@@ -611,7 +611,7 @@ impl Catalog {
         self.storage.lock().await
     }
 
-    pub async fn allocate_user_id(&self) -> Result<GlobalId, Error> {
+    pub async fn allocate_user_id(&self) -> Result<(CatalogItemId, GlobalId), Error> {
         self.storage()
             .await
             .allocate_user_id()
@@ -630,7 +630,7 @@ impl Catalog {
     }
 
     #[cfg(test)]
-    pub async fn allocate_system_id(&self) -> Result<GlobalId, Error> {
+    pub async fn allocate_system_id(&self) -> Result<(CatalogItemId, GlobalId), Error> {
         use mz_ore::collections::CollectionExt;
         self.storage()
             .await
@@ -2374,7 +2374,8 @@ mod tests {
 
         let persist_client = PersistClient::new_for_tests().await;
         let organization_id = Uuid::new_v4();
-        let id = GlobalId::User(1);
+        let id = CatalogItemId::User(1);
+        let gid = GlobalId::User(1);
         {
             let mut catalog =
                 Catalog::open_debug_catalog(persist_client.clone(), organization_id.clone())
@@ -2382,7 +2383,7 @@ mod tests {
                     .expect("unable to open debug catalog");
             let item = catalog
                 .state()
-                .deserialize_item(id, &create_sql)
+                .deserialize_item(gid, &create_sql, &BTreeMap::new())
                 .expect("unable to parse view");
             catalog
                 .transact(
@@ -3270,15 +3271,17 @@ mod tests {
             let schema_spec = schema.id().clone();
             let schema_name = &schema.name().schema;
             let database_spec = ResolvedDatabaseSpecifier::Id(database_id);
-            let mv_id = catalog
+            let (mv_id, mv_gid) = catalog
                 .allocate_user_id()
                 .await
                 .expect("unable to allocate id");
             let mv = catalog
                 .state()
-                .deserialize_item(mv_id, &format!(
-                    "CREATE MATERIALIZED VIEW {database_name}.{schema_name}.{mv_name} AS SELECT name FROM mz_tables"
-                ))
+                .deserialize_item(
+                    mv_gid,
+                    &format!("CREATE MATERIALIZED VIEW {database_name}.{schema_name}.{mv_name} AS SELECT name FROM mz_tables"),
+                    &BTreeMap::new(),
+                )
                 .expect("unable to deserialize item");
             catalog
                 .transact(

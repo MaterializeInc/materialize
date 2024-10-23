@@ -962,7 +962,10 @@ impl Coordinator {
         } else {
             None
         };
-        let table_id = self.catalog_mut().allocate_user_id().await?;
+        let (table_id, global_id) = self.catalog_mut().allocate_user_id().await?;
+
+        let collections = [(RelationVersion::root(), global_id)].into_iter().collect();
+
         let data_source = match table.data_source {
             plan::TableDataSource::TableWrites { defaults } => {
                 TableDataSource::TableWrites { defaults }
@@ -993,6 +996,7 @@ impl Coordinator {
         let table = Table {
             create_sql: Some(table.create_sql),
             desc: table.desc,
+            collections,
             conn_id: conn_id.cloned(),
             resolved_ids,
             custom_logical_compaction_window: table.compaction_window,

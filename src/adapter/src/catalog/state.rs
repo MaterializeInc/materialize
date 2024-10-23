@@ -38,6 +38,7 @@ use mz_controller::clusters::{
     UnmanagedReplicaLocation,
 };
 use mz_controller_types::{ClusterId, ReplicaId};
+use mz_expr::CollectionPlan;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NOW_ZERO;
 use mz_ore::soft_assert_no_log;
@@ -61,9 +62,9 @@ use mz_sql::catalog::{
     IdReference, NameReference, SessionCatalog, SystemObjectType, TypeReference,
 };
 use mz_sql::names::{
-    CommentObjectId, DatabaseId, FullItemName, FullSchemaName, ObjectId, PartialItemName,
-    QualifiedItemName, QualifiedSchemaName, RawDatabaseSpecifier, ResolvedDatabaseSpecifier,
-    ResolvedIds, SchemaId, SchemaSpecifier, SystemObjectId,
+    CommentObjectId, DatabaseId, DependencyIds, FullItemName, FullSchemaName, ObjectId,
+    PartialItemName, QualifiedItemName, QualifiedSchemaName, RawDatabaseSpecifier,
+    ResolvedDatabaseSpecifier, ResolvedIds, SchemaId, SchemaSpecifier, SystemObjectId,
 };
 use mz_sql::plan::{
     CreateConnectionPlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateSecretPlan,
@@ -867,45 +868,52 @@ impl CatalogState {
 
         let (plan, resolved_ids) = Self::parse_plan(create_sql, pcx, &session_catalog)?;
 
-        Ok(match plan {
-            Plan::CreateTable(CreateTablePlan { table, .. }) => CatalogItem::Table(Table {
-                create_sql: Some(table.create_sql),
-                desc: table.desc,
-                conn_id: None,
-                resolved_ids,
-                custom_logical_compaction_window: custom_logical_compaction_window
-                    .or(table.compaction_window),
-                is_retained_metrics_object,
-                data_source: match table.data_source {
-                    mz_sql::plan::TableDataSource::TableWrites { defaults } => {
-                        TableDataSource::TableWrites { defaults }
-                    }
-                    mz_sql::plan::TableDataSource::DataSource {
-                        desc: data_source_desc,
-                        timeline,
-                    } => match data_source_desc {
-                        mz_sql::plan::DataSourceDesc::IngestionExport {
-                            ingestion_id,
-                            external_reference,
-                            details,
-                            data_config,
-                        } => TableDataSource::DataSource {
-                            desc: DataSourceDesc::IngestionExport {
+        let item = match plan {
+            Plan::CreateTable(CreateTablePlan { table, .. }) => {
+                // TODO(alter_table): Support versioning tables.
+                assert_eq!(extra_versions.len(), 0);
+                let collections = [(RelationVersion::root(), global_id)].into_iter().collect();
+
+                CatalogItem::Table(Table {
+                    create_sql: Some(table.create_sql),
+                    desc: table.desc,
+                    collections,
+                    conn_id: None,
+                    resolved_ids,
+                    custom_logical_compaction_window: custom_logical_compaction_window
+                        .or(table.compaction_window),
+                    is_retained_metrics_object,
+                    data_source: match table.data_source {
+                        mz_sql::plan::TableDataSource::TableWrites { defaults } => {
+                            TableDataSource::TableWrites { defaults }
+                        }
+                        mz_sql::plan::TableDataSource::DataSource {
+                            desc: data_source_desc,
+                            timeline,
+                        } => match data_source_desc {
+                            mz_sql::plan::DataSourceDesc::IngestionExport {
                                 ingestion_id,
                                 external_reference,
                                 details,
                                 data_config,
+                            } => TableDataSource::DataSource {
+                                desc: DataSourceDesc::IngestionExport {
+                                    ingestion_id,
+                                    external_reference,
+                                    details,
+                                    data_config,
+                                },
+                                timeline,
                             },
-                            timeline,
+                            _ => {
+                                return Err(AdapterError::Unstructured(anyhow::anyhow!(
+                                    "unsupported data source for table"
+                                )))
+                            }
                         },
-                        _ => {
-                            return Err(AdapterError::Unstructured(anyhow::anyhow!(
-                                "unsupported data source for table"
-                            )))
-                        }
                     },
-                },
-            }),
+                })
+            }
             Plan::CreateSource(CreateSourcePlan {
                 source,
                 timeline,
@@ -952,6 +960,7 @@ impl CatalogState {
                     },
                 },
                 desc: source.desc,
+                global_id,
                 timeline,
                 resolved_ids,
                 custom_logical_compaction_window: source
@@ -973,6 +982,7 @@ impl CatalogState {
 
                 CatalogItem::View(View {
                     create_sql: view.create_sql,
+                    global_id,
                     raw_expr: raw_expr.into(),
                     desc: RelationDesc::new(optimized_expr.typ(), view.column_names),
                     optimized_expr: optimized_expr.into(),
@@ -1002,6 +1012,7 @@ impl CatalogState {
 
                 CatalogItem::MaterializedView(MaterializedView {
                     create_sql: materialized_view.create_sql,
+                    global_id,
                     raw_expr: raw_expr.into(),
                     optimized_expr: optimized_expr.into(),
                     desc,
@@ -1014,10 +1025,11 @@ impl CatalogState {
                 })
             }
             Plan::CreateContinualTask(plan) => CatalogItem::ContinualTask(
-                crate::continual_task::ct_item_from_plan(plan, id, resolved_ids)?,
+                crate::continual_task::ct_item_from_plan(plan, global_id, resolved_ids)?,
             ),
             Plan::CreateIndex(CreateIndexPlan { index, .. }) => CatalogItem::Index(Index {
                 create_sql: index.create_sql,
+                global_id,
                 on: index.on,
                 keys: index.keys.into(),
                 conn_id: None,
@@ -1034,6 +1046,7 @@ impl CatalogState {
                 ..
             }) => CatalogItem::Sink(Sink {
                 create_sql: sink.create_sql,
+                global_id,
                 from: sink.from,
                 connection: sink.connection,
                 partition_strategy: sink.partition_strategy,
@@ -1045,6 +1058,7 @@ impl CatalogState {
             }),
             Plan::CreateType(CreateTypePlan { typ, .. }) => CatalogItem::Type(Type {
                 create_sql: Some(typ.create_sql),
+                global_id,
                 desc: typ.inner.desc(&session_catalog)?,
                 details: CatalogTypeDetails {
                     array_id: None,
@@ -1055,6 +1069,7 @@ impl CatalogState {
             }),
             Plan::CreateSecret(CreateSecretPlan { secret, .. }) => CatalogItem::Secret(Secret {
                 create_sql: secret.create_sql,
+                global_id,
             }),
             Plan::CreateConnection(CreateConnectionPlan {
                 connection:
@@ -1065,6 +1080,7 @@ impl CatalogState {
                 ..
             }) => CatalogItem::Connection(Connection {
                 create_sql,
+                global_id,
                 details,
                 resolved_ids,
             }),
@@ -1074,7 +1090,9 @@ impl CatalogState {
                 })
                 .into())
             }
-        })
+        };
+
+        Ok(item)
     }
 
     /// Execute function `f` on `self`, with all "enable_for_item_parsing" feature flags enabled.

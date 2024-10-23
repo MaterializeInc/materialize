@@ -42,11 +42,9 @@ use mz_ore::{instrument, soft_assert_no_log};
 use mz_pgrepr::oid::INVALID_OID;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::role_id::RoleId;
-use mz_repr::{GlobalId, Timestamp};
+use mz_repr::{CatalogItemId, GlobalId, RelationVersion, Timestamp};
 use mz_sql::catalog::CatalogError as SqlCatalogError;
-use mz_sql::catalog::{
-    CatalogItem as SqlCatalogItem, CatalogItemType, CatalogSchema, CatalogType, NameReference,
-};
+use mz_sql::catalog::{CatalogItem as SqlCatalogItem, CatalogItemType, CatalogSchema, CatalogType};
 use mz_sql::names::{
     FullItemName, ItemQualifiers, QualifiedItemName, RawDatabaseSpecifier,
     ResolvedDatabaseSpecifier, ResolvedIds, SchemaSpecifier,
@@ -897,15 +895,15 @@ impl CatalogState {
             StateDiff::Addition => {
                 let key = item.key();
                 let mz_catalog::durable::Item {
-                    id: _,
+                    id,
                     oid,
+                    global_id,
                     schema_id,
                     name,
                     create_sql,
                     owner_id,
                     privileges,
-                    global_id,
-                    extra_versions: _,
+                    extra_versions,
                 } = item;
                 let schema = self.find_non_temp_schema(&schema_id);
                 let name = QualifiedItemName {
@@ -917,23 +915,20 @@ impl CatalogState {
                 };
                 let entry = match retractions.items.remove(&key) {
                     Some(mut retraction) => {
-                        // TODO(alter_table): Switch this to CatalogItemId.
-                        assert_eq!(retraction.id, item.global_id);
+                        assert_eq!(retraction.id, item.id);
                         // We only reparse the SQL if it's changed. Otherwise, we use the existing
                         // item. This is a performance optimization and not needed for correctness.
                         // This makes it difficult to use the `UpdateFrom` trait, but the structure
                         // is still the same as the trait.
-                        //
-                        // TODO(alter_table): Switch this to CatalogItemId.
                         if retraction.create_sql() != create_sql {
                             let item = self
-                                .deserialize_item(global_id, &create_sql)
+                                .deserialize_item(global_id, &create_sql, &extra_versions)
                                 .unwrap_or_else(|e| {
                                     panic!("{e:?}: invalid persisted SQL: {create_sql}")
                                 });
                             retraction.item = item;
                         }
-                        retraction.id = global_id;
+                        retraction.id = id;
                         retraction.oid = oid;
                         retraction.name = name;
                         retraction.owner_id = owner_id;
@@ -942,9 +937,8 @@ impl CatalogState {
                         retraction
                     }
                     None => {
-                        // TODO(alter_table): Switch this to CatalogItemId.
                         let catalog_item = self
-                            .deserialize_item(global_id, &create_sql)
+                            .deserialize_item(global_id, &create_sql, &extra_versions)
                             .unwrap_or_else(|e| {
                                 panic!("{e:?}: invalid persisted SQL: {create_sql}")
                             });
@@ -952,7 +946,7 @@ impl CatalogState {
                             item: catalog_item,
                             referenced_by: Vec::new(),
                             used_by: Vec::new(),
-                            id: global_id,
+                            id,
                             oid,
                             name,
                             owner_id,
@@ -974,8 +968,7 @@ impl CatalogState {
                 self.insert_entry(entry);
             }
             StateDiff::Retraction => {
-                // TODO(alter_table): Switch this to CatalogItemId.
-                let entry = self.drop_item(item.global_id);
+                let entry = self.drop_item(item.id);
                 let key = item.into_key_value().0;
                 retractions.items.insert(key, entry);
             }
@@ -1026,19 +1019,16 @@ impl CatalogState {
     ) {
         match diff {
             StateDiff::Addition => {
-                let prev = self.source_references.insert(
-                    source_references.source_id.to_global_id(),
-                    source_references.into(),
-                );
+                let prev = self
+                    .source_references
+                    .insert(source_references.source_id, source_references.into());
                 assert!(
                     prev.is_none(),
                     "values must be explicitly retracted before inserting a new value: {prev:?}"
                 );
             }
             StateDiff::Retraction => {
-                let prev = self
-                    .source_references
-                    .remove(&source_references.source_id.to_global_id());
+                let prev = self.source_references.remove(&source_references.source_id);
                 assert!(
                     prev.is_some(),
                     "retraction for a non-existent existing value: {source_references:?}"
@@ -1166,7 +1156,7 @@ impl CatalogState {
                 }
             }
             StateUpdateKind::TemporaryItem(item) => self.pack_item_update(item.id, diff),
-            StateUpdateKind::Item(item) => self.pack_item_update(item.global_id, diff),
+            StateUpdateKind::Item(item) => self.pack_item_update(item.id, diff),
             StateUpdateKind::Comment(comment) => vec![self.pack_comment_update(
                 comment.object_id,
                 comment.sub_component,
@@ -1413,7 +1403,7 @@ impl CatalogState {
             .collect()
     }
 
-    /// Associates a name, `GlobalId`, and entry.
+    /// Associates a name, `CatalogItemId`, and entry.
     fn insert_entry(&mut self, entry: CatalogEntry) {
         if !entry.id.is_system() {
             if let Some(cluster_id) = entry.item.cluster_id() {
@@ -1474,10 +1464,10 @@ impl CatalogState {
         self.entry_by_id.insert(entry.id(), entry.clone());
     }
 
-    /// Associates a name, `GlobalId`, and entry.
+    /// Associates a name, [`CatalogItemId`], and entry.
     fn insert_item(
         &mut self,
-        id: GlobalId,
+        id: CatalogItemId,
         oid: u32,
         name: QualifiedItemName,
         item: CatalogItem,
@@ -1499,7 +1489,7 @@ impl CatalogState {
     }
 
     #[mz_ore::instrument(level = "trace")]
-    fn drop_item(&mut self, id: GlobalId) -> CatalogEntry {
+    fn drop_item(&mut self, id: CatalogItemId) -> CatalogEntry {
         let metadata = self.entry_by_id.remove(&id).expect("catalog out of sync");
         for u in &metadata.references().0 {
             if let Some(dep_metadata) = self.entry_by_id.get_mut(u) {
@@ -1766,7 +1756,7 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
         }
     }
 
-    /// Sort item updates by GlobalId.
+    /// Sort item updates by [`CatalogItemId`].
     fn sort_item_updates(
         item_updates: Vec<(mz_catalog::durable::Item, Timestamp, StateDiff)>,
     ) -> VecDeque<(mz_catalog::durable::Item, Timestamp, StateDiff)> {
@@ -1778,10 +1768,9 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
             // we can just always move sinks to the end.
             .sorted_by_key(|(item, _ts, _diff)| {
                 if item.create_sql.starts_with("CREATE SINK") {
-                    GlobalId::User(u64::MAX)
+                    CatalogItemId::User(u64::MAX)
                 } else {
-                    // TODO(alter_table): Switch this to CatalogItemId.
-                    item.global_id
+                    item.id
                 }
             })
             .collect()
@@ -1800,7 +1789,7 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
             // and can never depend upon one another, to fix the topological sort,
             // we can just always move sinks to the end.
             .sorted_by_key(|(item, _ts, _diff)| match item.item.typ() {
-                CatalogItemType::Sink => GlobalId::User(u64::MAX),
+                CatalogItemType::Sink => CatalogItemId::User(u64::MAX),
                 _ => item.id,
             })
             .collect()
@@ -1818,16 +1807,14 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
         while let (Some((item, _, _)), Some((temp_item, _, _))) =
             (item_updates.front(), temp_item_updates.front())
         {
-            // TODO(alter_table): Switch this to CatalogItemId.
-            if item.global_id < temp_item.id {
+            if item.id < temp_item.id {
                 let (item, ts, diff) = item_updates.pop_front().expect("non-empty");
                 state_updates.push(StateUpdate {
                     kind: StateUpdateKind::Item(item),
                     ts,
                     diff,
                 });
-            // TODO(alter_table): Switch this to CatalogItemId.
-            } else if item.global_id > temp_item.id {
+            } else if item.id > temp_item.id {
                 let (temp_item, ts, diff) = temp_item_updates.pop_front().expect("non-empty");
                 state_updates.push(StateUpdate {
                     kind: StateUpdateKind::TemporaryItem(temp_item),

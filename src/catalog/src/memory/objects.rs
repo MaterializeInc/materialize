@@ -22,14 +22,17 @@ use mz_adapter_types::connection::ConnectionId;
 use mz_compute_client::logging::LogVariant;
 use mz_controller::clusters::{ClusterRole, ClusterStatus, ReplicaConfig, ReplicaLogging};
 use mz_controller_types::{ClusterId, ReplicaId};
-use mz_expr::{CollectionPlan, MirScalarExpr, OptimizedMirRelationExpr};
+use mz_expr::{MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::role_id::RoleId;
-use mz_repr::{Diff, GlobalId, RelationDesc, Timestamp};
+use mz_repr::{
+    CatalogItemId, Diff, GlobalId, RelationDesc, RelationVersion, RelationVersionSelector,
+    Timestamp,
+};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{Expr, Raw, Statement, UnresolvedItemName, Value, WithOptionValue};
 use mz_sql::catalog::{
@@ -39,8 +42,8 @@ use mz_sql::catalog::{
     RoleVars, SystemObjectType,
 };
 use mz_sql::names::{
-    Aug, CommentObjectId, DatabaseId, FullItemName, QualifiedItemName, QualifiedSchemaName,
-    ResolvedDatabaseSpecifier, ResolvedIds, SchemaId, SchemaSpecifier,
+    Aug, CommentObjectId, DatabaseId, DependencyIds, FullItemName, QualifiedItemName,
+    QualifiedSchemaName, ResolvedDatabaseSpecifier, ResolvedIds, SchemaId, SchemaSpecifier,
 };
 use mz_sql::plan::{
     ClusterSchedule, ComputeReplicaConfig, ComputeReplicaIntrospectionConfig, ConnectionDetails,
@@ -140,9 +143,9 @@ pub struct Schema {
     pub name: QualifiedSchemaName,
     pub id: SchemaSpecifier,
     pub oid: u32,
-    pub items: BTreeMap<String, GlobalId>,
-    pub functions: BTreeMap<String, GlobalId>,
-    pub types: BTreeMap<String, GlobalId>,
+    pub items: BTreeMap<String, CatalogItemId>,
+    pub functions: BTreeMap<String, CatalogItemId>,
+    pub types: BTreeMap<String, CatalogItemId>,
     pub owner_id: RoleId,
     pub privileges: PrivilegeMap,
 }
@@ -295,7 +298,7 @@ pub struct Cluster {
     pub log_indexes: BTreeMap<LogVariant, GlobalId>,
     /// Objects bound to this cluster. Does not include introspection source
     /// indexes.
-    pub bound_objects: BTreeSet<GlobalId>,
+    pub bound_objects: BTreeSet<CatalogItemId>,
     pub replica_id_by_name_: BTreeMap<String, ReplicaId>,
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub replicas_by_id_: BTreeMap<ReplicaId, ClusterReplica>,
@@ -510,9 +513,9 @@ impl From<SourceReference> for durable::SourceReference {
 }
 
 impl SourceReferences {
-    pub fn to_durable(self, source_id: GlobalId) -> durable::SourceReferences {
+    pub fn to_durable(self, source_id: CatalogItemId) -> durable::SourceReferences {
         durable::SourceReferences {
-            source_id: source_id.to_item_id(),
+            source_id,
             updated_at: self.updated_at,
             references: self.references.into_iter().map(Into::into).collect(),
         }
@@ -592,13 +595,13 @@ impl From<SourceReference> for mz_sql::plan::SourceReference {
 pub struct CatalogEntry {
     pub item: CatalogItem,
     #[serde(skip)]
-    pub referenced_by: Vec<GlobalId>,
+    pub referenced_by: Vec<CatalogItemId>,
     // TODO(database-issues#7922)––this should have an invariant tied to it that all
     // dependents (i.e. entries in this field) have IDs greater than this
     // entry's ID.
     #[serde(skip)]
-    pub used_by: Vec<GlobalId>,
-    pub id: GlobalId,
+    pub used_by: Vec<CatalogItemId>,
+    pub id: CatalogItemId,
     pub oid: u32,
     pub name: QualifiedItemName,
     pub owner_id: RoleId,
@@ -623,32 +626,43 @@ pub enum CatalogItem {
 
 impl From<CatalogEntry> for durable::Item {
     fn from(entry: CatalogEntry) -> durable::Item {
-        let global_id = entry.id();
+        let (create_sql, global_id, extra_versions) = entry.item.into_serialized();
         durable::Item {
-            id: global_id.to_item_id(),
+            id: entry.id,
             oid: entry.oid,
+            global_id,
             schema_id: entry.name.qualifiers.schema_spec.into(),
             name: entry.name.item,
-            create_sql: entry.item.into_serialized(),
+            create_sql,
             owner_id: entry.owner_id,
             privileges: entry.privileges.into_all_values().collect(),
-            global_id,
-            extra_versions: BTreeMap::new(),
+            extra_versions,
         }
     }
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Table {
+    /// Parse-able SQL that defines this table.
     pub create_sql: Option<String>,
+    /// [`RelationDesc`] of this table, derived from the `create_sql`.
     pub desc: RelationDesc,
+    /// Versions of this table, and the [`GlobalId`]s that refer to them.
+    #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
+    pub collections: BTreeMap<RelationVersion, GlobalId>,
+    /// If created in the `TEMPORARY` schema, the [`ConnectionId`] for that session.
     #[serde(skip)]
     pub conn_id: Option<ConnectionId>,
+    /// Other catalog objects referenced by this table, e.g. custom types.
     pub resolved_ids: ResolvedIds,
+    /// Custom compaction window, e.g. set via `ALTER RETAIN HISTORY`.
     pub custom_logical_compaction_window: Option<CompactionWindow>,
-    /// Whether the table's logical compaction window is controlled by
-    /// METRICS_RETENTION
+    /// Whether the table's logical compaction window is controlled by the ['metrics_retention']
+    /// session variable.
+    ///
+    /// ['metrics_retention']: mz_sql::session::vars::METRICS_RETENTION
     pub is_retained_metrics_object: bool,
+    /// Where data for this table comes from, e.g. `INSERT` statements or an upstream source.
     pub data_source: TableDataSource,
 }
 
@@ -660,6 +674,20 @@ impl Table {
             TableDataSource::TableWrites { .. } => Timeline::EpochMilliseconds,
             TableDataSource::DataSource { timeline, .. } => timeline.clone(),
         }
+    }
+
+    /// Returns all of the [`GlobalId`]s that this [`Table`] can be referenced by.
+    pub fn global_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
+        self.collections.values().copied()
+    }
+
+    /// Returns the latest [`GlobalId`] for this [`Table`] which should be used for writes.
+    pub fn global_id_writes(&self) -> GlobalId {
+        self.collections
+            .last_key_value()
+            .expect("at least one version of a table")
+            .1
+            .clone()
     }
 }
 
@@ -694,7 +722,7 @@ pub enum DataSourceDesc {
     /// The `external_reference` field is only used here for displaying
     /// human-readable names in system tables.
     IngestionExport {
-        ingestion_id: GlobalId,
+        ingestion_id: CatalogItemId,
         external_reference: UnresolvedItemName,
         details: SourceExportDetails,
         data_config: SourceExportDataConfig<ReferencedConnection>,
@@ -796,12 +824,18 @@ impl DataSourceDesc {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Source {
+    /// Parse-able SQL that defines this table.
     pub create_sql: Option<String>,
+    /// [`GlobalId`] used to reference this source from outside the catalog.
+    pub global_id: GlobalId,
     // TODO: Unskip: currently blocked on some inner BTreeMap<X, _> problems.
     #[serde(skip)]
     pub data_source: DataSourceDesc,
+    /// [`RelationDesc`] of this source, derived from the `create_sql`.
     pub desc: RelationDesc,
+    /// The timeline this source exists on.
     pub timeline: Timeline,
+    /// Other catalog objects referenced by this table, e.g. custom types.
     pub resolved_ids: ResolvedIds,
     /// This value is ignored for subsources, i.e. for
     /// [`DataSourceDesc::IngestionExport`]. Instead, it uses the primary
@@ -821,6 +855,7 @@ impl Source {
     /// - If a non-ingestion-based source is given a cluster_id.
     pub fn new(
         plan: CreateSourcePlan,
+        global_id: GlobalId,
         resolved_ids: ResolvedIds,
         custom_logical_compaction_window: Option<CompactionWindow>,
         is_retained_metrics_object: bool,
@@ -874,6 +909,7 @@ impl Source {
                 },
             },
             desc: plan.source.desc,
+            global_id,
             timeline: plan.timeline,
             resolved_ids,
             custom_logical_compaction_window: plan
@@ -908,6 +944,11 @@ impl Source {
             | DataSourceDesc::Webhook { .. }
             | DataSourceDesc::Progress => None,
         }
+    }
+
+    /// The single [`GlobalId`] that refers to this Source.
+    pub fn global_id(&self) -> GlobalId {
+        self.global_id
     }
 
     /// The expensive resource that each source consumes is persist shards. To
@@ -952,20 +993,42 @@ impl Source {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Log {
+    /// The category of data this log stores.
     pub variant: LogVariant,
+    /// [`GlobalId`] used to reference this log from outside the catalog.
+    pub global_id: GlobalId,
+}
+
+impl Log {
+    /// The single [`GlobalId`] that refers to this Log.
+    pub fn global_id(&self) -> GlobalId {
+        self.global_id
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Sink {
+    /// Parse-able SQL that defines this sink.
     pub create_sql: String,
+    /// [`GlobalId`] used to reference this sink from outside the catalog, e.g storage.
+    pub global_id: GlobalId,
+    /// Collection we read into this sink.
     pub from: GlobalId,
+    /// Connection to the external service we're sinking into, e.g. Kafka.
     pub connection: StorageSinkConnection<ReferencedConnection>,
-    // TODO(guswynn): this probably should just be in the `connection`.
+    /// Envelope we use to sink into the external system.
+    ///
+    /// TODO(guswynn): this probably should just be in the `connection`.
     pub envelope: SinkEnvelope,
+    /// Strategy used to partition rows.
     pub partition_strategy: SinkPartitionStrategy,
+    /// Emit an initial snapshot into the sink.
     pub with_snapshot: bool,
+    /// Used to fence other writes into this sink as we evolve the upstream materialized view.
     pub version: u64,
+    /// Other catalog objects this sink references.
     pub resolved_ids: ResolvedIds,
+    /// Cluster this sink runs on.
     pub cluster_id: ClusterId,
 }
 
@@ -1006,77 +1069,164 @@ impl Sink {
     pub fn connection_id(&self) -> Option<CatalogItemId> {
         self.connection.connection_id()
     }
+
+    /// The single [`GlobalId`] that this Sink can be referenced by.
+    pub fn global_id(&self) -> GlobalId {
+        self.global_id
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct View {
+    /// Parse-able SQL that defines this view.
     pub create_sql: String,
+    /// [`GlobalId`] used to reference this view from outside the catalog, e.g. compute.
+    pub global_id: GlobalId,
+    /// Unoptimized high-level expression from parsing the `create_sql`.
     pub raw_expr: Arc<HirRelationExpr>,
+    /// Optimized mid-level expression from optimizing the `raw_expr`.
     pub optimized_expr: Arc<OptimizedMirRelationExpr>,
+    /// Columns of this view.
     pub desc: RelationDesc,
+    /// If created in the `TEMPORARY` schema, the [`ConnectionId`] for that session.
     pub conn_id: Option<ConnectionId>,
+    /// Other catalog objects that are referenced by this view, determined at name resolution.
     pub resolved_ids: ResolvedIds,
+}
+
+impl View {
+    /// The single [`GlobalId`] this [`View`] can be referenced by.
+    pub fn global_id(&self) -> GlobalId {
+        self.global_id
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct MaterializedView {
+    /// Parse-able SQL that defines this materialized view.
     pub create_sql: String,
+    /// [`GlobalId`] used to reference this materialized view from outside the catalog.
+    pub global_id: GlobalId,
+    /// Raw high-level expression from planning, derived from the `create_sql`.
     pub raw_expr: Arc<HirRelationExpr>,
+    /// Optimized mid-level expression, derived from the `raw_expr`.
     pub optimized_expr: Arc<OptimizedMirRelationExpr>,
+    /// Columns for this materialized view.
     pub desc: RelationDesc,
+    /// Other catalog items that this materialized view references, determined at name resolution.
     pub resolved_ids: ResolvedIds,
+    /// Cluster that this materialized view runs on.
     pub cluster_id: ClusterId,
+    /// Column indexes that we assert are not `NULL`.
+    ///
+    /// TODO(parkmycar): Switch this to use the `ColumnIdx` type.
     pub non_null_assertions: Vec<usize>,
+    /// Custom compaction window, e.g. set via `ALTER RETAIN HISTORY`.
     pub custom_logical_compaction_window: Option<CompactionWindow>,
+    /// Schedule to refresh this materialized view, e.g. set via `REFRESH EVERY` option.
     pub refresh_schedule: Option<RefreshSchedule>,
     /// The initial `as_of` of the storage collection associated with the materialized view.
-    /// Note that this doesn't change upon restarts.
+    ///
+    /// Note: This doesn't change upon restarts.
     /// (The dataflow's initial `as_of` can be different.)
     pub initial_as_of: Option<Antichain<mz_repr::Timestamp>>,
 }
 
+impl MaterializedView {
+    /// The single [`GlobalId`] this [`MaterializedView`] can be referenced by.
+    pub fn global_id(&self) -> GlobalId {
+        self.global_id
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Index {
+    /// Parse-able SQL that defines this table.
     pub create_sql: String,
+    /// [`GlobalId`] used to reference this index from outside the catalog, e.g. compute.
+    pub global_id: GlobalId,
+    /// The [`GlobalId`] this Index is on.
     pub on: GlobalId,
+    /// Keys of the index.
     pub keys: Arc<[MirScalarExpr]>,
+    /// If created in the `TEMPORARY` schema, the [`ConnectionId`] for that session.
     pub conn_id: Option<ConnectionId>,
+    /// Other catalog objects referenced by this index, e.g. the object we're indexing.
     pub resolved_ids: ResolvedIds,
+    /// Cluster this index is installed on.
     pub cluster_id: ClusterId,
+    /// Custom compaction window, e.g. set via `ALTER RETAIN HISTORY`.
     pub custom_logical_compaction_window: Option<CompactionWindow>,
+    /// Whether the table's logical compaction window is controlled by the ['metrics_retention']
+    /// session variable.
+    ///
+    /// ['metrics_retention']: mz_sql::session::vars::METRICS_RETENTION
     pub is_retained_metrics_object: bool,
+}
+
+impl Index {
+    /// The [`GlobalId`] that refers to this Index.
+    pub fn global_id(&self) -> GlobalId {
+        self.global_id
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Type {
+    /// Parse-able SQL that defines this type.
     pub create_sql: Option<String>,
+    /// [`GlobalId`] used to reference this type from outside the catalog.
+    pub global_id: GlobalId,
     #[serde(skip)]
     pub details: CatalogTypeDetails<IdReference>,
     pub desc: Option<RelationDesc>,
+    /// Other catalog objects referenced by this type.
     pub resolved_ids: ResolvedIds,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Func {
+    /// Static definition of the function.
     #[serde(skip)]
     pub inner: &'static mz_sql::func::Func,
+    /// [`GlobalId`] used to reference this function from outside the catalog.
+    pub global_id: GlobalId,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Secret {
+    /// Parse-able SQL that defines this secret.
     pub create_sql: String,
+    /// [`GlobalId`] used to reference this secret from outside the catalog.
+    pub global_id: GlobalId,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Connection {
+    /// Parse-able SQL that defines this connection.
     pub create_sql: String,
+    /// [`GlobalId`] used to reference this connection from the storage layer.
+    pub global_id: GlobalId,
+    /// The kind of connection.
     pub details: ConnectionDetails,
+    /// Other objects this connection depends on.
     pub resolved_ids: ResolvedIds,
+}
+
+impl Connection {
+    /// The single [`GlobalId`] used to reference this connection.
+    pub fn global_id(&self) -> GlobalId {
+        self.global_id
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ContinualTask {
+    /// Parse-able SQL that defines this continual task.
     pub create_sql: String,
+    /// [`GlobalId`] used to reference this continual task from outside the catalog.
+    pub global_id: GlobalId,
+    /// [`GlobalId`] of the collection that we read into this continual task.
     pub input_id: GlobalId,
     pub with_snapshot: bool,
     /// ContinualTasks are self-referential. We make this work by using a
@@ -1084,11 +1234,21 @@ pub struct ContinualTask {
     /// planning. Then we fill in the real `GlobalId` before constructing this
     /// catalog item.
     pub raw_expr: Arc<HirRelationExpr>,
+    /// Columns for this continual task.
     pub desc: RelationDesc,
+    /// Other catalog items that this continual task references, determined at name resolution.
     pub resolved_ids: ResolvedIds,
+    /// Cluster that this continual task runs on.
     pub cluster_id: ClusterId,
     /// See the comment on [MaterializedView::initial_as_of].
     pub initial_as_of: Option<Antichain<mz_repr::Timestamp>>,
+}
+
+impl ContinualTask {
+    /// The single [`GlobalId`] used to reference this continual task.
+    pub fn global_id(&self) -> GlobalId {
+        self.global_id
+    }
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -1173,6 +1333,53 @@ impl CatalogItem {
             CatalogItem::Secret(_) => mz_sql::catalog::CatalogItemType::Secret,
             CatalogItem::Connection(_) => mz_sql::catalog::CatalogItemType::Connection,
             CatalogItem::ContinualTask(_) => mz_sql::catalog::CatalogItemType::ContinualTask,
+        }
+    }
+
+    /// Returns the [`GlobalId`]s that reference this item, if any.
+    pub fn global_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
+        let gid = match self {
+            CatalogItem::Source(source) => source.global_id,
+            CatalogItem::Log(log) => log.global_id,
+            CatalogItem::Sink(sink) => sink.global_id,
+            CatalogItem::View(view) => view.global_id,
+            CatalogItem::MaterializedView(mv) => mv.global_id,
+            CatalogItem::ContinualTask(ct) => ct.global_id,
+            CatalogItem::Index(index) => index.global_id,
+            CatalogItem::Func(func) => func.global_id,
+            CatalogItem::Type(ty) => ty.global_id,
+            CatalogItem::Secret(secret) => secret.global_id,
+            CatalogItem::Connection(conn) => conn.global_id,
+            CatalogItem::Table(table) => {
+                return itertools::Either::Left(table.collections.values().copied());
+            }
+        };
+        itertools::Either::Right(std::iter::once(gid))
+    }
+
+    /// Returns the most up-to-date [`GlobalId`] for this item.
+    ///
+    /// Note: The only type of object that can have multiple [`GlobalId`]s are tables.
+    pub fn latest_global_id(&self) -> GlobalId {
+        match self {
+            CatalogItem::Source(source) => source.global_id,
+            CatalogItem::Log(log) => log.global_id,
+            CatalogItem::Sink(sink) => sink.global_id,
+            CatalogItem::View(view) => view.global_id,
+            CatalogItem::MaterializedView(mv) => mv.global_id,
+            CatalogItem::ContinualTask(ct) => ct.global_id,
+            CatalogItem::Index(index) => index.global_id,
+            CatalogItem::Func(func) => func.global_id,
+            CatalogItem::Type(ty) => ty.global_id,
+            CatalogItem::Secret(secret) => secret.global_id,
+            CatalogItem::Connection(conn) => conn.global_id,
+            CatalogItem::Table(table) => {
+                let (_version, gid) = table
+                    .collections
+                    .last_key_value()
+                    .expect("at least one version");
+                *gid
+            }
         }
     }
 
@@ -1263,8 +1470,8 @@ impl CatalogItem {
         )
     }
 
-    /// Collects the identifiers of the objects that were encountered when
-    /// resolving names in the item's DDL statement.
+    /// Collects the identifiers of the objects that were encountered when resolving names in the
+    /// item's DDL statement.
     pub fn references(&self) -> &ResolvedIds {
         static EMPTY: LazyLock<ResolvedIds> = LazyLock::new(|| ResolvedIds(BTreeSet::new()));
         match self {
@@ -1722,65 +1929,100 @@ impl CatalogItem {
         }
     }
 
-    pub fn to_serialized(&self) -> String {
+    pub fn to_serialized(&self) -> (String, GlobalId, BTreeMap<RelationVersion, GlobalId>) {
         match self {
-            CatalogItem::Table(table) => table
-                .create_sql
-                .as_ref()
-                .expect("builtin tables cannot be serialized")
-                .clone(),
+            CatalogItem::Table(table) => {
+                let create_sql = table
+                    .create_sql
+                    .clone()
+                    .expect("builtin tables cannot be serialized");
+                let mut collections = table.collections.clone();
+                let global_id = collections
+                    .remove(&RelationVersion::root())
+                    .expect("at least one version");
+                (create_sql, global_id, collections)
+            }
             CatalogItem::Log(_) => unreachable!("builtin logs cannot be serialized"),
             CatalogItem::Source(source) => {
                 assert!(
                     !matches!(source.data_source, DataSourceDesc::Introspection(_)),
                     "cannot serialize introspection/builtin sources",
                 );
-                source
+                let create_sql = source
                     .create_sql
-                    .as_ref()
-                    .expect("builtin sources cannot be serialized")
                     .clone()
+                    .expect("builtin sources cannot be serialized");
+                (create_sql, source.global_id, BTreeMap::new())
             }
-            CatalogItem::View(view) => view.create_sql.clone(),
-            CatalogItem::MaterializedView(mview) => mview.create_sql.clone(),
-            CatalogItem::Index(index) => index.create_sql.clone(),
-            CatalogItem::Sink(sink) => sink.create_sql.clone(),
-            CatalogItem::Type(typ) => typ
-                .create_sql
-                .as_ref()
-                .expect("builtin types cannot be serialized")
-                .clone(),
-            CatalogItem::Secret(secret) => secret.create_sql.clone(),
-            CatalogItem::Connection(connection) => connection.create_sql.clone(),
+            CatalogItem::View(view) => (view.create_sql.clone(), view.global_id, BTreeMap::new()),
+            CatalogItem::MaterializedView(mview) => {
+                (mview.create_sql.clone(), mview.global_id, BTreeMap::new())
+            }
+            CatalogItem::Index(index) => {
+                (index.create_sql.clone(), index.global_id, BTreeMap::new())
+            }
+            CatalogItem::Sink(sink) => (sink.create_sql.clone(), sink.global_id, BTreeMap::new()),
+            CatalogItem::Type(typ) => {
+                let create_sql = typ
+                    .create_sql
+                    .clone()
+                    .expect("builtin types cannot be serialized");
+                (create_sql, typ.global_id, BTreeMap::new())
+            }
+            CatalogItem::Secret(secret) => {
+                (secret.create_sql.clone(), secret.global_id, BTreeMap::new())
+            }
+            CatalogItem::Connection(connection) => (
+                connection.create_sql.clone(),
+                connection.global_id,
+                BTreeMap::new(),
+            ),
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
-            CatalogItem::ContinualTask(ct) => ct.create_sql.clone(),
+            CatalogItem::ContinualTask(ct) => {
+                (ct.create_sql.clone(), ct.global_id, BTreeMap::new())
+            }
         }
     }
 
-    pub fn into_serialized(self) -> String {
+    pub fn into_serialized(self) -> (String, GlobalId, BTreeMap<RelationVersion, GlobalId>) {
         match self {
-            CatalogItem::Table(table) => table
-                .create_sql
-                .expect("builtin tables cannot be serialized"),
+            CatalogItem::Table(mut table) => {
+                let create_sql = table
+                    .create_sql
+                    .expect("builtin tables cannot be serialized");
+                let global_id = table
+                    .collections
+                    .remove(&RelationVersion::root())
+                    .expect("at least one version");
+                (create_sql, global_id, table.collections)
+            }
             CatalogItem::Log(_) => unreachable!("builtin logs cannot be serialized"),
             CatalogItem::Source(source) => {
                 assert!(
                     !matches!(source.data_source, DataSourceDesc::Introspection(_)),
                     "cannot serialize introspection/builtin sources",
                 );
-                source
+                let create_sql = source
                     .create_sql
-                    .expect("builtin sources cannot be serialized")
+                    .expect("builtin sources cannot be serialized");
+                (create_sql, source.global_id, BTreeMap::new())
             }
-            CatalogItem::View(view) => view.create_sql,
-            CatalogItem::MaterializedView(mview) => mview.create_sql,
-            CatalogItem::Index(index) => index.create_sql,
-            CatalogItem::Sink(sink) => sink.create_sql,
-            CatalogItem::Type(typ) => typ.create_sql.expect("builtin types cannot be serialized"),
-            CatalogItem::Secret(secret) => secret.create_sql,
-            CatalogItem::Connection(connection) => connection.create_sql,
+            CatalogItem::View(view) => (view.create_sql, view.global_id, BTreeMap::new()),
+            CatalogItem::MaterializedView(mview) => {
+                (mview.create_sql, mview.global_id, BTreeMap::new())
+            }
+            CatalogItem::Index(index) => (index.create_sql, index.global_id, BTreeMap::new()),
+            CatalogItem::Sink(sink) => (sink.create_sql, sink.global_id, BTreeMap::new()),
+            CatalogItem::Type(typ) => {
+                let create_sql = typ.create_sql.expect("builtin types cannot be serialized");
+                (create_sql, typ.global_id, BTreeMap::new())
+            }
+            CatalogItem::Secret(secret) => (secret.create_sql, secret.global_id, BTreeMap::new()),
+            CatalogItem::Connection(connection) => {
+                (connection.create_sql, connection.global_id, BTreeMap::new())
+            }
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
-            CatalogItem::ContinualTask(ct) => ct.create_sql,
+            CatalogItem::ContinualTask(ct) => (ct.create_sql, ct.global_id, BTreeMap::new()),
         }
     }
 }
@@ -1820,6 +2062,14 @@ impl CatalogEntry {
     pub fn materialized_view(&self) -> Option<&MaterializedView> {
         match self.item() {
             CatalogItem::MaterializedView(mv) => Some(mv),
+            _ => None,
+        }
+    }
+
+    /// Returns the inner [`Table`] if this entry is a table, else `None`.
+    pub fn table(&self) -> Option<&Table> {
+        match self.item() {
+            CatalogItem::Table(tbl) => Some(tbl),
             _ => None,
         }
     }
@@ -1894,7 +2144,7 @@ impl CatalogEntry {
     /// ingestion it is an export of, as well as the item it exports.
     pub fn subsource_details(
         &self,
-    ) -> Option<(GlobalId, &UnresolvedItemName, &SourceExportDetails)> {
+    ) -> Option<(CatalogItemId, &UnresolvedItemName, &SourceExportDetails)> {
         match &self.item() {
             CatalogItem::Source(source) => match &source.data_source {
                 DataSourceDesc::IngestionExport {
@@ -1914,7 +2164,7 @@ impl CatalogEntry {
     pub fn source_export_details(
         &self,
     ) -> Option<(
-        GlobalId,
+        CatalogItemId,
         &UnresolvedItemName,
         &SourceExportDetails,
         &SourceExportDataConfig<ReferencedConnection>,
@@ -1952,7 +2202,7 @@ impl CatalogEntry {
     }
 
     /// Returns the `GlobalId` of all of this entry's progress ID.
-    pub fn progress_id(&self) -> Option<GlobalId> {
+    pub fn progress_id(&self) -> Option<CatalogItemId> {
         match &self.item() {
             CatalogItem::Source(source) => match &source.data_source {
                 DataSourceDesc::Ingestion { ingestion_desc, .. } => {
@@ -2028,7 +2278,7 @@ impl CatalogEntry {
     /// Like [`CatalogEntry::references()`] but also includes objects that are not directly
     /// referenced. For example this will include any catalog objects used to implement functions
     /// and casts in the item.
-    pub fn uses(&self) -> BTreeSet<GlobalId> {
+    pub fn uses(&self) -> BTreeSet<CatalogItemId> {
         self.item.uses()
     }
 
@@ -2037,9 +2287,18 @@ impl CatalogEntry {
         &self.item
     }
 
-    /// Returns the global ID of this catalog entry.
-    pub fn id(&self) -> GlobalId {
+    /// Returns the [`CatalogItemId`] of this catalog entry.
+    pub fn id(&self) -> CatalogItemId {
         self.id
+    }
+
+    /// Returns all of the [`GlobalId`]s associated with this item.
+    pub fn global_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
+        self.item().global_ids()
+    }
+
+    pub fn latest_global_id(&self) -> GlobalId {
+        self.item().latest_global_id()
     }
 
     /// Returns the OID of this catalog entry.
@@ -2053,12 +2312,12 @@ impl CatalogEntry {
     }
 
     /// Returns the identifiers of the dataflows that are directly referenced by this dataflow.
-    pub fn referenced_by(&self) -> &[GlobalId] {
+    pub fn referenced_by(&self) -> &[CatalogItemId] {
         &self.referenced_by
     }
 
     /// Returns the identifiers of the dataflows that depend upon this dataflow.
-    pub fn used_by(&self) -> &[GlobalId] {
+    pub fn used_by(&self) -> &[CatalogItemId] {
         &self.used_by
     }
 
@@ -2498,7 +2757,7 @@ impl mz_sql::catalog::CatalogSchema for Schema {
         !self.items.is_empty()
     }
 
-    fn item_ids(&self) -> Box<dyn Iterator<Item = GlobalId> + '_> {
+    fn item_ids(&self) -> Box<dyn Iterator<Item = CatalogItemId> + '_> {
         Box::new(
             self.items
                 .values()
@@ -2566,7 +2825,7 @@ impl mz_sql::catalog::CatalogCluster<'_> for Cluster {
         self.id
     }
 
-    fn bound_objects(&self) -> &BTreeSet<GlobalId> {
+    fn bound_objects(&self) -> &BTreeSet<CatalogItemId> {
         &self.bound_objects
     }
 
@@ -2644,16 +2903,16 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
         self.name()
     }
 
-    fn id(&self) -> GlobalId {
+    fn id(&self) -> CatalogItemId {
         self.id()
+    }
+
+    fn global_ids(&self) -> Box<dyn Iterator<Item = GlobalId> + '_> {
+        Box::new(self.global_ids())
     }
 
     fn oid(&self) -> u32 {
         self.oid()
-    }
-
-    fn desc(&self, name: &FullItemName) -> Result<Cow<RelationDesc>, SqlCatalogError> {
-        self.desc(name)
     }
 
     fn func(&self) -> Result<&'static mz_sql::func::Func, SqlCatalogError> {
@@ -2730,26 +2989,28 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
         self.references()
     }
 
-    fn uses(&self) -> BTreeSet<GlobalId> {
+    fn uses(&self) -> BTreeSet<CatalogItemId> {
         self.uses()
     }
 
-    fn referenced_by(&self) -> &[GlobalId] {
+    fn referenced_by(&self) -> &[CatalogItemId] {
         self.referenced_by()
     }
 
-    fn used_by(&self) -> &[GlobalId] {
+    fn used_by(&self) -> &[CatalogItemId] {
         self.used_by()
     }
 
-    fn subsource_details(&self) -> Option<(GlobalId, &UnresolvedItemName, &SourceExportDetails)> {
+    fn subsource_details(
+        &self,
+    ) -> Option<(CatalogItemId, &UnresolvedItemName, &SourceExportDetails)> {
         self.subsource_details()
     }
 
     fn source_export_details(
         &self,
     ) -> Option<(
-        GlobalId,
+        CatalogItemId,
         &UnresolvedItemName,
         &SourceExportDetails,
         &SourceExportDataConfig<ReferencedConnection>,
@@ -2761,7 +3022,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
         self.is_progress_source()
     }
 
-    fn progress_id(&self) -> Option<GlobalId> {
+    fn progress_id(&self) -> Option<CatalogItemId> {
         self.progress_id()
     }
 
@@ -2844,7 +3105,7 @@ impl TryFrom<Diff> for StateDiff {
 /// Information needed to process an update to a temporary item.
 #[derive(Debug, Clone)]
 pub struct TemporaryItem {
-    pub id: GlobalId,
+    pub id: CatalogItemId,
     pub oid: u32,
     pub name: QualifiedItemName,
     pub item: CatalogItem,

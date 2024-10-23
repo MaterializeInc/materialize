@@ -22,7 +22,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::instrument;
 use mz_repr::adt::mz_acl_item::PrivilegeMap;
 use mz_repr::optimize::OverrideFrom;
-use mz_repr::{GlobalId, Timestamp};
+use mz_repr::{GlobalId, RelationVersion, Timestamp};
 use mz_sql::ast::visit_mut::{VisitMut, VisitMutNode};
 use mz_sql::ast::{Raw, RawItemName};
 use mz_sql::names::{FullItemName, PartialItemName, ResolvedIds};
@@ -58,14 +58,18 @@ impl Coordinator {
 
         // Put a placeholder in the catalog so the optimizer can find something
         // for the sink_id.
-        let sink_id = self.catalog_mut().allocate_user_id().await?;
+        let (item_id, global_id) = self.catalog_mut().allocate_user_id().await?;
+
+        let collections = [(RelationVersion::root(), global_id)].into_iter().collect();
+
         let bootstrap_catalog = ContinualTaskCatalogBootstrap {
             delegate: self.owned_catalog().as_optimizer_catalog(),
-            sink_id,
+            sink_id: global_id,
             entry: CatalogEntry {
                 item: CatalogItem::Table(Table {
                     create_sql: None,
                     desc: desc.clone(),
+                    collections,
                     conn_id: None,
                     resolved_ids: resolved_ids.clone(),
                     custom_logical_compaction_window: None,
@@ -76,7 +80,7 @@ impl Coordinator {
                 }),
                 referenced_by: Vec::new(),
                 used_by: Vec::new(),
-                id: sink_id,
+                id: item_id,
                 oid: 0,
                 name: name.clone(),
                 owner_id: *session.current_role_id(),

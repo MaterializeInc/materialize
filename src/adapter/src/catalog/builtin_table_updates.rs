@@ -497,11 +497,10 @@ impl CatalogState {
 
     pub(super) fn pack_item_update(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
         let entry = self.get_entry(&id);
-        let id = entry.id();
         let oid = entry.oid();
         let conn_id = entry.item().conn_id().unwrap_or(&SYSTEM_CONN_ID);
         let schema_id = &self
