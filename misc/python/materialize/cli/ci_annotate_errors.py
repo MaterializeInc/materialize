@@ -734,27 +734,30 @@ def _get_errors_from_log_file(log_file_name: str) -> list[ErrorLog]:
         error_logs.extend(_collect_errors_in_logs(data, log_file_name))
         data.seek(0)
         error_logs.extend(_collect_service_panics_in_logs(data, log_file_name))
+        # TODO(def-) Figure out a way to reenable, currently log lines in the
+        # same container can intersect in any way, so there is no reliable way
+        # to detect if a password is in the logs or not
         # Passwords are expected in these files, ignore them
-        if log_file_name not in {
-            "run.log",
-            "docker-inspect.log",
-            "docker-ps-a.log",
-            "ps-aux.log",
-            "kubectl-describe-all.log",
-            # TODO(def-): Remove when we have 4 versions released without leaking passwords to logs
-        } and os.getenv("BUILDKITE_STEP_KEY") not in {
-            "checks-upgrade-clusterd-compute-first",
-            "checks-upgrade-clusterd-compute-last",
-            "checks-upgrade-entire-mz-two-versions",
-            "checks-upgrade-entire-mz-four-versions",
-            "checks-preflight-check-rollback",
-            "checks-0dt-upgrade-entire-mz-two-versions",
-            "checks-0dt-upgrade-entire-mz-four-versions",
-            "cloudtest-upgrade",
-            "feature-benchmark",
-        }:
-            data.seek(0)
-            error_logs.extend(_collect_passwords_in_logs(data, log_file_name))
+        # if log_file_name not in {
+        #     "run.log",
+        #     "docker-inspect.log",
+        #     "docker-ps-a.log",
+        #     "ps-aux.log",
+        #     "kubectl-describe-all.log",
+        #     # TODO(def-): Remove when we have 4 versions released without leaking passwords to logs
+        # } and os.getenv("BUILDKITE_STEP_KEY") not in {
+        #     "checks-upgrade-clusterd-compute-first",
+        #     "checks-upgrade-clusterd-compute-last",
+        #     "checks-upgrade-entire-mz-two-versions",
+        #     "checks-upgrade-entire-mz-four-versions",
+        #     "checks-preflight-check-rollback",
+        #     "checks-0dt-upgrade-entire-mz-two-versions",
+        #     "checks-0dt-upgrade-entire-mz-four-versions",
+        #     "cloudtest-upgrade",
+        #     "feature-benchmark",
+        # }:
+        #     data.seek(0)
+        #     error_logs.extend(_collect_passwords_in_logs(data, log_file_name))
 
     return error_logs
 
