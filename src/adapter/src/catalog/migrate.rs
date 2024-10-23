@@ -92,7 +92,7 @@ pub(crate) async fn migrate(
     state: &mut CatalogState,
     tx: &mut Transaction<'_>,
     item_updates: Vec<StateUpdate>,
-    _now: NowFn,
+    now: NowFn,
     _boot_ts: Timestamp,
 ) -> Result<Vec<BuiltinTableUpdate<&'static BuiltinTable>>, anyhow::Error> {
     let catalog_version = tx.get_catalog_content_version();
@@ -107,6 +107,7 @@ pub(crate) async fn migrate(
     );
 
     rewrite_ast_items(tx, |tx, item, stmt, all_items_and_statements| {
+        let now = now.clone();
         Box::pin(async move {
             // Add per-item AST migrations below.
             //
@@ -128,7 +129,7 @@ pub(crate) async fn migrate(
                 })?;
                 if enable_migration {
                     info!("migrate: force_source_table_syntax");
-                    ast_rewrite_sources_to_tables(tx, item, stmt, all_items_and_statements)?;
+                    ast_rewrite_sources_to_tables(tx, now, item, stmt, all_items_and_statements)?;
                 }
             }
             Ok(())
@@ -227,6 +228,7 @@ pub(crate) async fn migrate(
 ///
 fn ast_rewrite_sources_to_tables(
     tx: &mut Transaction<'_>,
+    now: NowFn,
     item: &mut Item,
     stmt: &mut Statement<Raw>,
     all_items_and_statements: &Vec<(Item, Statement<Raw>)>,
@@ -577,6 +579,26 @@ fn ast_rewrite_sources_to_tables(
                 source_id => new_source_shard
             })?;
 
+            let schema = tx.get_schema(&item.schema_id).expect("schema must exist");
+
+            add_to_audit_log(
+                tx,
+                mz_audit_log::EventType::Create,
+                mz_audit_log::ObjectType::Table,
+                mz_audit_log::EventDetails::IdFullNameV1(mz_audit_log::IdFullNameV1 {
+                    id: new_table_id.to_string(),
+                    name: mz_audit_log::FullNameV1 {
+                        database: schema
+                            .database_id
+                            .map(|d| d.to_string())
+                            .unwrap_or_default(),
+                        schema: schema.name,
+                        item: table_item_name,
+                    },
+                }),
+                now(),
+            )?;
+
             info!("migrate: updated source {stmt} and added table {table}");
         }
 
@@ -609,3 +631,17 @@ pub(crate) fn durable_migrate(
 //
 // Please include the adapter team on any code reviews that add or edit
 // migrations.
+
+fn add_to_audit_log(
+    tx: &mut Transaction,
+    event_type: mz_audit_log::EventType,
+    object_type: mz_audit_log::ObjectType,
+    details: mz_audit_log::EventDetails,
+    occurred_at: mz_ore::now::EpochMillis,
+) -> Result<(), anyhow::Error> {
+    let id = tx.get_and_increment_id(mz_catalog::durable::AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
+    let event =
+        mz_audit_log::VersionedEvent::new(id, event_type, object_type, details, None, occurred_at);
+    tx.insert_audit_log_event(event);
+    Ok(())
+}
