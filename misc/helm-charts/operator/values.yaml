@@ -25,8 +25,8 @@ operator:
     region: "kind"
     # Flag to indicate whether the environment is for local development
     localDevelopment: true
-    # Target architecture for environmentd (set to "arm64" for ARM systems, can also be "amd64" for Intel/AMD)
-    environmentdTargetArch: "arm64" # amd64
+  # Node selector to use for the operator pod
+  nodeSelector: {}
   resources:
     # Resources requested by the operator for CPU and memory
     requests:
@@ -35,6 +35,14 @@ operator:
     # Resource limits for the operator's CPU and memory
     limits:
       memory: 512Mi
+
+environmentd:
+  # Node selector to use for environmentd pods spawned by the operator
+  nodeSelector: {}
+
+clusterd:
+  # Node selector to use for clusterd pods spawned by the operator
+  nodeSelector: {}
 
 # RBAC (Role-Based Access Control) settings
 rbac:

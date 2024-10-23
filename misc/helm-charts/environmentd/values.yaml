@@ -17,7 +17,7 @@ namespace:
 # Environment configuration for Materialize
 environment:
   # The name of the environment to be deployed, this should be a UUID
-  name: "environment-12345678-1234-1234-1234-123456789012"
+  name: "12345678-1234-1234-1234-123456789012"
   # Docker image reference for the Materialize `environmentd` service
   environmentdImageRef: "materialize/environmentd:v0.122.0-dev.0--pr.g8bb641fc00c77f98ba5556dcdca43670776eacfa"
   # Optional additional arguments to be passed to `environmentd`

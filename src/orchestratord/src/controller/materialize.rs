@@ -21,9 +21,9 @@ use tracing::{debug, trace};
 
 use crate::metrics::Metrics;
 use mz_cloud_resources::crd::materialize::v1alpha1::{Materialize, MaterializeStatus};
+use mz_orchestrator_kubernetes::KubernetesImagePullPolicy;
 use mz_orchestrator_tracing::TracingCliArgs;
-use mz_ore::cast::CastFrom;
-use mz_ore::instrument;
+use mz_ore::{cast::CastFrom, cli::KeyValueArg, instrument};
 
 mod resources;
 
@@ -35,26 +35,21 @@ pub struct Args {
     region: String,
     #[clap(long)]
     local_development: bool,
-    #[clap(long)]
-    environmentd_target_arch: String,
 
     #[clap(flatten)]
     aws_info: AwsInfo,
 
     #[clap(long)]
-    persist_bucket: Option<String>,
-
-    #[clap(long)]
-    frontegg_jwk: Option<String>,
-    #[clap(long)]
-    frontegg_url: Option<String>,
-    #[clap(long)]
-    frontegg_admin_role: Option<String>,
-
-    #[clap(long)]
     scheduler_name: Option<String>,
     #[clap(long)]
     enable_security_context: bool,
+
+    #[clap(long)]
+    environmentd_node_selector: Vec<KeyValueArg<String, String>>,
+    #[clap(long)]
+    clusterd_node_selector: Vec<KeyValueArg<String, String>>,
+    #[clap(long, default_value = "always", arg_enum)]
+    image_pull_policy: KubernetesImagePullPolicy,
 
     #[clap(long, default_value_t = default_cluster_replica_sizes())]
     environmentd_cluster_replica_sizes: String,
@@ -348,7 +343,7 @@ impl k8s_controller::Context for Context {
                         resources.promote_services(&client, &mz.namespace()).await?;
                         if increment_generation {
                             resources
-                                .teardown_generation(&client, &mz.namespace(), active_generation)
+                                .teardown_generation(&client, mz, active_generation)
                                 .await?;
                         }
                         self.update_status(
@@ -376,7 +371,7 @@ impl k8s_controller::Context for Context {
                     }
                     Err(e) => {
                         resources
-                            .teardown_generation(&client, &mz.namespace(), next_generation)
+                            .teardown_generation(&client, mz, next_generation)
                             .await?;
                         self.update_status(
                             &mz_api,
@@ -410,7 +405,7 @@ impl k8s_controller::Context for Context {
                 let mut needs_update = mz.conditions_need_update();
                 if mz.update_in_progress() {
                     resources
-                        .teardown_generation(&client, &mz.namespace(), next_generation)
+                        .teardown_generation(&client, mz, next_generation)
                         .await?;
                     needs_update = true;
                 }
@@ -448,7 +443,7 @@ impl k8s_controller::Context for Context {
             let mut needs_update = mz.conditions_need_update() || mz.rollout_requested();
             if mz.update_in_progress() {
                 resources
-                    .teardown_generation(&client, &mz.namespace(), next_generation)
+                    .teardown_generation(&client, mz, next_generation)
                     .await?;
                 needs_update = true;
             }

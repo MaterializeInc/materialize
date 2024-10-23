@@ -14,8 +14,7 @@ use k8s_openapi::{
     api::{
         apps::v1::{StatefulSet, StatefulSetSpec, StatefulSetUpdateStrategy},
         core::v1::{
-            Affinity, Capabilities, Container, ContainerPort, EnvVar, EnvVarSource, NodeAffinity,
-            NodeSelector, NodeSelectorRequirement, NodeSelectorTerm, Pod, PodSecurityContext,
+            Capabilities, Container, ContainerPort, EnvVar, EnvVarSource, Pod, PodSecurityContext,
             PodSpec, PodTemplateSpec, Probe, ResourceRequirements, SeccompProfile,
             SecretKeySelector, SecurityContext, Service, ServiceAccount, ServicePort, ServiceSpec,
             TCPSocketAction, Toleration,
@@ -160,7 +159,7 @@ impl Resources {
             }
 
             let environmentd_url =
-                environmentd_internal_http_address(args, namespace, self.generation);
+                environmentd_internal_http_address(args, namespace, &*self.generation_service);
 
             let http_client = reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(10))
@@ -236,15 +235,7 @@ impl Resources {
             }
         } else {
             trace!("restarting environmentd pod to pick up statefulset changes");
-            let Some(generation) = self
-                .statefulset
-                .annotations()
-                .get("materialize.cloud/generation")
-                .and_then(|generation| generation.parse().ok())
-            else {
-                bail!("failed to restart environmentd pod: missing generation");
-            };
-            delete_resource(&pod_api, &Materialize::environmentd_pod_name(generation)).await?;
+            delete_resource(&pod_api, &statefulset_pod_name(&*self.statefulset, 0)).await?;
         }
 
         Ok(None)
@@ -268,30 +259,26 @@ impl Resources {
     pub async fn teardown_generation(
         &self,
         client: &Client,
-        namespace: &str,
+        mz: &Materialize,
         generation: u64,
     ) -> Result<(), anyhow::Error> {
-        let service_api: Api<Service> = Api::namespaced(client.clone(), namespace);
-        let statefulset_api: Api<StatefulSet> = Api::namespaced(client.clone(), namespace);
+        let service_api: Api<Service> = Api::namespaced(client.clone(), &mz.namespace());
+        let statefulset_api: Api<StatefulSet> = Api::namespaced(client.clone(), &mz.namespace());
 
         trace!("deleting environmentd statefulset for generation {generation}");
         delete_resource(
             &statefulset_api,
-            &Materialize::environmentd_statefulset_name(generation),
+            &mz.environmentd_statefulset_name(generation),
         )
         .await?;
 
         trace!("deleting persist pubsub service for generation {generation}");
-        delete_resource(
-            &service_api,
-            &Materialize::persist_pubsub_service_name(generation),
-        )
-        .await?;
+        delete_resource(&service_api, &mz.persist_pubsub_service_name(generation)).await?;
 
         trace!("deleting environmentd per-generation service for generation {generation}");
         delete_resource(
             &service_api,
-            &Materialize::environmentd_generation_service_name(generation),
+            &mz.environmentd_generation_service_name(generation),
         )
         .await?;
 
@@ -484,12 +471,7 @@ fn create_public_service_object(
     mz: &Materialize,
     generation: u64,
 ) -> Service {
-    create_base_service_object(
-        config,
-        mz,
-        generation,
-        &Materialize::environmentd_service_name(),
-    )
+    create_base_service_object(config, mz, generation, &mz.environmentd_service_name())
 }
 
 fn create_generation_service_object(
@@ -501,7 +483,7 @@ fn create_generation_service_object(
         config,
         mz,
         generation,
-        &Materialize::environmentd_generation_service_name(generation),
+        &mz.environmentd_generation_service_name(generation),
     )
 }
 
@@ -538,7 +520,7 @@ fn create_base_service_object(
         },
     ];
 
-    let selector = btreemap! {"materialize.cloud/name".to_string() => Materialize::environmentd_pod_name(generation)};
+    let selector = btreemap! {"materialize.cloud/name".to_string() => mz.environmentd_statefulset_name(generation)};
 
     let spec = if config.local_development {
         ServiceSpec {
@@ -571,12 +553,12 @@ fn create_persist_pubsub_service(
     generation: u64,
 ) -> Service {
     Service {
-        metadata: mz.managed_resource_meta(Materialize::persist_pubsub_service_name(generation)),
+        metadata: mz.managed_resource_meta(mz.persist_pubsub_service_name(generation)),
         spec: Some(ServiceSpec {
             type_: Some("ClusterIP".to_string()),
             cluster_ip: Some("None".to_string()),
             selector: Some(btreemap! {
-                "materialize.cloud/name".to_string() => Materialize::environmentd_pod_name(generation),
+                "materialize.cloud/name".to_string() => mz.environmentd_statefulset_name(generation),
             }),
             ports: Some(vec![ServicePort {
                 name: Some("grpc".to_string()),
@@ -774,13 +756,10 @@ fn create_statefulset_object(
             args.push(format!("--aws-account-id={account_id}"));
         }
 
-        args.extend([
-            format!("--aws-secrets-controller-tags=Owner={}", mz.oidc_sub()),
-            format!(
-                "--aws-secrets-controller-tags=Environment={}",
-                mz.name_unchecked()
-            ),
-        ]);
+        args.extend([format!(
+            "--aws-secrets-controller-tags=Environment={}",
+            mz.name_unchecked()
+        )]);
         args.extend_from_slice(&config.aws_info.aws_secrets_controller_tags);
     }
 
@@ -791,9 +770,17 @@ fn create_statefulset_object(
             "--orchestrator-kubernetes-service-account={}",
             &mz.service_account_name()
         ),
-        "--orchestrator-kubernetes-service-node-selector=workload=materialize-instance".into(),
-        "--orchestrator-kubernetes-image-pull-policy=if-not-present".into(),
+        format!(
+            "--orchestrator-kubernetes-image-pull-policy={}",
+            config.image_pull_policy.as_kebab_case_str(),
+        ),
     ]);
+    for selector in &config.clusterd_node_selector {
+        args.push(format!(
+            "--orchestrator-kubernetes-service-node-selector={}={}",
+            selector.key, selector.value,
+        ));
+    }
     if let Some(scheduler_name) = &config.scheduler_name {
         args.push(format!(
             "--orchestrator-kubernetes-scheduler-name={}",
@@ -857,32 +844,10 @@ fn create_statefulset_object(
         ),
     ]);
 
-    // Add Frontegg arguments.
-    if let (Some(jwk_pem), Some(url), Some(admin_role)) = (
-        &config.frontegg_jwk,
-        &config.frontegg_url,
-        &config.frontegg_admin_role,
-    ) {
-        args.extend([
-            format!("--frontegg-tenant={}", mz.name_unchecked()),
-            format!("--frontegg-jwk={jwk_pem}"),
-            format!("--frontegg-api-token-url={url}/identity/resources/auth/v1/api-token",),
-            format!("--frontegg-admin-role={admin_role}"),
-        ]);
-    }
-
-    // Add storage retention arguments -- see
-    // https://github.com/MaterializeInc/cloud/issues/5142#issuecomment-1385496948
-    // for why 14 months in particular
-    let retention_days = 427;
-    args.push(format!(
-        "--storage-usage-retention-period={retention_days}days"
-    ));
-
     // Add Persist PubSub arguments
     args.push(format!(
         "--persist-pubsub-url=http://{}:{}",
-        Materialize::persist_pubsub_service_name(generation),
+        mz.persist_pubsub_service_name(generation),
         config.environmentd_internal_persist_pubsub_port,
     ));
     args.push(format!(
@@ -963,8 +928,9 @@ fn create_statefulset_object(
     ];
 
     let container = Container {
-        name: Materialize::environmentd_container_name().to_owned(),
+        name: "environmentd".to_owned(),
         image: Some(mz.spec.environmentd_image_ref.to_owned()),
+        image_pull_policy: Some(config.image_pull_policy.to_string()),
         ports: Some(ports),
         command,
         args: Some(args),
@@ -983,11 +949,11 @@ fn create_statefulset_object(
     let mut pod_template_labels = mz.default_labels();
     pod_template_labels.insert(
         "materialize.cloud/name".to_owned(),
-        Materialize::environmentd_pod_name(generation),
+        mz.environmentd_statefulset_name(generation),
     );
     pod_template_labels.insert(
         "materialize.cloud/app".to_owned(),
-        Materialize::environmentd_service_name(),
+        mz.environmentd_service_name(),
     );
     pod_template_labels.insert("app".to_owned(), "environmentd".to_string());
 
@@ -1000,31 +966,6 @@ fn create_statefulset_object(
         "karpenter.sh/do-not-disrupt".to_owned() => "true".to_string(),
         "materialize.cloud/generation".to_owned() => generation.to_string(),
     };
-
-    let affinity = Some(Affinity {
-        node_affinity: Some(NodeAffinity {
-            preferred_during_scheduling_ignored_during_execution: None,
-            required_during_scheduling_ignored_during_execution: Some(NodeSelector {
-                node_selector_terms: vec![NodeSelectorTerm {
-                    match_expressions: Some(vec![
-                        NodeSelectorRequirement {
-                            key: "workload".to_owned(),
-                            operator: "In".to_owned(),
-                            values: Some(vec!["materialize-instance".to_owned()]),
-                        },
-                        NodeSelectorRequirement {
-                            key: "kubernetes.io/arch".to_owned(),
-                            operator: "In".to_owned(),
-                            values: Some(vec![config.environmentd_target_arch.clone()]),
-                        },
-                    ]),
-                    match_fields: None,
-                }],
-            }),
-        }),
-        pod_affinity: None,
-        pod_anti_affinity: None,
-    });
 
     let tolerations = Some(vec![
         // When the node becomes `NotReady` it indicates there is a problem with the node,
@@ -1056,7 +997,13 @@ fn create_statefulset_object(
         }),
         spec: Some(PodSpec {
             containers: vec![container],
-            affinity,
+            node_selector: Some(
+                config
+                    .environmentd_node_selector
+                    .iter()
+                    .map(|selector| (selector.key.clone(), selector.value.clone()))
+                    .collect(),
+            ),
             scheduler_name: config.scheduler_name.clone(),
             service_account_name: Some(mz.service_account_name()),
             volumes: None,
@@ -1095,7 +1042,7 @@ fn create_statefulset_object(
     let mut match_labels = BTreeMap::new();
     match_labels.insert(
         "materialize.cloud/name".to_owned(),
-        Materialize::environmentd_pod_name(generation),
+        mz.environmentd_statefulset_name(generation),
     );
 
     let statefulset_spec = StatefulSetSpec {
@@ -1105,7 +1052,7 @@ fn create_statefulset_object(
             rolling_update: None,
             type_: Some("OnDelete".to_owned()),
         }),
-        service_name: Materialize::environmentd_service_name(),
+        service_name: mz.environmentd_service_name(),
         selector: LabelSelector {
             match_expressions: None,
             match_labels: Some(match_labels),
@@ -1119,7 +1066,7 @@ fn create_statefulset_object(
                 "materialize.cloud/generation".to_owned() => generation.to_string(),
                 "materialize.cloud/force".to_owned() => mz.spec.force_rollout.to_string(),
             }),
-            ..mz.managed_resource_meta(Materialize::environmentd_statefulset_name(generation))
+            ..mz.managed_resource_meta(mz.environmentd_statefulset_name(generation))
         },
         spec: Some(statefulset_spec),
         status: None,
@@ -1141,16 +1088,20 @@ enum BecomeLeaderResult {
 fn environmentd_internal_http_address(
     args: &super::Args,
     namespace: &str,
-    generation: u64,
+    generation_service: &Service,
 ) -> String {
     let host = if let Some(host_override) = &args.environmentd_internal_http_host_override {
         host_override.to_string()
     } else {
         format!(
             "{}.{}.svc.cluster.local",
-            Materialize::environmentd_generation_service_name(generation),
+            generation_service.name_unchecked(),
             namespace,
         )
     };
     format!("{}:{}", host, args.environmentd_internal_http_port)
+}
+
+fn statefulset_pod_name(statefulset: &StatefulSet, idx: u64) -> String {
+    format!("{}-{}", statefulset.name_unchecked(), idx)
 }
