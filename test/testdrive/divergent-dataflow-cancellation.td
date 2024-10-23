@@ -18,7 +18,7 @@
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_introspection_subscribes = false
 
-> CREATE CLUSTER test SIZE '1';
+> CREATE CLUSTER test SIZE '1', REPLICATION FACTOR = 2;
 > SET cluster = test;
 
 > CREATE VIEW divergent AS
