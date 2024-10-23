@@ -30,8 +30,8 @@ $ set-max-tries max-tries=1
 
 > SELECT sum(count)
   FROM (
-      SELECT count(*) FROM input_1
-      UNION ALL SELECT count(*) FROM input_2
+      SELECT count(*) FROM input_1_tbl
+      UNION ALL SELECT count(*) FROM input_2_tbl
       UNION ALL SELECT count(*) FROM t
   ) AS x;
 2000204
@@ -46,8 +46,8 @@ A,B,0
 
 > SELECT sum(count)
   FROM (
-      SELECT count(*) FROM input_1
-      UNION ALL SELECT count(*) FROM input_2
+      SELECT count(*) FROM input_1_tbl
+      UNION ALL SELECT count(*) FROM input_2_tbl
       UNION ALL SELECT count(*) FROM t
   ) AS x;
 3000207

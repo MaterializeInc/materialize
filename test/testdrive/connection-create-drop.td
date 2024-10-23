@@ -91,12 +91,15 @@ materialize.public.testconn   "CREATE CONNECTION \"materialize\".\"public\".\"te
 > CREATE CONNECTION testconn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
 
 > CREATE CLUSTER connection_source_cluster SIZE '${arg.default-storage-size}';
-> CREATE SOURCE connection_source (first, second)
+> CREATE SOURCE connection_source
   IN CLUSTER connection_source_cluster
   FROM KAFKA CONNECTION testconn (TOPIC 'testdrive-connection_test-${testdrive.seed}')
+
+> CREATE TABLE connection_source_tbl (first, second)
+  FROM SOURCE connection_source (REFERENCE "testdrive-connection_test-${testdrive.seed}")
   FORMAT CSV WITH 2 COLUMNS
 
-> SELECT * FROM connection_source
+> SELECT * FROM connection_source_tbl
 first second
 ------------
 1     2
@@ -110,6 +113,9 @@ contains:depended upon by source "connection_source"
 > DROP CONNECTION testconn CASCADE;
 
 # Validate the cascading drop actually happened
+! SELECT * FROM connection_source_tbl
+contains:unknown catalog item 'connection_source_tbl'
+
 ! SELECT * FROM connection_source
 contains:unknown catalog item 'connection_source'
 

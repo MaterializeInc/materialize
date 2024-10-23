@@ -130,13 +130,16 @@ def workflow_read_only(c: Composition) -> None:
         $ kafka-create-topic topic=kafka
         $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=kafka
         key1A,key1B:value1A,value1B
-        > CREATE SOURCE kafka_source (key1, key2, value1, value2)
+        > CREATE SOURCE kafka_source
           IN CLUSTER cluster
-          FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-${{testdrive.seed}}')
+          FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-${{testdrive.seed}}');
+
+        > CREATE TABLE kafka_source_tbl (key1, key2, value1, value2)
+          FROM SOURCE kafka_source (REFERENCE "testdrive-kafka-${{testdrive.seed}}")
           KEY FORMAT CSV WITH 2 COLUMNS DELIMITED BY ','
           VALUE FORMAT CSV WITH 2 COLUMNS DELIMITED BY ','
           ENVELOPE UPSERT;
-        > SELECT * FROM kafka_source
+        > SELECT * FROM kafka_source_tbl
         key1A key1B value1A value1B
 
         $ postgres-execute connection=postgres://postgres:postgres@postgres
@@ -267,7 +270,7 @@ def workflow_read_only(c: Composition) -> None:
             > EXPLAIN TIMESTAMP FOR SELECT * FROM mv;
             "                query timestamp: <> <>\\nlargest not in advance of upper: <> <>\\n                          upper:[<> <>]\\n                          since:[<> <>]\\n        can respond immediately: true\\n                       timeline: Some(EpochMilliseconds)\\n              session wall time: <> <>\\n\\nsource materialize.public.mv (<>, storage):\\n                  read frontier:[<> <>]\\n                 write frontier:[<> <>]\\n"
 
-            > SELECT * FROM kafka_source
+            > SELECT * FROM kafka_source_tbl
             key1A key1B value1A value1B
             > SELECT * FROM postgres_source_table
             A 0
@@ -321,7 +324,7 @@ def workflow_read_only(c: Composition) -> None:
             8
             > SELECT max(b) FROM t;
             8
-            > SELECT * FROM kafka_source
+            > SELECT * FROM kafka_source_tbl
             key1A key1B value1A value1B
             key2A key2B value2A value2B
             > SELECT * FROM postgres_source_table
@@ -345,7 +348,7 @@ def workflow_read_only(c: Composition) -> None:
             USE public;
             INSERT INTO mysql_source_table VALUES ('C', 2);
 
-            > SELECT * FROM kafka_source
+            > SELECT * FROM kafka_source_tbl
             key1A key1B value1A value1B
             key2A key2B value2A value2B
             key3A key3B value3A value3B
@@ -414,13 +417,16 @@ def workflow_basic(c: Composition) -> None:
         $ kafka-create-topic topic=kafka
         $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=kafka
         key1A,key1B:value1A,value1B
-        > CREATE SOURCE kafka_source (key1, key2, value1, value2)
+        > CREATE SOURCE kafka_source
           IN CLUSTER cluster
-          FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-${{testdrive.seed}}')
+          FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-${{testdrive.seed}}');
+
+        > CREATE TABLE kafka_source_tbl (key1, key2, value1, value2)
+          FROM SOURCE kafka_source (REFERENCE "testdrive-kafka-${{testdrive.seed}}")
           KEY FORMAT CSV WITH 2 COLUMNS DELIMITED BY ','
           VALUE FORMAT CSV WITH 2 COLUMNS DELIMITED BY ','
           ENVELOPE UPSERT;
-        > SELECT * FROM kafka_source
+        > SELECT * FROM kafka_source_tbl
         key1A key1B value1A value1B
 
         $ postgres-execute connection=postgres://postgres:postgres@postgres
@@ -564,7 +570,7 @@ def workflow_basic(c: Composition) -> None:
             > EXPLAIN TIMESTAMP FOR SELECT * FROM mv;
             "                query timestamp: <> <>\\nlargest not in advance of upper: <> <>\\n                          upper:[<> <>]\\n                          since:[<> <>]\\n        can respond immediately: true\\n                       timeline: Some(EpochMilliseconds)\\n              session wall time: <> <>\\n\\nsource materialize.public.mv (<>, storage):\\n                  read frontier:[<> <>]\\n                 write frontier:[<> <>]\\n"
 
-            > SELECT * FROM kafka_source
+            > SELECT * FROM kafka_source_tbl
             key1A key1B value1A value1B
             key2A key2B value2A value2B
             > SELECT * FROM postgres_source_table
@@ -635,7 +641,7 @@ def workflow_basic(c: Composition) -> None:
         > EXPLAIN TIMESTAMP FOR SELECT * FROM mv;
         "                query timestamp: <> <>\\nlargest not in advance of upper: <> <>\\n                          upper:[<> <>]\\n                          since:[<> <>]\\n        can respond immediately: true\\n                       timeline: Some(EpochMilliseconds)\\n              session wall time: <> <>\\n\\nsource materialize.public.mv (<>, storage):\\n                  read frontier:[<> <>]\\n                 write frontier:[<> <>]\\n"
 
-        > SELECT * FROM kafka_source
+        > SELECT * FROM kafka_source_tbl
         key1A key1B value1A value1B
         key2A key2B value2A value2B
         key3A key3B value3A value3B
@@ -698,7 +704,7 @@ def workflow_basic(c: Composition) -> None:
             6
             > SELECT * FROM mv;
             9
-            > SELECT * FROM kafka_source
+            > SELECT * FROM kafka_source_tbl
             key1A key1B value1A value1B
             key2A key2B value2A value2B
             key3A key3B value3A value3B
@@ -792,7 +798,7 @@ def workflow_basic(c: Composition) -> None:
             16
             > SELECT max(b) FROM t;
             8
-            > SELECT * FROM kafka_source
+            > SELECT * FROM kafka_source_tbl
             key1A key1B value1A value1B
             key2A key2B value2A value2B
             key3A key3B value3A value3B
@@ -816,7 +822,7 @@ def workflow_basic(c: Composition) -> None:
             USE public;
             INSERT INTO mysql_source_table VALUES ('D', 3);
 
-            > SELECT * FROM kafka_source
+            > SELECT * FROM kafka_source_tbl
             key1A key1B value1A value1B
             key2A key2B value2A value2B
             key3A key3B value3A value3B

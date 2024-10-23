@@ -229,11 +229,13 @@ two,2  bee,honey
 > CREATE SOURCE regexvalue
   IN CLUSTER regexvalue_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textsrc-${testdrive.seed}')
+> CREATE TABLE regexvalue_tbl
+  FROM SOURCE regexvalue (REFERENCE "testdrive-textsrc-${testdrive.seed}")
   KEY FORMAT TEXT
   VALUE FORMAT REGEX '(?P<animal>[^,]+),(?P<food>\w+)'
   INCLUDE KEY
 
-> SELECT * FROM regexvalue
+> SELECT * FROM regexvalue_tbl
 key   animal  food
 --------------------
 one,1  horse  apple
@@ -244,11 +246,13 @@ two,2  bee    honey
 > CREATE SOURCE regexboth
   IN CLUSTER regexboth_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textsrc-${testdrive.seed}')
+> CREATE TABLE regexboth_tbl
+  FROM SOURCE regexboth (REFERENCE "testdrive-textsrc-${testdrive.seed}")
   KEY FORMAT REGEX '(?P<id_name>[^,]+),(?P<id>\w+)'
   VALUE FORMAT REGEX '(?P<animal>[^,]+),(?P<food>\w+)'
   INCLUDE KEY
 
-> SELECT * FROM regexboth
+> SELECT * FROM regexboth_tbl
 id_name id     animal food
 ---------------------------
 one     1      horse  apple
@@ -259,11 +263,13 @@ two     2      bee    honey
 > CREATE SOURCE regexbothnest
   IN CLUSTER regexbothnest_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textsrc-${testdrive.seed}')
+> CREATE TABLE regexbothnest_tbl
+  FROM SOURCE regexbothnest (REFERENCE "testdrive-textsrc-${testdrive.seed}")
   KEY FORMAT REGEX '(?P<id_name>[^,]+),(?P<id>\w+)'
   VALUE FORMAT REGEX '(?P<animal>[^,]+),(?P<food>\w+)'
   INCLUDE KEY AS nest
 
-> SELECT (nest).id_name, (nest).id, animal FROM regexbothnest
+> SELECT (nest).id_name, (nest).id, animal FROM regexbothnest_tbl
 id_name id     animal
 --------------------
 <null>  <null> cow
