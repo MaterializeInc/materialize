@@ -293,6 +293,10 @@ mz_cluster_replica_metrics_history
 SOURCE
 materialize
 mz_internal
+mz_cluster_replica_metrics_history_ct
+CONTINUAL-TASK
+materialize
+mz_internal
 mz_cluster_replica_name_history
 VIEW
 materialize

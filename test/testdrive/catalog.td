@@ -361,6 +361,7 @@ table
 source
 view
 materialized-view
+continual-task
 sink
 index
 connection
@@ -791,7 +792,7 @@ test_table ""
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-241
+242
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2
