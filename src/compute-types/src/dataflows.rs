@@ -12,19 +12,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use differential_dataflow::lattice::Lattice;
-use mz_expr::{CollectionPlan, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
-use mz_ore::soft_assert_or_log;
-use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
-use mz_repr::refresh_schedule::RefreshSchedule;
-use mz_repr::{GlobalId, RelationType};
-use mz_storage_types::controller::CollectionMetadata;
-use proptest::prelude::{any, Arbitrary};
-use proptest::strategy::{BoxedStrategy, Strategy};
-use proptest_derive::Arbitrary;
-use serde::{Deserialize, Serialize};
-use timely::progress::Antichain;
-
 use crate::dataflows::proto_dataflow_description::{
     ProtoDataflowExpirationDesc, ProtoIndexExport, ProtoIndexImport, ProtoSinkExport,
     ProtoSourceImport,
@@ -33,6 +20,19 @@ use crate::plan::flat_plan::FlatPlan;
 use crate::plan::Plan;
 use crate::sinks::{ComputeSinkConnection, ComputeSinkDesc};
 use crate::sources::{SourceInstanceArguments, SourceInstanceDesc};
+use differential_dataflow::lattice::Lattice;
+use mz_expr::{CollectionPlan, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
+use mz_ore::soft_assert_or_log;
+use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
+use mz_repr::definity::Indefiniteness;
+use mz_repr::refresh_schedule::RefreshSchedule;
+use mz_repr::{GlobalId, RelationType};
+use mz_storage_types::controller::CollectionMetadata;
+use proptest::prelude::{any, Arbitrary};
+use proptest::strategy::{BoxedStrategy, Strategy};
+use proptest_derive::Arbitrary;
+use serde::{Deserialize, Serialize};
+use timely::progress::Antichain;
 
 include!(concat!(env!("OUT_DIR"), "/mz_compute_types.dataflows.rs"));
 
@@ -72,10 +72,12 @@ pub struct DataflowDescription<P, S: 'static = (), T = mz_repr::Timestamp> {
     pub initial_storage_as_of: Option<Antichain<T>>,
     /// The schedule of REFRESH materialized views.
     pub refresh_schedule: Option<RefreshSchedule>,
-    /// Human readable name
+    /// Human-readable name
     pub debug_name: String,
     /// Information about the dataflow used to determine if dataflow expiration can be enabled.
     pub dataflow_expiration_desc: DataflowExpirationDesc<T>,
+    /// Approximate information about for what times the dataflow produces definite outputs.
+    pub definiteness: Option<Indefiniteness>,
 }
 
 impl<P, S> DataflowDescription<P, S, mz_repr::Timestamp> {
@@ -122,6 +124,21 @@ impl<P, S> DataflowDescription<P, S, mz_repr::Timestamp> {
         replica_expiration: &Antichain<mz_repr::Timestamp>,
         dataflow_debug_name: &str,
     ) -> Antichain<mz_repr::Timestamp> {
+        if let (Some(definiteness), Some(expiration)) =
+            (&self.definiteness, replica_expiration.as_option())
+        {
+            println!(
+                "Got definiteness: {:?} and expiration: {:?}",
+                definiteness, expiration
+            );
+            let mut result = Antichain::new();
+            if let Some(expiration) = definiteness.apply(*expiration) {
+                result.insert(expiration);
+            }
+            println!("Returning result: {:?}", result);
+            return result;
+        }
+
         let dataflow_expiration_desc = &self.dataflow_expiration_desc;
 
         // Disable dataflow expiration if `replica_expiration` is unset, the current dataflow has a
@@ -190,6 +207,7 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
             refresh_schedule: None,
             debug_name: name,
             dataflow_expiration_desc: DataflowExpirationDesc::default(),
+            definiteness: None,
         }
     }
 
@@ -532,7 +550,8 @@ where
             && old.sink_exports == new.sink_exports
             && old.objects_to_build == new.objects_to_build
             && old.index_imports == new.index_imports
-            && old.source_imports == new.source_imports;
+            && old.source_imports == new.source_imports
+            && old.definiteness == new.definiteness;
 
         let partial = if let (Some(old_as_of), Some(new_as_of)) = (&old.as_of, &new.as_of) {
             timely::PartialOrder::less_equal(old_as_of, new_as_of)
@@ -594,6 +613,7 @@ where
             refresh_schedule: self.refresh_schedule.clone(),
             debug_name: self.debug_name.clone(),
             dataflow_expiration_desc: self.dataflow_expiration_desc.clone(),
+            definiteness: self.definiteness.clone(),
         }
     }
 }
@@ -612,6 +632,7 @@ impl RustType<ProtoDataflowDescription> for DataflowDescription<FlatPlan, Collec
             refresh_schedule: self.refresh_schedule.into_proto(),
             debug_name: self.debug_name.clone(),
             dataflow_expiration_desc: Some(self.dataflow_expiration_desc.into_proto()),
+            definiteness: self.definiteness.into_proto(),
         }
     }
 
@@ -639,6 +660,7 @@ impl RustType<ProtoDataflowDescription> for DataflowDescription<FlatPlan, Collec
                 .map(|x| x.into_rust())
                 .transpose()?
                 .unwrap_or_else(DataflowExpirationDesc::default),
+            definiteness: proto.definiteness.into_rust()?,
         })
     }
 }
@@ -775,6 +797,7 @@ proptest::prop_compose! {
         refresh_schedule_some in any::<bool>(),
         refresh_schedule in any::<RefreshSchedule>(),
         dataflow_expiration_desc in any::<DataflowExpirationDesc<mz_repr::Timestamp>>(),
+        definiteness in any::<Option<Indefiniteness>>(),
     ) -> DataflowDescription<FlatPlan, CollectionMetadata, mz_repr::Timestamp> {
         DataflowDescription {
             source_imports: BTreeMap::from_iter(source_imports.into_iter()),
@@ -802,6 +825,7 @@ proptest::prop_compose! {
             },
             debug_name,
             dataflow_expiration_desc,
+            definiteness,
         }
     }
 }

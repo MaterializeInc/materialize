@@ -28,6 +28,7 @@ use mz_repr::fixed_length::{FromDatumIter, ToDatumIter};
 use mz_repr::{DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::{CollectionExt, StreamExt};
+use mz_timely_util::shutdown::ShutdownToken;
 use timely::container::columnation::Columnation;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
@@ -37,7 +38,7 @@ use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 
 use crate::render::context::{
-    ArrangementFlavor, CollectionBundle, Context, MzArrangement, MzArrangementImport, ShutdownToken,
+    ArrangementFlavor, CollectionBundle, Context, MzArrangement, MzArrangementImport,
 };
 use crate::render::RenderTimestamp;
 use crate::typedefs::{RowRowAgent, RowRowEnter};

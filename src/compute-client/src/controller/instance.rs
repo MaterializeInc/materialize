@@ -1331,6 +1331,7 @@ where
             refresh_schedule: dataflow.refresh_schedule,
             debug_name: dataflow.debug_name,
             dataflow_expiration_desc: dataflow.dataflow_expiration_desc,
+            definiteness: dataflow.definiteness,
         };
 
         if augmented_dataflow.is_transient() {

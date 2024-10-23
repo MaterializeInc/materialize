@@ -165,7 +165,9 @@ use tracing::{debug, info, info_span, span, warn, Instrument, Level, Span};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 
+use self::statement_logging::{StatementLogging, StatementLoggingId};
 use crate::active_compute_sink::ActiveComputeSink;
+use crate::catalog::dataflow_expiration::IndefinitenessHelper;
 use crate::catalog::{BuiltinTableUpdate, Catalog, OpenCatalogResult};
 use crate::client::{Client, Handle};
 use crate::command::{Command, ExecuteResponse};
@@ -194,8 +196,6 @@ use crate::statement_logging::{StatementEndedExecutionReason, StatementLifecycle
 use crate::util::{ClientTransmitter, ResultExt};
 use crate::webhook::{WebhookAppenderInvalidator, WebhookConcurrencyLimiter};
 use crate::{flags, AdapterNotice, ReadHolds};
-
-use self::statement_logging::{StatementLogging, StatementLoggingId};
 
 pub(crate) mod id_bundle;
 pub(crate) mod in_memory_oracle;
@@ -2639,6 +2639,13 @@ impl Coordinator {
         for entry in ordered_catalog_entries {
             let id = entry.id();
             let is_timeline_epoch_ms = self.get_timeline_context(id).is_timeline_epoch_ms();
+            let indefiniteness =
+                IndefinitenessHelper::new(self.catalog()).indefinite_up_to(entry.id);
+            println!(
+                "item: {:?} indefiniteness: {:?}",
+                entry.item(),
+                indefiniteness
+            );
             match entry.item() {
                 CatalogItem::Index(idx) => {
                     // Collect optimizer parameters.
@@ -2680,7 +2687,8 @@ impl Coordinator {
                         (optimized_plan, global_lir_plan)
                     };
 
-                    let (physical_plan, metainfo) = global_lir_plan.unapply();
+                    let (mut physical_plan, metainfo) = global_lir_plan.unapply();
+                    physical_plan.definiteness = Some(indefiniteness);
                     let metainfo = {
                         // Pre-allocate a vector of transient GlobalIds for each notice.
                         let notice_ids = std::iter::repeat_with(|| self.allocate_transient_id())
@@ -2740,7 +2748,8 @@ impl Coordinator {
                         (optimized_plan, global_lir_plan)
                     };
 
-                    let (physical_plan, metainfo) = global_lir_plan.unapply();
+                    let (mut physical_plan, metainfo) = global_lir_plan.unapply();
+                    physical_plan.definiteness = Some(indefiniteness);
                     let metainfo = {
                         // Pre-allocate a vector of transient GlobalIds for each notice.
                         let notice_ids = std::iter::repeat_with(|| self.allocate_transient_id())

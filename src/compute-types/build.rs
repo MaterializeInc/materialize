@@ -35,6 +35,7 @@ fn main() {
         .extern_path(".mz_postgres_util.desc", "::mz_postgres_util::desc")
         .extern_path(".mz_repr.adt.regex", "::mz_repr::adt::regex")
         .extern_path(".mz_repr.antichain", "::mz_repr::antichain")
+        .extern_path(".mz_repr.definity", "::mz_repr::definity")
         .extern_path(".mz_repr.global_id", "::mz_repr::global_id")
         .extern_path(".mz_repr.relation_and_scalar", "::mz_repr")
         .extern_path(".mz_repr.explain", "::mz_repr")

@@ -13,9 +13,8 @@ use std::hash::Hash;
 
 use differential_dataflow::ExchangeData;
 use mz_repr::Row;
+use mz_timely_util::shutdown::ShutdownToken;
 use timely::container::columnation::Columnation;
-
-use crate::render::context::ShutdownToken;
 
 /// Used to make possibly-validating code generic: think of this as a kind of `MaybeResult`,
 /// specialized for use in compute.  Validation code will only run when the error constructor is
