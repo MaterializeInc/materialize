@@ -108,16 +108,16 @@ object. Only the replica knows the local expiration time. Thus, a dataflow
 description needs to encode enough breadcrumbs for the replica to make a
 correct decision on if and when to expire a dataflow.
 
-**An object is _definite up to_ a frontier as a function of an expiration
+**An object is at least _indefinite up to_ a frontier as a function of an expiration
 time:**
-* Sources are definite up to the expiration time.
-* Load generators are definit up to the minimum frontier.
-* Indexes are definite up to the meet of their inputs.
-* Constant collections are definite up to the empty frontier.
-* Tables are definite up to the expiration time.
-* Materialized views are definite up to the meet of their inputs, rounded up to
+* Sources are indefinite up to the expiration time.
+* Load generators are indefinit up to the minimum frontier.
+* Indexes are indefinite up to the meet of their inputs.
+* Constant collections are indefinite up to the empty frontier.
+* Tables are indefinite up to the expiration time.
+* Materialized views are indefinite up to the meet of their inputs, rounded up to
   the refresh schedule.
-* Subscribes are definite up to the meet of their up-to and their inputs.
+* Subscribes are indefinite up to the meet of their up-to and their inputs.
 
 ### Distinguishing expiration from dataflow shutdown
 
@@ -128,7 +128,12 @@ the user, but incorrect if the until is set to expire future updates.
 
 TODO:
 * Checking frontiers at the input vs. output.
-* Do we need a token to distinguish shutdown variants? Ideally, we know from the structure of the dataflow and objects it depends on what advancing to the empty frontier means.
+* Do we need a token to distinguish shutdown variants? Ideally, we know from
+  the structure of the dataflow and objects it depends on what advancing to the
+  empty frontier means.
+* Do we need to panic on expiration?
+* Can we retain a capability at the expiration time and thus prevent unwanted
+  progress?
 
 An overview of the logic used for these features is as follows:
 ```
