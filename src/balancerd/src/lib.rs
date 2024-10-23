@@ -201,20 +201,30 @@ impl BalancerService {
                     .unwrap_or_else(|| String::from("unknown"));
                 if let Some(provider) = cfg.cloud_provider.clone() {
                     builder.add_context(
-                        ld::ContextBuilder::new(provider)
-                            .kind("cloud_provider")
-                            .set_string("cloud_provider_region", region)
-                            .build()
-                            .map_err(|e| anyhow::anyhow!(e))?,
+                        ld::ContextBuilder::new(format!(
+                            "{}/{}/{}",
+                            provider, region, cfg.build_version
+                        ))
+                        .kind("balancer")
+                        .set_string("provider", provider)
+                        .set_string("region", region)
+                        .set_string("version", cfg.build_version.to_string())
+                        .build()
+                        .map_err(|e| anyhow::anyhow!(e))?,
                     );
                 } else {
                     builder.add_context(
-                        ld::ContextBuilder::new("unknown")
-                            .anonymous(true) // exclude this user from the dashboard
-                            .kind("cloud_provider")
-                            .set_string("cloud_provider_region", region)
-                            .build()
-                            .map_err(|e| anyhow::anyhow!(e))?,
+                        ld::ContextBuilder::new(format!(
+                            "{}/{}/{}",
+                            "unknown", region, cfg.build_version
+                        ))
+                        .anonymous(true) // exclude this user from the dashboard
+                        .kind("balancer")
+                        .set_string("provider", "unknown")
+                        .set_string("region", region)
+                        .set_string("version", cfg.build_version.to_string())
+                        .build()
+                        .map_err(|e| anyhow::anyhow!(e))?,
                     );
                 }
                 Ok(())
