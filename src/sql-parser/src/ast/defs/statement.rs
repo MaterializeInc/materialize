@@ -1610,6 +1610,8 @@ pub enum TableFromSourceOptionName {
     /// message, which includes details necessary for planning this
     /// table as a Source Export
     Details,
+
+    IgnoreKeys,
 }
 
 impl AstDisplay for TableFromSourceOptionName {
@@ -1619,6 +1621,7 @@ impl AstDisplay for TableFromSourceOptionName {
             TableFromSourceOptionName::ExcludeColumns => "EXCLUDE COLUMNS",
             TableFromSourceOptionName::Timeline => "TIMELINE",
             TableFromSourceOptionName::Details => "DETAILS",
+            TableFromSourceOptionName::IgnoreKeys => "IGNORE KEYS",
         })
     }
 }
@@ -1635,7 +1638,8 @@ impl WithOptionName for TableFromSourceOptionName {
             TableFromSourceOptionName::Details
             | TableFromSourceOptionName::TextColumns
             | TableFromSourceOptionName::ExcludeColumns
-            | TableFromSourceOptionName::Timeline => false,
+            | TableFromSourceOptionName::Timeline
+            | TableFromSourceOptionName::IgnoreKeys => false,
         }
     }
 }
