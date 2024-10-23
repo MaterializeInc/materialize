@@ -112,8 +112,9 @@ pub const ENABLE_EXPRESSION_CACHE: Config<bool> = Config::new(
 );
 
 /// Whether to enable the migration to convert all sources to use tables.
-pub const ENABLE_SOURCE_TABLE_MIGRATION: Config<bool> = Config::new(
-    "enable_source_table_migration",
+/// TODO(#8678): This should also disable usage of the old source syntax.
+pub const FORCE_SOURCE_TABLE_SYNTAX: Config<bool> = Config::new(
+    "force_source_table_syntax",
     false,
     "Whether to enable the migration to convert all sources to use tables.",
 );
@@ -136,4 +137,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_CONTINUAL_TASK_BUILTINS)
         .add(&ENABLE_EXPRESSION_CACHE)
         .add(&ENABLE_SOURCE_TABLE_MIGRATION)
+        .add(&FORCE_SOURCE_TABLE_SYNTAX)
 }
