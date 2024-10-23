@@ -28,7 +28,6 @@ class TableFromPgSource(TableFromSourceBase):
     suffix = "tbl_from_pg_source"
 
     def initialize(self) -> Testdrive:
-
         return Testdrive(
             self.generic_setup()
             + dedent(
