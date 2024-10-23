@@ -6,8 +6,6 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-
-
 from textwrap import dedent
 
 from materialize.buildkite_insights.data.build_annotation import BuildAnnotation
@@ -90,6 +88,7 @@ class TestAnalyticsDataSource:
                 CASE WHEN bsu.has_failed_steps THEN 'FAILED' else 'PASSED' END AS state,
                 bae.branch,
                 bsu.build_url,
+                bae.build_date,
                 bae.test_suite,
                 bae.content
             FROM v_build_annotation_error bae
@@ -119,8 +118,9 @@ class TestAnalyticsDataSource:
                 state=row[2],
                 branch=row[3],
                 web_url=row[4],
+                created_at=row[5],
             )
-            annotation = BuildAnnotation(title=row[5], content=row[6])
+            annotation = BuildAnnotation(title=row[6], content=row[7])
 
             result.append((build, annotation))
 
