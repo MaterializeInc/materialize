@@ -89,28 +89,39 @@ def activate_venv(py_dir: Path) -> Path:
             )
             logger.info("python exec error: %s", e)
         print(f"==> Initializing virtualenv in {venv_dir}", file=sys.stderr)
-        # Install Python into the virtualenv via a symlink rather than copying,
-        # except on Windows. This matches the behavior of the `python -m venv`
-        # command line tool. This is important on macOS, where the default
-        # `symlinks=False` is broken with the system Python.
-        # See: https://bugs.python.org/issue38705
-        symlinks = os.name != "nt"
-        # Work around Debian's packaging of Python, which doesn't include the
-        # `ensurepip` module that `venv` uses under the hood.
         try:
-            import ensurepip
-        except ImportError:
-            raise AssertionError(
-                "It appears you're on a Debian-derived system. Please install `python3-venv`, otherwise this will fail annoyingly."
-            )
+            subprocess.check_call(["uv", "venv", venv_dir])
+        except FileNotFoundError:
+            # Install Python into the virtualenv via a symlink rather than copying,
+            # except on Windows. This matches the behavior of the `python -m venv`
+            # command line tool. This is important on macOS, where the default
+            # `symlinks=False` is broken with the system Python.
+            # See: https://bugs.python.org/issue38705
+            symlinks = os.name != "nt"
+            # Work around Debian's packaging of Python, which doesn't include the
+            # `ensurepip` module that `venv` uses under the hood.
+            try:
+                import ensurepip
+            except ImportError:
+                raise AssertionError(
+                    "It appears you're on a Debian-derived system. Please install `python3-venv`, otherwise this will fail annoyingly."
+                )
 
-        venv.create(venv_dir, with_pip=True, clear=True, symlinks=symlinks)
-        # Work around a Debian bug which incorrectly makes pip think that we've
-        # installed wheel in the virtual environment when we haven't. This is
-        # a no-op on systems without the bug.
-        # See: https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=959997
-        for path in venv_dir.glob("share/python-wheels/wheel*"):
-            path.unlink()
+            venv.create(venv_dir, with_pip=True, clear=True, symlinks=symlinks)
+            # Work around a Debian bug which incorrectly makes pip think that we've
+            # installed wheel in the virtual environment when we haven't. This is
+            # a no-op on systems without the bug.
+            # See: https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=959997
+            for path in venv_dir.glob("share/python-wheels/wheel*"):
+                path.unlink()
+
+            # Work around a Debian bug which incorrectly makes pip think that we've
+            # installed wheel in the virtual environment when we haven't. This is
+            # a no-op on systems without the bug.
+            # See: https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=959997
+
+            for path in venv_dir.glob("share/python-wheels/wheel*"):
+                path.unlink()
 
     # The Python that ships with Xcode 12 is broken and attempts to compile
     # Python extensions for ARM when it shouldn't. Detect this known-broken
@@ -172,14 +183,22 @@ def acquire_deps(venv_dir: Path, variant: Optional[str] = None, use_pep517: bool
 
     # Update dependencies, if necessary.
     if stamp_mtime <= requirements_mtime:
-        print(f"==> Updating {variant + ' ' if variant else ''}dependencies with pip", file=sys.stderr)
-        subprocess.check_call([
+        print(f"==> Updating {variant + ' ' if variant else ''}dependencies", file=sys.stderr)
+        try:
+            subprocess.check_call([
+                    "uv", "pip", "install", "-r", requirements_path,
+                ],
+                stdout=sys.stderr,
+                cwd=venv_dir
+            )
+        except FileNotFoundError:
+            subprocess.check_call([
                 venv_dir / "bin" / "pip", "install", "-r", requirements_path,
                 "--disable-pip-version-check",
                 *(["--use-pep517"] if use_pep517 else []),
-            ],
-            stdout=sys.stderr
-        )
+                ],
+                stdout=sys.stderr,
+            )
         stamp_path.touch()
 
 

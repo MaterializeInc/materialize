@@ -113,7 +113,6 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     postgresql-client \
     python3 \
     python3-dev \
-    python3-pip \
     python3-setuptools \
     qemu-system \
     qemu-user-static \
@@ -214,6 +213,8 @@ RUN mkdir rust \
 RUN ln -s /usr/bin/lld /opt/x-tools/$ARCH_GCC-unknown-linux-gnu/bin/$ARCH_GCC-unknown-linux-gnu-ld.lld \
     && ln -s /usr/bin/lld /opt/x-tools/$ARCH_GCC-unknown-linux-gnu/bin/$ARCH_GCC-unknown-linux-gnu-lld
 
+RUN curl -LsSf https://astral.sh/uv/0.4.25/install.sh | UV_INSTALL_DIR=/usr/local UV_UNMANAGED_INSTALL=1 sh
+
 # Shims for sanitizers
 COPY sanshim/$ARCH_GCC /sanshim
 
@@ -228,7 +229,7 @@ RUN npx pyright@$(sh /workdir/pyright-version.sh) --help
 
 COPY requirements.txt /workdir/
 
-RUN pip3 install --break-system-packages -r /workdir/requirements.txt && rm /workdir/requirements*.txt
+RUN uv pip install --system --break-system-packages -r /workdir/requirements.txt && rm /workdir/requirements*.txt
 
 # Install APT repo generator.
 
