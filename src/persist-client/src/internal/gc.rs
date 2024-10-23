@@ -571,6 +571,7 @@ where
                     .cfg
                     .dynamic
                     .gc_blob_delete_concurrency_limit(),
+                &*machine.applier.metrics,
                 &machine.applier.metrics.retries.external.batch_delete,
             )
             .instrument(debug_span!("batch::delete"))

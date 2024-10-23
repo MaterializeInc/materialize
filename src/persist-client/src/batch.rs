@@ -174,6 +174,7 @@ where
                 &*self.blob,
                 self.shard_id(),
                 usize::MAX,
+                &*self.metrics,
                 &*self.metrics.retries.external.batch_delete,
             )
             .await;
@@ -1355,6 +1356,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             let shard_id = self.shard_id;
             let blob = Arc::clone(&self.blob);
             let writer_key = self.cfg.writer_key.clone();
+            let metrics = Arc::clone(&self.metrics);
             let handle = mz_ore::task::spawn(
                 || "batch::inline_part",
                 async move {
@@ -1367,9 +1369,9 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                         blob.as_ref(),
                         &writer_key,
                         HollowRun { parts },
+                        &*metrics,
                     )
-                    .await
-                    .expect("FIXME: retry");
+                    .await;
 
                     RunPart::Many(run_ref)
                 }
@@ -1512,7 +1514,8 @@ impl<T: Timestamp> PartDeletes<T> {
         blob: &dyn Blob,
         shard_id: ShardId,
         concurrency: usize,
-        metrics: &RetryMetrics,
+        metrics: &Metrics,
+        delete_metrics: &RetryMetrics,
     ) where
         T: Codec64,
     {
@@ -1521,7 +1524,7 @@ impl<T: Timestamp> PartDeletes<T> {
                 .map(|key| {
                     let key = key.complete(&shard_id);
                     async move {
-                        retry_external(metrics, || blob.delete(&key)).await;
+                        retry_external(delete_metrics, || blob.delete(&key)).await;
                     }
                 })
                 .buffer_unordered(concurrency)
@@ -1532,7 +1535,7 @@ impl<T: Timestamp> PartDeletes<T> {
                 break;
             };
 
-            if let Some(run) = run_ref.get(shard_id, blob).await {
+            if let Some(run) = run_ref.get(shard_id, blob, metrics).await {
                 // Queue up both all the individual parts and the run itself for deletion.
                 for part in &run.parts {
                     self.add(part);

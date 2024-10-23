@@ -741,8 +741,9 @@ where
     ) -> impl Stream<Item = LeasedBatchPart<T>> + '_ {
         stream! {
             let blob = Arc::clone(&self.blob);
+            let metrics = Arc::clone(&self.metrics);
             let desc = batch.desc.clone();
-            for await part in batch.part_stream(self.shard_id(), &*blob) {
+            for await part in batch.part_stream(self.shard_id(), &*blob, &*metrics) {
                 yield self.lease_batch_part(desc.clone(), part.expect("leased part").into_owned(), filter.clone())
             }
         }
@@ -1174,7 +1175,7 @@ where
     ) -> Result<SnapshotPartsStats, Since<T>> {
         let batches = self.machine.snapshot(&as_of).await?;
         let parts = stream::iter(&batches)
-            .flat_map(|b| b.part_stream(self.shard_id(), &*self.blob))
+            .flat_map(|b| b.part_stream(self.shard_id(), &*self.blob, &*self.metrics))
             .map(|p| {
                 let p = p.expect("live batch");
                 SnapshotPartStats {

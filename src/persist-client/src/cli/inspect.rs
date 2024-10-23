@@ -393,7 +393,8 @@ async fn consolidated_size(args: &StateArgs) -> Result<(), anyhow::Error> {
 
     let mut updates = Vec::new();
     for batch in state.collections.trace.batches() {
-        let mut part_stream = pin!(batch.part_stream(shard_id, &*state_versions.blob));
+        let mut part_stream =
+            pin!(batch.part_stream(shard_id, &*state_versions.blob, &*state_versions.metrics));
         while let Some(part) = part_stream.try_next().await? {
             tracing::info!("fetching {}", part.printable_name());
             let encoded_part = EncodedPart::fetch(
@@ -595,7 +596,8 @@ pub async fn unreferenced_blobs(args: &StateArgs) -> Result<impl serde::Serializ
             // TODO: this may end up refetching externally-stored runs once per batch...
             // but if we have enough parts for this to be a problem, we may need to track a more
             // efficient state representation.
-            let mut parts = pin!(batch.part_stream(shard_id, &*state_versions.blob));
+            let mut parts =
+                pin!(batch.part_stream(shard_id, &*state_versions.blob, &*state_versions.metrics));
             while let Some(batch_part) = parts.next().await {
                 match &*batch_part? {
                     BatchPart::Hollow(x) => known_parts.insert(x.key.clone()),

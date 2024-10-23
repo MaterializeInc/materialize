@@ -54,10 +54,12 @@ use crate::critical::CriticalReaderId;
 use crate::error::InvalidUsage;
 use crate::internal::encoding::{parse_id, LazyInlineBatchPart, LazyPartStats, LazyProto};
 use crate::internal::gc::GcReq;
+use crate::internal::machine::retry_external;
 use crate::internal::paths::{BlobKey, PartId, PartialBatchKey, PartialRollupKey, WriterKey};
 use crate::internal::trace::{
     ActiveCompaction, ApplyMergeResult, FueledMergeReq, FueledMergeRes, Trace,
 };
+use crate::metrics::Metrics;
 use crate::read::LeasedReaderId;
 use crate::schema::CaESchema;
 use crate::write::WriterId;
@@ -366,7 +368,8 @@ impl<T: Timestamp + Codec64> HollowRunRef<T> {
         blob: &dyn Blob,
         writer: &WriterKey,
         data: HollowRun<T>,
-    ) -> anyhow::Result<Self> {
+        metrics: &Metrics,
+    ) -> Self {
         let hollow_bytes = data.parts.iter().map(|p| p.hollow_bytes()).sum();
         let max_part_bytes = data
             .parts
@@ -387,23 +390,34 @@ impl<T: Timestamp + Codec64> HollowRunRef<T> {
         let key = PartialBatchKey::new(writer, &PartId::new());
         let blob_key = key.complete(&shard_id);
         let bytes = Bytes::from(prost::Message::encode_to_vec(&data.into_proto()));
-        blob.set(&blob_key, bytes).await.expect("FIXME: retry loop");
-        Ok(Self {
+        let () = retry_external(&metrics.retries.external.hollow_run_set, || {
+            blob.set(&blob_key, bytes.clone())
+        })
+        .await;
+        Self {
             key,
             hollow_bytes,
             max_part_bytes,
             key_lower,
             structured_key_lower,
             _phantom_data: Default::default(),
-        })
+        }
     }
 
     /// Retrieve the [HollowRun] that this reference points to.
     /// The caller is expected to ensure that this ref is the result of calling [HollowRunRef::set]
     /// with the same shard id and backing store.
-    pub async fn get(&self, shard_id: ShardId, blob: &dyn Blob) -> Option<HollowRun<T>> {
+    pub async fn get(
+        &self,
+        shard_id: ShardId,
+        blob: &dyn Blob,
+        metrics: &Metrics,
+    ) -> Option<HollowRun<T>> {
         let blob_key = self.key.complete(&shard_id);
-        let mut bytes = blob.get(&blob_key).await.expect("FIXME: retry loop")?;
+        let mut bytes = retry_external(&metrics.retries.external.hollow_run_get, || {
+            blob.get(&blob_key)
+        })
+        .await?;
         let proto_runs: ProtoHollowRun =
             prost::Message::decode(&mut bytes).expect("illegal state: invalid proto bytes");
         let runs = proto_runs
@@ -554,6 +568,7 @@ impl<T: Timestamp + Codec64> RunPart<T> {
         &'a self,
         shard_id: ShardId,
         blob: &'a dyn Blob,
+        metrics: &'a Metrics,
     ) -> impl Stream<Item = Result<Cow<'a, BatchPart<T>>, MissingBlob>> + Send + 'a {
         try_stream! {
             match self {
@@ -561,9 +576,9 @@ impl<T: Timestamp + Codec64> RunPart<T> {
                     yield Cow::Borrowed(p);
                 }
                 RunPart::Many(r) => {
-                    let fetched = r.get(shard_id, blob).await.ok_or_else(|| MissingBlob(r.key.complete(&shard_id)))?;
+                    let fetched = r.get(shard_id, blob, metrics).await.ok_or_else(|| MissingBlob(r.key.complete(&shard_id)))?;
                     for run_part in fetched.parts {
-                        for await batch_part in run_part.part_stream(shard_id, blob).boxed() {
+                        for await batch_part in run_part.part_stream(shard_id, blob, metrics).boxed() {
                             yield Cow::Owned(batch_part?.into_owned());
                         }
                     }
@@ -795,11 +810,12 @@ impl<T: Timestamp + Codec64> HollowBatch<T> {
     pub fn part_stream<'a>(
         &'a self,
         shard_id: ShardId,
-        blob: &'a (dyn Blob + Send + Sync),
+        blob: &'a dyn Blob,
+        metrics: &'a Metrics,
     ) -> impl Stream<Item = Result<Cow<'a, BatchPart<T>>, MissingBlob>> + 'a {
         stream! {
             for part in &self.parts {
-                for await part in part.part_stream(shard_id, blob) {
+                for await part in part.part_stream(shard_id, blob, metrics) {
                     yield part;
                 }
             }

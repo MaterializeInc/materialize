@@ -375,6 +375,7 @@ where
                                     .cfg
                                     .dynamic
                                     .gc_blob_delete_concurrency_limit(),
+                                &*metrics,
                                 &metrics.retries.external.compaction_noop_delete,
                             )
                             .await;

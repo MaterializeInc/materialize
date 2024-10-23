@@ -323,7 +323,7 @@ impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
             }
             RunPart::Many(run_ref) => {
                 let runs = run_ref
-                    .get(shard_id, blob)
+                    .get(shard_id, blob, metrics)
                     .await
                     .ok_or_else(|| anyhow!("missing run ref {}", run_ref.key))?;
                 Ok(Err(runs))

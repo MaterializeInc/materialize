@@ -1833,7 +1833,11 @@ pub mod datadriven {
 
         let mut s = String::new();
         let mut stream = pin!(batch
-            .part_stream(datadriven.shard_id, &*datadriven.state_versions.blob)
+            .part_stream(
+                datadriven.shard_id,
+                &*datadriven.state_versions.blob,
+                &*datadriven.state_versions.metrics
+            )
             .enumerate());
         while let Some((idx, part)) = stream.next().await {
             let part = &*part?;
@@ -2029,6 +2033,7 @@ pub mod datadriven {
             datadriven.client.blob.as_ref(),
             &datadriven.client.cfg.build_version,
             datadriven.shard_id,
+            &*datadriven.state_versions.metrics,
         )
         .await?;
         let mut out = String::new();
@@ -2111,8 +2116,11 @@ pub mod datadriven {
             for (run, (_meta, parts)) in batch.runs().enumerate() {
                 writeln!(result, "<run {run}>");
                 let mut stream = pin!(futures::stream::iter(parts)
-                    .flat_map(|part| part
-                        .part_stream(datadriven.shard_id, &*datadriven.state_versions.blob))
+                    .flat_map(|part| part.part_stream(
+                        datadriven.shard_id,
+                        &*datadriven.state_versions.blob,
+                        &*datadriven.state_versions.metrics
+                    ))
                     .enumerate());
                 while let Some((idx, part)) = stream.next().await {
                     let part = &*part?;

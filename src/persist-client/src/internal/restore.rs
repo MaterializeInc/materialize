@@ -14,6 +14,7 @@ use crate::internal::paths::BlobKey;
 use crate::internal::state::{BatchPart, RunPart, State};
 use crate::internal::state_diff::{StateDiff, StateFieldValDiff};
 use crate::internal::state_versions::StateVersions;
+use crate::metrics::Metrics;
 use crate::ShardId;
 use anyhow::anyhow;
 use mz_persist::location::Blob;
@@ -27,6 +28,7 @@ pub(crate) async fn restore_blob(
     blob: &dyn Blob,
     build_version: &semver::Version,
     shard_id: ShardId,
+    metrics: &Metrics,
 ) -> anyhow::Result<Vec<BlobKey>> {
     let diffs = versions.fetch_all_live_diffs(&shard_id).await;
     let Some(first_live_seqno) = diffs.0.first().map(|d| d.seqno) else {
@@ -107,7 +109,7 @@ pub(crate) async fn restore_blob(
                     let key = runs.key.complete(&shard_id);
                     check_restored(&key, blob.restore(&key).await);
                     let runs = runs
-                        .get(shard_id, blob)
+                        .get(shard_id, blob, metrics)
                         .await
                         .ok_or_else(|| anyhow!("fetching just-restored run"))?;
                     part_queue.extend(runs.parts);
