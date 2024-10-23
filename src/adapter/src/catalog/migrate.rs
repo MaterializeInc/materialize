@@ -119,15 +119,15 @@ pub(crate) async fn migrate(
 
             // Special block for `ast_rewrite_sources_to_tables` migration
             // since it requires a feature flag.
-            if let Some(config_val) = tx.get_system_config("enable_source_table_migration") {
+            if let Some(config_val) = tx.get_system_config("force_source_table_syntax") {
                 let enable_migration = config_val.parse::<bool>().map_err(|e| {
                     anyhow::anyhow!(
-                        "could not parse enable_source_table_migration config value: {}",
+                        "could not parse force_source_table_syntax config value: {}",
                         e
                     )
                 })?;
                 if enable_migration {
-                    info!("migrate: enable_source_table_migration");
+                    info!("migrate: force_source_table_syntax");
                     ast_rewrite_sources_to_tables(tx, item, stmt, all_items_and_statements)?;
                 }
             }
