@@ -85,7 +85,6 @@ class PostgresAsCockroach(Postgres):
 
 CockroachOrPostgres = (
     Cockroach
-    if os.getenv("BUILDKITE_TAG", "").startswith("v")
-    or ui.env_is_truthy("CI_FORCE_POSTGRES")
+    if os.getenv("BUILDKITE_TAG", "") != "" or ui.env_is_truthy("CI_FORCE_POSTGRES")
     else PostgresAsCockroach
 )
