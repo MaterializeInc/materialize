@@ -1811,7 +1811,7 @@ impl<'a> Transaction<'a> {
             .items()
             .into_iter()
             .filter(|(k, _v)| k.cluster_id == cluster_id)
-            .map(|(k, v)| (k.name, (GlobalId::System(v.index_id), v.oid)))
+            .map(|(k, v)| (k.name, (v.global_id.into(), v.oid)))
             .collect()
     }
 
