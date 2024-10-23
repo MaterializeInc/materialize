@@ -61,6 +61,8 @@ goofus,gallant
   FROM KAFKA CONNECTION kafka_conn (TOPIC
   'testdrive-upsert-${testdrive.seed}'
   )
+
+> CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-upsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   INCLUDE OFFSET
   ENVELOPE UPSERT
@@ -71,7 +73,7 @@ goofus,gallant
 
 # Adding a select here so that the ingests after this
 # triggers lookup from the upsert state
-> SELECT key, f1, f2 FROM upsert
+> SELECT key, f1, f2 FROM upsert_tbl
 key           f1      f2
 ------------------------
 fish          fish    1000
@@ -111,7 +113,7 @@ SELECT
 $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} schema=${schema}
 {"key": "mammalmore"}
 
-> SELECT key, f1, f2 FROM upsert
+> SELECT key, f1, f2 FROM upsert_tbl
 key           f1      f2
 ------------------------
 fish          fish    1000

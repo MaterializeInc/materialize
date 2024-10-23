@@ -40,12 +40,14 @@ $ kafka-create-topic topic=evolution partitions=1
 > CREATE SOURCE evolution
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-evolution-${testdrive.seed}')
+
+> CREATE TABLE evolution_tbl FROM SOURCE evolution (REFERENCE "testdrive-evolution-${testdrive.seed}")
   FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
 $ kafka-ingest topic=evolution format=protobuf descriptor-file=evolution.pb message=Message confluent-wire-format=true
 {"i": 1}
 
-> SELECT * FROM evolution
+> SELECT * FROM evolution_tbl
 i
 ---
 1
@@ -73,7 +75,7 @@ $ schema-registry-publish subject=testdrive-evolution-${testdrive.seed}-value sc
 $ kafka-ingest topic=evolution format=protobuf descriptor-file=evolution.pb message=Message confluent-wire-format=true
 {"i_renamed": 2, "extra": false}
 
-> SELECT * FROM evolution
+> SELECT * FROM evolution_tbl
 i
 ---
 1
@@ -101,7 +103,7 @@ $ schema-registry-publish subject=testdrive-evolution-${testdrive.seed}-value sc
 $ kafka-ingest topic=evolution format=protobuf descriptor-file=evolution.pb message=Message confluent-wire-format=true
 {"i_demoted": false}
 
-> SELECT * FROM evolution
+> SELECT * FROM evolution_tbl
 i
 ---
 1
@@ -134,5 +136,5 @@ $ schema-registry-publish subject=testdrive-evolution-${testdrive.seed}-value sc
 $ kafka-ingest topic=evolution format=protobuf descriptor-file=evolution.pb message=Message confluent-wire-format=true
 {"wrong": "i'm not an int!"}
 
-! SELECT * FROM evolution
+! SELECT * FROM evolution_tbl
 contains:Decode error: protobuf deserialization error: failed to decode Protobuf message: invalid wire type: LengthDelimited (expected Varint)

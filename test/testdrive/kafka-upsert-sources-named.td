@@ -43,12 +43,14 @@ $ kafka-ingest format=avro topic=avroavro key-format=avro key-schema=${keyschema
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC
   'testdrive-avroavro-${testdrive.seed}')
+
+> CREATE TABLE avroavro_tbl FROM SOURCE avroavro (REFERENCE "testdrive-avroavro-${testdrive.seed}")
   KEY FORMAT AVRO USING SCHEMA '${keyschema}'
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE KEY AS named
   ENVELOPE UPSERT
 
-> SELECT (named).key, (named).key2, f1, f2 from avroavro
+> SELECT (named).key, (named).key2, f1, f2 from avroavro_tbl
 key     key2  f1       f2
 ---------------------------
 fish    key2  fishval  1000
@@ -70,12 +72,14 @@ $ kafka-ingest format=avro topic=single key-format=avro key-schema=${keyschemasi
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC
   'testdrive-single-${testdrive.seed}')
+
+> CREATE TABLE single_tbl FROM SOURCE single (REFERENCE "testdrive-single-${testdrive.seed}")
   KEY FORMAT AVRO USING SCHEMA '${keyschemasingle}'
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE KEY AS named
   ENVELOPE UPSERT
 
-> SELECT named, f1, f2 from single
+> SELECT named, f1, f2 from single_tbl
 named   f1       f2
 ---------------------------
 fish    fishval  1000

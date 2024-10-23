@@ -34,16 +34,18 @@ $ kafka-create-topic topic=data
 > CREATE SOURCE data
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
+
+> CREATE TABLE data_tbl FROM SOURCE data (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'
 
-> SELECT * FROM data
+> SELECT * FROM data_tbl
 
-> CREATE VIEW data_view as SELECT * from data
+> CREATE VIEW data_view as SELECT * from data_tbl
 
 > SELECT * FROM data_view
 
 > CREATE MATERIALIZED VIEW test1 AS
-  SELECT b, sum(a) FROM data GROUP BY b
+  SELECT b, sum(a) FROM data_tbl GROUP BY b
 
 > SHOW VIEWS
 name       comment
@@ -83,7 +85,7 @@ data_view  ""
 > SHOW CREATE MATERIALIZED VIEW test1
 name                      create_sql
 -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-materialize.public.test1  "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"test1\" IN CLUSTER \"quickstart\" WITH (REFRESH = ON COMMIT) AS SELECT \"b\", \"pg_catalog\".\"sum\"(\"a\") FROM \"materialize\".\"public\".\"data\" GROUP BY \"b\""
+materialize.public.test1  "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"test1\" IN CLUSTER \"quickstart\" WITH (REFRESH = ON COMMIT) AS SELECT \"b\", \"pg_catalog\".\"sum\"(\"a\") FROM \"materialize\".\"public\".\"data_tbl\" GROUP BY \"b\""
 
 # Materialized view can be built on a not-materialized view.
 > CREATE MATERIALIZED VIEW test2 AS
@@ -336,11 +338,13 @@ $ kafka-create-topic topic=mat
 > CREATE SOURCE mat_data
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-mat-${testdrive.seed}')
+
+> CREATE TABLE mat_data_tbl FROM SOURCE mat_data (REFERENCE "testdrive-mat-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'
 
 > CREATE DEFAULT INDEX ON mat_data
 
-> SELECT * from mat_data
+> SELECT * from mat_data_tbl
 
 $ kafka-ingest format=avro topic=mat schema=${schema} timestamp=1
 {"a": -1, "b": 0}
@@ -348,7 +352,7 @@ $ kafka-ingest format=avro topic=mat schema=${schema} timestamp=1
 {"a": 3, "b": 4}
 {"a": 1, "b": 2}
 
-> SELECT * from mat_data
+> SELECT * from mat_data_tbl
 a  b
 ----
 -1 0
@@ -372,7 +376,7 @@ mat_data_progress progress  <null>                         ""
 
 > DROP INDEX mat_data_primary_idx
 
-> SELECT a+b from mat_data
+> SELECT a+b from mat_data_tbl
 -1
 0
 7
@@ -380,14 +384,14 @@ mat_data_progress progress  <null>                         ""
 
 # Can create both materialized and unmaterialized views from materialized
 # source.
-> CREATE MATERIALIZED VIEW test7 as SELECT count(*) from mat_data
+> CREATE MATERIALIZED VIEW test7 as SELECT count(*) from mat_data_tbl
 
 > SELECT * from test7
 count
 -----
 4
 
-> CREATE VIEW test8 as SELECT -b as c, -a as d from mat_data
+> CREATE VIEW test8 as SELECT -b as c, -a as d from mat_data_tbl
 
 > SELECT * from test8
 c  d
@@ -401,7 +405,7 @@ c  d
 > DROP INDEX mat_data_primary_idx1
 
 # Still works.
-> SELECT * from mat_data
+> SELECT * from mat_data_tbl
 a  b
 ----
 -1 0
@@ -429,9 +433,9 @@ $ kafka-ingest format=avro topic=mat schema=${schema} timestamp=2
 {"a": 1, "b": 2}
 
 # Rematerialize source.
-> CREATE INDEX mat_data_idx3 on mat_data(b)
+> CREATE INDEX mat_data_idx3 on mat_data_tbl(b)
 
-> SELECT * from mat_data
+> SELECT * from mat_data_tbl
 a  b
 ----
 -1 0
@@ -469,24 +473,50 @@ c    d
   JOIN mz_introspection.mz_dataflow_operator_dataflows mdod ON mash.operator_id = mdod.id
   JOIN mz_introspection.mz_compute_exports USING (dataflow_id)
   WHERE export_id LIKE 'u%'
+"Dataflow: materialize.public.test4" "Arrange ReduceMinsMaxes"
+"Dataflow: materialize.public.test4" "Arranged MinsMaxesHierarchical input"
+"Dataflow: materialize.public.test4" "Arranged MinsMaxesHierarchical input"
+"Dataflow: materialize.public.test4" "Arranged MinsMaxesHierarchical input"
+"Dataflow: materialize.public.test4" "Arranged MinsMaxesHierarchical input"
+"Dataflow: materialize.public.test4" "Arranged MinsMaxesHierarchical input"
+"Dataflow: materialize.public.test4" "Arranged MinsMaxesHierarchical input"
+"Dataflow: materialize.public.test4" "Arranged MinsMaxesHierarchical input"
+"Dataflow: materialize.public.test4" ReduceMinsMaxes
+"Dataflow: materialize.public.test4" "Reduced Fallibly MinsMaxesHierarchical"
+"Dataflow: materialize.public.test4" "Reduced Fallibly MinsMaxesHierarchical"
+"Dataflow: materialize.public.test4" "Reduced Fallibly MinsMaxesHierarchical"
+"Dataflow: materialize.public.test4" "Reduced Fallibly MinsMaxesHierarchical"
+"Dataflow: materialize.public.test4" "Reduced Fallibly MinsMaxesHierarchical"
+"Dataflow: materialize.public.test4" "Reduced Fallibly MinsMaxesHierarchical"
+"Dataflow: materialize.public.test4" "Reduced Fallibly MinsMaxesHierarchical"
+"Dataflow: materialize.public.test6" "Arrange ReduceMinsMaxes"
+"Dataflow: materialize.public.test6" "Arranged MinsMaxesHierarchical input"
+"Dataflow: materialize.public.test6" "Arranged MinsMaxesHierarchical input"
+"Dataflow: materialize.public.test6" "Arranged MinsMaxesHierarchical input"
+"Dataflow: materialize.public.test6" "Arranged MinsMaxesHierarchical input"
+"Dataflow: materialize.public.test6" "Arranged MinsMaxesHierarchical input"
+"Dataflow: materialize.public.test6" "Arranged MinsMaxesHierarchical input"
+"Dataflow: materialize.public.test6" "Arranged MinsMaxesHierarchical input"
+"Dataflow: materialize.public.test6" ReduceMinsMaxes
+"Dataflow: materialize.public.test6" "Reduced Fallibly MinsMaxesHierarchical"
+"Dataflow: materialize.public.test6" "Reduced Fallibly MinsMaxesHierarchical"
+"Dataflow: materialize.public.test6" "Reduced Fallibly MinsMaxesHierarchical"
+"Dataflow: materialize.public.test6" "Reduced Fallibly MinsMaxesHierarchical"
+"Dataflow: materialize.public.test6" "Reduced Fallibly MinsMaxesHierarchical"
+"Dataflow: materialize.public.test6" "Reduced Fallibly MinsMaxesHierarchical"
+"Dataflow: materialize.public.test6" "Reduced Fallibly MinsMaxesHierarchical"
 "Dataflow: materialize.public.data_view_idx" ArrangeBy[[Column(0)]]
 "Dataflow: materialize.public.data_view_idx" ArrangeBy[[Column(0)]]-errors
 "Dataflow: materialize.public.data_view_primary_idx" "ArrangeBy[[Column(0), Column(1)]]"
 "Dataflow: materialize.public.data_view_primary_idx" "ArrangeBy[[Column(0), Column(1)]]-errors"
 "Dataflow: materialize.public.mat_data_idx3" ArrangeBy[[Column(1)]]
 "Dataflow: materialize.public.mat_data_idx3" ArrangeBy[[Column(1)]]-errors
-"Dataflow: materialize.public.mat_data_primary_idx" "ArrangeBy[[Column(0), Column(1)]]"
-"Dataflow: materialize.public.mat_data_primary_idx" "ArrangeBy[[Column(0), Column(1)]]-errors"
 "Dataflow: materialize.public.test1" AccumulableErrorCheck
 "Dataflow: materialize.public.test1" "ArrangeAccumulable [val: empty]"
 "Dataflow: materialize.public.test1" ReduceAccumulable
 "Dataflow: materialize.public.test2" AccumulableErrorCheck
 "Dataflow: materialize.public.test2" "ArrangeAccumulable [val: empty]"
 "Dataflow: materialize.public.test2" ReduceAccumulable
-"Dataflow: materialize.public.test4" "ArrangeMonotonic [val: empty]"
-"Dataflow: materialize.public.test4" ReduceMonotonic
-"Dataflow: materialize.public.test6" "ArrangeMonotonic [val: empty]"
-"Dataflow: materialize.public.test6" ReduceMonotonic
 "Dataflow: materialize.public.test7" AccumulableErrorCheck
 "Dataflow: materialize.public.test7" "ArrangeAccumulable [val: empty]"
 "Dataflow: materialize.public.test7" ReduceAccumulable

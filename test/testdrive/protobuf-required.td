@@ -30,9 +30,11 @@ $ kafka-ingest topic=required format=protobuf descriptor-file=required.pb messag
 > CREATE SOURCE required
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-required-${testdrive.seed}')
+
+> CREATE TABLE required_tbl FROM SOURCE required (REFERENCE "testdrive-required-${testdrive.seed}")
   FORMAT PROTOBUF MESSAGE '.Required' USING SCHEMA '${required-schema}'
 
-> SELECT * FROM required
+> SELECT * FROM required_tbl
 f
 ----
 42
@@ -40,5 +42,5 @@ f
 $ kafka-ingest topic=required format=protobuf descriptor-file=required.pb message=Required
 {}
 
-! SELECT * FROM required
+! SELECT * FROM required_tbl
 contains:protobuf message missing required field f

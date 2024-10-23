@@ -50,9 +50,11 @@ $ kafka-ingest format=avro topic=top1 schema=${schema} timestamp=1
 > CREATE SOURCE t1
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-top1-${testdrive.seed}')
+  WITH (TIMESTAMP INTERVAL '100ms')
+
+> CREATE TABLE t1_tbl FROM SOURCE t1 (REFERENCE "testdrive-top1-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
-  WITH (TIMESTAMP INTERVAL '100ms')
 
 #
 # Over constants
@@ -77,17 +79,17 @@ a
 # And now some actual materialized views
 #
 
-> CREATE MATERIALIZED VIEW limit_only AS SELECT (SELECT f1 FROM t1 LIMIT 1);
+> CREATE MATERIALIZED VIEW limit_only AS SELECT (SELECT f1 FROM t1_tbl LIMIT 1);
 
-> CREATE MATERIALIZED VIEW group_by_limit AS SELECT (SELECT f1 FROM t1 GROUP BY f1 LIMIT 1);
+> CREATE MATERIALIZED VIEW group_by_limit AS SELECT (SELECT f1 FROM t1_tbl GROUP BY f1 LIMIT 1);
 
-> CREATE MATERIALIZED VIEW order_by_limit AS SELECT (SELECT f1 FROM t1 ORDER BY f1 LIMIT 1);
+> CREATE MATERIALIZED VIEW order_by_limit AS SELECT (SELECT f1 FROM t1_tbl ORDER BY f1 LIMIT 1);
 
-> CREATE MATERIALIZED VIEW order_by_desc_limit AS SELECT (SELECT f1 FROM t1 ORDER BY f1 DESC LIMIT 1);
+> CREATE MATERIALIZED VIEW order_by_desc_limit AS SELECT (SELECT f1 FROM t1_tbl ORDER BY f1 DESC LIMIT 1);
 
-> CREATE MATERIALIZED VIEW group_by_in_top_1 AS SELECT (select f2 FROM t1 AS inner WHERE inner.f1 = outer.f1 GROUP BY f2 LIMIT 1) FROM t1 AS outer;
+> CREATE MATERIALIZED VIEW group_by_in_top_1 AS SELECT (select f2 FROM t1_tbl AS inner WHERE inner.f1 = outer.f1 GROUP BY f2 LIMIT 1) FROM t1_tbl AS outer;
 
-> CREATE MATERIALIZED VIEW group_by_order_by_in_top_1 AS SELECT (select f2 FROM t1 AS inner WHERE inner.f1 = outer.f1 ORDER BY f2 DESC LIMIT 1) FROM t1 AS outer;
+> CREATE MATERIALIZED VIEW group_by_order_by_in_top_1 AS SELECT (select f2 FROM t1_tbl AS inner WHERE inner.f1 = outer.f1 ORDER BY f2 DESC LIMIT 1) FROM t1_tbl AS outer;
 
 #
 # Over an empty source
@@ -282,33 +284,117 @@ $ kafka-ingest format=avro topic=top1 schema=${schema} timestamp=5
   JOIN mz_introspection.mz_dataflow_operator_dataflows mdod ON mash.operator_id = mdod.id
   JOIN mz_introspection.mz_compute_exports USING (dataflow_id)
   WHERE export_id LIKE 'u%'
+"Dataflow: group_by_in_top_1" "Arranged TopK input"
+"Dataflow: group_by_in_top_1" "Arranged TopK input"
+"Dataflow: group_by_in_top_1" "Arranged TopK input"
+"Dataflow: group_by_in_top_1" "Arranged TopK input"
+"Dataflow: group_by_in_top_1" "Arranged TopK input"
+"Dataflow: group_by_in_top_1" "Arranged TopK input"
+"Dataflow: group_by_in_top_1" "Arranged TopK input"
+"Dataflow: group_by_in_top_1" "Arranged TopK input"
+"Dataflow: group_by_in_top_1" "Reduced TopK input"
+"Dataflow: group_by_in_top_1" "Reduced TopK input"
+"Dataflow: group_by_in_top_1" "Reduced TopK input"
+"Dataflow: group_by_in_top_1" "Reduced TopK input"
+"Dataflow: group_by_in_top_1" "Reduced TopK input"
+"Dataflow: group_by_in_top_1" "Reduced TopK input"
+"Dataflow: group_by_in_top_1" "Reduced TopK input"
+"Dataflow: group_by_in_top_1" "Reduced TopK input"
+"Dataflow: group_by_limit" "Arranged TopK input"
+"Dataflow: group_by_limit" "Arranged TopK input"
+"Dataflow: group_by_limit" "Arranged TopK input"
+"Dataflow: group_by_limit" "Arranged TopK input"
+"Dataflow: group_by_limit" "Arranged TopK input"
+"Dataflow: group_by_limit" "Arranged TopK input"
+"Dataflow: group_by_limit" "Arranged TopK input"
+"Dataflow: group_by_limit" "Arranged TopK input"
+"Dataflow: group_by_limit" "Reduced TopK input"
+"Dataflow: group_by_limit" "Reduced TopK input"
+"Dataflow: group_by_limit" "Reduced TopK input"
+"Dataflow: group_by_limit" "Reduced TopK input"
+"Dataflow: group_by_limit" "Reduced TopK input"
+"Dataflow: group_by_limit" "Reduced TopK input"
+"Dataflow: group_by_limit" "Reduced TopK input"
+"Dataflow: group_by_limit" "Reduced TopK input"
+"Dataflow: group_by_order_by_in_top_1" "Arranged TopK input"
+"Dataflow: group_by_order_by_in_top_1" "Arranged TopK input"
+"Dataflow: group_by_order_by_in_top_1" "Arranged TopK input"
+"Dataflow: group_by_order_by_in_top_1" "Arranged TopK input"
+"Dataflow: group_by_order_by_in_top_1" "Arranged TopK input"
+"Dataflow: group_by_order_by_in_top_1" "Arranged TopK input"
+"Dataflow: group_by_order_by_in_top_1" "Arranged TopK input"
+"Dataflow: group_by_order_by_in_top_1" "Arranged TopK input"
+"Dataflow: group_by_order_by_in_top_1" "Reduced TopK input"
+"Dataflow: group_by_order_by_in_top_1" "Reduced TopK input"
+"Dataflow: group_by_order_by_in_top_1" "Reduced TopK input"
+"Dataflow: group_by_order_by_in_top_1" "Reduced TopK input"
+"Dataflow: group_by_order_by_in_top_1" "Reduced TopK input"
+"Dataflow: group_by_order_by_in_top_1" "Reduced TopK input"
+"Dataflow: group_by_order_by_in_top_1" "Reduced TopK input"
+"Dataflow: group_by_order_by_in_top_1" "Reduced TopK input"
+"Dataflow: limit_only" "Arranged TopK input"
+"Dataflow: limit_only" "Arranged TopK input"
+"Dataflow: limit_only" "Arranged TopK input"
+"Dataflow: limit_only" "Arranged TopK input"
+"Dataflow: limit_only" "Arranged TopK input"
+"Dataflow: limit_only" "Arranged TopK input"
+"Dataflow: limit_only" "Arranged TopK input"
+"Dataflow: limit_only" "Arranged TopK input"
+"Dataflow: limit_only" "Reduced TopK input"
+"Dataflow: limit_only" "Reduced TopK input"
+"Dataflow: limit_only" "Reduced TopK input"
+"Dataflow: limit_only" "Reduced TopK input"
+"Dataflow: limit_only" "Reduced TopK input"
+"Dataflow: limit_only" "Reduced TopK input"
+"Dataflow: limit_only" "Reduced TopK input"
+"Dataflow: limit_only" "Reduced TopK input"
+"Dataflow: order_by_desc_limit" "Arranged TopK input"
+"Dataflow: order_by_desc_limit" "Arranged TopK input"
+"Dataflow: order_by_desc_limit" "Arranged TopK input"
+"Dataflow: order_by_desc_limit" "Arranged TopK input"
+"Dataflow: order_by_desc_limit" "Arranged TopK input"
+"Dataflow: order_by_desc_limit" "Arranged TopK input"
+"Dataflow: order_by_desc_limit" "Arranged TopK input"
+"Dataflow: order_by_desc_limit" "Arranged TopK input"
+"Dataflow: order_by_desc_limit" "Reduced TopK input"
+"Dataflow: order_by_desc_limit" "Reduced TopK input"
+"Dataflow: order_by_desc_limit" "Reduced TopK input"
+"Dataflow: order_by_desc_limit" "Reduced TopK input"
+"Dataflow: order_by_desc_limit" "Reduced TopK input"
+"Dataflow: order_by_desc_limit" "Reduced TopK input"
+"Dataflow: order_by_desc_limit" "Reduced TopK input"
+"Dataflow: order_by_desc_limit" "Reduced TopK input"
+"Dataflow: order_by_limit" "Arranged TopK input"
+"Dataflow: order_by_limit" "Arranged TopK input"
+"Dataflow: order_by_limit" "Arranged TopK input"
+"Dataflow: order_by_limit" "Arranged TopK input"
+"Dataflow: order_by_limit" "Arranged TopK input"
+"Dataflow: order_by_limit" "Arranged TopK input"
+"Dataflow: order_by_limit" "Arranged TopK input"
+"Dataflow: order_by_limit" "Arranged TopK input"
+"Dataflow: order_by_limit" "Reduced TopK input"
+"Dataflow: order_by_limit" "Reduced TopK input"
+"Dataflow: order_by_limit" "Reduced TopK input"
+"Dataflow: order_by_limit" "Reduced TopK input"
+"Dataflow: order_by_limit" "Reduced TopK input"
+"Dataflow: order_by_limit" "Reduced TopK input"
+"Dataflow: order_by_limit" "Reduced TopK input"
+"Dataflow: order_by_limit" "Reduced TopK input"
 "Dataflow: group_by_in_top_1" ArrangeBy[[Column(0)]]
 "Dataflow: group_by_in_top_1" ArrangeBy[[Column(0)]]
 "Dataflow: group_by_in_top_1" ArrangeBy[[Column(0)]]
 "Dataflow: group_by_in_top_1" "Arranged DistinctBy"
 "Dataflow: group_by_in_top_1" "Arranged DistinctBy"
-"Dataflow: group_by_in_top_1" "Arranged MonotonicTop1 partial [val: empty]"
 "Dataflow: group_by_in_top_1" DistinctBy
 "Dataflow: group_by_in_top_1" DistinctBy
 "Dataflow: group_by_in_top_1" DistinctByErrorCheck
 "Dataflow: group_by_in_top_1" DistinctByErrorCheck
-"Dataflow: group_by_in_top_1" MonotonicTop1
 "Dataflow: group_by_limit" "Arranged DistinctBy"
-"Dataflow: group_by_limit" "Arranged MonotonicTop1 partial [val: empty]"
 "Dataflow: group_by_limit" DistinctBy
 "Dataflow: group_by_limit" DistinctByErrorCheck
-"Dataflow: group_by_limit" MonotonicTop1
 "Dataflow: group_by_order_by_in_top_1" ArrangeBy[[Column(0)]]
 "Dataflow: group_by_order_by_in_top_1" ArrangeBy[[Column(0)]]
 "Dataflow: group_by_order_by_in_top_1" ArrangeBy[[Column(0)]]
 "Dataflow: group_by_order_by_in_top_1" "Arranged DistinctBy"
-"Dataflow: group_by_order_by_in_top_1" "Arranged MonotonicTop1 partial [val: empty]"
 "Dataflow: group_by_order_by_in_top_1" DistinctBy
 "Dataflow: group_by_order_by_in_top_1" DistinctByErrorCheck
-"Dataflow: group_by_order_by_in_top_1" MonotonicTop1
-"Dataflow: limit_only" "Arranged MonotonicTop1 partial [val: empty]"
-"Dataflow: limit_only" MonotonicTop1
-"Dataflow: order_by_desc_limit" "Arranged MonotonicTop1 partial [val: empty]"
-"Dataflow: order_by_desc_limit" MonotonicTop1
-"Dataflow: order_by_limit" "Arranged MonotonicTop1 partial [val: empty]"
-"Dataflow: order_by_limit" MonotonicTop1

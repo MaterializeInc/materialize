@@ -40,6 +40,8 @@ one:two
   FROM KAFKA CONNECTION kafka_conn (TOPIC
   'testdrive-upsert-${testdrive.seed}'
   )
+
+> CREATE TABLE upsert1_tbl FROM SOURCE upsert1 (REFERENCE "testdrive-upsert-${testdrive.seed}")
   KEY FORMAT BYTES
   VALUE FORMAT BYTES
   ENVELOPE UPSERT
@@ -59,7 +61,7 @@ sink1 1 1 true true
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('upsert1')
   GROUP BY s.id, s.name
-upsert1 true 1
+upsert1 true 2
 
 # Shut down the cluster
 > ALTER CLUSTER cluster1 SET (REPLICATION FACTOR = 0)
@@ -79,7 +81,7 @@ sink1 1 1 true true
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('upsert1')
   GROUP BY s.id, s.name
-upsert1 true 1
+upsert1 true 2
 
 # Ingest some more data, and ensure counters are maintained
 
@@ -103,4 +105,4 @@ sink1 2 2 true true
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('upsert1')
   GROUP BY s.id, s.name
-upsert1 true 2
+upsert1 true 4

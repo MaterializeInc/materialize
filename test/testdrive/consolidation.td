@@ -105,13 +105,15 @@ $ kafka-create-topic topic=nums
 > CREATE SOURCE nums
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-nums-${testdrive.seed}')
+
+> CREATE TABLE nums_tbl FROM SOURCE nums (REFERENCE "testdrive-nums-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${nums-schema}'
   ENVELOPE MATERIALIZE
 
-> CREATE DEFAULT INDEX ON nums
+> CREATE DEFAULT INDEX ON nums_tbl
 
 # Disable logical compaction, to ensure we can view historical detail.
-> ALTER INDEX materialize.public.nums_primary_idx
+> ALTER INDEX materialize.public.nums_tbl_primary_idx
   SET (RETAIN HISTORY = FOR 0)
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
@@ -121,7 +123,7 @@ $ kafka-create-topic topic=nums
 # Create a sink before we ingest any data, to ensure the sink starts AS OF 0
 > CREATE SINK nums_sink
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM nums
+  FROM nums_tbl
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'nums-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
@@ -161,7 +163,7 @@ $ kafka-verify-data headers=materialize-timestamp format=avro sink=materialize.p
 # # is fully consolidated.
 # > CREATE SINK nums_sink
 #   IN CLUSTER ${arg.single-replica-cluster}
-#   FROM nums
+#   FROM nums_tbl
 #   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-nums-sink-${testdrive.seed}')
 #   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 #   AS OF 3
@@ -173,7 +175,7 @@ $ kafka-verify-data headers=materialize-timestamp format=avro sink=materialize.p
 # This protects against regression of database-issues#1675.
 
 > BEGIN
-> DECLARE cur CURSOR FOR SUBSCRIBE nums AS OF 3
+> DECLARE cur CURSOR FOR SUBSCRIBE nums_tbl AS OF 3
 > FETCH ALL cur
 mz_timestamp  mz_diff  num
 --------------------------
@@ -185,16 +187,16 @@ mz_timestamp  mz_diff  num
 # Each transaction that has been updated so far should be separately visible
 # (i.e., not compacted away).
 
-> SELECT * FROM nums AS OF 1
+> SELECT * FROM nums_tbl AS OF 1
 3
-> SELECT * FROM nums AS OF 2
+> SELECT * FROM nums_tbl AS OF 2
 4
-> SELECT * FROM nums AS OF 3
+> SELECT * FROM nums_tbl AS OF 3
 5
 
 # Decrease the compaction window and ingest some new data in transaction 4.
 
-> ALTER INDEX materialize.public.nums_primary_idx
+> ALTER INDEX materialize.public.nums_tbl_primary_idx
   SET (RETAIN HISTORY = FOR '1ms')
 
 $ kafka-ingest format=avro topic=nums schema=${nums-schema}
@@ -205,20 +207,20 @@ $ kafka-ingest format=avro topic=nums schema=${nums-schema}
 # Data from older transactions should be immediately compacted to the timestamp
 # of the latest transaction (i.e., 4).
 
-! SELECT * FROM nums AS OF 2
+! SELECT * FROM nums_tbl AS OF 2
 contains:Timestamp (2) is not valid for all inputs
-! SELECT * FROM nums AS OF 3
+! SELECT * FROM nums_tbl AS OF 3
 contains:Timestamp (3) is not valid for all inputs
-> SELECT * FROM nums AS OF 4
+> SELECT * FROM nums_tbl AS OF 4
 6
 
 # Set the compaction window back to off and advance the number in transactions 5 and 6.
 
-> ALTER INDEX materialize.public.nums_primary_idx
+> ALTER INDEX materialize.public.nums_tbl_primary_idx
   SET (RETAIN HISTORY = FOR 0)
 
 # But also create an index that compacts frequently.
-> CREATE VIEW nums_compacted AS SELECT * FROM nums
+> CREATE VIEW nums_compacted AS SELECT * FROM nums_tbl
 > CREATE DEFAULT INDEX ON nums_compacted WITH (RETAIN HISTORY = FOR '1ms')
 
 $ kafka-ingest format=avro topic=nums schema=${nums-schema}
@@ -231,11 +233,11 @@ $ kafka-ingest format=avro topic=nums schema=${nums-schema}
 # Timestamps 4, 5, and 6 should all be available due to the longer compaction
 # window.
 
-> SELECT * FROM nums AS OF 4
+> SELECT * FROM nums_tbl AS OF 4
 6
-> SELECT * FROM nums AS OF 5
+> SELECT * FROM nums_tbl AS OF 5
 7
-> SELECT * FROM nums AS OF 6
+> SELECT * FROM nums_tbl AS OF 6
 8
 
 ! SELECT * FROM nums_compacted AS OF 4

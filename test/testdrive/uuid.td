@@ -41,14 +41,16 @@ $ kafka-ingest format=avro topic=data schema=${schema}
 > CREATE SOURCE data
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
+
+> CREATE TABLE data_tbl FROM SOURCE data (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'
 
-> SHOW COLUMNS FROM data
+> SHOW COLUMNS FROM data_tbl
 name   nullable  type  comment
 ------------------------------
 u      false     uuid  ""
 
-> SELECT * FROM data
+> SELECT * FROM data_tbl
 "16fd95b0-65b7-4249-9b66-1547cd95923d"
 "b141698b-fb7f-492d-bc8a-0d159641c7a3"
 
@@ -64,7 +66,7 @@ u      false     uuid  ""
 
 > CREATE SINK uuid_sink_${testdrive.seed}
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM data
+  FROM data_tbl
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-data-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM

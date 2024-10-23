@@ -18,6 +18,8 @@ $ kafka-create-topic topic=missing_keys_or_values partitions=1
 > CREATE SOURCE missing_keys_or_values
   IN CLUSTER missing_keys_or_values_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-missing_keys_or_values-${testdrive.seed}')
+
+> CREATE TABLE missing_keys_or_values_tbl FROM SOURCE missing_keys_or_values (REFERENCE "testdrive-missing_keys_or_values-${testdrive.seed}")
   KEY FORMAT TEXT
   VALUE FORMAT TEXT
   INCLUDE KEY
@@ -28,7 +30,7 @@ $ kafka-create-topic topic=missing_keys_or_values partitions=1
 $ kafka-ingest topic=missing_keys_or_values format=bytes key-format=bytes key-terminator=:
 hello:world
 
-> SELECT * FROM missing_keys_or_values
+> SELECT * FROM missing_keys_or_values_tbl
 key   text
 -----------
 hello world
@@ -39,7 +41,7 @@ hello world
 $ kafka-ingest topic=missing_keys_or_values format=bytes omit-key=true
 foo
 
-> SELECT * FROM missing_keys_or_values
+> SELECT * FROM missing_keys_or_values_tbl
 key    text
 -------------
 hello  world
@@ -50,7 +52,7 @@ hello  world
 
 $ kafka-ingest topic=missing_keys_or_values format=bytes omit-value=true omit-key=true
 
-> SELECT * FROM missing_keys_or_values
+> SELECT * FROM missing_keys_or_values_tbl
 key    text
 -------------
 hello  world
@@ -62,5 +64,5 @@ hello  world
 $ kafka-ingest topic=missing_keys_or_values key-format=bytes format=bytes omit-value=true
 bar
 
-! SELECT * FROM missing_keys_or_values
+! SELECT * FROM missing_keys_or_values_tbl
 contains: Envelope error: Flat: Value not present for message

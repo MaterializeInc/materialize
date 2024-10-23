@@ -28,8 +28,11 @@ world
 > CREATE SOURCE gzip
   IN CLUSTER gzip_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-gzip-${testdrive.seed}')
+
+> CREATE TABLE gzip_tbl FROM SOURCE gzip (REFERENCE "testdrive-gzip-${testdrive.seed}")
   FORMAT TEXT
-> SELECT text FROM gzip
+
+> SELECT text FROM gzip_tbl
 hello
 world
 
@@ -43,8 +46,11 @@ world
 > CREATE SOURCE snappy
   IN CLUSTER snappy_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snappy-${testdrive.seed}')
+
+> CREATE TABLE snappy_tbl FROM SOURCE snappy (REFERENCE "testdrive-snappy-${testdrive.seed}")
   FORMAT TEXT
-> SELECT text FROM snappy
+
+> SELECT text FROM snappy_tbl
 hello
 world
 
@@ -58,8 +64,11 @@ world
 > CREATE SOURCE lz4
   IN CLUSTER lz4_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-lz4-${testdrive.seed}')
+
+> CREATE TABLE lz4_tbl FROM SOURCE lz4 (REFERENCE "testdrive-lz4-${testdrive.seed}")
   FORMAT TEXT
-> SELECT text FROM lz4
+
+> SELECT text FROM lz4_tbl
 hello
 world
 
@@ -73,8 +82,11 @@ world
 > CREATE SOURCE zstd
   IN CLUSTER zstd_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-zstd-${testdrive.seed}')
+
+> CREATE TABLE zstd_tbl FROM SOURCE zstd (REFERENCE "testdrive-zstd-${testdrive.seed}")
   FORMAT TEXT
-> SELECT text FROM zstd
+
+> SELECT text FROM zstd_tbl
 hello
 world
 
@@ -82,8 +94,11 @@ world
 > CREATE SOURCE zstd_fast_forwarded
   IN CLUSTER zstd_fast_forwarded_cluster
   FROM KAFKA CONNECTION kafka_conn (START OFFSET=[1], TOPIC 'testdrive-zstd-${testdrive.seed}')
+
+> CREATE TABLE zstd_fast_forwarded_tbl FROM SOURCE zstd_fast_forwarded (REFERENCE "testdrive-zstd-${testdrive.seed}")
   FORMAT TEXT
-> SELECT text FROM zstd_fast_forwarded
+
+> SELECT text FROM zstd_fast_forwarded_tbl
 world
 
 # Test compression with sinks.

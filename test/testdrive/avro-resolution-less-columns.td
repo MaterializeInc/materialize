@@ -31,13 +31,15 @@ $ kafka-ingest format=avro topic=resolution-2to1 schema=${2columns} timestamp=1
 > CREATE SOURCE resolution_2to1
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-resolution-2to1-${testdrive.seed}')
+
+> CREATE TABLE resolution_2to1_tbl FROM SOURCE resolution_2to1 (REFERENCE "testdrive-resolution-2to1-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
 
 $ kafka-ingest format=avro topic=resolution-2to1 schema=${1column} timestamp=2
 {"f1": "val_f1b"}
 
-> SELECT * FROM resolution_2to1
+> SELECT * FROM resolution_2to1_tbl
 f1 f2
 ---
 val_f1a val_f2a

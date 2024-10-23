@@ -92,12 +92,14 @@ $ kafka-verify-data format=avro sink=materialize.public.v01
 # around.
 > CREATE SOURCE sink_verify
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-v0-${testdrive.seed}')
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-v0-${testdrive.seed}');
+
+> CREATE TABLE sink_verify_tbl FROM SOURCE sink_verify (REFERENCE "testdrive-v0-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   INCLUDE PARTITION
   ENVELOPE NONE;
 
-> SELECT COUNT(DISTINCT partition) = 1 FROM sink_verify
+> SELECT COUNT(DISTINCT partition) = 1 FROM sink_verify_tbl
 false
 
 # This is the row that will be published with the v1 schema

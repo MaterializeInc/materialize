@@ -27,10 +27,12 @@ $ kafka-ingest format=avro topic=avro-decode-no-record schema=${no-record} times
 > CREATE SOURCE avro_decode_no_record
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-decode-no-record-${testdrive.seed}')
+
+> CREATE TABLE avro_decode_no_record_tbl FROM SOURCE avro_decode_no_record (REFERENCE "testdrive-avro-decode-no-record-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${no-record}'
   ENVELOPE NONE
 
-> SHOW COLUMNS FROM avro_decode_no_record
+> SHOW COLUMNS FROM avro_decode_no_record_tbl
 name       nullable  type     comment
 -------------------------------------
 \?column?  false     integer  ""

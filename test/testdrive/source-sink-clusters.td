@@ -78,24 +78,28 @@ bb
 > CREATE SOURCE data1
   IN CLUSTER storage
   FROM KAFKA CONNECTION kafka (TOPIC 'testdrive-data1-${testdrive.seed}')
+
+> CREATE TABLE data1_tbl FROM SOURCE data1 (REFERENCE "testdrive-data1-${testdrive.seed}")
   FORMAT TEXT
 
 > CREATE SOURCE data2
   IN CLUSTER storage
   FROM KAFKA CONNECTION kafka (TOPIC 'testdrive-data2-${testdrive.seed}')
+
+> CREATE TABLE data2_tbl FROM SOURCE data2 (REFERENCE "testdrive-data2-${testdrive.seed}")
   FORMAT TEXT
 
-> SELECT * FROM data1
+> SELECT * FROM data1_tbl
 a
 b
 
-> SELECT * FROM data2
+> SELECT * FROM data2_tbl
 aa
 bb
 
-> CREATE MATERIALIZED VIEW view1 AS SELECT text FROM data1
+> CREATE MATERIALIZED VIEW view1 AS SELECT text FROM data1_tbl
 
-> CREATE MATERIALIZED VIEW view2 AS SELECT text || text AS text FROM data2
+> CREATE MATERIALIZED VIEW view2 AS SELECT text || text AS text FROM data2_tbl
 
 > CREATE SINK sink1
   IN CLUSTER storage
@@ -132,12 +136,12 @@ c
 $ kafka-ingest format=bytes topic=data2
 cc
 
-> SELECT * FROM data1
+> SELECT * FROM data1_tbl
 a
 b
 c
 
-> SELECT * FROM data2
+> SELECT * FROM data2_tbl
 aa
 bb
 cc

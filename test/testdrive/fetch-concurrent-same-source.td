@@ -29,23 +29,25 @@ $ kafka-create-topic topic=fetch-concurrent-same-source
 > CREATE SOURCE fetch_concurrent_same_source
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-fetch-concurrent-same-source-${testdrive.seed}')
+  WITH (TIMESTAMP INTERVAL '10ms')
+
+> CREATE TABLE fetch_concurrent_same_source_tbl FROM SOURCE fetch_concurrent_same_source (REFERENCE "testdrive-fetch-concurrent-same-source-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${int}'
   ENVELOPE NONE
-  WITH (TIMESTAMP INTERVAL '10ms')
 
 $ kafka-ingest format=avro topic=fetch-concurrent-same-source schema=${int} timestamp=1
 {"f1": 123}
 {"f1": 234}
 {"f1": 345}
 
-> SELECT COUNT(*) FROM fetch_concurrent_same_source;
+> SELECT COUNT(*) FROM fetch_concurrent_same_source_tbl;
 3
 
 > BEGIN
 
-> DECLARE c1 CURSOR FOR SELECT * FROM fetch_concurrent_same_source;
+> DECLARE c1 CURSOR FOR SELECT * FROM fetch_concurrent_same_source_tbl;
 
-> DECLARE c2 CURSOR FOR SELECT * FROM fetch_concurrent_same_source;
+> DECLARE c2 CURSOR FOR SELECT * FROM fetch_concurrent_same_source_tbl;
 
 > FETCH ALL c1;
 123
@@ -57,7 +59,7 @@ $ kafka-ingest format=avro topic=fetch-concurrent-same-source schema=${int} time
 234
 345
 
-> DECLARE c3 CURSOR FOR SELECT * FROM fetch_concurrent_same_source;
+> DECLARE c3 CURSOR FOR SELECT * FROM fetch_concurrent_same_source_tbl;
 
 > FETCH ALL c3;
 123

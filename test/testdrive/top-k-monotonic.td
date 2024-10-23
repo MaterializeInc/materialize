@@ -46,11 +46,13 @@ $ kafka-ingest format=avro topic=non-dbz-data schema=${non-dbz-schema} timestamp
 > CREATE SOURCE non_dbz_data
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-non-dbz-data-${testdrive.seed}')
+
+> CREATE TABLE non_dbz_data_tbl FROM SOURCE non_dbz_data (REFERENCE "testdrive-non-dbz-data-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
   ENVELOPE NONE
 
 # Create a monotonic topk plan that has both a limit and a group to test that thinning works as expected
-> SELECT * FROM (SELECT DISTINCT a FROM non_dbz_data) grp, LATERAL (SELECT b FROM non_dbz_data WHERE a = grp.a ORDER BY b LIMIT 2);
+> SELECT * FROM (SELECT DISTINCT a FROM non_dbz_data_tbl) grp, LATERAL (SELECT b FROM non_dbz_data_tbl WHERE a = grp.a ORDER BY b LIMIT 2);
 a b
 ---------
 1 1
@@ -68,9 +70,9 @@ a b
 > CREATE VIEW v_basic AS
   SELECT *
   FROM
-    (SELECT sum(a) AS s FROM non_dbz_data GROUP BY a) grp,
+    (SELECT sum(a) AS s FROM non_dbz_data_tbl GROUP BY a) grp,
     LATERAL (
-      SELECT b FROM non_dbz_data
+      SELECT b FROM non_dbz_data_tbl
       WHERE (grp.s IS NULL AND a IS NULL) OR a = grp.s
       ORDER BY b LIMIT 6 / abs(grp.s+2)
     );
@@ -78,9 +80,9 @@ a b
 > CREATE VIEW v_monotonic AS
   SELECT *
   FROM
-    (SELECT DISTINCT a::numeric FROM non_dbz_data) grp,
+    (SELECT DISTINCT a::numeric FROM non_dbz_data_tbl) grp,
     LATERAL (
-      SELECT b FROM non_dbz_data
+      SELECT b FROM non_dbz_data_tbl
       WHERE (grp.a IS NULL AND a IS NULL) OR a = grp.a
       ORDER BY b LIMIT 6 / abs(grp.a+2)
     );
@@ -220,16 +222,18 @@ $ kafka-ingest format=avro topic=other-non-dbz-data schema=${other-non-dbz-schem
 > CREATE SOURCE other_non_dbz_data
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-other-non-dbz-data-${testdrive.seed}')
+
+> CREATE TABLE other_non_dbz_data_tbl FROM SOURCE other_non_dbz_data (REFERENCE "testdrive-other-non-dbz-data-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${other-non-dbz-schema}'
   ENVELOPE NONE
 
-> SELECT sum(a) FROM (SELECT a FROM other_non_dbz_data ORDER BY b LIMIT 37);
+> SELECT sum(a) FROM (SELECT a FROM other_non_dbz_data_tbl ORDER BY b LIMIT 37);
 sum
 ----
 703
 
 > CREATE VIEW v_other AS
-  SELECT a FROM other_non_dbz_data ORDER BY b LIMIT 37;
+  SELECT a FROM other_non_dbz_data_tbl ORDER BY b LIMIT 37;
 
 > CREATE DEFAULT INDEX ON v_other;
 
@@ -286,4 +290,18 @@ a
 "Dataflow: materialize.public.v_other_primary_idx" ArrangeBy[[Column(0)]]
 "Dataflow: materialize.public.v_other_primary_idx" ArrangeBy[[Column(0)]]-errors
 "Dataflow: materialize.public.v_other_primary_idx" "Arranged TopK input"
+"Dataflow: materialize.public.v_other_primary_idx" "Reduced TopK input"
+"Dataflow: materialize.public.v_other_primary_idx" "Arranged TopK input"
+"Dataflow: materialize.public.v_other_primary_idx" "Arranged TopK input"
+"Dataflow: materialize.public.v_other_primary_idx" "Arranged TopK input"
+"Dataflow: materialize.public.v_other_primary_idx" "Arranged TopK input"
+"Dataflow: materialize.public.v_other_primary_idx" "Arranged TopK input"
+"Dataflow: materialize.public.v_other_primary_idx" "Arranged TopK input"
+"Dataflow: materialize.public.v_other_primary_idx" "Arranged TopK input"
+"Dataflow: materialize.public.v_other_primary_idx" "Reduced TopK input"
+"Dataflow: materialize.public.v_other_primary_idx" "Reduced TopK input"
+"Dataflow: materialize.public.v_other_primary_idx" "Reduced TopK input"
+"Dataflow: materialize.public.v_other_primary_idx" "Reduced TopK input"
+"Dataflow: materialize.public.v_other_primary_idx" "Reduced TopK input"
+"Dataflow: materialize.public.v_other_primary_idx" "Reduced TopK input"
 "Dataflow: materialize.public.v_other_primary_idx" "Reduced TopK input"
