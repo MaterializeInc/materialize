@@ -58,8 +58,9 @@ use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::time_dependence::{TimeDependence, TimeDependenceError};
 use prometheus::proto::LabelPair;
 use serde::{Deserialize, Serialize};
-use timely::progress::{Antichain, Timestamp};
+use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use timely::PartialOrder;
+use tokio::sync::mpsc::error::SendError;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{self, MissedTickBehavior};
 use tracing::debug_span;
@@ -604,7 +605,7 @@ where
     /// Panics if the identified `instance` still has active replicas.
     pub fn drop_instance(&mut self, id: ComputeInstanceId) {
         if let Some(instance) = self.instances.remove(&id) {
-            instance.call(|i| i.check_empty());
+            instance.call(|i| i.shutdown());
         }
 
         self.instance_workload_classes
@@ -1119,12 +1120,14 @@ impl<T: ComputeControllerTimestamp> InstanceState<T> {
         F: FnOnce(&mut Instance<T>) + Send + 'static,
     {
         let otel_ctx = OpenTelemetryContext::obtain();
-        self.client.send(Box::new(move |instance| {
-            let _span = debug_span!("instance::call").entered();
-            otel_ctx.attach_as_parent();
+        self.client
+            .send(Box::new(move |instance| {
+                let _span = debug_span!("instance::call").entered();
+                otel_ctx.attach_as_parent();
 
-            f(instance)
-        }));
+                f(instance)
+            }))
+            .expect("instance not dropped");
     }
 
     pub async fn call_sync<F, R>(&self, f: F) -> R
@@ -1134,13 +1137,15 @@ impl<T: ComputeControllerTimestamp> InstanceState<T> {
     {
         let (tx, rx) = oneshot::channel();
         let otel_ctx = OpenTelemetryContext::obtain();
-        self.client.send(Box::new(move |instance| {
-            let _span = debug_span!("instance::call_sync").entered();
-            otel_ctx.attach_as_parent();
+        self.client
+            .send(Box::new(move |instance| {
+                let _span = debug_span!("instance::call_sync").entered();
+                otel_ctx.attach_as_parent();
 
-            let result = f(instance);
-            let _ = tx.send(result);
-        }));
+                let result = f(instance);
+                let _ = tx.send(result);
+            }))
+            .expect("instance not dropped");
 
         rx.await.expect("instance not dropped")
     }
@@ -1164,9 +1169,12 @@ impl<T: ComputeControllerTimestamp> InstanceState<T> {
         });
 
         let client = self.client.clone();
-        let tx = Arc::new(move |id, change| {
-            client.send(Box::new(move |i| i.report_read_hold_change(id, change)));
-            Ok(())
+        let tx = Arc::new(move |id, change: ChangeBatch<_>| {
+            let cmd: instance::Command<_> = {
+                let change = change.clone();
+                Box::new(move |i| i.report_read_hold_change(id, change))
+            };
+            client.send(cmd).map_err(|_| SendError((id, change)))
         });
 
         let hold = ReadHold::new(id, since, tx);
