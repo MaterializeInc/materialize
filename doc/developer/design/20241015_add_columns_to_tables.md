@@ -156,8 +156,10 @@ We need to start `CatalogItemId`s at the current value of the `GlobalId` allocat
 items can continue to be identified by the same text representation of their current ID, and thus
 to prevent ID re-use. For example, if a user has a table named "orders" with `GlobalId::User(42)`,
 we'll migrate that to `CatalogItemId::User(42)` so externally that table continues to have the ID
-of `'u42'`. Additionally, resuming `GlobalId` allocation from the current value prevents accidental
-`GlobalId` re-use if they are persisted outside the Catalog. Additionally we will extend the existing
+of `'u42'`. This migration is only possible if we start `CatalogItemId`s at the current value of
+the `GlobalId` allocator, so all existing IDs are considered "allocated". Additionally, resuming
+`GlobalId` allocation from the current value prevents accidental `GlobalId` re-use if they are
+persisted outside the Catalog. Additionally we will extend the existing
 [ItemValue](https://github.com/MaterializeInc/materialize/blob/b579caa68b6d287426dead8626c0adc885205740/src/catalog/protos/objects.proto#L119-L126)
 protobuf type to include a map of `VERSION -> GlobalId`. Externally to map between `CatalogItemId`s
 and `GlobalId`s we’ll introduce a new Catalog table, `mz_internal.mz_collection_ids`.
