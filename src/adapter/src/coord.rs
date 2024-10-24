@@ -2433,9 +2433,16 @@ impl Coordinator {
         &mut self,
         migrated_storage_collections: &BTreeSet<GlobalId>,
     ) {
+        let start = Instant::now();
+        info!("STORAGE LOOK: storage collections init beginning");
+        info!("STORAGE LOOK: storage collections init: resolve beginning");
         let catalog = self.catalog();
         let source_status_collection_id = catalog
             .resolve_builtin_storage_collection(&mz_catalog::builtin::MZ_SOURCE_STATUS_HISTORY);
+        info!(
+            "STORAGE LOOK: storage collections init: resolve complete in {:?}",
+            start.elapsed()
+        );
 
         let source_desc = |data_source: &DataSourceDesc, desc: &RelationDesc| {
             let (data_source, status_collection_id) = match data_source.clone() {
@@ -2489,6 +2496,8 @@ impl Coordinator {
             }
         };
 
+        let col_start = Instant::now();
+        info!("STORAGE LOOK: storage collections init: collection collect beginning");
         let mut collections = vec![];
         let mut new_builtin_continual_tasks = vec![];
         for entry in catalog.entries() {
@@ -2537,7 +2546,13 @@ impl Coordinator {
                 _ => (),
             }
         }
+        info!(
+            "STORAGE LOOK: storage collections init: collection collect complete in {:?}",
+            col_start.elapsed()
+        );
 
+        let ts_start = Instant::now();
+        info!("STORAGE LOOK: storage collections init: get timestamp beginning");
         let register_ts = if self.controller.read_only() {
             self.get_local_read_ts().await
         } else {
@@ -2545,9 +2560,15 @@ impl Coordinator {
             // oracle, which we're not allowed in read-only mode.
             self.get_local_write_ts().await.timestamp
         };
+        info!(
+            "STORAGE LOOK: storage collections init: get timestamp complete in {:?}",
+            ts_start.elapsed()
+        );
 
         let storage_metadata = self.catalog.state().storage_metadata();
 
+        let create_start = Instant::now();
+        info!("STORAGE LOOK: storage collections init: create collections beginning");
         self.controller
             .storage
             .create_collections_for_bootstrap(
@@ -2558,13 +2579,28 @@ impl Coordinator {
             )
             .await
             .unwrap_or_terminate("cannot fail to create collections");
+        info!(
+            "STORAGE LOOK: storage collections init: create collections complete in {:?}",
+            create_start.elapsed()
+        );
 
         self.bootstrap_builtin_continual_tasks(new_builtin_continual_tasks)
             .await;
 
+        let apply_start = Instant::now();
+        info!("STORAGE LOOK: storage collections init: apply write beginning");
         if !self.controller.read_only() {
             self.apply_local_write(register_ts).await;
         }
+        info!(
+            "STORAGE LOOK: storage collections init: apply write complete in {:?}",
+            apply_start.elapsed()
+        );
+
+        info!(
+            "STORAGE LOOK: storage collections init complete in {:?}",
+            start.elapsed()
+        );
     }
 
     /// TODO(ct1): Hack to make as_of selection happy. It assumes that anything
@@ -2635,26 +2671,40 @@ impl Coordinator {
 
         let optimizer_config = OptimizerConfig::from(self.catalog().system_config());
 
+        let mut num_indexes = 0;
+        let mut num_skipped_indexes = 0;
+        let mut snapshot_dur = Duration::new(0, 0);
+        let mut opt_build_dur = Duration::new(0, 0);
+        let mut mir_to_mir_dur = Duration::new(0, 0);
+        let mut mir_to_lir_dur = Duration::new(0, 0);
+        let mut rest_dur = Duration::new(0, 0);
+        let mut ct_dur = Duration::new(0, 0);
+
         for entry in ordered_catalog_entries {
             let id = entry.id();
             let is_timeline_epoch_ms = self.get_timeline_context(id).is_timeline_epoch_ms();
             match entry.item() {
                 CatalogItem::Index(idx) => {
+                    num_indexes += 1;
                     // Collect optimizer parameters.
+                    let start = Instant::now();
                     let compute_instance =
                         instance_snapshots.entry(idx.cluster_id).or_insert_with(|| {
                             self.instance_snapshot(idx.cluster_id)
                                 .expect("compute instance exists")
                         });
+                    snapshot_dur += start.elapsed();
 
                     // The index may already be installed on the compute instance. For example,
                     // this is the case for introspection indexes.
                     if compute_instance.contains_collection(&id) {
+                        num_skipped_indexes += 1;
                         continue;
                     }
 
                     let (optimized_plan, global_lir_plan) = {
                         // Build an optimizer for this INDEX.
+                        let start = Instant::now();
                         let mut optimizer = optimize::index::Optimizer::new(
                             self.owned_catalog(),
                             compute_instance.clone(),
@@ -2662,8 +2712,10 @@ impl Coordinator {
                             optimizer_config.clone(),
                             self.optimizer_metrics(),
                         );
+                        opt_build_dur += start.elapsed();
 
                         // MIR ⇒ MIR optimization (global)
+                        let start = Instant::now();
                         let index_plan = optimize::index::Index::new(
                             entry.name().clone(),
                             idx.on,
@@ -2672,13 +2724,17 @@ impl Coordinator {
                         );
                         let global_mir_plan = optimizer.optimize(index_plan)?;
                         let optimized_plan = global_mir_plan.df_desc().clone();
+                        mir_to_mir_dur += start.elapsed();
 
                         // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
+                        let start = Instant::now();
                         let global_lir_plan = optimizer.optimize(global_mir_plan)?;
+                        mir_to_lir_dur += start.elapsed();
 
                         (optimized_plan, global_lir_plan)
                     };
 
+                    let start = Instant::now();
                     let (physical_plan, metainfo) = global_lir_plan.unapply();
                     let metainfo = {
                         // Pre-allocate a vector of transient GlobalIds for each notice.
@@ -2696,9 +2752,12 @@ impl Coordinator {
                     catalog.set_dataflow_metainfo(id, metainfo);
 
                     compute_instance.insert_collection(id);
+
+                    rest_dur += start.elapsed();
                 }
                 CatalogItem::MaterializedView(mv) => {
                     // Collect optimizer parameters.
+                    let start = Instant::now();
                     let compute_instance =
                         instance_snapshots.entry(mv.cluster_id).or_insert_with(|| {
                             self.instance_snapshot(mv.cluster_id)
@@ -2709,9 +2768,11 @@ impl Coordinator {
                         .catalog()
                         .resolve_full_name(entry.name(), None)
                         .to_string();
+                    snapshot_dur += start.elapsed();
 
                     let (optimized_plan, global_lir_plan) = {
                         // Build an optimizer for this MATERIALIZED VIEW.
+                        let start = Instant::now();
                         let mut optimizer = optimize::materialized_view::Optimizer::new(
                             self.owned_catalog().as_optimizer_catalog(),
                             compute_instance.clone(),
@@ -2725,18 +2786,24 @@ impl Coordinator {
                             self.optimizer_metrics(),
                             is_timeline_epoch_ms,
                         );
+                        opt_build_dur += start.elapsed();
 
                         // MIR ⇒ MIR optimization (global)
+                        let start = Instant::now();
                         let global_mir_plan =
                             optimizer.optimize(mv.optimized_expr.as_ref().clone())?;
                         let optimized_plan = global_mir_plan.df_desc().clone();
+                        mir_to_mir_dur += start.elapsed();
 
                         // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
+                        let start = Instant::now();
                         let global_lir_plan = optimizer.optimize(global_mir_plan)?;
+                        mir_to_lir_dur += start.elapsed();
 
                         (optimized_plan, global_lir_plan)
                     };
 
+                    let start = Instant::now();
                     let (physical_plan, metainfo) = global_lir_plan.unapply();
                     let metainfo = {
                         // Pre-allocate a vector of transient GlobalIds for each notice.
@@ -2754,14 +2821,19 @@ impl Coordinator {
                     catalog.set_dataflow_metainfo(id, metainfo);
 
                     compute_instance.insert_collection(id);
+
+                    rest_dur += start.elapsed();
                 }
                 CatalogItem::ContinualTask(ct) => {
+                    let start = Instant::now();
                     let compute_instance =
                         instance_snapshots.entry(ct.cluster_id).or_insert_with(|| {
                             self.instance_snapshot(ct.cluster_id)
                                 .expect("compute instance exists")
                         });
+                    snapshot_dur += start.elapsed();
 
+                    let start = Instant::now();
                     let debug_name = self
                         .catalog()
                         .resolve_full_name(entry.name(), None)
@@ -2781,10 +2853,18 @@ impl Coordinator {
                     catalog.set_dataflow_metainfo(id, metainfo);
 
                     compute_instance.insert_collection(id);
+
+                    ct_dur += start.elapsed();
                 }
                 _ => (),
             }
         }
+
+        let diff = num_indexes - num_skipped_indexes;
+
+        info!(
+            "STARTUP LOOK: indexes: {num_indexes}, skipped: {num_skipped_indexes}, difference: {diff}, snapshot duration: {snapshot_dur:?}, optimizer build duration: {opt_build_dur:?}, MIR to MIR duration: {mir_to_mir_dur:?}, MIR to LIR duration: {mir_to_lir_dur:?}, postamble duration: {rest_dur:?}, continual task optimization duration: {ct_dur:?}"
+        );
 
         Ok(())
     }
@@ -3650,9 +3730,14 @@ pub fn serve(
         })
         .await?;
 
+        let apply_start = Instant::now();
         if !read_only_controllers {
             epoch_millis_oracle.apply_write(boot_ts).await;
         }
+        info!(
+            "STARTUP LOOK: apply write took: {:?}",
+            apply_start.elapsed()
+        );
 
         info!(
             "startup: coordinator init: catalog open complete in {:?}",
@@ -3975,7 +4060,6 @@ pub async fn load_remote_system_parameters(
                 .map(|param| {
                     let name = param.name;
                     let value = param.value;
-                    tracing::info!(name, value, initial = true, "sync parameter");
                     (name, value)
                 })
                 .collect();

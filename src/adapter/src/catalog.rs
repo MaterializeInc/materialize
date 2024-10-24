@@ -2325,7 +2325,7 @@ mod tests {
                 Catalog::open_debug_catalog(persist_client.clone(), organization_id.clone())
                     .await
                     .expect("unable to open debug catalog");
-            let item = catalog
+            let (item, _) = catalog
                 .state()
                 .deserialize_item(id, &create_sql)
                 .expect("unable to parse view");
@@ -3224,7 +3224,7 @@ mod tests {
                 .deserialize_item(mv_id, &format!(
                     "CREATE MATERIALIZED VIEW {database_name}.{schema_name}.{mv_name} AS SELECT name FROM mz_tables"
                 ))
-                .expect("unable to deserialize item");
+                .expect("unable to deserialize item").0;
             catalog
                 .transact(
                     None,

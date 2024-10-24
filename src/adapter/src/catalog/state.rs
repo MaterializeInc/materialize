@@ -85,6 +85,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
+use crate::catalog::apply::ApplyItemTimings;
 use crate::catalog::{Catalog, ConnCatalog};
 use crate::coord::ConnMeta;
 use crate::optimize::{self, Optimize, OptimizerCatalog};
@@ -788,12 +789,19 @@ impl CatalogState {
         create_sql: &str,
         pcx: Option<&PlanContext>,
         catalog: &ConnCatalog,
-    ) -> Result<(Plan, ResolvedIds), AdapterError> {
+    ) -> Result<(Plan, ResolvedIds, ApplyItemTimings), AdapterError> {
+        let mut item_timings = ApplyItemTimings::new();
+        let parse_start = Instant::now();
         let stmt = mz_sql::parse::parse(create_sql)?.into_element().ast;
+        item_timings.parse_duration += parse_start.elapsed();
+        let resolve_start = Instant::now();
         let (stmt, resolved_ids) = mz_sql::names::resolve(catalog, stmt)?;
+        item_timings.resolve_duration += resolve_start.elapsed();
+        let plan_start = Instant::now();
         let plan = mz_sql::plan::plan(pcx, catalog, stmt, &Params::empty(), &resolved_ids)?;
+        item_timings.plan_duration += plan_start.elapsed();
 
-        return Ok((plan, resolved_ids));
+        return Ok((plan, resolved_ids, item_timings));
     }
 
     /// Parses the given SQL string into a pair of [`CatalogItem`].
@@ -801,7 +809,7 @@ impl CatalogState {
         &self,
         id: GlobalId,
         create_sql: &str,
-    ) -> Result<CatalogItem, AdapterError> {
+    ) -> Result<(CatalogItem, ApplyItemTimings), AdapterError> {
         self.parse_item(id, create_sql, None, false, None)
     }
 
@@ -814,12 +822,16 @@ impl CatalogState {
         pcx: Option<&PlanContext>,
         is_retained_metrics_object: bool,
         custom_logical_compaction_window: Option<CompactionWindow>,
-    ) -> Result<CatalogItem, AdapterError> {
+    ) -> Result<(CatalogItem, ApplyItemTimings), AdapterError> {
+        let mut item_timings = ApplyItemTimings::new();
         let session_catalog = self.for_system_session();
 
-        let (plan, resolved_ids) = Self::parse_plan(create_sql, pcx, &session_catalog)?;
+        let (plan, resolved_ids, inner_item_timings) =
+            Self::parse_plan(create_sql, pcx, &session_catalog)?;
 
-        Ok(match plan {
+        item_timings.merge(inner_item_timings);
+
+        let item = match plan {
             Plan::CreateTable(CreateTablePlan { table, .. }) => CatalogItem::Table(Table {
                 create_sql: Some(table.create_sql),
                 desc: table.desc,
@@ -912,6 +924,7 @@ impl CatalogState {
                 is_retained_metrics_object,
             }),
             Plan::CreateView(CreateViewPlan { view, .. }) => {
+                let optimize_start = Instant::now();
                 // Collect optimizer parameters.
                 let optimizer_config =
                     optimize::OptimizerConfig::from(session_catalog.system_vars());
@@ -922,6 +935,8 @@ impl CatalogState {
                 // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
                 let raw_expr = view.expr;
                 let optimized_expr = optimizer.optimize(raw_expr.clone())?;
+
+                item_timings.optimize_duration += optimize_start.elapsed();
 
                 CatalogItem::View(View {
                     create_sql: view.create_sql,
@@ -935,6 +950,7 @@ impl CatalogState {
             Plan::CreateMaterializedView(CreateMaterializedViewPlan {
                 materialized_view, ..
             }) => {
+                let optimize_start = Instant::now();
                 // Collect optimizer parameters.
                 let optimizer_config =
                     optimize::OptimizerConfig::from(session_catalog.system_vars());
@@ -951,6 +967,7 @@ impl CatalogState {
                 let desc = RelationDesc::new(typ, materialized_view.column_names);
 
                 let initial_as_of = materialized_view.as_of.map(Antichain::from_elem);
+                item_timings.optimize_duration += optimize_start.elapsed();
 
                 CatalogItem::MaterializedView(MaterializedView {
                     create_sql: materialized_view.create_sql,
@@ -1026,7 +1043,9 @@ impl CatalogState {
                 })
                 .into())
             }
-        })
+        };
+
+        Ok((item, item_timings))
     }
 
     /// Execute function `f` on `self`, with all "enable_for_item_parsing" feature flags enabled.
