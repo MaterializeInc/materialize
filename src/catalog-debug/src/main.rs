@@ -56,7 +56,6 @@ use mz_sql::session::vars::ConnectionCounter;
 use mz_storage_types::connections::ConnectionContext;
 use serde::{Deserialize, Serialize};
 use tracing::{error, Instrument};
-use uuid::Uuid;
 
 pub const BUILD_INFO: BuildInfo = build_info!();
 pub static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version());
@@ -65,9 +64,10 @@ pub static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version
 #[clap(name = "catalog", next_line_help = true, version = VERSION.as_str())]
 pub struct Args {
     // === Persist options. ===
-    /// The organization ID of the environment.
-    #[clap(long, env = "ORG_ID")]
-    organization_id: Uuid,
+    /// An opaque identifier for the environment in which this process is
+    /// running.
+    #[clap(long, env = "ENVIRONMENT_ID")]
+    environment_id: EnvironmentId,
     /// Where the persist library should store its blob data.
     #[clap(long, env = "PERSIST_BLOB_URL")]
     persist_blob_url: SensitiveUrl,
@@ -85,18 +85,10 @@ pub struct Args {
     /// a customer's requested role for an AWS connection.
     #[clap(long, env = "AWS_CONNECTION_ROLE_ARN")]
     aws_connection_role_arn: Option<String>,
-    // === Secrets reader options. ===
-    #[clap(flatten)]
-    secrets: SecretsReaderCliArgs,
     // === Tracing options. ===
     #[clap(flatten)]
     tracing: TracingCliArgs,
     // === Other options. ===
-    /// An opaque identifier for the environment in which this process is
-    /// running.
-    #[clap(long, env = "ENVIRONMENT_ID")]
-    environment_id: EnvironmentId,
-
     #[clap(long)]
     deploy_generation: Option<u64>,
 
@@ -154,6 +146,8 @@ enum Action {
     /// non-zero. Can be used on a running environmentd. Operates without
     /// interfering with it or committing any data to that catalog.
     UpgradeCheck {
+        #[clap(flatten)]
+        secrets: SecretsReaderCliArgs,
         /// Map of cluster name to resource specification. Check the README for latest values.
         cluster_replica_sizes: Option<String>,
     },
@@ -202,7 +196,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         consensus_uri: args.persist_consensus_url.clone(),
     };
     let persist_client = persist_clients.open(persist_location).await?;
-    let organization_id = args.organization_id;
+    let organization_id = args.environment_id.organization_id();
     let metrics = Arc::new(mz_catalog::durable::Metrics::new(&metrics_registry));
     let openable_state = persist_backed_catalog_state(
         persist_client,
@@ -252,13 +246,14 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         } => edit(openable_state, collection, key, value).await,
         Action::Delete { collection, key } => delete(openable_state, collection, key).await,
         Action::UpgradeCheck {
+            secrets,
             cluster_replica_sizes,
         } => {
             let cluster_replica_sizes: ClusterReplicaSizeMap = match cluster_replica_sizes {
                 None => Default::default(),
                 Some(json) => serde_json::from_str(&json).context("parsing replica size map")?,
             };
-            upgrade_check(args, openable_state, cluster_replica_sizes, start).await
+            upgrade_check(args, openable_state, secrets, cluster_replica_sizes, start).await
         }
     }
 }
@@ -523,14 +518,11 @@ async fn epoch(
 async fn upgrade_check(
     args: Args,
     openable_state: Box<dyn OpenableDurableCatalogState>,
+    secrets: SecretsReaderCliArgs,
     cluster_replica_sizes: ClusterReplicaSizeMap,
     start: Instant,
 ) -> Result<(), anyhow::Error> {
-    let secrets_reader = args
-        .secrets
-        .load()
-        .await
-        .context("loading secrets reader")?;
+    let secrets_reader = secrets.load().await.context("loading secrets reader")?;
 
     let now = SYSTEM_TIME.clone();
     let mut storage = openable_state
