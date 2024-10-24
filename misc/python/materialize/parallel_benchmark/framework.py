@@ -194,7 +194,7 @@ class TdAction(Action):
         self.c = c
 
     def _run(self, conns: queue.Queue):
-        self.c.testdrive(self.td, quiet=True)
+        self.c.testdrive(self.td, capture=True)
 
     def __str__(self) -> str:
         return "testdrive"
@@ -393,7 +393,7 @@ class TdPhase(Phase):
         conns: queue.Queue,
         state: State,
     ) -> None:
-        c.testdrive(self.td, quiet=True)
+        c.testdrive(self.td, capture=True)
 
 
 class LoadPhase(Phase):
