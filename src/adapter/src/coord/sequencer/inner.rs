@@ -2472,8 +2472,8 @@ impl Coordinator {
                 );
                 self.sequence_staged(ctx, Span::current(), stage).await;
             }
-            Explainee::MaterializedView(gid) => {
-                self.explain_pushdown_materialized_view(ctx, gid).await;
+            Explainee::MaterializedView(item_id) => {
+                self.explain_pushdown_materialized_view(ctx, item_id).await;
             }
             _ => {
                 ctx.retire(Err(AdapterError::Unsupported(
@@ -2511,8 +2511,8 @@ impl Coordinator {
     ) -> impl Future<Output = Result<ExecuteResponse, AdapterError>> {
         let explain_timeout = *session.vars().statement_timeout();
         let mut futures = FuturesOrdered::new();
-        for (gid, mfp) in imports {
-            let catalog_entry = self.catalog.get_entry(&gid);
+        for (id, mfp) in imports {
+            let catalog_entry = self.catalog.get_entry_by_global_id(&id);
             let full_name = self
                 .catalog
                 .for_session(session)
@@ -2526,7 +2526,7 @@ impl Coordinator {
             let stats_future = self
                 .controller
                 .storage
-                .snapshot_parts_stats(gid, as_of.clone())
+                .snapshot_parts_stats(id, as_of.clone())
                 .await;
 
             let mz_now = mz_now.clone();
@@ -4813,8 +4813,9 @@ where
 {
     let log_names = source_ids
         .iter()
-        .flat_map(|id| catalog.introspection_dependencies(*id))
-        .map(|id| catalog.get_entry(&id).name().item.clone())
+        .map(|gid| catalog.resolve_item_id(gid))
+        .flat_map(|item_id| catalog.introspection_dependencies(item_id))
+        .map(|item_id| catalog.get_entry(&item_id).name().item.clone())
         .collect::<Vec<_>>();
 
     if log_names.is_empty() {

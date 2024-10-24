@@ -900,7 +900,7 @@ fn generate_rbac_requirements(
                     .depends_on()
                     .into_iter()
                     .map(|id| {
-                        let item = catalog.get_item(&id);
+                        let item = catalog.get_item_by_global_id(&id);
                         let schema_id: ObjectId = item.name().qualifiers.clone().into();
                         (SystemObjectId::Object(schema_id), AclMode::USAGE, role_id)
                     })
@@ -920,7 +920,7 @@ fn generate_rbac_requirements(
         Plan::ExplainSinkSchema(plan::ExplainSinkSchemaPlan { sink_from, .. }) => {
             RbacRequirements {
                 privileges: {
-                    let item = catalog.get_item(sink_from);
+                    let item = catalog.get_item_by_global_id(sink_from);
                     let schema_id: ObjectId = item.name().qualifiers.clone().into();
                     vec![(SystemObjectId::Object(schema_id), AclMode::USAGE, role_id)]
                 },
@@ -937,7 +937,7 @@ fn generate_rbac_requirements(
                 .depends_on()
                 .into_iter()
                 .map(|id| {
-                    let item = catalog.get_item(&id);
+                    let item = catalog.get_item_by_global_id(&id);
                     let schema_id: ObjectId = item.name().qualifiers.clone().into();
                     (SystemObjectId::Object(schema_id), AclMode::USAGE, role_id)
                 })

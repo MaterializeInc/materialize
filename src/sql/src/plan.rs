@@ -960,17 +960,17 @@ pub struct ExplainPlanPlan {
 #[derive(Clone, Debug)]
 pub enum Explainee {
     /// Lookup and explain a plan saved for an view.
-    View(GlobalId),
+    View(CatalogItemId),
     /// Lookup and explain a plan saved for an existing materialized view.
-    MaterializedView(GlobalId),
+    MaterializedView(CatalogItemId),
     /// Lookup and explain a plan saved for an existing index.
-    Index(GlobalId),
+    Index(CatalogItemId),
     /// Replan an existing view.
-    ReplanView(GlobalId),
+    ReplanView(CatalogItemId),
     /// Replan an existing materialized view.
-    ReplanMaterializedView(GlobalId),
+    ReplanMaterializedView(CatalogItemId),
     /// Replan an existing index.
-    ReplanIndex(GlobalId),
+    ReplanIndex(CatalogItemId),
     /// A SQL statement.
     Statement(ExplaineeStatement),
 }
