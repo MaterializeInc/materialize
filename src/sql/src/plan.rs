@@ -76,8 +76,8 @@ use crate::catalog::{
     RoleAttributes,
 };
 use crate::names::{
-    Aug, CommentObjectId, FullItemName, ObjectId, QualifiedItemName, ResolvedDataType,
-    ResolvedDatabaseSpecifier, ResolvedIds, SchemaSpecifier, SystemObjectId,
+    Aug, CommentObjectId, DependencyIds, FullItemName, ObjectId, QualifiedItemName,
+    ResolvedDataType, ResolvedDatabaseSpecifier, ResolvedIds, SchemaSpecifier, SystemObjectId,
 };
 
 pub(crate) mod error;
@@ -789,6 +789,7 @@ pub struct ShowVariablePlan {
 
 #[derive(Debug)]
 pub struct InspectShardPlan {
+    /// ID of the storage collection to inspect.
     pub id: GlobalId,
 }
 
@@ -895,7 +896,7 @@ pub struct ShowCreatePlan {
 
 #[derive(Debug)]
 pub struct ShowColumnsPlan {
-    pub id: GlobalId,
+    pub id: CatalogItemId,
     pub select_plan: SelectPlan,
     pub new_resolved_ids: ResolvedIds,
 }

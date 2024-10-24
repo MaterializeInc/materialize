@@ -12,7 +12,7 @@
 //! This module houses the handlers for statements that manipulate the session,
 //! like `DISCARD` and `SET`.
 
-use mz_repr::{GlobalId, RelationDesc, ScalarType};
+use mz_repr::{CatalogItemId, RelationDesc, RelationVersionSelector, ScalarType};
 use mz_sql_parser::ast::InspectShardStatement;
 use std::time::Duration;
 use uncased::UncasedStr;
@@ -144,11 +144,17 @@ pub fn describe_inspect_shard(
 }
 
 pub fn plan_inspect_shard(
-    _: &StatementContext,
+    scx: &StatementContext,
     InspectShardStatement { id }: InspectShardStatement,
 ) -> Result<Plan, PlanError> {
-    let id: GlobalId = id.parse().map_err(|_| sql_err!("invalid shard id"))?;
-    Ok(Plan::InspectShard(InspectShardPlan { id }))
+    let id: CatalogItemId = id.parse().map_err(|_| sql_err!("invalid shard id"))?;
+    // Always inspect the shard at the latest GlobalId.
+    let gid = scx
+        .catalog
+        .get_item(&id)
+        .at_version(RelationVersionSelector::Latest)
+        .global_id();
+    Ok(Plan::InspectShard(InspectShardPlan { id: gid }))
 }
 
 pub fn describe_discard(
