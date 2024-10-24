@@ -1082,13 +1082,13 @@ pub struct AlterNoopPlan {
 
 #[derive(Debug)]
 pub struct AlterSetClusterPlan {
-    pub id: GlobalId,
+    pub id: CatalogItemId,
     pub set_cluster: ClusterId,
 }
 
 #[derive(Debug)]
 pub struct AlterRetainHistoryPlan {
-    pub id: GlobalId,
+    pub id: CatalogItemId,
     pub value: Option<Value>,
     pub window: CompactionWindow,
     pub object_type: ObjectType,
@@ -1131,13 +1131,15 @@ pub enum AlterSourceAction {
 
 #[derive(Debug)]
 pub struct AlterSourcePlan {
-    pub id: GlobalId,
+    pub item_id: CatalogItemId,
+    pub ingestion_id: GlobalId,
     pub action: AlterSourceAction,
 }
 
 #[derive(Debug, Clone)]
 pub struct AlterSinkPlan {
-    pub id: GlobalId,
+    pub item_id: CatalogItemId,
+    pub global_id: GlobalId,
     pub sink: Sink,
     pub with_snapshot: bool,
     pub in_cluster: ClusterId,
@@ -1168,7 +1170,7 @@ pub struct AlterClusterReplicaRenamePlan {
 
 #[derive(Debug)]
 pub struct AlterItemRenamePlan {
-    pub id: GlobalId,
+    pub id: CatalogItemId,
     pub current_full_name: FullItemName,
     pub to_name: String,
     pub object_type: ObjectType,
@@ -1234,7 +1236,7 @@ pub struct AlterOwnerPlan {
 
 #[derive(Debug)]
 pub struct AlterTablePlan {
-    pub relation_id: GlobalId,
+    pub relation_id: CatalogItemId,
     pub column_name: ColumnName,
     pub column_type: ResolvedDataType,
 }

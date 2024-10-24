@@ -6572,6 +6572,8 @@ pub fn plan_alter_sink(
 
         return Ok(Plan::AlterNoop(AlterNoopPlan { object_type }));
     };
+    // Always ALTER objects from their latest version.
+    let item = item.at_version(RelationVersionSelector::Latest);
 
     match action {
         AlterSinkAction::ChangeRelation(new_from) => {
@@ -6610,7 +6612,8 @@ pub fn plan_alter_sink(
             };
 
             Ok(Plan::AlterSink(AlterSinkPlan {
-                id: item.id(),
+                item_id: item.id(),
+                global_id: item.global_id(),
                 sink: plan.sink,
                 with_snapshot: plan.with_snapshot,
                 in_cluster: plan.in_cluster,
@@ -6809,8 +6812,10 @@ pub fn plan_alter_table_add_column(
     let (relation_id, item_name, desc) =
         match resolve_item_or_type(scx, object_type, name.clone(), if_exists)? {
             Some(item) => {
+                // Always add columns to the latest version of the item.
                 let item_name = scx.catalog.resolve_full_name(item.name());
-                let desc = item.desc(&item_name)?;
+                let item = item.at_version(RelationVersionSelector::Latest);
+                let desc = item.desc(&item_name)?.into_owned();
                 (item.id(), item_name, desc)
             }
             None => {
