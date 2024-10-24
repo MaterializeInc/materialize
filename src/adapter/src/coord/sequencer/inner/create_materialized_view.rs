@@ -145,7 +145,7 @@ impl Coordinator {
         let optimizer_trace = OptimizerTrace::new(stage.paths());
 
         // Not used in the EXPLAIN path so it's OK to generate a dummy value.
-        let resolved_ids = ResolvedIds(Default::default());
+        let resolved_ids = ResolvedIds::empty();
 
         let explain_ctx = ExplainContext::Plan(ExplainPlanContext {
             broken,
@@ -381,7 +381,7 @@ impl Coordinator {
                 // index), otherwise we might be missing some read holds.
                 let ids = self
                     .index_oracle(*cluster_id)
-                    .sufficient_collections(resolved_ids.0.iter());
+                    .sufficient_collections(resolved_ids.collections().copied());
                 if !ids.difference(&read_holds.id_bundle()).is_empty() {
                     return Err(AdapterError::ChangedPlan(
                         "the set of possible inputs changed during the creation of the \

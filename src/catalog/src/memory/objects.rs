@@ -1473,7 +1473,7 @@ impl CatalogItem {
     /// Collects the identifiers of the objects that were encountered when resolving names in the
     /// item's DDL statement.
     pub fn references(&self) -> &ResolvedIds {
-        static EMPTY: LazyLock<ResolvedIds> = LazyLock::new(|| ResolvedIds(BTreeSet::new()));
+        static EMPTY: LazyLock<ResolvedIds> = LazyLock::new(ResolvedIds::empty);
         match self {
             CatalogItem::Func(_) => &*EMPTY,
             CatalogItem::Index(idx) => &idx.resolved_ids,
@@ -1496,7 +1496,7 @@ impl CatalogItem {
     /// referenced. For example this will include any catalog objects used to implement functions
     /// and casts in the item.
     pub fn uses(&self) -> BTreeSet<GlobalId> {
-        let mut uses = self.references().0.clone();
+        let mut uses: BTreeSet<_> = self.references().items().copied().collect();
         match self {
             // TODO(jkosh44) This isn't really correct for functions. They may use other objects in
             // their implementation. However, currently there's no way to get that information.

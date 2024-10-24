@@ -306,13 +306,8 @@ pub fn check_usage(
 
     // Certain statements depend on objects that haven't been created yet, like sub-sources, so we
     // need to filter those out.
-    let existing_resolved_ids = resolved_ids
-        .0
-        .iter()
-        .filter(|id| catalog.try_get_item(id).is_some())
-        .cloned()
-        .collect();
-    let existing_resolved_ids = ResolvedIds(existing_resolved_ids);
+    let existing_resolved_ids =
+        resolved_ids.retain_items(|item_id| catalog.try_get_item(item_id).is_some());
 
     let required_privileges = generate_usage_privileges(
         catalog,
@@ -1607,7 +1602,7 @@ fn generate_read_privileges_inner(
                 | CatalogItemType::MaterializedView
                 | CatalogItemType::ContinualTask => {
                     privileges.push((SystemObjectId::Object(id.into()), AclMode::SELECT, role_id));
-                    views.push((item.references().0.clone().into_iter(), item.owner_id()));
+                    views.push((item.references().items().copied(), item.owner_id()));
                 }
                 CatalogItemType::Table | CatalogItemType::Source => {
                     privileges.push((SystemObjectId::Object(id.into()), AclMode::SELECT, role_id));
@@ -1636,8 +1631,7 @@ fn generate_usage_privileges(
     item_types: &BTreeSet<CatalogItemType>,
 ) -> BTreeSet<(SystemObjectId, AclMode, RoleId)> {
     // Use a `BTreeSet` to remove duplicate privileges.
-    ids.0
-        .iter()
+    ids.items()
         .filter_map(move |id| {
             let item = catalog.get_item(id);
             if item_types.contains(&item.item_type()) {

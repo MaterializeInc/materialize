@@ -157,7 +157,7 @@ impl Coordinator {
                 }
                 Plan::CreateSources(plans) => {
                     assert!(
-                        resolved_ids.0.is_empty(),
+                        resolved_ids.is_empty(),
                         "each plan has separate resolved_ids"
                     );
                     let result = self.sequence_create_source(ctx.session_mut(), plans).await;

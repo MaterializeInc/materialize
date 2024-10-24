@@ -293,8 +293,7 @@ pub fn plan(
     };
 
     if resolved_ids
-        .0
-        .iter()
+        .items()
         // Filter out items that may not have been created yet, such as sub-sources.
         .filter_map(|id| catalog.try_get_item(id))
         .any(|item| {

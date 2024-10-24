@@ -732,7 +732,7 @@ impl CatalogState {
         if !entry.item().is_temporary() {
             // Populate or clean up the `mz_object_dependencies` table.
             // TODO(jkosh44) Unclear if this table wants to include all uses or only references.
-            for dependee in &entry.item().references().0 {
+            for dependee in entry.item().references().items() {
                 updates.push(self.pack_depends_update(id, *dependee, diff))
             }
         }

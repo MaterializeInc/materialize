@@ -217,8 +217,7 @@ impl Coordinator {
                     };
 
                     let conn_id = ctx.session().conn_id().clone();
-                    self.sequence_plan(ctx, plan, ResolvedIds(BTreeSet::new()))
-                        .await;
+                    self.sequence_plan(ctx, plan, ResolvedIds::empty()).await;
                     // Part of the Command::Commit contract is that the Coordinator guarantees that
                     // it has cleared its transaction state for the connection.
                     self.clear_connection(&conn_id).await;
@@ -1093,7 +1092,7 @@ impl Coordinator {
             let cluster = mz_sql::plan::resolve_cluster_for_materialized_view(&catalog, cmvs)?;
             let ids = self
                 .index_oracle(cluster)
-                .sufficient_collections(resolved_ids.0.iter());
+                .sufficient_collections(resolved_ids.collections().copied());
 
             // If there is any REFRESH option, then acquire read holds. (Strictly speaking, we'd
             // need this only if there is a `REFRESH AT`, not for `REFRESH EVERY`, because later
@@ -1112,7 +1111,8 @@ impl Coordinator {
                 .iter()
                 .any(materialized_view_option_contains_temporal)
             {
-                let timeline_context = self.validate_timeline_context(resolved_ids.0.clone())?;
+                let timeline_context =
+                    self.validate_timeline_context(resolved_ids.collections().copied())?;
 
                 // We default to EpochMilliseconds, similarly to `determine_timestamp_for`,
                 // but even in the TimestampIndependent case.

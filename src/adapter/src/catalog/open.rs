@@ -1506,7 +1506,7 @@ mod builtin_migration_tests {
                             .with_column("a", ScalarType::Int32.nullable(true))
                             .with_key(vec![0])
                             .finish(),
-                        resolved_ids: ResolvedIds(resolved_ids),
+                        resolved_ids: resolved_ids.into_iter().collect(),
                         cluster_id: ClusterId::User(1),
                         non_null_assertions: vec![],
                         custom_logical_compaction_window: None,
@@ -1523,7 +1523,7 @@ mod builtin_migration_tests {
                         on: on_gid,
                         keys: Default::default(),
                         conn_id: None,
-                        resolved_ids: ResolvedIds(BTreeSet::from_iter([on_id])),
+                        resolved_ids: [(on_item_id, on_gid)].into_iter().collect(),
                         cluster_id: ClusterId::User(1),
                         custom_logical_compaction_window: None,
                         is_retained_metrics_object: false,

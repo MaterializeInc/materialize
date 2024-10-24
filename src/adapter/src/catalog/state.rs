@@ -332,8 +332,8 @@ impl CatalogState {
             | CatalogItem::Connection(_)
             | CatalogItem::ContinualTask(_)) => {
                 // TODO(jkosh44) Unclear if this table wants to include all uses or only references.
-                for id in &item.references().0 {
-                    self.introspection_dependencies_inner(*id, out);
+                for item_id in item.references().items() {
+                    self.introspection_dependencies_inner(*item_id, out);
                 }
             }
             CatalogItem::Sink(sink) => self.introspection_dependencies_inner(sink.from, out),
@@ -565,8 +565,7 @@ impl CatalogState {
 
         let unstable_dependencies: Vec<_> = item
             .references()
-            .0
-            .iter()
+            .items()
             .filter(|id| !self.is_stable(**id))
             .map(|id| self.get_entry(id).name().item.clone())
             .collect();

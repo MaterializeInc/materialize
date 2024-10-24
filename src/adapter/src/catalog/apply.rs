@@ -1460,7 +1460,7 @@ impl CatalogState {
             };
         }
 
-        for u in &entry.references().0 {
+        for u in entry.references().items() {
             match self.entry_by_id.get_mut(u) {
                 Some(metadata) => metadata.referenced_by.push(entry.id()),
                 None => panic!(
@@ -1536,7 +1536,7 @@ impl CatalogState {
     #[mz_ore::instrument(level = "trace")]
     fn drop_item(&mut self, id: CatalogItemId) -> CatalogEntry {
         let metadata = self.entry_by_id.remove(&id).expect("catalog out of sync");
-        for u in &metadata.references().0 {
+        for u in metadata.references().items() {
             if let Some(dep_metadata) = self.entry_by_id.get_mut(u) {
                 dep_metadata.referenced_by.retain(|u| *u != metadata.id())
             }
@@ -1630,7 +1630,7 @@ impl CatalogState {
                     &log.variant.index_by(),
                 ),
                 conn_id: None,
-                resolved_ids: ResolvedIds(BTreeSet::from_iter([log_id])),
+                resolved_ids: [(log_item_id, log_global_id)].into_iter().collect(),
                 cluster_id,
                 is_retained_metrics_object: false,
                 custom_logical_compaction_window: None,
