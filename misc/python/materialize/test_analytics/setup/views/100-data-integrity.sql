@@ -13,7 +13,7 @@ CREATE OR REPLACE VIEW v_data_integrity (table_name, own_item_key, referenced_it
     FROM build_job
     WHERE build_id NOT IN (SELECT build_id FROM build)
     UNION
-    SELECT 'feature_benchmark_result', build_job_id, build_job_id, 'benchmark result references missing build job'
+    SELECT 'feature_benchmark_result', build_job_id, build_job_id, 'feature benchmark result references missing build job'
     FROM feature_benchmark_result
     WHERE build_job_id NOT IN (SELECT build_job_id FROM build_job)
     UNION
@@ -21,8 +21,12 @@ CREATE OR REPLACE VIEW v_data_integrity (table_name, own_item_key, referenced_it
     FROM scalability_framework_result
     WHERE build_job_id NOT IN (SELECT build_job_id FROM build_job)
     UNION
-    SELECT 'parallel_benchmark_result', build_job_id, build_job_id, 'benchmark result references missing build job'
+    SELECT 'parallel_benchmark_result', build_job_id, build_job_id, 'parallel benchmark result references missing build job'
     FROM parallel_benchmark_result
+    WHERE build_job_id NOT IN (SELECT build_job_id FROM build_job)
+    UNION
+    SELECT 'product_limits_result', build_job_id, build_job_id, 'product limits result references missing build job'
+    FROM product_limits_result
     WHERE build_job_id NOT IN (SELECT build_job_id FROM build_job)
     UNION
     SELECT 'build_annotation', build_job_id, build_job_id, 'build annotation references missing build job'
