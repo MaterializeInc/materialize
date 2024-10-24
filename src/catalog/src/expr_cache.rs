@@ -16,7 +16,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::sync::Arc;
 
-use mz_catalog::durable::expression_cache_shard_id;
 use mz_compute_types::dataflows::{DataflowDescription, DataflowExpirationDesc};
 use mz_durable_cache::{DurableCache, DurableCacheCodec};
 use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
@@ -43,9 +42,11 @@ use tokio::sync::mpsc;
 use tracing::debug;
 use uuid::Uuid;
 
+use crate::durable::expression_cache_shard_id;
+
 /// The data that is cached per catalog object.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct Expressions {
+pub struct Expressions {
     local_mir: OptimizedMirRelationExpr,
     global_mir: DataflowDescription<OptimizedMirRelationExpr>,
     physical_plan: DataflowDescription<mz_compute_types::plan::Plan>,
@@ -115,7 +116,7 @@ impl DurableCacheCodec for ExpressionCodec {
 
 /// Configuration needed to initialize an [`ExpressionCache`].
 #[derive(Debug, Clone)]
-pub(crate) struct ExpressionCacheConfig<'a> {
+pub struct ExpressionCacheConfig<'a> {
     deploy_generation: u64,
     persist: &'a PersistClient,
     organization_id: Uuid,
@@ -365,7 +366,7 @@ mod tests {
     use proptest::test_runner::TestRunner;
     use uuid::Uuid;
 
-    use crate::catalog::expr_cache::{
+    use crate::expr_cache::{
         CacheKey, ExpressionCacheConfig, ExpressionCacheHandle, ExpressionCodec, Expressions,
     };
 
