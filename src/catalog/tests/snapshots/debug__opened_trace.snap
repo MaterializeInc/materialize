@@ -1049,6 +1049,9 @@ Trace {
     items: CollectionTrace {
         values: [],
     },
+    network_policies: CollectionTrace {
+        values: [],
+    },
     roles: CollectionTrace {
         values: [
             (

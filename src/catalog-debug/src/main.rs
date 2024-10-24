@@ -29,8 +29,9 @@ use mz_catalog::durable::debug::{
     AuditLogCollection, ClusterCollection, ClusterIntrospectionSourceIndexCollection,
     ClusterReplicaCollection, Collection, CollectionTrace, CollectionType, CommentCollection,
     ConfigCollection, DatabaseCollection, DebugCatalogState, DefaultPrivilegeCollection,
-    IdAllocatorCollection, ItemCollection, RoleCollection, SchemaCollection, SettingCollection,
-    SourceReferencesCollection, StorageCollectionMetadataCollection, SystemConfigurationCollection,
+    IdAllocatorCollection, ItemCollection, NetworkPolicyCollection, RoleCollection,
+    SchemaCollection, SettingCollection, SourceReferencesCollection,
+    StorageCollectionMetadataCollection, SystemConfigurationCollection,
     SystemItemMappingCollection, SystemPrivilegeCollection, Trace, TxnWalShardCollection,
     UnfinalizedShardsCollection,
 };
@@ -273,6 +274,7 @@ macro_rules! for_collection {
             CollectionType::DefaultPrivileges => $fn::<DefaultPrivilegeCollection>($($arg),*).await?,
             CollectionType::IdAlloc => $fn::<IdAllocatorCollection>($($arg),*).await?,
             CollectionType::Item => $fn::<ItemCollection>($($arg),*).await?,
+            CollectionType::NetworkPolicy => $fn::<NetworkPolicyCollection>($($arg),*).await?,
             CollectionType::Role => $fn::<RoleCollection>($($arg),*).await?,
             CollectionType::Schema => $fn::<SchemaCollection>($($arg),*).await?,
             CollectionType::Setting => $fn::<SettingCollection>($($arg),*).await?,
@@ -409,6 +411,7 @@ async fn dump(
         default_privileges,
         id_allocator,
         items,
+        network_policies,
         roles,
         schemas,
         settings,
@@ -455,6 +458,13 @@ async fn dump(
     );
     dump_col(&mut data, id_allocator, &ignore, stats_only, consolidate);
     dump_col(&mut data, items, &ignore, stats_only, consolidate);
+    dump_col(
+        &mut data,
+        network_policies,
+        &ignore,
+        stats_only,
+        consolidate,
+    );
     dump_col(&mut data, roles, &ignore, stats_only, consolidate);
     dump_col(&mut data, schemas, &ignore, stats_only, consolidate);
     dump_col(&mut data, settings, &ignore, stats_only, consolidate);

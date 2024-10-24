@@ -36,6 +36,7 @@ use mz_ore::collections::HashSet;
 use mz_ore::instrument;
 use mz_ore::now::EpochMillis;
 use mz_repr::adt::mz_acl_item::{merge_mz_acl_items, AclMode, MzAclItem, PrivilegeMap};
+use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
 use mz_repr::{strconv, GlobalId};
 use mz_sql::catalog::{
@@ -47,6 +48,7 @@ use mz_sql::names::{
     CommentObjectId, DatabaseId, FullItemName, ObjectId, QualifiedItemName,
     ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier, SystemObjectId,
 };
+use mz_sql::plan::{NetworkPolicyRule, PlanError};
 use mz_sql::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID};
 use mz_sql::session::vars::OwnedVarInput;
 use mz_sql::session::vars::{Value as VarValue, VarInput};
@@ -110,6 +112,12 @@ pub enum Op {
         id: GlobalId,
         name: QualifiedItemName,
         item: CatalogItem,
+        owner_id: RoleId,
+    },
+    CreateNetworkPolicy {
+        id: NetworkPolicyId,
+        rules: Vec<NetworkPolicyRule>,
+        name: String,
         owner_id: RoleId,
     },
     Comment {
@@ -222,6 +230,7 @@ pub enum DropObjectInfo {
     Schema((ResolvedDatabaseSpecifier, SchemaSpecifier)),
     Role(RoleId),
     Item(GlobalId),
+    NetworkPolicy(NetworkPolicyId),
 }
 
 impl DropObjectInfo {
@@ -239,6 +248,7 @@ impl DropObjectInfo {
             ObjectId::Schema(schema) => DropObjectInfo::Schema(schema),
             ObjectId::Role(role_id) => DropObjectInfo::Role(role_id),
             ObjectId::Item(global_id) => DropObjectInfo::Item(global_id),
+            ObjectId::NetworkPolicy(policy_id) => DropObjectInfo::NetworkPolicy(policy_id),
         }
     }
 
@@ -254,6 +264,9 @@ impl DropObjectInfo {
             DropObjectInfo::Schema(schema) => ObjectId::Schema(schema.clone()),
             DropObjectInfo::Role(role_id) => ObjectId::Role(role_id.clone()),
             DropObjectInfo::Item(global_id) => ObjectId::Item(global_id.clone()),
+            DropObjectInfo::NetworkPolicy(network_policy_id) => {
+                ObjectId::NetworkPolicy(network_policy_id.clone())
+            }
         }
     }
 }
@@ -1109,6 +1122,50 @@ impl Catalog {
                     )?;
                 }
             }
+            Op::CreateNetworkPolicy {
+                id,
+                rules,
+                name,
+                owner_id,
+            } => {
+                if state.network_policies_by_name.contains_key(&name) {
+                    return Err(AdapterError::PlanError(PlanError::Catalog(
+                        SqlCatalogError::NetworkPolicyAlreadyExists(name),
+                    )));
+                }
+                if is_reserved_name(&name) {
+                    return Err(AdapterError::Catalog(Error::new(
+                        ErrorKind::ReservedNetworkPolicyName(name),
+                    )));
+                }
+
+                let owner_privileges = vec![rbac::owner_privilege(
+                    mz_sql::catalog::ObjectType::NetworkPolicy,
+                    owner_id,
+                )];
+                let default_privileges = state
+                    .default_privileges
+                    .get_applicable_privileges(
+                        owner_id,
+                        None,
+                        None,
+                        mz_sql::catalog::ObjectType::NetworkPolicy,
+                    )
+                    .map(|item| item.mz_acl_item(owner_id));
+                let privileges: Vec<_> =
+                    merge_mz_acl_items(owner_privileges.into_iter().chain(default_privileges))
+                        .collect();
+
+                let temporary_oids: HashSet<_> = state.get_temporary_oids().collect();
+                tx.insert_user_network_policy(
+                    id,
+                    name,
+                    rules,
+                    privileges,
+                    owner_id,
+                    &temporary_oids,
+                )?;
+            }
             Op::Comment {
                 object_id,
                 sub_component,
@@ -1445,6 +1502,11 @@ impl Catalog {
                             let mut database = state.get_database(id).clone();
                             update_privilege_fn(&mut database.privileges);
                             tx.update_database(*id, database.into())?;
+                        }
+                        ObjectId::NetworkPolicy(id) => {
+                            let mut policy = state.get_network_policy(id).clone();
+                            update_privilege_fn(&mut policy.privileges);
+                            tx.update_network_policy(*id, policy.into())?;
                         }
                         ObjectId::Schema((database_spec, schema_spec)) => {
                             let schema_id = schema_spec.clone().into();
@@ -1934,6 +1996,21 @@ impl Catalog {
                             temporary_item_updates.push((new_entry.into(), StateDiff::Addition));
                         }
                     }
+                    ObjectId::NetworkPolicy(id) => {
+                        let mut policy = state.get_network_policy(id).clone();
+                        if id.is_system() {
+                            return Err(AdapterError::Catalog(Error::new(
+                                ErrorKind::ReadOnlyNetworkPolicy(policy.name),
+                            )));
+                        }
+                        Self::update_privilege_owners(
+                            &mut policy.privileges,
+                            policy.owner_id,
+                            new_owner,
+                        );
+                        policy.owner_id = new_owner;
+                        tx.update_network_policy(*id, policy.into())?;
+                    }
                     ObjectId::Role(_) => unreachable!("roles have no owner"),
                 }
                 let object_type = state.get_object_type(&id);
@@ -2198,6 +2275,7 @@ pub(crate) struct ObjectsToDrop {
     pub replicas: BTreeMap<ReplicaId, (ClusterId, ReplicaCreateDropReason)>,
     pub roles: BTreeSet<RoleId>,
     pub items: Vec<GlobalId>,
+    pub network_policies: BTreeSet<NetworkPolicyId>,
 }
 
 impl ObjectsToDrop {
@@ -2295,6 +2373,17 @@ impl ObjectsToDrop {
                 }
 
                 self.items.push(item_id);
+            }
+            DropObjectInfo::NetworkPolicy(network_policy_id) => {
+                let policy = state.get_network_policy(&network_policy_id);
+                let name = &policy.name;
+                if network_policy_id.is_system() {
+                    return Err(AdapterError::Catalog(Error::new(
+                        ErrorKind::ReadOnlyNetworkPolicy(name.clone()),
+                    )));
+                }
+
+                self.network_policies.insert(network_policy_id);
             }
         }
 

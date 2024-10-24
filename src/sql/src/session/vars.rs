@@ -1707,6 +1707,11 @@ impl SystemVars {
         *self.expect_value(&MAX_CONTINUAL_TASKS)
     }
 
+    /// Returns the value of the `max_network_policies` configuration parameter.
+    pub fn max_network_policies(&self) -> u32 {
+        *self.expect_value(&MAX_NETWORK_POLICIES)
+    }
+
     /// Returns the value of the `max_result_size` configuration parameter.
     pub fn max_result_size(&self) -> u64 {
         self.expect_value::<ByteSize>(&MAX_RESULT_SIZE).as_bytes()

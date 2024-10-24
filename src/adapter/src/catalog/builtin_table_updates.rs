@@ -22,11 +22,12 @@ use mz_catalog::builtin::{
     MZ_HISTORY_RETENTION_STRATEGIES, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_INTERNAL_CLUSTER_REPLICAS,
     MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS, MZ_KAFKA_SOURCES, MZ_KAFKA_SOURCE_TABLES, MZ_LIST_TYPES,
     MZ_MAP_TYPES, MZ_MATERIALIZED_VIEWS, MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES,
-    MZ_MYSQL_SOURCE_TABLES, MZ_OBJECT_DEPENDENCIES, MZ_OPERATORS, MZ_PENDING_CLUSTER_REPLICAS,
-    MZ_POSTGRES_SOURCES, MZ_POSTGRES_SOURCE_TABLES, MZ_PSEUDO_TYPES, MZ_ROLES, MZ_ROLE_MEMBERS,
-    MZ_ROLE_PARAMETERS, MZ_SCHEMAS, MZ_SECRETS, MZ_SESSIONS, MZ_SINKS, MZ_SOURCES,
-    MZ_SOURCE_REFERENCES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS,
-    MZ_SYSTEM_PRIVILEGES, MZ_TABLES, MZ_TYPES, MZ_TYPE_PG_METADATA, MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
+    MZ_MYSQL_SOURCE_TABLES, MZ_NETWORK_POLICIES, MZ_NETWORK_POLICY_RULES, MZ_OBJECT_DEPENDENCIES,
+    MZ_OPERATORS, MZ_PENDING_CLUSTER_REPLICAS, MZ_POSTGRES_SOURCES, MZ_POSTGRES_SOURCE_TABLES,
+    MZ_PSEUDO_TYPES, MZ_ROLES, MZ_ROLE_MEMBERS, MZ_ROLE_PARAMETERS, MZ_SCHEMAS, MZ_SECRETS,
+    MZ_SESSIONS, MZ_SINKS, MZ_SOURCES, MZ_SOURCE_REFERENCES, MZ_SSH_TUNNEL_CONNECTIONS,
+    MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES, MZ_TABLES, MZ_TYPES,
+    MZ_TYPE_PG_METADATA, MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
 };
 use mz_catalog::config::AwsPrincipalContext;
 use mz_catalog::durable::SourceReferences;
@@ -49,6 +50,7 @@ use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
+use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::refresh_schedule::RefreshEvery;
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, ScalarType, Timestamp};
@@ -453,6 +455,43 @@ impl CatalogState {
             ]),
             diff,
         }
+    }
+
+    pub(crate) fn pack_network_policy_update(
+        &self,
+        policy_id: &NetworkPolicyId,
+        diff: Diff,
+    ) -> Result<Vec<BuiltinTableUpdate<&'static BuiltinTable>>, Error> {
+        let policy = self.get_network_policy(policy_id);
+        let row = self.pack_privilege_array_row(&policy.privileges);
+        let privileges = row.unpack_first();
+        let mut updates = Vec::new();
+        for ref rule in policy.rules.clone() {
+            updates.push(BuiltinTableUpdate {
+                id: &*MZ_NETWORK_POLICY_RULES,
+                row: Row::pack_slice(&[
+                    Datum::String(&rule.name),
+                    Datum::String(&policy.id.to_string()),
+                    Datum::String(&rule.action.to_string()),
+                    Datum::String(&rule.address.to_string()),
+                    Datum::String(&rule.direction.to_string()),
+                ]),
+                diff,
+            });
+        }
+        updates.push(BuiltinTableUpdate {
+            id: &*MZ_NETWORK_POLICIES,
+            row: Row::pack_slice(&[
+                Datum::String(&policy.id.to_string()),
+                Datum::String(&policy.name),
+                Datum::String(&policy.owner_id.to_string()),
+                privileges,
+                Datum::UInt32(policy.oid.clone()),
+            ]),
+            diff,
+        });
+
+        Ok(updates)
     }
 
     pub(super) fn pack_item_update(
@@ -2134,6 +2173,7 @@ impl CatalogState {
             CommentObjectId::Schema((_, schema_id)) => schema_id.to_string(),
             CommentObjectId::Cluster(cluster_id) => cluster_id.to_string(),
             CommentObjectId::ClusterReplica((_, replica_id)) => replica_id.to_string(),
+            CommentObjectId::NetworkPolicy(network_policy_id) => network_policy_id.to_string(),
         };
         let column_pos_datum = match column_pos {
             Some(pos) => {

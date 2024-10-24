@@ -63,6 +63,7 @@ pub enum CollectionType {
     DefaultPrivileges,
     IdAlloc,
     Item,
+    NetworkPolicy,
     Role,
     Schema,
     Setting,
@@ -199,6 +200,14 @@ collection_impl!({
     update: StateUpdateKind::Item,
 });
 collection_impl!({
+    name: NetworkPolicyCollection,
+    key: proto::NetworkPolicyKey,
+    value: proto::NetworkPolicyValue,
+    collection_type: CollectionType::NetworkPolicy,
+    trace_field: network_policies,
+    update: StateUpdateKind::NetworkPolicy,
+});
+collection_impl!({
     name: RoleCollection,
     key: proto::RoleKey,
     value: proto::RoleValue,
@@ -308,6 +317,7 @@ pub struct Trace {
     pub default_privileges: CollectionTrace<DefaultPrivilegeCollection>,
     pub id_allocator: CollectionTrace<IdAllocatorCollection>,
     pub items: CollectionTrace<ItemCollection>,
+    pub network_policies: CollectionTrace<NetworkPolicyCollection>,
     pub roles: CollectionTrace<RoleCollection>,
     pub schemas: CollectionTrace<SchemaCollection>,
     pub settings: CollectionTrace<SettingCollection>,
@@ -333,6 +343,7 @@ impl Trace {
             default_privileges: CollectionTrace::new(),
             id_allocator: CollectionTrace::new(),
             items: CollectionTrace::new(),
+            network_policies: CollectionTrace::new(),
             roles: CollectionTrace::new(),
             schemas: CollectionTrace::new(),
             settings: CollectionTrace::new(),
