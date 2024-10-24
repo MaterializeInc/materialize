@@ -12,7 +12,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: redpanda
-  namespace: materialize-environment
+  namespace: materialize
 spec:
   replicas: 1
   selector:
@@ -61,7 +61,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: redpanda
-  namespace: materialize-environment
+  namespace: materialize
 spec:
   selector:
     app: redpanda

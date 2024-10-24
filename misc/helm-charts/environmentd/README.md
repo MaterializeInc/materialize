@@ -48,14 +48,14 @@ The following table lists the configurable parameters of the Materialize environ
 |-----------|-------------|---------|
 | `environment.environmentdCpuAllocation` |  | ``1`` |
 | `environment.environmentdExtraArgs[0]` |  | ``"--orchestrator-kubernetes-ephemeral-volume-class=hostpath"`` |
-| `environment.environmentdImageRef` |  | ``"materialize/environmentd:v0.122.0-dev.0--pr.g8bb641fc00c77f98ba5556dcdca43670776eacfa"`` |
+| `environment.environmentdImageRef` |  | ``"materialize/environmentd:v0.122.0-dev.0--pr.g47923ddb1bb4f3fb38d152b8aa86a77514599b29"`` |
 | `environment.environmentdMemoryAllocation` |  | ``"1Gi"`` |
 | `environment.forceRollout` |  | ``"33333333-3333-3333-3333-333333333333"`` |
 | `environment.inPlaceRollout` |  | ``false`` |
 | `environment.name` |  | ``"12345678-1234-1234-1234-123456789012"`` |
 | `environment.requestRollout` |  | ``"22222222-2222-2222-2222-222222222222"`` |
-| `environment.secret.metadataBackendUrl` |  | ``"postgres://materialize_user:materialize_pass@postgres.materialize-environment.svc.cluster.local:5432/materialize_db?sslmode=disable"`` |
-| `environment.secret.persistBackendUrl` |  | ``"s3://minio:minio123@bucket/12345678-1234-1234-1234-123456789012?endpoint=http%3A%2F%2Fminio.materialize-environment.svc.cluster.local%3A9000&region=minio"`` |
+| `environment.secret.metadataBackendUrl` |  | ``"postgres://materialize_user:materialize_pass@postgres.materialize.svc.cluster.local:5432/materialize_db?sslmode=disable"`` |
+| `environment.secret.persistBackendUrl` |  | ``"s3://minio:minio123@bucket/12345678-1234-1234-1234-123456789012?endpoint=http%3A%2F%2Fminio.materialize.svc.cluster.local%3A9000&region=minio"`` |
 | `namespace.create` |  | ``false`` |
 | `namespace.name` |  | ``"materialize-environment"`` |
 

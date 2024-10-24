@@ -12,7 +12,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: minio
-  namespace: materialize-environment
+  namespace: materialize
   labels:
     app: minio
 spec:
@@ -49,7 +49,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: minio
-  namespace: materialize-environment
+  namespace: materialize
 spec:
   ports:
     - port: 9000
