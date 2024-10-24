@@ -49,6 +49,10 @@ pub mod v1alpha1 {
         pub environmentd_cpu_allocation: Option<String>,
         // Value for the memory request and limit for the environmentd pod
         pub environmentd_memory_allocation: Option<String>,
+        // Value for the cpu request and limit for the balancerd pod
+        pub balancerd_cpu_allocation: Option<String>,
+        // Value for the memory request and limit for the balancerd pod
+        pub balancerd_memory_allocation: Option<String>,
 
         // When changes are made to the environmentd resources (either via
         // modifying fields in the spec here or by deploying a new
@@ -110,6 +114,14 @@ pub mod v1alpha1 {
             format!("environmentd-{}-{generation}", self.name_unchecked())
         }
 
+        pub fn balancerd_deployment_name(&self) -> String {
+            format!("balancerd-{}", self.name_unchecked())
+        }
+
+        pub fn balancerd_service_name(&self) -> String {
+            format!("balancerd-{}", self.name_unchecked())
+        }
+
         pub fn persist_pubsub_service_name(&self, generation: u64) -> String {
             format!("persist-pubsub-{}-{generation}", self.name_unchecked())
         }
@@ -141,6 +153,20 @@ pub mod v1alpha1 {
         pub fn environmentd_memory_allocation(&self, default_allocation: &str) -> String {
             self.spec
                 .environmentd_memory_allocation
+                .clone()
+                .unwrap_or_else(|| default_allocation.to_string())
+        }
+
+        pub fn balancerd_cpu_allocation(&self, default_allocation: &str) -> String {
+            self.spec
+                .balancerd_cpu_allocation
+                .clone()
+                .unwrap_or_else(|| default_allocation.to_string())
+        }
+
+        pub fn balancerd_memory_allocation(&self, default_allocation: &str) -> String {
+            self.spec
+                .balancerd_memory_allocation
                 .clone()
                 .unwrap_or_else(|| default_allocation.to_string())
         }

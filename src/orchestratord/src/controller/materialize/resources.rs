@@ -12,12 +12,15 @@ use std::{collections::BTreeMap, time::Duration};
 use anyhow::bail;
 use k8s_openapi::{
     api::{
-        apps::v1::{StatefulSet, StatefulSetSpec, StatefulSetUpdateStrategy},
+        apps::v1::{
+            Deployment, DeploymentSpec, DeploymentStrategy, RollingUpdateDeployment, StatefulSet,
+            StatefulSetSpec, StatefulSetUpdateStrategy,
+        },
         core::v1::{
-            Capabilities, Container, ContainerPort, EnvVar, EnvVarSource, Pod, PodSecurityContext,
-            PodSpec, PodTemplateSpec, Probe, ResourceRequirements, SeccompProfile,
-            SecretKeySelector, SecurityContext, Service, ServiceAccount, ServicePort, ServiceSpec,
-            TCPSocketAction, Toleration,
+            Capabilities, Container, ContainerPort, EnvVar, EnvVarSource, HTTPGetAction, Pod,
+            PodSecurityContext, PodSpec, PodTemplateSpec, Probe, ResourceRequirements,
+            SeccompProfile, SecretKeySelector, SecurityContext, Service, ServiceAccount,
+            ServicePort, ServiceSpec, TCPSocketAction, Toleration,
         },
         networking::v1::{
             IPBlock, NetworkPolicy, NetworkPolicyEgressRule, NetworkPolicyIngressRule,
@@ -53,7 +56,9 @@ pub struct Resources {
     public_service: Box<Service>,
     generation_service: Box<Service>,
     persist_pubsub_service: Box<Service>,
-    statefulset: Box<StatefulSet>,
+    environmentd_statefulset: Box<StatefulSet>,
+    balancerd_deployment: Option<Box<Deployment>>,
+    balancerd_service: Option<Box<Service>>,
 }
 
 impl Resources {
@@ -73,7 +78,15 @@ impl Resources {
         let generation_service = Box::new(create_generation_service_object(config, mz, generation));
         let persist_pubsub_service =
             Box::new(create_persist_pubsub_service(config, mz, generation));
-        let statefulset = Box::new(create_statefulset_object(config, tracing, mz, generation));
+        let environmentd_statefulset = Box::new(create_environmentd_statefulset_object(
+            config, tracing, mz, generation,
+        ));
+        let balancerd_deployment = config
+            .create_balancers
+            .then(|| Box::new(create_balancerd_deployment_object(config, mz)));
+        let balancerd_service = config
+            .create_balancers
+            .then(|| Box::new(create_balancerd_service_object(config, mz)));
 
         Self {
             generation,
@@ -84,7 +97,9 @@ impl Resources {
             public_service,
             generation_service,
             persist_pubsub_service,
-            statefulset,
+            environmentd_statefulset,
+            balancerd_deployment,
+            balancerd_service,
         }
     }
 
@@ -102,6 +117,7 @@ impl Resources {
         let role_api: Api<Role> = Api::namespaced(client.clone(), namespace);
         let role_binding_api: Api<RoleBinding> = Api::namespaced(client.clone(), namespace);
         let statefulset_api: Api<StatefulSet> = Api::namespaced(client.clone(), namespace);
+        let deployment_api: Api<Deployment> = Api::namespaced(client.clone(), namespace);
         let pod_api: Api<Pod> = Api::namespaced(client.clone(), namespace);
 
         for policy in &self.network_policies {
@@ -125,7 +141,17 @@ impl Resources {
         apply_resource(&service_api, &*self.persist_pubsub_service).await?;
 
         trace!("creating new environmentd statefulset");
-        apply_resource(&statefulset_api, &*self.statefulset).await?;
+        apply_resource(&statefulset_api, &*self.environmentd_statefulset).await?;
+
+        if let Some(balancerd_deployment) = &self.balancerd_deployment {
+            trace!("creating new balancerd deployment");
+            apply_resource(&deployment_api, &*balancerd_deployment).await?;
+        }
+
+        if let Some(balancerd_service) = &self.balancerd_service {
+            trace!("creating new balancerd service");
+            apply_resource(&service_api, &*balancerd_service).await?;
+        }
 
         // until we have full zero downtime upgrades, we have a tradeoff: if
         // we use the graceful upgrade mechanism, we minimize environmentd
@@ -146,8 +172,11 @@ impl Resources {
         if increment_generation {
             let retry_action = Action::requeue(Duration::from_secs(thread_rng().gen_range(5..10)));
 
-            let statefulset =
-                get_resource(&statefulset_api, &self.statefulset.name_unchecked()).await?;
+            let statefulset = get_resource(
+                &statefulset_api,
+                &self.environmentd_statefulset.name_unchecked(),
+            )
+            .await?;
             if statefulset
                 .and_then(|statefulset| statefulset.status)
                 .and_then(|status| status.ready_replicas)
@@ -235,7 +264,11 @@ impl Resources {
             }
         } else {
             trace!("restarting environmentd pod to pick up statefulset changes");
-            delete_resource(&pod_api, &statefulset_pod_name(&*self.statefulset, 0)).await?;
+            delete_resource(
+                &pod_api,
+                &statefulset_pod_name(&*self.environmentd_statefulset, 0),
+            )
+            .await?;
         }
 
         Ok(None)
@@ -588,6 +621,18 @@ fn create_base_service_object(
             name: Some("internal-http".to_string()),
             ..Default::default()
         },
+        ServicePort {
+            port: config.environmentd_balancer_sql_port,
+            protocol: Some("TCP".to_string()),
+            name: Some("balancer-sql".to_string()),
+            ..Default::default()
+        },
+        ServicePort {
+            port: config.environmentd_balancer_http_port,
+            protocol: Some("TCP".to_string()),
+            name: Some("balancer-http".to_string()),
+            ..Default::default()
+        },
     ];
 
     let selector = btreemap! {"materialize.cloud/name".to_string() => mz.environmentd_statefulset_name(generation)};
@@ -642,7 +687,7 @@ fn create_persist_pubsub_service(
     }
 }
 
-fn create_statefulset_object(
+fn create_environmentd_statefulset_object(
     config: &super::Args,
     tracing: &TracingCliArgs,
     mz: &Materialize,
@@ -721,8 +766,6 @@ fn create_statefulset_object(
         });
     }
 
-    let command = None;
-
     let mut args = vec![];
 
     // Add environment ID argument.
@@ -731,23 +774,11 @@ fn create_statefulset_object(
         mz.environment_id(&config.cloud_provider.to_string(), &config.region)
     ));
 
-    // Add storaged and computed image arguments based on environmentd
-    // tag.
-    {
-        let namespace = mz
-            .spec
-            .environmentd_image_ref
-            .rsplit_once('/')
-            .unwrap_or(("materialize", ""))
-            .0;
-        let tag = mz
-            .spec
-            .environmentd_image_ref
-            .rsplit_once(':')
-            .unwrap_or(("", "unstable"))
-            .1;
-        args.push(format!("--clusterd-image={namespace}/clusterd:{tag}"));
-    }
+    // Add clusterd image argument based on environmentd tag.
+    args.push(format!(
+        "--clusterd-image={}",
+        matching_image_from_environmentd_image_ref(&mz.spec.environmentd_image_ref, "clusterd")
+    ));
 
     // Add cluster and storage host size arguments.
     args.extend([
@@ -775,6 +806,14 @@ fn create_statefulset_object(
         format!(
             "--internal-http-listen-addr=0.0.0.0:{}",
             config.environmentd_internal_http_port
+        ),
+        format!(
+            "--balancer-sql-listen-addr=0.0.0.0:{}",
+            config.environmentd_balancer_sql_port
+        ),
+        format!(
+            "--balancer-http-listen-addr=0.0.0.0:{}",
+            config.environmentd_balancer_http_port
         ),
     ]);
 
@@ -981,6 +1020,11 @@ fn create_statefulset_object(
             ..Default::default()
         },
         ContainerPort {
+            container_port: config.environmentd_balancer_sql_port,
+            name: Some("balancer-sql".to_owned()),
+            ..Default::default()
+        },
+        ContainerPort {
             container_port: config.environmentd_http_port,
             name: Some("http".to_owned()),
             ..Default::default()
@@ -988,6 +1032,11 @@ fn create_statefulset_object(
         ContainerPort {
             container_port: config.environmentd_internal_http_port,
             name: Some("internal-http".to_owned()),
+            ..Default::default()
+        },
+        ContainerPort {
+            container_port: config.environmentd_balancer_http_port,
+            name: Some("balancer-http".to_owned()),
             ..Default::default()
         },
         ContainerPort {
@@ -1002,7 +1051,6 @@ fn create_statefulset_object(
         image: Some(mz.spec.environmentd_image_ref.to_owned()),
         image_pull_policy: Some(config.image_pull_policy.to_string()),
         ports: Some(ports),
-        command,
         args: Some(args),
         env: Some(env),
         liveness_probe: Some(probe.clone()),
@@ -1143,6 +1191,253 @@ fn create_statefulset_object(
     }
 }
 
+fn create_balancerd_deployment_object(config: &super::Args, mz: &Materialize) -> Deployment {
+    let limits = btreemap! {
+        "cpu".to_string() =>
+            Quantity(mz.balancerd_cpu_allocation(&config.default_balancerd_cpu_allocation)),
+        "memory".to_string() =>
+            Quantity(mz.balancerd_memory_allocation(&config.default_balancerd_memory_allocation)),
+    };
+    let requests = btreemap! {
+        "cpu".to_string() =>
+            Quantity(mz.balancerd_cpu_allocation(&config.default_balancerd_cpu_allocation)),
+        "memory".to_string() =>
+            Quantity(mz.balancerd_memory_allocation(&config.default_balancerd_memory_allocation)),
+    };
+
+    let security_context = if config.enable_security_context {
+        // Since we want to adhere to the most restrictive security context, all
+        // of these fields have to be set how they are.
+        // See https://kubernetes.io/docs/concepts/security/pod-security-standards/#restricted
+        Some(SecurityContext {
+            run_as_non_root: Some(true),
+            capabilities: Some(Capabilities {
+                drop: Some(vec!["ALL".to_string()]),
+                ..Default::default()
+            }),
+            seccomp_profile: Some(SeccompProfile {
+                type_: "RuntimeDefault".to_string(),
+                ..Default::default()
+            }),
+            allow_privilege_escalation: Some(false),
+            ..Default::default()
+        })
+    } else {
+        None
+    };
+
+    let mut pod_template_labels = mz.default_labels();
+    pod_template_labels.insert(
+        "materialize.cloud/name".to_owned(),
+        mz.balancerd_deployment_name(),
+    );
+    pod_template_labels.insert("app".to_owned(), "balancerd".to_string());
+
+    let ports = vec![
+        ContainerPort {
+            container_port: config.balancerd_sql_port,
+            name: Some("pgwire".into()),
+            protocol: Some("TCP".into()),
+            ..Default::default()
+        },
+        ContainerPort {
+            container_port: config.balancerd_http_port,
+            name: Some("http".into()),
+            protocol: Some("TCP".into()),
+            ..Default::default()
+        },
+        ContainerPort {
+            container_port: config.balancerd_internal_http_port,
+            name: Some("internal-http".into()),
+            protocol: Some("TCP".into()),
+            ..Default::default()
+        },
+    ];
+
+    let args = vec![
+        "service".to_string(),
+        format!("--pgwire-listen-addr=0.0.0.0:{}", config.balancerd_sql_port),
+        format!("--https-listen-addr=0.0.0.0:{}", config.balancerd_http_port),
+        format!(
+            "--internal-http-listen-addr=0.0.0.0:{}",
+            config.balancerd_internal_http_port
+        ),
+        format!(
+            "--https-resolver-template={}.{}.svc.cluster.local:{}",
+            mz.environmentd_service_name(),
+            mz.namespace(),
+            config.environmentd_balancer_http_port
+        ),
+        format!(
+            "--static-resolver-addr={}.{}.svc.cluster.local:{}",
+            mz.environmentd_service_name(),
+            mz.namespace(),
+            config.environmentd_balancer_sql_port
+        ),
+        "--tls-mode=disable".to_string(),
+    ];
+
+    let startup_probe = Probe {
+        http_get: Some(HTTPGetAction {
+            port: IntOrString::Int(config.balancerd_internal_http_port),
+            path: Some("/api/readyz".into()),
+            ..Default::default()
+        }),
+        failure_threshold: Some(20),
+        initial_delay_seconds: Some(3),
+        period_seconds: Some(3),
+        success_threshold: Some(1),
+        timeout_seconds: Some(1),
+        ..Default::default()
+    };
+    let readiness_probe = Probe {
+        http_get: Some(HTTPGetAction {
+            port: IntOrString::Int(config.balancerd_internal_http_port),
+            path: Some("/api/readyz".into()),
+            ..Default::default()
+        }),
+        failure_threshold: Some(3),
+        period_seconds: Some(10),
+        success_threshold: Some(1),
+        timeout_seconds: Some(1),
+        ..Default::default()
+    };
+    let liveness_probe = Probe {
+        http_get: Some(HTTPGetAction {
+            port: IntOrString::Int(config.balancerd_internal_http_port),
+            path: Some("/api/livez".into()),
+            ..Default::default()
+        }),
+        failure_threshold: Some(3),
+        initial_delay_seconds: Some(8),
+        period_seconds: Some(10),
+        success_threshold: Some(1),
+        timeout_seconds: Some(1),
+        ..Default::default()
+    };
+
+    let container = Container {
+        name: "balancerd".to_owned(),
+        image: Some(matching_image_from_environmentd_image_ref(
+            &mz.spec.environmentd_image_ref,
+            "balancerd",
+        )),
+        image_pull_policy: Some(config.image_pull_policy.to_string()),
+        ports: Some(ports),
+        args: Some(args),
+        startup_probe: Some(startup_probe),
+        readiness_probe: Some(readiness_probe),
+        liveness_probe: Some(liveness_probe),
+        resources: Some(ResourceRequirements {
+            limits: Some(limits),
+            requests: Some(requests),
+            ..Default::default()
+        }),
+        security_context: security_context.clone(),
+        ..Default::default()
+    };
+
+    let deployment_spec = DeploymentSpec {
+        replicas: Some(1),
+        selector: LabelSelector {
+            match_labels: Some(pod_template_labels.clone()),
+            ..Default::default()
+        },
+        strategy: Some(DeploymentStrategy {
+            rolling_update: Some(RollingUpdateDeployment {
+                // Allow a complete set of new pods at once, to minimize the
+                // chances of a new connection going to a pod that will be
+                // immediately drained
+                max_surge: Some(IntOrString::String("100%".into())),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
+        template: PodTemplateSpec {
+            // not using managed_resource_meta because the pod should be
+            // owned by the deployment, not the materialize instance
+            metadata: Some(ObjectMeta {
+                labels: Some(pod_template_labels),
+                ..Default::default()
+            }),
+            spec: Some(PodSpec {
+                containers: vec![container],
+                node_selector: Some(
+                    config
+                        .balancerd_node_selector
+                        .iter()
+                        .map(|selector| (selector.key.clone(), selector.value.clone()))
+                        .collect(),
+                ),
+                security_context: Some(PodSecurityContext {
+                    fs_group: Some(999),
+                    run_as_user: Some(999),
+                    run_as_group: Some(999),
+                    ..Default::default()
+                }),
+                scheduler_name: config.scheduler_name.clone(),
+                service_account_name: Some(mz.service_account_name()),
+                ..Default::default()
+            }),
+        },
+        ..Default::default()
+    };
+
+    Deployment {
+        metadata: ObjectMeta {
+            ..mz.managed_resource_meta(mz.balancerd_deployment_name())
+        },
+        spec: Some(deployment_spec),
+        status: None,
+    }
+}
+
+fn create_balancerd_service_object(config: &super::Args, mz: &Materialize) -> Service {
+    let selector =
+        btreemap! {"materialize.cloud/name".to_string() => mz.balancerd_deployment_name()};
+
+    let ports = vec![
+        ServicePort {
+            name: Some("http".to_string()),
+            protocol: Some("TCP".to_string()),
+            port: config.balancerd_http_port,
+            target_port: Some(IntOrString::Int(config.balancerd_http_port)),
+            ..Default::default()
+        },
+        ServicePort {
+            name: Some("pgwire".to_string()),
+            protocol: Some("TCP".to_string()),
+            port: config.balancerd_sql_port,
+            target_port: Some(IntOrString::Int(config.balancerd_sql_port)),
+            ..Default::default()
+        },
+    ];
+
+    let spec = if config.local_development {
+        ServiceSpec {
+            type_: Some("NodePort".to_string()),
+            selector: Some(selector),
+            ports: Some(ports),
+            external_traffic_policy: Some("Local".to_string()),
+            ..Default::default()
+        }
+    } else {
+        ServiceSpec {
+            type_: Some("ClusterIP".to_string()),
+            cluster_ip: Some("None".to_string()),
+            selector: Some(selector),
+            ports: Some(ports),
+            ..Default::default()
+        }
+    };
+
+    Service {
+        metadata: mz.managed_resource_meta(mz.balancerd_service_name()),
+        spec: Some(spec),
+        status: None,
+    }
+}
+
 // see materialize/src/environmentd/src/http.rs
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 struct BecomeLeaderResponse {
@@ -1174,4 +1469,19 @@ fn environmentd_internal_http_address(
 
 fn statefulset_pod_name(statefulset: &StatefulSet, idx: u64) -> String {
     format!("{}-{}", statefulset.name_unchecked(), idx)
+}
+
+fn matching_image_from_environmentd_image_ref(
+    environmentd_image_ref: &str,
+    image_name: &str,
+) -> String {
+    let namespace = environmentd_image_ref
+        .rsplit_once('/')
+        .unwrap_or(("materialize", ""))
+        .0;
+    let tag = environmentd_image_ref
+        .rsplit_once(':')
+        .unwrap_or(("", "unstable"))
+        .1;
+    format!("{namespace}/{image_name}:{tag}")
 }

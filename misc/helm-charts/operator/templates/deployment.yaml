@@ -41,6 +41,9 @@ spec:
         {{- if .Values.operator.args.localDevelopment }}
         - "--local-development"
         {{- end }}
+        {{- if .Values.operator.args.createBalancers }}
+        - "--create-balancers"
+        {{- end }}
         - "--image-pull-policy={{ kebabcase .Values.operator.image.pullPolicy }}"
         {{- range $key, $value := .Values.environmentd.nodeSelector }}
         - "--environmentd-node-selector={{ $key }}={{ $value }}"

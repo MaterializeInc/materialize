@@ -35,6 +35,8 @@ pub struct Args {
     region: String,
     #[clap(long)]
     local_development: bool,
+    #[clap(long)]
+    create_balancers: bool,
 
     #[clap(flatten)]
     aws_info: AwsInfo,
@@ -48,6 +50,8 @@ pub struct Args {
     environmentd_node_selector: Vec<KeyValueArg<String, String>>,
     #[clap(long)]
     clusterd_node_selector: Vec<KeyValueArg<String, String>>,
+    #[clap(long)]
+    balancerd_node_selector: Vec<KeyValueArg<String, String>>,
     #[clap(long, default_value = "always", arg_enum)]
     image_pull_policy: KubernetesImagePullPolicy,
     #[clap(flatten)]
@@ -71,6 +75,10 @@ pub struct Args {
     default_environmentd_cpu_allocation: String,
     #[clap(long, default_value = "512Mi")]
     default_environmentd_memory_allocation: String,
+    #[clap(long, default_value = "100m")]
+    default_balancerd_cpu_allocation: String,
+    #[clap(long, default_value = "256Mi")]
+    default_balancerd_memory_allocation: String,
 
     #[clap(
         long,
@@ -92,6 +100,17 @@ pub struct Args {
     environmentd_internal_http_host_override: Option<String>,
     #[clap(long, default_value = "6879")]
     environmentd_internal_persist_pubsub_port: i32,
+    #[clap(long, default_value = "6880")]
+    environmentd_balancer_sql_port: i32,
+    #[clap(long, default_value = "6881")]
+    environmentd_balancer_http_port: i32,
+
+    #[clap(long, default_value = "6875")]
+    balancerd_sql_port: i32,
+    #[clap(long, default_value = "6876")]
+    balancerd_http_port: i32,
+    #[clap(long, default_value = "8080")]
+    balancerd_internal_http_port: i32,
 }
 
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
