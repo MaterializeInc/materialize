@@ -19,8 +19,8 @@ class BoundedMemoryMinimalSearchEntry:
     scenario_name: str
     configured_memory_mz_in_gb: float
     configured_memory_clusterd_in_gb: float
-    found_memory_mz_in_gb: float
-    found_memory_clusterd_in_gb: float
+    tested_memory_mz_in_gb: float
+    tested_memory_clusterd_in_gb: float
 
 
 class BoundedMemoryMinimalSearchStorage(BaseDataStorage):
@@ -29,19 +29,24 @@ class BoundedMemoryMinimalSearchStorage(BaseDataStorage):
         self,
         framework_version: str,
         entry: BoundedMemoryMinimalSearchEntry,
+        minimization_target: str,
+        flush: bool = True,
     ) -> None:
         job_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_JOB_ID)
 
         sql_statement = f"""
-            INSERT INTO bounded_memory_min_found_config
+            INSERT INTO bounded_memory_config
             (
                 build_job_id,
                 framework_version,
                 scenario_name,
                 configured_memory_mz_in_gb,
                 configured_memory_clusterd_in_gb,
-                found_memory_mz_in_gb,
-                found_memory_clusterd_in_gb
+                tested_memory_mz_in_gb,
+                tested_memory_clusterd_in_gb,
+                minimization_target,
+                started_at,
+                status
             )
             SELECT
                 {as_sanitized_literal(job_id)},
@@ -49,8 +54,39 @@ class BoundedMemoryMinimalSearchStorage(BaseDataStorage):
                 {as_sanitized_literal(entry.scenario_name)},
                 {entry.configured_memory_mz_in_gb},
                 {entry.configured_memory_clusterd_in_gb},
-                {entry.found_memory_mz_in_gb},
-                {entry.found_memory_clusterd_in_gb};
+                {entry.tested_memory_mz_in_gb},
+                {entry.tested_memory_clusterd_in_gb},
+                {as_sanitized_literal(minimization_target)},
+                now(),
+                'PENDING';
             """
 
         self.database_connector.add_update_statements([sql_statement])
+
+        if flush:
+            self.database_connector.submit_update_statements()
+
+    def update_success(
+        self,
+        entry: BoundedMemoryMinimalSearchEntry,
+        success: bool,
+        minimization_target: str,
+        flush: bool = True,
+    ) -> None:
+        job_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_JOB_ID)
+
+        sql_statement = f"""
+            UPDATE bounded_memory_config
+            SET status = '{'SUCCESS' if success else 'FAILURE'}'
+            WHERE build_job_id = {as_sanitized_literal(job_id)}
+            AND scenario_name = {as_sanitized_literal(entry.scenario_name)}
+            AND tested_memory_mz_in_gb = {entry.tested_memory_mz_in_gb}
+            AND tested_memory_clusterd_in_gb = {entry.tested_memory_clusterd_in_gb}
+            AND minimization_target = {as_sanitized_literal(minimization_target)}
+            ;
+            """
+
+        self.database_connector.add_update_statements([sql_statement])
+
+        if flush:
+            self.database_connector.submit_update_statements()
