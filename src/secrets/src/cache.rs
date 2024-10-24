@@ -14,7 +14,7 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use mz_repr::GlobalId;
+use mz_repr::CatalogItemId;
 
 use crate::{CachingPolicy, SecretsReader};
 
@@ -87,7 +87,7 @@ pub struct CachingSecretsReader {
     inner: Arc<dyn SecretsReader>,
     /// In-memory cache, not having a size limit or eviction policy is okay because we limit users
     /// to 100 secrets, which should not be a problem to store in-memory.
-    cache: Arc<RwLock<BTreeMap<GlobalId, CacheItem>>>,
+    cache: Arc<RwLock<BTreeMap<CatalogItemId, CacheItem>>>,
     /// Caching policy, can change at runtime, e.g. via LaunchDarkly.
     policy: Arc<CachingParameters>,
 }
@@ -145,7 +145,7 @@ impl CachingSecretsReader {
 
 #[async_trait]
 impl SecretsReader for CachingSecretsReader {
-    async fn read(&self, id: GlobalId) -> Result<Vec<u8>, anyhow::Error> {
+    async fn read(&self, id: CatalogItemId) -> Result<Vec<u8>, anyhow::Error> {
         // Iff our cache is enabled will we read from it.
         if self.policy.enabled() {
             let read_guard = self.cache.read().expect("CachingSecretsReader panicked!");
@@ -181,7 +181,7 @@ mod test {
     use std::time::Duration;
 
     use async_trait::async_trait;
-    use mz_repr::GlobalId;
+    use mz_repr::CatalogItemId;
 
     use crate::cache::CachingSecretsReader;
     use crate::{InMemorySecretsController, SecretsController, SecretsReader};
@@ -193,11 +193,11 @@ mod test {
         let caching_reader = CachingSecretsReader::new(Arc::new(testing_reader.clone()));
 
         let secret = [42, 42, 42, 42];
-        let id = GlobalId::User(1);
+        let id = CatalogItemId::User(1);
 
         // Add a new secret and read it back.
         controller
-            .ensure(GlobalId::User(1), &secret[..])
+            .ensure(CatalogItemId::User(1), &secret[..])
             .await
             .expect("success");
         let roundtrip = caching_reader.read(id).await.expect("success");
@@ -226,7 +226,7 @@ mod test {
         caching_reader.set_ttl(Duration::from_secs(1));
 
         let secret = [42, 42, 42, 42];
-        let id = GlobalId::User(1);
+        let id = CatalogItemId::User(1);
 
         // Store our secret.
         controller.ensure(id, &secret).await.expect("success");
@@ -254,7 +254,7 @@ mod test {
         let caching_reader = CachingSecretsReader::new(Arc::new(testing_reader.clone()));
 
         let secret = [42, 42, 42, 42];
-        let id = GlobalId::User(1);
+        let id = CatalogItemId::User(1);
 
         // Store a value.
         controller.ensure(id, &secret).await.expect("success");
@@ -294,7 +294,7 @@ mod test {
         let caching_reader = CachingSecretsReader::new(Arc::new(testing_reader.clone()));
 
         let secret = [42, 42, 42, 42];
-        let id = GlobalId::User(1);
+        let id = CatalogItemId::User(1);
 
         // Store an initial value.
         controller.ensure(id, &secret).await.expect("success");
@@ -335,7 +335,7 @@ mod test {
         /// The underlying secrets controller.
         reader: Arc<dyn SecretsReader>,
         /// A log of reads that have been made.
-        reads: Arc<Mutex<Vec<GlobalId>>>,
+        reads: Arc<Mutex<Vec<CatalogItemId>>>,
     }
 
     impl TestingSecretsReader {
@@ -347,7 +347,7 @@ mod test {
         }
 
         /// Drain all of the actions for introspection.
-        pub fn drain(&self) -> Vec<GlobalId> {
+        pub fn drain(&self) -> Vec<CatalogItemId> {
             self.reads
                 .lock()
                 .expect("TracingSecretsController panicked!")
@@ -356,7 +356,7 @@ mod test {
         }
 
         /// Record that an action has occurred.
-        fn record(&self, id: GlobalId) {
+        fn record(&self, id: CatalogItemId) {
             self.reads
                 .lock()
                 .expect("TracingSecretsController panicked!")
@@ -366,7 +366,7 @@ mod test {
 
     #[async_trait]
     impl SecretsReader for TestingSecretsReader {
-        async fn read(&self, id: GlobalId) -> Result<Vec<u8>, anyhow::Error> {
+        async fn read(&self, id: CatalogItemId) -> Result<Vec<u8>, anyhow::Error> {
             let result = self.reader.read(id).await;
             self.record(id);
             result

@@ -313,7 +313,7 @@ impl<'a> DataflowBuilder<'a> {
             } => {
                 let source_desc = self
                     .catalog
-                    .get_entry(ingestion_id)
+                    .get_entry_by_item_id(ingestion_id)
                     .source_desc()
                     .expect("ingestion export must reference a source")
                     .expect("ingestion export must reference a source");

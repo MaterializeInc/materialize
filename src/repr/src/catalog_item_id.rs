@@ -16,6 +16,8 @@ use mz_proto::{RustType, TryFromProtoError};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
+use crate::GlobalId;
+
 include!(concat!(env!("OUT_DIR"), "/mz_repr.catalog_item_id.rs"));
 
 /// The identifier for an item within the Catalog.
@@ -56,6 +58,17 @@ impl CatalogItemId {
     /// Reports whether this ID is for a transient item.
     pub fn is_transient(&self) -> bool {
         matches!(self, CatalogItemId::Transient(_))
+    }
+
+    /// Converts a [`CatalogItemId`] to a [`GlobalId`].
+    ///
+    /// TODO(alter_table): Remove this method.
+    pub fn to_global_id(&self) -> GlobalId {
+        match self {
+            CatalogItemId::User(x) => GlobalId::User(*x),
+            CatalogItemId::System(x) => GlobalId::System(*x),
+            CatalogItemId::Transient(x) => GlobalId::Transient(*x),
+        }
     }
 }
 

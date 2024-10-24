@@ -278,7 +278,7 @@ impl Coordinator {
         let compute_instance = self
             .instance_snapshot(cluster.id())
             .expect("compute instance does not exist");
-        let view_id = self.allocate_transient_id();
+        let (_, view_id) = self.allocate_transient_id();
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
             .override_from(&self.catalog.get_cluster(cluster.id()).config.features())
             .override_from(&explain_ctx);
@@ -296,8 +296,8 @@ impl Coordinator {
                 let compute_instance = self
                     .instance_snapshot(cluster.id())
                     .expect("compute instance does not exist");
-                let view_id = self.allocate_transient_id();
-                let index_id = self.allocate_transient_id();
+                let (_, view_id) = self.allocate_transient_id();
+                let (_, index_id) = self.allocate_transient_id();
 
                 // Build an optimizer for this SELECT.
                 Either::Left(optimize::peek::Optimizer::new(
@@ -372,9 +372,13 @@ impl Coordinator {
         )?;
         session.add_notices(notices);
 
+        let dependencies = source_ids
+            .iter()
+            .map(|id| self.catalog.resolve_item_id(id))
+            .collect();
         let validity = PlanValidity::new(
             catalog.transient_revision(),
-            source_ids.clone(),
+            dependencies,
             Some(cluster.id()),
             target_replica,
             session.role_metadata().clone(),
@@ -476,11 +480,14 @@ impl Coordinator {
         };
         let id_bundle = self
             .dataflow_builder(cluster_id)
-            .sufficient_collections(&source_ids);
+            .sufficient_collections(source_ids.iter().copied());
 
         // Although we have added `sources.depends_on()` to the validity already, also add the
         // sufficient collections for safety.
-        validity.extend_dependencies(id_bundle.iter());
+        let item_ids = id_bundle
+            .iter()
+            .map(|id| self.catalog().resolve_item_id(&id));
+        validity.extend_dependencies(item_ids);
 
         let determination = self.sequence_peek_timestamp(
             session,
@@ -743,8 +750,12 @@ impl Coordinator {
             explain_ctx,
         }: PeekStageRealTimeRecency,
     ) -> Result<StageResult<Box<PeekStage>>, AdapterError> {
+        let item_ids: Vec<_> = source_ids
+            .iter()
+            .map(|gid| self.catalog.resolve_item_id(gid))
+            .collect();
         let fut = self
-            .determine_real_time_recent_timestamp(session, source_ids.iter().cloned())
+            .determine_real_time_recent_timestamp(session, item_ids.into_iter())
             .await?;
 
         match fut {
@@ -864,16 +875,22 @@ impl Coordinator {
             let ts = determination.timestamp_context.timestamp_or_default();
             let mut transitive_storage_deps = BTreeSet::new();
             let mut transitive_compute_deps = BTreeSet::new();
-            for id in id_bundle
+            for item_id in id_bundle
                 .iter()
+                .map(|gid| self.catalog.state().get_entry_by_global_id(&gid).id())
                 .flat_map(|id| self.catalog.state().transitive_uses(id))
             {
-                match self.catalog.state().get_entry(&id).item() {
+                let entry = self.catalog.state().get_entry(&item_id);
+                match entry.item() {
+                    // TODO(parkmycar): Adding all of the GlobalIds an object depends on is
+                    // probably incorrect, but it's okay for now since the only thing that can have
+                    // multiple GlobalIds are Tables. In the future we should track dependencies
+                    // based on `GlobalId` or (`CatalogItemId`, `Version`).
                     CatalogItem::Table(_) | CatalogItem::Source(_) => {
-                        transitive_storage_deps.insert(id);
+                        transitive_storage_deps.extend(entry.global_ids());
                     }
                     CatalogItem::MaterializedView(_) | CatalogItem::Index(_) => {
-                        transitive_compute_deps.insert(id);
+                        transitive_compute_deps.extend(entry.global_ids());
                     }
                     _ => {}
                 }

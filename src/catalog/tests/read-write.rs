@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::BTreeMap;
+
 use insta::assert_debug_snapshot;
 use itertools::Itertools;
 use mz_audit_log::{EventDetails, EventType, EventV1, IdNameV1, VersionedEvent};
@@ -22,7 +24,7 @@ use mz_ore::now::SYSTEM_TIME;
 use mz_persist_client::PersistClient;
 use mz_proto::RustType;
 use mz_repr::role_id::RoleId;
-use mz_repr::GlobalId;
+use mz_repr::{CatalogItemId, GlobalId};
 use mz_sql::catalog::{RoleAttributes, RoleMembership, RoleVars};
 use mz_sql::names::{DatabaseId, ResolvedDatabaseSpecifier, SchemaId};
 
@@ -199,22 +201,26 @@ async fn test_items(state_builder: TestCatalogStateBuilder) {
     let state_builder = state_builder.with_default_deploy_generation();
     let items = [
         Item {
-            id: GlobalId::User(100),
+            id: CatalogItemId::User(100),
             oid: 20_000,
+            global_id: GlobalId::User(100),
             schema_id: SchemaId::User(1),
             name: "foo".to_string(),
             create_sql: "CREATE VIEW v AS SELECT 1".to_string(),
             owner_id: RoleId::User(1),
             privileges: vec![],
+            extra_versions: BTreeMap::new(),
         },
         Item {
-            id: GlobalId::User(200),
+            id: CatalogItemId::User(200),
             oid: 20_001,
+            global_id: GlobalId::User(200),
             schema_id: SchemaId::User(1),
             name: "bar".to_string(),
             create_sql: "CREATE MATERIALIZED VIEW mv AS SELECT 2".to_string(),
             owner_id: RoleId::User(2),
             privileges: vec![],
+            extra_versions: BTreeMap::new(),
         },
     ];
 
@@ -234,11 +240,13 @@ async fn test_items(state_builder: TestCatalogStateBuilder) {
         txn.insert_item(
             item.id,
             item.oid,
+            item.global_id,
             item.schema_id,
             &item.name,
             item.create_sql.clone(),
             item.owner_id,
             item.privileges.clone(),
+            item.extra_versions.clone(),
         )
         .unwrap();
     }

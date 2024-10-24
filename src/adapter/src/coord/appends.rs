@@ -20,7 +20,7 @@ use mz_ore::metrics::MetricsFutureExt;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::vec::VecExt;
-use mz_repr::{Diff, GlobalId, Row, Timestamp};
+use mz_repr::{CatalogItemId, Diff, Row, Timestamp};
 use mz_sql::plan::Plan;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_storage_client::client::TimestamplessUpdate;
@@ -288,7 +288,7 @@ impl Coordinator {
             .await
             .unwrap_or_terminate("unable to confirm leadership");
 
-        let mut appends: BTreeMap<GlobalId, Vec<(Row, Diff)>> = BTreeMap::new();
+        let mut appends: BTreeMap<CatalogItemId, Vec<(Row, Diff)>> = BTreeMap::new();
         let mut responses = Vec::with_capacity(self.pending_writes.len());
         let mut notifies = Vec::new();
 
@@ -346,11 +346,12 @@ impl Coordinator {
         let appends = appends
             .into_iter()
             .map(|(id, updates)| {
+                let gid = self.catalog().get_entry(&id).latest_global_id();
                 let updates = updates
                     .into_iter()
                     .map(|(row, diff)| TimestamplessUpdate { row, diff })
                     .collect();
-                (id, updates)
+                (gid, updates)
             })
             .collect();
 

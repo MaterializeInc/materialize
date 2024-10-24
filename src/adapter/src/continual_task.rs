@@ -23,7 +23,7 @@ use crate::AdapterError;
 
 pub fn ct_item_from_plan(
     plan: plan::CreateContinualTaskPlan,
-    output_id: GlobalId,
+    global_id: GlobalId,
     resolved_ids: ResolvedIds,
 ) -> Result<ContinualTask, AdapterError> {
     let plan::CreateContinualTaskPlan {
@@ -36,6 +36,7 @@ pub fn ct_item_from_plan(
                 create_sql,
                 cluster_id,
                 expr: mut raw_expr,
+                dependencies,
                 column_names: _,
                 non_null_assertions: _,
                 compaction_window: _,
@@ -48,18 +49,22 @@ pub fn ct_item_from_plan(
     if let Some(placeholder_id) = placeholder_id {
         raw_expr.visit_mut_post(&mut |expr| match expr {
             HirRelationExpr::Get { id, .. } if *id == Id::Local(placeholder_id) => {
-                *id = Id::Global(output_id);
+                *id = Id::Global(global_id);
             }
             _ => {}
         })?;
     }
+    // TODO(alter_table): `dependencies` doesn't include the `CatalogItemId` for self and we can't
+    // look it up in the Catalog from it's `GlobalId` because we haven't yet added this item.
 
     Ok(ContinualTask {
         create_sql,
+        global_id,
         input_id,
         raw_expr: Arc::new(raw_expr),
         desc,
         resolved_ids,
+        dependencies,
         cluster_id,
         initial_as_of: as_of.map(Antichain::from_elem),
     })

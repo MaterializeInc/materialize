@@ -13,13 +13,13 @@ package mz_storage_types.sources.kafka;
 
 import "google/protobuf/empty.proto";
 import "proto/src/proto.proto";
-import "repr/src/global_id.proto";
+import "repr/src/catalog_item_id.proto";
 import "storage-types/src/connections.proto";
 
 message ProtoKafkaSourceConnection {
   reserved 5, 6, 7, 8, 9, 10, 12, 14;
   mz_storage_types.connections.ProtoKafkaConnection connection = 1;
-  mz_repr.global_id.ProtoGlobalId connection_id = 13;
+  mz_repr.catalog_item_id.ProtoCatalogItemId connection_id = 13;
   string topic = 2;
   map<int32, int64> start_offsets = 3;
   optional string group_id_prefix = 4;

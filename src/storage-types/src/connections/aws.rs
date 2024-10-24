@@ -20,7 +20,7 @@ use aws_types::SdkConfig;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::{InTask, OreFutureExt};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use mz_repr::GlobalId;
+use mz_repr::{CatalogItemId, GlobalId};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -112,7 +112,7 @@ pub struct AwsCredentials {
     /// The AWS API Access Key required to connect to the AWS account.
     pub access_key_id: StringOrSecret,
     /// The Secret Access Key required to connect to the AWS account.
-    pub secret_access_key: GlobalId,
+    pub secret_access_key: CatalogItemId,
     /// Optional session token to connect to the AWS account.
     pub session_token: Option<StringOrSecret>,
 }
@@ -191,7 +191,7 @@ impl AwsAssumeRole {
     async fn load_credentials_provider(
         &self,
         connection_context: &ConnectionContext,
-        connection_id: GlobalId,
+        connection_id: CatalogItemId,
     ) -> Result<impl ProvideCredentials, anyhow::Error> {
         let external_id = self.external_id(connection_context, connection_id)?;
         // It's okay to use `dangerously_load_credentials_provider` here, as
@@ -214,7 +214,7 @@ impl AwsAssumeRole {
     async fn dangerously_load_credentials_provider(
         &self,
         connection_context: &ConnectionContext,
-        connection_id: GlobalId,
+        connection_id: CatalogItemId,
         external_id: Option<String>,
     ) -> Result<impl ProvideCredentials, anyhow::Error> {
         let Some(aws_connection_role_arn) = &connection_context.aws_connection_role_arn else {
@@ -265,7 +265,7 @@ impl AwsAssumeRole {
     pub fn external_id(
         &self,
         connection_context: &ConnectionContext,
-        connection_id: GlobalId,
+        connection_id: CatalogItemId,
     ) -> Result<String, anyhow::Error> {
         let Some(aws_external_id_prefix) = &connection_context.aws_external_id_prefix else {
             bail!("internal error: no AWS external ID prefix configured");
@@ -276,7 +276,7 @@ impl AwsAssumeRole {
     pub fn example_trust_policy(
         &self,
         connection_context: &ConnectionContext,
-        connection_id: GlobalId,
+        connection_id: CatalogItemId,
     ) -> Result<serde_json::Value, anyhow::Error> {
         let Some(aws_connection_role_arn) = &connection_context.aws_connection_role_arn else {
             bail!("internal error: no AWS connection role configured");
@@ -325,7 +325,7 @@ impl AwsConnection {
     pub async fn load_sdk_config(
         &self,
         connection_context: &ConnectionContext,
-        connection_id: GlobalId,
+        connection_id: CatalogItemId,
         in_task: InTask,
     ) -> Result<SdkConfig, anyhow::Error> {
         let connection_context = connection_context.clone();
@@ -367,7 +367,7 @@ impl AwsConnection {
 
     pub(crate) async fn validate(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         storage_configuration: &StorageConfiguration,
     ) -> Result<(), AwsConnectionValidationError> {
         let aws_config = self
@@ -448,7 +448,7 @@ impl AwsConnectionValidationError {
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct AwsConnectionReference<C: ConnectionAccess = InlinedConnection> {
     /// ID of the AWS connection.
-    pub connection_id: GlobalId,
+    pub connection_id: CatalogItemId,
     /// AWS connection object.
     pub connection: C::Aws,
 }

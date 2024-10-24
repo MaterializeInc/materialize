@@ -217,8 +217,7 @@ impl Coordinator {
                     };
 
                     let conn_id = ctx.session().conn_id().clone();
-                    self.sequence_plan(ctx, plan, ResolvedIds(BTreeSet::new()))
-                        .await;
+                    self.sequence_plan(ctx, plan, ResolvedIds::empty()).await;
                     // Part of the Command::Commit contract is that the Coordinator guarantees that
                     // it has cleared its transaction state for the connection.
                     self.clear_connection(&conn_id).await;
@@ -818,9 +817,10 @@ impl Coordinator {
                     )
                     .await;
                     let result = result.map_err(|e| e.into());
+                    let dependency_ids = resolved_ids.items().copied().collect();
                     let plan_validity = PlanValidity::new(
                         transient_revision,
-                        resolved_ids.0,
+                        dependency_ids,
                         cluster_id,
                         None,
                         ctx.session().role_metadata().clone(),
@@ -1062,7 +1062,7 @@ impl Coordinator {
             let cluster = mz_sql::plan::resolve_cluster_for_materialized_view(&catalog, cmvs)?;
             let ids = self
                 .index_oracle(cluster)
-                .sufficient_collections(resolved_ids.0.iter());
+                .sufficient_collections(resolved_ids.collections().copied());
 
             // If there is any REFRESH option, then acquire read holds. (Strictly speaking, we'd
             // need this only if there is a `REFRESH AT`, not for `REFRESH EVERY`, because later
@@ -1081,7 +1081,8 @@ impl Coordinator {
                 .iter()
                 .any(materialized_view_option_contains_temporal)
             {
-                let timeline_context = self.validate_timeline_context(resolved_ids.0.clone())?;
+                let timeline_context =
+                    self.validate_timeline_context(resolved_ids.collections().copied())?;
 
                 // We default to EpochMilliseconds, similarly to `determine_timestamp_for`,
                 // but even in the TimestampIndependent case.
@@ -1298,7 +1299,7 @@ impl Coordinator {
                 return Err(name);
             };
 
-            let (body_format, header_tys, validator) = match entry.item() {
+            let (body_format, header_tys, validator, global_id) = match entry.item() {
                 CatalogItem::Source(Source {
                     data_source:
                         DataSourceDesc::Webhook {
@@ -1308,6 +1309,7 @@ impl Coordinator {
                             ..
                         },
                     desc,
+                    global_id,
                     ..
                 }) => {
                     // Assert we have one column for the body, and how ever many are required for
@@ -1337,7 +1339,7 @@ impl Coordinator {
                             coord.caching_secrets_reader.clone(),
                         )
                     });
-                    (*body_format, headers.clone(), validator)
+                    (*body_format, headers.clone(), validator, *global_id)
                 }
                 _ => return Err(name),
             };
@@ -1346,12 +1348,12 @@ impl Coordinator {
             let row_tx = coord
                 .controller
                 .storage
-                .monotonic_appender(entry.id())
+                .monotonic_appender(global_id)
                 .map_err(|_| name.clone())?;
             let stats = coord
                 .controller
                 .storage
-                .webhook_statistics(entry.id())
+                .webhook_statistics(global_id)
                 .map_err(|_| name)?;
             let invalidator = coord
                 .active_webhooks
