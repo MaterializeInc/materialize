@@ -334,6 +334,11 @@ fn create_network_policies(
 ) -> Vec<NetworkPolicy> {
     let mut network_policies = Vec::new();
     if config.network_policies.internal_enabled {
+        let mut environmentd_label_selector = mz.default_labels();
+        environmentd_label_selector.insert(
+            "materialize.cloud/app".to_owned(),
+            mz.environmentd_service_name(),
+        );
         network_policies.extend([
             // Allow all clusterd/environmentd traffic (within the namespace)
             NetworkPolicy {
@@ -353,6 +358,12 @@ fn create_network_policies(
                         }]),
                         ..Default::default()
                     }]),
+                    pod_selector: LabelSelector {
+                        // TODO (Alex) filter to just clusterd and environmentd,
+                        // once we get a consistent set of labels for both.
+                        match_expressions: None,
+                        match_labels: Some(mz.default_labels()),
+                    },
                     policy_types: Some(vec!["Ingress".to_owned(), "Egress".to_owned()]),
                     ..Default::default()
                 }),
@@ -385,6 +396,10 @@ fn create_network_policies(
                         }]),
                         ..Default::default()
                     }]),
+                    pod_selector: LabelSelector {
+                        match_expressions: None,
+                        match_labels: Some(environmentd_label_selector),
+                    },
                     policy_types: Some(vec!["Ingress".to_owned()]),
                     ..Default::default()
                 }),
@@ -392,6 +407,11 @@ fn create_network_policies(
         ]);
     }
     if config.network_policies.ingress_enabled {
+        let mut ingress_label_selector = mz.default_labels();
+        ingress_label_selector.insert(
+            "materialize.cloud/app".to_owned(),
+            mz.balancerd_service_name(),
+        );
         network_policies.extend([NetworkPolicy {
             metadata: mz.managed_resource_meta(mz.name_prefixed("sql-and-http-ingress")),
             spec: Some(NetworkPolicySpec {
@@ -424,6 +444,10 @@ fn create_network_policies(
                     ]),
                     ..Default::default()
                 }]),
+                pod_selector: LabelSelector {
+                    match_expressions: None,
+                    match_labels: Some(ingress_label_selector),
+                },
                 policy_types: Some(vec!["Ingress".to_owned()]),
                 ..Default::default()
             }),
@@ -450,6 +474,10 @@ fn create_network_policies(
                     ),
                     ..Default::default()
                 }]),
+                pod_selector: LabelSelector {
+                    match_expressions: None,
+                    match_labels: Some(mz.default_labels()),
+                },
                 policy_types: Some(vec!["Egress".to_owned()]),
                 ..Default::default()
             }),
@@ -1232,6 +1260,10 @@ fn create_balancerd_deployment_object(config: &super::Args, mz: &Materialize) ->
         mz.balancerd_deployment_name(),
     );
     pod_template_labels.insert("app".to_owned(), "balancerd".to_string());
+    pod_template_labels.insert(
+        "materialize.cloud/app".to_owned(),
+        mz.balancerd_service_name(),
+    );
 
     let ports = vec![
         ContainerPort {
