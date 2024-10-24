@@ -18,11 +18,13 @@ spec:
   environmentdExtraArgs:
     {{- toYaml .Values.environment.environmentdExtraArgs | nindent 4 }}
   {{- end }}
-  {{- if .Values.environment.environmentdCpuAllocation }}
-  environmentdCpuAllocation: {{ .Values.environment.environmentdCpuAllocation | quote }}
+  {{- if .Values.environment.environmentdResourceRequirements }}
+  environmentdResourceRequirements:
+    {{- toYaml .Values.environment.environmentdResourceRequirements | nindent 4 }}
   {{- end }}
-  {{- if .Values.environment.environmentdMemoryAllocation }}
-  environmentdMemoryAllocation: {{ .Values.environment.environmentdMemoryAllocation | quote }}
+  {{- if .Values.environment.balancerdResourceRequirements }}
+  balancerdResourceRequirements:
+    {{- toYaml .Values.environment.balancerdResourceRequirements | nindent 4 }}
   {{- end }}
   {{- if .Values.environment.requestRollout }}
   requestRollout: {{ .Values.environment.requestRollout }}

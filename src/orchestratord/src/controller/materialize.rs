@@ -71,14 +71,6 @@ pub struct Args {
     bootstrap_builtin_catalog_server_cluster_replica_size: String,
     #[clap(long, default_value = "25cc")]
     bootstrap_builtin_analytics_cluster_replica_size: String,
-    #[clap(long, default_value = "250m")]
-    default_environmentd_cpu_allocation: String,
-    #[clap(long, default_value = "512Mi")]
-    default_environmentd_memory_allocation: String,
-    #[clap(long, default_value = "100m")]
-    default_balancerd_cpu_allocation: String,
-    #[clap(long, default_value = "256Mi")]
-    default_balancerd_memory_allocation: String,
 
     #[clap(
         long,
