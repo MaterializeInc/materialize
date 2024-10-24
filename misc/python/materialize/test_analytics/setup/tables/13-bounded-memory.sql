@@ -15,8 +15,10 @@ CREATE TABLE bounded_memory_config (
    scenario_name TEXT NOT NULL,
    configured_memory_mz_in_gb DOUBLE NOT NULL,
    configured_memory_clusterd_in_gb DOUBLE NOT NULL,
+   minimization_target TEXT NOT NULL,
    tested_memory_mz_in_gb DOUBLE NOT NULL,
    tested_memory_clusterd_in_gb DOUBLE NOT NULL,
+   started_at TIMESTAMPTZ NOT NULL,
    status TEXT NOT NULL DEFAULT 'PENDING' -- one of 'PENDING', 'SUCCESS', 'FAILURE'
 );
 

@@ -1256,9 +1256,16 @@ def find_minimal_memory(
     reduce_materialized_memory_by_gb: float,
     reduce_clusterd_memory_by_gb: float,
 ) -> tuple[str, str]:
-    assert (
-        reduce_materialized_memory_by_gb >= 0.1 or reduce_clusterd_memory_by_gb >= 0.1
-    )
+    if reduce_materialized_memory_by_gb > 0 and reduce_clusterd_memory_by_gb > 0:
+        raise RuntimeError(
+            "Cannot reduce both materialized and clusterd memory at once"
+        )
+    elif reduce_materialized_memory_by_gb >= 0.1:
+        minimalization_target = "materialized_memory"
+    elif reduce_clusterd_memory_by_gb >= 0.1:
+        minimalization_target = "clusterd_memory"
+    else:
+        raise RuntimeError("No valid reduction set")
 
     min_allowed_materialized_memory_in_gb = 1.5
     min_allowed_clusterd_memory_in_gb = 0.5
@@ -1294,7 +1301,10 @@ def find_minimal_memory(
             tested_memory_clusterd_in_gb=_get_memory_in_gb(new_clusterd_memory),
         )
         test_analytics.bounded_memory_search.add_entry(
-            BOUNDED_MEMORY_FRAMEWORK_VERSION, search_entry, flush=True
+            BOUNDED_MEMORY_FRAMEWORK_VERSION,
+            search_entry,
+            minimization_target=minimalization_target,
+            flush=True,
         )
 
         print(f"Trying scenario {scenario_desc}")
@@ -1312,12 +1322,18 @@ def find_minimal_memory(
             materialized_memory_steps.append(new_materialized_memory)
             clusterd_memory_steps.append(new_clusterd_memory)
             test_analytics.bounded_memory_search.update_success(
-                search_entry, success=True, flush=True
+                search_entry,
+                success=True,
+                minimization_target=minimalization_target,
+                flush=True,
             )
         else:
             print(f"Scenario {scenario_desc} failed.")
             test_analytics.bounded_memory_search.update_success(
-                search_entry, success=False, flush=True
+                search_entry,
+                success=False,
+                minimization_target=minimalization_target,
+                flush=True,
             )
             break
 

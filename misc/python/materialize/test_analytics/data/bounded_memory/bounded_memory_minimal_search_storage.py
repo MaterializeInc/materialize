@@ -29,6 +29,7 @@ class BoundedMemoryMinimalSearchStorage(BaseDataStorage):
         self,
         framework_version: str,
         entry: BoundedMemoryMinimalSearchEntry,
+        minimization_target: str,
         flush: bool = True,
     ) -> None:
         job_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_JOB_ID)
@@ -43,6 +44,8 @@ class BoundedMemoryMinimalSearchStorage(BaseDataStorage):
                 configured_memory_clusterd_in_gb,
                 tested_memory_mz_in_gb,
                 tested_memory_clusterd_in_gb,
+                minimization_target,
+                started_at,
                 status
             )
             SELECT
@@ -53,6 +56,8 @@ class BoundedMemoryMinimalSearchStorage(BaseDataStorage):
                 {entry.configured_memory_clusterd_in_gb},
                 {entry.tested_memory_mz_in_gb},
                 {entry.tested_memory_clusterd_in_gb},
+                {as_sanitized_literal(minimization_target)},
+                now(),
                 'PENDING';
             """
 
@@ -62,7 +67,11 @@ class BoundedMemoryMinimalSearchStorage(BaseDataStorage):
             self.database_connector.submit_update_statements()
 
     def update_success(
-        self, entry: BoundedMemoryMinimalSearchEntry, success: bool, flush: bool = True
+        self,
+        entry: BoundedMemoryMinimalSearchEntry,
+        success: bool,
+        minimization_target: str,
+        flush: bool = True,
     ) -> None:
         job_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_JOB_ID)
 
@@ -73,6 +82,7 @@ class BoundedMemoryMinimalSearchStorage(BaseDataStorage):
             AND scenario_name = {as_sanitized_literal(entry.scenario_name)}
             AND tested_memory_mz_in_gb = {entry.tested_memory_mz_in_gb}
             AND tested_memory_clusterd_in_gb = {entry.tested_memory_clusterd_in_gb}
+            AND minimization_target = {as_sanitized_literal(minimization_target)}
             ;
             """
 
