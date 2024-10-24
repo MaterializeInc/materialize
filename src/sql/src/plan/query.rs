@@ -51,8 +51,8 @@ use mz_repr::adt::numeric::{NumericMaxScale, NUMERIC_DATUM_MAX_PRECISION};
 use mz_repr::adt::timestamp::TimestampPrecision;
 use mz_repr::adt::varchar::VarCharMaxLength;
 use mz_repr::{
-    strconv, ColumnName, ColumnType, Datum, GlobalId, RelationDesc, RelationType, Row, RowArena,
-    ScalarType,
+    strconv, CatalogItemId, ColumnName, ColumnType, Datum, RelationDesc, RelationType,
+    RelationVersionSelector, Row, RowArena, ScalarType,
 };
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit::Visit;
@@ -257,7 +257,7 @@ pub fn plan_insert_query(
     returning: Vec<SelectItem<Aug>>,
 ) -> Result<
     (
-        GlobalId,
+        CatalogItemId,
         HirRelationExpr,
         PlannedRootQuery<Vec<HirScalarExpr>>,
     ),
@@ -475,7 +475,7 @@ pub fn plan_copy_item(
     scx: &StatementContext,
     item_name: ResolvedItemName,
     columns: Vec<Ident>,
-) -> Result<(GlobalId, RelationDesc, Vec<usize>), PlanError> {
+) -> Result<(CatalogItemId, RelationDesc, Vec<usize>), PlanError> {
     let item = scx.get_item_by_resolved_name(&item_name)?;
 
     let mut desc = item
@@ -524,7 +524,7 @@ pub fn plan_copy_from(
     scx: &StatementContext,
     table_name: ResolvedItemName,
     columns: Vec<Ident>,
-) -> Result<(GlobalId, RelationDesc, Vec<usize>), PlanError> {
+) -> Result<(CatalogItemId, RelationDesc, Vec<usize>), PlanError> {
     let table = scx.get_item_by_resolved_name(&table_name)?;
 
     // Validate the target of the insert.
@@ -559,13 +559,16 @@ pub fn plan_copy_from(
 pub fn plan_copy_from_rows(
     pcx: &PlanContext,
     catalog: &dyn SessionCatalog,
-    id: GlobalId,
+    id: CatalogItemId,
     columns: Vec<usize>,
     rows: Vec<mz_repr::Row>,
 ) -> Result<HirRelationExpr, PlanError> {
     let scx = StatementContext::new(Some(pcx), catalog);
 
-    let table = catalog.get_item(&id);
+    // Always copy at the latest version of the table.
+    let table = catalog
+        .get_item(&id)
+        .at_version(RelationVersionSelector::Latest);
     let desc = table.desc(&catalog.resolve_full_name(table.name()))?;
 
     let mut defaults = table
