@@ -95,10 +95,16 @@ where
         // Ensure that the frontier does not advance past the expiration time, if set. Otherwise,
         // we might write down incorrect data.
         if let Some(&expiration) = self.dataflow_expiration.as_option() {
-            ok_collection =
-                ok_collection.expire_collection_at(expiration, self.shutdown_token.clone());
-            err_collection =
-                err_collection.expire_collection_at(expiration, self.shutdown_token.clone());
+            ok_collection = ok_collection.expire_collection_at(
+                &format!("{}_export_sink_oks", self.debug_name),
+                expiration,
+                self.shutdown_token.clone(),
+            );
+            err_collection = err_collection.expire_collection_at(
+                &format!("{}_export_sink_errs", self.debug_name),
+                expiration,
+                self.shutdown_token.clone(),
+            );
         }
 
         let non_null_assertions = sink.non_null_assertions.clone();

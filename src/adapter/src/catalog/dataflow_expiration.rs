@@ -5,13 +5,16 @@
 
 //! Helper function for dataflow expiration checks.
 
-use crate::catalog::Catalog;
+use std::collections::BTreeMap;
+
 use mz_catalog::memory::objects::DataSourceDesc;
-use mz_repr::definity::Indefiniteness;
+use mz_repr::time_dependence::TimeDependence;
 use mz_repr::GlobalId;
 use mz_sql::catalog::{CatalogItem, CatalogItemType};
 use mz_storage_types::sources::{GenericSourceConnection, Timeline};
-use std::collections::BTreeMap;
+
+use crate::catalog::Catalog;
+use crate::optimize::dataflows::dataflow_import_id_bundle;
 
 impl Catalog {
     /// Whether the catalog entry `id` or any of its transitive dependencies is a materialized view
@@ -31,13 +34,13 @@ impl Catalog {
     }
 }
 
-pub(crate) struct IndefinitenessHelper<'a> {
-    seen: BTreeMap<GlobalId, Indefiniteness>,
+pub(crate) struct TimeDependenceHelper<'a> {
+    seen: BTreeMap<GlobalId, TimeDependence>,
     catalog: &'a Catalog,
     level: usize,
 }
 
-impl<'a> IndefinitenessHelper<'a> {
+impl<'a> TimeDependenceHelper<'a> {
     pub(crate) fn new(catalog: &'a Catalog) -> Self {
         Self {
             seen: BTreeMap::new(),
@@ -46,44 +49,49 @@ impl<'a> IndefinitenessHelper<'a> {
         }
     }
 
-    pub(crate) fn indefinite_up_to(&mut self, id: GlobalId) -> Indefiniteness {
-        use Indefiniteness::*;
+    pub(crate) fn determine_dependence(&mut self, id: GlobalId) -> TimeDependence {
+        use TimeDependence::*;
 
-        if let Some(indefiniteness) = self.seen.get(&id).cloned() {
-            return indefiniteness;
+        if let Some(dependence) = self.seen.get(&id).cloned() {
+            return dependence;
         }
         let indent = "  ".repeat(self.level);
 
         self.level += 1;
         let entry = self.catalog.get_entry(&id);
-        let mut indefiniteness = match entry.item_type() {
+        let mut time_dependence = match entry.item_type() {
             CatalogItemType::Table => {
                 println!("{indent}table: {id:?}");
-                // Indefinite until expiration time.
+                // Follows wall clock.
                 Wallclock
             }
             CatalogItemType::Source => {
                 println!("{indent}source: {id:?}");
-                // Indefinite until expiration time, only supports epoch timeline.
+                // Some sources don't have a `Source` entry, so we can't determine their time
+                // dependence.
                 let Some(source) = entry.source() else {
-                    return Definite;
+                    return Indeterminate;
                 };
+                // We only know how to handle the epoch timeline.
                 let timeline = source.timeline.clone();
                 if !matches!(timeline, Timeline::EpochMilliseconds) {
-                    Definite
+                    Indeterminate
                 } else {
                     match &source.data_source {
                         DataSourceDesc::Ingestion { ingestion_desc, .. } => {
                             match ingestion_desc.desc.connection {
+                                // Kafka, Postgres, MySql sources follow wall clock.
                                 GenericSourceConnection::Kafka(_)
                                 | GenericSourceConnection::Postgres(_)
                                 | GenericSourceConnection::MySql(_) => Wallclock,
-                                GenericSourceConnection::LoadGenerator(_) => Definite,
+                                // Load generators not further specified.
+                                GenericSourceConnection::LoadGenerator(_) => Indeterminate,
                             }
                         }
                         DataSourceDesc::IngestionExport { ingestion_id, .. } => {
-                            self.indefinite_up_to(*ingestion_id)
+                            self.determine_dependence(*ingestion_id)
                         }
+                        // Introspection, progress and webhook sources follow wall clock.
                         DataSourceDesc::Introspection(_)
                         | DataSourceDesc::Progress
                         | DataSourceDesc::Webhook { .. } => Wallclock,
@@ -92,50 +100,58 @@ impl<'a> IndefinitenessHelper<'a> {
             }
             CatalogItemType::MaterializedView => {
                 println!("{indent}mv: {id:?}");
-                // Indefinite until the meet of the dependencies, rounded to the next refresh.
+                // Follow dependencies, rounded to the next refresh.
                 let materialized_view = entry.materialized_view().unwrap();
-                let mut indefiniteness = Definite;
-                for dep in entry.uses() {
-                    indefiniteness.unify(&self.indefinite_up_to(dep));
-                }
-                if let Some(refresh_schedule) = &materialized_view.refresh_schedule {
-                    println!("{indent}mv refresh_schedule: {refresh_schedule:?}");
-                    match indefiniteness {
-                        Definite => Definite,
-                        RefreshSchedule(_, existing) => {
-                            RefreshSchedule(Some(refresh_schedule.clone()), existing)
-                        }
-                        Wallclock => {
-                            RefreshSchedule(Some(refresh_schedule.clone()), vec![Wallclock])
-                        }
+                let mut dependence = Indeterminate;
+                if let Some(plan) = self.catalog.try_get_physical_plan(&id) {
+                    let id_bundle =
+                        dataflow_import_id_bundle(plan, entry.cluster_id().expect("must exist"));
+                    for dep in id_bundle.iter() {
+                        dependence.unify(&self.determine_dependence(dep));
                     }
-                } else {
-                    indefiniteness
+                    if let Some(refresh_schedule) = &materialized_view.refresh_schedule {
+                        println!("{indent}mv refresh_schedule: {refresh_schedule:?}");
+                        dependence = match dependence {
+                            Indeterminate => Indeterminate,
+                            RefreshSchedule(_, existing) => {
+                                RefreshSchedule(Some(refresh_schedule.clone()), existing)
+                            }
+                            Wallclock => {
+                                RefreshSchedule(Some(refresh_schedule.clone()), vec![Wallclock])
+                            }
+                        };
+                    }
                 }
+                dependence
             }
             CatalogItemType::Index => {
                 println!("{indent}index: {id:?}");
-                // Indefinite until the meet of the dependencies.
-                let mut indefiniteness = Definite;
-                for dep in entry.uses() {
-                    indefiniteness.unify(&self.indefinite_up_to(dep));
+                // Follow dependencies, if any.
+                let mut dependence = Indeterminate;
+                if let Some(plan) = self.catalog.try_get_physical_plan(&id) {
+                    let id_bundle =
+                        dataflow_import_id_bundle(plan, entry.cluster_id().expect("must exist"));
+                    for dep in id_bundle.iter() {
+                        dependence.unify(&self.determine_dependence(dep));
+                    }
                 }
-                indefiniteness
+                dependence
             }
+            // All others are indeterminate.
             CatalogItemType::Connection
             | CatalogItemType::ContinualTask
             | CatalogItemType::Func
             | CatalogItemType::Secret
             | CatalogItemType::Sink
             | CatalogItemType::Type
-            | CatalogItemType::View => Definite,
+            | CatalogItemType::View => Indeterminate,
         };
         self.level -= 1;
 
-        indefiniteness.normalize();
+        time_dependence.normalize();
 
-        println!("{indent}-> indefiniteness: {id:?} {indefiniteness:?}");
-        self.seen.insert(id, indefiniteness.clone());
-        indefiniteness
+        println!("{indent}-> time dependence: {id:?} {time_dependence:?}");
+        self.seen.insert(id, time_dependence.clone());
+        time_dependence
     }
 }

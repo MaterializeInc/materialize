@@ -8,21 +8,21 @@
 // by the Apache License, Version 2.0.
 syntax = "proto3";
 
-package mz_repr.definity;
+package mz_repr.time_dependence;
 
 import "google/protobuf/empty.proto";
 import "proto/src/proto.proto";
 import "repr/src/refresh_schedule.proto";
 
-message ProtoDefinity {
+message ProtoTimeDependence {
   oneof kind {
     google.protobuf.Empty Definite = 1;
-    ProtoRefreshSchedule  RefreshSchedule = 2;
+    ProtoRefreshSchedule RefreshSchedule = 2;
     google.protobuf.Empty Wallclock = 3;
   }
 }
 
 message ProtoRefreshSchedule {
   optional mz_repr.refresh_schedule.ProtoRefreshSchedule refresh_schedule = 1;
-  repeated ProtoDefinity definity = 2;
+  repeated ProtoTimeDependence definity = 2;
 }

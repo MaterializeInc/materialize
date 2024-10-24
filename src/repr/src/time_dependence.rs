@@ -17,23 +17,23 @@ use proptest::prelude::BoxedStrategy;
 use proptest::strategy::{Just, Strategy, Union};
 use serde::{Deserialize, Serialize};
 
-include!(concat!(env!("OUT_DIR"), "/mz_repr.definity.rs"));
+include!(concat!(env!("OUT_DIR"), "/mz_repr.time_dependence.rs"));
 
 /// Description of how a dataflow follows time.
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
-pub enum Indefiniteness {
+pub enum TimeDependence {
     /// Potentially valid for all times.
-    Definite,
+    Indeterminate,
     /// Valid up to a some nested time, rounded according to the refresh schedule.
     RefreshSchedule(Option<RefreshSchedule>, Vec<Self>),
     /// Valid up to the wall-clock time.
     Wallclock,
 }
 
-impl Indefiniteness {
+impl TimeDependence {
     /// Normalizes by removing unnecessary nesting.
     pub fn normalize(&mut self) {
-        use Indefiniteness::*;
+        use TimeDependence::*;
         match self {
             RefreshSchedule(None, existing) if existing.len() == 1 => {
                 *self = existing.remove(0);
@@ -42,20 +42,20 @@ impl Indefiniteness {
         }
     }
 
-    /// Unify two indefinitenesses. A definite value is the least specific, followed by a refresh
+    /// Unify two time dependencies. A definite value is the least specific, followed by a refresh
     /// schedule, and finally wallclock time.
     pub fn unify(&mut self, other: &Self) {
-        use Indefiniteness::*;
+        use TimeDependence::*;
         match (self, other) {
-            (Definite, Definite) => {}
-            (this @ Definite, inner @ RefreshSchedule(_, _)) => {
+            (Indeterminate, Indeterminate) => {}
+            (this @ Indeterminate, inner @ RefreshSchedule(_, _)) => {
                 *this = RefreshSchedule(None, vec![inner.clone()]);
             }
             (this, Wallclock) => *this = Wallclock,
             (RefreshSchedule(_, existing), inner @ RefreshSchedule(_, _)) => {
                 existing.push(inner.clone());
             }
-            (RefreshSchedule(_, _), Definite) => {}
+            (RefreshSchedule(_, _), Indeterminate) => {}
             (Wallclock, _) => {}
         }
     }
@@ -63,8 +63,8 @@ impl Indefiniteness {
     /// Applies the indefiniteness to a wall clock time.
     pub fn apply(&self, wall_clock: Timestamp) -> Option<Timestamp> {
         match self {
-            Indefiniteness::Definite => None,
-            Indefiniteness::RefreshSchedule(schedule, inner) => {
+            TimeDependence::Indeterminate => None,
+            TimeDependence::RefreshSchedule(schedule, inner) => {
                 let result = inner.iter().map(|inner| inner.apply(wall_clock)).min()??;
                 if let Some(schedule) = schedule {
                     schedule
@@ -75,64 +75,64 @@ impl Indefiniteness {
                     Some(result)
                 }
             }
-            Indefiniteness::Wallclock => Some(wall_clock),
+            TimeDependence::Wallclock => Some(wall_clock),
         }
     }
 }
 
-impl RustType<ProtoDefinity> for Indefiniteness {
-    fn into_proto(&self) -> ProtoDefinity {
-        ProtoDefinity {
+impl RustType<ProtoTimeDependence> for TimeDependence {
+    fn into_proto(&self) -> ProtoTimeDependence {
+        ProtoTimeDependence {
             kind: Some(match self {
-                Indefiniteness::Definite => proto_definity::Kind::Definite(()),
-                Indefiniteness::RefreshSchedule(schedule, inner) => {
-                    proto_definity::Kind::RefreshSchedule(ProtoRefreshSchedule {
+                TimeDependence::Indeterminate => proto_time_dependence::Kind::Definite(()),
+                TimeDependence::RefreshSchedule(schedule, inner) => {
+                    proto_time_dependence::Kind::RefreshSchedule(ProtoRefreshSchedule {
                         refresh_schedule: schedule.as_ref().map(|s| s.into_proto()),
                         definity: inner.into_proto(),
                     })
                 }
-                Indefiniteness::Wallclock => proto_definity::Kind::Wallclock(()),
+                TimeDependence::Wallclock => proto_time_dependence::Kind::Wallclock(()),
             }),
         }
     }
 
-    fn from_proto(proto: ProtoDefinity) -> Result<Self, TryFromProtoError> {
+    fn from_proto(proto: ProtoTimeDependence) -> Result<Self, TryFromProtoError> {
         let inner = match proto
             .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoDefinity::kind"))?
+            .ok_or_else(|| TryFromProtoError::missing_field("ProtoTimeDependence::kind"))?
         {
-            proto_definity::Kind::Definite(()) => Indefiniteness::Definite,
-            proto_definity::Kind::RefreshSchedule(ProtoRefreshSchedule {
+            proto_time_dependence::Kind::Definite(()) => TimeDependence::Indeterminate,
+            proto_time_dependence::Kind::RefreshSchedule(ProtoRefreshSchedule {
                 refresh_schedule,
                 definity,
-            }) => Indefiniteness::RefreshSchedule(
+            }) => TimeDependence::RefreshSchedule(
                 refresh_schedule
                     .map(|s| RefreshSchedule::from_proto(s))
                     .transpose()?,
                 definity
                     .into_iter()
-                    .map(Indefiniteness::from_proto)
+                    .map(TimeDependence::from_proto)
                     .collect::<Result<_, _>>()?,
             ),
-            proto_definity::Kind::Wallclock(()) => Indefiniteness::Wallclock,
+            proto_time_dependence::Kind::Wallclock(()) => TimeDependence::Wallclock,
         };
         Ok(inner)
     }
 }
 
-impl Arbitrary for Indefiniteness {
+impl Arbitrary for TimeDependence {
     type Strategy = BoxedStrategy<Self>;
     type Parameters = ();
 
     fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
         Union::new(vec![
-            Just(Indefiniteness::Definite).boxed(),
+            Just(TimeDependence::Indeterminate).boxed(),
             any::<RefreshSchedule>()
                 .prop_map(|s| {
-                    Indefiniteness::RefreshSchedule(Some(s), vec![Indefiniteness::Wallclock])
+                    TimeDependence::RefreshSchedule(Some(s), vec![TimeDependence::Wallclock])
                 })
                 .boxed(),
-            Just(Indefiniteness::Wallclock).boxed(),
+            Just(TimeDependence::Wallclock).boxed(),
         ])
         .boxed()
     }
@@ -144,96 +144,96 @@ mod tests {
 
     #[test]
     fn test_indefiniteness_normalize() {
-        let mut i = Indefiniteness::RefreshSchedule(None, vec![Indefiniteness::Wallclock]);
+        let mut i = TimeDependence::RefreshSchedule(None, vec![TimeDependence::Wallclock]);
         i.normalize();
-        assert_eq!(i, Indefiniteness::Wallclock);
+        assert_eq!(i, TimeDependence::Wallclock);
 
-        let mut i = Indefiniteness::RefreshSchedule(
+        let mut i = TimeDependence::RefreshSchedule(
             Some(RefreshSchedule {
                 everies: vec![],
                 ats: vec![Timestamp::from(1000)],
             }),
-            vec![Indefiniteness::Wallclock],
+            vec![TimeDependence::Wallclock],
         );
         i.normalize();
         assert_eq!(
             i,
-            Indefiniteness::RefreshSchedule(
+            TimeDependence::RefreshSchedule(
                 Some(RefreshSchedule {
                     everies: vec![],
                     ats: vec![Timestamp::from(1000)],
                 }),
-                vec![Indefiniteness::Wallclock]
+                vec![TimeDependence::Wallclock]
             )
         );
 
-        i = Indefiniteness::Wallclock;
+        i = TimeDependence::Wallclock;
         i.normalize();
-        assert_eq!(i, Indefiniteness::Wallclock);
+        assert_eq!(i, TimeDependence::Wallclock);
 
-        i = Indefiniteness::Definite;
+        i = TimeDependence::Indeterminate;
         i.normalize();
-        assert_eq!(i, Indefiniteness::Definite);
+        assert_eq!(i, TimeDependence::Indeterminate);
     }
 
     #[test]
     fn test_indefiniteness_unify() {
-        let mut i = Indefiniteness::Definite;
-        i.unify(&Indefiniteness::Definite);
-        assert_eq!(i, Indefiniteness::Definite);
+        let mut i = TimeDependence::Indeterminate;
+        i.unify(&TimeDependence::Indeterminate);
+        assert_eq!(i, TimeDependence::Indeterminate);
 
-        i = Indefiniteness::Definite;
-        i.unify(&Indefiniteness::RefreshSchedule(
+        i = TimeDependence::Indeterminate;
+        i.unify(&TimeDependence::RefreshSchedule(
             None,
-            vec![Indefiniteness::Wallclock],
+            vec![TimeDependence::Wallclock],
         ));
         assert_eq!(
             i,
-            Indefiniteness::RefreshSchedule(
+            TimeDependence::RefreshSchedule(
                 None,
-                vec![Indefiniteness::RefreshSchedule(
+                vec![TimeDependence::RefreshSchedule(
                     None,
-                    vec![Indefiniteness::Wallclock]
+                    vec![TimeDependence::Wallclock]
                 )]
             )
         );
 
-        i = Indefiniteness::Definite;
-        i.unify(&Indefiniteness::Wallclock);
-        assert_eq!(i, Indefiniteness::Wallclock);
+        i = TimeDependence::Indeterminate;
+        i.unify(&TimeDependence::Wallclock);
+        assert_eq!(i, TimeDependence::Wallclock);
 
-        i = Indefiniteness::RefreshSchedule(None, vec![Indefiniteness::Wallclock]);
-        i.unify(&Indefiniteness::RefreshSchedule(
+        i = TimeDependence::RefreshSchedule(None, vec![TimeDependence::Wallclock]);
+        i.unify(&TimeDependence::RefreshSchedule(
             None,
-            vec![Indefiniteness::Wallclock],
+            vec![TimeDependence::Wallclock],
         ));
         assert_eq!(
             i,
-            Indefiniteness::RefreshSchedule(
+            TimeDependence::RefreshSchedule(
                 None,
                 vec![
-                    Indefiniteness::Wallclock,
-                    Indefiniteness::RefreshSchedule(None, vec![Indefiniteness::Wallclock],)
+                    TimeDependence::Wallclock,
+                    TimeDependence::RefreshSchedule(None, vec![TimeDependence::Wallclock],)
                 ]
             )
         );
 
-        i = Indefiniteness::RefreshSchedule(None, vec![Indefiniteness::Wallclock]);
-        i.unify(&Indefiniteness::Definite);
+        i = TimeDependence::RefreshSchedule(None, vec![TimeDependence::Wallclock]);
+        i.unify(&TimeDependence::Indeterminate);
         assert_eq!(
             i,
-            Indefiniteness::RefreshSchedule(None, vec![Indefiniteness::Wallclock])
+            TimeDependence::RefreshSchedule(None, vec![TimeDependence::Wallclock])
         );
 
-        i = Indefiniteness::Wallclock;
-        i.unify(&Indefiniteness::Definite);
-        assert_eq!(i, Indefiniteness::Wallclock);
+        i = TimeDependence::Wallclock;
+        i.unify(&TimeDependence::Indeterminate);
+        assert_eq!(i, TimeDependence::Wallclock);
 
-        i = Indefiniteness::Wallclock;
-        i.unify(&Indefiniteness::RefreshSchedule(
+        i = TimeDependence::Wallclock;
+        i.unify(&TimeDependence::RefreshSchedule(
             None,
-            vec![Indefiniteness::Wallclock],
+            vec![TimeDependence::Wallclock],
         ));
-        assert_eq!(i, Indefiniteness::Wallclock);
+        assert_eq!(i, TimeDependence::Wallclock);
     }
 }
