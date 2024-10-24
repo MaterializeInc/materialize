@@ -26,6 +26,7 @@ use mz_catalog::builtin::{
     Builtin, BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable, BuiltinType, BUILTINS,
 };
 use mz_catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap};
+use mz_catalog::expr_cache::LocalExpressions;
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, Cluster, ClusterReplica, CommentsMap, Connection, DataSourceDesc,
@@ -38,6 +39,7 @@ use mz_controller::clusters::{
     UnmanagedReplicaLocation,
 };
 use mz_controller_types::{ClusterId, ReplicaId};
+use mz_expr::OptimizedMirRelationExpr;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NOW_ZERO;
 use mz_ore::soft_assert_no_log;
@@ -50,6 +52,7 @@ use mz_repr::namespaces::{
     UNSTABLE_SCHEMAS,
 };
 use mz_repr::network_policy_id::NetworkPolicyId;
+use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::role_id::RoleId;
 use mz_repr::{GlobalId, RelationDesc};
 use mz_secrets::InMemorySecretsController;
@@ -83,7 +86,7 @@ use mz_storage_types::connections::ConnectionContext;
 use serde::Serialize;
 use timely::progress::Antichain;
 use tokio::sync::mpsc;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
 use crate::catalog::{Catalog, ConnCatalog};
@@ -149,6 +152,89 @@ pub struct CatalogState {
     pub(super) aws_principal_context: Option<AwsPrincipalContext>,
     pub(super) aws_privatelink_availability_zones: Option<BTreeSet<String>>,
     pub(super) http_host_name: Option<String>,
+}
+
+/// Keeps track of what expressions are cached or not during startup.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) enum LocalExpressionCache {
+    /// The cache is being used.
+    Open {
+        /// The local expressions that were cached in the expression cache.
+        cached_exprs: BTreeMap<GlobalId, LocalExpressions>,
+        /// The local expressions that were NOT cached in the expression cache.
+        uncached_exprs: BTreeMap<GlobalId, LocalExpressions>,
+    },
+    /// The cache is not being used.
+    Closed,
+}
+
+impl LocalExpressionCache {
+    pub(super) fn new(cached_exprs: BTreeMap<GlobalId, LocalExpressions>) -> Self {
+        Self::Open {
+            cached_exprs,
+            uncached_exprs: BTreeMap::new(),
+        }
+    }
+
+    pub(super) fn remove_cached_expression(&mut self, id: &GlobalId) -> Option<LocalExpressions> {
+        match self {
+            LocalExpressionCache::Open { cached_exprs, .. } => cached_exprs.remove(id),
+            LocalExpressionCache::Closed => None,
+        }
+    }
+
+    pub(super) fn insert_cached_expression(
+        &mut self,
+        id: GlobalId,
+        local_expressions: LocalExpressions,
+    ) {
+        match self {
+            LocalExpressionCache::Open { cached_exprs, .. } => {
+                cached_exprs.insert(id, local_expressions);
+            }
+            LocalExpressionCache::Closed => {}
+        }
+    }
+
+    pub(super) fn insert_uncached_expression(
+        &mut self,
+        id: GlobalId,
+        local_mir: OptimizedMirRelationExpr,
+        optimizer_features: OptimizerFeatures,
+    ) {
+        match self {
+            LocalExpressionCache::Open { uncached_exprs, .. } => {
+                let local_expr = LocalExpressions {
+                    local_mir,
+                    optimizer_features,
+                };
+                // If we are trying to cache the same item a second time, with a different
+                // expression, then we must be migrating the object or doing something else weird.
+                // Caching the unmigrated expression may cause us to incorrectly use the unmigrated
+                // version after a restart. Caching the migrated version may cause us to incorrectly
+                // think that the object has already been migrated. To simplify things, we cache
+                // neither.
+                let prev = uncached_exprs.remove(&id);
+                match prev {
+                    Some(prev) if prev == local_expr => {
+                        uncached_exprs.insert(id, local_expr);
+                    }
+                    None => {
+                        uncached_exprs.insert(id, local_expr);
+                    }
+                    Some(_) => {}
+                }
+            }
+            LocalExpressionCache::Closed => {}
+        }
+    }
+
+    pub(super) fn into_uncached_exprs(self) -> BTreeMap<GlobalId, LocalExpressions> {
+        match self {
+            LocalExpressionCache::Open { uncached_exprs, .. } => uncached_exprs,
+            LocalExpressionCache::Closed => BTreeMap::new(),
+        }
+    }
 }
 
 fn skip_temp_items<S>(
@@ -849,8 +935,9 @@ impl CatalogState {
         &self,
         id: GlobalId,
         create_sql: &str,
+        local_expression_cache: &mut LocalExpressionCache,
     ) -> Result<CatalogItem, AdapterError> {
-        self.parse_item(id, create_sql, None, false, None)
+        self.parse_item(id, create_sql, None, false, None, local_expression_cache)
     }
 
     /// Parses the given SQL string into a `CatalogItem`.
@@ -862,12 +949,68 @@ impl CatalogState {
         pcx: Option<&PlanContext>,
         is_retained_metrics_object: bool,
         custom_logical_compaction_window: Option<CompactionWindow>,
+        local_expression_cache: &mut LocalExpressionCache,
     ) -> Result<CatalogItem, AdapterError> {
+        let cached_expr = local_expression_cache.remove_cached_expression(&id);
+        match self.parse_item_inner(
+            id,
+            create_sql,
+            pcx,
+            is_retained_metrics_object,
+            custom_logical_compaction_window,
+            cached_expr,
+        ) {
+            Ok((item, uncached_expr)) => {
+                if let Some((uncached_expr, optimizer_features)) = uncached_expr {
+                    local_expression_cache.insert_uncached_expression(
+                        id,
+                        uncached_expr,
+                        optimizer_features,
+                    );
+                }
+                Ok(item)
+            }
+            Err((err, cached_expr)) => {
+                if let Some(local_expr) = cached_expr {
+                    local_expression_cache.insert_cached_expression(id, local_expr);
+                }
+                Err(err)
+            }
+        }
+    }
+
+    /// Parses the given SQL string into a `CatalogItem`, using `cached_expr` if it's Some.
+    ///
+    /// On success returns the `CatalogItem` and an optimized expression iff the expression was
+    /// not cached.
+    ///
+    /// On failure returns an error and `cached_expr` so it can be used later.
+    #[mz_ore::instrument]
+    pub(crate) fn parse_item_inner(
+        &self,
+        id: GlobalId,
+        create_sql: &str,
+        pcx: Option<&PlanContext>,
+        is_retained_metrics_object: bool,
+        custom_logical_compaction_window: Option<CompactionWindow>,
+        cached_expr: Option<LocalExpressions>,
+    ) -> Result<
+        (
+            CatalogItem,
+            Option<(OptimizedMirRelationExpr, OptimizerFeatures)>,
+        ),
+        (AdapterError, Option<LocalExpressions>),
+    > {
         let session_catalog = self.for_system_session();
 
-        let (plan, resolved_ids) = Self::parse_plan(create_sql, pcx, &session_catalog)?;
+        let (plan, resolved_ids) = match Self::parse_plan(create_sql, pcx, &session_catalog) {
+            Ok((plan, resolved_ids)) => (plan, resolved_ids),
+            Err(err) => return Err((err, cached_expr)),
+        };
 
-        Ok(match plan {
+        let mut uncached_expr = None;
+
+        let item = match plan {
             Plan::CreateTable(CreateTablePlan { table, .. }) => CatalogItem::Table(Table {
                 create_sql: Some(table.create_sql),
                 desc: table.desc,
@@ -899,9 +1042,12 @@ impl CatalogState {
                             timeline,
                         },
                         _ => {
-                            return Err(AdapterError::Unstructured(anyhow::anyhow!(
-                                "unsupported data source for table"
-                            )))
+                            return Err((
+                                AdapterError::Unstructured(anyhow::anyhow!(
+                                    "unsupported data source for table"
+                                )),
+                                cached_expr,
+                            ))
                         }
                     },
                 },
@@ -920,9 +1066,12 @@ impl CatalogState {
                             cluster_id: match in_cluster {
                                 Some(id) => id,
                                 None => {
-                                    return Err(AdapterError::Unstructured(anyhow::anyhow!(
-                                        "ingestion-based sources must have cluster specified"
-                                    )))
+                                    return Err((
+                                        AdapterError::Unstructured(anyhow::anyhow!(
+                                            "ingestion-based sources must have cluster specified"
+                                        )),
+                                        cached_expr,
+                                    ))
                                 }
                             },
                         }
@@ -964,12 +1113,30 @@ impl CatalogState {
                 let optimizer_config =
                     optimize::OptimizerConfig::from(session_catalog.system_vars());
 
-                // Build an optimizer for this VIEW.
-                let mut optimizer = optimize::view::Optimizer::new(optimizer_config, None);
+                let (raw_expr, optimized_expr) = match cached_expr {
+                    Some(local_expr)
+                        if local_expr.optimizer_features == optimizer_config.features =>
+                    {
+                        info!("local expression cache hit for {id:?}");
+                        (view.expr, local_expr.local_mir)
+                    }
+                    Some(_) | None => {
+                        let optimizer_features = optimizer_config.features.clone();
+                        // Build an optimizer for this VIEW.
+                        let mut optimizer = optimize::view::Optimizer::new(optimizer_config, None);
 
-                // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
-                let raw_expr = view.expr;
-                let optimized_expr = optimizer.optimize(raw_expr.clone())?;
+                        // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
+                        let raw_expr = view.expr;
+                        let optimized_expr = match optimizer.optimize(raw_expr.clone()) {
+                            Ok(optimzed_expr) => optimzed_expr,
+                            Err(err) => return Err((err.into(), cached_expr)),
+                        };
+
+                        uncached_expr = Some((optimized_expr.clone(), optimizer_features));
+
+                        (raw_expr, optimized_expr)
+                    }
+                };
 
                 CatalogItem::View(View {
                     create_sql: view.create_sql,
@@ -986,12 +1153,31 @@ impl CatalogState {
                 // Collect optimizer parameters.
                 let optimizer_config =
                     optimize::OptimizerConfig::from(session_catalog.system_vars());
-                // Build an optimizer for this VIEW.
-                // TODO(aalexandrov): ideally this should be a materialized_view::Optimizer.
-                let mut optimizer = optimize::view::Optimizer::new(optimizer_config, None);
 
-                let raw_expr = materialized_view.expr;
-                let optimized_expr = optimizer.optimize(raw_expr.clone())?;
+                let (raw_expr, optimized_expr) = match cached_expr {
+                    Some(local_expr)
+                        if local_expr.optimizer_features == optimizer_config.features =>
+                    {
+                        info!("local expression cache hit for {id:?}");
+                        (materialized_view.expr, local_expr.local_mir)
+                    }
+                    Some(_) | None => {
+                        let optimizer_features = optimizer_config.features.clone();
+                        // Build an optimizer for this VIEW.
+                        // TODO(aalexandrov): ideally this should be a materialized_view::Optimizer.
+                        let mut optimizer = optimize::view::Optimizer::new(optimizer_config, None);
+
+                        let raw_expr = materialized_view.expr;
+                        let optimized_expr = match optimizer.optimize(raw_expr.clone()) {
+                            Ok(optimzed_expr) => optimzed_expr,
+                            Err(err) => return Err((err.into(), cached_expr)),
+                        };
+
+                        uncached_expr = Some((optimized_expr.clone(), optimizer_features));
+
+                        (raw_expr, optimized_expr)
+                    }
+                };
                 let mut typ = optimized_expr.typ();
                 for &i in &materialized_view.non_null_assertions {
                     typ.column_types[i].nullable = false;
@@ -1013,9 +1199,13 @@ impl CatalogState {
                     initial_as_of,
                 })
             }
-            Plan::CreateContinualTask(plan) => CatalogItem::ContinualTask(
-                crate::continual_task::ct_item_from_plan(plan, id, resolved_ids)?,
-            ),
+            Plan::CreateContinualTask(plan) => {
+                let ct = match crate::continual_task::ct_item_from_plan(plan, id, resolved_ids) {
+                    Ok(ct) => ct,
+                    Err(err) => return Err((err, cached_expr)),
+                };
+                CatalogItem::ContinualTask(ct)
+            }
             Plan::CreateIndex(CreateIndexPlan { index, .. }) => CatalogItem::Index(Index {
                 create_sql: index.create_sql,
                 on: index.on,
@@ -1043,16 +1233,22 @@ impl CatalogState {
                 resolved_ids,
                 cluster_id: in_cluster,
             }),
-            Plan::CreateType(CreateTypePlan { typ, .. }) => CatalogItem::Type(Type {
-                create_sql: Some(typ.create_sql),
-                desc: typ.inner.desc(&session_catalog)?,
-                details: CatalogTypeDetails {
-                    array_id: None,
-                    typ: typ.inner,
-                    pg_metadata: None,
-                },
-                resolved_ids,
-            }),
+            Plan::CreateType(CreateTypePlan { typ, .. }) => {
+                let desc = match typ.inner.desc(&session_catalog) {
+                    Ok(desc) => desc,
+                    Err(err) => return Err((err.into(), cached_expr)),
+                };
+                CatalogItem::Type(Type {
+                    create_sql: Some(typ.create_sql),
+                    desc,
+                    details: CatalogTypeDetails {
+                        array_id: None,
+                        typ: typ.inner,
+                        pg_metadata: None,
+                    },
+                    resolved_ids,
+                })
+            }
             Plan::CreateSecret(CreateSecretPlan { secret, .. }) => CatalogItem::Secret(Secret {
                 create_sql: secret.create_sql,
             }),
@@ -1069,12 +1265,16 @@ impl CatalogState {
                 resolved_ids,
             }),
             _ => {
-                return Err(Error::new(ErrorKind::Corruption {
-                    detail: "catalog entry generated inappropriate plan".to_string(),
-                })
-                .into())
+                return Err((
+                    Error::new(ErrorKind::Corruption {
+                        detail: "catalog entry generated inappropriate plan".to_string(),
+                    })
+                    .into(),
+                    cached_expr,
+                ))
             }
-        })
+        };
+        Ok((item, uncached_expr))
     }
 
     /// Execute function `f` on `self`, with all "enable_for_item_parsing" feature flags enabled.

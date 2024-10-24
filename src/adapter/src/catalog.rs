@@ -12,11 +12,12 @@
 //! Persistent metadata storage for the coordinator.
 
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::convert;
 use std::sync::Arc;
 
-use futures::Future;
+use futures::future::BoxFuture;
+use futures::{Future, FutureExt};
 use itertools::Itertools;
 use mz_adapter_types::connection::ConnectionId;
 use mz_audit_log::{EventType, FullNameV1, ObjectType, VersionedStorageUsage};
@@ -29,6 +30,7 @@ use mz_catalog::config::{BuiltinItemMigrationConfig, ClusterReplicaSizeMap, Conf
 #[cfg(test)]
 use mz_catalog::durable::CatalogError;
 use mz_catalog::durable::{test_bootstrap_args, DurableCatalogState, TestCatalogStateBuilder};
+use mz_catalog::expr_cache::{ExpressionCacheHandle, GlobalExpressions, LocalExpressions};
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogEntry, Cluster, ClusterReplica, Database, NetworkPolicy, Role, Schema,
@@ -37,6 +39,7 @@ use mz_compute_types::dataflows::DataflowDescription;
 use mz_controller::clusters::ReplicaLocation;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::OptimizedMirRelationExpr;
+use mz_ore::collections::HashSet;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn, SYSTEM_TIME};
 use mz_ore::option::FallibleMapExt;
@@ -52,9 +55,9 @@ use mz_repr::{Diff, GlobalId, ScalarType};
 use mz_secrets::InMemorySecretsController;
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError as SqlCatalogError,
-    CatalogItem as SqlCatalogItem, CatalogItemType as SqlCatalogItemType, CatalogNetworkPolicy,
-    CatalogRole, CatalogSchema, DefaultPrivilegeAclItem, DefaultPrivilegeObject, EnvironmentId,
-    SessionCatalog, SystemObjectType,
+    CatalogItem as SqlCatalogItem, CatalogItemType as SqlCatalogItemType, CatalogItemType,
+    CatalogNetworkPolicy, CatalogRole, CatalogSchema, DefaultPrivilegeAclItem,
+    DefaultPrivilegeObject, EnvironmentId, SessionCatalog, SystemObjectType,
 };
 use mz_sql::names::{
     CommentObjectId, DatabaseId, FullItemName, FullSchemaName, ItemQualifiers, ObjectId,
@@ -128,6 +131,7 @@ mod transact;
 pub struct Catalog {
     state: CatalogState,
     plans: CatalogPlans,
+    expr_cache_handle: Option<ExpressionCacheHandle>,
     storage: Arc<tokio::sync::Mutex<Box<dyn mz_catalog::durable::DurableCatalogState>>>,
     transient_revision: u64,
 }
@@ -139,6 +143,7 @@ impl Clone for Catalog {
         Self {
             state: self.state.clone(),
             plans: self.plans.clone(),
+            expr_cache_handle: self.expr_cache_handle.clone(),
             storage: Arc::clone(&self.storage),
             transient_revision: self.transient_revision,
         }
@@ -363,6 +368,49 @@ impl Catalog {
         }
         policies
     }
+
+    /// Return a set of [`GlobalId`]s for items that need to have their cache entries invalidated
+    /// as a result of creating new indexes on the items in `ons`.
+    pub(crate) fn invalidate_for_index(
+        &self,
+        ons: impl Iterator<Item = GlobalId>,
+    ) -> BTreeSet<GlobalId> {
+        let mut dependencies = BTreeSet::new();
+        let mut queue = VecDeque::new();
+        let mut seen = HashSet::new();
+        for on in ons {
+            dependencies.insert(on);
+            seen.insert(on);
+            let entry = self.get_entry(&on);
+            let uses = entry.uses();
+            queue.extend(uses.clone());
+            seen.extend(uses);
+        }
+
+        while let Some(cur) = queue.pop_front() {
+            if seen.insert(cur) {
+                let entry = self.get_entry(&cur);
+                match entry.item_type() {
+                    CatalogItemType::Table
+                    | CatalogItemType::Source
+                    | CatalogItemType::MaterializedView
+                    | CatalogItemType::Sink
+                    | CatalogItemType::Index
+                    | CatalogItemType::Type
+                    | CatalogItemType::Func
+                    | CatalogItemType::Secret
+                    | CatalogItemType::Connection
+                    | CatalogItemType::ContinualTask => {
+                        dependencies.insert(cur);
+                    }
+                    CatalogItemType::View => {
+                        queue.extend(entry.uses());
+                    }
+                }
+            }
+        }
+        dependencies
+    }
 }
 
 #[derive(Debug)]
@@ -480,15 +528,21 @@ impl Catalog {
     ) -> Result<Catalog, anyhow::Error> {
         let now = SYSTEM_TIME.clone();
         let environment_id = None;
-        let openable_storage = TestCatalogStateBuilder::new(persist_client)
+        let openable_storage = TestCatalogStateBuilder::new(persist_client.clone())
             .with_organization_id(organization_id)
             .with_default_deploy_generation()
             .build()
             .await?;
         let storage = openable_storage.open(now(), &test_bootstrap_args()).await?;
         let system_parameter_defaults = BTreeMap::default();
-        Self::open_debug_catalog_inner(storage, now, environment_id, system_parameter_defaults)
-            .await
+        Self::open_debug_catalog_inner(
+            persist_client,
+            storage,
+            now,
+            environment_id,
+            system_parameter_defaults,
+        )
+        .await
     }
 
     /// Opens a read only debug persist backed catalog defined by `persist_client` and
@@ -501,7 +555,7 @@ impl Catalog {
     ) -> Result<Catalog, anyhow::Error> {
         let now = SYSTEM_TIME.clone();
         let environment_id = None;
-        let openable_storage = TestCatalogStateBuilder::new(persist_client)
+        let openable_storage = TestCatalogStateBuilder::new(persist_client.clone())
             .with_organization_id(organization_id)
             .build()
             .await?;
@@ -509,8 +563,14 @@ impl Catalog {
             .open_read_only(&test_bootstrap_args())
             .await?;
         let system_parameter_defaults = BTreeMap::default();
-        Self::open_debug_catalog_inner(storage, now, environment_id, system_parameter_defaults)
-            .await
+        Self::open_debug_catalog_inner(
+            persist_client,
+            storage,
+            now,
+            environment_id,
+            system_parameter_defaults,
+        )
+        .await
     }
 
     /// Opens a read only debug persist backed catalog defined by `persist_client` and
@@ -524,7 +584,7 @@ impl Catalog {
         system_parameter_defaults: BTreeMap<String, String>,
         version: semver::Version,
     ) -> Result<Catalog, anyhow::Error> {
-        let openable_storage = TestCatalogStateBuilder::new(persist_client)
+        let openable_storage = TestCatalogStateBuilder::new(persist_client.clone())
             .with_organization_id(environment_id.organization_id())
             .with_version(version)
             .build()
@@ -533,6 +593,7 @@ impl Catalog {
             .open_read_only(&test_bootstrap_args())
             .await?;
         Self::open_debug_catalog_inner(
+            persist_client,
             storage,
             now,
             Some(environment_id),
@@ -542,6 +603,7 @@ impl Catalog {
     }
 
     async fn open_debug_catalog_inner(
+        persist_client: PersistClient,
         storage: Box<dyn DurableCatalogState>,
         now: NowFn,
         environment_id: Option<EnvironmentId>,
@@ -559,6 +621,8 @@ impl Catalog {
             migrated_storage_collections_0dt: _,
             new_builtins: _,
             builtin_table_updates: _,
+            cached_global_exprs: _,
+            uncached_local_exprs: _,
         } = Catalog::open(Config {
             storage,
             metrics_registry,
@@ -567,6 +631,8 @@ impl Catalog {
                 all_features: false,
                 build_info: &DUMMY_BUILD_INFO,
                 environment_id: environment_id.unwrap_or(EnvironmentId::for_tests()),
+                deploy_generation: 0,
+                read_only: false,
                 now,
                 boot_ts: previous_ts,
                 skip_migrations: true,
@@ -586,6 +652,7 @@ impl Catalog {
                 connection_context: ConnectionContext::for_tests(secrets_reader),
                 active_connection_count,
                 builtin_item_migration_config: BuiltinItemMigrationConfig::Legacy,
+                persist_client,
                 helm_chart_version: None,
             },
         })
@@ -1258,6 +1325,31 @@ impl Catalog {
     ) -> Result<(Plan, ResolvedIds), AdapterError> {
         self.state
             .deserialize_plan_with_enable_for_item_parsing(create_sql, force_if_exists_skip)
+    }
+
+    pub(crate) fn update_expression_cache<'a, 'b>(
+        &'a self,
+        new_local_expressions: Vec<(GlobalId, LocalExpressions)>,
+        new_global_expressions: Vec<(GlobalId, GlobalExpressions)>,
+    ) -> BoxFuture<'b, ()> {
+        if let Some(expr_cache) = &self.expr_cache_handle {
+            let ons = new_local_expressions
+                .iter()
+                .map(|(id, _)| id)
+                .chain(new_global_expressions.iter().map(|(id, _)| id))
+                .filter_map(|id| self.get_entry(id).index())
+                .map(|index| index.on);
+            let invalidate_ids = self.invalidate_for_index(ons);
+            expr_cache
+                .update(
+                    new_local_expressions,
+                    new_global_expressions,
+                    invalidate_ids,
+                )
+                .boxed()
+        } else {
+            async {}.boxed()
+        }
     }
 
     /// Listen for and apply all unconsumed updates to the durable catalog state.
@@ -2060,6 +2152,7 @@ mod tests {
     use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
     use mz_sql::session::vars::VarInput;
 
+    use crate::catalog::state::LocalExpressionCache;
     use crate::catalog::{Catalog, Op};
     use crate::optimize::dataflows::{prep_scalar_expr, EvalTime, ExprPrepStyle};
     use crate::session::Session;
@@ -2378,7 +2471,7 @@ mod tests {
                     .expect("unable to open debug catalog");
             let item = catalog
                 .state()
-                .deserialize_item(id, &create_sql)
+                .deserialize_item(id, &create_sql, &mut LocalExpressionCache::Closed)
                 .expect("unable to parse view");
             catalog
                 .transact(
@@ -3274,7 +3367,7 @@ mod tests {
                 .state()
                 .deserialize_item(mv_id, &format!(
                     "CREATE MATERIALIZED VIEW {database_name}.{schema_name}.{mv_name} AS SELECT name FROM mz_tables"
-                ))
+                ), &mut LocalExpressionCache::Closed)
                 .expect("unable to deserialize item");
             catalog
                 .transact(

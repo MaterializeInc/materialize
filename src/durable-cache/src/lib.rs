@@ -15,7 +15,7 @@ use std::hash::Hash;
 use std::sync::Arc;
 use std::time::Duration;
 
-use differential_dataflow::consolidation::consolidate;
+use differential_dataflow::consolidation::{consolidate, consolidate_updates};
 use mz_ore::collections::{AssociativeExt, HashSet};
 use mz_ore::soft_panic_or_log;
 use mz_persist_client::critical::SinceHandle;
@@ -135,7 +135,9 @@ impl<C: DurableCacheCodec> DurableCache<C> {
             let events = self.subscribe.fetch_next().await;
             for event in events {
                 match event {
-                    ListenEvent::Updates(x) => {
+                    ListenEvent::Updates(mut x) => {
+                        consolidate_updates(&mut x);
+                        x.sort_by(|(_, ts1, d1), (_, ts2, d2)| ts1.cmp(ts2).then(d1.cmp(d2)));
                         for ((k, v), t, d) in x {
                             let encoded_key = k.unwrap();
                             let encoded_val = v.unwrap();

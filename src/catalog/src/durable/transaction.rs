@@ -58,10 +58,10 @@ use crate::durable::objects::{
 };
 use crate::durable::{
     CatalogError, DefaultPrivilege, DurableCatalogError, DurableCatalogState, NetworkPolicy,
-    Snapshot, AUDIT_LOG_ID_ALLOC_KEY, CATALOG_CONTENT_VERSION_KEY, DATABASE_ID_ALLOC_KEY,
-    OID_ALLOC_KEY, SCHEMA_ID_ALLOC_KEY, STORAGE_USAGE_ID_ALLOC_KEY, SYSTEM_ITEM_ALLOC_KEY,
-    SYSTEM_REPLICA_ID_ALLOC_KEY, USER_ITEM_ALLOC_KEY, USER_NETWORK_POLICY_ID_ALLOC_KEY,
-    USER_REPLICA_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
+    Snapshot, SystemConfiguration, AUDIT_LOG_ID_ALLOC_KEY, CATALOG_CONTENT_VERSION_KEY,
+    DATABASE_ID_ALLOC_KEY, OID_ALLOC_KEY, SCHEMA_ID_ALLOC_KEY, STORAGE_USAGE_ID_ALLOC_KEY,
+    SYSTEM_ITEM_ALLOC_KEY, SYSTEM_REPLICA_ID_ALLOC_KEY, USER_ITEM_ALLOC_KEY,
+    USER_NETWORK_POLICY_ID_ALLOC_KEY, USER_REPLICA_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
 };
 use crate::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
 
@@ -1955,6 +1955,14 @@ impl<'a> Transaction<'a> {
 
     pub fn get_schemas(&self) -> impl Iterator<Item = Schema> {
         self.schemas
+            .items()
+            .clone()
+            .into_iter()
+            .map(|(k, v)| DurableType::from_key_value(k, v))
+    }
+
+    pub fn get_system_configurations(&self) -> impl Iterator<Item = SystemConfiguration> {
+        self.system_configurations
             .items()
             .clone()
             .into_iter()

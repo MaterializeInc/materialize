@@ -22,6 +22,7 @@ use semver::Version;
 use tracing::info;
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
 use crate::catalog::open::into_consolidatable_updates_startup;
+use crate::catalog::state::LocalExpressionCache;
 use crate::catalog::{BuiltinTableUpdate, CatalogState, ConnCatalog};
 
 async fn rewrite_ast_items<F>(tx: &mut Transaction<'_>, mut f: F) -> Result<(), anyhow::Error>
@@ -81,6 +82,7 @@ where
 pub(crate) async fn migrate(
     state: &mut CatalogState,
     tx: &mut Transaction<'_>,
+    local_expr_cache: &mut LocalExpressionCache,
     item_updates: Vec<StateUpdate>,
     _now: NowFn,
     _boot_ts: Timestamp,
@@ -128,7 +130,9 @@ pub(crate) async fn migrate(
             diff: diff.try_into().expect("valid diff"),
         })
         .collect();
-    let mut ast_builtin_table_updates = state.apply_updates_for_bootstrap(item_updates).await;
+    let mut ast_builtin_table_updates = state
+        .apply_updates_for_bootstrap(item_updates, local_expr_cache)
+        .await;
 
     info!("migrating from catalog version {:?}", catalog_version);
 
@@ -162,7 +166,9 @@ pub(crate) async fn migrate(
     // input and stages arbitrary transformations to the catalog on `tx`.
 
     let op_item_updates = tx.get_and_commit_op_updates();
-    let item_builtin_table_updates = state.apply_updates_for_bootstrap(op_item_updates).await;
+    let item_builtin_table_updates = state
+        .apply_updates_for_bootstrap(op_item_updates, local_expr_cache)
+        .await;
 
     ast_builtin_table_updates.extend(item_builtin_table_updates);
 
