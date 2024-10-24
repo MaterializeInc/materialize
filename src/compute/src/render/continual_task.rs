@@ -103,7 +103,7 @@
 
 use std::any::Any;
 use std::cell::RefCell;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -343,23 +343,28 @@ where
             let clients = Arc::clone(&compute_state.persist_clients);
             let metadata = self.storage_metadata.clone();
             let handle_purpose = format!("ct_sink({})", name);
-            async move {
-                let client = clients
-                    .open(metadata.persist_location)
-                    .await
-                    .expect("valid location");
-                client
-                    .open_writer(
-                        metadata.data_shard,
-                        metadata.relation_desc.into(),
-                        UnitSchema.into(),
-                        Diagnostics {
-                            shard_name: sink_id.to_string(),
-                            handle_purpose,
-                        },
-                    )
-                    .await
-                    .expect("codecs should match")
+            move || {
+                let clients = Arc::clone(&clients);
+                let metadata = metadata.clone();
+                let diagnostics = Diagnostics {
+                    shard_name: sink_id.to_string(),
+                    handle_purpose: handle_purpose.clone(),
+                };
+                async move {
+                    let client = clients
+                        .open(metadata.persist_location)
+                        .await
+                        .expect("valid location");
+                    client
+                        .open_writer(
+                            metadata.data_shard,
+                            metadata.relation_desc.into(),
+                            UnitSchema.into(),
+                            diagnostics,
+                        )
+                        .await
+                        .expect("codecs should match")
+                }
             }
         };
 
@@ -370,21 +375,17 @@ where
         let sink_write_frontier = Rc::new(RefCell::new(Antichain::from_elem(Timestamp::minimum())));
         collection.sink_write_frontier = Some(Rc::clone(&sink_write_frontier));
 
-        // TODO(ct1): Obey `compute_state.read_only_rx`
-        //
-        // Seemingly, the read-only env needs to tail the output shard and keep
-        // historical updates around until it sees that the output frontier
-        // advances beyond their times.
-        let sink_button = continual_task_sink(
+        let (to_append, button0) =
+            continual_task_sink(&name, to_append, append_times, as_of, write_handle());
+        let button1 = single_worker_persist_sink(
             &name,
             to_append,
-            append_times,
-            as_of,
-            write_handle,
+            write_handle(),
             start_signal,
             sink_write_frontier,
+            compute_state.read_only_rx.clone(),
         );
-        Some(Rc::new(sink_button.press_on_drop()))
+        Some(Rc::new((button0.press_on_drop(), button1.press_on_drop())))
     }
 }
 
@@ -394,11 +395,10 @@ fn continual_task_sink<G: Scope<Timestamp = Timestamp>>(
     append_times: Collection<G, (), Diff>,
     as_of: Antichain<Timestamp>,
     write_handle: impl Future<Output = WriteHandle<SourceData, (), Timestamp, Diff>> + Send + 'static,
-    start_signal: StartSignal,
-    output_frontier: Rc<RefCell<Antichain<Timestamp>>>,
-) -> Button {
+) -> (Collection<G, SourceData, Diff>, Button) {
     let scope = to_append.scope();
     let mut op = AsyncOperatorBuilder::new(format!("ct_sink({})", name), scope.clone());
+    let (output, output_stream) = op.new_output();
 
     // TODO(ct2): This all works perfectly well data parallel (assuming we
     // broadcast the append_times). We just need to hook it up to the
@@ -407,16 +407,17 @@ fn continual_task_sink<G: Scope<Timestamp = Timestamp>>(
     let active_worker = name.hashed();
     let to_append_input =
         op.new_input_for_many(&to_append.inner, Exchange::new(move |_| active_worker), []);
-    let append_times_input = op.new_input_for_many(
+    let append_times_input = op.new_input_for(
         &append_times.inner,
         Exchange::new(move |_| active_worker),
-        [],
+        &output,
     );
 
     let active_worker = usize::cast_from(active_worker) % scope.peers() == scope.index();
-    let button = op.build(move |_capabilities| async move {
+    let button = op.build(move |caps| async move {
+        // TODO(ct2): Use the data caps instead.
+        let [mut cap]: [_; 1] = caps.try_into().expect("one capability per output");
         if !active_worker {
-            output_frontier.borrow_mut().clear();
             return;
         }
 
@@ -447,15 +448,13 @@ fn continual_task_sink<G: Scope<Timestamp = Timestamp>>(
             }
         }
 
-        let () = start_signal.await;
-
         #[derive(Debug)]
-        enum OpEvent<C> {
-            ToAppend(Event<Timestamp, C, Vec<(SourceData, Timestamp, Diff)>>),
-            AppendTimes(Event<Timestamp, C, Vec<((), Timestamp, Diff)>>),
+        enum OpEvent<C0, C1> {
+            ToAppend(Event<Timestamp, C0, Vec<(SourceData, Timestamp, Diff)>>),
+            AppendTimes(Event<Timestamp, C1, Vec<((), Timestamp, Diff)>>),
         }
 
-        impl<C: std::fmt::Debug> OpEvent<C> {
+        impl<C0: std::fmt::Debug, C1: std::fmt::Debug> OpEvent<C0, C1> {
             fn apply(self, state: &mut SinkState<SourceData, Timestamp>) {
                 debug!("ct_sink event {:?}", self);
                 match self {
@@ -473,59 +472,160 @@ fn continual_task_sink<G: Scope<Timestamp = Timestamp>>(
             }
         }
 
-        let to_insert_input = to_append_input.map(OpEvent::ToAppend);
+        let to_append_input = to_append_input.map(OpEvent::ToAppend);
         let append_times_input = append_times_input.map(OpEvent::AppendTimes);
-        let mut op_inputs = futures::stream::select(to_insert_input, append_times_input);
+        let mut op_events = futures::stream::select(to_append_input, append_times_input);
 
         let mut state = SinkState::new();
+        state.output_progress = write_handle.shared_upper();
         loop {
-            if PartialOrder::less_than(&*output_frontier.borrow(), &state.output_progress) {
-                output_frontier.borrow_mut().clear();
-                output_frontier
-                    .borrow_mut()
-                    .extend(state.output_progress.iter().cloned());
-            }
-            let Some(event) = op_inputs.next().await else {
+            let Some(event) = op_events.next().await else {
                 // Inputs exhausted, shutting down.
-                output_frontier.borrow_mut().clear();
                 return;
             };
             event.apply(&mut state);
             // Also drain any other events that may be ready.
-            while let Some(Some(event)) = op_inputs.next().now_or_never() {
+            while let Some(Some(event)) = op_events.next().now_or_never() {
                 event.apply(&mut state);
             }
             debug!("ct_sink about to process {:?}", state);
-            let Some((new_upper, to_append)) = state.process() else {
+            let Some((new_upper, mut to_append)) = state.process() else {
                 continue;
             };
             debug!("ct_sink got write {:?}: {:?}", new_upper, to_append);
+            output.give_container(&cap, &mut to_append);
+            if let Some(new_upper) = new_upper.as_option() {
+                cap.downgrade(new_upper);
+            };
+            state.output_progress = new_upper;
+        }
+    });
 
-            let mut expected_upper = write_handle.shared_upper();
+    (output_stream.as_collection(), button)
+}
+
+// TODO(ct2): Replace this with the multi-worker storage persist_sink, once it
+// truncates on CaA failure (#29760) and doesn't have storage-specific logic.
+fn single_worker_persist_sink<G: Scope<Timestamp = Timestamp>>(
+    name: &str,
+    input: Collection<G, SourceData, Diff>,
+    write_handle: impl Future<Output = WriteHandle<SourceData, (), Timestamp, Diff>> + Send + 'static,
+    start_signal: StartSignal,
+    output_frontier: Rc<RefCell<Antichain<Timestamp>>>,
+    mut read_only_rx: tokio::sync::watch::Receiver<bool>,
+) -> Button {
+    let scope = input.scope();
+    let mut op = AsyncOperatorBuilder::new(format!("persist_sink({})", name), scope.clone());
+
+    let active_worker = name.hashed();
+    let input = op.new_input_for_many(&input.inner, Exchange::new(move |_| active_worker), []);
+
+    let active_worker = usize::cast_from(active_worker) % scope.peers() == scope.index();
+    let button = op.build(move |_capabilities| async move {
+        if !active_worker {
+            output_frontier.borrow_mut().clear();
+            return;
+        }
+
+        let () = start_signal.await;
+        let mut write_handle = write_handle.await;
+
+        let allow_writes = futures::stream::once(Box::pin(async move {
+            read_only_rx
+                .wait_for(|ro| !ro)
+                .await
+                .expect("read only unexpectedly closed");
+        }));
+
+        #[derive(Debug)]
+        enum OpEvent<C> {
+            Input(Event<Timestamp, C, Vec<(SourceData, Timestamp, Diff)>>),
+            AllowWrites(()),
+        }
+
+        let input = input.map(OpEvent::Input);
+        let allow_writes = allow_writes.map(OpEvent::AllowWrites);
+        let mut op_events = futures::stream::select(input, allow_writes);
+
+        let mut read_only = true;
+        let mut data_by_ts_row = BTreeMap::<(Timestamp, SourceData), Diff>::new();
+        let mut input_progress;
+        let mut output_progress = write_handle.shared_upper();
+        loop {
+            if PartialOrder::less_than(&*output_frontier.borrow(), &output_progress) {
+                output_frontier.borrow_mut().clear();
+                output_frontier
+                    .borrow_mut()
+                    .extend(output_progress.iter().cloned());
+            }
+            let Some(event) = op_events.next().await else {
+                // Inputs exhausted, shutting down.
+                output_frontier.borrow_mut().clear();
+                return;
+            };
+            debug!("persist_sink event {:?}", event);
+            match event {
+                OpEvent::Input(Event::Data(_cap, x)) => {
+                    for (row, ts, diff) in x {
+                        data_by_ts_row
+                            .entry((ts, row))
+                            .or_default()
+                            .plus_equals(&diff);
+                    }
+                    continue;
+                }
+                OpEvent::Input(Event::Progress(x)) => input_progress = x,
+                OpEvent::AllowWrites(()) => {
+                    read_only = false;
+                    continue;
+                }
+            }
+
             loop {
-                if !PartialOrder::less_than(&expected_upper, &new_upper) {
-                    state.output_progress = expected_upper.clone();
-                    debug!("ct_sink skipping {:?}", new_upper.elements());
+                // This sink truncates off any proposed writes before the
+                // shard's upper.
+                while let Some(first) = data_by_ts_row.first_entry() {
+                    let (first_ts, _) = first.key();
+                    if output_progress.less_equal(first_ts) {
+                        break;
+                    }
+                    let _ = first.remove_entry();
+                }
+
+                if !PartialOrder::less_than(&output_progress, &input_progress) {
+                    // The output is already at or ahead of our input, so
+                    // nothing to write.
                     break;
                 }
+
+                // If we're in read-only mode, then don't write anything.
+                if read_only {
+                    break;
+                }
+
+                // Now grab anything left that's up to `input_frontier`.
+                let to_write = data_by_ts_row
+                    .iter()
+                    .take_while(|((ts, _), _)| !input_progress.less_equal(ts));
+                let to_write = to_write.map(|((ts, row), diff)| ((row, &()), ts, diff));
                 let res = write_handle
-                    .compare_and_append(&to_append, expected_upper.clone(), new_upper.clone())
+                    .compare_and_append(to_write, output_progress.clone(), input_progress.clone())
                     .await
-                    .expect("usage was valid");
+                    .expect("usage should be valid");
                 debug!(
-                    "ct_sink write res {:?}-{:?}: {:?}",
-                    expected_upper.elements(),
-                    new_upper.elements(),
+                    "persist_sink write res {:?}-{:?}: {:?}",
+                    output_progress.elements(),
+                    input_progress.elements(),
                     res
                 );
                 match res {
                     Ok(()) => {
-                        state.output_progress = new_upper;
-                        break;
+                        output_progress = input_progress.clone();
+                        // Intentionally go around the loop one more time to
+                        // clear the data out of the BTreeMap.
                     }
-                    Err(err) => {
-                        expected_upper = err.current;
-                        continue;
+                    Err(UpperMismatch { current, .. }) => {
+                        output_progress = current;
                     }
                 }
             }
@@ -553,7 +653,7 @@ struct SinkState<D, T> {
     output_progress: Antichain<T>,
 }
 
-impl<D: Ord> SinkState<D, Timestamp> {
+impl<D: Ord + Clone> SinkState<D, Timestamp> {
     fn new() -> Self {
         SinkState {
             append_times: BTreeSet::new(),
@@ -565,7 +665,7 @@ impl<D: Ord> SinkState<D, Timestamp> {
     }
 
     /// Returns data to write to the output, if any, and the new upper to use.
-    fn process(&mut self) -> Option<(Antichain<Timestamp>, Vec<((&D, &()), &Timestamp, &Diff)>)> {
+    fn process(&mut self) -> Option<(Antichain<Timestamp>, Vec<(D, Timestamp, Diff)>)> {
         // We can only append at times >= the output_progress, so pop off
         // anything unnecessary.
         while let Some(x) = self.append_times.first() {
@@ -624,7 +724,7 @@ impl<D: Ord> SinkState<D, Timestamp> {
         let append_data = self
             .to_append
             .iter()
-            .filter_map(|((k, t), d)| (t <= write_ts).then_some(((k, &()), t, d)))
+            .filter_map(|((k, t), d)| (t <= write_ts).then_some((k.clone(), *t, d.clone())))
             .collect();
         Some((Antichain::from_elem(write_ts.step_forward()), append_data))
     }
@@ -920,7 +1020,7 @@ mod tests {
             );
             let to_append = to_append
                 .into_iter()
-                .map(|((k, ()), _ts, _diff)| *k)
+                .map(|(k, _ts, _diff)| k)
                 .collect::<Vec<_>>();
             assert_eq!(to_append, expected_append);
         }
