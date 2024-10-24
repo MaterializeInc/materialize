@@ -156,7 +156,7 @@
     -- Tables are not supported as a materialization type in dbt-materialize,
     -- but seeds and source tables are materialized as tables.
     {% elif relation.type == 'table' %}
-      drop table if exists {{ relation }}
+      drop table if exists {{ relation }} cascade
     {% endif %}
   {%- endcall %}
 {% endmacro %}
