@@ -15,7 +15,7 @@ This directory contains simple examples for deploying MinIO, PostgreSQL, and Red
 0. Create a namespace:
 
     ```bash
-    kubectl create namespace materialize-environment # or use an existing namespace
+    kubectl create namespace materialize # or use an existing namespace
     ```
 
 1. Deploy the services to your Kubernetes cluster:
@@ -35,7 +35,7 @@ This directory contains simple examples for deploying MinIO, PostgreSQL, and Red
 3. (Optional) Create a bucket in MinIO:
 
     ```bash
-    kubectl exec -it minio-123456-abcdef -n materialize-environment -- /bin/sh
+    kubectl exec -it minio-123456-abcdef -n materialize -- /bin/sh
     mc alias set local http://localhost:9000 minio minio123
     mc mb local/bucket
     ```
@@ -81,6 +81,12 @@ Look for the args section in the deployment and add the following:
     args:
     - --kubelet-insecure-tls
     - --kubelet-preferred-address-types=InternalIP,Hostname,ExternalIP
+```
+
+Get the metrics server pod status:
+
+```sh
+kubectl get pods -n kube-system
 ```
 
 ## Notes
