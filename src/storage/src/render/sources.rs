@@ -214,104 +214,93 @@ where
             let (upsert, health_update) = scope.scoped(
                 &format!("upsert_rehydration_backpressure({})", export_id),
                 |scope| {
-                    let (previous, previous_token, feedback_handle, backpressure_metrics) =
-                        if mz_repr::Timestamp::minimum() < upper_ts {
-                            let as_of = Antichain::from_elem(upper_ts.saturating_sub(1));
+                    let (previous, previous_token, feedback_handle, backpressure_metrics) = {
+                        let as_of = Antichain::from_elem(upper_ts.saturating_sub(1));
 
-                            let backpressure_max_inflight_bytes =
-                                get_backpressure_max_inflight_bytes(
-                                    &storage_state
-                                        .storage_configuration
-                                        .parameters
-                                        .storage_dataflow_max_inflight_bytes_config,
-                                    &storage_state.instance_context.cluster_memory_limit,
+                        let backpressure_max_inflight_bytes = get_backpressure_max_inflight_bytes(
+                            &storage_state
+                                .storage_configuration
+                                .parameters
+                                .storage_dataflow_max_inflight_bytes_config,
+                            &storage_state.instance_context.cluster_memory_limit,
+                        );
+
+                        let (feedback_handle, flow_control, backpressure_metrics) =
+                            if let Some(storage_dataflow_max_inflight_bytes) =
+                                backpressure_max_inflight_bytes
+                            {
+                                tracing::info!(
+                                    ?backpressure_max_inflight_bytes,
+                                    "timely-{} using backpressure in upsert for source {}",
+                                    base_source_config.worker_id,
+                                    export_id
                                 );
-
-                            let (feedback_handle, flow_control, backpressure_metrics) =
-                                if let Some(storage_dataflow_max_inflight_bytes) =
-                                    backpressure_max_inflight_bytes
+                                if !storage_state
+                                    .storage_configuration
+                                    .parameters
+                                    .storage_dataflow_max_inflight_bytes_config
+                                    .disk_only
+                                    || storage_state.instance_context.scratch_directory.is_some()
                                 {
-                                    tracing::info!(
-                                        ?backpressure_max_inflight_bytes,
-                                        "timely-{} using backpressure in upsert for source {}",
-                                        base_source_config.worker_id,
-                                        export_id
+                                    let (feedback_handle, feedback_data) =
+                                        scope.feedback(Default::default());
+
+                                    // TODO(guswynn): cleanup
+                                    let backpressure_metrics = Some(
+                                        base_source_config
+                                            .metrics
+                                            .get_backpressure_metrics(export_id, scope.index()),
                                     );
-                                    if !storage_state
-                                        .storage_configuration
-                                        .parameters
-                                        .storage_dataflow_max_inflight_bytes_config
-                                        .disk_only
-                                        || storage_state
-                                            .instance_context
-                                            .scratch_directory
-                                            .is_some()
-                                    {
-                                        let (feedback_handle, feedback_data) =
-                                            scope.feedback(Default::default());
 
-                                        // TODO(guswynn): cleanup
-                                        let backpressure_metrics = Some(
-                                            base_source_config
-                                                .metrics
-                                                .get_backpressure_metrics(export_id, scope.index()),
-                                        );
-
-                                        (
-                                            Some(feedback_handle),
-                                            Some(persist_source::FlowControl {
-                                                progress_stream: feedback_data,
-                                                max_inflight_bytes:
-                                                    storage_dataflow_max_inflight_bytes,
-                                                summary: (
-                                                    Default::default(),
-                                                    Subtime::least_summary(),
-                                                ),
-                                                metrics: backpressure_metrics.clone(),
-                                            }),
-                                            backpressure_metrics,
-                                        )
-                                    } else {
-                                        (None, None, None)
-                                    }
+                                    (
+                                        Some(feedback_handle),
+                                        Some(persist_source::FlowControl {
+                                            progress_stream: feedback_data,
+                                            max_inflight_bytes: storage_dataflow_max_inflight_bytes,
+                                            summary: (Default::default(), Subtime::least_summary()),
+                                            metrics: backpressure_metrics.clone(),
+                                        }),
+                                        backpressure_metrics,
+                                    )
                                 } else {
                                     (None, None, None)
-                                };
+                                }
+                            } else {
+                                (None, None, None)
+                            };
 
-                            let grace_period = dyncfgs::CLUSTER_SHUTDOWN_GRACE_PERIOD
-                                .get(storage_state.storage_configuration.config_set());
-                            let storage_metadata = description.source_exports[&export_id]
-                                .storage_metadata
-                                .clone();
+                        let grace_period = dyncfgs::CLUSTER_SHUTDOWN_GRACE_PERIOD
+                            .get(storage_state.storage_configuration.config_set());
+                        let storage_metadata = description.source_exports[&export_id]
+                            .storage_metadata
+                            .clone();
 
-                            let (stream, tok) = persist_source::persist_source_core(
-                                scope,
-                                export_id,
-                                persist_clients,
-                                storage_metadata,
-                                Some(as_of),
-                                SnapshotMode::Include,
-                                Antichain::new(),
-                                None,
-                                flow_control,
-                                false.then_some(|| unreachable!()),
-                                async {},
-                                move |error| {
-                                    Box::pin(async move {
-                                        tokio::time::sleep(grace_period).await;
-                                        panic!("upsert_rehydration: {error}")
-                                    })
-                                },
-                            );
-                            (
-                                stream.as_collection(),
-                                Some(tok),
-                                feedback_handle,
-                                backpressure_metrics,
-                            )
-                        } else {
-                            (Collection::new(empty(scope)), None, None, None)
-                        };
+                        let (stream, tok) = persist_source::persist_source_core(
+                            scope,
+                            export_id,
+                            persist_clients,
+                            storage_metadata,
+                            Some(as_of),
+                            SnapshotMode::Include,
+                            Antichain::new(),
+                            None,
+                            flow_control,
+                            false.then_some(|| unreachable!()),
+                            async {},
+                            move |error| {
+                                Box::pin(async move {
+                                    tokio::time::sleep(grace_period).await;
+                                    panic!("upsert_rehydration: {error}")
+                                })
+                            },
+                        );
+                        (
+                            stream.as_collection(),
+                            Some(tok),
+                            feedback_handle,
+                            backpressure_metrics,
+                        )
+                    };
                     let (upsert, health_update, snapshot_progress, upsert_token) =
                         crate::upsert::upsert(
                             &upsert_input.enter(scope),
