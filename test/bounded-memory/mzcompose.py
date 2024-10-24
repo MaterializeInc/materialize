@@ -30,6 +30,8 @@ from materialize.test_analytics.config.test_analytics_db_config import (
     create_test_analytics_config,
 )
 from materialize.test_analytics.data.bounded_memory.bounded_memory_minimal_search_storage import (
+    BOUNDED_MEMORY_STATUS_FAILURE,
+    BOUNDED_MEMORY_STATUS_SUCCESS,
     BoundedMemoryMinimalSearchEntry,
 )
 from materialize.test_analytics.test_analytics_db import TestAnalyticsDb
@@ -1295,12 +1297,8 @@ def find_minimal_memory(
 
         search_entry = BoundedMemoryMinimalSearchEntry(
             scenario_name=scenario.name,
-            tested_memory_mz_in_gb=_get_memory_in_gb(
-                new_materialized_memory or materialized_memory
-            ),
-            tested_memory_clusterd_in_gb=_get_memory_in_gb(
-                new_clusterd_memory or clusterd_memory
-            ),
+            tested_memory_mz_in_gb=_get_memory_in_gb(new_materialized_memory),
+            tested_memory_clusterd_in_gb=_get_memory_in_gb(new_clusterd_memory),
         )
         test_analytics.bounded_memory_search.add_entry(
             BOUNDED_MEMORY_FRAMEWORK_VERSION,
@@ -1323,17 +1321,17 @@ def find_minimal_memory(
             clusterd_memory = new_clusterd_memory
             materialized_memory_steps.append(new_materialized_memory)
             clusterd_memory_steps.append(new_clusterd_memory)
-            test_analytics.bounded_memory_search.update_success(
+            test_analytics.bounded_memory_search.update_status(
                 search_entry,
-                success=True,
+                status=BOUNDED_MEMORY_STATUS_SUCCESS,
                 minimization_target=minimalization_target,
                 flush=True,
             )
         else:
             print(f"Scenario {scenario_desc} failed.")
-            test_analytics.bounded_memory_search.update_success(
+            test_analytics.bounded_memory_search.update_status(
                 search_entry,
-                success=False,
+                status=BOUNDED_MEMORY_STATUS_FAILURE,
                 minimization_target=minimalization_target,
                 flush=True,
             )

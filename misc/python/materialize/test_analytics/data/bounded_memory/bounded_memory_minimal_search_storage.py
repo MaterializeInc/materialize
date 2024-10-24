@@ -13,6 +13,10 @@ from materialize.buildkite import BuildkiteEnvVar
 from materialize.test_analytics.data.base_data_storage import BaseDataStorage
 from materialize.test_analytics.util.mz_sql_util import as_sanitized_literal
 
+BOUNDED_MEMORY_STATUS_PENDING = "PENDING"
+BOUNDED_MEMORY_STATUS_SUCCESS = "SUCCESS"
+BOUNDED_MEMORY_STATUS_FAILURE = "FAILURE"
+
 
 @dataclass
 class BoundedMemoryMinimalSearchEntry:
@@ -52,7 +56,7 @@ class BoundedMemoryMinimalSearchStorage(BaseDataStorage):
                 {entry.tested_memory_clusterd_in_gb},
                 {as_sanitized_literal(minimization_target)},
                 now(),
-                'PENDING';
+                '{BOUNDED_MEMORY_STATUS_PENDING}';
             """
 
         self.database_connector.add_update_statements([sql_statement])
@@ -60,10 +64,10 @@ class BoundedMemoryMinimalSearchStorage(BaseDataStorage):
         if flush:
             self.database_connector.submit_update_statements()
 
-    def update_success(
+    def update_status(
         self,
         entry: BoundedMemoryMinimalSearchEntry,
-        success: bool,
+        status: str,
         minimization_target: str,
         flush: bool = True,
     ) -> None:
@@ -71,7 +75,7 @@ class BoundedMemoryMinimalSearchStorage(BaseDataStorage):
 
         sql_statement = f"""
             UPDATE bounded_memory_config
-            SET status = '{'SUCCESS' if success else 'FAILURE'}'
+            SET status = {as_sanitized_literal(status)}
             WHERE build_job_id = {as_sanitized_literal(job_id)}
             AND scenario_name = {as_sanitized_literal(entry.scenario_name)}
             AND tested_memory_mz_in_gb = {entry.tested_memory_mz_in_gb}
