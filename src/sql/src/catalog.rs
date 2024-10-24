@@ -29,7 +29,7 @@ use mz_ore::str::StrExt;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::role_id::RoleId;
-use mz_repr::{ColumnName, GlobalId, RelationDesc};
+use mz_repr::{CatalogItemId, ColumnName, GlobalId, RelationDesc, RelationVersionSelector};
 use mz_sql_parser::ast::{Expr, QualifiedReplica, UnresolvedItemName};
 use mz_storage_types::connections::inline::{ConnectionResolver, ReferencedConnection};
 use mz_storage_types::connections::{Connection, ConnectionContext};
@@ -818,7 +818,7 @@ impl From<CatalogItemType> for mz_audit_log::ObjectType {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CatalogTypeDetails<T: TypeReference> {
     /// The ID of the type with this type as the array element, if available.
-    pub array_id: Option<GlobalId>,
+    pub array_id: Option<CatalogItemId>,
     /// The description of this type.
     pub typ: CatalogType<T>,
     /// Additional metadata about the type in PostgreSQL, if relevant.
@@ -853,7 +853,7 @@ impl TypeReference for NameReference {
 pub struct IdReference;
 
 impl TypeReference for IdReference {
-    type Reference = GlobalId;
+    type Reference = CatalogItemId;
 }
 
 /// A type stored in the catalog.
@@ -1235,7 +1235,7 @@ pub enum CatalogError {
     /// Unknown item.
     UnknownItem(String),
     /// Item already exists.
-    ItemAlreadyExists(GlobalId, String),
+    ItemAlreadyExists(CatalogItemId, String),
     /// Unknown function.
     UnknownFunction {
         /// The identifier of the function we couldn't find
