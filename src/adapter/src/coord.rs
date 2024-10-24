@@ -1646,7 +1646,7 @@ pub struct Coordinator {
     /// A map from the compute sink ID to it's state description.
     active_compute_sinks: BTreeMap<GlobalId, ActiveComputeSink>,
     /// A map from active webhooks to their invalidation handle.
-    active_webhooks: BTreeMap<GlobalId, WebhookAppenderInvalidator>,
+    active_webhooks: BTreeMap<CatalogItemId, WebhookAppenderInvalidator>,
     /// A map from connection ids to a watch channel that is set to `true` if the connection
     /// received a cancel request.
     staged_cancellation: BTreeMap<ConnectionId, (watch::Sender<bool>, watch::Receiver<bool>)>,

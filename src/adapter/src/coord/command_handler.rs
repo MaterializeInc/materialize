@@ -1322,7 +1322,7 @@ impl Coordinator {
                 return Err(name);
             };
 
-            let (body_format, header_tys, validator) = match entry.item() {
+            let (body_format, header_tys, validator, global_id) = match entry.item() {
                 CatalogItem::Source(Source {
                     data_source:
                         DataSourceDesc::Webhook {
@@ -1332,6 +1332,7 @@ impl Coordinator {
                             ..
                         },
                     desc,
+                    global_id,
                     ..
                 }) => {
                     // Assert we have one column for the body, and how ever many are required for
@@ -1361,7 +1362,7 @@ impl Coordinator {
                             coord.caching_secrets_reader.clone(),
                         )
                     });
-                    (*body_format, headers.clone(), validator)
+                    (*body_format, headers.clone(), validator, *global_id)
                 }
                 _ => return Err(name),
             };
@@ -1370,12 +1371,12 @@ impl Coordinator {
             let row_tx = coord
                 .controller
                 .storage
-                .monotonic_appender(entry.id())
+                .monotonic_appender(global_id)
                 .map_err(|_| name.clone())?;
             let stats = coord
                 .controller
                 .storage
-                .webhook_statistics(entry.id())
+                .webhook_statistics(global_id)
                 .map_err(|_| name)?;
             let invalidator = coord
                 .active_webhooks
