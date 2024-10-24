@@ -82,10 +82,6 @@ impl Coordinator {
             },
         };
 
-        let is_timeline_epoch_ms = self
-            .validate_timeline_context(resolved_ids.0.clone())?
-            .is_timeline_epoch_ms();
-
         // Construct the CatalogItem for this CT and optimize it.
         let mut item = crate::continual_task::ct_item_from_plan(plan, sink_id, resolved_ids)?;
         let full_name = bootstrap_catalog.resolve_full_name(&name, Some(session.conn_id()));
@@ -94,7 +90,6 @@ impl Coordinator {
             sink_id,
             Arc::new(bootstrap_catalog),
             full_name.to_string(),
-            is_timeline_epoch_ms,
         )?;
 
         // Timestamp selection
@@ -161,7 +156,6 @@ impl Coordinator {
         output_id: GlobalId,
         catalog: Arc<dyn OptimizerCatalog>,
         debug_name: String,
-        is_timeline_epoch_ms: bool,
     ) -> Result<
         (
             DataflowDescription<OptimizedMirRelationExpr>,
@@ -191,7 +185,6 @@ impl Coordinator {
             debug_name,
             optimizer_config,
             self.optimizer_metrics(),
-            is_timeline_epoch_ms,
         );
 
         // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local and global)
