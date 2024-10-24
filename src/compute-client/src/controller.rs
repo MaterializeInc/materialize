@@ -57,6 +57,7 @@ use prometheus::proto::LabelPair;
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use timely::PartialOrder;
+use tokio::sync::mpsc::error::SendError;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{self, MissedTickBehavior};
 use tracing::debug_span;
@@ -555,8 +556,6 @@ where
             logs.push((log, id, shared));
         }
 
-        let (read_holds_tx, read_holds_rx) = mpsc::unbounded_channel();
-
         let client = instance::Client::spawn(
             id,
             self.build_info,
@@ -569,11 +568,9 @@ where
             Arc::clone(&self.dyncfg),
             self.response_tx.clone(),
             self.introspection_tx.clone(),
-            read_holds_tx.clone(),
-            read_holds_rx,
         );
 
-        let instance = InstanceState::new(client, collections, read_holds_tx);
+        let instance = InstanceState::new(client, collections);
         self.instances.insert(id, instance);
 
         self.instance_workload_classes
@@ -624,7 +621,7 @@ where
     /// Panics if the identified `instance` still has active replicas.
     pub fn drop_instance(&mut self, id: ComputeInstanceId) {
         if let Some(instance) = self.instances.remove(&id) {
-            instance.call(|i| i.check_empty());
+            instance.call(|i| i.shutdown());
         }
 
         self.instance_workload_classes
@@ -1069,24 +1066,14 @@ struct InstanceState<T: ComputeControllerTimestamp> {
     client: instance::Client<T>,
     replicas: BTreeSet<ReplicaId>,
     collections: BTreeMap<GlobalId, Collection<T>>,
-    /// Sender for updates to collection read holds.
-    ///
-    /// Copies of this sender are given to [`ReadHold`]s that are created in
-    /// [`InstanceState::acquire_read_hold`].
-    read_holds_tx: mpsc::UnboundedSender<(GlobalId, ChangeBatch<T>)>,
 }
 
 impl<T: ComputeControllerTimestamp> InstanceState<T> {
-    fn new(
-        client: instance::Client<T>,
-        collections: BTreeMap<GlobalId, Collection<T>>,
-        read_holds_tx: mpsc::UnboundedSender<(GlobalId, ChangeBatch<T>)>,
-    ) -> Self {
+    fn new(client: instance::Client<T>, collections: BTreeMap<GlobalId, Collection<T>>) -> Self {
         Self {
             client,
             replicas: Default::default(),
             collections,
-            read_holds_tx,
         }
     }
 
@@ -1099,12 +1086,14 @@ impl<T: ComputeControllerTimestamp> InstanceState<T> {
         F: FnOnce(&mut Instance<T>) + Send + 'static,
     {
         let otel_ctx = OpenTelemetryContext::obtain();
-        self.client.send(Box::new(move |instance| {
-            let _span = debug_span!("instance::call").entered();
-            otel_ctx.attach_as_parent();
+        self.client
+            .send(Box::new(move |instance| {
+                let _span = debug_span!("instance::call").entered();
+                otel_ctx.attach_as_parent();
 
-            f(instance)
-        }));
+                f(instance)
+            }))
+            .expect("instance not dropped");
     }
 
     pub async fn call_sync<F, R>(&self, f: F) -> R
@@ -1114,13 +1103,15 @@ impl<T: ComputeControllerTimestamp> InstanceState<T> {
     {
         let (tx, rx) = oneshot::channel();
         let otel_ctx = OpenTelemetryContext::obtain();
-        self.client.send(Box::new(move |instance| {
-            let _span = debug_span!("instance::call_sync").entered();
-            otel_ctx.attach_as_parent();
+        self.client
+            .send(Box::new(move |instance| {
+                let _span = debug_span!("instance::call_sync").entered();
+                otel_ctx.attach_as_parent();
 
-            let result = f(instance);
-            let _ = tx.send(result);
-        }));
+                let result = f(instance);
+                let _ = tx.send(result);
+            }))
+            .expect("instance not dropped");
 
         rx.await.expect("instance not dropped")
     }
@@ -1143,7 +1134,16 @@ impl<T: ComputeControllerTimestamp> InstanceState<T> {
             since
         });
 
-        let hold = ReadHold::new(id, since, self.read_holds_tx.clone());
+        let client = self.client.clone();
+        let tx = Arc::new(move |id, change: ChangeBatch<_>| {
+            let cmd: instance::Command<_> = {
+                let change = change.clone();
+                Box::new(move |i| i.report_read_hold_change(id, change))
+            };
+            client.send(cmd).map_err(|_| SendError((id, change)))
+        });
+
+        let hold = ReadHold::new(id, since, tx);
         Ok(hold)
     }
 
@@ -1154,7 +1154,6 @@ impl<T: ComputeControllerTimestamp> InstanceState<T> {
             client: _,
             replicas,
             collections,
-            read_holds_tx: _,
         } = self;
 
         let instance = self.call_sync(|i| i.dump()).await?;
