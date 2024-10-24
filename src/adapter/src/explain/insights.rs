@@ -141,7 +141,7 @@ impl PlanInsights {
                     continue;
                 }
                 let idx_name = if let FastPathPlan::PeekExisting(_, idx_id, _, _) = plan {
-                    let idx_entry = ctx.catalog.get_entry(&idx_id);
+                    let idx_entry = ctx.catalog.get_entry_by_global_id(&idx_id);
                     Some(FastPathCluster {
                         index: structured_name(humanizer, idx_id),
                         on: structured_name(
