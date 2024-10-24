@@ -223,7 +223,7 @@ pub const STORAGE_RECLOCK_TO_LATEST: Config<bool> = Config::new(
 /// Whether to use the new continual feedback upsert operator.
 pub const STORAGE_USE_CONTINUAL_FEEDBACK_UPSERT: Config<bool> = Config::new(
     "storage_use_continual_feedback_upsert",
-    false,
+    true,
     "Whether to use the new continual feedback upsert operator.",
 );
 
