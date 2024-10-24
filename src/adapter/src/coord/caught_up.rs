@@ -61,14 +61,18 @@ impl Coordinator {
             return;
         };
 
-        let replica_frontier_collection_id = self
+        let replica_frontier_item_id = self
             .catalog()
             .resolve_builtin_storage_collection(&MZ_CLUSTER_REPLICA_FRONTIERS);
+        let replica_frontier_gid = self
+            .catalog()
+            .get_entry(&replica_frontier_item_id)
+            .latest_global_id();
 
         let live_frontiers = self
             .controller
             .storage
-            .snapshot_latest(replica_frontier_collection_id)
+            .snapshot_latest(replica_frontier_gid)
             .await
             .expect("can't read mz_cluster_replica_frontiers");
 

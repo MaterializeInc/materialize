@@ -119,20 +119,19 @@ impl Coordinator {
                         let mvs = cluster
                             .bound_objects()
                             .iter()
-                            .filter_map(|id| {
-                                if let CatalogItem::MaterializedView(mv) =
-                                    self.catalog().get_entry(id).item()
-                                {
-                                    if mv.refresh_schedule.is_some() {
-                                        let (_since, write_frontier) = self
-                                            .controller
-                                            .storage
-                                              .collection_frontiers(*id)
-                                            .expect("the storage controller should know about MVs that exist in the catalog");
-                                        Some((*id, write_frontier))
-                                    } else {
-                                        None
-                                    }
+                            .filter_map(|item_id| {
+                                let item = self.catalog().get_entry(item_id).item();
+                                let CatalogItem::MaterializedView(mv) = item else {
+                                    return None;
+                                };
+
+                                if mv.refresh_schedule.is_some() {
+                                    let (_since, write_frontier) = self
+                                        .controller
+                                        .storage
+                                            .collection_frontiers(mv.global_id())
+                                        .expect("the storage controller should know about MVs that exist in the catalog");
+                                    Some((mv.global_id(), write_frontier))
                                 } else {
                                     None
                                 }
