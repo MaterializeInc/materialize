@@ -229,7 +229,7 @@ impl Optimize<LocalMirPlan> for Optimizer {
         };
         let mut df_desc = MirDataflowDescription::new(self.debug_name.clone());
 
-        df_desc.dataflow_expiration_desc.is_timeline_epoch_ms = self.is_timeline_epoch_ms;
+        df_desc.dataflow_expiration_desc.is_timeline_epoch_ms = Some(self.is_timeline_epoch_ms);
 
         df_desc.refresh_schedule.clone_from(&self.refresh_schedule);
 

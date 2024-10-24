@@ -368,7 +368,7 @@ impl Coordinator {
         df_desc.dataflow_expiration_desc.transitive_upper = Some(transitive_upper);
         df_desc
             .dataflow_expiration_desc
-            .has_transitive_refresh_schedule = has_transitive_refresh_schedule;
+            .has_transitive_refresh_schedule = Some(has_transitive_refresh_schedule);
 
         // Emit notices.
         self.emit_optimizer_notices(ctx.session(), &df_meta.optimizer_notices);

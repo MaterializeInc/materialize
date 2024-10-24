@@ -168,7 +168,7 @@ impl Optimize<Index> for Optimizer {
         };
         let mut df_desc = MirDataflowDescription::new(full_name.to_string());
 
-        df_desc.dataflow_expiration_desc.is_timeline_epoch_ms = index.is_timeline_epoch_ms;
+        df_desc.dataflow_expiration_desc.is_timeline_epoch_ms = Some(index.is_timeline_epoch_ms);
 
         df_builder.import_into_dataflow(&index.on, &mut df_desc, &self.config.features)?;
         df_builder.maybe_reoptimize_imported_views(&mut df_desc, &self.config)?;

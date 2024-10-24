@@ -124,18 +124,19 @@ impl<P, S> DataflowDescription<P, S, mz_repr::Timestamp> {
     ) -> Antichain<mz_repr::Timestamp> {
         let dataflow_expiration_desc = &self.dataflow_expiration_desc;
 
-        // Disable dataflow expiration if `replica_expiration` is unset, the current dataflow has a
-        // refresh schedule, has a transitive dependency with a refresh schedule, or the dataflow's
-        // timeline is not `Timeline::EpochMilliSeconds`.
-        if replica_expiration.is_empty()
+        let dataflow_expiration = if replica_expiration.is_empty()
             || self.refresh_schedule.is_some()
-            || dataflow_expiration_desc.has_transitive_refresh_schedule
-            || !dataflow_expiration_desc.is_timeline_epoch_ms
+            || !matches!(
+                dataflow_expiration_desc.has_transitive_refresh_schedule,
+                Some(false)
+            )
+            || !matches!(dataflow_expiration_desc.is_timeline_epoch_ms, Some(true))
         {
-            return Antichain::default();
-        }
-
-        let dataflow_expiration = if let Some(upper) = &dataflow_expiration_desc.transitive_upper {
+            // Disable dataflow expiration if `replica_expiration` is unset, the current dataflow
+            // has a refresh schedule, doesn't have a transitive dependency with a refresh schedule,
+            // or the dataflow's timeline is not `Timeline::EpochMilliSeconds`.
+            Antichain::default()
+        } else if let Some(upper) = &dataflow_expiration_desc.transitive_upper {
             // Returns empty if `upper` is empty, else the max of `upper` and `replica_expiration`.
             upper.join(replica_expiration)
         } else {
@@ -906,19 +907,17 @@ pub struct DataflowExpirationDesc<T> {
     /// The upper of the dataflow considering all transitive dependencies.
     pub transitive_upper: Option<Antichain<T>>,
     /// Whether the dataflow has a transitive dependency with a refresh schedule.
-    pub has_transitive_refresh_schedule: bool,
+    pub has_transitive_refresh_schedule: Option<bool>,
     /// Whether the timeline of the dataflow is [`mz_storage_types::sources::Timeline::EpochMilliseconds`].
-    pub is_timeline_epoch_ms: bool,
+    pub is_timeline_epoch_ms: Option<bool>,
 }
 
 impl<T> Default for DataflowExpirationDesc<T> {
     fn default() -> Self {
         Self {
             transitive_upper: None,
-            // Assume present unless explicitly checked.
-            has_transitive_refresh_schedule: true,
-            // Assume any timeline type possible unless explicitly checked.
-            is_timeline_epoch_ms: false,
+            has_transitive_refresh_schedule: None,
+            is_timeline_epoch_ms: None,
         }
     }
 }
@@ -954,10 +953,10 @@ impl Arbitrary for DataflowExpirationDesc<mz_repr::Timestamp> {
         )
             .prop_map(
                 |(
-                    has_transitive_refresh_schedule,
+                    has_transitive_refresh_schedule_some,
                     transitive_upper_some,
                     transitive_upper,
-                    is_timeline_epoch_ms,
+                    is_timeline_epoch_ms_some,
                 )| {
                     DataflowExpirationDesc {
                         transitive_upper: if transitive_upper_some {
@@ -965,8 +964,16 @@ impl Arbitrary for DataflowExpirationDesc<mz_repr::Timestamp> {
                         } else {
                             None
                         },
-                        has_transitive_refresh_schedule,
-                        is_timeline_epoch_ms,
+                        has_transitive_refresh_schedule: if !has_transitive_refresh_schedule_some {
+                            Some(false)
+                        } else {
+                            None
+                        },
+                        is_timeline_epoch_ms: if is_timeline_epoch_ms_some {
+                            Some(true)
+                        } else {
+                            None
+                        },
                     }
                 },
             )

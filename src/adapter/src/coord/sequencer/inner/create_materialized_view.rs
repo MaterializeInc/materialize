@@ -677,7 +677,7 @@ impl Coordinator {
                 df_desc.dataflow_expiration_desc.transitive_upper = Some(transitive_upper);
                 df_desc
                     .dataflow_expiration_desc
-                    .has_transitive_refresh_schedule = has_transitive_refresh_schedule;
+                    .has_transitive_refresh_schedule = Some(has_transitive_refresh_schedule);
 
                 let storage_metadata = coord.catalog.state().storage_metadata();
 

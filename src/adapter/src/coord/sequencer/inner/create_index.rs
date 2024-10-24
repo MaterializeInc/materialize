@@ -479,7 +479,7 @@ impl Coordinator {
                 df_desc.dataflow_expiration_desc.transitive_upper = Some(transitive_upper);
                 df_desc
                     .dataflow_expiration_desc
-                    .has_transitive_refresh_schedule = has_transitive_refresh_schedule;
+                    .has_transitive_refresh_schedule = Some(has_transitive_refresh_schedule);
 
                 coord
                     .ship_dataflow_and_notice_builtin_table_updates(
