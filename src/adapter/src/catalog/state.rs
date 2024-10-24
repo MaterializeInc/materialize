@@ -983,6 +983,13 @@ impl CatalogState {
                 let raw_expr = view.expr;
                 let optimized_expr = optimizer.optimize(raw_expr.clone())?;
 
+                // Resolve all item dependencies from the HIR expression.
+                let dependencies: BTreeSet<_> = raw_expr
+                    .depends_on()
+                    .into_iter()
+                    .map(|gid| self.get_entry_by_global_id(&gid).id())
+                    .collect();
+
                 CatalogItem::View(View {
                     create_sql: view.create_sql,
                     global_id,
@@ -991,6 +998,7 @@ impl CatalogState {
                     optimized_expr: optimized_expr.into(),
                     conn_id: None,
                     resolved_ids,
+                    dependencies: DependencyIds(dependencies),
                 })
             }
             Plan::CreateMaterializedView(CreateMaterializedViewPlan {
@@ -1013,6 +1021,13 @@ impl CatalogState {
 
                 let initial_as_of = materialized_view.as_of.map(Antichain::from_elem);
 
+                // Resolve all item dependencies from the HIR expression.
+                let dependencies = raw_expr
+                    .depends_on()
+                    .into_iter()
+                    .map(|gid| self.get_entry_by_global_id(&gid).id())
+                    .collect();
+
                 CatalogItem::MaterializedView(MaterializedView {
                     create_sql: materialized_view.create_sql,
                     global_id,
@@ -1020,6 +1035,7 @@ impl CatalogState {
                     optimized_expr: optimized_expr.into(),
                     desc,
                     resolved_ids,
+                    dependencies,
                     cluster_id: materialized_view.cluster_id,
                     non_null_assertions: materialized_view.non_null_assertions,
                     custom_logical_compaction_window: materialized_view.compaction_window,

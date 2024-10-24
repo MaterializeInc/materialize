@@ -373,6 +373,7 @@ impl Coordinator {
                         plan::View {
                             create_sql,
                             expr: raw_expr,
+                            dependencies,
                             column_names,
                             temporary,
                         },
@@ -406,6 +407,7 @@ impl Coordinator {
                         None
                     },
                     resolved_ids: resolved_ids.clone(),
+                    dependencies: dependencies.clone(),
                 }),
                 owner_id: *session.current_role_id(),
             },

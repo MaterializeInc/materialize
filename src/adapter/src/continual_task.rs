@@ -37,6 +37,7 @@ pub fn ct_item_from_plan(
                 create_sql,
                 cluster_id,
                 expr: mut raw_expr,
+                dependencies,
                 column_names: _,
                 non_null_assertions: _,
                 compaction_window: _,
@@ -54,6 +55,8 @@ pub fn ct_item_from_plan(
             _ => {}
         })?;
     }
+    // TODO(alter_table): `dependencies` doesn't include the `CatalogItemId` for self and we can't
+    // look it up in the Catalog from it's `GlobalId` because we haven't yet added this item.
 
     Ok(ContinualTask {
         create_sql,
@@ -62,6 +65,7 @@ pub fn ct_item_from_plan(
         raw_expr: Arc::new(raw_expr),
         desc,
         resolved_ids,
+        dependencies,
         cluster_id,
         initial_as_of: as_of.map(Antichain::from_elem),
     })

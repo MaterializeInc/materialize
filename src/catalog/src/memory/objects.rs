@@ -1266,6 +1266,8 @@ pub struct View {
     pub conn_id: Option<ConnectionId>,
     /// Other catalog objects that are referenced by this view, determined at name resolution.
     pub resolved_ids: ResolvedIds,
+    /// All of the catalog objects that are referenced by this view.
+    pub dependencies: DependencyIds,
 }
 
 impl View {
@@ -1289,6 +1291,8 @@ pub struct MaterializedView {
     pub desc: RelationDesc,
     /// Other catalog items that this materialized view references, determined at name resolution.
     pub resolved_ids: ResolvedIds,
+    /// All of the catalog objects that are referenced by this view.
+    pub dependencies: DependencyIds,
     /// Cluster that this materialized view runs on.
     pub cluster_id: ClusterId,
     /// Column indexes that we assert are not `NULL`.
@@ -1412,6 +1416,8 @@ pub struct ContinualTask {
     pub desc: RelationDesc,
     /// Other catalog items that this continual task references, determined at name resolution.
     pub resolved_ids: ResolvedIds,
+    /// All of the catalog objects that are referenced by this continual task.
+    pub dependencies: DependencyIds,
     /// Cluster that this continual task runs on.
     pub cluster_id: ClusterId,
     /// See the comment on [MaterializedView::initial_as_of].
@@ -1669,7 +1675,7 @@ impl CatalogItem {
     /// Like [`CatalogItem::references()`] but also includes objects that are not directly
     /// referenced. For example this will include any catalog objects used to implement functions
     /// and casts in the item.
-    pub fn uses(&self) -> BTreeSet<GlobalId> {
+    pub fn uses(&self) -> BTreeSet<CatalogItemId> {
         let mut uses: BTreeSet<_> = self.references().items().copied().collect();
         match self {
             // TODO(jkosh44) This isn't really correct for functions. They may use other objects in
@@ -1681,9 +1687,11 @@ impl CatalogItem {
             CatalogItem::Log(_) => {}
             CatalogItem::Table(_) => {}
             CatalogItem::Type(_) => {}
-            CatalogItem::View(view) => uses.extend(view.raw_expr.depends_on()),
-            CatalogItem::MaterializedView(mview) => uses.extend(mview.raw_expr.depends_on()),
-            CatalogItem::ContinualTask(ct) => uses.extend(ct.raw_expr.depends_on()),
+            CatalogItem::View(view) => uses.extend(view.dependencies.0.iter().copied()),
+            CatalogItem::MaterializedView(mview) => {
+                uses.extend(mview.dependencies.0.iter().copied())
+            }
+            CatalogItem::ContinualTask(ct) => uses.extend(ct.dependencies.0.iter().copied()),
             CatalogItem::Secret(_) => {}
             CatalogItem::Connection(_) => {}
         }
