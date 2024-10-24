@@ -16,24 +16,6 @@ use mz_storage_types::sources::{GenericSourceConnection, Timeline};
 use crate::catalog::Catalog;
 use crate::optimize::dataflows::dataflow_import_id_bundle;
 
-impl Catalog {
-    /// Whether the catalog entry `id` or any of its transitive dependencies is a materialized view
-    /// with a refresh schedule. Used to disable dataflow expiration if found.
-    pub(crate) fn item_has_transitive_refresh_schedule(&self, id: GlobalId) -> bool {
-        let test_has_transitive_refresh_schedule = |dep: GlobalId| -> bool {
-            if let Some(mv) = self.get_entry(&dep).materialized_view() {
-                return mv.refresh_schedule.is_some();
-            }
-            false
-        };
-        test_has_transitive_refresh_schedule(id)
-            || self
-                .state()
-                .transitive_uses(id)
-                .any(test_has_transitive_refresh_schedule)
-    }
-}
-
 pub(crate) struct TimeDependenceHelper<'a> {
     seen: BTreeMap<GlobalId, TimeDependence>,
     catalog: &'a Catalog,

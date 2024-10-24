@@ -341,7 +341,7 @@ impl Coordinator {
         // We want to reject queries that depend on log sources, for example,
         // even if we can *technically* optimize that reference away.
         let expr_depends_on = expr.depends_on();
-        let timeline_ctx = self.validate_timeline_context(expr_depends_on.iter().cloned())?;
+        self.validate_timeline_context(expr_depends_on.iter().cloned())?;
         self.validate_system_column_references(*ambiguous_columns, &expr_depends_on)?;
         // Materialized views are not allowed to depend on log sources, as replicas
         // are not producing the same definite collection for these.
@@ -399,7 +399,6 @@ impl Coordinator {
                 plan,
                 resolved_ids,
                 explain_ctx,
-                is_timeline_epoch_ms: timeline_ctx.is_timeline_epoch_ms(),
             },
         ))
     }
@@ -412,7 +411,6 @@ impl Coordinator {
             plan,
             resolved_ids,
             explain_ctx,
-            is_timeline_epoch_ms,
         }: CreateMaterializedViewOptimize,
     ) -> Result<StageResult<Box<CreateMaterializedViewStage>>, AdapterError> {
         let plan::CreateMaterializedViewPlan {
@@ -456,7 +454,6 @@ impl Coordinator {
             debug_name,
             optimizer_config,
             self.optimizer_metrics(),
-            is_timeline_epoch_ms,
             force_non_monotonic,
         );
 
@@ -576,14 +573,6 @@ impl Coordinator {
         // Timestamp selection
         let id_bundle = dataflow_import_id_bundle(global_lir_plan.df_desc(), cluster_id);
 
-        // Collect properties for `DataflowExpirationDesc`.
-        let transitive_upper = self.least_valid_write(&id_bundle);
-        let has_transitive_refresh_schedule = refresh_schedule.is_some()
-            || raw_expr
-                .depends_on()
-                .into_iter()
-                .any(|id| self.catalog.item_has_transitive_refresh_schedule(id));
-
         let read_holds_owned;
         let read_holds = if let Some(txn_reads) = self.txn_read_holds.get(session.conn_id()) {
             // In some cases, for example when REFRESH is used, the preparatory
@@ -678,11 +667,6 @@ impl Coordinator {
                 df_desc.set_as_of(dataflow_as_of.clone());
                 df_desc.set_initial_as_of(initial_as_of);
                 df_desc.until = until;
-
-                df_desc.dataflow_expiration_desc.transitive_upper = Some(transitive_upper);
-                df_desc
-                    .dataflow_expiration_desc
-                    .has_transitive_refresh_schedule = has_transitive_refresh_schedule;
                 df_desc.time_dependence = Some(time_dependence);
 
                 let storage_metadata = coord.catalog.state().storage_metadata();

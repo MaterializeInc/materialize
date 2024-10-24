@@ -1330,7 +1330,6 @@ where
             initial_storage_as_of: dataflow.initial_storage_as_of,
             refresh_schedule: dataflow.refresh_schedule,
             debug_name: dataflow.debug_name,
-            dataflow_expiration_desc: dataflow.dataflow_expiration_desc,
             time_dependence: dataflow.time_dependence,
         };
 

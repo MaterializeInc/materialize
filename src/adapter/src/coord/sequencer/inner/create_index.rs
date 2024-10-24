@@ -296,7 +296,7 @@ impl Coordinator {
         }: CreateIndexOptimize,
     ) -> Result<StageResult<Box<CreateIndexStage>>, AdapterError> {
         let plan::CreateIndexPlan {
-            index: plan::Index { cluster_id, on, .. },
+            index: plan::Index { cluster_id, .. },
             ..
         } = &plan;
 
@@ -322,7 +322,6 @@ impl Coordinator {
             self.optimizer_metrics(),
         );
         let span = Span::current();
-        let is_timeline_epoch_ms = self.get_timeline_context(*on).is_timeline_epoch_ms();
         Ok(StageResult::Handle(mz_ore::task::spawn_blocking(
             || "optimize create index",
             move || {
@@ -334,7 +333,7 @@ impl Coordinator {
                     let _dispatch_guard = explain_ctx.dispatch_guard();
 
                     let index_plan =
-                        optimize::index::Index::new(plan.name.clone(), plan.index.on, plan.index.keys.clone(), is_timeline_epoch_ms);
+                        optimize::index::Index::new(plan.name.clone(), plan.index.on, plan.index.keys.clone());
 
                     // MIR ⇒ MIR optimization (global)
                     let global_mir_plan = optimizer.catch_unwind_optimize(index_plan)?;
@@ -441,10 +440,6 @@ impl Coordinator {
             owner_id: *self.catalog().get_entry(&on).owner_id(),
         }];
 
-        // Collect properties for `DataflowExpirationDesc`.
-        let transitive_upper = self.least_valid_write(&id_bundle);
-        let has_transitive_refresh_schedule = self.catalog.item_has_transitive_refresh_schedule(on);
-
         // Pre-allocate a vector of transient GlobalIds for each notice.
         let notice_ids = std::iter::repeat_with(|| self.allocate_transient_id())
             .take(global_lir_plan.df_meta().optimizer_notices.len())
@@ -479,10 +474,6 @@ impl Coordinator {
                 let since = coord.least_valid_read(&read_holds);
                 df_desc.set_as_of(since);
 
-                df_desc.dataflow_expiration_desc.transitive_upper = Some(transitive_upper);
-                df_desc
-                    .dataflow_expiration_desc
-                    .has_transitive_refresh_schedule = has_transitive_refresh_schedule;
                 df_desc.time_dependence = Some(time_dependence);
 
                 coord

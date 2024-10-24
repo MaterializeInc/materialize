@@ -27,8 +27,7 @@ use timely::progress::Antichain;
 use timely::PartialOrder;
 
 use crate::dataflows::proto_dataflow_description::{
-    ProtoDataflowExpirationDesc, ProtoIndexExport, ProtoIndexImport, ProtoSinkExport,
-    ProtoSourceImport,
+    ProtoIndexExport, ProtoIndexImport, ProtoSinkExport, ProtoSourceImport,
 };
 use crate::plan::flat_plan::FlatPlan;
 use crate::plan::Plan;
@@ -75,8 +74,6 @@ pub struct DataflowDescription<P, S: 'static = (), T = mz_repr::Timestamp> {
     pub refresh_schedule: Option<RefreshSchedule>,
     /// Human-readable name
     pub debug_name: String,
-    /// Information about the dataflow used to determine if dataflow expiration can be enabled.
-    pub dataflow_expiration_desc: DataflowExpirationDesc<T>,
     /// Description of how the dataflow's progress relates to wall-clock time. None for unknown.
     pub time_dependence: Option<TimeDependence>,
 }
@@ -177,7 +174,6 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
             initial_storage_as_of: None,
             refresh_schedule: None,
             debug_name: name,
-            dataflow_expiration_desc: DataflowExpirationDesc::default(),
             time_dependence: None,
         }
     }
@@ -583,7 +579,6 @@ where
             initial_storage_as_of: self.initial_storage_as_of.clone(),
             refresh_schedule: self.refresh_schedule.clone(),
             debug_name: self.debug_name.clone(),
-            dataflow_expiration_desc: self.dataflow_expiration_desc.clone(),
             time_dependence: self.time_dependence.clone(),
         }
     }
@@ -602,7 +597,6 @@ impl RustType<ProtoDataflowDescription> for DataflowDescription<FlatPlan, Collec
             initial_storage_as_of: self.initial_storage_as_of.into_proto(),
             refresh_schedule: self.refresh_schedule.into_proto(),
             debug_name: self.debug_name.clone(),
-            dataflow_expiration_desc: Some(self.dataflow_expiration_desc.into_proto()),
             time_dependence: self.time_dependence.into_proto(),
         }
     }
@@ -626,11 +620,6 @@ impl RustType<ProtoDataflowDescription> for DataflowDescription<FlatPlan, Collec
                 .transpose()?,
             refresh_schedule: proto.refresh_schedule.into_rust()?,
             debug_name: proto.debug_name,
-            dataflow_expiration_desc: proto
-                .dataflow_expiration_desc
-                .map(|x| x.into_rust())
-                .transpose()?
-                .unwrap_or_else(DataflowExpirationDesc::default),
             time_dependence: proto.time_dependence.into_rust()?,
         })
     }
@@ -767,7 +756,6 @@ proptest::prop_compose! {
         initial_as_of in proptest::collection::vec(any::<mz_repr::Timestamp>(), 1..5),
         refresh_schedule_some in any::<bool>(),
         refresh_schedule in any::<RefreshSchedule>(),
-        dataflow_expiration_desc in any::<DataflowExpirationDesc<mz_repr::Timestamp>>(),
         time_dependence in any::<Option<TimeDependence >>(),
     ) -> DataflowDescription<FlatPlan, CollectionMetadata, mz_repr::Timestamp> {
         DataflowDescription {
@@ -795,7 +783,6 @@ proptest::prop_compose! {
                 None
             },
             debug_name,
-            dataflow_expiration_desc,
             time_dependence,
         }
     }
@@ -893,80 +880,6 @@ impl RustType<ProtoBuildDesc> for BuildDesc<FlatPlan> {
             id: x.id.into_rust_if_some("ProtoBuildDesc::id")?,
             plan: x.plan.into_rust_if_some("ProtoBuildDesc::plan")?,
         })
-    }
-}
-
-/// A description of dataflow properties used to determine if dataflow expiration can be enabled.
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct DataflowExpirationDesc<T> {
-    /// The upper of the dataflow considering all transitive dependencies.
-    pub transitive_upper: Option<Antichain<T>>,
-    /// Whether the dataflow has a transitive dependency with a refresh schedule.
-    pub has_transitive_refresh_schedule: bool,
-    /// Whether the timeline of the dataflow is [`mz_storage_types::sources::Timeline::EpochMilliseconds`].
-    pub is_timeline_epoch_ms: bool,
-}
-
-impl<T> Default for DataflowExpirationDesc<T> {
-    fn default() -> Self {
-        Self {
-            transitive_upper: None,
-            // Assume present unless explicitly checked.
-            has_transitive_refresh_schedule: true,
-            // Assume any timeline type possible unless explicitly checked.
-            is_timeline_epoch_ms: false,
-        }
-    }
-}
-
-impl RustType<ProtoDataflowExpirationDesc> for DataflowExpirationDesc<mz_repr::Timestamp> {
-    fn into_proto(&self) -> ProtoDataflowExpirationDesc {
-        ProtoDataflowExpirationDesc {
-            transitive_upper: self.transitive_upper.into_proto(),
-            has_transitive_refresh_schedule: self.has_transitive_refresh_schedule.into_proto(),
-            is_timeline_epoch_ms: self.is_timeline_epoch_ms.into_proto(),
-        }
-    }
-
-    fn from_proto(x: ProtoDataflowExpirationDesc) -> Result<Self, TryFromProtoError> {
-        Ok(Self {
-            transitive_upper: x.transitive_upper.into_rust()?,
-            has_transitive_refresh_schedule: x.has_transitive_refresh_schedule.into_rust()?,
-            is_timeline_epoch_ms: x.is_timeline_epoch_ms.into_rust()?,
-        })
-    }
-}
-
-impl Arbitrary for DataflowExpirationDesc<mz_repr::Timestamp> {
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        (
-            any::<bool>(),
-            any::<bool>(),
-            proptest::collection::vec(any::<mz_repr::Timestamp>(), 1..5),
-            any::<bool>(),
-        )
-            .prop_map(
-                |(
-                    has_transitive_refresh_schedule,
-                    transitive_upper_some,
-                    transitive_upper,
-                    is_timeline_epoch_ms,
-                )| {
-                    DataflowExpirationDesc {
-                        transitive_upper: if transitive_upper_some {
-                            Some(Antichain::from(transitive_upper))
-                        } else {
-                            None
-                        },
-                        has_transitive_refresh_schedule,
-                        is_timeline_epoch_ms,
-                    }
-                },
-            )
-            .boxed()
     }
 }
 
