@@ -53,7 +53,9 @@ ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS = {
 
 
 def get_default_system_parameters(
-    version: MzVersion | None = None, zero_downtime: bool = False
+    version: MzVersion | None = None,
+    zero_downtime: bool = False,
+    force_source_table_syntax: bool = False,
 ) -> dict[str, str]:
     """For upgrade tests we only want parameters set when all environmentd /
     clusterd processes have reached a specific version (or higher)
@@ -123,6 +125,7 @@ def get_default_system_parameters(
         "persist_record_schema_id": (
             "true" if version > MzVersion.parse_mz("v0.127.0-dev") else "false"
         ),
+        "force_source_table_syntax": "true" if force_source_table_syntax else "false",
         "persist_batch_columnar_format": "both_v2",
         "persist_batch_columnar_format_percent": "100",
         "persist_batch_delete_enabled": "true",
