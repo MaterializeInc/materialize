@@ -2343,7 +2343,7 @@ impl Coordinator {
     pub(super) async fn determine_real_time_recent_timestamp(
         &self,
         session: &Session,
-        source_ids: impl Iterator<Item = GlobalId>,
+        source_ids: impl Iterator<Item = CatalogItemId>,
     ) -> Result<Option<BoxFuture<'static, Result<Timestamp, StorageError<Timestamp>>>>, AdapterError>
     {
         let vars = session.vars();
@@ -2361,7 +2361,7 @@ impl Coordinator {
             // storage objects that ingest data from external systems) remap
             // data. We "cheat" a little bit and filter out any IDs that aren't
             // user objects because we know they are not a RTR source.
-            let mut to_visit = VecDeque::from_iter(source_ids.filter(GlobalId::is_user));
+            let mut to_visit = VecDeque::from_iter(source_ids.filter(CatalogItemId::is_user));
             // If none of the sources are user objects, we don't need to provide
             // a RTR timestamp.
             if to_visit.is_empty() {
@@ -2380,6 +2380,10 @@ impl Coordinator {
                         .filter(|id| !timestamp_objects.contains(id) && id.is_user()),
                 );
             }
+            let timestamp_objects = timestamp_objects
+                .into_iter()
+                .flat_map(|item_id| self.catalog().get_entry(&item_id).global_ids())
+                .collect();
 
             let r = self
                 .controller
@@ -2695,7 +2699,12 @@ impl Coordinator {
         mut ctx: ExecuteContext,
         plan: plan::ReadThenWritePlan,
     ) {
-        let mut source_ids = plan.selection.depends_on();
+        let mut source_ids: BTreeSet<_> = plan
+            .selection
+            .depends_on()
+            .into_iter()
+            .map(|gid| self.catalog().resolve_item_id(&gid))
+            .collect();
         source_ids.insert(plan.id);
 
         // If the transaction doesn't already have write locks, acquire them.
@@ -2789,7 +2798,7 @@ impl Coordinator {
         //   timestamp.
         fn validate_read_dependencies(
             catalog: &Catalog,
-            id: &GlobalId,
+            id: &CatalogItemId,
         ) -> Result<(), AdapterError> {
             use mz_catalog::memory::objects;
             use CatalogItemType::*;
@@ -2840,8 +2849,9 @@ impl Coordinator {
             Ok(())
         }
 
-        for id in selection.depends_on() {
-            if let Err(err) = validate_read_dependencies(self.catalog(), &id) {
+        for gid in selection.depends_on() {
+            let item_id = self.catalog().resolve_item_id(&gid);
+            if let Err(err) = validate_read_dependencies(self.catalog(), &item_id) {
                 ctx.retire(Err(err));
                 return;
             }

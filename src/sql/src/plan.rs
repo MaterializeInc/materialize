@@ -888,7 +888,9 @@ pub struct SubscribePlan {
 
 #[derive(Debug, Clone)]
 pub enum SubscribeFrom {
+    /// ID of the collection to subscribe to.
     Id(GlobalId),
+    /// Query to subscribe to.
     Query {
         expr: MirRelationExpr,
         desc: RelationDesc,
@@ -1092,7 +1094,7 @@ pub struct InsertPlan {
 
 #[derive(Debug)]
 pub struct ReadThenWritePlan {
-    pub id: GlobalId,
+    pub id: CatalogItemId,
     pub selection: HirRelationExpr,
     pub finishing: RowSetFinishing,
     pub assignments: BTreeMap<usize, mz_expr::MirScalarExpr>,

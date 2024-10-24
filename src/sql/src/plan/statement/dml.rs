@@ -27,7 +27,7 @@ use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::bytes::ByteSize;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::optimize::OptimizerFeatureOverrides;
-use mz_repr::{Datum, GlobalId, RelationDesc, ScalarType};
+use mz_repr::{CatalogItemId, Datum, RelationDesc, ScalarType};
 use mz_sql_parser::ast::{
     CreateSinkOption, CreateSinkOptionName, CteBlock, ExplainPlanOption, ExplainPlanOptionName,
     ExplainPushdownStatement, ExplainSinkSchemaFor, ExplainSinkSchemaStatement,
@@ -837,7 +837,11 @@ pub fn plan_subscribe(
                 _ => None,
             };
             let scope = Scope::from_source(item_name, desc.iter().map(|(name, _type)| name));
-            (SubscribeFrom::Id(entry.id()), desc.into_owned(), scope)
+            (
+                SubscribeFrom::Id(entry.global_id()),
+                desc.into_owned(),
+                scope,
+            )
         }
         SubscribeRelation::Query(query) => {
             #[allow(deprecated)] // TODO(aalexandrov): Use HirRelationExpr in Subscribe

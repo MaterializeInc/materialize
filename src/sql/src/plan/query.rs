@@ -629,7 +629,7 @@ pub fn plan_copy_from_rows(
 
 /// Common information used for DELETE, UPDATE, and INSERT INTO ... SELECT plans.
 pub struct ReadThenWritePlan {
-    pub id: GlobalId,
+    pub id: CatalogItemId,
     /// Read portion of query.
     ///
     /// NOTE: Even if the WHERE filter is left off, we still need to perform a read to generate
@@ -683,14 +683,14 @@ pub fn plan_mutation_query_inner(
     assignments: Vec<Assignment<Aug>>,
     selection: Option<Expr<Aug>>,
 ) -> Result<ReadThenWritePlan, PlanError> {
-    // Get global ID and version of the relation desc.
-    let id = match table_name {
-        ResolvedItemName::Item { id, version: _, .. } => id,
+    // Get ID and version of the relation desc.
+    let (id, version) = match table_name {
+        ResolvedItemName::Item { id, version, .. } => (id, version),
         _ => sql_bail!("cannot mutate non-user table"),
     };
 
     // Perform checks on item with given ID.
-    let item = qcx.scx.get_item(&id);
+    let item = qcx.scx.get_item(&id).at_version(version);
     if item.item_type() != CatalogItemType::Table {
         sql_bail!(
             "cannot mutate {} '{}'",
@@ -6243,14 +6243,19 @@ impl<'a> QueryContext<'a> {
         object: ResolvedItemName,
     ) -> Result<(HirRelationExpr, Scope), PlanError> {
         match object {
-            ResolvedItemName::Item { id, full_name, .. } => {
+            ResolvedItemName::Item {
+                id,
+                full_name,
+                version,
+                ..
+            } => {
                 let name = full_name.into();
-                let item = self.scx.get_item(&id);
+                let item = self.scx.get_item(&id).at_version(version);
                 let desc = item
                     .desc(&self.scx.catalog.resolve_full_name(item.name()))?
                     .clone();
                 let expr = HirRelationExpr::Get {
-                    id: Id::Global(item.id()),
+                    id: Id::Global(item.global_id()),
                     typ: desc.typ().clone(),
                 };
 

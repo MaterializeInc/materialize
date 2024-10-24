@@ -327,22 +327,28 @@ impl Coordinator {
         let mut id_bundle = CollectionIdBundle::default();
         for entry in self.catalog().entries() {
             if let TimelineContext::TimelineDependent(entry_timeline) =
-                self.get_timeline_context(entry.id())
+                self.get_timeline_context(entry.latest_global_id())
             {
                 if timeline == &entry_timeline {
                     match entry.item() {
-                        CatalogItem::Table(_)
-                        | CatalogItem::Source(_)
-                        | CatalogItem::MaterializedView(_)
-                        | CatalogItem::ContinualTask(_) => {
-                            id_bundle.storage_ids.insert(entry.id());
+                        CatalogItem::Table(table) => {
+                            id_bundle.storage_ids.extend(table.global_ids());
+                        }
+                        CatalogItem::Source(source) => {
+                            id_bundle.storage_ids.insert(source.global_id());
+                        }
+                        CatalogItem::MaterializedView(mv) => {
+                            id_bundle.storage_ids.insert(mv.global_id());
+                        }
+                        CatalogItem::ContinualTask(ct) => {
+                            id_bundle.storage_ids.insert(ct.global_id());
                         }
                         CatalogItem::Index(index) => {
                             id_bundle
                                 .compute_ids
                                 .entry(index.cluster_id)
                                 .or_default()
-                                .insert(entry.id());
+                                .insert(index.global_id());
                         }
                         CatalogItem::View(_)
                         | CatalogItem::Sink(_)
@@ -432,7 +438,7 @@ impl Coordinator {
             if !seen.insert(id) {
                 continue;
             }
-            if let Some(entry) = self.catalog().try_get_entry(&id) {
+            if let Some(entry) = self.catalog().try_get_entry_by_global_id(&id) {
                 match entry.item() {
                     CatalogItem::Source(source) => {
                         timelines
@@ -535,7 +541,7 @@ impl Coordinator {
         // Gather all the used schemas.
         let mut schemas = BTreeSet::new();
         for id in uses_ids {
-            let entry = self.catalog().get_entry(id);
+            let entry = self.catalog().get_entry_by_global_id(id);
             let name = entry.name();
             schemas.insert((name.qualifiers.database_spec, name.qualifiers.schema_spec));
         }
@@ -561,16 +567,23 @@ impl Coordinator {
         }
 
         // Gather the IDs of all items in all used schemas.
-        let mut item_ids: BTreeSet<GlobalId> = BTreeSet::new();
+        let mut collection_ids: BTreeSet<GlobalId> = BTreeSet::new();
         for (db, schema) in schemas {
             let schema = self.catalog().get_schema(&db, &schema, conn_id);
-            item_ids.extend(schema.items.values());
+            // Note: We include just the latest `GlobalId` instead of all `GlobalId`s associated
+            // with an object, because older versions will already get included, if there are
+            // objects the depend on them.
+            let global_ids = schema
+                .items
+                .values()
+                .map(|item_id| self.catalog().get_entry(item_id).latest_global_id());
+            collection_ids.extend(global_ids);
         }
 
         // Gather the dependencies of those items.
         let mut id_bundle: CollectionIdBundle = self
             .index_oracle(compute_instance)
-            .sufficient_collections(item_ids.iter());
+            .sufficient_collections(collection_ids);
 
         // Filter out ids from different timelines.
         for ids in [

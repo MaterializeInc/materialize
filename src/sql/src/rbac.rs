@@ -793,8 +793,11 @@ fn generate_rbac_requirements(
             finishing: _,
             copy_to: _,
         }) => {
-            let mut privileges =
-                generate_read_privileges(catalog, source.depends_on().into_iter(), role_id);
+            let items = source
+                .depends_on()
+                .into_iter()
+                .map(|gid| catalog.resolve_item_id(&gid));
+            let mut privileges = generate_read_privileges(catalog, items, role_id);
             if let Some(privilege) = generate_cluster_usage_privileges(
                 source.as_const().is_some(),
                 target_cluster_id,
@@ -816,8 +819,11 @@ fn generate_rbac_requirements(
             emit_progress: _,
             output: _,
         }) => {
-            let mut privileges =
-                generate_read_privileges(catalog, from.depends_on().into_iter(), role_id);
+            let items = from
+                .depends_on()
+                .into_iter()
+                .map(|gid| catalog.resolve_item_id(&gid));
+            let mut privileges = generate_read_privileges(catalog, items, role_id);
             if let Some(cluster_id) = target_cluster_id {
                 privileges.push((
                     SystemObjectId::Object(cluster_id.into()),
@@ -1260,11 +1266,12 @@ fn generate_rbac_requirements(
             //  PostgreSQL doesn't always do this.
             //  As a concrete example, we require SELECT and UPDATE privileges to execute
             //  `UPDATE t SET a = 42;`, while PostgreSQL only requires UPDATE privileges.
+            let items = selection
+                .depends_on()
+                .into_iter()
+                .map(|gid| catalog.resolve_item_id(&gid));
             privileges.extend_from_slice(&generate_read_privileges_inner(
-                catalog,
-                selection.depends_on().into_iter(),
-                role_id,
-                &mut seen,
+                catalog, items, role_id, &mut seen,
             ));
 
             if let Some(privilege) = generate_cluster_usage_privileges(
