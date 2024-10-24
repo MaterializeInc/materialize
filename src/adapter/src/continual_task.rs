@@ -31,6 +31,7 @@ pub fn ct_item_from_plan(
         placeholder_id,
         desc,
         input_id,
+        with_snapshot,
         continual_task:
             plan::MaterializedView {
                 create_sql,
@@ -57,6 +58,7 @@ pub fn ct_item_from_plan(
     Ok(ContinualTask {
         create_sql,
         input_id,
+        with_snapshot,
         raw_expr: Arc::new(raw_expr),
         desc,
         resolved_ids,

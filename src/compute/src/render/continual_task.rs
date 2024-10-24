@@ -144,6 +144,7 @@ use crate::sink::ConsolidatingVec;
 pub(crate) struct ContinualTaskCtx<G: Scope<Timestamp = Timestamp>> {
     name: Option<String>,
     dataflow_as_of: Option<Antichain<Timestamp>>,
+    inputs_with_snapshot: Option<bool>,
     ct_inputs: BTreeSet<GlobalId>,
     ct_outputs: BTreeSet<GlobalId>,
     pub ct_times: Vec<Collection<G, (), Diff>>,
@@ -164,7 +165,10 @@ pub(crate) enum ContinualTaskSourceTransformer {
     ///
     /// We'll presumably have the same for deletes eventually, but it's not
     /// exposed in the SQL frontend yet.
-    InsertsInput { source_id: GlobalId },
+    InsertsInput {
+        source_id: GlobalId,
+        with_snapshot: bool,
+    },
     /// A self-reference to the continual task's output. This is essentially a
     /// timely feedback loop via the persist shard. See module rustdoc for how
     /// this works.
@@ -178,8 +182,16 @@ impl ContinualTaskSourceTransformer {
     pub fn snapshot_mode(&self) -> SnapshotMode {
         use ContinualTaskSourceTransformer::*;
         match self {
-            InsertsInput { .. } => SnapshotMode::Exclude,
-            SelfReference { .. } | NormalReference => SnapshotMode::Include,
+            InsertsInput {
+                with_snapshot: false,
+                ..
+            } => SnapshotMode::Exclude,
+            InsertsInput {
+                with_snapshot: true,
+                ..
+            }
+            | SelfReference { .. }
+            | NormalReference => SnapshotMode::Include,
         }
     }
 
@@ -201,7 +213,7 @@ impl ContinualTaskSourceTransformer {
         match self {
             // Make a collection s.t, for each time T in the input, the output
             // contains the inserts at T.
-            InsertsInput { source_id } => {
+            InsertsInput { source_id, .. } => {
                 let name = source_id.to_string();
                 // Keep only the inserts.
                 let oks = oks.inner.filter(|(_, _, diff)| *diff > 0);
@@ -242,6 +254,7 @@ impl<G: Scope<Timestamp = Timestamp>> ContinualTaskCtx<G> {
         let mut name = None;
         let mut ct_inputs = BTreeSet::new();
         let mut ct_outputs = BTreeSet::new();
+        let mut inputs_with_snapshot = None;
         for (sink_id, sink) in &dataflow.sink_exports {
             match &sink.connection {
                 ComputeSinkConnection::ContinualTask(ContinualTaskConnection {
@@ -252,6 +265,28 @@ impl<G: Scope<Timestamp = Timestamp>> ContinualTaskCtx<G> {
                     // There's only one CT sink per dataflow at this point.
                     assert_eq!(name, None);
                     name = Some(sink_id.to_string());
+                    assert_eq!(inputs_with_snapshot, None);
+                    match (
+                        sink.with_snapshot,
+                        dataflow.as_of.as_ref(),
+                        dataflow.initial_storage_as_of.as_ref(),
+                    ) {
+                        // User specified no snapshot when creating the CT.
+                        (false, _, _) => inputs_with_snapshot = Some(false),
+                        // User specified a snapshot but we're past the initial
+                        // as_of.
+                        (true, Some(as_of), Some(initial_as_of))
+                            if PartialOrder::less_than(initial_as_of, as_of) =>
+                        {
+                            inputs_with_snapshot = Some(false)
+                        }
+                        // User specified a snapshot and we're either at the
+                        // initial creation, or we don't know (builtin CTs). If
+                        // we don't know, it's always safe to fall back to
+                        // snapshotting, at worst it's wasted work and will get
+                        // filtered.
+                        (true, _, _) => inputs_with_snapshot = Some(true),
+                    }
                 }
                 _ => continue,
             }
@@ -259,6 +294,7 @@ impl<G: Scope<Timestamp = Timestamp>> ContinualTaskCtx<G> {
         let mut ret = ContinualTaskCtx {
             name,
             dataflow_as_of: None,
+            inputs_with_snapshot,
             ct_inputs,
             ct_outputs,
             ct_times: Vec::new(),
@@ -282,16 +318,19 @@ impl<G: Scope<Timestamp = Timestamp>> ContinualTaskCtx<G> {
         &self,
         source_id: GlobalId,
     ) -> Option<ContinualTaskSourceTransformer> {
-        if !self.is_ct_dataflow() {
+        let Some(inputs_with_snapshot) = self.inputs_with_snapshot else {
             return None;
-        }
+        };
         let transformer = match (
             self.ct_inputs.contains(&source_id),
             self.ct_outputs.contains(&source_id),
         ) {
             (false, false) => ContinualTaskSourceTransformer::NormalReference,
             (false, true) => ContinualTaskSourceTransformer::SelfReference { source_id },
-            (true, false) => ContinualTaskSourceTransformer::InsertsInput { source_id },
+            (true, false) => ContinualTaskSourceTransformer::InsertsInput {
+                source_id,
+                with_snapshot: inputs_with_snapshot,
+            },
             (true, true) => panic!("ct output is not allowed to be an input"),
         };
         Some(transformer)
@@ -428,6 +467,9 @@ fn continual_task_sink<G: Scope<Timestamp = Timestamp>>(
         // advance the output's (exclusive) upper to the first time that this CT
         // might write: `as_of+1`. Because we don't want this to happen on
         // restarts, only do it if the upper is `T::minimum()`.
+        //
+        // TODO(ct2): This should be `as_of`, not `as_of+1` when the input
+        // snapshot option is used.
         let mut write_handle = write_handle.await;
         {
             let new_upper = as_of.into_iter().map(|x| x.step_forward()).collect();

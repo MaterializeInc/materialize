@@ -53,29 +53,29 @@ use mz_sql_parser::ast::{
     ClusterAlterOptionValue, ClusterAlterUntilReadyOption, ClusterAlterUntilReadyOptionName,
     ClusterFeature, ClusterFeatureName, ClusterOption, ClusterOptionName,
     ClusterScheduleOptionValue, ColumnDef, ColumnOption, CommentObjectType, CommentStatement,
-    ConnectionOption, ConnectionOptionName, CreateClusterReplicaStatement, CreateClusterStatement,
-    CreateConnectionOption, CreateConnectionOptionName, CreateConnectionStatement,
-    CreateConnectionType, CreateContinualTaskStatement, CreateDatabaseStatement,
-    CreateIndexStatement, CreateMaterializedViewStatement, CreateRoleStatement,
-    CreateSchemaStatement, CreateSecretStatement, CreateSinkConnection, CreateSinkOption,
-    CreateSinkOptionName, CreateSinkStatement, CreateSourceConnection, CreateSourceOption,
-    CreateSourceOptionName, CreateSourceStatement, CreateSubsourceOption,
-    CreateSubsourceOptionName, CreateSubsourceStatement, CreateTableFromSourceStatement,
-    CreateTableStatement, CreateTypeAs, CreateTypeListOption, CreateTypeListOptionName,
-    CreateTypeMapOption, CreateTypeMapOptionName, CreateTypeStatement, CreateViewStatement,
-    CreateWebhookSourceStatement, CsrConfigOption, CsrConfigOptionName, CsrConnection,
-    CsrConnectionAvro, CsrConnectionProtobuf, CsrSeedProtobuf, CsvColumns, DeferredItemName,
-    DocOnIdentifier, DocOnSchema, DropObjectsStatement, DropOwnedStatement, Expr, Format,
-    FormatSpecifier, Ident, IfExistsBehavior, IndexOption, IndexOptionName, KafkaSinkConfigOption,
-    KeyConstraint, LoadGeneratorOption, LoadGeneratorOptionName, MaterializedViewOption,
-    MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName, PgConfigOption,
-    PgConfigOptionName, ProtobufSchema, QualifiedReplica, RefreshAtOptionValue,
-    RefreshEveryOptionValue, RefreshOptionValue, ReplicaDefinition, ReplicaOption,
-    ReplicaOptionName, RoleAttribute, SetRoleVar, SourceErrorPolicy, SourceIncludeMetadata,
-    Statement, TableConstraint, TableFromSourceColumns, TableFromSourceOption,
-    TableFromSourceOptionName, TableOption, TableOptionName, UnresolvedDatabaseName,
-    UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value, ViewDefinition,
-    WithOptionValue,
+    ConnectionOption, ConnectionOptionName, ContinualTaskOption, ContinualTaskOptionName,
+    CreateClusterReplicaStatement, CreateClusterStatement, CreateConnectionOption,
+    CreateConnectionOptionName, CreateConnectionStatement, CreateConnectionType,
+    CreateContinualTaskStatement, CreateDatabaseStatement, CreateIndexStatement,
+    CreateMaterializedViewStatement, CreateRoleStatement, CreateSchemaStatement,
+    CreateSecretStatement, CreateSinkConnection, CreateSinkOption, CreateSinkOptionName,
+    CreateSinkStatement, CreateSourceConnection, CreateSourceOption, CreateSourceOptionName,
+    CreateSourceStatement, CreateSubsourceOption, CreateSubsourceOptionName,
+    CreateSubsourceStatement, CreateTableFromSourceStatement, CreateTableStatement, CreateTypeAs,
+    CreateTypeListOption, CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName,
+    CreateTypeStatement, CreateViewStatement, CreateWebhookSourceStatement, CsrConfigOption,
+    CsrConfigOptionName, CsrConnection, CsrConnectionAvro, CsrConnectionProtobuf, CsrSeedProtobuf,
+    CsvColumns, DeferredItemName, DocOnIdentifier, DocOnSchema, DropObjectsStatement,
+    DropOwnedStatement, Expr, Format, FormatSpecifier, Ident, IfExistsBehavior, IndexOption,
+    IndexOptionName, KafkaSinkConfigOption, KeyConstraint, LoadGeneratorOption,
+    LoadGeneratorOptionName, MaterializedViewOption, MaterializedViewOptionName, MySqlConfigOption,
+    MySqlConfigOptionName, PgConfigOption, PgConfigOptionName, ProtobufSchema, QualifiedReplica,
+    RefreshAtOptionValue, RefreshEveryOptionValue, RefreshOptionValue, ReplicaDefinition,
+    ReplicaOption, ReplicaOptionName, RoleAttribute, SetRoleVar, SourceErrorPolicy,
+    SourceIncludeMetadata, Statement, TableConstraint, TableFromSourceColumns,
+    TableFromSourceOption, TableFromSourceOptionName, TableOption, TableOptionName,
+    UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value,
+    ViewDefinition, WithOptionValue,
 };
 use mz_sql_parser::ident;
 use mz_sql_parser::parser::StatementParseResult;
@@ -2774,6 +2774,8 @@ pub fn plan_create_continual_task(
     let create_sql =
         normalize::create_statement(scx, Statement::CreateContinualTask(stmt.clone()))?;
 
+    let ContinualTaskOptionExtracted { snapshot, seen: _ } = stmt.with_options.try_into()?;
+
     // It seems desirable for a CT that e.g. simply filters the input to keep
     // the same nullability. So, start by assuming all columns are non-nullable,
     // and then make them nullable below if any of the exprs plan them as
@@ -2955,6 +2957,9 @@ pub fn plan_create_continual_task(
         placeholder_id,
         desc,
         input_id: input.id(),
+        // TODO(ct2): Flip the default to true once we've fixed the issue with
+        // snapshot + self-referencing CTs.
+        with_snapshot: snapshot.unwrap_or(false),
         continual_task: MaterializedView {
             create_sql,
             expr,
@@ -3025,6 +3030,8 @@ fn continual_task_query<'a>(
         }
     }
 }
+
+generate_extracted_config!(ContinualTaskOption, (Snapshot, bool));
 
 pub fn describe_create_sink(
     _: &StatementContext,

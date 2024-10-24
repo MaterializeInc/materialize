@@ -606,6 +606,7 @@ fn generate_rbac_requirements(
             placeholder_id: _,
             desc: _,
             input_id: _,
+            with_snapshot: _,
             continual_task,
         }) => RbacRequirements {
             privileges: vec![
