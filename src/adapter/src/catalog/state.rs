@@ -2307,6 +2307,9 @@ impl ConnectionResolver for CatalogState {
 
 impl OptimizerCatalog for CatalogState {
     fn get_entry(&self, id: &GlobalId) -> &CatalogEntry {
+        CatalogState::get_entry_by_global_id(self, id)
+    }
+    fn get_entry_by_item_id(&self, id: &CatalogItemId) -> &CatalogEntry {
         CatalogState::get_entry(self, id)
     }
     fn resolve_full_name(
@@ -2327,6 +2330,10 @@ impl OptimizerCatalog for CatalogState {
 
 impl OptimizerCatalog for Catalog {
     fn get_entry(&self, id: &GlobalId) -> &CatalogEntry {
+        self.state.get_entry_by_global_id(id)
+    }
+
+    fn get_entry_by_item_id(&self, id: &CatalogItemId) -> &CatalogEntry {
         self.state.get_entry(id)
     }
 

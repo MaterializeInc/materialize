@@ -1416,27 +1416,18 @@ impl ConnCatalog<'_> {
 
 impl ExprHumanizer for ConnCatalog<'_> {
     fn humanize_id(&self, id: GlobalId) -> Option<String> {
-        self.state
-            .entry_by_id
-            .get(&id)
-            .map(|entry| entry.name())
-            .map(|name| self.resolve_full_name(name).to_string())
+        let entry = self.state.try_get_entry_by_global_id(&id)?;
+        Some(self.resolve_full_name(entry.name()).to_string())
     }
 
     fn humanize_id_unqualified(&self, id: GlobalId) -> Option<String> {
-        self.state
-            .entry_by_id
-            .get(&id)
-            .map(|entry| entry.name())
-            .map(|name| name.item.clone())
+        let entry = self.state.try_get_entry_by_global_id(&id)?;
+        Some(entry.name().item.clone())
     }
 
     fn humanize_id_parts(&self, id: GlobalId) -> Option<Vec<String>> {
-        self.state
-            .entry_by_id
-            .get(&id)
-            .map(|entry| entry.name())
-            .map(|name| self.resolve_full_name(name).into_parts())
+        let entry = self.state.try_get_entry_by_global_id(&id)?;
+        Some(self.resolve_full_name(entry.name()).into_parts())
     }
 
     fn humanize_scalar_type(&self, typ: &ScalarType) -> String {
@@ -1509,18 +1500,15 @@ impl ExprHumanizer for ConnCatalog<'_> {
     }
 
     fn column_names_for_id(&self, id: GlobalId) -> Option<Vec<String>> {
-        let Some(entry) = self.state.entry_by_id.get(&id) else {
-            return None;
-        };
+        let entry = self.state.try_get_entry_by_global_id(&id)?;
 
         match entry.index() {
             Some(index) => {
-                let Some(on_entry) = self.state.entry_by_id.get(&index.on) else {
-                    return None;
-                };
-                let Ok(on_desc) = on_entry.desc(&self.resolve_full_name(on_entry.name())) else {
-                    return None;
-                };
+                // TODO(alter_table): Use the correct RelationDesc here.
+                let on_entry = self.state.try_get_entry_by_global_id(&index.on)?;
+                let on_desc = on_entry
+                    .desc(&self.resolve_full_name(on_entry.name()))
+                    .ok()?;
 
                 let mut on_names = on_desc
                     .iter_names()
@@ -1560,19 +1548,13 @@ impl ExprHumanizer for ConnCatalog<'_> {
     }
 
     fn humanize_column(&self, id: GlobalId, column: usize) -> Option<String> {
-        self.state
-            .entry_by_id
-            .get(&id)
-            .try_map(|entry| {
-                let desc = entry.desc(&self.resolve_full_name(entry.name()))?;
-                let column_name = desc.get_name(column);
-                Ok::<_, SqlCatalogError>(column_name.to_string())
-            })
-            .unwrap_or(None)
+        let entry = self.state.try_get_entry_by_global_id(&id)?;
+        let desc = entry.desc(&self.resolve_full_name(entry.name())).ok()?;
+        Some(desc.get_name(column).to_string())
     }
 
     fn id_exists(&self, id: GlobalId) -> bool {
-        self.state.entry_by_id.contains_key(&id)
+        self.state.entry_by_global_id.contains_key(&id)
     }
 }
 

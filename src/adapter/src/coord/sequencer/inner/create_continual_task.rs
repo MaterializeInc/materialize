@@ -262,6 +262,10 @@ impl OptimizerCatalog for ContinualTaskCatalogBootstrap {
         self.delegate.get_entry(id)
     }
 
+    fn get_entry_by_item_id(&self, id: &mz_repr::CatalogItemId) -> &CatalogEntry {
+        self.delegate.get_entry_by_item_id(id)
+    }
+
     fn resolve_full_name(
         &self,
         name: &mz_sql::names::QualifiedItemName,
@@ -330,6 +334,10 @@ struct NoIndexCatalog {
 impl OptimizerCatalog for NoIndexCatalog {
     fn get_entry(&self, id: &GlobalId) -> &CatalogEntry {
         self.delegate.get_entry(id)
+    }
+
+    fn get_entry_by_item_id(&self, id: &mz_repr::CatalogItemId) -> &CatalogEntry {
+        self.delegate.get_entry_by_item_id(id)
     }
 
     fn resolve_full_name(
