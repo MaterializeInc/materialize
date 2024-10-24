@@ -189,8 +189,9 @@ impl ContinualTaskSourceTransformer {
             InsertsInput {
                 with_snapshot: true,
                 ..
-            } => SnapshotMode::Include,
-            SelfReference { .. } | NormalReference => SnapshotMode::Include,
+            }
+            | SelfReference { .. }
+            | NormalReference => SnapshotMode::Include,
         }
     }
 
@@ -265,7 +266,6 @@ impl<G: Scope<Timestamp = Timestamp>> ContinualTaskCtx<G> {
                     assert_eq!(name, None);
                     name = Some(sink_id.to_string());
                     assert_eq!(inputs_with_snapshot, None);
-                    tracing::warn!(sink.with_snapshot, ?dataflow.as_of, ?dataflow.initial_storage_as_of, "WIP snapshot_inputs");
                     match (
                         sink.with_snapshot,
                         dataflow.as_of.as_ref(),
@@ -465,15 +465,19 @@ fn continual_task_sink<G: Scope<Timestamp = Timestamp>>(
         // be the output (which starts at `T::minimum()`, not the as_of). To
         // break this cycle, before we even get the start signal, go ahead and
         // advance the output's (exclusive) upper to the first time that this CT
-        // might write: `as_of`. Because we don't want this to happen on
+        // might write: `as_of+1`. Because we don't want this to happen on
         // restarts, only do it if the upper is `T::minimum()`.
+        //
+        // TODO(ct2): This should be `as_of`, not `as_of+1` when the input
+        // snapshot option is used.
         let mut write_handle = write_handle.await;
         {
+            let new_upper = as_of.into_iter().map(|x| x.step_forward()).collect();
             let res = write_handle
                 .compare_and_append_batch(
                     &mut [],
                     Antichain::from_elem(Timestamp::minimum()),
-                    as_of.clone(),
+                    new_upper,
                 )
                 .await
                 .expect("usage was valid");

@@ -2774,8 +2774,7 @@ pub fn plan_create_continual_task(
     let create_sql =
         normalize::create_statement(scx, Statement::CreateContinualTask(stmt.clone()))?;
 
-    let ContinualTaskOptionExtracted { snapshot, seen: _ }: ContinualTaskOptionExtracted =
-        stmt.with_options.try_into()?;
+    let ContinualTaskOptionExtracted { snapshot, seen: _ } = stmt.with_options.try_into()?;
 
     // It seems desirable for a CT that e.g. simply filters the input to keep
     // the same nullability. So, start by assuming all columns are non-nullable,
@@ -2958,7 +2957,9 @@ pub fn plan_create_continual_task(
         placeholder_id,
         desc,
         input_id: input.id(),
-        with_snapshot: snapshot.unwrap_or(true),
+        // TODO(ct2): Flip the default to true once we've fixed the issue with
+        // snapshot + self-referencing CTs.
+        with_snapshot: snapshot.unwrap_or(false),
         continual_task: MaterializedView {
             create_sql,
             expr,

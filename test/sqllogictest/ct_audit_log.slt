@@ -25,13 +25,12 @@ SELECT * FROM anomalies
 
 statement ok
 CREATE CONTINUAL TASK audit_log ON INPUT anomalies AS (
-    INSERT INTO audit_log SELECT * FROM anomalies WHERE sum IS NOT NULL;
+    INSERT INTO audit_log SELECT * FROM anomalies WHERE sum > 1;
 )
 
 query I
 SELECT * FROM audit_log
 ----
-1
 
 statement ok
 INSERT INTO mv_input VALUES (2), (3)
@@ -44,5 +43,4 @@ SELECT * FROM anomalies
 query I
 SELECT * FROM audit_log
 ----
-1
 6
