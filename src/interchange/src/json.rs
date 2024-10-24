@@ -14,7 +14,7 @@ use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::char;
 use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::adt::numeric::{NUMERIC_AGG_MAX_PRECISION, NUMERIC_DATUM_MAX_PRECISION};
-use mz_repr::{ColumnName, ColumnType, Datum, GlobalId, RelationDesc, ScalarType};
+use mz_repr::{CatalogItemId, ColumnName, ColumnType, Datum, RelationDesc, ScalarType};
 use serde_json::{json, Map};
 
 use crate::avro::DocTarget;
@@ -260,9 +260,9 @@ fn encode_array<'a>(
 
 fn build_row_schema_field_type(
     type_namer: &mut Namer,
-    custom_names: &BTreeMap<GlobalId, String>,
+    custom_names: &BTreeMap<CatalogItemId, String>,
     typ: &ColumnType,
-    item_id: Option<GlobalId>,
+    item_id: Option<CatalogItemId>,
     options: &SchemaOptions,
 ) -> serde_json::Value {
     let mut field_type = match &typ.scalar_type {
@@ -408,8 +408,8 @@ fn build_row_schema_field_type(
 fn build_row_schema_fields(
     columns: &[(ColumnName, ColumnType)],
     type_namer: &mut Namer,
-    custom_names: &BTreeMap<GlobalId, String>,
-    item_id: Option<GlobalId>,
+    custom_names: &BTreeMap<CatalogItemId, String>,
+    item_id: Option<CatalogItemId>,
     options: &SchemaOptions,
 ) -> Vec<serde_json::Value> {
     let mut fields = Vec::new();
@@ -467,8 +467,8 @@ pub struct SchemaOptions {
 pub fn build_row_schema_json(
     columns: &[(ColumnName, ColumnType)],
     name: &str,
-    custom_names: &BTreeMap<GlobalId, String>,
-    item_id: Option<GlobalId>,
+    custom_names: &BTreeMap<CatalogItemId, String>,
+    item_id: Option<CatalogItemId>,
     options: &SchemaOptions,
 ) -> Result<serde_json::Value, anyhow::Error> {
     let fields = build_row_schema_fields(

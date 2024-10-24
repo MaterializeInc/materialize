@@ -145,8 +145,8 @@ struct DropOps {
 // A bundle of values returned from create_source_inner
 struct CreateSourceInner {
     ops: Vec<catalog::Op>,
-    sources: Vec<(GlobalId, Source)>,
-    if_not_exists_ids: BTreeMap<GlobalId, QualifiedItemName>,
+    sources: Vec<(CatalogItemId, Source)>,
+    if_not_exists_ids: BTreeMap<CatalogItemId, QualifiedItemName>,
 }
 
 impl Coordinator {
@@ -274,13 +274,14 @@ impl Coordinator {
             .iter()
             .filter_map(
                 |plan::CreateSourcePlanBundle {
-                     source_id,
+                     item_id,
+                     global_id: _,
                      plan,
                      resolved_ids: _,
                      available_source_references: _,
                  }| {
                     if plan.if_not_exists {
-                        Some((*source_id, plan.name.clone()))
+                        Some((*item_id, plan.name.clone()))
                     } else {
                         None
                     }
@@ -289,7 +290,8 @@ impl Coordinator {
             .collect::<BTreeMap<_, _>>();
 
         for plan::CreateSourcePlanBundle {
-            source_id,
+            item_id,
+            global_id,
             mut plan,
             resolved_ids,
             available_source_references,
@@ -335,19 +337,19 @@ impl Coordinator {
             let mut reference_ops = vec![];
             if let Some(references) = &available_source_references {
                 reference_ops.push(catalog::Op::UpdateSourceReferences {
-                    source_id,
+                    source_id: item_id,
                     references: references.clone().into(),
                 });
             }
 
-            let source = Source::new(plan, resolved_ids, None, false);
+            let source = Source::new(plan, global_id, resolved_ids, None, false);
             ops.push(catalog::Op::CreateItem {
-                id: source_id,
+                id: item_id,
                 name,
                 item: CatalogItem::Source(source.clone()),
                 owner_id: *session.current_role_id(),
             });
-            sources.push((source_id, source));
+            sources.push((item_id, source));
             // These operations must be executed after the source is added to the catalog.
             ops.extend(reference_ops);
         }
@@ -372,6 +374,8 @@ impl Coordinator {
     ) -> Result<CreateSourcePlanBundle, AdapterError> {
         let catalog = self.catalog().for_session(session);
         let resolved_ids = mz_sql::names::visit_dependencies(&catalog, &subsource_stmt);
+        let (item_id, global_id) = self.catalog_mut().allocate_user_id().await?;
+
         let plan = self.plan_statement(
             session,
             Statement::CreateSubsource(subsource_stmt),
@@ -383,7 +387,8 @@ impl Coordinator {
             _ => unreachable!(),
         };
         Ok(CreateSourcePlanBundle {
-            source_id,
+            item_id,
+            global_id,
             plan,
             resolved_ids,
             available_source_references: None,
@@ -480,7 +485,7 @@ impl Coordinator {
             .catalog()
             .resolve_full_name(&progress_plan.plan.name, None);
         let progress_subsource = ResolvedItemName::Item {
-            id: progress_plan.source_id,
+            id: progress_plan.item_id,
             qualifiers: progress_plan.plan.name.qualifiers.clone(),
             full_name: progress_full_name,
             print_id: true,
@@ -505,10 +510,11 @@ impl Coordinator {
             p => unreachable!("s must be CreateSourcePlan but got {:?}", p),
         };
 
-        let source_id = self.catalog_mut().allocate_user_id().await?;
+        let (item_id, global_id) = self.catalog_mut().allocate_user_id().await?;
+
         let source_full_name = self.catalog().resolve_full_name(&source_plan.name, None);
         let of_source = ResolvedItemName::Item {
-            id: source_id,
+            id: item_id,
             qualifiers: source_plan.name.qualifiers.clone(),
             full_name: source_full_name,
             print_id: true,
@@ -523,7 +529,8 @@ impl Coordinator {
         let subsource_stmts = generate_subsource_statements(&scx, of_source, subsources)?;
 
         create_source_plans.push(CreateSourcePlanBundle {
-            source_id,
+            item_id,
+            global_id,
             plan: source_plan,
             resolved_ids: resolved_ids.clone(),
             available_source_references: Some(available_source_references),
@@ -547,7 +554,7 @@ impl Coordinator {
         session: &mut Session,
         plans: Vec<plan::CreateSourcePlanBundle>,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let source_ids: Vec<_> = plans.iter().map(|plan| plan.source_id).collect();
+        let item_ids: Vec<_> = plans.iter().map(|plan| plan.item_id).collect();
         let CreateSourceInner {
             ops,
             sources,
@@ -569,11 +576,16 @@ impl Coordinator {
                 // this apart into creating the collections sequentially.
                 let mut collections = Vec::with_capacity(sources.len());
 
-                for (source_id, source) in sources {
-                    let source_status_collection_id =
-                        Some(coord.catalog().resolve_builtin_storage_collection(
-                            &mz_catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
-                        ));
+                for (item_id, source) in sources {
+                    let source_status_item_id = coord.catalog().resolve_builtin_storage_collection(
+                        &mz_catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
+                    );
+                    let source_status_collection_id = Some(
+                        coord
+                            .catalog()
+                            .get_entry(&source_status_item_id)
+                            .latest_global_id(),
+                    );
 
                     let (data_source, status_collection_id) = match source.data_source {
                         DataSourceDesc::Ingestion {
@@ -585,6 +597,13 @@ impl Coordinator {
                             cluster_id,
                         } => {
                             let desc = desc.into_inline_connection(coord.catalog().state());
+                            // TODO(parkmycar): We should probably check the type here, but I'm not
+                            // sure if this will always be a Source or a Table.
+                            let progress_subsource = coord
+                                .catalog()
+                                .get_entry(&progress_subsource)
+                                .latest_global_id();
+
                             let ingestion = mz_storage_types::sources::IngestionDescription::new(
                                 desc,
                                 cluster_id,
@@ -601,19 +620,24 @@ impl Coordinator {
                             external_reference: _,
                             details,
                             data_config,
-                        } => (
-                            DataSource::IngestionExport {
-                                ingestion_id,
-                                details,
-                                data_config: data_config
-                                    .into_inline_connection(coord.catalog().state()),
-                            },
-                            source_status_collection_id,
-                        ),
+                        } => {
+                            // TODO(parkmycar): We should probably check the type here, but I'm not sure if
+                            // this will always be a Source or a Table.
+                            let ingestion_id =
+                                coord.catalog().get_entry(&ingestion_id).latest_global_id();
+                            (
+                                DataSource::IngestionExport {
+                                    ingestion_id,
+                                    details,
+                                    data_config: data_config
+                                        .into_inline_connection(coord.catalog().state()),
+                                },
+                                source_status_collection_id,
+                            )
+                        }
                         DataSourceDesc::Progress => (DataSource::Progress, None),
                         DataSourceDesc::Webhook { .. } => {
-                            if let Some(url) =
-                                coord.catalog().state().try_get_webhook_url(&source_id)
+                            if let Some(url) = coord.catalog().state().try_get_webhook_url(&item_id)
                             {
                                 session.add_notice(AdapterNotice::WebhookSourceCreated { url })
                             }
@@ -626,7 +650,7 @@ impl Coordinator {
                     };
 
                     collections.push((
-                        source_id,
+                        source.global_id,
                         CollectionDescription::<Timestamp> {
                             desc: source.desc.clone(),
                             data_source,
@@ -660,10 +684,7 @@ impl Coordinator {
                 // ever called with, hedge our bets a bit and collect the compaction windows for
                 // each id in the bundle (these should all be identical). This is some extra work
                 // but seems safer.
-                let read_policies = coord
-                    .catalog()
-                    .state()
-                    .source_compaction_windows(source_ids);
+                let read_policies = coord.catalog().state().source_compaction_windows(item_ids);
                 for (compaction_window, storage_policies) in read_policies {
                     coord
                         .initialize_storage_read_policies(storage_policies, compaction_window)
@@ -695,8 +716,8 @@ impl Coordinator {
         plan: plan::CreateConnectionPlan,
         resolved_ids: ResolvedIds,
     ) {
-        let connection_gid = match self.catalog_mut().allocate_user_id().await {
-            Ok(gid) => gid,
+        let (connection_id, connection_gid) = match self.catalog_mut().allocate_user_id().await {
+            Ok(item_id) => item_id,
             Err(err) => return ctx.retire(Err(err.into())),
         };
 
@@ -722,11 +743,7 @@ impl Coordinator {
 
                 let key_set = SshKeyPairSet::from_parts(key_1, key_2);
                 let secret = key_set.to_bytes();
-                if let Err(err) = self
-                    .secrets_controller
-                    .ensure(connection_gid, &secret)
-                    .await
-                {
+                if let Err(err) = self.secrets_controller.ensure(connection_id, &secret).await {
                     return ctx.retire(Err(err.into()));
                 }
             }
@@ -749,7 +766,7 @@ impl Coordinator {
             let current_storage_parameters = self.controller.storage.config().clone();
             task::spawn(|| format!("validate_connection:{conn_id}"), async move {
                 let result = match connection
-                    .validate(connection_gid, &current_storage_parameters)
+                    .validate(connection_id, &current_storage_parameters)
                     .await
                 {
                     Ok(()) => Ok(plan),
@@ -761,6 +778,7 @@ impl Coordinator {
                     CreateConnectionValidationReady {
                         ctx,
                         result,
+                        connection_id,
                         connection_gid,
                         plan_validity: PlanValidity::new(
                             transient_revision,
@@ -781,6 +799,7 @@ impl Coordinator {
             let result = self
                 .sequence_create_connection_stage_finish(
                     ctx.session_mut(),
+                    connection_id,
                     connection_gid,
                     plan,
                     resolved_ids,
@@ -794,15 +813,17 @@ impl Coordinator {
     pub(crate) async fn sequence_create_connection_stage_finish(
         &mut self,
         session: &mut Session,
+        connection_id: CatalogItemId,
         connection_gid: GlobalId,
         plan: plan::CreateConnectionPlan,
         resolved_ids: ResolvedIds,
     ) -> Result<ExecuteResponse, AdapterError> {
         let ops = vec![catalog::Op::CreateItem {
-            id: connection_gid,
+            id: connection_id,
             name: plan.name.clone(),
             item: CatalogItem::Connection(Connection {
                 create_sql: plan.connection.create_sql,
+                global_id: connection_gid,
                 details: plan.connection.details.clone(),
                 resolved_ids,
             }),
@@ -826,7 +847,7 @@ impl Coordinator {
                                 }
                             };
                         if let Err(err) = cloud_resource_controller
-                            .ensure_vpc_endpoint(connection_gid, spec)
+                            .ensure_vpc_endpoint(connection_id, spec)
                             .await
                         {
                             tracing::warn!(?err, "failed to ensure vpc endpoint!");
@@ -927,7 +948,6 @@ impl Coordinator {
             None
         };
         let (table_id, global_id) = self.catalog_mut().allocate_user_id().await?;
-
         let collections = [(RelationVersion::root(), global_id)].into_iter().collect();
 
         let data_source = match table.data_source {
@@ -1008,7 +1028,7 @@ impl Coordinator {
                             .create_collections(
                                 storage_metadata,
                                 Some(register_ts),
-                                vec![(table_id, collection_desc)],
+                                vec![(global_id, collection_desc)],
                             )
                             .await
                             .unwrap_or_terminate("cannot fail to create collections");
@@ -1037,10 +1057,20 @@ impl Coordinator {
                                 // TODO: It's a little weird that a table will be present in this
                                 // source status collection, we might want to split out into a separate
                                 // status collection.
-                                let status_collection_id =
-                                    Some(coord.catalog().resolve_builtin_storage_collection(
+                                let source_status_item_id =
+                                    coord.catalog().resolve_builtin_storage_collection(
                                         &mz_catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
-                                    ));
+                                    );
+                                let status_collection_id = Some(
+                                    coord
+                                        .catalog()
+                                        .get_entry(&source_status_item_id)
+                                        .latest_global_id(),
+                                );
+                                // TODO(parkmycar): We should probably check the type here, but I'm not sure if
+                                // this will always be a Source or a Table.
+                                let ingestion_id =
+                                    coord.catalog().get_entry(&ingestion_id).latest_global_id();
                                 let collection_desc = CollectionDescription::<Timestamp> {
                                     desc: table.desc.clone(),
                                     data_source: DataSource::IngestionExport {
@@ -1059,7 +1089,7 @@ impl Coordinator {
                                     .create_collections(
                                         storage_metadata,
                                         None,
-                                        vec![(table_id, collection_desc)],
+                                        vec![(global_id, collection_desc)],
                                     )
                                     .await
                                     .unwrap_or_terminate("cannot fail to create collections");
@@ -1117,7 +1147,7 @@ impl Coordinator {
         } = plan;
 
         // First try to allocate an ID and an OID. If either fails, we're done.
-        let id = return_if_err!(self.catalog_mut().allocate_user_id().await, ctx);
+        let (item_id, global_id) = return_if_err!(self.catalog_mut().allocate_user_id().await, ctx);
 
         if let Some(cluster) = self.catalog().try_get_cluster(in_cluster) {
             mz_ore::soft_assert_or_log!(
@@ -1129,6 +1159,7 @@ impl Coordinator {
 
         let catalog_sink = Sink {
             create_sql: sink.create_sql,
+            global_id,
             from: sink.from,
             connection: sink.connection,
             partition_strategy: sink.partition_strategy,
@@ -1140,13 +1171,13 @@ impl Coordinator {
         };
 
         let ops = vec![catalog::Op::CreateItem {
-            id,
+            id: item_id,
             name: name.clone(),
             item: CatalogItem::Sink(catalog_sink.clone()),
             owner_id: *ctx.session().current_role_id(),
         }];
 
-        let from = self.catalog().get_entry(&catalog_sink.from);
+        let from = self.catalog().get_entry_by_global_id(&catalog_sink.from);
         if let Err(e) = self
             .controller
             .storage
@@ -1186,7 +1217,7 @@ impl Coordinator {
             }
         };
 
-        self.create_storage_export(id, &catalog_sink)
+        self.create_storage_export(global_id, &catalog_sink)
             .await
             .unwrap_or_terminate("cannot fail to create exports");
 
@@ -1223,7 +1254,7 @@ impl Coordinator {
         if uses_ambiguous_columns
             && depends_on
                 .iter()
-                .any(|id| id.is_system() && self.catalog().get_entry(id).is_relation())
+                .any(|id| id.is_system() && self.catalog().get_entry_by_global_id(id).is_relation())
         {
             Err(AdapterError::AmbiguousSystemColumnReference)
         } else {
@@ -1238,8 +1269,10 @@ impl Coordinator {
         plan: plan::CreateTypePlan,
         resolved_ids: ResolvedIds,
     ) -> Result<ExecuteResponse, AdapterError> {
+        let (item_id, global_id) = self.catalog_mut().allocate_user_id().await?;
         let typ = Type {
             create_sql: Some(plan.typ.create_sql),
+            global_id,
             desc: plan.typ.inner.desc(&self.catalog().for_session(session))?,
             details: CatalogTypeDetails {
                 array_id: None,
@@ -1248,9 +1281,8 @@ impl Coordinator {
             },
             resolved_ids,
         };
-        let id = self.catalog_mut().allocate_user_id().await?;
         let op = catalog::Op::CreateItem {
-            id,
+            id: item_id,
             name: plan.name,
             item: CatalogItem::Type(typ),
             owner_id: *session.current_role_id(),
