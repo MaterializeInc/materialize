@@ -2759,8 +2759,9 @@ impl Coordinator {
                         .catalog()
                         .resolve_full_name(entry.name(), None)
                         .to_string();
-                    let (optimized_plan, physical_plan, metainfo) = self
+                    let (optimized_plan, mut physical_plan, metainfo) = self
                         .optimize_create_continual_task(ct, id, self.owned_catalog(), debug_name)?;
+                    physical_plan.time_dependence = Some(time_dependence);
 
                     let catalog = self.catalog_mut();
                     catalog.set_optimized_plan(id, optimized_plan);

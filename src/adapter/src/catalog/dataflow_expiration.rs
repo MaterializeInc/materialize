@@ -79,40 +79,53 @@ impl<'a> TimeDependenceHelper<'a> {
                 let materialized_view = entry.materialized_view().unwrap();
                 let mut dependence = Indeterminate;
                 if let Some(plan) = self.catalog.try_get_physical_plan(&id) {
-                    let id_bundle =
-                        dataflow_import_id_bundle(plan, entry.cluster_id().expect("must exist"));
-                    for dep in id_bundle.iter() {
-                        dependence.unify(&self.determine_dependence(dep));
-                    }
-                    if let Some(refresh_schedule) = &materialized_view.refresh_schedule {
-                        dependence = match dependence {
-                            Indeterminate => Indeterminate,
-                            RefreshSchedule(_, existing) => {
-                                RefreshSchedule(Some(refresh_schedule.clone()), existing)
-                            }
-                            Wallclock => {
-                                RefreshSchedule(Some(refresh_schedule.clone()), vec![Wallclock])
-                            }
-                        };
+                    if let Some(time_dependence) = &plan.time_dependence {
+                        dependence = time_dependence.clone();
+                    } else {
+                        let id_bundle = dataflow_import_id_bundle(
+                            plan,
+                            entry.cluster_id().expect("must exist"),
+                        );
+                        for dep in id_bundle.iter() {
+                            dependence.unify(&self.determine_dependence(dep));
+                        }
+                        if let Some(refresh_schedule) = &materialized_view.refresh_schedule {
+                            dependence = match dependence {
+                                Indeterminate => Indeterminate,
+                                RefreshSchedule(_, existing) => {
+                                    RefreshSchedule(Some(refresh_schedule.clone()), existing)
+                                }
+                                Wallclock => {
+                                    RefreshSchedule(Some(refresh_schedule.clone()), vec![Wallclock])
+                                }
+                            };
+                        }
+                        // panic!("Dependency on materialized view without time dependence");
                     }
                 }
                 dependence
             }
-            CatalogItemType::Index => {
+            CatalogItemType::Index | CatalogItemType::ContinualTask => {
                 // Follow dependencies, if any.
                 let mut dependence = Indeterminate;
                 if let Some(plan) = self.catalog.try_get_physical_plan(&id) {
-                    let id_bundle =
-                        dataflow_import_id_bundle(plan, entry.cluster_id().expect("must exist"));
-                    for dep in id_bundle.iter() {
-                        dependence.unify(&self.determine_dependence(dep));
+                    if let Some(time_dependence) = &plan.time_dependence {
+                        dependence = time_dependence.clone();
+                    } else {
+                        let id_bundle = dataflow_import_id_bundle(
+                            plan,
+                            entry.cluster_id().expect("must exist"),
+                        );
+                        for dep in id_bundle.iter() {
+                            dependence.unify(&self.determine_dependence(dep));
+                        }
+                        // panic!("Dependency on view without time dependence");
                     }
                 }
                 dependence
             }
             // All others are indeterminate.
             CatalogItemType::Connection
-            | CatalogItemType::ContinualTask
             | CatalogItemType::Func
             | CatalogItemType::Secret
             | CatalogItemType::Sink

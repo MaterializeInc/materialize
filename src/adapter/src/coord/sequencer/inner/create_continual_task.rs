@@ -36,6 +36,7 @@ use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::OptimizerNotice;
 
 use crate::catalog;
+use crate::catalog::dataflow_expiration::TimeDependenceHelper;
 use crate::command::ExecuteResponse;
 use crate::coord::Coordinator;
 use crate::error::AdapterError;
@@ -125,6 +126,10 @@ impl Coordinator {
 
         let () = self
             .catalog_transact_with_side_effects(Some(session), ops, |coord| async {
+                let time_dependence =
+                    TimeDependenceHelper::new(coord.catalog()).determine_dependence(sink_id);
+                physical_plan.time_dependence = Some(time_dependence);
+
                 let catalog = coord.catalog_mut();
                 catalog.set_optimized_plan(sink_id, optimized_plan);
                 catalog.set_physical_plan(sink_id, physical_plan.clone());

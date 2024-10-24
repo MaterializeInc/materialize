@@ -647,27 +647,28 @@ impl Coordinator {
 
         let transact_result = self
             .catalog_transact_with_side_effects(Some(session), ops, |coord| async {
+                let time_dependence =
+                    TimeDependenceHelper::new(coord.catalog()).determine_dependence(sink_id);
+
+                let output_desc = global_lir_plan.desc().clone();
+                let (mut df_desc, df_meta) = global_lir_plan.unapply();
+                df_desc.time_dependence = Some(time_dependence);
+
                 // Save plan structures.
                 coord
                     .catalog_mut()
                     .set_optimized_plan(sink_id, global_mir_plan.df_desc().clone());
                 coord
                     .catalog_mut()
-                    .set_physical_plan(sink_id, global_lir_plan.df_desc().clone());
-
-                let output_desc = global_lir_plan.desc().clone();
-                let (mut df_desc, df_meta) = global_lir_plan.unapply();
+                    .set_physical_plan(sink_id, df_desc.clone());
 
                 let notice_builtin_updates_fut = coord
                     .process_dataflow_metainfo(df_meta, sink_id, session, notice_ids)
                     .await;
-                let time_dependence =
-                    TimeDependenceHelper::new(coord.catalog()).determine_dependence(sink_id);
 
                 df_desc.set_as_of(dataflow_as_of.clone());
                 df_desc.set_initial_as_of(initial_as_of);
                 df_desc.until = until;
-                df_desc.time_dependence = Some(time_dependence);
 
                 let storage_metadata = coord.catalog.state().storage_metadata();
 
