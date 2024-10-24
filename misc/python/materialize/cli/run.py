@@ -297,14 +297,23 @@ def main() -> int:
         if args.build_only:
             return build_retcode
 
-        command = _cargo_command(args, "test")
+        command = _cargo_command(args, "nextest")
+        try:
+            subprocess.check_output(
+                command + ["--version"], env=env, stderr=subprocess.PIPE
+            )
+        except subprocess.CalledProcessError:
+            raise UIError("cargo nextest not found, run `cargo install cargo-nextest`")
+
+        command += ["run"]
+
         for package in args.package:
             command += ["--package", package]
         for test in args.test:
             command += ["--test", test]
         command += args.args
-        command += ["--", "--nocapture"]
         env["COCKROACH_URL"] = args.postgres
+        dbconn = _connect_sql(args.postgres)
     else:
         raise UIError(f"unknown program {args.program}")
 
