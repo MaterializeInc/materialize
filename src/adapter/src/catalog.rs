@@ -1436,14 +1436,14 @@ impl ExprHumanizer for ConnCatalog<'_> {
         match typ {
             Array(t) => format!("{}[]", self.humanize_scalar_type(t)),
             List {
-                custom_id: Some(global_id),
+                custom_id: Some(item_id),
                 ..
             }
             | Map {
-                custom_id: Some(global_id),
+                custom_id: Some(item_id),
                 ..
             } => {
-                let item = self.get_item(global_id);
+                let item = self.get_item(item_id);
                 self.minimal_qualification(item.name()).to_string()
             }
             List { element_type, .. } => {
@@ -1455,10 +1455,10 @@ impl ExprHumanizer for ConnCatalog<'_> {
                 self.humanize_scalar_type(value_type)
             ),
             Record {
-                custom_id: Some(id),
+                custom_id: Some(item_id),
                 ..
             } => {
-                let item = self.get_item(id);
+                let item = self.get_item(item_id);
                 self.minimal_qualification(item.name()).to_string()
             }
             Record { fields, .. } => format!(
