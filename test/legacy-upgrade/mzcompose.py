@@ -108,20 +108,56 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         else:
             if parallelism_count == 1 or parallelism_index == 0:
                 test_upgrade_from_version(
-                    c, f"{version}", priors, filter=args.filter, zero_downtime=True
+                    c,
+                    f"{version}",
+                    priors,
+                    filter=args.filter,
+                    zero_downtime=True,
+                    force_source_table_syntax=False,
                 )
             if parallelism_count == 1 or parallelism_index == 1:
                 test_upgrade_from_version(
-                    c, f"{version}", priors, filter=args.filter, zero_downtime=False
+                    c,
+                    f"{version}",
+                    priors,
+                    filter=args.filter,
+                    zero_downtime=False,
+                    force_source_table_syntax=False,
+                )
+                test_upgrade_from_version(
+                    c,
+                    f"{version}",
+                    priors,
+                    filter=args.filter,
+                    zero_downtime=False,
+                    force_source_table_syntax=True,
                 )
 
     if parallelism_count == 1 or parallelism_index == 0:
         test_upgrade_from_version(
-            c, "current_source", priors=[], filter=args.filter, zero_downtime=True
+            c,
+            "current_source",
+            priors=[],
+            filter=args.filter,
+            zero_downtime=True,
+            force_source_table_syntax=False,
         )
     if parallelism_count == 1 or parallelism_index == 1:
         test_upgrade_from_version(
-            c, "current_source", priors=[], filter=args.filter, zero_downtime=False
+            c,
+            "current_source",
+            priors=[],
+            filter=args.filter,
+            zero_downtime=False,
+            force_source_table_syntax=False,
+        )
+        test_upgrade_from_version(
+            c,
+            "current_source",
+            priors=[],
+            filter=args.filter,
+            zero_downtime=False,
+            force_source_table_syntax=True,
         )
 
 
@@ -144,13 +180,14 @@ def test_upgrade_from_version(
     priors: list[MzVersion],
     filter: str,
     zero_downtime: bool,
+    force_source_table_syntax: bool,
 ) -> None:
     print(
         f"+++ Testing {'0dt upgrade' if zero_downtime else 'regular upgrade'} from Materialize {from_version} to current_source."
     )
 
     system_parameter_defaults = get_default_system_parameters(
-        zero_downtime=zero_downtime
+        zero_downtime=zero_downtime,
     )
     deploy_generation = 0
 
@@ -289,6 +326,13 @@ def test_upgrade_from_version(
                     c.rm(mz_service)
 
     print(f"{'0dt-' if zero_downtime else ''}Upgrading to final version")
+    system_parameter_defaults = get_default_system_parameters(
+        zero_downtime=zero_downtime,
+        # We can only force the syntax on the final version so that the migration to convert
+        # sources to the new model can be applied without preventing sources from being
+        # created in the old syntax on the older version.
+        force_source_table_syntax=force_source_table_syntax,
+    )
     mz_to = Materialized(
         name=mz_service,
         options=list(mz_options.values()),
