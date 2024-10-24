@@ -127,6 +127,11 @@ build --@rules_rust//:extra_rustc_flag="-Ccodegen-units=64"
 # just `.rmeta` instead of the full `.rlib`.
 build --@rules_rust//rust/settings:pipelined_compilation=True
 
+# `cargo check` like config, still experimental!
+#
+# Ignores all outputs other than `.rmeta`, requires pipelied_compilation to be enabled!
+build:check --output_groups=build_metadata
+
 # CI Build Configuration
 #
 # Note: This shouldn't change any config of the built binary, just the way it

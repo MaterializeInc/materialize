@@ -35,10 +35,23 @@ def main() -> int:
         fmt_cmd(sub_args)
     elif args.action == "output_path":
         output_path_cmd(sub_args)
+    elif args.action == "check":
+        check_cmd(sub_args)
     else:
         bazel_cmd([args.action] + sub_args)
 
     return 0
+
+
+def check_cmd(args: list[str]):
+    """
+    Invokes a `bazel build` with `cargo check` like behavior.
+
+    Still experimental, is known to fail with crates that have pipelined compilation explicitly
+    disabled.
+    """
+    check_args = ["build", "--config=check", *args]
+    bazel_cmd(check_args)
 
 
 def gen_cmd(args: list[str]):
