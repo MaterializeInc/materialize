@@ -114,6 +114,8 @@ $ kafka-ingest format=avro topic=dbz-no-before key-format=avro key-schema=${keys
 > SELECT count(*) FROM dbz_no_before
 0
 
+# WIP: The feedback upsert implementation does not count tombstones in
+# bytes_indexed. For now.
 > SELECT
     bool_and(u.snapshot_committed),
     SUM(u.bytes_indexed) > 0,
@@ -123,7 +125,7 @@ $ kafka-ingest format=avro topic=dbz-no-before key-format=avro key-schema=${keys
   WHERE s.name IN ('dbz_no_before')
   GROUP BY s.name
   ORDER BY s.name
-true true 0
+true false 0
 
 $ kafka-ingest format=avro topic=dbz-no-before key-format=avro key-schema=${keyschema} schema=${schema} timestamp=1
 {"id": 1} {"after": {"row": {"id": 1, "creature": "mudskipper"}}, "op": "c", "source": {"file": "binlog1", "pos": 1, "row": 1, "snapshot": {"boolean": false}}}
@@ -150,7 +152,8 @@ $ kafka-ingest format=avro topic=dbz-no-before key-format=avro key-schema=${keys
 > SELECT count(*) FROM dbz_no_before
 0
 
-# A tombstone is left behind
+# WIP: The feedback upsert implementation does not count tombstones in
+# bytes_indexed. For now.
 > SELECT
     bool_and(u.snapshot_committed),
     SUM(u.bytes_indexed) > 0,
@@ -160,4 +163,4 @@ $ kafka-ingest format=avro topic=dbz-no-before key-format=avro key-schema=${keys
   WHERE s.name IN ('dbz_no_before')
   GROUP BY s.name
   ORDER BY s.name
-true true 0
+true false 0
