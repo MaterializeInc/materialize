@@ -16,6 +16,7 @@ from materialize.test_analytics.util.mz_sql_util import as_sanitized_literal
 BOUNDED_MEMORY_STATUS_PENDING = "PENDING"
 BOUNDED_MEMORY_STATUS_SUCCESS = "SUCCESS"
 BOUNDED_MEMORY_STATUS_FAILURE = "FAILURE"
+BOUNDED_MEMORY_STATUS_CONFIGURED = "CONFIGURED"
 
 
 @dataclass

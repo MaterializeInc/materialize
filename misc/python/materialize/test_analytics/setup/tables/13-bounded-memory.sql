@@ -17,7 +17,7 @@ CREATE TABLE bounded_memory_config (
    tested_memory_mz_in_gb DOUBLE NOT NULL,
    tested_memory_clusterd_in_gb DOUBLE NOT NULL,
    started_at TIMESTAMPTZ NOT NULL,
-   status TEXT NOT NULL DEFAULT 'PENDING' -- one of 'PENDING', 'SUCCESS', 'FAILURE'
+   status TEXT NOT NULL DEFAULT 'PENDING' -- one of 'PENDING', 'SUCCESS', 'FAILURE', 'CONFIGURED'
 );
 
 ALTER TABLE bounded_memory_config OWNER TO qa;
