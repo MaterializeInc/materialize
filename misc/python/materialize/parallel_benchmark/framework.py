@@ -50,6 +50,11 @@ class MeasurementsStore:
     def close(self) -> None:
         raise NotImplementedError
 
+    def get_data(
+        self, action: str, start_time: float, end_time: float
+    ) -> tuple[list[float], list[float]]:
+        raise NotImplementedError
+
 
 class MemoryStore(MeasurementsStore):
     def __init__(self):
@@ -63,6 +68,13 @@ class MemoryStore(MeasurementsStore):
 
     def close(self) -> None:
         pass
+
+    def get_data(
+        self, action: str, start_time: float, end_time: float
+    ) -> tuple[list[float], list[float]]:
+        times: list[float] = [x.timestamp - start_time for x in self.data[action]]
+        durations: list[float] = [x.duration * 1000 for x in self.data[action]]
+        return (times, durations)
 
 
 class SQLiteStore(MeasurementsStore):
@@ -118,6 +130,22 @@ class SQLiteStore(MeasurementsStore):
     def close(self) -> None:
         with self.lock:
             self.conn.close()
+
+    def get_data(
+        self, action: str, start_time: float, end_time: float
+    ) -> tuple[list[float], list[float]]:
+        with self.lock:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                "SELECT duration, timestamp FROM measurements WHERE scenario = ? AND action = ? AND timestamp BETWEEN ? AND ?",
+                (self.scenario, action, start_time, end_time),
+            )
+            times: list[float] = []
+            durations: list[float] = []
+            for row in cursor:
+                durations.append(row[0])
+                times.append(row[1] - start_time)
+            return (times, durations)
 
 
 @dataclass
