@@ -467,7 +467,6 @@ impl Coordinator {
                     .await;
                 let time_dependence = TimeDependenceHelper::new(coord.catalog())
                     .determine_dependence(exported_index_id);
-                println!("time_dependence: {:?}", time_dependence);
 
                 // We're putting in place read holds, such that ship_dataflow,
                 // below, which calls update_read_capabilities, can successfully

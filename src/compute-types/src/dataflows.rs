@@ -127,10 +127,6 @@ impl<P, S> DataflowDescription<P, S, mz_repr::Timestamp> {
         if let (Some(time_dependence), Some(expiration)) =
             (&self.time_dependence, replica_expiration.as_option())
         {
-            println!(
-                "{} Got definiteness: {:?} and expiration: {:?}",
-                self.debug_name, time_dependence, expiration
-            );
             let mut result = Antichain::new();
             if let Some(expiration) = time_dependence.apply(*expiration) {
                 result.insert(expiration);
@@ -140,7 +136,6 @@ impl<P, S> DataflowDescription<P, S, mz_repr::Timestamp> {
                 // Disable expiration if the until is less than or equal to the expiration.
                 result = Antichain::default();
             }
-            println!("{} Returning result: {result:?}", self.debug_name);
             result
         } else {
             Antichain::default()
