@@ -234,7 +234,7 @@ pub enum DropObjectInfo {
     Database(DatabaseId),
     Schema((ResolvedDatabaseSpecifier, SchemaSpecifier)),
     Role(RoleId),
-    Item(GlobalId),
+    Item(CatalogItemId),
     NetworkPolicy(NetworkPolicyId),
 }
 
@@ -252,7 +252,7 @@ impl DropObjectInfo {
             ObjectId::Database(database_id) => DropObjectInfo::Database(database_id),
             ObjectId::Schema(schema) => DropObjectInfo::Schema(schema),
             ObjectId::Role(role_id) => DropObjectInfo::Role(role_id),
-            ObjectId::Item(global_id) => DropObjectInfo::Item(global_id),
+            ObjectId::Item(item_id) => DropObjectInfo::Item(item_id),
             ObjectId::NetworkPolicy(policy_id) => DropObjectInfo::NetworkPolicy(policy_id),
         }
     }
@@ -268,7 +268,7 @@ impl DropObjectInfo {
             DropObjectInfo::Database(database_id) => ObjectId::Database(database_id.clone()),
             DropObjectInfo::Schema(schema) => ObjectId::Schema(schema.clone()),
             DropObjectInfo::Role(role_id) => ObjectId::Role(role_id.clone()),
-            DropObjectInfo::Item(global_id) => ObjectId::Item(global_id.clone()),
+            DropObjectInfo::Item(item_id) => ObjectId::Item(item_id.clone()),
             DropObjectInfo::NetworkPolicy(network_policy_id) => {
                 ObjectId::NetworkPolicy(network_policy_id.clone())
             }
@@ -374,7 +374,7 @@ impl Catalog {
             )))
         });
 
-        let drop_ids: BTreeSet<GlobalId> = ops
+        let drop_ids: BTreeSet<CatalogItemId> = ops
             .iter()
             .filter_map(|op| match op {
                 Op::DropObjects(drop_object_infos) => {
@@ -399,6 +399,11 @@ impl Catalog {
                 }
             })
             .collect();
+        let dropped_global_ids = drop_ids
+            .iter()
+            .flat_map(|item_id| self.get_global_ids(item_id))
+            .collect();
+
         let temporary_ids = self.temporary_ids(&ops, temporary_drops)?;
         let mut builtin_table_updates = vec![];
         let mut audit_events = vec![];
@@ -438,7 +443,7 @@ impl Catalog {
         self.transient_revision += 1;
 
         // Drop in-memory planning metadata.
-        let dropped_notices = self.drop_plans_and_metainfos(&drop_ids);
+        let dropped_notices = self.drop_plans_and_metainfos(&dropped_global_ids);
         if self.state.system_config().enable_mz_notices() {
             // Generate retractions for the Builtin tables.
             self.state().pack_optimizer_notices(
@@ -1302,8 +1307,8 @@ impl Catalog {
                     delta
                         .items
                         .iter()
-                        .copied()
-                        .partition(|id| !state.get_entry(id).item().is_temporary());
+                        .map(|id| id)
+                        .partition(|id| !state.get_entry(*id).item().is_temporary());
                 tx.remove_items(&durable_items_to_drop)?;
                 temporary_item_updates.extend(temporary_items_to_drop.into_iter().map(|id| {
                     let entry = state.get_entry(&id);
@@ -1313,8 +1318,27 @@ impl Catalog {
                 for item_id in delta.items {
                     let entry = state.get_entry(&item_id);
 
-                    if entry.item().is_storage_collection() {
-                        storage_collections_to_drop.insert(item_id);
+                    match entry.item() {
+                        CatalogItem::Table(table) => {
+                            storage_collections_to_drop.extend(table.global_ids());
+                        }
+                        CatalogItem::Source(source) => {
+                            storage_collections_to_drop.insert(source.global_id());
+                        }
+                        CatalogItem::MaterializedView(mv) => {
+                            storage_collections_to_drop.insert(mv.global_id());
+                        }
+                        CatalogItem::ContinualTask(ct) => {
+                            storage_collections_to_drop.insert(ct.global_id());
+                        }
+                        CatalogItem::Log(_)
+                        | CatalogItem::Sink(_)
+                        | CatalogItem::View(_)
+                        | CatalogItem::Index(_)
+                        | CatalogItem::Type(_)
+                        | CatalogItem::Func(_)
+                        | CatalogItem::Secret(_)
+                        | CatalogItem::Connection(_) => (),
                     }
 
                     if state.source_references.contains_key(&item_id) {
@@ -2377,7 +2401,7 @@ pub(crate) struct ObjectsToDrop {
     pub clusters: BTreeSet<ClusterId>,
     pub replicas: BTreeMap<ReplicaId, (ClusterId, ReplicaCreateDropReason)>,
     pub roles: BTreeSet<RoleId>,
-    pub items: Vec<GlobalId>,
+    pub items: Vec<CatalogItemId>,
     pub network_policies: BTreeSet<NetworkPolicyId>,
 }
 

@@ -46,7 +46,9 @@ use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::role_id::RoleId;
-use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType, Timestamp};
+use mz_repr::{
+    CatalogItemId, ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType, Timestamp,
+};
 use mz_sql_parser::ast::{
     AlterSourceAddSubsourceOption, ClusterAlterOptionValue, ConnectionOptionName, QualifiedReplica,
     SelectStatement, TransactionIsolationLevel, TransactionMode, UnresolvedItemName, Value,

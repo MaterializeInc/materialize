@@ -1710,7 +1710,7 @@ impl Coordinator {
                         let dependants = self
                             .controller
                             .compute
-                            .collection_reverse_dependencies(index.cluster_id, *id)
+                            .collection_reverse_dependencies(index.cluster_id, index.global_id())
                             .ok()
                             .into_iter()
                             .flatten()
@@ -1721,10 +1721,19 @@ impl Coordinator {
                                 // "There is an in-progress ad hoc SELECT that uses the dropped
                                 // index. The resources used by the index will be freed when all
                                 // such SELECTs complete."
-                                !matches!(dependant_id, GlobalId::Transient(..)) &&
+                                if dependant_id.is_transient() {
+                                    return false;
+                                }
+                                // The item should exist, but don't panic if it doesn't.
+                                let Some(dependent_id) = humanizer
+                                    .try_get_item_by_global_id(dependant_id)
+                                    .map(|item| item.id())
+                                else {
+                                    return false;
+                                };
                                 // If the dependent object is also being dropped, then there is no
                                 // problem, so we don't want a notice.
-                                !ids_set.contains(&ObjectId::Item(*dependant_id))
+                                !ids_set.contains(&ObjectId::Item(dependent_id))
                             })
                             .flat_map(|dependant_id| {
                                 // If we are not able to find a name for this ID it probably means
@@ -1735,7 +1744,9 @@ impl Coordinator {
                             .collect_vec();
                         if !dependants.is_empty() {
                             dropped_in_use_indexes.push(DroppedInUseIndex {
-                                index_name: humanizer.humanize_id(*id).unwrap_or(id.to_string()),
+                                index_name: humanizer
+                                    .humanize_id(index.global_id())
+                                    .unwrap_or(id.to_string()),
                                 dependant_objects: dependants,
                             });
                         }

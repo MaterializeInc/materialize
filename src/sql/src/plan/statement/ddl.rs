@@ -5341,13 +5341,14 @@ fn plan_drop_cluster_replica(
     Ok(cluster.map(|(cluster, replica_id)| (cluster.id(), replica_id)))
 }
 
+/// Returns the [`CatalogItemId`] of the item we should drop, if it exists.
 fn plan_drop_item(
     scx: &StatementContext,
     object_type: ObjectType,
     if_exists: bool,
     name: UnresolvedItemName,
     cascade: bool,
-) -> Result<Option<GlobalId>, PlanError> {
+) -> Result<Option<CatalogItemId>, PlanError> {
     let resolved = match resolve_item_or_type(scx, object_type, name, if_exists) {
         Ok(r) => r,
         // Return a more helpful error on `DROP VIEW <materialized-view>`.
@@ -5471,7 +5472,7 @@ pub fn plan_drop_owned(
                 let non_owned_bound_objects: Vec<_> = cluster
                     .bound_objects()
                     .into_iter()
-                    .map(|global_id| scx.catalog.get_item(global_id))
+                    .map(|item_id| scx.catalog.get_item(item_id))
                     .filter(|item| !role_ids.contains(&item.owner_id()))
                     .collect();
                 if !non_owned_bound_objects.is_empty() {
@@ -5505,18 +5506,11 @@ pub fn plan_drop_owned(
     for item in scx.catalog.get_items() {
         if role_ids.contains(&item.owner_id()) {
             if !cascade {
-                // When this item gets dropped it will also drop its progress source, so we need to
-                // check the users of those.
-                for sub_item in item
-                    .progress_id()
-                    .iter()
-                    .map(|id| scx.catalog.get_item(id))
-                    .chain(iter::once(item))
-                {
-                    let non_owned_dependencies: Vec<_> = sub_item
-                        .used_by()
+                // Checks if any items still depend on this one, returning an error if so.
+                let check_if_dependents_exist = |used_by: &[CatalogItemId]| {
+                    let non_owned_dependencies: Vec<_> = used_by
                         .into_iter()
-                        .map(|global_id| scx.catalog.get_item(global_id))
+                        .map(|item_id| scx.catalog.get_item(item_id))
                         .filter(|item| dependency_prevents_drop(item.item_type().into(), *item))
                         .filter(|item| !role_ids.contains(&item.owner_id()))
                         .collect();
@@ -5524,13 +5518,13 @@ pub fn plan_drop_owned(
                         let names: Vec<_> = non_owned_dependencies
                             .into_iter()
                             .map(|item| {
-                                (
-                                    item.item_type().to_string(),
-                                    scx.catalog.resolve_full_name(item.name()).to_string(),
-                                )
+                                let item_typ = item.item_type().to_string();
+                                let item_name =
+                                    scx.catalog.resolve_full_name(item.name()).to_string();
+                                (item_typ, item_name)
                             })
                             .collect();
-                        return Err(PlanError::DependentObjectsStillExist {
+                        Err(PlanError::DependentObjectsStillExist {
                             object_type: item.item_type().to_string(),
                             object_name: scx
                                 .catalog
@@ -5538,9 +5532,19 @@ pub fn plan_drop_owned(
                                 .to_string()
                                 .to_string(),
                             dependents: names,
-                        });
+                        })
+                    } else {
+                        Ok(())
                     }
+                };
+
+                // When this item gets dropped it will also drop its progress source, so we need to
+                // check the users of those.
+                if let Some(id) = item.progress_id() {
+                    let progress_item = scx.catalog.get_item(&id);
+                    check_if_dependents_exist(progress_item.used_by())?;
                 }
+                check_if_dependents_exist(item.used_by())?;
             }
             drop_ids.push(item.id().into());
         }
@@ -5559,7 +5563,7 @@ pub fn plan_drop_owned(
                 if !cascade {
                     let non_owned_dependencies: Vec<_> = schema
                         .item_ids()
-                        .map(|global_id| scx.catalog.get_item(&global_id))
+                        .map(|item_id| scx.catalog.get_item(&item_id))
                         .filter(|item| dependency_prevents_drop(item.item_type().into(), *item))
                         .filter(|item| !role_ids.contains(&item.owner_id()))
                         .collect();
