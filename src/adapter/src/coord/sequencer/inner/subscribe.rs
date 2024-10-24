@@ -351,7 +351,7 @@ impl Coordinator {
         let (mut df_desc, df_meta) = global_lir_plan.unapply();
 
         let time_dependence =
-            TimeDependenceHelper::new(self.catalog()).determine_dependence(sink_id);
+            TimeDependenceHelper::new(self.catalog()).determine_dependence(sink_id, Some(&df_desc));
         df_desc.time_dependence = Some(time_dependence);
 
         // Emit notices.

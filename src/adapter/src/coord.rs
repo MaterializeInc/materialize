@@ -2626,8 +2626,6 @@ impl Coordinator {
 
         for entry in ordered_catalog_entries {
             let id = entry.id();
-            let mut time_dependence_helper = TimeDependenceHelper::new(self.catalog());
-            let time_dependence = time_dependence_helper.determine_dependence(entry.id);
             match entry.item() {
                 CatalogItem::Index(idx) => {
                     // Collect optimizer parameters.
@@ -2669,6 +2667,8 @@ impl Coordinator {
                     };
 
                     let (mut physical_plan, metainfo) = global_lir_plan.unapply();
+                    let time_dependence = TimeDependenceHelper::new(self.catalog())
+                        .determine_dependence(entry.id, Some(&physical_plan));
                     physical_plan.time_dependence = Some(time_dependence);
                     let metainfo = {
                         // Pre-allocate a vector of transient GlobalIds for each notice.
@@ -2727,6 +2727,8 @@ impl Coordinator {
                     };
 
                     let (mut physical_plan, metainfo) = global_lir_plan.unapply();
+                    let time_dependence = TimeDependenceHelper::new(self.catalog())
+                        .determine_dependence(entry.id, Some(&physical_plan));
                     physical_plan.time_dependence = Some(time_dependence);
                     let metainfo = {
                         // Pre-allocate a vector of transient GlobalIds for each notice.
@@ -2758,6 +2760,8 @@ impl Coordinator {
                         .to_string();
                     let (optimized_plan, mut physical_plan, metainfo) = self
                         .optimize_create_continual_task(ct, id, self.owned_catalog(), debug_name)?;
+                    let time_dependence = TimeDependenceHelper::new(self.catalog())
+                        .determine_dependence(entry.id, Some(&physical_plan));
                     physical_plan.time_dependence = Some(time_dependence);
 
                     let catalog = self.catalog_mut();
