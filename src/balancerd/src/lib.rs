@@ -1125,6 +1125,7 @@ impl mz_server_core::Server for HttpsBalancer {
 
                 let mz_stream = TcpStream::connect(resolved.addr).await?;
 
+                warn!("initial connection to mz");
                 // do a TLS handshake
                 let mut builder =
                     SslConnector::builder(SslMethod::tls()).expect("Error creating builder.");
@@ -1134,7 +1135,9 @@ impl mz_server_core::Server for HttpsBalancer {
                     .build()
                     .configure()?
                     .into_ssl(&resolved.addr.to_string())?;
+                warn!("built ssl");
                 let mut mz_stream = SslStream::new(ssl, mz_stream)?;
+                warn!("built ssl stream");
                 let mut client_counter = CountingConn::new(client_stream);
 
                 if inject_proxy_headers {
@@ -1144,7 +1147,9 @@ impl mz_server_core::Server for HttpsBalancer {
                     let mut buf = [0u8; 1024];
                     let len = header.encode_to_slice_v2(&mut buf)?;
                     mz_stream.write_all(&buf[..len]).await?;
+                    warn!("injected proxy headers");
                 }
+                warn!("beginning copy_bidrectional");
 
                 // Now blindly shuffle bytes back and forth until closed.
                 // TODO: Limit total memory use.
