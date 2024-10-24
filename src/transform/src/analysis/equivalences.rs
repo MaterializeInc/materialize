@@ -339,8 +339,6 @@ impl EquivalenceClasses {
     /// only minimal structural clean-up.
     fn tidy(&mut self) {
         for class in self.classes.iter_mut() {
-            // Remove all literal errors, as they cannot be equated to other things.
-            class.retain(|e| !e.is_literal_err());
             class.sort_by(Self::mir_scalar_expr_complexity);
             class.dedup();
         }
