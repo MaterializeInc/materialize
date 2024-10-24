@@ -18,9 +18,9 @@ use k8s_openapi::{
         },
         core::v1::{
             Capabilities, Container, ContainerPort, EnvVar, EnvVarSource, HTTPGetAction, Pod,
-            PodSecurityContext, PodSpec, PodTemplateSpec, Probe, ResourceRequirements,
-            SeccompProfile, SecretKeySelector, SecurityContext, Service, ServiceAccount,
-            ServicePort, ServiceSpec, TCPSocketAction, Toleration,
+            PodSecurityContext, PodSpec, PodTemplateSpec, Probe, SeccompProfile, SecretKeySelector,
+            SecurityContext, Service, ServiceAccount, ServicePort, ServiceSpec, TCPSocketAction,
+            Toleration,
         },
         networking::v1::{
             IPBlock, NetworkPolicy, NetworkPolicyEgressRule, NetworkPolicyIngressRule,
@@ -28,9 +28,7 @@ use k8s_openapi::{
         },
         rbac::v1::{PolicyRule, Role, RoleBinding, RoleRef, Subject},
     },
-    apimachinery::pkg::{
-        api::resource::Quantity, apis::meta::v1::LabelSelector, util::intstr::IntOrString,
-    },
+    apimachinery::pkg::{apis::meta::v1::LabelSelector, util::intstr::IntOrString},
 };
 use kube::{api::ObjectMeta, runtime::controller::Action, Api, Client, ResourceExt};
 use maplit::btreemap;
@@ -693,19 +691,6 @@ fn create_environmentd_statefulset_object(
     mz: &Materialize,
     generation: u64,
 ) -> StatefulSet {
-    let limits = btreemap! {
-        "cpu".to_string() =>
-            Quantity(mz.environmentd_cpu_allocation(&config.default_environmentd_cpu_allocation)),
-        "memory".to_string() =>
-            Quantity(mz.environmentd_memory_allocation(&config.default_environmentd_memory_allocation)),
-    };
-    let requests = btreemap! {
-        "cpu".to_string() =>
-            Quantity(mz.environmentd_cpu_allocation(&config.default_environmentd_cpu_allocation)),
-        "memory".to_string() =>
-            Quantity(mz.environmentd_memory_allocation(&config.default_environmentd_memory_allocation)),
-    };
-
     // IMPORTANT: Only pass secrets via environment variables. All other
     // parameters should be passed as command line arguments, possibly gated
     // with a `meets_minimum_version` call. This ensures typos cause
@@ -1055,11 +1040,7 @@ fn create_environmentd_statefulset_object(
         env: Some(env),
         liveness_probe: Some(probe.clone()),
         readiness_probe: Some(probe),
-        resources: Some(ResourceRequirements {
-            claims: None,
-            limits: Some(limits),
-            requests: Some(requests),
-        }),
+        resources: mz.spec.environmentd_resource_requirements.clone(),
         security_context: security_context.clone(),
         ..Default::default()
     };
@@ -1192,19 +1173,6 @@ fn create_environmentd_statefulset_object(
 }
 
 fn create_balancerd_deployment_object(config: &super::Args, mz: &Materialize) -> Deployment {
-    let limits = btreemap! {
-        "cpu".to_string() =>
-            Quantity(mz.balancerd_cpu_allocation(&config.default_balancerd_cpu_allocation)),
-        "memory".to_string() =>
-            Quantity(mz.balancerd_memory_allocation(&config.default_balancerd_memory_allocation)),
-    };
-    let requests = btreemap! {
-        "cpu".to_string() =>
-            Quantity(mz.balancerd_cpu_allocation(&config.default_balancerd_cpu_allocation)),
-        "memory".to_string() =>
-            Quantity(mz.balancerd_memory_allocation(&config.default_balancerd_memory_allocation)),
-    };
-
     let security_context = if config.enable_security_context {
         // Since we want to adhere to the most restrictive security context, all
         // of these fields have to be set how they are.
@@ -1328,11 +1296,7 @@ fn create_balancerd_deployment_object(config: &super::Args, mz: &Materialize) ->
         startup_probe: Some(startup_probe),
         readiness_probe: Some(readiness_probe),
         liveness_probe: Some(liveness_probe),
-        resources: Some(ResourceRequirements {
-            limits: Some(limits),
-            requests: Some(requests),
-            ..Default::default()
-        }),
+        resources: mz.spec.balancerd_resource_requirements.clone(),
         security_context: security_context.clone(),
         ..Default::default()
     };

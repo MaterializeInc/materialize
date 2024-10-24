@@ -9,8 +9,12 @@
 
 use std::collections::BTreeMap;
 
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, OwnerReference, Time};
-use kube::{CustomResource, Resource, ResourceExt};
+use k8s_openapi::{
+    api::core::v1::ResourceRequirements,
+    apimachinery::pkg::apis::meta::v1::{Condition, OwnerReference, Time},
+};
+use kube::{api::ObjectMeta, CustomResource, Resource, ResourceExt};
+
 use schemars::JsonSchema;
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -20,12 +24,10 @@ pub const LAST_KNOWN_ACTIVE_GENERATION_ANNOTATION: &str =
     "materialize.cloud/last-known-active-generation";
 
 pub mod v1alpha1 {
-    use kube::api::ObjectMeta;
-
     use super::*;
 
     #[derive(
-        CustomResource, Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema,
+        CustomResource, Clone, Debug, Default, PartialEq, Deserialize, Serialize, JsonSchema,
     )]
     #[serde(rename_all = "camelCase")]
     #[kube(
@@ -45,14 +47,10 @@ pub mod v1alpha1 {
         pub environmentd_image_ref: String,
         // Extra args to pass to the environmentd binary
         pub environmentd_extra_args: Option<Vec<String>>,
-        // Value for the cpu request and limit for the environmentd pod
-        pub environmentd_cpu_allocation: Option<String>,
-        // Value for the memory request and limit for the environmentd pod
-        pub environmentd_memory_allocation: Option<String>,
-        // Value for the cpu request and limit for the balancerd pod
-        pub balancerd_cpu_allocation: Option<String>,
-        // Value for the memory request and limit for the balancerd pod
-        pub balancerd_memory_allocation: Option<String>,
+        // Resource requirements for the environmentd pod
+        pub environmentd_resource_requirements: Option<ResourceRequirements>,
+        // Resource requirements for the balancerd pod
+        pub balancerd_resource_requirements: Option<ResourceRequirements>,
 
         // When changes are made to the environmentd resources (either via
         // modifying fields in the spec here or by deploying a new
@@ -141,34 +139,6 @@ pub mod v1alpha1 {
                     self.namespace(),
                 ),
             ])
-        }
-
-        pub fn environmentd_cpu_allocation(&self, default_allocation: &str) -> String {
-            self.spec
-                .environmentd_cpu_allocation
-                .clone()
-                .unwrap_or_else(|| default_allocation.to_string())
-        }
-
-        pub fn environmentd_memory_allocation(&self, default_allocation: &str) -> String {
-            self.spec
-                .environmentd_memory_allocation
-                .clone()
-                .unwrap_or_else(|| default_allocation.to_string())
-        }
-
-        pub fn balancerd_cpu_allocation(&self, default_allocation: &str) -> String {
-            self.spec
-                .balancerd_cpu_allocation
-                .clone()
-                .unwrap_or_else(|| default_allocation.to_string())
-        }
-
-        pub fn balancerd_memory_allocation(&self, default_allocation: &str) -> String {
-            self.spec
-                .balancerd_memory_allocation
-                .clone()
-                .unwrap_or_else(|| default_allocation.to_string())
         }
 
         pub fn environment_id(&self, cloud_provider: &str, region: &str) -> String {

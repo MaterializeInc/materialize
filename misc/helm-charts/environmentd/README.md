@@ -46,10 +46,14 @@ The following table lists the configurable parameters of the Materialize environ
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `environment.environmentdCpuAllocation` |  | ``1`` |
+| `environment.balancerdResourceRequirements.limits.memory` |  | ``"256Mi"`` |
+| `environment.balancerdResourceRequirements.requests.cpu` |  | ``"100m"`` |
+| `environment.balancerdResourceRequirements.requests.memory` |  | ``"256Mi"`` |
 | `environment.environmentdExtraArgs[0]` |  | ``"--orchestrator-kubernetes-ephemeral-volume-class=hostpath"`` |
 | `environment.environmentdImageRef` |  | ``"materialize/environmentd:v0.122.0-dev.0--pr.g47923ddb1bb4f3fb38d152b8aa86a77514599b29"`` |
-| `environment.environmentdMemoryAllocation` |  | ``"1Gi"`` |
+| `environment.environmentdResourceRequirements.limits.memory` |  | ``"512Mi"`` |
+| `environment.environmentdResourceRequirements.requests.cpu` |  | ``"250m"`` |
+| `environment.environmentdResourceRequirements.requests.memory` |  | ``"512Mi"`` |
 | `environment.forceRollout` |  | ``"33333333-3333-3333-3333-333333333333"`` |
 | `environment.inPlaceRollout` |  | ``false`` |
 | `environment.name` |  | ``"12345678-1234-1234-1234-123456789012"`` |
