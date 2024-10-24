@@ -92,7 +92,8 @@ offending row is deleted.
 Depending on your use case, you might have data that doesn't require
 up-to-the-second freshness, or that can be accessed using different patterns to
 optimize for performance and cost (e.g., hot vs. cold data). To support these
-use cases, you can tweak the refresh strategy of a materialized view.
+use cases, you can configure a non-default refresh strategy for materialized
+views.
 
 {{< note >}}
 We **do not** recommend using this feature if you're looking for very frequent
@@ -102,7 +103,7 @@ otherwise, you'll want to stick with the [default behavior](#refresh-on-commit).
 {{< /note >}}
 
 Materialized views configured with a refresh strategy are **not incrementally
-maintained**, and must recompute their results from scratch on every refresh.
+maintained** and must recompute their results from scratch on every refresh.
 Because these views can be hosted in [scheduled clusters](/sql/create-cluster/#scheduling),
 which automatically turn on and off based on the configured refresh strategies,
 this feature can lead to significant cost savings when handling large volumes of
@@ -235,11 +236,11 @@ user-specified refresh time.
 #### Querying materialized views with refresh strategies
 
 Materialized views configured with [`REFRESH EVERY` strategies](#refresh-every)
-have a period of unavailability around the scheduled refresh times — during
-this period, the view **will not return any results**. To avoid unavailability
-during the refresh operation, we recommend hosting these views in
-[**scheduled clusters**](/sql/create-cluster/#scheduling) configured to
-automatically [turn on ahead of the scheduled refresh time](/sql/create-cluster/#hydration-time-estimate).
+have a period of unavailability around the scheduled refresh times — during this
+period, the view **will not return any results**. To avoid unavailability
+during the refresh operation, you must host these views in
+[**scheduled clusters**](/sql/create-cluster/#scheduling), which can be
+configured to automatically [turn on ahead of the scheduled refresh time](/sql/create-cluster/#hydration-time-estimate).
 
 **Example**
 

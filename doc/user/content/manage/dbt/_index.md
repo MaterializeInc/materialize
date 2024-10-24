@@ -500,13 +500,14 @@ see [Refresh strategies](/sql/create-materialized-view/#refresh-strategies).
 
 For data that doesn't require up-to-the-second freshness, or that can be
 accessed using different patterns to optimize for performance and cost
-(e.g., hot vs. cold data), you may consider using a non-default
+(e.g., hot vs. cold data), it might be appropriate to use a non-default
 [refresh strategy](/sql/create-materialized-view/#refresh-strategies).
 
-To tweak the refresh strategy of a materialized view model, use the
-[`refresh_interval` configuration](#configuration-refresh-strategies). As a
-reminder, these models need to be deployed in a [scheduled cluster](/sql/create-cluster/#scheduling),
-so you must also specify a valid scheduled `cluster` using the
+To configure a refresh strategy in a materialized view model, use the
+[`refresh_interval` configuration](#configuration-refresh-strategies).
+Materialized view models configured with a refresh strategy must be deployed in
+a [scheduled cluster](/sql/create-cluster/#scheduling) for cost savings to be
+significant — so you must also specify a valid scheduled `cluster` using the
 [`cluster` configuration](#configuration).
 
 **Filename:** models/materialized_view_refresh.sql
@@ -534,7 +535,7 @@ SELECT ...;
 ```
 
 Materialized views configured with a refresh strategy are **not incrementally
-maintained**, and must recompute their results from scratch on every refresh.
+maintained** and must recompute their results from scratch on every refresh.
 
 ### Sinks
 
@@ -649,10 +650,10 @@ The `refresh_interval` configuration can have the following components:
 Component       | Value    | Description
 ----------------|----------|--------------------------------------------------
 `at`            | `string` | The specific time to refresh the materialized view at, using the [refresh at](/sql/create-materialized-view/#refresh-at) strategy.
-`at_creation`   | `bool`   | Default: `False`. If set to `True`, triggers a first refresh when the materialized view is created.
+`at_creation`   | `bool`   | Default: `false`. Whether to trigger a first refresh when the materialized view is created.
 `every`         | `string` | The regular interval to refresh the materialized view at, using the [refresh every](/sql/create-materialized-view/#refresh-every) strategy.
 `aligned_to`    | `string` | The _phase_ of the regular interval to refresh the materialized view at, using the [refresh every](/sql/create-materialized-view/#refresh-every) strategy. If unspecified, defaults to the time when the materialized view is created.
-`on_commit`     | `bool`   | Default: `False`. If set to `True`, configures the default [refresh on commit](/sql/create-materialized-view/#refresh-on-commit) strategy. This is equivalent to **not specifying** `refresh_interval` in the configuration block, so we recommend only setting this component for the special case of parametrizing the configuration option (e.g. in macros).
+`on_commit`     | `bool`   | Default: `false`. Whether to use the default [refresh on commit](/sql/create-materialized-view/#refresh-on-commit) strategy. Setting this component to `true` is equivalent to **not specifying** `refresh_interval` in the configuration block, so we recommend only using it for the special case of parametrizing the configuration option (e.g., in macros).
 
 ### Configuration: model contracts and constraints {#configuration-contracts}
 
