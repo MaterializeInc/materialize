@@ -1028,25 +1028,31 @@ fn generate_rbac_requirements(
             ownership: vec![ObjectId::Item(*id)],
             ..Default::default()
         },
-        Plan::AlterSource(plan::AlterSourcePlan { id, action: _ }) => RbacRequirements {
-            ownership: vec![ObjectId::Item(*id)],
+        Plan::AlterSource(plan::AlterSourcePlan {
+            item_id,
+            ingestion_id: _,
+            action: _,
+        }) => RbacRequirements {
+            ownership: vec![ObjectId::Item(*item_id)],
             item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
         Plan::AlterSink(plan::AlterSinkPlan {
-            id,
+            item_id,
+            global_id: _,
             sink,
             with_snapshot: _,
             in_cluster,
         }) => {
-            let mut privileges = generate_read_privileges(catalog, iter::once(sink.from), role_id);
+            let items = iter::once(sink.from).map(|gid| catalog.resolve_item_id(&gid));
+            let mut privileges = generate_read_privileges(catalog, items, role_id);
             privileges.push((
                 SystemObjectId::Object(in_cluster.into()),
                 AclMode::CREATE,
                 role_id,
             ));
             RbacRequirements {
-                ownership: vec![ObjectId::Item(*id)],
+                ownership: vec![ObjectId::Item(*item_id)],
                 privileges,
                 item_usage: &CREATE_ITEM_USAGE,
                 ..Default::default()

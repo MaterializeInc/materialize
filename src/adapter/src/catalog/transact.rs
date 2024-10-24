@@ -12,6 +12,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
+use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_adapter_types::dyncfgs::{
@@ -38,7 +39,7 @@ use mz_ore::now::EpochMillis;
 use mz_repr::adt::mz_acl_item::{merge_mz_acl_items, AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
-use mz_repr::{strconv, GlobalId};
+use mz_repr::{strconv, CatalogItemId, GlobalId};
 use mz_sql::catalog::{
     CatalogDatabase, CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem, CatalogRole,
     CatalogSchema, DefaultPrivilegeAclItem, DefaultPrivilegeObject, RoleAttributes, RoleMembership,
@@ -71,7 +72,7 @@ use crate::AdapterError;
 #[derive(Debug, Clone)]
 pub enum Op {
     AlterRetainHistory {
-        id: GlobalId,
+        id: CatalogItemId,
         value: Option<Value>,
         window: CompactionWindow,
     },
@@ -149,7 +150,7 @@ pub enum Op {
         to_name: String,
     },
     RenameItem {
-        id: GlobalId,
+        id: CatalogItemId,
         current_full_name: FullItemName,
         to_name: String,
     },
@@ -189,12 +190,12 @@ pub enum Op {
         config: ReplicaConfig,
     },
     UpdateItem {
-        id: GlobalId,
+        id: CatalogItemId,
         name: QualifiedItemName,
         to_item: CatalogItem,
     },
     UpdateSourceReferences {
-        source_id: GlobalId,
+        source_id: CatalogItemId,
         references: SourceReferences,
     },
     UpdateSystemConfiguration {
@@ -2312,7 +2313,7 @@ impl Catalog {
         Ok((weird_builtin_table_update, temporary_item_updates))
     }
 
-    fn log_update(state: &CatalogState, id: &GlobalId) {
+    fn log_update(state: &CatalogState, id: &CatalogItemId) {
         let entry = state.get_entry(id);
         info!(
             "update {} {} ({})",

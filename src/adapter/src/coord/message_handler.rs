@@ -623,7 +623,8 @@ impl Coordinator {
         AlterConnectionValidationReady {
             mut ctx,
             result,
-            connection_gid,
+            connection_id,
+            connection_gid: _,
             mut plan_validity,
             otel_ctx,
             dependency_ids: _,
@@ -648,7 +649,7 @@ impl Coordinator {
         };
 
         let result = self
-            .sequence_alter_connection_stage_finish(ctx.session_mut(), connection_gid, conn)
+            .sequence_alter_connection_stage_finish(ctx.session_mut(), connection_id, conn)
             .await;
         ctx.retire(result);
     }
