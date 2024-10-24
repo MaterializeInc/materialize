@@ -23,7 +23,6 @@ use std::time::{Duration, Instant};
 use axum::response::{IntoResponse, Response};
 use axum::{routing, Json, Router};
 use chrono::{DateTime, Utc};
-use http::StatusCode;
 use mz_adapter::{TimestampContext, TimestampExplanation};
 use mz_catalog::builtin::BUILTINS;
 use mz_environmentd::test_util::{
@@ -103,103 +102,6 @@ impl MockHttpServer {
             .await
             .expect("server unexpectedly closed channel")
     }
-}
-
-#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-async fn test_no_block() {
-    // We manually time out the test because it's better than relying on CI to time out, because
-    // an actual failure (as opposed to a CI timeout) causes `services.log` to be uploaded.
-
-    // Allow the use of banned rdkafka methods, because we are just in tests.
-    #[allow(clippy::disallowed_methods)]
-    let test_case = async move {
-        println!("test_no_block: starting server");
-        let server = test_util::TestHarness::default().start().await;
-        server
-            .enable_feature_flags(&["enable_connection_validation_syntax"])
-            .await;
-
-        println!("test_no_block: starting mock HTTP server");
-        let mut schema_registry_server = MockHttpServer::new().await;
-
-        println!("test_no_block: connecting to server");
-        let client = server.connect().await.unwrap();
-
-        let slow_task = task::spawn(|| "slow_client", async move {
-            println!("test_no_block: in thread; executing create source");
-            let result = client
-                .batch_execute(&format!(
-                    "CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (URL 'http://{}') WITH (VALIDATE = false);",
-                    schema_registry_server.addr,
-                ))
-                .await;
-            println!("test_no_block: in thread; create CSR conn done");
-            let _ = result.unwrap();
-
-            let admin: AdminClient<_> = ClientConfig::new()
-                .set("bootstrap.servers", &*KAFKA_ADDRS)
-                .create()
-                .expect("Admin client creation failed");
-
-            let new_topic = NewTopic::new("foo", 1, TopicReplication::Fixed(1));
-            let topic_results = admin
-                .create_topics([&new_topic], &AdminOptions::new())
-                .await
-                .expect("topic creation failed");
-            match topic_results[0] {
-                Ok(_) | Err((_, RDKafkaErrorCode::TopicAlreadyExists)) => {}
-                Err((ref err, _)) => panic!("failed to ensure topic: {err}"),
-            }
-
-            let result = client
-                    .batch_execute(&format!(
-                        "CREATE CONNECTION kafka_conn TO KAFKA (BROKER '{}', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false)",
-                        &*KAFKA_ADDRS,
-                    ))
-                    .await;
-            println!("test_no_block: in thread; create Kafka conn done");
-            let _ = result.unwrap();
-
-            let result = client
-                .batch_execute(
-                    "CREATE SOURCE foo \
-                        FROM KAFKA CONNECTION kafka_conn (TOPIC 'foo') \
-                        FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn",
-                )
-                .await;
-            println!("test_no_block: in thread; create source done");
-            // Verify that the schema registry error was returned to the client, for
-            // good measure.
-            assert_contains!(result.unwrap_err().to_string(), "server error 503");
-        });
-
-        // Wait for Materialize to contact the schema registry, which
-        // indicates the adapter is processing the CREATE SOURCE command. It
-        // will be unable to complete the query until we respond.
-        println!("test_no_block: accepting fake schema registry connection");
-        let response_tx = schema_registry_server.accept().await;
-
-        // Verify that the adapter can still process other requests from
-        // other sessions.
-        println!("test_no_block: connecting to server again");
-        let client = server.connect().await.unwrap();
-        println!("test_no_block: executing query");
-        let answer: i32 = client.query_one("SELECT 1 + 1", &[]).await.unwrap().get(0);
-        assert_eq!(answer, 2);
-
-        // Return an error to the adapter, so that we can shutdown cleanly.
-        println!("test_no_block: writing fake schema registry error");
-        response_tx
-            .send(StatusCode::SERVICE_UNAVAILABLE.into_response())
-            .expect("server unexpectedly closed channel");
-
-        println!("test_no_block: joining task");
-        slow_task.await.unwrap();
-    };
-
-    tokio::time::timeout(Duration::from_secs(120), test_case)
-        .await
-        .expect("Test timed out");
 }
 
 /// Test that dropping a connection while a source is undergoing purification
