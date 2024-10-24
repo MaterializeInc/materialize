@@ -148,6 +148,7 @@ impl FrontendStartupMessage {
                 dst.put_u32(*conn_id);
                 dst.put_u32(*secret_key);
             }
+            FrontendStartupMessage::SslRequest {} => dst.put_i32(VERSION_SSL),
             _ => panic!("unsupported"),
         }
 
