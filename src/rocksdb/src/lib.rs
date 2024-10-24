@@ -303,6 +303,9 @@ enum Command<K, V> {
     ManualCompaction {
         done_sender: oneshot::Sender<()>,
     },
+    Clear {
+        done_sender: oneshot::Sender<()>,
+    },
 }
 
 /// An async wrapper around RocksDB.
@@ -587,6 +590,17 @@ where
         }
     }
 
+    /// Clear out all key-value state.
+    pub async fn clear(&self) -> Result<(), Error> {
+        let (tx, rx) = oneshot::channel();
+        self.tx
+            .send(Command::Clear { done_sender: tx })
+            .await
+            .map_err(|_| Error::RocksDBThreadGoneAway)?;
+
+        rx.await.map_err(|_| Error::RocksDBThreadGoneAway)
+    }
+
     /// Trigger manual compaction of the RocksDB instance.
     pub async fn manual_compaction(&self) -> Result<(), Error> {
         let (tx, rx) = oneshot::channel();
@@ -652,7 +666,7 @@ fn rocksdb_core_loop<K, V, M, O, IM, F>(
             },
         });
 
-    let db: DB = match retry_result {
+    let mut db: DB = match retry_result {
         Ok(db) => {
             drop(creation_error_tx);
             db
@@ -663,6 +677,9 @@ fn rocksdb_core_loop<K, V, M, O, IM, F>(
             return;
         }
     };
+
+    db.create_cf("upsert", &rocksdb_options)
+        .expect("cannot fail to create our column family");
 
     let mut encoded_batch_buffers: Vec<Option<Vec<u8>>> = Vec::new();
     let mut encoded_batch: Vec<(K, KeyUpdate<Vec<u8>>)> = Vec::new();
@@ -678,9 +695,64 @@ fn rocksdb_core_loop<K, V, M, O, IM, F>(
                 let _ = done_sender.send(());
                 return;
             }
+            Command::Clear { done_sender } => {
+                let drop_result = Retry::default()
+                    .max_duration(retry_max_duration)
+                    .retry(|_| {
+                        let res = db.drop_cf("upsert");
+
+                        match res {
+                            Ok(()) => RetryResult::Ok(()),
+                            Err(e) => match e.kind() {
+                                ErrorKind::TryAgain => RetryResult::RetryableErr(Error::RocksDB(e)),
+                                _ => RetryResult::FatalErr(Error::RocksDB(e)),
+                            },
+                        }
+                    });
+
+                let _ = match drop_result {
+                    Ok(()) => {}
+                    Err(e) => {
+                        panic!("cannot fail to clear state, we cannot recover: {:?}", e);
+                    }
+                };
+
+                let add_result = Retry::default()
+                    .max_duration(retry_max_duration)
+                    .retry(|_| {
+                        let res = db.create_cf("upsert", &rocksdb_options);
+
+                        match res {
+                            Ok(()) => RetryResult::Ok(()),
+                            Err(e) => match e.kind() {
+                                ErrorKind::TryAgain => RetryResult::RetryableErr(Error::RocksDB(e)),
+                                _ => RetryResult::FatalErr(Error::RocksDB(e)),
+                            },
+                        }
+                    });
+
+                // Abundance of caution: ensure state is cleared.
+                let cf_handle = db.cf_handle("upsert").expect("missing column family");
+                let mut iterator = db.iterator_cf(cf_handle, rocksdb::IteratorMode::Start);
+                let next_entry = iterator.next();
+                assert!(
+                    next_entry.is_none(),
+                    "column family must be empty after clearing"
+                );
+
+                let _ = match add_result {
+                    Ok(()) => {
+                        let _ = done_sender.send(());
+                    }
+                    Err(e) => {
+                        panic!("cannot fail to clear state, we cannot recover: {:?}", e);
+                    }
+                };
+            }
             Command::ManualCompaction { done_sender } => {
                 // Compact the full key-range.
-                db.compact_range::<&[u8], &[u8]>(None, None);
+                let cf_handle = db.cf_handle("upsert").expect("missing column family");
+                db.compact_range_cf::<&[u8], &[u8]>(cf_handle, None, None);
                 let _ = done_sender.send(());
             }
             Command::MultiGet {
@@ -690,12 +762,15 @@ fn rocksdb_core_loop<K, V, M, O, IM, F>(
             } => {
                 let batch_size = batch.len();
 
+                let cf_handle = db.cf_handle("upsert").expect("missing column family");
+
                 // Perform the multi_get and record metrics, if there wasn't an error.
                 let now = Instant::now();
                 let retry_result = Retry::default()
                     .max_duration(retry_max_duration)
                     .retry(|_| {
-                        let gets = db.multi_get(batch.iter());
+                        let batch = batch.iter().map(|k| (cf_handle, k));
+                        let gets = db.multi_get_cf(batch);
                         let latency = now.elapsed();
 
                         let gets: Result<Vec<_>, _> = gets.into_iter().collect();
@@ -836,6 +911,9 @@ fn rocksdb_core_loop<K, V, M, O, IM, F>(
                         KeyUpdate::Delete => encoded_batch.push((key, KeyUpdate::Delete)),
                     }
                 }
+
+                let cf_handle = db.cf_handle("upsert").expect("missing column family");
+
                 // Perform the multi_update and record metrics, if there wasn't an error.
                 let now = Instant::now();
                 let retry_result = Retry::default()
@@ -845,9 +923,9 @@ fn rocksdb_core_loop<K, V, M, O, IM, F>(
 
                         for (key, value) in encoded_batch.iter() {
                             match value {
-                                KeyUpdate::Put(update) => writes.put(key, update),
-                                KeyUpdate::Merge(update) => writes.merge(key, update),
-                                KeyUpdate::Delete => writes.delete(key),
+                                KeyUpdate::Put(update) => writes.put_cf(cf_handle, key, update),
+                                KeyUpdate::Merge(update) => writes.merge_cf(cf_handle, key, update),
+                                KeyUpdate::Delete => writes.delete_cf(cf_handle, key),
                             }
                         }
 
