@@ -1291,6 +1291,24 @@ impl AstDisplay for LoadGenerator {
 }
 impl_display!(LoadGenerator);
 
+impl LoadGenerator {
+    /// Corresponds with the same mapping on the `LoadGenerator` enum defined in
+    /// src/storage-types/src/sources/load_generator.rs, but re-defined here for
+    /// cases where we only have the AST representation. This can be removed once
+    /// the `ast_rewrite_sources_to_tables` migration is removed.
+    pub fn schema_name(&self) -> &'static str {
+        match self {
+            LoadGenerator::Counter => "counter",
+            LoadGenerator::Clock => "clock",
+            LoadGenerator::Marketing => "marketing",
+            LoadGenerator::Auction => "auction",
+            LoadGenerator::Datums => "datums",
+            LoadGenerator::Tpch => "tpch",
+            LoadGenerator::KeyValue => "key_value",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum LoadGeneratorOptionName {
     ScaleFactor,
