@@ -674,7 +674,6 @@ impl Coordinator {
                     .await;
                 let time_dependence =
                     TimeDependenceHelper::new(coord.catalog()).determine_dependence(sink_id);
-                println!("time_dependence: {:?}", time_dependence);
 
                 df_desc.set_as_of(dataflow_as_of.clone());
                 df_desc.set_initial_as_of(initial_as_of);

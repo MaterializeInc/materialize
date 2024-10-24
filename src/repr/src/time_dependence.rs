@@ -107,7 +107,7 @@ impl RustType<ProtoTimeDependence> for TimeDependence {
                 definity,
             }) => TimeDependence::RefreshSchedule(
                 refresh_schedule
-                    .map(|s| RefreshSchedule::from_proto(s))
+                    .map(RefreshSchedule::from_proto)
                     .transpose()?,
                 definity
                     .into_iter()

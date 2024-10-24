@@ -2641,11 +2641,6 @@ impl Coordinator {
             let is_timeline_epoch_ms = self.get_timeline_context(id).is_timeline_epoch_ms();
             let time_dependence =
                 TimeDependenceHelper::new(self.catalog()).determine_dependence(entry.id);
-            println!(
-                "item: {:?} timer_dependence: {:?}",
-                entry.item(),
-                time_dependence
-            );
             match entry.item() {
                 CatalogItem::Index(idx) => {
                     // Collect optimizer parameters.

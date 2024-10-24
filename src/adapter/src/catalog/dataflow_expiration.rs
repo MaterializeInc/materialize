@@ -37,7 +37,6 @@ impl Catalog {
 pub(crate) struct TimeDependenceHelper<'a> {
     seen: BTreeMap<GlobalId, TimeDependence>,
     catalog: &'a Catalog,
-    level: usize,
 }
 
 impl<'a> TimeDependenceHelper<'a> {
@@ -45,7 +44,6 @@ impl<'a> TimeDependenceHelper<'a> {
         Self {
             seen: BTreeMap::new(),
             catalog,
-            level: 0,
         }
     }
 
@@ -55,18 +53,14 @@ impl<'a> TimeDependenceHelper<'a> {
         if let Some(dependence) = self.seen.get(&id).cloned() {
             return dependence;
         }
-        let indent = "  ".repeat(self.level);
 
-        self.level += 1;
         let entry = self.catalog.get_entry(&id);
         let mut time_dependence = match entry.item_type() {
             CatalogItemType::Table => {
-                println!("{indent}table: {id:?}");
                 // Follows wall clock.
                 Wallclock
             }
             CatalogItemType::Source => {
-                println!("{indent}source: {id:?}");
                 // Some sources don't have a `Source` entry, so we can't determine their time
                 // dependence.
                 let Some(source) = entry.source() else {
@@ -99,7 +93,6 @@ impl<'a> TimeDependenceHelper<'a> {
                 }
             }
             CatalogItemType::MaterializedView => {
-                println!("{indent}mv: {id:?}");
                 // Follow dependencies, rounded to the next refresh.
                 let materialized_view = entry.materialized_view().unwrap();
                 let mut dependence = Indeterminate;
@@ -110,7 +103,6 @@ impl<'a> TimeDependenceHelper<'a> {
                         dependence.unify(&self.determine_dependence(dep));
                     }
                     if let Some(refresh_schedule) = &materialized_view.refresh_schedule {
-                        println!("{indent}mv refresh_schedule: {refresh_schedule:?}");
                         dependence = match dependence {
                             Indeterminate => Indeterminate,
                             RefreshSchedule(_, existing) => {
@@ -125,7 +117,6 @@ impl<'a> TimeDependenceHelper<'a> {
                 dependence
             }
             CatalogItemType::Index => {
-                println!("{indent}index: {id:?}");
                 // Follow dependencies, if any.
                 let mut dependence = Indeterminate;
                 if let Some(plan) = self.catalog.try_get_physical_plan(&id) {
@@ -146,11 +137,9 @@ impl<'a> TimeDependenceHelper<'a> {
             | CatalogItemType::Type
             | CatalogItemType::View => Indeterminate,
         };
-        self.level -= 1;
 
         time_dependence.normalize();
 
-        println!("{indent}-> time dependence: {id:?} {time_dependence:?}");
         self.seen.insert(id, time_dependence.clone());
         time_dependence
     }
