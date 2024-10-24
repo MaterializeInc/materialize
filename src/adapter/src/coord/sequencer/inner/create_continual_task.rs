@@ -24,8 +24,9 @@ use mz_repr::adt::mz_acl_item::PrivilegeMap;
 use mz_repr::optimize::OverrideFrom;
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::ast::visit_mut::{VisitMut, VisitMutNode};
-use mz_sql::ast::{ContinualTaskStmt, Raw, RawItemName};
+use mz_sql::ast::{Raw, RawItemName};
 use mz_sql::names::{FullItemName, PartialItemName, ResolvedIds};
+use mz_sql::normalize::unresolved_item_name;
 use mz_sql::plan;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql_parser::ast::display::AstDisplay;
@@ -276,14 +277,14 @@ fn update_create_sql(
     ct_name: &FullItemName,
     as_of: Option<&Timestamp>,
 ) -> String {
-    let f =
-        |x: &mut RawItemName| *x = RawItemName::Name(PartialItemName::from(ct_name.clone()).into());
-
-    struct ReplaceName(FullItemName);
+    struct ReplaceName(PartialItemName);
     impl<'ast> VisitMut<'ast, Raw> for ReplaceName {
         fn visit_item_name_mut(&mut self, node: &'ast mut RawItemName) {
-            if node.name().0.last().map(|x| x.as_str()) == Some(&self.0.item) {
-                *node = RawItemName::Name(PartialItemName::from(self.0.clone()).into());
+            let Ok(name) = unresolved_item_name(node.name().clone()) else {
+                return;
+            };
+            if name.matches(&self.0) {
+                *(node.name_mut()) = self.0.clone().into();
             }
         }
     }
@@ -294,18 +295,10 @@ fn update_create_sql(
         .ast;
     match &mut ast {
         Statement::CreateContinualTask(stmt) => {
-            f(&mut stmt.name);
-            for stmt in &mut stmt.stmts {
-                match stmt {
-                    ContinualTaskStmt::Delete(stmt) => f(&mut stmt.table_name),
-                    ContinualTaskStmt::Insert(stmt) => f(&mut stmt.table_name),
-                }
-            }
-            // Do the same name replacement for the contents of the statements.
-            //
-            // TODO(ct2): I think we should be able to replace the above with
-            // this?
-            stmt.visit_mut(&mut ReplaceName(ct_name.clone()));
+            // Replace any self-references in the statements with the full name,
+            // now that we have it.
+            stmt.visit_mut(&mut ReplaceName(PartialItemName::from(ct_name.clone())));
+            // Also fill in the initial as_of.
             if let Some(as_of) = as_of {
                 stmt.as_of = Some(as_of.into());
             }

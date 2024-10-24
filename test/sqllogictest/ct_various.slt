@@ -48,7 +48,7 @@ CREATE CONTINUAL TASK x.ct (key INT) ON INPUT input AS (
 
 statement ok
 CREATE CONTINUAL TASK y.z.ct (key INT) ON INPUT input AS (
-    INSERT INTO y.z.ct SELECT * FROM input;
+    INSERT INTO y.z.ct SELECT i.key FROM input i JOIN x.ct x_ct ON i.key = x_ct.key;
 )
 
 statement ok
@@ -63,6 +63,16 @@ query T
 SELECT * FROM y.z.ct;
 ----
 1
+
+# Also, ensure that we correctly resolve item with the same name in different
+# schemas.
+#
+# TODO(ct2): Replace this with a SHOW CREATE CONTINUAL TASK once we've fixed it.
+query T
+SELECT regexp_replace(create_sql, ' AS OF.*', '')
+FROM mz_internal.mz_continual_tasks WHERE create_sql LIKE '%y.z.ct%';
+----
+CREATE CONTINUAL TASK y.z.ct ("key" [s20 AS "pg_catalog"."int4"]) IN CLUSTER [u1] ON INPUT [u1 AS "materialize"."public"."input"] AS (INSERT INTO y.z.ct SELECT "i"."key" FROM [u1 AS "materialize"."public"."input"] AS "i" JOIN [u3 AS "materialize"."x"."ct"] AS "x_ct" ON "i"."key" = "x_ct"."key")
 
 # Regression test for a bug where we'd panic if no CT inputs were referenced.
 statement ok
