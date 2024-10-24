@@ -164,22 +164,9 @@ $ kafka-ingest format=avro topic=upsert-topic key-format=avro key-schema=${keysc
   FORMAT TEXT
   ENVELOPE NONE
 
-# TODO: database-issues#8613
-#
-# > SELECT envelope_type FROM mz_sources WHERE name = 'none_source'
-# none
-#
-# > SELECT envelope_type FROM mz_sources WHERE name = 'debezium_source'
-# debezium
-#
-# > SELECT envelope_type FROM mz_sources WHERE name = 'upsert_source'
-# upsert
-#
-# > SELECT key_format, value_format FROM mz_sources WHERE name = 'none_source'
-# text text
-#
-# > SELECT key_format, value_format FROM mz_sources WHERE name = 'none_source_no_key'
-# <null> text
-#
-# > SELECT key_format, value_format FROM mz_sources WHERE name = 'debezium_source'
-# avro avro
+> SELECT topic, envelope_type, key_format, value_format FROM mz_internal.mz_kafka_source_tables
+"\"testdrive-none-topic-${testdrive.seed}\""     none            <null>       text
+"\"testdrive-upsert-topic-${testdrive.seed}\""   none            <null>       text
+"\"testdrive-none-topic-${testdrive.seed}\""     none            text         text
+"\"testdrive-dbzupsert-${testdrive.seed}\""      debezium        avro         avro
+"\"testdrive-upsert-topic-${testdrive.seed}\""   upsert          avro         avro
