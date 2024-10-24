@@ -18,7 +18,7 @@ use mz_expr::CollectionPlan;
 use mz_ore::str::StrExt;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
-use mz_repr::GlobalId;
+use mz_repr::CatalogItemId;
 use mz_sql_parser::ast::{Ident, QualifiedReplica};
 use tracing::debug;
 
@@ -854,11 +854,12 @@ fn generate_rbac_requirements(
             format: _,
             max_file_size: _,
         }) => {
-            let mut privileges = generate_read_privileges(
-                catalog,
-                select_plan.source.depends_on().into_iter(),
-                role_id,
-            );
+            let items = select_plan
+                .source
+                .depends_on()
+                .into_iter()
+                .map(|gid| catalog.resolve_item_id(&gid));
+            let mut privileges = generate_read_privileges(catalog, items, role_id);
             if let Some(cluster_id) = target_cluster_id {
                 privileges.push((
                     SystemObjectId::Object(cluster_id.into()),
@@ -963,11 +964,12 @@ fn generate_rbac_requirements(
                 seen.insert((id.into(), role_id));
             }
 
+            let items = values
+                .depends_on()
+                .into_iter()
+                .map(|gid| catalog.resolve_item_id(&gid));
             privileges.extend_from_slice(&generate_read_privileges_inner(
-                catalog,
-                values.depends_on().into_iter(),
-                role_id,
-                &mut seen,
+                catalog, items, role_id, &mut seen,
             ));
 
             if let Some(privilege) = generate_cluster_usage_privileges(
@@ -1576,7 +1578,7 @@ fn generate_required_source_privileges(
 /// For more details see: <https://www.postgresql.org/docs/15/rules-privileges.html>
 fn generate_read_privileges(
     catalog: &impl SessionCatalog,
-    ids: impl Iterator<Item = GlobalId>,
+    ids: impl Iterator<Item = CatalogItemId>,
     role_id: RoleId,
 ) -> Vec<(SystemObjectId, AclMode, RoleId)> {
     generate_read_privileges_inner(catalog, ids, role_id, &mut BTreeSet::new())
@@ -1584,7 +1586,7 @@ fn generate_read_privileges(
 
 fn generate_read_privileges_inner(
     catalog: &impl SessionCatalog,
-    ids: impl Iterator<Item = GlobalId>,
+    ids: impl Iterator<Item = CatalogItemId>,
     role_id: RoleId,
     seen: &mut BTreeSet<(ObjectId, RoleId)>,
 ) -> Vec<(SystemObjectId, AclMode, RoleId)> {

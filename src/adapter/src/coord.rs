@@ -97,7 +97,7 @@ use mz_catalog::config::{AwsPrincipalContext, BuiltinItemMigrationConfig, Cluste
 use mz_catalog::durable::OpenableDurableCatalogState;
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, ClusterReplicaProcessStatus, ClusterVariantManaged, Connection,
-    DataSourceDesc, NetworkPolicy, TableDataSource,
+    DataSourceDesc, NetworkPolicy, Table, TableDataSource,
 };
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig, VpcEndpointEvent};
 use mz_compute_client::as_of_selection;
@@ -130,12 +130,8 @@ use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::{SecretsController, SecretsReader};
 use mz_sql::ast::{Raw, Statement};
 use mz_sql::catalog::{CatalogCluster, EnvironmentId};
-use mz_sql::names::{ResolvedIds, SchemaSpecifier};
+use mz_sql::names::{QualifiedItemName, ResolvedIds, SchemaSpecifier};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
-use mz_sql::plan::{
-    self, AlterSinkPlan, ConnectionDetails, CreateConnectionPlan, OnTimeoutAction, Params,
-    QueryWhen,
-};
 use mz_sql::session::user::User;
 use mz_sql::session::vars::{ConnectionCounter, SystemVars};
 use mz_sql_parser::ast::display::AstDisplay;
@@ -435,7 +431,7 @@ pub struct CopyToContext {
     /// Connection information required to connect to the external service to copy the data.
     pub connection: StorageConnection<ReferencedConnection>,
     /// The ID of the CONNECTION object to be used for copying the data.
-    pub connection_id: GlobalId,
+    pub connection_id: CatalogItemId,
     /// Format params to format the data.
     pub format: S3SinkFormat,
     /// Approximate max file size of each uploaded file.

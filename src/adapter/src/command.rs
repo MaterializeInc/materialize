@@ -23,7 +23,7 @@ use mz_ore::soft_assert_no_log;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::role_id::RoleId;
-use mz_repr::{GlobalId, RowIterator};
+use mz_repr::{CatalogItemId, RowIterator};
 use mz_sql::ast::{FetchDirection, Raw, Statement};
 use mz_sql::catalog::ObjectType;
 use mz_sql::plan::{ExecuteTimeout, Plan, PlanKind};
@@ -282,7 +282,7 @@ pub enum ExecuteResponse {
         resp: Box<ExecuteResponse>,
     },
     CopyFrom {
-        id: GlobalId,
+        id: CatalogItemId,
         columns: Vec<usize>,
         params: CopyFormatParams<'static>,
         ctx_extra: ExecuteContextExtra,

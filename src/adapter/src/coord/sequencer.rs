@@ -736,7 +736,7 @@ impl Coordinator {
     pub(crate) fn insert_constant(
         catalog: &Catalog,
         session: &mut Session,
-        id: GlobalId,
+        id: CatalogItemId,
         constants: MirRelationExpr,
     ) -> Result<ExecuteResponse, AdapterError> {
         // Insert can be queued, so we need to re-verify the id exists.

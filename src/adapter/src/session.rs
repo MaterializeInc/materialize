@@ -29,7 +29,7 @@ use mz_ore::now::{EpochMillis, NowFn};
 use mz_pgwire_common::Format;
 use mz_repr::role_id::RoleId;
 use mz_repr::user::ExternalUserMetadata;
-use mz_repr::{Datum, Diff, GlobalId, Row, RowIterator, ScalarType, TimestampManipulation};
+use mz_repr::{CatalogItemId, Datum, Diff, Row, RowIterator, ScalarType, TimestampManipulation};
 use mz_sql::ast::{AstInfo, Raw, Statement, TransactionAccessMode};
 use mz_sql::plan::{Params, PlanContext, QueryWhen, StatementDesc};
 use mz_sql::session::metadata::SessionMetadata;
@@ -1446,7 +1446,7 @@ impl<T> Default for TransactionOps<T> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct WriteOp {
     /// The target table.
-    pub id: GlobalId,
+    pub id: CatalogItemId,
     /// The data rows.
     pub rows: Vec<(Row, Diff)>,
 }

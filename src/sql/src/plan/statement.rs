@@ -15,7 +15,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use mz_repr::namespaces::is_system_schema;
-use mz_repr::{ColumnType, GlobalId, RelationDesc, RelationVersionSelector, ScalarType};
+use mz_repr::{CatalogItemId, ColumnType, RelationDesc, RelationVersionSelector, ScalarType};
 use mz_sql_parser::ast::{
     ColumnDef, ColumnName, ConnectionDefaultAwsPrivatelink, CreateMaterializedViewStatement,
     RawItemName, ShowStatement, StatementKind, TableConstraint, UnresolvedDatabaseName,
@@ -26,8 +26,8 @@ use mz_storage_types::connections::{AwsPrivatelink, Connection, SshTunnel, Tunne
 
 use crate::ast::{Ident, Statement, UnresolvedItemName};
 use crate::catalog::{
-    CatalogCluster, CatalogDatabase, CatalogItem, CatalogItemType, CatalogSchema, ObjectType,
-    SessionCatalog, SystemObjectType,
+    CatalogCluster, CatalogCollectionItem, CatalogDatabase, CatalogItem, CatalogItemType,
+    CatalogSchema, ObjectType, SessionCatalog, SystemObjectType,
 };
 use crate::names::{
     self, Aug, DatabaseId, FullItemName, ItemQualifiers, ObjectId, PartialItemName,
@@ -436,7 +436,7 @@ pub fn plan(
 pub fn plan_copy_from(
     pcx: &PlanContext,
     catalog: &dyn SessionCatalog,
-    id: GlobalId,
+    id: CatalogItemId,
     columns: Vec<usize>,
     rows: Vec<mz_repr::Row>,
 ) -> Result<super::HirRelationExpr, PlanError> {

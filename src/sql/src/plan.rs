@@ -924,7 +924,7 @@ pub struct ShowColumnsPlan {
 
 #[derive(Debug)]
 pub struct CopyFromPlan {
-    pub id: GlobalId,
+    pub id: CatalogItemId,
     pub columns: Vec<usize>,
     pub params: CopyFormatParams<'static>,
 }
@@ -938,7 +938,7 @@ pub struct CopyToPlan {
     pub to: HirScalarExpr,
     pub connection: mz_storage_types::connections::Connection<ReferencedConnection>,
     /// The ID of the connection.
-    pub connection_id: GlobalId,
+    pub connection_id: CatalogItemId,
     pub format: S3SinkFormat,
     pub max_file_size: u64,
 }
@@ -1074,7 +1074,7 @@ pub struct ExplainSinkSchemaPlan {
 
 #[derive(Debug)]
 pub struct SendDiffsPlan {
-    pub id: GlobalId,
+    pub id: CatalogItemId,
     pub updates: Vec<(Row, Diff)>,
     pub kind: MutationKind,
     pub returning: Vec<(Row, NonZeroUsize)>,
@@ -1083,7 +1083,7 @@ pub struct SendDiffsPlan {
 
 #[derive(Debug)]
 pub struct InsertPlan {
-    pub id: GlobalId,
+    pub id: CatalogItemId,
     pub values: HirRelationExpr,
     pub returning: Vec<mz_expr::MirScalarExpr>,
 }
