@@ -1176,7 +1176,7 @@ impl CatalogState {
         }
     }
 
-    fn get_entry_mut(&mut self, id: &GlobalId) -> &mut CatalogEntry {
+    fn get_entry_mut(&mut self, id: &CatalogItemId) -> &mut CatalogEntry {
         self.entry_by_id
             .get_mut(id)
             .unwrap_or_else(|| panic!("catalog out of sync, missing id {id}"))
@@ -1436,6 +1436,9 @@ impl CatalogState {
                 ),
             }
         }
+        for gid in entry.item.global_ids() {
+            self.entry_by_global_id.insert(gid, entry.id());
+        }
         let conn_id = entry.item().conn_id().unwrap_or(&SYSTEM_CONN_ID);
         let schema = self.get_schema_mut(
             &entry.name().qualifiers.database_spec,
@@ -1496,6 +1499,9 @@ impl CatalogState {
             if let Some(dep_metadata) = self.entry_by_id.get_mut(&u) {
                 dep_metadata.used_by.retain(|u| *u != metadata.id())
             }
+        }
+        for gid in metadata.global_ids() {
+            self.entry_by_global_id.remove(&gid);
         }
 
         let conn_id = metadata.item().conn_id().unwrap_or(&SYSTEM_CONN_ID);
