@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 use differential_dataflow::collection::AsCollection;
 use differential_dataflow::trace::{BatchReader, Cursor};
 use differential_dataflow::Collection;
+use mz_compute_types::plan::LirId;
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, GlobalId, Timestamp};
 use mz_timely_util::replay::MzReplay;
@@ -130,6 +131,32 @@ pub enum ComputeEvent {
     },
     /// A dataflow export was hydrated.
     Hydration { export_id: GlobalId },
+    /// An LIR operator was mapped to some particular dataflow operator.
+    ///
+    /// Cf. `ComputeLog::LirMaping`
+    LirMapping {
+        /// The `GlobalId` in which the LIR operator is rendered.
+        ///
+        /// NB a single a dataflow may have many `GlobalId`s inside it.
+        /// A separate mapping (using `ComputeEvent::DataflowGlobal`)
+        /// tracks the many-to-one relationship between `GlobalId`s and
+        /// dataflows.
+        global_id: GlobalId,
+        /// The LIR identifier (local to `export_id`).
+        lir_id: LirId,
+        /// The LIR operator, as a string (see `FlatPlanNode::humanize`).
+        operator: String,
+        /// How nested this operator is.
+        nesting: u8,
+        /// Operator id span; may not be present if not operators were rendered.
+        operator_span: Option<(usize, usize)>,
+    },
+    DataflowGlobal {
+        /// The identifier of the dataflow.
+        id: usize,
+        /// A `GlobalId` that is rendered as part of this dataflow.
+        global_id: GlobalId,
+    },
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Debug)]
@@ -214,6 +241,8 @@ pub(super) fn construct<A: Allocate + 'static>(
             demux.new_output();
         let (mut error_count_out, error_count) = demux.new_output();
         let (mut hydration_time_out, hydration_time) = demux.new_output();
+        let (mut lir_mapping_out, lir_mapping) = demux.new_output();
+        let (mut dataflow_global_ids_out, dataflow_global_ids) = demux.new_output();
 
         let mut demux_state = DemuxState::new(worker2);
         let mut demux_buffer = Vec::new();
@@ -230,6 +259,8 @@ pub(super) fn construct<A: Allocate + 'static>(
                 let mut arrangement_heap_allocations = arrangement_heap_allocations_out.activate();
                 let mut error_count = error_count_out.activate();
                 let mut hydration_time = hydration_time_out.activate();
+                let mut lir_mapping = lir_mapping_out.activate();
+                let mut dataflow_global_ids = dataflow_global_ids_out.activate();
 
                 input.for_each(|cap, data| {
                     data.swap(&mut demux_buffer);
@@ -246,6 +277,8 @@ pub(super) fn construct<A: Allocate + 'static>(
                         arrangement_heap_allocations: arrangement_heap_allocations.session(&cap),
                         error_count: error_count.session(&cap),
                         hydration_time: hydration_time.session(&cap),
+                        lir_mapping: lir_mapping.session(&cap),
+                        dataflow_global_ids: dataflow_global_ids.session(&cap),
                     };
 
                     for (time, logger_id, event) in demux_buffer.drain(..) {
@@ -382,6 +415,42 @@ pub(super) fn construct<A: Allocate + 'static>(
             }
         });
 
+        let packer = PermutedRowPacker::new(ComputeLog::LirMapping);
+        let lir_mapping = lir_mapping.as_collection().map({
+            move |datum| {
+                let mut scratch1 = String::new();
+                let mut scratch2 = String::new();
+                let (span_start, span_end) = match datum.operator_span {
+                    Some((start, end)) => (
+                        Datum::UInt64(u64::cast_from(start)),
+                        Datum::UInt64(u64::cast_from(end)),
+                    ),
+                    None => (Datum::Null, Datum::Null),
+                };
+                packer.pack_slice(&[
+                    make_string_datum(datum.global_id, &mut scratch1),
+                    Datum::UInt64(datum.lir_id),
+                    Datum::UInt64(u64::cast_from(worker_id)),
+                    make_string_datum(&datum.operator, &mut scratch2),
+                    Datum::UInt16(u16::cast_from(datum.nesting)),
+                    span_start,
+                    span_end,
+                ])
+            }
+        });
+
+        let packer = PermutedRowPacker::new(ComputeLog::DataflowGlobal);
+        let dataflow_global_ids = dataflow_global_ids.as_collection().map({
+            move |datum| {
+                let mut scratch = String::new();
+                packer.pack_slice(&[
+                    Datum::UInt64(u64::cast_from(datum.id)),
+                    Datum::UInt64(u64::cast_from(worker_id)),
+                    make_string_datum(datum.global_id, &mut scratch),
+                ])
+            }
+        });
+
         use ComputeLog::*;
         let logs = [
             (DataflowCurrent, dataflow_current),
@@ -395,6 +464,8 @@ pub(super) fn construct<A: Allocate + 'static>(
             (ArrangementHeapAllocations, arrangement_heap_allocations),
             (ErrorCount, error_count),
             (HydrationTime, hydration_time),
+            (LirMapping, lir_mapping),
+            (DataflowGlobal, dataflow_global_ids),
         ];
 
         // Build the output arrangements.
@@ -446,8 +517,23 @@ struct DemuxState<A: Allocate> {
     shutdown_dataflows: BTreeSet<usize>,
     /// Maps pending peeks to their installation time.
     peek_stash: BTreeMap<Uuid, Duration>,
-    /// Arrangement size stash
+    /// Arrangement size stash.
     arrangement_size: BTreeMap<usize, ArrangementSizeState>,
+    /// LIR -> operator span mapping.
+    lir_mapping: BTreeMap<GlobalId, BTreeMap<LirId, LirMetadata>>,
+    /// Dataflow -> `GlobalId` mapping (many-to-one)/
+    dataflow_global_ids: BTreeMap<usize, BTreeSet<GlobalId>>,
+}
+
+/// Metadata for LIR operators.
+#[derive(Debug)]
+struct LirMetadata {
+    /// The operator rendered as a string.
+    operator: String,
+    /// How nested the operator is (for nice indentation).
+    nesting: u8,
+    /// The dataflow operator ids, given as start (inclusive) and end (exclusive).
+    operator_span: Option<(usize, usize)>,
 }
 
 impl<A: Allocate> DemuxState<A> {
@@ -460,6 +546,8 @@ impl<A: Allocate> DemuxState<A> {
             shutdown_dataflows: Default::default(),
             peek_stash: Default::default(),
             arrangement_size: Default::default(),
+            lir_mapping: Default::default(),
+            dataflow_global_ids: Default::default(),
         }
     }
 }
@@ -516,6 +604,8 @@ struct DemuxOutput<'a> {
     arrangement_heap_allocations: OutputSession<'a, ArrangementHeapDatum>,
     hydration_time: OutputSession<'a, HydrationTimeDatum>,
     error_count: OutputSession<'a, ErrorCountDatum>,
+    lir_mapping: OutputSession<'a, LirMappingDatum>,
+    dataflow_global_ids: OutputSession<'a, DataflowGlobalDatum>,
 }
 
 #[derive(Clone)]
@@ -567,6 +657,21 @@ struct ErrorCountDatum {
     // per-worker error count might be negative and at the SQL level having negative multiplicities
     // is treated as an error.
     count: i64,
+}
+
+#[derive(Clone)]
+struct LirMappingDatum {
+    global_id: GlobalId,
+    lir_id: LirId,
+    operator: String,
+    nesting: u8,
+    operator_span: Option<(usize, usize)>,
+}
+
+#[derive(Clone)]
+struct DataflowGlobalDatum {
+    id: usize,
+    global_id: GlobalId,
 }
 
 /// Event handler of the demux operator.
@@ -638,6 +743,14 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
             DataflowShutdown { dataflow_index } => self.handle_dataflow_shutdown(dataflow_index),
             ErrorCount { export_id, diff } => self.handle_error_count(export_id, diff),
             Hydration { export_id } => self.handle_hydration(export_id),
+            LirMapping {
+                global_id,
+                lir_id,
+                operator,
+                nesting,
+                operator_span,
+            } => self.handle_lir_mapping(global_id, lir_id, operator, nesting, operator_span),
+            DataflowGlobal { id, global_id } => self.handle_dataflow_global(id, global_id),
         }
     }
 
@@ -722,18 +835,49 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
     }
 
     fn handle_dataflow_shutdown(&mut self, id: usize) {
+        let ts = self.ts();
+
         if let Some(start) = self.state.dataflow_drop_times.remove(&id) {
-            // Dataflow has alredy been dropped.
+            // Dataflow has already been dropped.
             let elapsed_ns = self.time.saturating_sub(start).as_nanos();
             let elapsed_pow = elapsed_ns.next_power_of_two();
-            self.output
-                .shutdown_duration
-                .give((elapsed_pow, self.ts(), 1));
+            self.output.shutdown_duration.give((elapsed_pow, ts, 1));
         } else {
             // Dataflow has not yet been dropped.
             let was_new = self.state.shutdown_dataflows.insert(id);
             if !was_new {
                 error!(dataflow = %id, "dataflow already shutdown");
+            }
+        }
+
+        // We deal with any `GlobalId` based mappings in this event.
+        if let Some(global_ids) = self.state.dataflow_global_ids.remove(&id) {
+            for global_id in global_ids {
+                // Remove dataflow/`GlobalID` mapping.
+                let datum = DataflowGlobalDatum { id, global_id };
+                self.output.dataflow_global_ids.give((datum, ts, -1));
+
+                // Remove LIR mapping.
+                if let Some(mappings) = self.state.lir_mapping.remove(&global_id) {
+                    for (
+                        lir_id,
+                        LirMetadata {
+                            operator,
+                            nesting,
+                            operator_span,
+                        },
+                    ) in mappings
+                    {
+                        let datum = LirMappingDatum {
+                            global_id,
+                            lir_id,
+                            operator,
+                            nesting,
+                            operator_span,
+                        };
+                        self.output.lir_mapping.give((datum, ts, -1));
+                    }
+                }
             }
         }
     }
@@ -949,6 +1093,64 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
         self.shared_state
             .arrangement_size_activators
             .remove(&operator_id);
+    }
+
+    /// Indicate that a new LIR operator exists; record the dataflow address it maps to.
+    fn handle_lir_mapping(
+        &mut self,
+        global_id: GlobalId,
+        lir_id: LirId,
+        operator: String,
+        nesting: u8,
+        operator_span: Option<(usize, usize)>,
+    ) {
+        // record the state (for the later drop)
+        self.state
+            .lir_mapping
+            .entry(global_id)
+            .and_modify(|id_mapping| {
+                let existing = id_mapping.insert(lir_id, LirMetadata {
+                    operator: operator.clone(),
+                    nesting,
+                    operator_span: operator_span.clone(),
+                });
+                if let Some(old_operator_span) = existing {
+                    error!(%global_id, %lir_id, "lir mapping to operator span {operator_span:?} already registered as {old_operator_span:?}");
+                }
+            })
+            .or_insert_with(|| BTreeMap::from([(lir_id, LirMetadata {
+                operator: operator.clone(),
+                nesting,
+                operator_span: operator_span.clone(),
+            })]));
+
+        // send the datum out
+        let ts = self.ts();
+        let datum = LirMappingDatum {
+            global_id,
+            lir_id,
+            operator,
+            nesting,
+            operator_span,
+        };
+        self.output.lir_mapping.give((datum, ts, 1));
+    }
+
+    fn handle_dataflow_global(&mut self, id: usize, global_id: GlobalId) {
+        self.state
+            .dataflow_global_ids
+            .entry(id)
+            .and_modify(|globals| {
+                // NB BTreeSet::insert() returns `false` when the element was already in the set
+                if !globals.insert(global_id.clone()) {
+                    error!(%id, %global_id, "dataflow mapping already knew about this GlobalId");
+                }
+            })
+            .or_insert_with(|| BTreeSet::from([global_id.clone()]));
+
+        let ts = self.ts();
+        let datum = DataflowGlobalDatum { id, global_id };
+        self.output.dataflow_global_ids.give((datum, ts, 1));
     }
 }
 
