@@ -271,7 +271,7 @@ async fn main() {
 
     tracing_subscriber::fmt()
         .with_env_filter(args.log_filter)
-        .with_writer(io::stderr)
+        .with_writer(io::stdout)
         .init();
 
     let (aws_config, aws_account) = match args.aws_region {
@@ -509,7 +509,7 @@ async fn main() {
             junit_suite.add_testcase(test_case);
         }
         if let Err(error) = res {
-            let _ = error.print_stderr();
+            let _ = error.print_error();
             error_count += 1;
             error_files.insert(file);
             if error_count >= args.max_errors {
