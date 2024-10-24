@@ -1901,6 +1901,26 @@ impl CatalogState {
                     serde_json::json!(unfinalized_shards),
                 );
         }
+        // Remove GlobalIds for temporary objects from the mapping.
+        //
+        // Post-test consistency checks with the durable catalog don't know about temporary items
+        // since they're kept entirely in memory.
+        let temporary_gids: Vec<_> = self
+            .entry_by_global_id
+            .iter()
+            .filter(|(_gid, item_id)| self.get_entry(item_id).conn_id().is_some())
+            .map(|(gid, _item_id)| *gid)
+            .collect();
+        if !temporary_gids.is_empty() {
+            let gids = dump_obj
+                .get_mut("entry_by_global_id")
+                .expect("known_to_exist")
+                .as_object_mut()
+                .expect("entry_by_global_id is an object");
+            for gid in temporary_gids {
+                gids.remove(&gid.to_string());
+            }
+        }
 
         // Emit as pretty-printed JSON.
         Ok(serde_json::to_string_pretty(&dump).expect("cannot fail on serde_json::Value"))

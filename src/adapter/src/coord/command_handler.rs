@@ -848,9 +848,10 @@ impl Coordinator {
                     )
                     .await;
                     let result = result.map_err(|e| e.into());
+                    let dependency_ids = resolved_ids.items().copied().collect();
                     let plan_validity = PlanValidity::new(
                         transient_revision,
-                        resolved_ids.0,
+                        dependency_ids,
                         cluster_id,
                         None,
                         ctx.session().role_metadata().clone(),
