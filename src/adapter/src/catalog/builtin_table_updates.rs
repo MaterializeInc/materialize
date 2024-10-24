@@ -53,7 +53,7 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::refresh_schedule::RefreshEvery;
 use mz_repr::role_id::RoleId;
-use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, ScalarType, Timestamp};
+use mz_repr::{CatalogItemId, Datum, Diff, GlobalId, Row, RowPacker, ScalarType, Timestamp};
 use mz_sql::ast::{ContinualTaskStmt, CreateIndexStatement, Statement, UnresolvedItemName};
 use mz_sql::catalog::{
     CatalogCluster, CatalogDatabase, CatalogSchema, CatalogType, DefaultPrivilegeObject,
@@ -83,7 +83,7 @@ use crate::coord::ConnMeta;
 
 /// An update to a built-in table.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BuiltinTableUpdate<T = GlobalId> {
+pub struct BuiltinTableUpdate<T = CatalogItemId> {
     /// The reference of the table to update.
     pub id: T,
     /// The data to put into the table.
@@ -96,7 +96,7 @@ impl CatalogState {
     pub fn resolve_builtin_table_updates(
         &self,
         builtin_table_update: Vec<BuiltinTableUpdate<&'static BuiltinTable>>,
-    ) -> Vec<BuiltinTableUpdate<GlobalId>> {
+    ) -> Vec<BuiltinTableUpdate<CatalogItemId>> {
         builtin_table_update
             .into_iter()
             .map(|builtin_table_update| self.resolve_builtin_table_update(builtin_table_update))
@@ -106,15 +106,15 @@ impl CatalogState {
     pub fn resolve_builtin_table_update(
         &self,
         BuiltinTableUpdate { id, row, diff }: BuiltinTableUpdate<&'static BuiltinTable>,
-    ) -> BuiltinTableUpdate<GlobalId> {
+    ) -> BuiltinTableUpdate<CatalogItemId> {
         let id = self.resolve_builtin_table(id);
         BuiltinTableUpdate { id, row, diff }
     }
 
     pub fn pack_depends_update(
         &self,
-        depender: GlobalId,
-        dependee: GlobalId,
+        depender: CatalogItemId,
+        dependee: CatalogItemId,
         diff: Diff,
     ) -> BuiltinTableUpdate<&'static BuiltinTable> {
         BuiltinTableUpdate {
@@ -642,7 +642,7 @@ impl CatalogState {
                                 self.pack_postgres_source_update(id, postgres, diff)
                             }
                             GenericSourceConnection::Kafka(kafka) => {
-                                self.pack_kafka_source_update(id, kafka, diff)
+                                self.pack_kafka_source_update(id, source.global_id(), kafka, diff)
                             }
                             _ => vec![],
                         }
@@ -821,7 +821,7 @@ impl CatalogState {
 
     fn pack_history_retention_strategy_update(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         cw: CompactionWindow,
         diff: Diff,
     ) -> BuiltinTableUpdate<&'static BuiltinTable> {
@@ -842,7 +842,7 @@ impl CatalogState {
 
     fn pack_table_update(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         oid: u32,
         schema_id: &SchemaSpecifier,
         name: &str,
@@ -899,12 +899,12 @@ impl CatalogState {
 
     fn pack_source_update(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         oid: u32,
         schema_id: &SchemaSpecifier,
         name: &str,
         source_desc_name: &str,
-        connection_id: Option<GlobalId>,
+        connection_id: Option<CatalogItemId>,
         envelope: Option<&str>,
         key_format: Option<&str>,
         value_format: Option<&str>,
@@ -956,7 +956,7 @@ impl CatalogState {
 
     fn pack_postgres_source_update(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         postgres: &PostgresSourceConnection<ReferencedConnection>,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
@@ -973,15 +973,16 @@ impl CatalogState {
 
     fn pack_kafka_source_update(
         &self,
-        id: GlobalId,
+        item_id: CatalogItemId,
+        collection_id: GlobalId,
         kafka: &KafkaSourceConnection<ReferencedConnection>,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
         vec![BuiltinTableUpdate {
             id: &*MZ_KAFKA_SOURCES,
             row: Row::pack_slice(&[
-                Datum::String(&id.to_string()),
-                Datum::String(&kafka.group_id(&self.config.connection_context, id)),
+                Datum::String(&item_id.to_string()),
+                Datum::String(&kafka.group_id(&self.config.connection_context, collection_id)),
                 Datum::String(&kafka.topic),
             ]),
             diff,
@@ -990,7 +991,7 @@ impl CatalogState {
 
     fn pack_postgres_source_tables_update(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         schema_name: &str,
         table_name: &str,
         diff: Diff,
@@ -1008,7 +1009,7 @@ impl CatalogState {
 
     fn pack_mysql_source_tables_update(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         schema_name: &str,
         table_name: &str,
         diff: Diff,
@@ -1026,7 +1027,7 @@ impl CatalogState {
 
     fn pack_kafka_source_tables_update(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         topic: &str,
         envelope: Option<&str>,
         key_format: Option<&str>,
@@ -1048,7 +1049,7 @@ impl CatalogState {
 
     fn pack_connection_update(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         oid: u32,
         schema_id: &SchemaSpecifier,
         name: &str,
@@ -1125,7 +1126,7 @@ impl CatalogState {
 
     pub(crate) fn pack_ssh_tunnel_connection_update(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         key_1: &SshKey,
         key_2: &SshKey,
         diff: Diff,
@@ -1143,7 +1144,7 @@ impl CatalogState {
 
     fn pack_kafka_connection_update(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         kafka: &KafkaConnection<ReferencedConnection>,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
@@ -1175,7 +1176,7 @@ impl CatalogState {
 
     pub fn pack_aws_privatelink_connection_update(
         &self,
-        connection_id: GlobalId,
+        connection_id: CatalogItemId,
         aws_principal_context: &AwsPrincipalContext,
         diff: Diff,
     ) -> BuiltinTableUpdate<&'static BuiltinTable> {
@@ -1189,7 +1190,7 @@ impl CatalogState {
 
     pub fn pack_aws_connection_update(
         &self,
-        connection_id: GlobalId,
+        connection_id: CatalogItemId,
         aws_config: &AwsConnection,
         diff: Diff,
     ) -> Result<BuiltinTableUpdate<&'static BuiltinTable>, anyhow::Error> {
@@ -1260,7 +1261,7 @@ impl CatalogState {
 
     fn pack_view_update(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         oid: u32,
         schema_id: &SchemaSpecifier,
         name: &str,
@@ -1307,7 +1308,7 @@ impl CatalogState {
 
     fn pack_materialized_view_update(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         oid: u32,
         schema_id: &SchemaSpecifier,
         name: &str,
@@ -1418,7 +1419,7 @@ impl CatalogState {
 
     fn pack_continual_task_update(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         oid: u32,
         schema_id: &SchemaSpecifier,
         name: &str,
@@ -1476,7 +1477,7 @@ impl CatalogState {
 
     fn pack_sink_update(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         oid: u32,
         schema_id: &SchemaSpecifier,
         name: &str,
@@ -1539,7 +1540,7 @@ impl CatalogState {
 
     fn pack_index_update(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         oid: u32,
         name: &str,
         owner_id: &RoleId,
@@ -1564,6 +1565,7 @@ impl CatalogState {
                 .expect("key_parts is filled in during planning"),
             _ => unreachable!(),
         };
+        let on_item_id = self.get_entry_by_global_id(&index.on).id();
 
         updates.push(BuiltinTableUpdate {
             id: &*MZ_INDEXES,
@@ -1571,7 +1573,7 @@ impl CatalogState {
                 Datum::String(&id.to_string()),
                 Datum::UInt32(oid),
                 Datum::String(name),
-                Datum::String(&index.on.to_string()),
+                Datum::String(&on_item_id.to_string()),
                 Datum::String(&index.cluster_id.to_string()),
                 Datum::String(&owner_id.to_string()),
                 Datum::String(&index.create_sql),
@@ -1581,7 +1583,7 @@ impl CatalogState {
         });
 
         for (i, key) in index.keys.iter().enumerate() {
-            let on_entry = self.get_entry(&index.on);
+            let on_entry = self.get_entry_by_global_id(&index.on);
             let nullable = key
                 .typ(
                     &on_entry
@@ -1620,7 +1622,7 @@ impl CatalogState {
 
     fn pack_type_update(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         oid: u32,
         schema_id: &SchemaSpecifier,
         name: &str,
@@ -1736,7 +1738,7 @@ impl CatalogState {
 
     fn pack_func_update(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         schema_id: &SchemaSpecifier,
         name: &str,
         owner_id: &RoleId,
@@ -1850,7 +1852,7 @@ impl CatalogState {
 
     fn pack_secret_update(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         oid: u32,
         schema_id: &SchemaSpecifier,
         name: &str,
@@ -2199,15 +2201,15 @@ impl CatalogState {
 
     pub fn pack_webhook_source_update(
         &self,
-        source_id: GlobalId,
+        item_id: CatalogItemId,
         diff: Diff,
     ) -> BuiltinTableUpdate<&'static BuiltinTable> {
         let url = self
-            .try_get_webhook_url(&source_id)
+            .try_get_webhook_url(&item_id)
             .expect("webhook source should exist");
         let url = url.to_string();
-        let name = &self.get_entry(&source_id).name().item;
-        let id_str = source_id.to_string();
+        let name = &self.get_entry(&item_id).name().item;
+        let id_str = item_id.to_string();
 
         BuiltinTableUpdate {
             id: &*MZ_WEBHOOKS_SOURCES,
