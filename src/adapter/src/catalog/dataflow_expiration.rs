@@ -9,6 +9,8 @@ use std::collections::BTreeMap;
 
 use mz_catalog::memory::objects::DataSourceDesc;
 use mz_compute_types::dataflows::DataflowDescription;
+use mz_controller_types::ClusterId;
+use mz_ore::soft_panic_or_log;
 use mz_repr::time_dependence::TimeDependence;
 use mz_repr::GlobalId;
 use mz_sql::catalog::{CatalogItem, CatalogItemType};
@@ -32,12 +34,28 @@ impl<'a> TimeDependenceHelper<'a> {
         }
     }
 
-    pub(crate) fn determine_dependence<P>(
+    pub(crate) fn determine_time_dependence_plan<P>(
         &mut self,
-        id: GlobalId,
-        plan: Option<&DataflowDescription<P>>,
+        plan: &DataflowDescription<P>,
+        cluster: ClusterId,
     ) -> TimeDependence {
-        println!("determine_dependence({id})");
+        let id_bundle = dataflow_import_id_bundle(plan, cluster);
+        self.determine_time_dependence_ids(id_bundle.iter())
+    }
+
+    pub(crate) fn determine_time_dependence_ids(
+        &mut self,
+        ids: impl IntoIterator<Item = GlobalId>,
+    ) -> TimeDependence {
+        use TimeDependence::*;
+        let mut time_dependence = Indeterminate;
+        for id in ids {
+            time_dependence.unify(&self.determine_dependence_inner(id));
+        }
+        time_dependence
+    }
+
+    fn determine_dependence_inner(&mut self, id: GlobalId) -> TimeDependence {
         use TimeDependence::*;
 
         if let Some(dependence) = self.seen.get(&id).cloned() {
@@ -47,104 +65,61 @@ impl<'a> TimeDependenceHelper<'a> {
 
         self.level += 1;
         let entry = self.catalog.get_entry(&id);
+        println!("{indent}{}: {id:?} {:?}", entry.item_type(), entry.name());
         let mut time_dependence = match entry.item_type() {
             CatalogItemType::Table => {
-                println!("{indent}table: {id:?}");
                 // Follows wall clock.
                 Wallclock
             }
             CatalogItemType::Source => {
-                println!("{indent}source: {id:?}");
                 // Some sources don't have a `Source` entry, so we can't determine their time
                 // dependence.
-                let Some(source) = entry.source() else {
-                    return Indeterminate;
-                };
-                // We only know how to handle the epoch timeline.
-                let timeline = source.timeline.clone();
-                if !matches!(timeline, Timeline::EpochMilliseconds) {
-                    Indeterminate
-                } else {
-                    match &source.data_source {
-                        DataSourceDesc::Ingestion { ingestion_desc, .. } => {
-                            match ingestion_desc.desc.connection {
-                                // Kafka, Postgres, MySql sources follow wall clock.
-                                GenericSourceConnection::Kafka(_)
-                                | GenericSourceConnection::Postgres(_)
-                                | GenericSourceConnection::MySql(_) => Wallclock,
-                                // Load generators not further specified.
-                                GenericSourceConnection::LoadGenerator(_) => Indeterminate,
-                            }
-                        }
-                        DataSourceDesc::IngestionExport { ingestion_id, .. } => {
-                            self.determine_dependence::<()>(*ingestion_id, None)
-                        }
-                        // Introspection, progress and webhook sources follow wall clock.
-                        DataSourceDesc::Introspection(_)
-                        | DataSourceDesc::Progress
-                        | DataSourceDesc::Webhook { .. } => Wallclock,
-                    }
-                }
-            }
-            CatalogItemType::MaterializedView => {
-                println!("{indent}mv: {id:?}");
-                // Follow dependencies, rounded to the next refresh.
-                let materialized_view = entry.materialized_view().unwrap();
-                let mut dependence = Indeterminate;
-                if let Some(plan) = self.catalog.try_get_physical_plan(&id) {
-                    if let Some(time_dependence) = &plan.time_dependence {
-                        println!("{indent}mv cached value: {time_dependence:?}");
-                        dependence = time_dependence.clone();
+                if let Some(source) = entry.source() {
+                    // We only know how to handle the epoch timeline.
+                    let timeline = source.timeline.clone();
+                    if !matches!(timeline, Timeline::EpochMilliseconds) {
+                        Indeterminate
                     } else {
-                        let id_bundle = dataflow_import_id_bundle(
-                            plan,
-                            entry.cluster_id().expect("must exist"),
-                        );
-                        for dep in id_bundle.iter() {
-                            dependence.unify(&self.determine_dependence::<()>(dep, None));
-                        }
-                        if let Some(refresh_schedule) = &materialized_view.refresh_schedule {
-                            dependence = match dependence {
-                                Indeterminate => Indeterminate,
-                                RefreshSchedule(_, existing) => {
-                                    RefreshSchedule(Some(refresh_schedule.clone()), existing)
+                        match &source.data_source {
+                            DataSourceDesc::Ingestion { ingestion_desc, .. } => {
+                                match ingestion_desc.desc.connection {
+                                    // Kafka, Postgres, MySql sources follow wall clock.
+                                    GenericSourceConnection::Kafka(_)
+                                    | GenericSourceConnection::Postgres(_)
+                                    | GenericSourceConnection::MySql(_) => Wallclock,
+                                    // Load generators not further specified.
+                                    GenericSourceConnection::LoadGenerator(_) => Indeterminate,
                                 }
-                                Wallclock => {
-                                    RefreshSchedule(Some(refresh_schedule.clone()), vec![Wallclock])
-                                }
-                            };
+                            }
+                            DataSourceDesc::IngestionExport { ingestion_id, .. } => {
+                                self.determine_dependence_inner(*ingestion_id)
+                            }
+                            // Introspection, progress and webhook sources follow wall clock.
+                            DataSourceDesc::Introspection(_)
+                            | DataSourceDesc::Progress
+                            | DataSourceDesc::Webhook { .. } => Wallclock,
                         }
-                        // panic!("Dependency on materialized view without time dependence");
                     }
                 } else {
-                    println!("{indent}mv physical plan absent");
+                    Indeterminate
                 }
-                dependence
             }
-            CatalogItemType::Index | CatalogItemType::ContinualTask => {
-                println!("{indent}index|CT: {id:?}");
+            CatalogItemType::MaterializedView
+            | CatalogItemType::Index
+            | CatalogItemType::ContinualTask => {
                 // Follow dependencies, if any.
-                let mut dependence = Indeterminate;
                 if let Some(time_dependence) = self
                     .catalog
                     .try_get_physical_plan(&id)
                     .and_then(|plan| plan.time_dependence.as_ref())
                     .cloned()
                 {
-                    // if let Some(time_dependence) = &plan.time_dependence {
-                    println!("{indent}index|CT cached value: {time_dependence:?}");
-                    dependence = time_dependence;
-                } else if let Some(plan) = plan {
-                    let id_bundle =
-                        dataflow_import_id_bundle(plan, entry.cluster_id().expect("must exist"));
-                    for dep in id_bundle.iter() {
-                        dependence.unify(&self.determine_dependence::<()>(dep, None));
-                    }
-                    // panic!("Dependency on view without time dependence");
+                    println!("{indent}mv|index|CT cached value: {time_dependence:?}");
+                    time_dependence
                 } else {
-                    println!("{indent}index|CT physical plan absent");
+                    soft_panic_or_log!("{indent}mv|index|CT physical plan absent");
+                    Indeterminate
                 }
-                dependence
             }
             // All others are indeterminate.
             CatalogItemType::Connection
@@ -154,6 +129,7 @@ impl<'a> TimeDependenceHelper<'a> {
             | CatalogItemType::Type
             | CatalogItemType::View => Indeterminate,
         };
+        self.level -= 1;
 
         time_dependence.normalize();
 
