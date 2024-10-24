@@ -322,15 +322,15 @@ impl Catalog {
         !item.is_temporary()
     }
 
-    /// Gets GlobalIds of temporary items to be created, checks for name collisions
+    /// Gets [`CatalogItemId`]s of temporary items to be created, checks for name collisions
     /// within a connection id.
     fn temporary_ids(
         &self,
         ops: &[Op],
         temporary_drops: BTreeSet<(&ConnectionId, String)>,
-    ) -> Result<Vec<GlobalId>, Error> {
+    ) -> Result<BTreeSet<CatalogItemId>, Error> {
         let mut creating = BTreeSet::new();
-        let mut temporary_ids = Vec::with_capacity(ops.len());
+        let mut temporary_ids = BTreeSet::new();
         for op in ops.iter() {
             if let Op::CreateItem {
                 id,
@@ -349,7 +349,7 @@ impl Catalog {
                         );
                     } else {
                         creating.insert((conn_id, &name.item));
-                        temporary_ids.push(id.clone());
+                        temporary_ids.insert(id.clone());
                     }
                 }
             }
@@ -466,7 +466,7 @@ impl Catalog {
         oracle_write_ts: mz_repr::Timestamp,
         session: Option<&ConnMeta>,
         mut ops: Vec<Op>,
-        temporary_ids: Vec<GlobalId>,
+        temporary_ids: BTreeSet<CatalogItemId>,
         builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
         audit_events: &mut Vec<VersionedEvent>,
         tx: &mut Transaction<'_>,
@@ -572,7 +572,7 @@ impl Catalog {
         oracle_write_ts: mz_repr::Timestamp,
         session: Option<&ConnMeta>,
         op: Op,
-        temporary_ids: &Vec<GlobalId>,
+        temporary_ids: &BTreeSet<CatalogItemId>,
         audit_events: &mut Vec<VersionedEvent>,
         tx: &mut Transaction<'_>,
         state: &CatalogState,

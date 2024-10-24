@@ -253,7 +253,7 @@ impl CatalogState {
                 | CommentObjectId::Type(item_id)
                 | CommentObjectId::Secret(item_id)
                 | CommentObjectId::ContinualTask(item_id) => {
-                    let entry = self.entry_by_id.get(&item_id.to_global_id());
+                    let entry = self.entry_by_id.get(&item_id);
                     match entry {
                         None => comment_inconsistencies
                             .push(CommentInconsistency::Dangling(comment_object_id)),

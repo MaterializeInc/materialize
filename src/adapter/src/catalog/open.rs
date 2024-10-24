@@ -224,6 +224,7 @@ impl Catalog {
             database_by_name: BTreeMap::new(),
             database_by_id: BTreeMap::new(),
             entry_by_id: BTreeMap::new(),
+            entry_by_global_id: BTreeMap::new(),
             ambient_schemas_by_name: BTreeMap::new(),
             ambient_schemas_by_id: BTreeMap::new(),
             clusters_by_name: BTreeMap::new(),

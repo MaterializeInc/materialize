@@ -626,7 +626,7 @@ impl<'a> StatementContext<'a> {
     // `UnresolvedItemName`.
     pub fn allocate_resolved_item_name(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         name: UnresolvedItemName,
     ) -> Result<ResolvedItemName, PlanError> {
         let partial = normalize::unresolved_item_name(name)?;
@@ -723,16 +723,18 @@ impl<'a> StatementContext<'a> {
         }
     }
 
-    pub fn get_item(&self, id: &GlobalId) -> &dyn CatalogItem {
+    pub fn get_item(&self, id: &CatalogItemId) -> &dyn CatalogItem {
         self.catalog.get_item(id)
     }
 
     pub fn get_item_by_resolved_name(
         &self,
         name: &ResolvedItemName,
-    ) -> Result<&dyn CatalogItem, PlanError> {
+    ) -> Result<Box<dyn CatalogCollectionItem>, PlanError> {
         match name {
-            ResolvedItemName::Item { id, .. } => Ok(self.get_item(id)),
+            ResolvedItemName::Item { id, version, .. } => {
+                Ok(self.get_item(id).at_version(*version))
+            }
             ResolvedItemName::Cte { .. } => sql_bail!("non-user item"),
             ResolvedItemName::ContinualTask { .. } => sql_bail!("non-user item"),
             ResolvedItemName::Error => unreachable!("should have been caught in name resolution"),
@@ -742,10 +744,13 @@ impl<'a> StatementContext<'a> {
     pub fn get_column_by_resolved_name(
         &self,
         name: &ColumnName<Aug>,
-    ) -> Result<(&dyn CatalogItem, usize), PlanError> {
+    ) -> Result<(Box<dyn CatalogCollectionItem>, usize), PlanError> {
         match (&name.relation, &name.column) {
-            (ResolvedItemName::Item { id, .. }, ResolvedColumnReference::Column { index, .. }) => {
-                let item = self.get_item(id);
+            (
+                ResolvedItemName::Item { id, version, .. },
+                ResolvedColumnReference::Column { index, .. },
+            ) => {
+                let item = self.get_item(id).at_version(*version);
                 Ok((item, *index))
             }
             _ => unreachable!(

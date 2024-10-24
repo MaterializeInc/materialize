@@ -31,7 +31,7 @@ use mz_catalog::durable::CatalogError;
 use mz_catalog::durable::{test_bootstrap_args, DurableCatalogState, TestCatalogStateBuilder};
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogEntry, Cluster, ClusterReplica, Database, NetworkPolicy, Role, Schema,
+    CatalogEntry, CatalogItem, Cluster, ClusterReplica, Database, NetworkPolicy, Role, Schema,
 };
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_controller::clusters::ReplicaLocation;
@@ -39,7 +39,6 @@ use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::OptimizedMirRelationExpr;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn, SYSTEM_TIME};
-use mz_ore::option::FallibleMapExt;
 use mz_ore::result::ResultExt as _;
 use mz_ore::{soft_assert_eq_or_log, soft_assert_or_log};
 use mz_persist_client::PersistClient;
@@ -48,7 +47,7 @@ use mz_repr::explain::ExprHumanizer;
 use mz_repr::namespaces::MZ_TEMP_SCHEMA;
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
-use mz_repr::{Diff, GlobalId, ScalarType};
+use mz_repr::{CatalogItemId, Diff, GlobalId, RelationVersionSelector, ScalarType};
 use mz_secrets::InMemorySecretsController;
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError as SqlCatalogError,
@@ -336,7 +335,6 @@ impl Catalog {
                 )
             });
             let bad_notices = bracketed("{", "}", separated(", ", bad_notices));
-            // soft_panic_or_log!(
             error!(
                 "all dropped_notices entries should have `Arc::strong_count(_) == 1`; \
                  bad_notices = {bad_notices}; \
@@ -352,12 +350,12 @@ impl Catalog {
     /// will be added to the result.
     pub fn source_read_policies(
         &self,
-        id: GlobalId,
-    ) -> Vec<(GlobalId, ReadPolicy<mz_repr::Timestamp>)> {
+        id: CatalogItemId,
+    ) -> Vec<(CatalogItemId, ReadPolicy<mz_repr::Timestamp>)> {
         let mut policies = Vec::new();
         let cws = self.state.source_compaction_windows([id]);
-        for (cw, ids) in cws {
-            for id in ids {
+        for (cw, items) in cws {
+            for id in items {
                 policies.push((id, cw.into()));
             }
         }
@@ -377,7 +375,7 @@ pub struct ConnCatalog<'a> {
     ///
     /// Note that uses of this field should be used by short-lived
     /// catalogs.
-    unresolvable_ids: BTreeSet<GlobalId>,
+    unresolvable_ids: BTreeSet<CatalogItemId>,
     conn_id: ConnectionId,
     cluster: String,
     database: Option<DatabaseId>,
@@ -405,7 +403,7 @@ impl ConnCatalog<'_> {
     ///
     /// # Panics
     /// If the catalog's role ID is not [`MZ_SYSTEM_ROLE_ID`].
-    pub fn mark_id_unresolvable_for_replanning(&mut self, id: GlobalId) {
+    pub fn mark_id_unresolvable_for_replanning(&mut self, id: CatalogItemId) {
         assert_eq!(
             self.role_id, MZ_SYSTEM_ROLE_ID,
             "only the system role can mark IDs unresolvable",
@@ -839,12 +837,28 @@ impl Catalog {
         self.state.resolve_full_name(name, conn_id)
     }
 
-    pub fn try_get_entry(&self, id: &GlobalId) -> Option<&CatalogEntry> {
+    pub fn try_get_entry(&self, id: &CatalogItemId) -> Option<&CatalogEntry> {
         self.state.try_get_entry(id)
     }
 
-    pub fn get_entry(&self, id: &GlobalId) -> &CatalogEntry {
+    pub fn try_get_entry_by_global_id(&self, id: &GlobalId) -> Option<&CatalogEntry> {
+        self.state.try_get_entry_by_global_id(id)
+    }
+
+    pub fn get_entry(&self, id: &CatalogItemId) -> &CatalogEntry {
         self.state.get_entry(id)
+    }
+
+    pub fn get_entry_by_global_id(&self, id: &GlobalId) -> &CatalogEntry {
+        self.state.get_entry_by_global_id(id)
+    }
+
+    pub fn get_global_ids(&self, id: &CatalogItemId) -> impl Iterator<Item = GlobalId> + '_ {
+        self.get_entry(id).global_ids()
+    }
+
+    pub fn resolve_item_id(&self, id: &GlobalId) -> CatalogItemId {
+        self.get_entry_by_global_id(id).id()
     }
 
     pub fn get_schema(
@@ -1016,7 +1030,7 @@ impl Catalog {
     }
 
     /// Return the ids of all log sources the given object depends on.
-    pub fn introspection_dependencies(&self, id: GlobalId) -> Vec<GlobalId> {
+    pub fn introspection_dependencies(&self, id: CatalogItemId) -> Vec<CatalogItemId> {
         self.state.introspection_dependencies(id)
     }
 
@@ -1153,7 +1167,7 @@ impl Catalog {
         self.state.default_privileges.iter()
     }
 
-    pub fn pack_item_update(&self, id: GlobalId, diff: Diff) -> Vec<BuiltinTableUpdate> {
+    pub fn pack_item_update(&self, id: CatalogItemId, diff: Diff) -> Vec<BuiltinTableUpdate> {
         self.state
             .resolve_builtin_table_updates(self.state.pack_item_update(id, diff))
     }
@@ -1811,12 +1825,50 @@ impl SessionCatalog for ConnCatalog<'_> {
         self.state.get_system_type(name)
     }
 
-    fn try_get_item(&self, id: &GlobalId) -> Option<&dyn mz_sql::catalog::CatalogItem> {
+    fn try_get_item(&self, id: &CatalogItemId) -> Option<&dyn mz_sql::catalog::CatalogItem> {
         Some(self.state.try_get_entry(id)?)
     }
 
-    fn get_item(&self, id: &GlobalId) -> &dyn mz_sql::catalog::CatalogItem {
+    fn try_get_item_by_global_id(
+        &self,
+        id: &GlobalId,
+    ) -> Option<Box<dyn mz_sql::catalog::CatalogCollectionItem>> {
+        let entry = self.state.try_get_entry_by_global_id(id)?;
+        let entry = match &entry.item {
+            CatalogItem::Table(table) => {
+                let (version, _gid) = table
+                    .collections
+                    .iter()
+                    .find(|(_version, gid)| *gid == id)
+                    .expect("catalog out of sync, mismatched GlobalId");
+                entry.at_version(RelationVersionSelector::Specific(*version))
+            }
+            _ => entry.at_version(RelationVersionSelector::Latest),
+        };
+        Some(entry)
+    }
+
+    fn get_item(&self, id: &CatalogItemId) -> &dyn mz_sql::catalog::CatalogItem {
         self.state.get_entry(id)
+    }
+
+    fn get_item_by_global_id(
+        &self,
+        id: &GlobalId,
+    ) -> Box<dyn mz_sql::catalog::CatalogCollectionItem> {
+        let entry = self.state.get_entry_by_global_id(id);
+        let entry = match &entry.item {
+            CatalogItem::Table(table) => {
+                let (version, _gid) = table
+                    .collections
+                    .iter()
+                    .find(|(_version, gid)| *gid == id)
+                    .expect("catalog out of sync, mismatched GlobalId");
+                entry.at_version(RelationVersionSelector::Specific(*version))
+            }
+            _ => entry.at_version(RelationVersionSelector::Latest),
+        };
+        entry
     }
 
     fn get_items(&self) -> Vec<&dyn mz_sql::catalog::CatalogItem> {
@@ -1893,6 +1945,21 @@ impl SessionCatalog for ConnCatalog<'_> {
         self.state.resolve_full_schema_name(name)
     }
 
+    fn resolve_item_id(&self, global_id: &GlobalId) -> CatalogItemId {
+        self.state.get_entry_by_global_id(global_id).id()
+    }
+
+    fn resolve_global_id(
+        &self,
+        item_id: &CatalogItemId,
+        version: RelationVersionSelector,
+    ) -> GlobalId {
+        self.state
+            .get_entry(item_id)
+            .at_version(version)
+            .global_id()
+    }
+
     fn config(&self) -> &mz_sql::catalog::CatalogConfig {
         self.state.config()
     }
@@ -1943,7 +2010,7 @@ impl SessionCatalog for ConnCatalog<'_> {
         self.state.object_dependents(ids, &self.conn_id, &mut seen)
     }
 
-    fn item_dependents(&self, id: GlobalId) -> Vec<ObjectId> {
+    fn item_dependents(&self, id: CatalogItemId) -> Vec<ObjectId> {
         let mut seen = BTreeSet::new();
         self.state.item_dependents(id, &mut seen)
     }
@@ -2019,7 +2086,7 @@ impl SessionCatalog for ConnCatalog<'_> {
         let _ = self.notices_tx.send(notice.into());
     }
 
-    fn get_item_comments(&self, id: &GlobalId) -> Option<&BTreeMap<Option<usize>, String>> {
+    fn get_item_comments(&self, id: &CatalogItemId) -> Option<&BTreeMap<Option<usize>, String>> {
         let comment_id = self.state.get_comment_id(ObjectId::Item(*id));
         self.state.comments.get_object_comments(comment_id)
     }
@@ -2051,7 +2118,10 @@ mod tests {
     use mz_pgrepr::oid::{FIRST_MATERIALIZE_OID, FIRST_UNPINNED_OID, FIRST_USER_OID};
     use mz_repr::namespaces::{INFORMATION_SCHEMA, PG_CATALOG_SCHEMA};
     use mz_repr::role_id::RoleId;
-    use mz_repr::{Datum, GlobalId, RelationType, RowArena, ScalarType, Timestamp};
+    use mz_repr::{
+        CatalogItemId, Datum, GlobalId, RelationType, RelationVersionSelector, RowArena,
+        ScalarType, Timestamp,
+    };
     use mz_sql::catalog::{
         BuiltinsConfig, CatalogDatabase, CatalogSchema, CatalogType, SessionCatalog,
     };
@@ -3165,7 +3235,9 @@ mod tests {
                         schema: Some(view.schema.to_string()),
                         item: view.name.to_string(),
                     })
-                    .expect("unable to resolve view");
+                    .expect("unable to resolve view")
+                    // TODO(alter_table)
+                    .at_version(RelationVersionSelector::Latest);
                 let full_name = conn_catalog.resolve_full_name(item.name());
                 for col_type in item
                     .desc(&full_name)

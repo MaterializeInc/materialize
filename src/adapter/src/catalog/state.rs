@@ -52,7 +52,7 @@ use mz_repr::namespaces::{
 };
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
-use mz_repr::{GlobalId, RelationDesc};
+use mz_repr::{CatalogItemId, GlobalId, RelationDesc, RelationVersion};
 use mz_secrets::InMemorySecretsController;
 use mz_sql::ast::Ident;
 use mz_sql::catalog::{
@@ -110,7 +110,9 @@ pub struct CatalogState {
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub(super) database_by_id: BTreeMap<DatabaseId, Database>,
     #[serde(serialize_with = "skip_temp_items")]
-    pub(super) entry_by_id: BTreeMap<GlobalId, CatalogEntry>,
+    pub(super) entry_by_id: BTreeMap<CatalogItemId, CatalogEntry>,
+    #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
+    pub(super) entry_by_global_id: BTreeMap<GlobalId, CatalogItemId>,
     pub(super) ambient_schemas_by_name: BTreeMap<String, SchemaId>,
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub(super) ambient_schemas_by_id: BTreeMap<SchemaId, Schema>,
@@ -130,7 +132,7 @@ pub struct CatalogState {
     pub(super) system_privileges: PrivilegeMap,
     pub(super) comments: CommentsMap,
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
-    pub(super) source_references: BTreeMap<GlobalId, SourceReferences>,
+    pub(super) source_references: BTreeMap<CatalogItemId, SourceReferences>,
     pub(super) storage_metadata: StorageMetadata,
 
     // Mutable state not derived from the durable catalog.
@@ -153,7 +155,7 @@ pub struct CatalogState {
 }
 
 fn skip_temp_items<S>(
-    entries: &BTreeMap<GlobalId, CatalogEntry>,
+    entries: &BTreeMap<CatalogItemId, CatalogEntry>,
     serializer: S,
 ) -> Result<S::Ok, S::Error>
 where
@@ -172,6 +174,7 @@ impl CatalogState {
             database_by_name: Default::default(),
             database_by_id: Default::default(),
             entry_by_id: Default::default(),
+            entry_by_global_id: Default::default(),
             ambient_schemas_by_name: Default::default(),
             ambient_schemas_by_id: Default::default(),
             temporary_schemas: Default::default(),
@@ -262,38 +265,18 @@ impl CatalogState {
         self.for_sessionless_user(MZ_SYSTEM_ROLE_ID)
     }
 
-    /// Computes the IDs of any indexes that transitively depend on this catalog
-    /// entry.
-    pub fn dependent_indexes(&self, id: GlobalId) -> Vec<GlobalId> {
-        let mut out = Vec::new();
-        self.dependent_indexes_inner(id, &mut out);
-        out
-    }
-
-    fn dependent_indexes_inner(&self, id: GlobalId, out: &mut Vec<GlobalId>) {
-        let entry = self.get_entry(&id);
-        match entry.item() {
-            CatalogItem::Index(_) => out.push(id),
-            _ => {
-                for id in entry.used_by() {
-                    self.dependent_indexes_inner(*id, out)
-                }
-            }
-        }
-    }
-
     /// Returns an iterator over the deduplicated identifiers of all
     /// objects this catalog entry transitively depends on (where
     /// "depends on" is meant in the sense of [`CatalogItem::uses`], rather than
     /// [`CatalogItem::references`]).
-    pub fn transitive_uses(&self, id: GlobalId) -> impl Iterator<Item = GlobalId> + '_ {
+    pub fn transitive_uses(&self, id: CatalogItemId) -> impl Iterator<Item = CatalogItemId> + '_ {
         struct I<'a> {
-            queue: VecDeque<GlobalId>,
-            seen: BTreeSet<GlobalId>,
+            queue: VecDeque<CatalogItemId>,
+            seen: BTreeSet<CatalogItemId>,
             this: &'a CatalogState,
         }
         impl<'a> Iterator for I<'a> {
-            type Item = GlobalId;
+            type Item = CatalogItemId;
             fn next(&mut self) -> Option<Self::Item> {
                 if let Some(next) = self.queue.pop_front() {
                     for child in self.this.get_entry(&next).item().uses() {
@@ -318,13 +301,13 @@ impl CatalogState {
 
     /// Computes the IDs of any log sources this catalog entry transitively
     /// depends on.
-    pub fn introspection_dependencies(&self, id: GlobalId) -> Vec<GlobalId> {
+    pub fn introspection_dependencies(&self, id: CatalogItemId) -> Vec<CatalogItemId> {
         let mut out = Vec::new();
         self.introspection_dependencies_inner(id, &mut out);
         out
     }
 
-    fn introspection_dependencies_inner(&self, id: GlobalId, out: &mut Vec<GlobalId>) {
+    fn introspection_dependencies_inner(&self, id: CatalogItemId, out: &mut Vec<CatalogItemId>) {
         match self.get_entry(&id).item() {
             CatalogItem::Log(_) => out.push(id),
             item @ (CatalogItem::View(_)
@@ -336,8 +319,14 @@ impl CatalogState {
                     self.introspection_dependencies_inner(*item_id, out);
                 }
             }
-            CatalogItem::Sink(sink) => self.introspection_dependencies_inner(sink.from, out),
-            CatalogItem::Index(idx) => self.introspection_dependencies_inner(idx.on, out),
+            CatalogItem::Sink(sink) => {
+                let from_item_id = self.get_entry_by_global_id(&sink.from).id();
+                self.introspection_dependencies_inner(from_item_id, out)
+            }
+            CatalogItem::Index(idx) => {
+                let on_item_id = self.get_entry_by_global_id(&idx.on).id();
+                self.introspection_dependencies_inner(on_item_id, out)
+            }
             CatalogItem::Table(_)
             | CatalogItem::Source(_)
             | CatalogItem::Type(_)
@@ -510,7 +499,7 @@ impl CatalogState {
     /// objects.
     pub(super) fn item_dependents(
         &self,
-        item_id: GlobalId,
+        item_id: CatalogItemId,
         seen: &mut BTreeSet<ObjectId>,
     ) -> Vec<ObjectId> {
         let mut dependents = Vec::new();
@@ -553,7 +542,7 @@ impl CatalogState {
     /// Indicates whether the indicated item is considered stable or not.
     ///
     /// Only stable items can be used as dependencies of other catalog items.
-    fn is_stable(&self, id: GlobalId) -> bool {
+    fn is_stable(&self, id: CatalogItemId) -> bool {
         let spec = self.get_entry(&id).name().qualifiers.schema_spec;
         !self.is_unstable_schema_specifier(spec)
     }
@@ -628,10 +617,18 @@ impl CatalogState {
         }
     }
 
-    pub fn get_entry(&self, id: &GlobalId) -> &CatalogEntry {
+    pub fn get_entry(&self, id: &CatalogItemId) -> &CatalogEntry {
         self.entry_by_id
             .get(id)
-            .unwrap_or_else(|| panic!("catalog out of sync, missing id {id}"))
+            .unwrap_or_else(|| panic!("catalog out of sync, missing id {id:?}"))
+    }
+
+    pub fn get_entry_by_global_id(&self, id: &GlobalId) -> &CatalogEntry {
+        let item_id = self
+            .entry_by_global_id
+            .get(id)
+            .unwrap_or_else(|| panic!("catalog out of sync, missing id {id:?}"));
+        self.get_entry(item_id)
     }
 
     pub fn get_temp_items(&self, conn: &ConnectionId) -> impl Iterator<Item = ObjectId> + '_ {
@@ -639,7 +636,7 @@ impl CatalogState {
             .temporary_schemas
             .get(conn)
             .unwrap_or_else(|| panic!("catalog out of sync, missing temporary schema for {conn}"));
-        schema.items.values().copied().map(ObjectId::Item)
+        schema.items.values().copied().map(ObjectId::from)
     }
 
     /// Gets a type named `name` from exactly one of the system schemas.
@@ -706,8 +703,13 @@ impl CatalogState {
         name
     }
 
-    pub fn try_get_entry(&self, id: &GlobalId) -> Option<&CatalogEntry> {
+    pub fn try_get_entry(&self, id: &CatalogItemId) -> Option<&CatalogEntry> {
         self.entry_by_id.get(id)
+    }
+
+    pub fn try_get_entry_by_global_id(&self, id: &GlobalId) -> Option<&CatalogEntry> {
+        let item_id = self.entry_by_global_id.get(id)?;
+        self.try_get_entry(item_id)
     }
 
     pub(crate) fn get_cluster(&self, cluster_id: ClusterId) -> &Cluster {
@@ -778,7 +780,7 @@ impl CatalogState {
     /// source.
     ///
     /// Note: Identifiers for the source, e.g. item name, are URL encoded.
-    pub fn try_get_webhook_url(&self, id: &GlobalId) -> Option<url::Url> {
+    pub fn try_get_webhook_url(&self, id: &CatalogItemId) -> Option<url::Url> {
         let entry = self.try_get_entry(id)?;
         // Note: Webhook sources can never be created in the temporary schema, hence passing None.
         let name = self.resolve_full_name(entry.name(), None);
@@ -847,18 +849,20 @@ impl CatalogState {
     /// Parses the given SQL string into a pair of [`CatalogItem`].
     pub(crate) fn deserialize_item(
         &self,
-        id: GlobalId,
+        global_id: GlobalId,
         create_sql: &str,
+        extra_versions: &BTreeMap<RelationVersion, GlobalId>,
     ) -> Result<CatalogItem, AdapterError> {
-        self.parse_item(id, create_sql, None, false, None)
+        self.parse_item(global_id, create_sql, extra_versions, None, false, None)
     }
 
     /// Parses the given SQL string into a `CatalogItem`.
     #[mz_ore::instrument]
     pub(crate) fn parse_item(
         &self,
-        id: GlobalId,
+        global_id: GlobalId,
         create_sql: &str,
+        extra_versions: &BTreeMap<RelationVersion, GlobalId>,
         pcx: Option<&PlanContext>,
         is_retained_metrics_object: bool,
         custom_logical_compaction_window: Option<CompactionWindow>,
@@ -1117,8 +1121,7 @@ impl CatalogState {
         res
     }
 
-    /// Returns all indexes on the given object and cluster known in the
-    /// catalog.
+    /// Returns all indexes on the given object and cluster known in the catalog.
     pub fn get_indexes_on(
         &self,
         id: GlobalId,
@@ -1126,14 +1129,14 @@ impl CatalogState {
     ) -> impl Iterator<Item = (GlobalId, &Index)> {
         let index_matches = move |idx: &Index| idx.on == id && idx.cluster_id == cluster;
 
-        self.try_get_entry(&id)
+        self.try_get_entry_by_global_id(&id)
             .into_iter()
             .map(move |e| {
                 e.used_by()
                     .iter()
                     .filter_map(move |uses_id| match self.get_entry(uses_id).item() {
                         CatalogItem::Index(index) if index_matches(index) => {
-                            Some((*uses_id, index))
+                            Some((index.global_id(), index))
                         }
                         _ => None,
                     })
@@ -1653,7 +1656,7 @@ impl CatalogState {
     #[allow(clippy::useless_let_if_seq)]
     pub fn resolve(
         &self,
-        get_schema_entries: fn(&Schema) -> &BTreeMap<String, GlobalId>,
+        get_schema_entries: fn(&Schema) -> &BTreeMap<String, CatalogItemId>,
         current_database: Option<&DatabaseId>,
         search_path: &Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)>,
         name: &PartialItemName,
@@ -1810,9 +1813,8 @@ impl CatalogState {
     /// For an [`ObjectId`] gets the corresponding [`CommentObjectId`].
     pub(super) fn get_comment_id(&self, object_id: ObjectId) -> CommentObjectId {
         match object_id {
-            ObjectId::Item(global_id) => {
-                let entry = self.get_entry(&global_id);
-                let item_id = global_id.to_item_id();
+            ObjectId::Item(item_id) => {
+                let entry = self.get_entry(&item_id);
                 match entry.item_type() {
                     CatalogItemType::Table => CommentObjectId::Table(item_id),
                     CatalogItemType::Source => CommentObjectId::Source(item_id),
@@ -2147,23 +2149,23 @@ impl CatalogState {
     /// source exports will be added to the result.
     pub fn source_compaction_windows(
         &self,
-        ids: impl IntoIterator<Item = GlobalId>,
-    ) -> BTreeMap<CompactionWindow, BTreeSet<GlobalId>> {
-        let mut cws: BTreeMap<CompactionWindow, BTreeSet<GlobalId>> = BTreeMap::new();
+        ids: impl IntoIterator<Item = CatalogItemId>,
+    ) -> BTreeMap<CompactionWindow, BTreeSet<CatalogItemId>> {
+        let mut cws: BTreeMap<CompactionWindow, BTreeSet<CatalogItemId>> = BTreeMap::new();
         let mut ids = VecDeque::from_iter(ids);
         let mut seen = BTreeSet::new();
-        while let Some(id) = ids.pop_front() {
-            if !seen.insert(id) {
+        while let Some(item_id) = ids.pop_front() {
+            if !seen.insert(item_id) {
                 continue;
             }
-            let entry = self.get_entry(&id);
+            let entry = self.get_entry(&item_id);
             match entry.item() {
                 CatalogItem::Source(source) => {
                     let source_cw = source.custom_logical_compaction_window.unwrap_or_default();
                     match source.data_source {
                         DataSourceDesc::Ingestion { .. } => {
                             // For sources, look up each dependent source export and propagate.
-                            cws.entry(source_cw).or_default().insert(id);
+                            cws.entry(source_cw).or_default().insert(item_id);
                             ids.extend(entry.used_by());
                         }
                         DataSourceDesc::IngestionExport { ingestion_id, .. } => {
@@ -2176,12 +2178,12 @@ impl CatalogState {
                             let cw = ingestion
                                 .custom_logical_compaction_window
                                 .unwrap_or(source_cw);
-                            cws.entry(cw).or_default().insert(id);
+                            cws.entry(cw).or_default().insert(item_id);
                         }
                         DataSourceDesc::Introspection(_)
                         | DataSourceDesc::Progress
                         | DataSourceDesc::Webhook { .. } => {
-                            cws.entry(source_cw).or_default().insert(id);
+                            cws.entry(source_cw).or_default().insert(item_id);
                         }
                     }
                 }
@@ -2198,7 +2200,7 @@ impl CatalogState {
                         let cw = ingestion
                             .custom_logical_compaction_window
                             .unwrap_or(table_cw);
-                        cws.entry(cw).or_default().insert(id);
+                        cws.entry(cw).or_default().insert(item_id);
                     }
                     _ => {}
                 },
@@ -2211,7 +2213,7 @@ impl CatalogState {
         cws
     }
 
-    pub fn comment_id_to_global_id(id: &CommentObjectId) -> Option<GlobalId> {
+    pub fn comment_id_to_item_id(id: &CommentObjectId) -> Option<CatalogItemId> {
         match id {
             CommentObjectId::Table(id)
             | CommentObjectId::View(id)
@@ -2223,7 +2225,7 @@ impl CatalogState {
             | CommentObjectId::Connection(id)
             | CommentObjectId::Type(id)
             | CommentObjectId::Secret(id)
-            | CommentObjectId::ContinualTask(id) => Some(id.to_global_id()),
+            | CommentObjectId::ContinualTask(id) => Some(*id),
             CommentObjectId::Role(_)
             | CommentObjectId::Database(_)
             | CommentObjectId::Schema(_)
@@ -2234,7 +2236,7 @@ impl CatalogState {
     }
 
     pub fn get_comment_id_entry(&self, id: &CommentObjectId) -> Option<&CatalogEntry> {
-        Self::comment_id_to_global_id(id).map(|id| self.get_entry(&id))
+        Self::comment_id_to_item_id(id).map(|id| self.get_entry(&id))
     }
 
     pub fn comment_id_to_audit_log_name(
@@ -2254,7 +2256,7 @@ impl CatalogState {
             | CommentObjectId::Type(id)
             | CommentObjectId::Secret(id)
             | CommentObjectId::ContinualTask(id) => {
-                let item = self.get_entry(&id.to_global_id());
+                let item = self.get_entry(&id);
                 let name = self.resolve_full_name(item.name(), Some(conn_id));
                 name.to_string()
             }

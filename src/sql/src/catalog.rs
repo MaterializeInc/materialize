@@ -252,12 +252,25 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
     fn get_system_type(&self, name: &str) -> &dyn CatalogItem;
 
     /// Gets an item by its ID.
-    fn try_get_item(&self, id: &GlobalId) -> Option<&dyn CatalogItem>;
+    fn try_get_item(&self, id: &CatalogItemId) -> Option<&dyn CatalogItem>;
+
+    /// Tries to get an item by a [`GlobalId`], returning `None` if the [`GlobalId`] does not
+    /// exist.
+    ///
+    /// Note: A single Catalog Item can have multiple [`GlobalId`]s associated with it.
+    fn try_get_item_by_global_id(&self, id: &GlobalId) -> Option<Box<dyn CatalogCollectionItem>>;
 
     /// Gets an item by its ID.
     ///
     /// Panics if `id` does not specify a valid item.
-    fn get_item(&self, id: &GlobalId) -> &dyn CatalogItem;
+    fn get_item(&self, id: &CatalogItemId) -> &dyn CatalogItem;
+
+    /// Gets an item by a [`GlobalId`].
+    ///
+    /// Panics if `id` does not specify a valid item.
+    ///
+    /// Note: A single Catalog Item can have multiple [`GlobalId`]s associated with it.
+    fn get_item_by_global_id(&self, id: &GlobalId) -> Box<dyn CatalogCollectionItem>;
 
     /// Gets all items.
     fn get_items(&self) -> Vec<&dyn CatalogItem>;
@@ -304,6 +317,16 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
     /// readable schema name
     fn resolve_full_schema_name(&self, name: &QualifiedSchemaName) -> FullSchemaName;
 
+    /// Returns the [`CatalogItemId`] for from a [`GlobalId`].
+    fn resolve_item_id(&self, global_id: &GlobalId) -> CatalogItemId;
+
+    /// Returns the [`GlobalId`] for the specificed Catalog Item, at the specified version.
+    fn resolve_global_id(
+        &self,
+        item_id: &CatalogItemId,
+        version: RelationVersionSelector,
+    ) -> GlobalId;
+
     /// Returns the configuration of the catalog.
     fn config(&self) -> &CatalogConfig;
 
@@ -344,7 +367,7 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
     /// The order is guaranteed to be in reverse dependency order, i.e. the leafs will appear
     /// earlier in the list than `id`. This is particularly userful for the order to drop
     /// objects.
-    fn item_dependents(&self, id: GlobalId) -> Vec<ObjectId>;
+    fn item_dependents(&self, id: CatalogItemId) -> Vec<ObjectId>;
 
     /// Returns all possible privileges associated with an object type.
     fn all_object_privileges(&self, object_type: SystemObjectType) -> AclMode;
@@ -364,7 +387,7 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
     fn add_notice(&self, notice: PlanNotice);
 
     /// Returns the associated comments for the given `id`
-    fn get_item_comments(&self, id: &GlobalId) -> Option<&BTreeMap<Option<usize>, String>>;
+    fn get_item_comments(&self, id: &CatalogItemId) -> Option<&BTreeMap<Option<usize>, String>>;
 }
 
 /// Configuration associated with a catalog.
@@ -438,7 +461,7 @@ pub trait CatalogSchema {
     fn has_items(&self) -> bool;
 
     /// Returns the IDs of the items in the schema.
-    fn item_ids(&self) -> Box<dyn Iterator<Item = GlobalId> + '_>;
+    fn item_ids(&self) -> Box<dyn Iterator<Item = CatalogItemId> + '_>;
 
     /// Returns the ID of the owning role.
     fn owner_id(&self) -> RoleId;
@@ -539,7 +562,7 @@ pub trait CatalogCluster<'a> {
     fn id(&self) -> ClusterId;
 
     /// Returns the objects that are bound to this cluster.
-    fn bound_objects(&self) -> &BTreeSet<GlobalId>;
+    fn bound_objects(&self) -> &BTreeSet<CatalogItemId>;
 
     /// Returns the replicas of the cluster as a map from replica name to
     /// replica ID.
@@ -597,17 +620,14 @@ pub trait CatalogItem {
     /// Returns the fully qualified name of the catalog item.
     fn name(&self) -> &QualifiedItemName;
 
-    /// Returns a stable ID for the catalog item.
-    fn id(&self) -> GlobalId;
+    /// Returns the [`CatalogItemId`] for the item.
+    fn id(&self) -> CatalogItemId;
+
+    /// Returns the [`GlobalId`]s associated with this item.
+    fn global_ids(&self) -> Box<dyn Iterator<Item = GlobalId> + '_>;
 
     /// Returns the catalog item's OID.
     fn oid(&self) -> u32;
-
-    /// Returns a description of the result set produced by the catalog item.
-    ///
-    /// If the catalog item is not of a type that produces data (i.e., a sink or
-    /// an index), it returns an error.
-    fn desc(&self, name: &FullItemName) -> Result<Cow<RelationDesc>, CatalogError>;
 
     /// Returns the resolved function.
     ///
@@ -639,24 +659,26 @@ pub trait CatalogItem {
 
     /// Returns the IDs of the catalog items upon which this catalog item
     /// depends.
-    fn uses(&self) -> BTreeSet<GlobalId>;
+    fn uses(&self) -> BTreeSet<CatalogItemId>;
 
     /// Returns the IDs of the catalog items that directly reference this catalog item.
-    fn referenced_by(&self) -> &[GlobalId];
+    fn referenced_by(&self) -> &[CatalogItemId];
 
     /// Returns the IDs of the catalog items that depend upon this catalog item.
-    fn used_by(&self) -> &[GlobalId];
+    fn used_by(&self) -> &[CatalogItemId];
 
     /// Reports whether this catalog entry is a subsource and, if it is, the
     /// ingestion it is an export of, as well as the item it exports.
-    fn subsource_details(&self) -> Option<(GlobalId, &UnresolvedItemName, &SourceExportDetails)>;
+    fn subsource_details(
+        &self,
+    ) -> Option<(CatalogItemId, &UnresolvedItemName, &SourceExportDetails)>;
 
     /// Reports whether this catalog entry is a source export and, if it is, the
     /// ingestion it is an export of, as well as the item it exports.
     fn source_export_details(
         &self,
     ) -> Option<(
-        GlobalId,
+        CatalogItemId,
         &UnresolvedItemName,
         &SourceExportDetails,
         &SourceExportDataConfig<ReferencedConnection>,
@@ -666,7 +688,7 @@ pub trait CatalogItem {
     fn is_progress_source(&self) -> bool;
 
     /// If this catalog item is a source, it return the IDs of its progress collection.
-    fn progress_id(&self) -> Option<GlobalId>;
+    fn progress_id(&self) -> Option<CatalogItemId>;
 
     /// Returns the index details associated with the catalog item, if the
     /// catalog item is an index.
@@ -688,6 +710,23 @@ pub trait CatalogItem {
 
     /// Returns the cluster the item belongs to.
     fn cluster_id(&self) -> Option<ClusterId>;
+
+    /// Returns the [`CatalogCollectionItem`] for a specific version of this
+    /// [`CatalogItem`].
+    fn at_version(&self, version: RelationVersionSelector) -> Box<dyn CatalogCollectionItem>;
+}
+
+/// An item in a [`SessionCatalog`] and the specific "collection"/pTVC that it
+/// refers to.
+pub trait CatalogCollectionItem: CatalogItem + Send + Sync {
+    /// Returns a description of the result set produced by the catalog item.
+    ///
+    /// If the catalog item is not of a type that produces data (i.e., a sink or
+    /// an index), it returns an error.
+    fn desc(&self, name: &FullItemName) -> Result<Cow<RelationDesc>, CatalogError>;
+
+    /// The [`GlobalId`] for this item.
+    fn global_id(&self) -> GlobalId;
 }
 
 /// The type of a [`CatalogItem`].
