@@ -126,8 +126,8 @@ impl Coordinator {
 
         let () = self
             .catalog_transact_with_side_effects(Some(session), ops, |coord| async {
-                let time_dependence =
-                    TimeDependenceHelper::new(coord.catalog()).determine_dependence(sink_id);
+                let time_dependence = TimeDependenceHelper::new(coord.catalog())
+                    .determine_dependence(sink_id, Some(&physical_plan));
                 physical_plan.time_dependence = Some(time_dependence);
 
                 let catalog = coord.catalog_mut();

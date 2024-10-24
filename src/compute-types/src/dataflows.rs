@@ -133,6 +133,7 @@ impl<P, S> DataflowDescription<P, S, mz_repr::Timestamp> {
                 // Disable expiration if the until is less than or equal to the expiration.
                 result = Antichain::default();
             }
+            println!("{} expiring at {result:?}", self.debug_name);
             result
         } else {
             Antichain::default()

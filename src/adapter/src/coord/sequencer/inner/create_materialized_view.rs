@@ -647,11 +647,11 @@ impl Coordinator {
 
         let transact_result = self
             .catalog_transact_with_side_effects(Some(session), ops, |coord| async {
-                let time_dependence =
-                    TimeDependenceHelper::new(coord.catalog()).determine_dependence(sink_id);
-
                 let output_desc = global_lir_plan.desc().clone();
                 let (mut df_desc, df_meta) = global_lir_plan.unapply();
+
+                let time_dependence = TimeDependenceHelper::new(coord.catalog())
+                    .determine_dependence(sink_id, Some(&df_desc));
                 df_desc.time_dependence = Some(time_dependence);
 
                 // Save plan structures.
