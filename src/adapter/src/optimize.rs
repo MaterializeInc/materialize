@@ -72,7 +72,7 @@ use mz_expr::{EvalError, MirRelationExpr, OptimizedMirRelationExpr, Unmaterializ
 use mz_ore::stack::RecursionLimitError;
 use mz_repr::adt::timestamp::TimestampError;
 use mz_repr::optimize::{OptimizerFeatureOverrides, OptimizerFeatures, OverrideFrom};
-use mz_repr::GlobalId;
+use mz_repr::{CatalogItemId, GlobalId};
 use mz_sql::names::{FullItemName, QualifiedItemName};
 use mz_sql::plan::PlanError;
 use mz_sql::session::vars::SystemVars;
@@ -264,6 +264,7 @@ impl From<&OptimizerConfig> for mz_sql::plan::HirToMirConfig {
 
 pub trait OptimizerCatalog: Debug + Send + Sync {
     fn get_entry(&self, id: &GlobalId) -> &CatalogEntry;
+    fn get_entry_by_item_id(&self, id: &CatalogItemId) -> &CatalogEntry;
     fn resolve_full_name(
         &self,
         name: &QualifiedItemName,
