@@ -2483,20 +2483,29 @@ pub fn plan_create_view(
     let replace = if *if_exists == IfExistsBehavior::Replace && !ignore_if_exists_errors {
         let if_exists = true;
         let cascade = false;
-        if let Some(id) = plan_drop_item(
+        let maybe_item_to_drop = plan_drop_item(
             scx,
             ObjectType::View,
             if_exists,
             definition.name.clone(),
             cascade,
-        )? {
-            if view.expr.depends_on().contains(&id) {
+        )?;
+
+        // Check if the new View depends on the item that we would be replacing.
+        if let Some(id) = maybe_item_to_drop {
+            let dependencies = view.expr.depends_on();
+            let invalid_drop = scx
+                .get_item(&id)
+                .global_ids()
+                .any(|gid| dependencies.contains(&gid));
+            if invalid_drop {
                 let item = scx.catalog.get_item(&id);
                 sql_bail!(
                     "cannot replace view {0}: depended upon by new {0} definition",
                     scx.catalog.resolve_full_name(item.name())
                 );
             }
+
             Some(id)
         } else {
             None
@@ -2786,8 +2795,15 @@ pub fn plan_create_materialized_view(
                 partial_name.into(),
                 cascade,
             )?;
+
+            // Check if the new Materialized View depends on the item that we would be replacing.
             if let Some(id) = replace_id {
-                if expr.depends_on().contains(&id) {
+                let dependencies = expr.depends_on();
+                let invalid_drop = scx
+                    .get_item(&id)
+                    .global_ids()
+                    .any(|gid| dependencies.contains(&gid));
+                if invalid_drop {
                     let item = scx.catalog.get_item(&id);
                     sql_bail!(
                         "cannot replace materialized view {0}: depended upon by new {0} definition",
@@ -3070,7 +3086,7 @@ pub fn plan_create_continual_task(
         name,
         placeholder_id,
         desc,
-        input_id: input.id(),
+        input_id: input.global_id(),
         with_snapshot: snapshot.unwrap_or(true),
         continual_task: MaterializedView {
             create_sql,
@@ -3419,7 +3435,7 @@ fn plan_sink(
         name,
         sink: Sink {
             create_sql,
-            from: from.id(),
+            from: from.global_id(),
             connection: connection_builder,
             partition_strategy,
             envelope,
@@ -3573,7 +3589,7 @@ fn kafka_sink_builder(
     headers_index: Option<usize>,
     value_desc: RelationDesc,
     envelope: SinkEnvelope,
-    sink_from: GlobalId,
+    sink_from: CatalogItemId,
 ) -> Result<StorageSinkConnection<ReferencedConnection>, PlanError> {
     // Get Kafka connection.
     let connection_item = scx.get_item_by_resolved_name(&connection)?;
@@ -3988,7 +4004,7 @@ pub fn plan_create_index(
         name: index_name,
         index: Index {
             create_sql,
-            on: on.id(),
+            on: on.global_id(),
             keys,
             cluster_id,
             compaction_window,
@@ -4016,7 +4032,7 @@ pub fn plan_create_type(
         data_type: ResolvedDataType,
         as_type: &str,
         key: &str,
-    ) -> Result<(GlobalId, Vec<i64>), PlanError> {
+    ) -> Result<(CatalogItemId, Vec<i64>), PlanError> {
         let (id, modifiers) = match data_type {
             ResolvedDataType::Named { id, modifiers, .. } => (id, modifiers),
             _ => sql_bail!(

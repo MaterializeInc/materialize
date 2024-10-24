@@ -115,7 +115,7 @@ pub enum Op {
         reason: ReplicaCreateDropReason,
     },
     CreateItem {
-        id: GlobalId,
+        id: CatalogItemId,
         name: QualifiedItemName,
         item: CatalogItem,
         owner_id: RoleId,
@@ -988,8 +988,29 @@ impl Catalog {
             } => {
                 state.check_unstable_dependencies(&item)?;
 
-                if item.is_storage_collection() {
-                    storage_collections_to_create.insert(id);
+                match &item {
+                    CatalogItem::Table(table) => {
+                        let gids: Vec<_> = table.global_ids().collect();
+                        assert_eq!(gids.len(), 1);
+                        storage_collections_to_create.extend(gids);
+                    }
+                    CatalogItem::Source(source) => {
+                        storage_collections_to_create.insert(source.global_id());
+                    }
+                    CatalogItem::MaterializedView(mv) => {
+                        storage_collections_to_create.insert(mv.global_id());
+                    }
+                    CatalogItem::ContinualTask(ct) => {
+                        storage_collections_to_create.insert(ct.global_id());
+                    }
+                    CatalogItem::Log(_)
+                    | CatalogItem::Sink(_)
+                    | CatalogItem::View(_)
+                    | CatalogItem::Index(_)
+                    | CatalogItem::Type(_)
+                    | CatalogItem::Func(_)
+                    | CatalogItem::Secret(_)
+                    | CatalogItem::Connection(_) => (),
                 }
 
                 let system_user = session.map_or(false, |s| s.user().is_system_user());
@@ -1052,10 +1073,12 @@ impl Catalog {
                     temporary_item_updates.push((item, StateDiff::Addition));
                 } else {
                     if let Some(temp_id) =
-                        item.uses().iter().find(|id| match state.try_get_entry(id) {
-                            Some(entry) => entry.item().is_temporary(),
-                            None => temporary_ids.contains(id),
-                        })
+                        item.uses()
+                            .iter()
+                            .find(|id| match state.try_get_entry(*id) {
+                                Some(entry) => entry.item().is_temporary(),
+                                None => temporary_ids.contains(id),
+                            })
                     {
                         let temp_item = state.get_entry(temp_id);
                         return Err(AdapterError::Catalog(Error::new(
@@ -1074,15 +1097,17 @@ impl Catalog {
                     }
                     let schema_id = name.qualifiers.schema_spec.clone().into();
                     let item_type = item.typ();
-                    let serialized_item = item.to_serialized();
+                    let (create_sql, global_id, versions) = item.to_serialized();
                     tx.insert_user_item(
                         id,
+                        global_id,
                         schema_id,
                         &name.item,
-                        serialized_item,
+                        create_sql,
                         owner_id,
                         privileges.clone(),
                         &temporary_oids,
+                        versions,
                     )?;
                     info!(
                         "create {} {} ({})",

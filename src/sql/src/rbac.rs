@@ -481,7 +481,8 @@ fn generate_rbac_requirements(
                 .iter()
                 .flat_map(
                     |plan::CreateSourcePlanBundle {
-                         source_id: _,
+                         item_id: _,
+                         global_id: _,
                          plan:
                              plan::CreateSourcePlan {
                                  name,
@@ -531,11 +532,8 @@ fn generate_rbac_requirements(
                 AclMode::CREATE,
                 role_id,
             )];
-            privileges.extend_from_slice(&generate_read_privileges(
-                catalog,
-                iter::once(sink.from),
-                role_id,
-            ));
+            let items = iter::once(sink.from).map(|gid| catalog.resolve_item_id(&gid));
+            privileges.extend_from_slice(&generate_read_privileges(catalog, items, role_id));
             privileges.push((
                 SystemObjectId::Object(in_cluster.into()),
                 AclMode::CREATE,
@@ -632,23 +630,26 @@ fn generate_rbac_requirements(
             name,
             index,
             if_not_exists: _,
-        }) => RbacRequirements {
-            ownership: vec![ObjectId::Item(index.on)],
-            privileges: vec![
-                (
-                    SystemObjectId::Object(name.qualifiers.clone().into()),
-                    AclMode::CREATE,
-                    role_id,
-                ),
-                (
-                    SystemObjectId::Object(index.cluster_id.into()),
-                    AclMode::CREATE,
-                    role_id,
-                ),
-            ],
-            item_usage: &CREATE_ITEM_USAGE,
-            ..Default::default()
-        },
+        }) => {
+            let index_on_item = catalog.resolve_item_id(&index.on);
+            RbacRequirements {
+                ownership: vec![ObjectId::Item(index_on_item)],
+                privileges: vec![
+                    (
+                        SystemObjectId::Object(name.qualifiers.clone().into()),
+                        AclMode::CREATE,
+                        role_id,
+                    ),
+                    (
+                        SystemObjectId::Object(index.cluster_id.into()),
+                        AclMode::CREATE,
+                        role_id,
+                    ),
+                ],
+                item_usage: &CREATE_ITEM_USAGE,
+                ..Default::default()
+            }
+        }
         Plan::CreateType(plan::CreateTypePlan { name, typ: _ }) => RbacRequirements {
             privileges: vec![(
                 SystemObjectId::Object(name.qualifiers.clone().into()),

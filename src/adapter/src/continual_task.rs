@@ -23,7 +23,7 @@ use crate::AdapterError;
 
 pub fn ct_item_from_plan(
     plan: plan::CreateContinualTaskPlan,
-    output_id: GlobalId,
+    global_id: GlobalId,
     resolved_ids: ResolvedIds,
 ) -> Result<ContinualTask, AdapterError> {
     let plan::CreateContinualTaskPlan {
@@ -50,7 +50,7 @@ pub fn ct_item_from_plan(
     if let Some(placeholder_id) = placeholder_id {
         raw_expr.visit_mut_post(&mut |expr| match expr {
             HirRelationExpr::Get { id, .. } if *id == Id::Local(placeholder_id) => {
-                *id = Id::Global(output_id);
+                *id = Id::Global(global_id);
             }
             _ => {}
         })?;
@@ -60,6 +60,7 @@ pub fn ct_item_from_plan(
 
     Ok(ContinualTask {
         create_sql,
+        global_id,
         input_id,
         with_snapshot,
         raw_expr: Arc::new(raw_expr),

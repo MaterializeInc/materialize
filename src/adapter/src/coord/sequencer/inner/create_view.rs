@@ -150,6 +150,7 @@ impl Coordinator {
         let CatalogItem::View(item) = self.catalog().get_entry(&id).item() else {
             unreachable!() // Asserted in `plan_explain_plan`.
         };
+        let gid = item.global_id();
 
         let create_sql = item.create_sql.clone();
         let plan_result = self
@@ -174,7 +175,7 @@ impl Coordinator {
             config,
             format,
             stage,
-            replan: Some(id),
+            replan: Some(gid),
             desc: None,
             optimizer_trace,
         });
@@ -283,7 +284,7 @@ impl Coordinator {
             explain_ctx,
         }: CreateViewOptimize,
     ) -> Result<StageResult<Box<CreateViewStage>>, AdapterError> {
-        let id = self.catalog_mut().allocate_user_id().await?;
+        let (item_id, global_id) = self.catalog_mut().allocate_user_id().await?;
 
         // Collect optimizer parameters.
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
@@ -314,14 +315,15 @@ impl Coordinator {
                             if let ExplainContext::Plan(explain_ctx) = explain_ctx {
                                 CreateViewStage::Explain(CreateViewExplain {
                                     validity,
-                                    id,
+                                    id: global_id,
                                     plan,
                                     explain_ctx,
                                 })
                             } else {
                                 CreateViewStage::Finish(CreateViewFinish {
                                     validity,
-                                    id,
+                                    item_id,
+                                    global_id,
                                     plan,
                                     optimized_expr,
                                     resolved_ids,
@@ -343,7 +345,7 @@ impl Coordinator {
                                 tracing::error!("error while handling EXPLAIN statement: {}", err);
                                 CreateViewStage::Explain(CreateViewExplain {
                                     validity,
-                                    id,
+                                    id: global_id,
                                     plan,
                                     explain_ctx,
                                 })
@@ -365,7 +367,8 @@ impl Coordinator {
         &mut self,
         session: &Session,
         CreateViewFinish {
-            id,
+            item_id,
+            global_id,
             plan:
                 plan::CreateViewPlan {
                     name,
@@ -394,10 +397,11 @@ impl Coordinator {
                     .collect(),
             ),
             catalog::Op::CreateItem {
-                id,
+                id: item_id,
                 name: name.clone(),
                 item: CatalogItem::View(View {
                     create_sql: create_sql.clone(),
+                    global_id,
                     raw_expr: raw_expr.into(),
                     desc: RelationDesc::new(optimized_expr.typ(), column_names.clone()),
                     optimized_expr: optimized_expr.into(),

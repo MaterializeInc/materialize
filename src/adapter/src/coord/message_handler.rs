@@ -559,7 +559,8 @@ impl Coordinator {
 
                 // Determine all dependencies, not just those in the statement
                 // itself.
-                let resolved_ids = mz_sql::names::visit_dependencies(&stmt);
+                let catalog = self.catalog().for_session(ctx.session());
+                let resolved_ids = mz_sql::names::visit_dependencies(&catalog, &stmt);
                 self.plan_statement(ctx.session(), stmt, &params, &resolved_ids)
                     .map(|plan| (plan, resolved_ids))
             }
@@ -577,6 +578,7 @@ impl Coordinator {
         CreateConnectionValidationReady {
             mut ctx,
             result,
+            connection_id,
             connection_gid,
             mut plan_validity,
             otel_ctx,
@@ -591,14 +593,14 @@ impl Coordinator {
         // WARNING: If we support `ALTER SECRET`, we'll need to also check
         // for connectors that were altered while we were purifying.
         if let Err(e) = plan_validity.check(self.catalog()) {
-            let _ = self.secrets_controller.delete(connection_gid).await;
+            let _ = self.secrets_controller.delete(connection_id).await;
             return ctx.retire(Err(e));
         }
 
         let plan = match result {
             Ok(ok) => ok,
             Err(e) => {
-                let _ = self.secrets_controller.delete(connection_gid).await;
+                let _ = self.secrets_controller.delete(connection_id).await;
                 return ctx.retire(Err(e));
             }
         };
@@ -606,9 +608,10 @@ impl Coordinator {
         let result = self
             .sequence_create_connection_stage_finish(
                 ctx.session_mut(),
+                connection_id,
                 connection_gid,
                 plan,
-                ResolvedIds(dependency_ids),
+                dependency_ids,
             )
             .await;
         ctx.retire(result);

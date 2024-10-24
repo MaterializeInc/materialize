@@ -5697,7 +5697,7 @@ pub fn scalar_type_from_sql(
 
 pub fn scalar_type_from_catalog(
     catalog: &dyn SessionCatalog,
-    id: GlobalId,
+    id: CatalogItemId,
     modifiers: &[i64],
 ) -> Result<ScalarType, PlanError> {
     let entry = catalog.get_item(&id);

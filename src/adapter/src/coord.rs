@@ -125,7 +125,7 @@ use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::global_id::TransientIdGen;
 use mz_repr::role_id::RoleId;
-use mz_repr::{Diff, GlobalId, RelationDesc, Row, Timestamp};
+use mz_repr::{CatalogItemId, Diff, GlobalId, RelationDesc, Row, Timestamp};
 use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::{SecretsController, SecretsReader};
 use mz_sql::ast::{Raw, Statement};
@@ -400,7 +400,8 @@ pub struct ValidationReady<T> {
     #[derivative(Debug = "ignore")]
     pub ctx: ExecuteContext,
     pub result: Result<T, AdapterError>,
-    pub dependency_ids: BTreeSet<GlobalId>,
+    pub dependency_ids: ResolvedIds,
+    pub connection_id: CatalogItemId,
     pub connection_gid: GlobalId,
     pub plan_validity: PlanValidity,
     pub otel_ctx: OpenTelemetryContext,
@@ -570,7 +571,8 @@ pub struct CreateIndexOptimize {
 #[derive(Debug)]
 pub struct CreateIndexFinish {
     validity: PlanValidity,
-    exported_index_id: GlobalId,
+    item_id: CatalogItemId,
+    global_id: GlobalId,
     plan: plan::CreateIndexPlan,
     resolved_ids: ResolvedIds,
     global_mir_plan: optimize::index::GlobalMirPlan,
@@ -606,8 +608,12 @@ pub struct CreateViewOptimize {
 #[derive(Debug)]
 pub struct CreateViewFinish {
     validity: PlanValidity,
-    id: GlobalId,
+    /// ID of this item in the Catalog.
+    item_id: CatalogItemId,
+    /// ID by with Compute will reference this View.
+    global_id: GlobalId,
     plan: plan::CreateViewPlan,
+    /// IDs of objects resolved during name resolution.
     resolved_ids: ResolvedIds,
     optimized_expr: OptimizedMirRelationExpr,
 }
@@ -759,8 +765,11 @@ pub struct CreateMaterializedViewOptimize {
 
 #[derive(Debug)]
 pub struct CreateMaterializedViewFinish {
+    /// The ID of this Materialized View in the Catalog.
+    item_id: CatalogItemId,
+    /// The ID of the durable pTVC backing this Materialized View.
+    global_id: GlobalId,
     validity: PlanValidity,
-    sink_id: GlobalId,
     plan: plan::CreateMaterializedViewPlan,
     resolved_ids: ResolvedIds,
     local_mir_plan: optimize::materialized_view::LocalMirPlan,
@@ -770,8 +779,8 @@ pub struct CreateMaterializedViewFinish {
 
 #[derive(Debug)]
 pub struct CreateMaterializedViewExplain {
+    global_id: GlobalId,
     validity: PlanValidity,
-    sink_id: GlobalId,
     plan: plan::CreateMaterializedViewPlan,
     df_meta: DataflowMetainfo,
     explain_ctx: ExplainPlanContext,
@@ -867,7 +876,8 @@ pub struct CreateSecretEnsure {
 #[derive(Debug)]
 pub struct CreateSecretFinish {
     validity: PlanValidity,
-    id: GlobalId,
+    item_id: CatalogItemId,
+    global_id: GlobalId,
     plan: plan::CreateSecretPlan,
 }
 

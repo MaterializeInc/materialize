@@ -32,7 +32,7 @@ use mz_postgres_util::desc::PostgresTableDesc;
 use mz_postgres_util::replication::WalLevel;
 use mz_postgres_util::tunnel::PostgresFlavor;
 use mz_proto::RustType;
-use mz_repr::{strconv, GlobalId, RelationDesc, RelationVersionSelector, Timestamp};
+use mz_repr::{strconv, CatalogItemId, RelationDesc, RelationVersionSelector, Timestamp};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit::{visit_function, Visit};
 use mz_sql_parser::ast::visit_mut::{visit_expr_mut, VisitMut};
@@ -295,7 +295,7 @@ pub async fn purify_statement(
 /// underlying materialized view).
 pub(crate) fn purify_create_sink_avro_doc_on_options(
     catalog: &dyn SessionCatalog,
-    from_id: GlobalId,
+    from_id: CatalogItemId,
     format: &mut Option<FormatSpecifier<Aug>>,
 ) -> Result<(), PlanError> {
     // Collect all objects referenced by the sink.
@@ -304,6 +304,7 @@ pub(crate) fn purify_create_sink_avro_doc_on_options(
         .references()
         .items()
         .copied()
+        .chain_one(from.id())
         .collect::<Vec<_>>();
 
     // Collect all Avro formats that use a schema registry, as well as a set of
@@ -335,8 +336,12 @@ pub(crate) fn purify_create_sink_avro_doc_on_options(
             })
             .collect::<BTreeSet<_>>();
 
+        // Adding existing comments if not already provided by user
         for object_id in &object_ids {
-            let item = catalog.get_item(object_id);
+            // Always add comments to the latest version of the item.
+            let item = catalog
+                .get_item(object_id)
+                .at_version(RelationVersionSelector::Latest);
             let full_name = catalog.resolve_full_name(item.name());
             let full_resolved_name = ResolvedItemName::Item {
                 id: *object_id,

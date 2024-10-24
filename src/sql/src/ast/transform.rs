@@ -12,7 +12,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use mz_ore::str::StrExt;
-use mz_repr::GlobalId;
+use mz_repr::CatalogItemId;
 use mz_sql_parser::ast::CreateTableFromSourceStatement;
 
 use crate::ast::visit::{self, Visit};
@@ -459,17 +459,17 @@ impl<'ast> VisitMut<'ast, Raw> for CreateSqlRewriter {
     }
 }
 
-/// Updates all `GlobalId`s from the keys of `ids` to the values of `ids` within `create_stmt`.
+/// Updates all `CatalogItemId`s from the keys of `ids` to the values of `ids` within `create_stmt`.
 pub fn create_stmt_replace_ids(
     create_stmt: &mut Statement<Raw>,
-    ids: &BTreeMap<GlobalId, GlobalId>,
+    ids: &BTreeMap<CatalogItemId, CatalogItemId>,
 ) {
     let mut id_replacer = CreateSqlIdReplacer { ids };
     id_replacer.visit_statement_mut(create_stmt);
 }
 
 struct CreateSqlIdReplacer<'a> {
-    ids: &'a BTreeMap<GlobalId, GlobalId>,
+    ids: &'a BTreeMap<CatalogItemId, CatalogItemId>,
 }
 
 impl<'ast> VisitMut<'ast, Raw> for CreateSqlIdReplacer<'_> {

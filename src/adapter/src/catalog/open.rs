@@ -1572,13 +1572,14 @@ mod builtin_migration_tests {
             .expect("failed to resolve default schemas")
             .id
             .clone();
+
         catalog
             .transact(
                 None,
                 mz_repr::Timestamp::MIN,
                 None,
                 vec![Op::CreateItem {
-                    id,
+                    id: item_id,
                     name: QualifiedItemName {
                         qualifiers: ItemQualifiers {
                             database_spec,

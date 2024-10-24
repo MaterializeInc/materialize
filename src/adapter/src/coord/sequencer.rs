@@ -17,7 +17,7 @@ use futures::FutureExt;
 use inner::return_if_err;
 use mz_expr::{MirRelationExpr, RowSetFinishing};
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::{Diff, GlobalId, RowCollection};
+use mz_repr::{CatalogItemId, Diff, GlobalId, RowCollection};
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{
@@ -140,13 +140,14 @@ impl Coordinator {
 
             match plan {
                 Plan::CreateSource(plan) => {
-                    let source_id =
+                    let (item_id, global_id) =
                         return_if_err!(self.catalog_mut().allocate_user_id().await, ctx);
                     let result = self
                         .sequence_create_source(
                             ctx.session_mut(),
                             vec![CreateSourcePlanBundle {
-                                source_id,
+                                item_id,
+                                global_id,
                                 plan,
                                 resolved_ids,
                                 available_source_references: None,
@@ -720,7 +721,7 @@ impl Coordinator {
         self.sequence_create_role(None, plan).await
     }
 
-    pub(crate) fn allocate_transient_id(&self) -> GlobalId {
+    pub(crate) fn allocate_transient_id(&self) -> (CatalogItemId, GlobalId) {
         self.transient_id_gen.allocate_id()
     }
 

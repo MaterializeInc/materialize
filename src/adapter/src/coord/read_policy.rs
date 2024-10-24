@@ -22,7 +22,7 @@ use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_compute_types::ComputeInstanceId;
 use mz_ore::instrument;
-use mz_repr::{GlobalId, Timestamp};
+use mz_repr::{CatalogItemId, GlobalId, Timestamp};
 use mz_sql::session::metadata::SessionMetadata;
 use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::read_policy::ReadPolicy;
@@ -200,12 +200,17 @@ impl crate::coord::Coordinator {
     /// with a read policy that allows no compaction.
     pub(crate) async fn initialize_storage_read_policies(
         &mut self,
-        ids: BTreeSet<GlobalId>,
+        ids: BTreeSet<CatalogItemId>,
         compaction_window: CompactionWindow,
     ) {
+        let gids = ids
+            .into_iter()
+            .map(|item_id| self.catalog().get_entry(&item_id).global_ids())
+            .flatten()
+            .collect();
         self.initialize_read_policies(
             &CollectionIdBundle {
-                storage_ids: ids,
+                storage_ids: gids,
                 compute_ids: BTreeMap::new(),
             },
             compaction_window,
