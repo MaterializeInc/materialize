@@ -1414,7 +1414,7 @@ mod builtin_migration_tests {
     };
     use mz_sql::catalog::CatalogDatabase;
     use mz_sql::names::{
-        ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds,
+        DependencyIds, ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds,
     };
     use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
     use mz_sql::DEFAULT_SCHEMA;
@@ -1492,6 +1492,7 @@ mod builtin_migration_tests {
                                 keys: Vec::new(),
                             },
                         ).into(),
+                        dependencies: DependencyIds(Default::default()),
                         optimized_expr: OptimizedMirRelationExpr(MirRelationExpr::Constant {
                             rows: Ok(Vec::new()),
                             typ: RelationType {

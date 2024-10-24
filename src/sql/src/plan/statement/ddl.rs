@@ -2361,6 +2361,11 @@ pub fn plan_view(
     assert!(finishing.is_trivial(expr.arity()));
 
     expr.bind_parameters(params)?;
+    let dependencies = expr
+        .depends_on()
+        .into_iter()
+        .map(|gid| scx.catalog.resolve_item_id(&gid))
+        .collect();
 
     let name = if temporary {
         scx.allocate_temporary_qualified_name(normalize::unresolved_item_name(name.to_owned())?)?
@@ -2382,6 +2387,7 @@ pub fn plan_view(
     let view = View {
         create_sql,
         expr,
+        dependencies,
         column_names: names,
         temporary,
     };
@@ -2710,6 +2716,11 @@ pub fn plan_create_materialized_view(
                 .collect()
         })
         .unwrap_or_default();
+    let dependencies = expr
+        .depends_on()
+        .into_iter()
+        .map(|gid| scx.catalog.resolve_item_id(&gid))
+        .collect();
 
     // Check for an object in the catalog with this same name
     let full_name = scx.catalog.resolve_full_name(&name);
@@ -2730,6 +2741,7 @@ pub fn plan_create_materialized_view(
         materialized_view: MaterializedView {
             create_sql,
             expr,
+            dependencies,
             column_names,
             cluster_id,
             non_null_assertions,
@@ -2921,6 +2933,11 @@ pub fn plan_create_continual_task(
         .into_iter()
         .reduce(|acc, expr| acc.union(expr))
         .ok_or_else(|| sql_err!("TODO(ct3)"))?;
+    let dependencies = expr
+        .depends_on()
+        .into_iter()
+        .map(|gid| scx.catalog.resolve_item_id(&gid))
+        .collect();
 
     let desc = desc.ok_or_else(|| sql_err!("TODO(ct3)"))?;
     let column_names: Vec<ColumnName> = desc.iter_names().cloned().collect();
@@ -2958,6 +2975,7 @@ pub fn plan_create_continual_task(
         continual_task: MaterializedView {
             create_sql,
             expr,
+            dependencies,
             column_names,
             cluster_id,
             non_null_assertions: Vec::new(),

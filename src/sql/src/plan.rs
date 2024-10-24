@@ -1598,6 +1598,8 @@ pub struct Sink {
 pub struct View {
     pub create_sql: String,
     pub expr: HirRelationExpr,
+    /// All of the catalog objects that are referenced by this view, according to the `expr`.
+    pub dependencies: DependencyIds,
     pub column_names: Vec<ColumnName>,
     pub temporary: bool,
 }
@@ -1606,6 +1608,8 @@ pub struct View {
 pub struct MaterializedView {
     pub create_sql: String,
     pub expr: HirRelationExpr,
+    /// All of the catalog objects that are referenced by this materialized view, according to the `expr`.
+    pub dependencies: DependencyIds,
     pub column_names: Vec<ColumnName>,
     pub cluster_id: ClusterId,
     pub non_null_assertions: Vec<usize>,
