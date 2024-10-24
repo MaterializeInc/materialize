@@ -17,8 +17,6 @@ from materialize.test_analytics.util.mz_sql_util import as_sanitized_literal
 @dataclass
 class BoundedMemoryMinimalSearchEntry:
     scenario_name: str
-    configured_memory_mz_in_gb: float
-    configured_memory_clusterd_in_gb: float
     tested_memory_mz_in_gb: float
     tested_memory_clusterd_in_gb: float
 
@@ -40,8 +38,6 @@ class BoundedMemoryMinimalSearchStorage(BaseDataStorage):
                 build_job_id,
                 framework_version,
                 scenario_name,
-                configured_memory_mz_in_gb,
-                configured_memory_clusterd_in_gb,
                 tested_memory_mz_in_gb,
                 tested_memory_clusterd_in_gb,
                 minimization_target,
@@ -52,8 +48,6 @@ class BoundedMemoryMinimalSearchStorage(BaseDataStorage):
                 {as_sanitized_literal(job_id)},
                 {as_sanitized_literal(framework_version)},
                 {as_sanitized_literal(entry.scenario_name)},
-                {entry.configured_memory_mz_in_gb},
-                {entry.configured_memory_clusterd_in_gb},
                 {entry.tested_memory_mz_in_gb},
                 {entry.tested_memory_clusterd_in_gb},
                 {as_sanitized_literal(minimization_target)},

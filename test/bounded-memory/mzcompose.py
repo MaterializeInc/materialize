@@ -1295,10 +1295,12 @@ def find_minimal_memory(
 
         search_entry = BoundedMemoryMinimalSearchEntry(
             scenario_name=scenario.name,
-            configured_memory_mz_in_gb=_get_memory_in_gb(initial_materialized_memory),
-            configured_memory_clusterd_in_gb=_get_memory_in_gb(initial_clusterd_memory),
-            tested_memory_mz_in_gb=_get_memory_in_gb(new_materialized_memory),
-            tested_memory_clusterd_in_gb=_get_memory_in_gb(new_clusterd_memory),
+            tested_memory_mz_in_gb=_get_memory_in_gb(
+                new_materialized_memory or materialized_memory
+            ),
+            tested_memory_clusterd_in_gb=_get_memory_in_gb(
+                new_clusterd_memory or clusterd_memory
+            ),
         )
         test_analytics.bounded_memory_search.add_entry(
             BOUNDED_MEMORY_FRAMEWORK_VERSION,

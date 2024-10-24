@@ -13,8 +13,6 @@ CREATE TABLE bounded_memory_config (
    build_job_id TEXT NOT NULL,
    framework_version TEXT NOT NULL,
    scenario_name TEXT NOT NULL,
-   configured_memory_mz_in_gb DOUBLE NOT NULL,
-   configured_memory_clusterd_in_gb DOUBLE NOT NULL,
    minimization_target TEXT NOT NULL,
    tested_memory_mz_in_gb DOUBLE NOT NULL,
    tested_memory_clusterd_in_gb DOUBLE NOT NULL,
