@@ -25,6 +25,8 @@ operator:
     region: "kind"
     # Flag to indicate whether the environment is for local development
     localDevelopment: true
+    # Flag to indicate whether to create balancerd pods for the environments
+    createBalancers: true
   # Node selector to use for the operator pod
   nodeSelector: {}
   resources:
