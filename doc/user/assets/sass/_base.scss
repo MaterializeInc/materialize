@@ -103,6 +103,10 @@ body.dark {
     --tip-after: #761c91;
     --tip-gutter: #b115b9;
 
+    --admonition: #e9f7fb;
+    --admonition-border: #c0d3d8;
+    --admonition-after: #c0d3d8;
+
     // NOTE(benesch): please ensure these colors stay blueish. Public preview
     // requires a mild amount of caution. Importantly, green is not the right
     // color, as that implies encouragement rather than caution.
@@ -147,6 +151,9 @@ body.light {
     --tip-border: #983fb1;
     --tip-after: #761c91;
     --tip-gutter: #b115b9;
+
+    --admonition-border: #c0d3d8;
+    --admonition-after: #c0d3d8;
 
     // NOTE(benesch): please ensure these colors stay blueish. Public preview
     // requires a mild amount of caution. Importantly, green is not the right
@@ -237,6 +244,7 @@ nav {
 p > a,
 .note > a,
 .tip > a,
+.admonition > a,
 .link-with-code {
     color: var(--link);
 
@@ -245,6 +253,11 @@ p > a,
         text-decoration: underline;
         color: var(--sub);
     }
+}
+
+.admonition-title {
+    font-weight: 600;
+    padding-bottom: rem(1.2);
 }
 
 a {

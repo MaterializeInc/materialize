@@ -1,0 +1,10 @@
+
+{{- $type := .Get "type" | default "note" -}}
+<div class="admonition">
+  <div class="admonition-title">
+    {{ $type }}
+  </div>
+  <div>
+    {{ .Inner | $.Page.RenderString }}
+  </div>
+</div>
