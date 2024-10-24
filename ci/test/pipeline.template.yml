@@ -56,6 +56,7 @@ steps:
         if: build.tag != "" && build.branch =~ /^v.*\..*\$/
         agents:
           queue: builder-linux-x86_64
+        coverage: skip
 
       - id: rust-build-aarch64
         label: ":rust: Build aarch64"
@@ -83,6 +84,7 @@ steps:
         if: build.tag != "" && build.branch =~ /^v.*\..*\$/
         agents:
           queue: builder-linux-aarch64-mem
+        coverage: skip
 
 
       - id: build-x86_64
