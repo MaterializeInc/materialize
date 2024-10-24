@@ -463,8 +463,8 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         let as_of = dataflow.as_of.clone().unwrap();
 
         // Determine the dataflow expiration, if any.
-        let dataflow_expiration = dataflow
-            .expire_dataflow_at(&self.compute_state.replica_expiration, &dataflow.debug_name);
+        let dataflow_expiration =
+            dataflow.expire_dataflow_at(&self.compute_state.replica_expiration);
 
         // Add the dataflow expiration to `until`.
         let until = dataflow.until.meet(&dataflow_expiration);

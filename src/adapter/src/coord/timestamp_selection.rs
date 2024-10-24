@@ -26,7 +26,7 @@ use mz_sql::session::vars::IsolationLevel;
 use mz_storage_types::sources::Timeline;
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
-use tracing::{debug, event, Level};
+use tracing::{event, Level};
 
 use crate::catalog::CatalogState;
 use crate::coord::id_bundle::CollectionIdBundle;
@@ -131,18 +131,6 @@ impl<T: TimestampManipulation> TimestampContext<T> {
     /// Converts this `TimestampContext` to an `Antichain`.
     pub fn antichain(&self) -> Antichain<T> {
         Antichain::from_elem(self.timestamp_or_default())
-    }
-
-    /// Whether the context contains a timestamp of type [`Timeline::EpochMilliseconds`].
-    pub fn is_timeline_epoch_ms(&self) -> bool {
-        debug!(timeline_ctx = ?self, "checking if timeline context is EpochMilliseconds");
-        matches!(
-            self,
-            &Self::TimelineTimestamp {
-                timeline: Timeline::EpochMilliseconds,
-                ..
-            }
-        )
     }
 }
 

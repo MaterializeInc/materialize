@@ -34,6 +34,7 @@ use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::OptimizerNotice;
 
 use crate::catalog;
+use crate::catalog::dataflow_expiration::TimeDependenceHelper;
 use crate::command::ExecuteResponse;
 use crate::coord::Coordinator;
 use crate::error::AdapterError;
@@ -82,10 +83,6 @@ impl Coordinator {
             },
         };
 
-        let is_timeline_epoch_ms = self
-            .validate_timeline_context(resolved_ids.0.clone())?
-            .is_timeline_epoch_ms();
-
         // Construct the CatalogItem for this CT and optimize it.
         let mut item = crate::continual_task::ct_item_from_plan(plan, sink_id, resolved_ids)?;
         let full_name = bootstrap_catalog.resolve_full_name(&name, Some(session.conn_id()));
@@ -94,7 +91,6 @@ impl Coordinator {
             sink_id,
             Arc::new(bootstrap_catalog),
             full_name.to_string(),
-            is_timeline_epoch_ms,
         )?;
 
         // Timestamp selection
@@ -125,6 +121,12 @@ impl Coordinator {
 
         let () = self
             .catalog_transact_with_side_effects(Some(session), ops, |coord| async {
+                // We're referencing ourselves, so filter out our ID.
+                let id_bundle = dataflow_import_id_bundle(&physical_plan, cluster_id);
+                let time_dependence = TimeDependenceHelper::new(coord.catalog())
+                    .determine_time_dependence_ids(id_bundle.iter().filter(|x| *x != sink_id));
+                physical_plan.time_dependence = Some(time_dependence);
+
                 let catalog = coord.catalog_mut();
                 catalog.set_optimized_plan(sink_id, optimized_plan);
                 catalog.set_physical_plan(sink_id, physical_plan.clone());
@@ -161,7 +163,6 @@ impl Coordinator {
         output_id: GlobalId,
         catalog: Arc<dyn OptimizerCatalog>,
         debug_name: String,
-        is_timeline_epoch_ms: bool,
     ) -> Result<
         (
             DataflowDescription<OptimizedMirRelationExpr>,
@@ -191,7 +192,6 @@ impl Coordinator {
             debug_name,
             optimizer_config,
             self.optimizer_metrics(),
-            is_timeline_epoch_ms,
         );
 
         // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local and global)

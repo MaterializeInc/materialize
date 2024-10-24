@@ -95,7 +95,7 @@ pub(crate) mod consistency;
 mod migrate;
 
 mod apply;
-mod dataflow_expiration;
+pub(crate) mod dataflow_expiration;
 mod open;
 mod state;
 mod transact;
@@ -169,6 +169,7 @@ impl Catalog {
         id: GlobalId,
         plan: DataflowDescription<mz_compute_types::plan::Plan>,
     ) {
+        assert!(plan.time_dependence.is_some());
         self.plans.physical_plan_by_id.insert(id, plan.into());
     }
 
