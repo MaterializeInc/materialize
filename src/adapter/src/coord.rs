@@ -2582,9 +2582,15 @@ impl Coordinator {
                 .catalog()
                 .resolve_full_name(entry.name(), None)
                 .to_string();
-            let (_optimized_plan, physical_plan, _metainfo) = self
+            let (optimized_plan, mut physical_plan, metainfo) = self
                 .optimize_create_continual_task(&ct, *id, self.owned_catalog(), debug_name)
                 .expect("builtin CT should optimize successfully");
+
+            // Filter our own ID because we don't exist yet.
+            let id_bundle = dataflow_import_id_bundle(&physical_plan, ct.cluster_id);
+            let time_dependence = TimeDependenceHelper::new(self.catalog())
+                .determine_time_dependence_ids(id_bundle.iter().filter(|x| x != id));
+            physical_plan.time_dependence = Some(time_dependence);
 
             // Determine an as of for the new continual task.
             let mut id_bundle = dataflow_import_id_bundle(&physical_plan, ct.cluster_id);
@@ -2594,6 +2600,10 @@ impl Coordinator {
             let as_of = read_holds.least_valid_read();
 
             collection.since = Some(as_of.clone());
+            let catalog = self.catalog_mut();
+            catalog.set_optimized_plan(*id, optimized_plan);
+            catalog.set_physical_plan(*id, physical_plan);
+            catalog.set_dataflow_metainfo(*id, metainfo);
         }
         self.controller
             .storage
@@ -2668,7 +2678,7 @@ impl Coordinator {
 
                     let (mut physical_plan, metainfo) = global_lir_plan.unapply();
                     let time_dependence = TimeDependenceHelper::new(self.catalog())
-                        .determine_dependence(entry.id, Some(&physical_plan));
+                        .determine_time_dependence_plan(&physical_plan, idx.cluster_id);
                     physical_plan.time_dependence = Some(time_dependence);
                     let metainfo = {
                         // Pre-allocate a vector of transient GlobalIds for each notice.
@@ -2728,7 +2738,7 @@ impl Coordinator {
 
                     let (mut physical_plan, metainfo) = global_lir_plan.unapply();
                     let time_dependence = TimeDependenceHelper::new(self.catalog())
-                        .determine_dependence(entry.id, Some(&physical_plan));
+                        .determine_time_dependence_plan(&physical_plan, mv.cluster_id);
                     physical_plan.time_dependence = Some(time_dependence);
                     let metainfo = {
                         // Pre-allocate a vector of transient GlobalIds for each notice.
@@ -2761,7 +2771,7 @@ impl Coordinator {
                     let (optimized_plan, mut physical_plan, metainfo) = self
                         .optimize_create_continual_task(ct, id, self.owned_catalog(), debug_name)?;
                     let time_dependence = TimeDependenceHelper::new(self.catalog())
-                        .determine_dependence(entry.id, Some(&physical_plan));
+                        .determine_time_dependence_plan(&physical_plan, ct.cluster_id);
                     physical_plan.time_dependence = Some(time_dependence);
 
                     let catalog = self.catalog_mut();

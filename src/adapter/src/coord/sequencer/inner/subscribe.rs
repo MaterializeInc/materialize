@@ -331,6 +331,9 @@ impl Coordinator {
     ) -> Result<StageResult<Box<SubscribeStage>>, AdapterError> {
         let sink_id = global_lir_plan.sink_id();
 
+        let time_dependence = TimeDependenceHelper::new(self.catalog())
+            .determine_time_dependence_ids(dependency_ids.iter().copied());
+
         let (tx, rx) = mpsc::unbounded_channel();
         let active_subscribe = ActiveSubscribe {
             conn_id: ctx.session().conn_id().clone(),
@@ -350,8 +353,6 @@ impl Coordinator {
 
         let (mut df_desc, df_meta) = global_lir_plan.unapply();
 
-        let time_dependence =
-            TimeDependenceHelper::new(self.catalog()).determine_dependence(sink_id, Some(&df_desc));
         df_desc.time_dependence = Some(time_dependence);
 
         // Emit notices.
