@@ -47,6 +47,7 @@ use crate::healthcheck::HealthStatusUpdate;
 use crate::metrics::upsert::UpsertMetrics;
 use crate::render::sources::OutputIndex;
 use crate::storage_state::StorageInstanceContext;
+use crate::upsert_continual_feedback;
 use autospill::AutoSpillBackend;
 use memory::InMemoryHashMap;
 use types::{
@@ -57,7 +58,8 @@ use types::{
 mod autospill;
 mod memory;
 mod rocksdb;
-mod types;
+// TODO(aljoscha): Move next to upsert module, rename to upsert_types.
+pub(crate) mod types;
 
 pub type UpsertValue = Result<Row, UpsertError>;
 
@@ -408,8 +410,7 @@ where
     tracing::info!(id = %source_config.id, %use_continual_feedback_upsert, "upsert operator implementation");
 
     if use_continual_feedback_upsert {
-        // TODO: actually add the other implementation!
-        upsert_classic(
+        upsert_continual_feedback::upsert_inner(
             input,
             key_indices,
             resume_upper,
