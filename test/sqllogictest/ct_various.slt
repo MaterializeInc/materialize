@@ -48,7 +48,7 @@ CREATE CONTINUAL TASK x.ct (key INT) ON INPUT input AS (
 
 statement ok
 CREATE CONTINUAL TASK y.z.ct (key INT) ON INPUT input AS (
-    INSERT INTO y.z.ct SELECT * FROM input;
+    INSERT INTO y.z.ct SELECT i.key FROM input i JOIN x.ct x_ct ON i.key = x_ct.key;
 )
 
 statement ok

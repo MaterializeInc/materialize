@@ -23,8 +23,10 @@ use mz_ore::instrument;
 use mz_repr::adt::mz_acl_item::PrivilegeMap;
 use mz_repr::optimize::OverrideFrom;
 use mz_repr::{GlobalId, Timestamp};
-use mz_sql::ast::{ContinualTaskStmt, RawItemName};
+use mz_sql::ast::visit_mut::{VisitMut, VisitMutNode};
+use mz_sql::ast::{Raw, RawItemName};
 use mz_sql::names::{FullItemName, PartialItemName, ResolvedIds};
+use mz_sql::normalize::unresolved_item_name;
 use mz_sql::plan;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql_parser::ast::display::AstDisplay;
@@ -275,8 +277,17 @@ fn update_create_sql(
     ct_name: &FullItemName,
     as_of: Option<&Timestamp>,
 ) -> String {
-    let f =
-        |x: &mut RawItemName| *x = RawItemName::Name(PartialItemName::from(ct_name.clone()).into());
+    struct ReplaceName(PartialItemName);
+    impl<'ast> VisitMut<'ast, Raw> for ReplaceName {
+        fn visit_item_name_mut(&mut self, node: &'ast mut RawItemName) {
+            let Ok(name) = unresolved_item_name(node.name().clone()) else {
+                return;
+            };
+            if name.matches(&self.0) {
+                *(node.name_mut()) = self.0.clone().into();
+            }
+        }
+    }
 
     let mut ast = mz_sql_parser::parser::parse_statements(create_sql)
         .expect("non-system items must be parseable")
@@ -284,13 +295,10 @@ fn update_create_sql(
         .ast;
     match &mut ast {
         Statement::CreateContinualTask(stmt) => {
-            f(&mut stmt.name);
-            for stmt in &mut stmt.stmts {
-                match stmt {
-                    ContinualTaskStmt::Delete(stmt) => f(&mut stmt.table_name),
-                    ContinualTaskStmt::Insert(stmt) => f(&mut stmt.table_name),
-                }
-            }
+            // Replace any self-references in the statements with the full name,
+            // now that we have it.
+            stmt.visit_mut(&mut ReplaceName(PartialItemName::from(ct_name.clone())));
+            // Also fill in the initial as_of.
             if let Some(as_of) = as_of {
                 stmt.as_of = Some(as_of.into());
             }
