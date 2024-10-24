@@ -118,7 +118,7 @@ impl Context {
             refresh_schedule: desc.refresh_schedule,
             debug_name: desc.debug_name,
             dataflow_expiration_desc: desc.dataflow_expiration_desc,
-            definiteness: desc.definiteness,
+            time_dependence: desc.time_dependence,
         })
     }
 

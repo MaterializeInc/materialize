@@ -161,8 +161,12 @@ where
         L: for<'a> FnMut(C1::Item<'a>) -> I + 'static;
 
     /// Panic if the frontier of a [`StreamCore`] exceeds `expiration` time.
-    fn expire_stream_at(&self, expiration: G::Timestamp, token: ShutdownToken)
-        -> StreamCore<G, C1>;
+    fn expire_stream_at(
+        &self,
+        name: &str,
+        expiration: G::Timestamp,
+        token: ShutdownToken,
+    ) -> StreamCore<G, C1>;
 
     /// Take a Timely stream and convert it to a Differential stream, where each diff is "1"
     /// and each time is the current Timely timestamp.
@@ -238,6 +242,7 @@ where
     /// Panic if the frontier of a [`Collection`] exceeds `expiration` time.
     fn expire_collection_at(
         &self,
+        name: &str,
         expiration: G::Timestamp,
         token: ShutdownToken,
     ) -> Collection<G, D1, R>;
@@ -468,10 +473,12 @@ where
 
     fn expire_stream_at(
         &self,
+        name: &str,
         expiration: G::Timestamp,
         token: ShutdownToken,
     ) -> StreamCore<G, C1> {
-        self.unary_frontier(Pipeline, "expire_stream_at", move |cap, _| {
+        let name = format!("expire_stream_at({name})");
+        self.unary_frontier(Pipeline, &name.clone(), move |cap, _| {
             let mut cap = Some(cap.delayed(&expiration));
             let mut buffer = Default::default();
             move |input, output| {
@@ -481,7 +488,7 @@ where
                     let frontier = input.frontier().frontier();
                     assert!(
                         frontier.less_than(&expiration),
-                        "frontier {frontier:?} not less than expiration {expiration:?}!",
+                        "{name} frontier {frontier:?} not less than expiration {expiration:?}!",
                     );
                 }
                 input.for_each(|time, data| {
@@ -583,11 +590,12 @@ where
 
     fn expire_collection_at(
         &self,
+        name: &str,
         expiration: G::Timestamp,
         token: ShutdownToken,
     ) -> Collection<G, D1, R> {
         self.inner
-            .expire_stream_at(expiration, token)
+            .expire_stream_at(name, expiration, token)
             .as_collection()
     }
 

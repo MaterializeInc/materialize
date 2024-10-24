@@ -34,7 +34,7 @@ use std::collections::BTreeMap;
 use timely::progress::Antichain;
 use tracing::Span;
 
-use crate::catalog::dataflow_expiration::IndefinitenessHelper;
+use crate::catalog::dataflow_expiration::TimeDependenceHelper;
 use crate::command::ExecuteResponse;
 use crate::coord::sequencer::inner::return_if_err;
 use crate::coord::{
@@ -672,9 +672,9 @@ impl Coordinator {
                 let notice_builtin_updates_fut = coord
                     .process_dataflow_metainfo(df_meta, sink_id, session, notice_ids)
                     .await;
-                let indefiniteness =
-                    IndefinitenessHelper::new(coord.catalog()).indefinite_up_to(sink_id);
-                println!("indefiniteness: {:?}", indefiniteness);
+                let time_dependence =
+                    TimeDependenceHelper::new(coord.catalog()).determine_dependence(sink_id);
+                println!("time_dependence: {:?}", time_dependence);
 
                 df_desc.set_as_of(dataflow_as_of.clone());
                 df_desc.set_initial_as_of(initial_as_of);
@@ -684,7 +684,7 @@ impl Coordinator {
                 df_desc
                     .dataflow_expiration_desc
                     .has_transitive_refresh_schedule = has_transitive_refresh_schedule;
-                df_desc.definiteness = Some(indefiniteness);
+                df_desc.time_dependence = Some(time_dependence);
 
                 let storage_metadata = coord.catalog.state().storage_metadata();
 

@@ -1032,6 +1032,7 @@ mod tests {
             refresh_schedule: Default::default(),
             debug_name: Default::default(),
             dataflow_expiration_desc: DataflowExpirationDesc::default(),
+            time_dependence: None,
         }
     }
 

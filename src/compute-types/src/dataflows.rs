@@ -12,20 +12,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use crate::dataflows::proto_dataflow_description::{
-    ProtoDataflowExpirationDesc, ProtoIndexExport, ProtoIndexImport, ProtoSinkExport,
-    ProtoSourceImport,
-};
-use crate::plan::flat_plan::FlatPlan;
-use crate::plan::Plan;
-use crate::sinks::{ComputeSinkConnection, ComputeSinkDesc};
-use crate::sources::{SourceInstanceArguments, SourceInstanceDesc};
-use differential_dataflow::lattice::Lattice;
 use mz_expr::{CollectionPlan, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::soft_assert_or_log;
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
-use mz_repr::definity::Indefiniteness;
 use mz_repr::refresh_schedule::RefreshSchedule;
+use mz_repr::time_dependence::TimeDependence;
 use mz_repr::{GlobalId, RelationType};
 use mz_storage_types::controller::CollectionMetadata;
 use proptest::prelude::{any, Arbitrary};
@@ -34,6 +25,15 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
 use timely::PartialOrder;
+
+use crate::dataflows::proto_dataflow_description::{
+    ProtoDataflowExpirationDesc, ProtoIndexExport, ProtoIndexImport, ProtoSinkExport,
+    ProtoSourceImport,
+};
+use crate::plan::flat_plan::FlatPlan;
+use crate::plan::Plan;
+use crate::sinks::{ComputeSinkConnection, ComputeSinkDesc};
+use crate::sources::{SourceInstanceArguments, SourceInstanceDesc};
 
 include!(concat!(env!("OUT_DIR"), "/mz_compute_types.dataflows.rs"));
 
@@ -77,8 +77,8 @@ pub struct DataflowDescription<P, S: 'static = (), T = mz_repr::Timestamp> {
     pub debug_name: String,
     /// Information about the dataflow used to determine if dataflow expiration can be enabled.
     pub dataflow_expiration_desc: DataflowExpirationDesc<T>,
-    /// Approximate information about for what times the dataflow produces definite outputs.
-    pub definiteness: Option<Indefiniteness>,
+    /// Description of how the dataflow's progress relates to wall-clock time. None for unknown.
+    pub time_dependence: Option<TimeDependence>,
 }
 
 impl<P, S> DataflowDescription<P, S, mz_repr::Timestamp> {
@@ -123,58 +123,28 @@ impl<P, S> DataflowDescription<P, S, mz_repr::Timestamp> {
     pub fn expire_dataflow_at(
         &self,
         replica_expiration: &Antichain<mz_repr::Timestamp>,
-        dataflow_debug_name: &str,
     ) -> Antichain<mz_repr::Timestamp> {
-        if let (Some(definiteness), Some(expiration)) =
-            (&self.definiteness, replica_expiration.as_option())
+        if let (Some(time_dependence), Some(expiration)) =
+            (&self.time_dependence, replica_expiration.as_option())
         {
             println!(
-                "Got definiteness: {:?} and expiration: {:?}",
-                definiteness, expiration
+                "{} Got definiteness: {:?} and expiration: {:?}",
+                self.debug_name, time_dependence, expiration
             );
             let mut result = Antichain::new();
-            if let Some(expiration) = definiteness.apply(*expiration) {
+            if let Some(expiration) = time_dependence.apply(*expiration) {
                 result.insert(expiration);
             }
             // We don't need to expire data if the dataflow's until is less or equal to the expiration time.
             if PartialOrder::less_equal(&self.until, &result) {
                 // Disable expiration if the until is less than or equal to the expiration.
-                return Antichain::default();
+                result = Antichain::default();
             }
-            println!("Returning result: {:?}", result);
-            return result;
-        }
-
-        let dataflow_expiration_desc = &self.dataflow_expiration_desc;
-
-        // Disable dataflow expiration if `replica_expiration` is unset, the current dataflow has a
-        // refresh schedule, has a transitive dependency with a refresh schedule, or the dataflow's
-        // timeline is not `Timeline::EpochMilliSeconds`.
-        if replica_expiration.is_empty()
-            || self.refresh_schedule.is_some()
-            || dataflow_expiration_desc.has_transitive_refresh_schedule
-            || !dataflow_expiration_desc.is_timeline_epoch_ms
-        {
-            return Antichain::default();
-        }
-
-        let dataflow_expiration = if let Some(upper) = &dataflow_expiration_desc.transitive_upper {
-            // Returns empty if `upper` is empty, else the max of `upper` and `replica_expiration`.
-            upper.join(replica_expiration)
+            println!("{} Returning result: {result:?}", self.debug_name);
+            result
         } else {
-            replica_expiration.clone()
-        };
-
-        tracing::debug!(
-            dataflow_name = %dataflow_debug_name,
-            replica_expiration = ?replica_expiration.elements(),
-            dataflow_expiration_desc = ?dataflow_expiration_desc,
-            self_refresh_schedule = ?self.refresh_schedule,
-            output_dataflow_expiration = ?dataflow_expiration.elements(),
-            "computing dataflow expiration",
-        );
-
-        dataflow_expiration
+            Antichain::default()
+        }
     }
 }
 
@@ -213,7 +183,7 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
             refresh_schedule: None,
             debug_name: name,
             dataflow_expiration_desc: DataflowExpirationDesc::default(),
-            definiteness: None,
+            time_dependence: None,
         }
     }
 
@@ -557,7 +527,7 @@ where
             && old.objects_to_build == new.objects_to_build
             && old.index_imports == new.index_imports
             && old.source_imports == new.source_imports
-            && old.definiteness == new.definiteness;
+            && old.time_dependence == new.time_dependence;
 
         let partial = if let (Some(old_as_of), Some(new_as_of)) = (&old.as_of, &new.as_of) {
             timely::PartialOrder::less_equal(old_as_of, new_as_of)
@@ -619,7 +589,7 @@ where
             refresh_schedule: self.refresh_schedule.clone(),
             debug_name: self.debug_name.clone(),
             dataflow_expiration_desc: self.dataflow_expiration_desc.clone(),
-            definiteness: self.definiteness.clone(),
+            time_dependence: self.time_dependence.clone(),
         }
     }
 }
@@ -638,7 +608,7 @@ impl RustType<ProtoDataflowDescription> for DataflowDescription<FlatPlan, Collec
             refresh_schedule: self.refresh_schedule.into_proto(),
             debug_name: self.debug_name.clone(),
             dataflow_expiration_desc: Some(self.dataflow_expiration_desc.into_proto()),
-            definiteness: self.definiteness.into_proto(),
+            time_dependence: self.time_dependence.into_proto(),
         }
     }
 
@@ -666,7 +636,7 @@ impl RustType<ProtoDataflowDescription> for DataflowDescription<FlatPlan, Collec
                 .map(|x| x.into_rust())
                 .transpose()?
                 .unwrap_or_else(DataflowExpirationDesc::default),
-            definiteness: proto.definiteness.into_rust()?,
+            time_dependence: proto.time_dependence.into_rust()?,
         })
     }
 }
@@ -803,7 +773,7 @@ proptest::prop_compose! {
         refresh_schedule_some in any::<bool>(),
         refresh_schedule in any::<RefreshSchedule>(),
         dataflow_expiration_desc in any::<DataflowExpirationDesc<mz_repr::Timestamp>>(),
-        definiteness in any::<Option<Indefiniteness>>(),
+        time_dependence in any::<Option<TimeDependence >>(),
     ) -> DataflowDescription<FlatPlan, CollectionMetadata, mz_repr::Timestamp> {
         DataflowDescription {
             source_imports: BTreeMap::from_iter(source_imports.into_iter()),
@@ -831,7 +801,7 @@ proptest::prop_compose! {
             },
             debug_name,
             dataflow_expiration_desc,
-            definiteness,
+            time_dependence,
         }
     }
 }
