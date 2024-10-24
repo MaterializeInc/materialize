@@ -668,7 +668,7 @@ impl Coordinator {
                     } else {
                         // Write statements never need to track resolved IDs (NOTE: This is not the
                         // same thing as plan dependencies, which we do need to re-validate).
-                        let resolved_ids = ResolvedIds(BTreeSet::new());
+                        let resolved_ids = ResolvedIds::empty();
                         self.sequence_plan(ready.ctx, ready.plan, resolved_ids)
                             .await;
                     }

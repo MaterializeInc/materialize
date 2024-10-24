@@ -98,7 +98,7 @@ async fn datadriven() {
                                                 .into_iter()
                                                 .collect(),
                                             conn_id: None,
-                                            resolved_ids: ResolvedIds(BTreeSet::new()),
+                                            resolved_ids: ResolvedIds::empty(),
                                             custom_logical_compaction_window: None,
                                             is_retained_metrics_object: false,
                                             data_source: TableDataSource::TableWrites {

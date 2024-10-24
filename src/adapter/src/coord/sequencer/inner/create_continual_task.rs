@@ -87,7 +87,7 @@ impl Coordinator {
         };
 
         let is_timeline_epoch_ms = self
-            .validate_timeline_context(resolved_ids.0.clone())?
+            .validate_timeline_context(resolved_ids.collections().copied())?
             .is_timeline_epoch_ms();
 
         // Construct the CatalogItem for this CT and optimize it.
