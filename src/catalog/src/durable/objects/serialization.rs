@@ -404,7 +404,7 @@ impl RustType<proto::ClusterIntrospectionSourceIndexValue>
 {
     fn into_proto(&self) -> proto::ClusterIntrospectionSourceIndexValue {
         proto::ClusterIntrospectionSourceIndexValue {
-            catalog_id: Some(self.catalog_id.into_proto()),
+            index_id: self.catalog_id.0,
             global_id: Some(self.global_id.into_proto()),
             oid: self.oid,
         }
@@ -414,9 +414,7 @@ impl RustType<proto::ClusterIntrospectionSourceIndexValue>
         proto: proto::ClusterIntrospectionSourceIndexValue,
     ) -> Result<Self, TryFromProtoError> {
         Ok(ClusterIntrospectionSourceIndexValue {
-            catalog_id: proto
-                .catalog_id
-                .into_rust_if_some("ClusterIntrospectionSourceIndexValue::catalog_id")?,
+            catalog_id: SystemCatalogItemId(proto.index_id),
             global_id: proto
                 .global_id
                 .into_rust_if_some("ClusterIntrospectionSourceIndexValue::global_id")?,

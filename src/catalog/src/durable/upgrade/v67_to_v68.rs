@@ -301,9 +301,7 @@ impl From<v67::GidMappingValue> for v68::GidMappingValue {
 impl From<v67::ClusterIntrospectionSourceIndexValue> for v68::ClusterIntrospectionSourceIndexValue {
     fn from(value: v67::ClusterIntrospectionSourceIndexValue) -> Self {
         v68::ClusterIntrospectionSourceIndexValue {
-            catalog_id: Some(v68::SystemCatalogItemId {
-                value: value.index_id,
-            }),
+            index_id: value.index_id,
             global_id: Some(v68::SystemGlobalId {
                 value: value.index_id,
             }),
