@@ -81,7 +81,6 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::rc::Rc;
 
-use differential_dataflow::lattice::Lattice;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::Plan;
 use mz_ore::collections::CollectionExt;
@@ -435,24 +434,49 @@ impl<'a, T: TimestampManipulation> Context<'a, T> {
 
     /// Apply as-of constraints imposed by the frontiers of downstream storage collections.
     ///
-    /// A collection's as-of _must_ be <= the join of the read frontier and the write frontier of
-    /// the storage collection it exports to, if any.
+    /// A collection's as-of _must_ be < the write frontier of the storage collection it exports to
+    /// (if any) if it is non-empty, and <= the storage collection's read frontier otherwise.
     ///
-    /// We need to consider the read frontier in addition to the write frontier because storage
-    /// collections are commonly initialyzed with a write frontier of `[0]`, even when they start
-    /// producing output at some later time. The read frontier is always initialized to the first
-    /// time the collection will produce valid output for, so it constrains the times that need to
-    /// be produced by dependencies of newly initialized storage collections.
+    /// Rationale:
+    ///
+    /// * A collection's as-of must be <= the write frontier of its dependent storage collection,
+    ///   because we need to pick up computing the contents of storage collections where we left
+    ///   off previously, to avoid skipped times observable in the durable output.
+    /// * Some dataflows feeding into storage collections (specifically: continual tasks) need to
+    ///   be able to observe input changes at times they write to the output. If we selected the
+    ///   as-of to be equal to the write frontier of the output storage collection, we wouldn't be
+    ///   able to produce the correct output at that frontier. Thus the selected as-of must be
+    ///   strictly less than the write frontier.
+    /// * As an exception to the above, if the output storage collection is empty (i.e. its write
+    ///   frontier is <= its read frontier), we need to allow the as-of to be equal to the read
+    ///   frontier. This is correct in the sense that it mirrors the timestamp selection behavior
+    ///   of the sequencer when it created the collection. Chances are that the sequencer chose the
+    ///   initial as-of (and therefore the initial read frontier of the storage collection) as the
+    ///   smallest possible time that can still be read from the collection inputs, so forcing the
+    ///   upper bound any lower than that read frontier would produce a hard constraint violation.
     ///
     /// Failing to apply this constraint to a collection is an error. The storage collection it
-    /// exports to will have times visible to readers skipped in its output, violating correctness.
+    /// exports to may have times visible to readers skipped in its output, violating correctness.
     fn apply_downstream_storage_constraints(&self) {
         // Apply direct constraints from storage exports.
         for id in self.collections.keys() {
             let Ok(frontiers) = self.storage_collections.collection_frontiers(*id) else {
                 continue;
             };
-            let upper = frontiers.read_capabilities.join(&frontiers.write_frontier);
+
+            let collection_empty =
+                PartialOrder::less_equal(&frontiers.write_frontier, &frontiers.read_capabilities);
+            let upper = if collection_empty {
+                frontiers.read_capabilities
+            } else {
+                Antichain::from_iter(
+                    frontiers
+                        .write_frontier
+                        .iter()
+                        .map(|t| t.step_back().unwrap_or(T::minimum())),
+                )
+            };
+
             let constraint = Constraint {
                 type_: ConstraintType::Hard,
                 bound_type: BoundType::Upper,
@@ -1081,9 +1105,9 @@ mod tests {
         },
         dataflows: [
             "u1" <- ["s1"] => 19,
-            "u2" <- ["s1"] => 13,
-            "u3" <- ["u2"] => 13,
-            "u4" <- ["u2"] => 13,
+            "u2" <- ["s1"] => 12,
+            "u3" <- ["u2"] => 12,
+            "u4" <- ["u2"] => 12,
         ],
         current_time: 100,
     });
@@ -1117,7 +1141,7 @@ mod tests {
             "u3" <- ["s1"] => 13,
             "u4" <- ["s1"] => 10,
             "u5" <- []     => 95,
-            "u6" <- ["s1"] => 18,
+            "u6" <- ["s1"] => 17,
         ],
         current_time: 100,
         read_policies: {
@@ -1140,9 +1164,9 @@ mod tests {
         dataflows: [
             "u1" <- ["s1"] => 15,
             "u2" <- ["s2"] => 20,
-            "u3" <- ["s1"] => 12,
-            "u4" <- ["u3"] => 12,
-            "u5" <- ["s1"] => 18,
+            "u3" <- ["s1"] => 11,
+            "u4" <- ["u3"] => 11,
+            "u5" <- ["s1"] => 17,
             "u6" <- []     => 15,
         ],
         current_time: 15,

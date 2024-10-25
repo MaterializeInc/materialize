@@ -2957,9 +2957,7 @@ pub fn plan_create_continual_task(
         placeholder_id,
         desc,
         input_id: input.id(),
-        // TODO(ct2): Flip the default to true once we've fixed the issue with
-        // snapshot + self-referencing CTs.
-        with_snapshot: snapshot.unwrap_or(false),
+        with_snapshot: snapshot.unwrap_or(true),
         continual_task: MaterializedView {
             create_sql,
             expr,
