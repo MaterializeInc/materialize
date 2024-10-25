@@ -633,7 +633,7 @@ impl Coordinator {
                     cluster_id,
                     non_null_assertions,
                     custom_logical_compaction_window: compaction_window,
-                    refresh_schedule,
+                    refresh_schedule: refresh_schedule.clone(),
                     initial_as_of: Some(initial_as_of.clone()),
                 }),
                 owner_id: *session.current_role_id(),
@@ -651,7 +651,7 @@ impl Coordinator {
                 let (mut df_desc, df_meta) = global_lir_plan.unapply();
 
                 let time_dependence = TimeDependenceHelper::new(coord.catalog())
-                    .determine_time_dependence_plan(&df_desc, cluster_id);
+                    .determine_time_dependence_plan(&df_desc, cluster_id, refresh_schedule);
                 df_desc.time_dependence = Some(time_dependence);
 
                 // Save plan structures.

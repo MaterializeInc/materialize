@@ -9,18 +9,19 @@
 
 //! Description of how a dataflow follows time, independent of time.
 
-use crate::refresh_schedule::RefreshSchedule;
-use crate::Timestamp;
 use mz_proto::{RustType, TryFromProtoError};
 use proptest::arbitrary::{any, Arbitrary};
 use proptest::prelude::BoxedStrategy;
 use proptest::strategy::{Just, Strategy, Union};
 use serde::{Deserialize, Serialize};
 
+use crate::refresh_schedule::RefreshSchedule;
+use crate::Timestamp;
+
 include!(concat!(env!("OUT_DIR"), "/mz_repr.time_dependence.rs"));
 
 /// Description of how a dataflow follows time.
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub enum TimeDependence {
     /// Potentially valid for all times.
     Indeterminate,
@@ -39,24 +40,6 @@ impl TimeDependence {
                 *self = existing.remove(0);
             }
             _ => {}
-        }
-    }
-
-    /// Unify two time dependencies. A definite value is the least specific, followed by a refresh
-    /// schedule, and finally wallclock time.
-    pub fn unify(&mut self, other: &Self) {
-        use TimeDependence::*;
-        match (self, other) {
-            (Indeterminate, Indeterminate) => {}
-            (this @ Indeterminate, inner @ RefreshSchedule(_, _)) => {
-                *this = RefreshSchedule(None, vec![inner.clone()]);
-            }
-            (this, Wallclock) => *this = Wallclock,
-            (RefreshSchedule(_, existing), inner @ RefreshSchedule(_, _)) => {
-                existing.push(inner.clone());
-            }
-            (RefreshSchedule(_, _), Indeterminate) => {}
-            (Wallclock, _) => {}
         }
     }
 
@@ -171,66 +154,5 @@ mod tests {
         i = TimeDependence::Indeterminate;
         i.normalize();
         assert_eq!(i, TimeDependence::Indeterminate);
-    }
-
-    #[mz_ore::test]
-    fn test_indefiniteness_unify() {
-        let mut i = TimeDependence::Indeterminate;
-        i.unify(&TimeDependence::Indeterminate);
-        assert_eq!(i, TimeDependence::Indeterminate);
-
-        i = TimeDependence::Indeterminate;
-        i.unify(&TimeDependence::RefreshSchedule(
-            None,
-            vec![TimeDependence::Wallclock],
-        ));
-        assert_eq!(
-            i,
-            TimeDependence::RefreshSchedule(
-                None,
-                vec![TimeDependence::RefreshSchedule(
-                    None,
-                    vec![TimeDependence::Wallclock]
-                )]
-            )
-        );
-
-        i = TimeDependence::Indeterminate;
-        i.unify(&TimeDependence::Wallclock);
-        assert_eq!(i, TimeDependence::Wallclock);
-
-        i = TimeDependence::RefreshSchedule(None, vec![TimeDependence::Wallclock]);
-        i.unify(&TimeDependence::RefreshSchedule(
-            None,
-            vec![TimeDependence::Wallclock],
-        ));
-        assert_eq!(
-            i,
-            TimeDependence::RefreshSchedule(
-                None,
-                vec![
-                    TimeDependence::Wallclock,
-                    TimeDependence::RefreshSchedule(None, vec![TimeDependence::Wallclock],)
-                ]
-            )
-        );
-
-        i = TimeDependence::RefreshSchedule(None, vec![TimeDependence::Wallclock]);
-        i.unify(&TimeDependence::Indeterminate);
-        assert_eq!(
-            i,
-            TimeDependence::RefreshSchedule(None, vec![TimeDependence::Wallclock])
-        );
-
-        i = TimeDependence::Wallclock;
-        i.unify(&TimeDependence::Indeterminate);
-        assert_eq!(i, TimeDependence::Wallclock);
-
-        i = TimeDependence::Wallclock;
-        i.unify(&TimeDependence::RefreshSchedule(
-            None,
-            vec![TimeDependence::Wallclock],
-        ));
-        assert_eq!(i, TimeDependence::Wallclock);
     }
 }

@@ -11,6 +11,7 @@ use mz_catalog::memory::objects::{DataSourceDesc, TableDataSource};
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_controller_types::ClusterId;
 use mz_ore::soft_panic_or_log;
+use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::time_dependence::TimeDependence;
 use mz_repr::GlobalId;
 use mz_sql::catalog::{CatalogItem, CatalogItemType};
@@ -26,6 +27,7 @@ pub(crate) struct TimeDependenceHelper<'a> {
 }
 
 impl<'a> TimeDependenceHelper<'a> {
+    /// Construct a new helper.
     pub(crate) fn new(catalog: &'a Catalog) -> Self {
         Self {
             seen: BTreeMap::new(),
@@ -34,25 +36,58 @@ impl<'a> TimeDependenceHelper<'a> {
         }
     }
 
+    /// Determine a time dependence based on a plan. The result can have an optional
+    /// refresh schedule.
+    ///
+    /// Note that the cluster IDs is only required to make [`dataflow_import_id_bundle`] happy.
     pub(crate) fn determine_time_dependence_plan<P>(
         &mut self,
         plan: &DataflowDescription<P>,
         cluster: ClusterId,
+        schedule: Option<RefreshSchedule>,
     ) -> TimeDependence {
         let id_bundle = dataflow_import_id_bundle(plan, cluster);
-        self.determine_time_dependence_ids(id_bundle.iter())
+        self.determine_time_dependence_ids(id_bundle.iter(), schedule)
     }
 
+    /// Determine a time dependence based on a set of global IDs. The result can have an optional
+    /// refresh schedule.
     pub(crate) fn determine_time_dependence_ids(
         &mut self,
         ids: impl IntoIterator<Item = GlobalId>,
+        schedule: Option<RefreshSchedule>,
     ) -> TimeDependence {
         use TimeDependence::*;
-        let mut time_dependence = Indeterminate;
-        for id in ids {
-            time_dependence.unify(&self.determine_dependence_inner(id));
+
+        // Collect all time dependencies of our dependencies.
+        let mut time_dependencies = ids
+            .into_iter()
+            .map(|id| self.determine_dependence_inner(id))
+            .collect::<Vec<_>>();
+
+        // Sort and dedupe to remove redundancy.
+        time_dependencies.sort();
+        time_dependencies.dedup();
+
+        if time_dependencies.iter().any(|dep| matches!(dep, Wallclock)) {
+            // Wall-clock dependency is dominant.
+            if schedule.is_some() {
+                RefreshSchedule(schedule, vec![Wallclock])
+            } else {
+                Wallclock
+            }
+        } else if time_dependencies
+            .iter()
+            .any(|dep| matches!(dep, RefreshSchedule(_, _)))
+        {
+            // No immediate wall-clock dependency, found some dependency with a refresh schedule.
+            // Remove remaining Indefinite dependencies.
+            time_dependencies.retain(|dep| matches!(dep, RefreshSchedule(_, _)));
+            RefreshSchedule(schedule, time_dependencies)
+        } else {
+            // No wall-clock dependence, no refresh schedule
+            Indeterminate
         }
-        time_dependence
     }
 
     /// Determine the time dependence for a [`DataSourceDesc`].

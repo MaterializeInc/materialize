@@ -128,7 +128,7 @@ use mz_repr::{Datum, GlobalId, Row, SharedRow};
 use mz_storage_operators::persist_source;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
-use mz_timely_util::operator::{CollectionExt, StreamExt};
+use mz_timely_util::operator::CollectionExt;
 use timely::communication::Allocate;
 use timely::container::columnation::Columnation;
 use timely::dataflow::channels::pact::Pipeline;
@@ -541,7 +541,7 @@ where
         });
 
         match bundle.arrangement(&idx.key) {
-            Some(ArrangementFlavor::Local(mut oks, mut errs)) => {
+            Some(ArrangementFlavor::Local(mut oks, errs)) => {
                 // Ensure that the frontier does not advance past the expiration time, if set.
                 // Otherwise, we might write down incorrect data.
                 if let Some(&expiration) = self.dataflow_expiration.as_option() {
@@ -551,11 +551,6 @@ where
                         &format!("{}_export_index_oks", self.debug_name),
                         expiration,
                         shutdown_token.clone(),
-                    );
-                    errs.stream = errs.stream.expire_stream_at(
-                        &format!("{}_export_index_errs", self.debug_name),
-                        expiration,
-                        shutdown_token,
                     );
                     needed_tokens.push(token);
                 }
@@ -628,7 +623,7 @@ where
             Some(ArrangementFlavor::Local(oks, errs)) => {
                 let mut oks = self.dispatch_rearrange_iterative(oks, "Arrange export iterative");
 
-                let mut errs = errs
+                let errs = errs
                     .as_collection(|k, v| (k.clone(), v.clone()))
                     .leave()
                     .mz_arrange("Arrange export iterative err");
@@ -642,11 +637,6 @@ where
                         &format!("{}_export_index_iterative_oks", self.debug_name),
                         expiration,
                         shutdown_token.clone(),
-                    );
-                    errs.stream = errs.stream.expire_stream_at(
-                        &format!("{}_export_index_iterative_err", self.debug_name),
-                        expiration,
-                        shutdown_token,
                     );
                     needed_tokens.push(token);
                 }

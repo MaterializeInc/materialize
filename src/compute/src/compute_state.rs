@@ -960,7 +960,11 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                 .and_then(mz_repr::Timestamp::try_step_forward)
                 .filter(|expiration| !plan.until.less_equal(expiration))
             {
-                println!("{} expiring at {expiration:?}", plan.debug_name);
+                println!(
+                    "{} expiring at {expiration:?} ({:?})",
+                    plan.debug_name,
+                    mz_ore::now::to_datetime(expiration.into())
+                );
                 return Antichain::from_elem(expiration);
             }
         }

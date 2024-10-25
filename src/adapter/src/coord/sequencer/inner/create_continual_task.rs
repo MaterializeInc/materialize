@@ -129,7 +129,10 @@ impl Coordinator {
                 // We're referencing ourselves, so filter out our ID.
                 let id_bundle = dataflow_import_id_bundle(&physical_plan, cluster_id);
                 let time_dependence = TimeDependenceHelper::new(coord.catalog())
-                    .determine_time_dependence_ids(id_bundle.iter().filter(|x| *x != sink_id));
+                    .determine_time_dependence_ids(
+                        id_bundle.iter().filter(|x| *x != sink_id),
+                        None,
+                    );
                 physical_plan.time_dependence = Some(time_dependence);
 
                 let catalog = coord.catalog_mut();
