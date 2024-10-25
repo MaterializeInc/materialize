@@ -66,6 +66,19 @@ SERVICES = [
 ]
 
 
+def _get_memory_in_gb(memory_spec: str) -> float:
+    if not memory_spec.endswith("Gb"):
+        raise RuntimeError(f"Unsupported memory specification: {memory_spec}")
+
+    return float(memory_spec.removesuffix("Gb"))
+
+
+def _add_memory_buffer(memory_spec: str) -> str:
+    current_gb = _get_memory_in_gb(memory_spec)
+    new_gb = current_gb + 0.2
+    return f"{round(new_gb, 2)}Gb"
+
+
 @dataclass
 class Scenario:
     name: str
@@ -251,7 +264,7 @@ SCENARIOS = [
             {ITERATIONS * REPEAT}
             """
         ),
-        materialized_memory="1.2Gb",
+        materialized_memory=_add_memory_buffer("1.2Gb"),
         clusterd_memory="3.5Gb",
     ),
     PgCdcScenario(
@@ -294,7 +307,7 @@ SCENARIOS = [
             0
             """
         ),
-        materialized_memory="1.0Gb",
+        materialized_memory=_add_memory_buffer("1.0Gb"),
         clusterd_memory="3.5Gb",
     ),
     Scenario(
@@ -356,7 +369,7 @@ SCENARIOS = [
             0
             """
         ),
-        materialized_memory="8Gb",
+        materialized_memory=_add_memory_buffer("8Gb"),
         clusterd_memory="6Gb",
         disabled=True,
     ),
@@ -390,7 +403,7 @@ SCENARIOS = [
             {int(ITERATIONS * 20 * REPEAT / 16)}
             """
         ),
-        materialized_memory="1.2Gb",
+        materialized_memory=_add_memory_buffer("1.2Gb"),
         clusterd_memory="1Gb",
     ),
     MySqlCdcScenario(
@@ -421,7 +434,7 @@ SCENARIOS = [
             {ITERATIONS * REPEAT}
             """
         ),
-        materialized_memory="1.2Gb",
+        materialized_memory=_add_memory_buffer("1.2Gb"),
         clusterd_memory="3.5Gb",
     ),
     MySqlCdcScenario(
@@ -466,7 +479,7 @@ SCENARIOS = [
             0
             """
         ),
-        materialized_memory="1.0Gb",
+        materialized_memory=_add_memory_buffer("1.0Gb"),
         clusterd_memory="3.5Gb",
     ),
     MySqlCdcScenario(
@@ -499,7 +512,7 @@ SCENARIOS = [
             {int(ITERATIONS * 10) * int(REPEAT / 128)}
             """
         ),
-        materialized_memory="1.0Gb",
+        materialized_memory=_add_memory_buffer("1.0Gb"),
         clusterd_memory="8.5Gb",
     ),
     KafkaScenario(
@@ -535,7 +548,7 @@ SCENARIOS = [
             """
         ),
         post_restart=KafkaScenario.SCHEMAS + KafkaScenario.POST_RESTART,
-        materialized_memory="1.0Gb",
+        materialized_memory=_add_memory_buffer("1.0Gb"),
         clusterd_memory="3.5Gb",
     ),
     # Perform updates while the source is ingesting
@@ -564,7 +577,7 @@ SCENARIOS = [
             """
         ),
         post_restart=KafkaScenario.SCHEMAS + KafkaScenario.POST_RESTART,
-        materialized_memory="1.0Gb",
+        materialized_memory=_add_memory_buffer("1.0Gb"),
         clusterd_memory="3.5Gb",
     ),
     # Perform inserts+deletes while the source is ingesting
@@ -596,7 +609,7 @@ SCENARIOS = [
             """
         ),
         post_restart=KafkaScenario.SCHEMAS + KafkaScenario.POST_RESTART,
-        materialized_memory="1.0Gb",
+        materialized_memory=_add_memory_buffer("1.0Gb"),
         clusterd_memory="3.5Gb",
     ),
     Scenario(
@@ -634,7 +647,7 @@ SCENARIOS = [
            0
            """
         ),
-        materialized_memory="1.5Gb",
+        materialized_memory=_add_memory_buffer("1.5Gb"),
         clusterd_memory="3.5Gb",
     ),
     Scenario(
@@ -685,7 +698,7 @@ SCENARIOS = [
             2000000
             """
         ),
-        materialized_memory="1.95Gb",
+        materialized_memory=_add_memory_buffer("1.95Gb"),
         clusterd_memory="3.5Gb",
     ),
     Scenario(
@@ -730,7 +743,7 @@ SCENARIOS = [
             10000001
             """
         ),
-        materialized_memory="3.7Gb",
+        materialized_memory=_add_memory_buffer("3.7Gb"),
         clusterd_memory="3.5Gb",
     ),
     KafkaScenario(
@@ -777,7 +790,7 @@ SCENARIOS = [
             "${{kafka-ingest.iteration}}"
             """
         ),
-        materialized_memory="1.0Gb",
+        materialized_memory=_add_memory_buffer("1.0Gb"),
         clusterd_memory="3.5Gb",
     ),
     Scenario(
@@ -830,7 +843,7 @@ SCENARIOS = [
             true
             """
         ),
-        materialized_memory="1.2Gb",
+        materialized_memory=_add_memory_buffer("1.2Gb"),
         clusterd_memory="5.5Gb",
     ),
     Scenario(
@@ -887,7 +900,7 @@ SCENARIOS = [
             true
             """
         ),
-        materialized_memory="1.5Gb",
+        materialized_memory=_add_memory_buffer("1.5Gb"),
         clusterd_memory="3.5Gb",
     ),
     Scenario(
@@ -1082,7 +1095,7 @@ SCENARIOS = [
             Target cluster: quickstart
             """
         ),
-        materialized_memory="1.0Gb",
+        materialized_memory=_add_memory_buffer("1.0Gb"),
         clusterd_memory="3.5Gb",
     ),
 ]
@@ -1455,10 +1468,3 @@ def _reduce_memory(
         new_gb = lower_bound_in_gb
 
     return f"{round(new_gb, 2)}Gb"
-
-
-def _get_memory_in_gb(memory_spec: str) -> float:
-    if not memory_spec.endswith("Gb"):
-        raise RuntimeError(f"Unsupported memory specification: {memory_spec}")
-
-    return float(memory_spec.removesuffix("Gb"))
