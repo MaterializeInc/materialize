@@ -15,6 +15,10 @@ retried until it produces the desired result.
 
 from pathlib import Path
 
+from prompt_toolkit import PromptSession
+from prompt_toolkit.lexers import PygmentsLexer
+from pygments.lexers.sql import SqlLexer
+
 from materialize import ci_util
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.fivetran_destination import FivetranDestination
@@ -216,3 +220,78 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             ci_util.upload_junit_report(
                 "testdrive", Path(__file__).parent / junit_report
             )
+
+
+def workflow_interactive(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """Interactively write a new testdrive file"""
+    parser.add_argument(
+        "file",
+        type=str,
+        default=None,
+        nargs="?",
+        help="start with the specified file and extend it",
+    )
+    parser.parse_args()
+
+    dependencies = [
+        "fivetran-destination",
+        "minio",
+        "materialized",
+        "postgres",
+        "mysql",
+        "zookeeper",
+        "kafka",
+        "schema-registry",
+    ]
+
+    with c.override(
+        Testdrive(seed=1)):
+        c.up(*dependencies)
+        c.up("testdrive", persistent=True)
+
+        c.sql(
+            "ALTER SYSTEM SET max_clusters = 50;",
+            port=6877,
+            user="mz_system",
+        )
+
+        # TODO: args.file
+
+        text = None
+
+        session = PromptSession(lexer=PygmentsLexer(SqlLexer))
+
+        try:
+            while True:
+                if not text:
+                    text = prompt("td| ")
+                if text.startswith(">"):
+                    result = c.sql_query(text[1:])
+                    for row in result:
+                        print(" ".join(row))
+                    action = button_dialog(
+                        title="Query Action",
+                        text="Choices",
+                        buttons=[
+                            ("Rerun query", "rerun"),
+                            ("Edit query", "edit"),
+                            ("Store result", "store"),
+                            ("Exit", "exit"),
+                        ],
+                    ).run()
+
+                    if action == "rerun":
+                        continue
+                    elif action == "edit":
+                        text = prompt("Edit query: ", default=text)
+                    elif action == "store":
+                        pass
+                    elif action == "exit":
+                        break
+                    else:
+                        raise RuntimeError(f"Unknown action {action}")
+
+                print("Result:")
+                print(result)
+        except KeyboardInterrupt:
+            pass # TODO: save file
