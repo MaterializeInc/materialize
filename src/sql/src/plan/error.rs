@@ -239,6 +239,7 @@ pub enum PlanError {
     LoadGeneratorSourcePurification(LoadGeneratorSourcePurificationError),
     CsrPurification(CsrPurificationError),
     MySqlSourcePurification(MySqlSourcePurificationError),
+    UseTablesForSources(String),
     MissingName(CatalogItemType),
     InvalidRefreshAt,
     InvalidRefreshEveryAlignedTo,
@@ -713,6 +714,7 @@ impl fmt::Display for PlanError {
             Self::KafkaSinkPurification(e) => write!(f, "KAFKA sink validation: {}", e),
             Self::CsrPurification(e) => write!(f, "CONFLUENT SCHEMA REGISTRY validation: {}", e),
             Self::MySqlSourcePurification(e) => write!(f, "MYSQL source validation: {}", e),
+            Self::UseTablesForSources(command) => write!(f, "{command} not supported; use CREATE TABLE .. FROM SOURCE instead"),
             Self::MangedReplicaName(name) => {
                 write!(f, "{name} is reserved for replicas of managed clusters")
             }
