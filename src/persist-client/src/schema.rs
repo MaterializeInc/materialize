@@ -14,6 +14,8 @@ use std::fmt::Debug;
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
+use anyhow::Context;
+use arrow::datatypes::DataType;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use mz_ore::cast::CastFrom;
@@ -402,15 +404,98 @@ impl<K: Codec, V: Codec> PartMigration<K, V> {
     }
 }
 
+/// Returns if `new` is at least as nullable as `old`.
+///
+/// Errors if `new` is less nullable than `old`, or `old` and `new` are different types or have
+/// different nested fields.
+pub(crate) fn is_atleast_as_nullable(old: &DataType, new: &DataType) -> Result<(), anyhow::Error> {
+    fn check(old: &arrow::datatypes::Field, new: &arrow::datatypes::Field) -> bool {
+        old.is_nullable() == new.is_nullable() || !old.is_nullable() && new.is_nullable()
+    }
+
+    match (old, new) {
+        (DataType::Null, DataType::Null)
+        | (DataType::Boolean, DataType::Boolean)
+        | (DataType::Int8, DataType::Int8)
+        | (DataType::Int16, DataType::Int16)
+        | (DataType::Int32, DataType::Int32)
+        | (DataType::Int64, DataType::Int64)
+        | (DataType::UInt8, DataType::UInt8)
+        | (DataType::UInt16, DataType::UInt16)
+        | (DataType::UInt32, DataType::UInt32)
+        | (DataType::UInt64, DataType::UInt64)
+        | (DataType::Float16, DataType::Float16)
+        | (DataType::Float32, DataType::Float32)
+        | (DataType::Float64, DataType::Float64)
+        | (DataType::Binary, DataType::Binary)
+        | (DataType::Utf8, DataType::Utf8) => Ok(()),
+        (DataType::FixedSizeBinary(old_size), DataType::FixedSizeBinary(new_size))
+            if old_size == new_size =>
+        {
+            Ok(())
+        }
+        (DataType::List(old_field), DataType::List(new_field))
+        | (DataType::Map(old_field, _), DataType::Map(new_field, _)) => {
+            if !check(old_field, new_field) {
+                anyhow::bail!("'{}' is now less nullable", old_field.name());
+            }
+            // Recurse into our children and bail early if one fails.
+            let child_result = is_atleast_as_nullable(old_field.data_type(), new_field.data_type())
+                .with_context(|| format!("'{}'", old_field.name()));
+            if let Err(e) = child_result {
+                return Err(e);
+            }
+            Ok(())
+        }
+        (DataType::Struct(old_fields), DataType::Struct(new_fields)) => {
+            if old_fields.len() != new_fields.len() {
+                anyhow::bail!(
+                    "wrong number of fields, old: {}, new: {}",
+                    old_fields.len(),
+                    new_fields.len()
+                )
+            }
+
+            // Note: This nested loop approach is O(n^2), but we expect the number of fields to be
+            // relatively small, and it avoid allocations, so we consciously use this approach.
+            for new_field in new_fields {
+                let old_field = old_fields
+                    .iter()
+                    .find(|old| old.name() == new_field.name())
+                    .ok_or_else(|| anyhow::anyhow!("missing field '{}'", new_field.name()))?;
+
+                if !check(old_field, new_field) {
+                    anyhow::bail!("'{}' is now less nullable", old_field.name());
+                }
+
+                // Recurse into our children and bail early if one fails.
+                let child_result =
+                    is_atleast_as_nullable(old_field.data_type(), new_field.data_type())
+                        .with_context(|| format!("'{}'", old_field.name()));
+                if let Err(e) = child_result {
+                    return Err(e);
+                }
+            }
+
+            Ok(())
+        }
+        (old, new) => {
+            anyhow::bail!("found unsupported or mismatched datatypes! old: {old:?}, new: {new:?}")
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use arrow::array::{
         as_string_array, Array, ArrayBuilder, StringArray, StringBuilder, StructArray,
     };
-    use arrow::datatypes::{DataType, Field};
+    use arrow::datatypes::{DataType, Field, Fields};
     use bytes::BufMut;
     use futures::StreamExt;
     use mz_dyncfg::ConfigUpdates;
+    use mz_ore::error::ErrorExt;
+    use mz_ore::{assert_contains, assert_err, assert_ok};
     use mz_persist_types::codec_impls::UnitSchema;
     use mz_persist_types::columnar::{ColumnDecoder, ColumnEncoder, Schema2};
     use mz_persist_types::stats::{NoneStats, StructStats};
@@ -764,5 +849,133 @@ mod tests {
         if false {
             info_log_non_zero_metrics(&client.metrics.registry.gather());
         }
+    }
+
+    #[mz_ore::test]
+    fn test_as_nullable() {
+        assert_ok!(is_atleast_as_nullable(&DataType::UInt8, &DataType::UInt8));
+        assert_err!(is_atleast_as_nullable(&DataType::UInt8, &DataType::Utf8));
+
+        let old_type = DataType::Struct(arrow::datatypes::Fields::from(vec![
+            Field::new("a", DataType::Utf8, true),
+            Field::new("b", DataType::Boolean, false),
+        ]));
+        assert_ok!(is_atleast_as_nullable(&old_type, &old_type));
+
+        let more_nullable_type = DataType::Struct(arrow::datatypes::Fields::from(vec![
+            Field::new("a", DataType::Utf8, true),
+            Field::new("b", DataType::Boolean, true),
+        ]));
+        assert_ok!(is_atleast_as_nullable(&old_type, &more_nullable_type));
+
+        let less_nullable_type = DataType::Struct(arrow::datatypes::Fields::from(vec![
+            Field::new("a", DataType::Utf8, false),
+            Field::new("b", DataType::Boolean, false),
+        ]));
+        assert_err!(is_atleast_as_nullable(&old_type, &less_nullable_type));
+
+        let different_fields = DataType::Struct(arrow::datatypes::Fields::from(vec![
+            Field::new("foobar", DataType::Utf8, true),
+            Field::new("b", DataType::Boolean, true),
+        ]));
+        assert_err!(is_atleast_as_nullable(&old_type, &different_fields));
+
+        let different_number_of_fields = DataType::Struct(arrow::datatypes::Fields::from(vec![
+            Field::new("a", DataType::Utf8, true),
+            Field::new("b", DataType::Boolean, true),
+            Field::new("c", DataType::UInt64, true),
+        ]));
+        assert_err!(is_atleast_as_nullable(
+            &old_type,
+            &different_number_of_fields
+        ));
+
+        let out_of_order_fields = DataType::Struct(arrow::datatypes::Fields::from(vec![
+            Field::new("b", DataType::Boolean, false),
+            Field::new("a", DataType::Utf8, true),
+        ]));
+        assert_ok!(is_atleast_as_nullable(&old_type, &out_of_order_fields));
+    }
+
+    #[mz_ore::test]
+    fn test_as_nullable_deeply_nested() {
+        let old_type = DataType::Struct(Fields::from(vec![
+            Field::new(
+                "k",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("event_type", DataType::Utf8, false),
+                    Field::new(
+                        "details",
+                        DataType::Struct(Fields::from(vec![
+                            Field::new("name", DataType::Utf8, false),
+                            Field::new("new_user", DataType::Boolean, false),
+                            Field::new("plan", DataType::Utf8, true),
+                        ])),
+                        false,
+                    ),
+                    Field::new("event_ts", DataType::UInt64, true),
+                ])),
+                true,
+            ),
+            Field::new("v", DataType::Boolean, false),
+            Field::new("t", DataType::UInt64, false),
+            Field::new("d", DataType::Int64, false),
+        ]));
+        assert_ok!(is_atleast_as_nullable(&old_type, &old_type));
+
+        let more_nullable_type = DataType::Struct(Fields::from(vec![
+            Field::new(
+                "k",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("event_type", DataType::Utf8, false),
+                    Field::new(
+                        "details",
+                        DataType::Struct(Fields::from(vec![
+                            Field::new("name", DataType::Utf8, false),
+                            // More nullable than old_type.
+                            Field::new("new_user", DataType::Boolean, true),
+                            Field::new("plan", DataType::Utf8, true),
+                        ])),
+                        false,
+                    ),
+                    Field::new("event_ts", DataType::UInt64, true),
+                ])),
+                true,
+            ),
+            Field::new("v", DataType::Boolean, false),
+            Field::new("t", DataType::UInt64, false),
+            Field::new("d", DataType::Int64, false),
+        ]));
+        assert_ok!(is_atleast_as_nullable(&old_type, &more_nullable_type));
+
+        let less_nullable_type = DataType::Struct(Fields::from(vec![
+            Field::new(
+                "k",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("event_type", DataType::Utf8, false),
+                    Field::new(
+                        "details",
+                        DataType::Struct(Fields::from(vec![
+                            Field::new("name", DataType::Utf8, false),
+                            Field::new("new_user", DataType::Boolean, false),
+                            // Less nullable than old type.
+                            Field::new("plan", DataType::Utf8, false),
+                        ])),
+                        false,
+                    ),
+                    Field::new("event_ts", DataType::UInt64, true),
+                ])),
+                true,
+            ),
+            Field::new("v", DataType::Boolean, false),
+            Field::new("t", DataType::UInt64, false),
+            Field::new("d", DataType::Int64, false),
+        ]));
+        let result = is_atleast_as_nullable(&old_type, &less_nullable_type);
+        assert_err!(result);
+        assert_contains!(
+            result.unwrap_err().to_string_with_causes(),
+            "'k': 'details': 'plan' is now less nullable"
+        );
     }
 }
