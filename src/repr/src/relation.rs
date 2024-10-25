@@ -369,7 +369,18 @@ static_assertions::assert_not_impl_all!(ColumnIndex: Arbitrary);
 
 /// The version a given column was added at.
 #[derive(
-    Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord, Serialize, Deserialize, Hash, MzReflect,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect,
+    Arbitrary,
 )]
 pub struct RelationVersion(u64);
 
@@ -386,6 +397,26 @@ impl RelationVersion {
             .checked_add(1)
             .expect("added more than u64::MAX columns?");
         RelationVersion(next_version)
+    }
+
+    /// Consume a [`RelationVersion`] returning the raw value.
+    ///
+    /// Should __only__ be used for serialization.
+    pub fn into_raw(self) -> u64 {
+        self.0
+    }
+
+    /// Create a [`RelationVersion`] from a raw value.
+    ///
+    /// Should __only__ be used for serialization.
+    pub fn from_raw(val: u64) -> RelationVersion {
+        RelationVersion(val)
+    }
+}
+
+impl fmt::Display for RelationVersion {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "v{}", self.0)
     }
 }
 

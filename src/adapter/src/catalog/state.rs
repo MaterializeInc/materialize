@@ -1742,20 +1742,19 @@ impl CatalogState {
         match object_id {
             ObjectId::Item(global_id) => {
                 let entry = self.get_entry(&global_id);
+                let item_id = global_id.to_item_id();
                 match entry.item_type() {
-                    CatalogItemType::Table => CommentObjectId::Table(global_id),
-                    CatalogItemType::Source => CommentObjectId::Source(global_id),
-                    CatalogItemType::Sink => CommentObjectId::Sink(global_id),
-                    CatalogItemType::View => CommentObjectId::View(global_id),
-                    CatalogItemType::MaterializedView => {
-                        CommentObjectId::MaterializedView(global_id)
-                    }
-                    CatalogItemType::Index => CommentObjectId::Index(global_id),
-                    CatalogItemType::Func => CommentObjectId::Func(global_id),
-                    CatalogItemType::Connection => CommentObjectId::Connection(global_id),
-                    CatalogItemType::Type => CommentObjectId::Type(global_id),
-                    CatalogItemType::Secret => CommentObjectId::Secret(global_id),
-                    CatalogItemType::ContinualTask => CommentObjectId::ContinualTask(global_id),
+                    CatalogItemType::Table => CommentObjectId::Table(item_id),
+                    CatalogItemType::Source => CommentObjectId::Source(item_id),
+                    CatalogItemType::Sink => CommentObjectId::Sink(item_id),
+                    CatalogItemType::View => CommentObjectId::View(item_id),
+                    CatalogItemType::MaterializedView => CommentObjectId::MaterializedView(item_id),
+                    CatalogItemType::Index => CommentObjectId::Index(item_id),
+                    CatalogItemType::Func => CommentObjectId::Func(item_id),
+                    CatalogItemType::Connection => CommentObjectId::Connection(item_id),
+                    CatalogItemType::Type => CommentObjectId::Type(item_id),
+                    CatalogItemType::Secret => CommentObjectId::Secret(item_id),
+                    CatalogItemType::ContinualTask => CommentObjectId::ContinualTask(item_id),
                 }
             }
             ObjectId::Role(role_id) => CommentObjectId::Role(role_id),
@@ -2135,7 +2134,7 @@ impl CatalogState {
             | CommentObjectId::Connection(id)
             | CommentObjectId::Type(id)
             | CommentObjectId::Secret(id)
-            | CommentObjectId::ContinualTask(id) => Some(*id),
+            | CommentObjectId::ContinualTask(id) => Some(id.to_global_id()),
             CommentObjectId::Role(_)
             | CommentObjectId::Database(_)
             | CommentObjectId::Schema(_)
@@ -2165,7 +2164,7 @@ impl CatalogState {
             | CommentObjectId::Type(id)
             | CommentObjectId::Secret(id)
             | CommentObjectId::ContinualTask(id) => {
-                let item = self.get_entry(&id);
+                let item = self.get_entry(&id.to_global_id());
                 let name = self.resolve_full_name(item.name(), Some(conn_id));
                 name.to_string()
             }
