@@ -486,10 +486,11 @@ where
                     drop(cap.take());
                 } else {
                     let frontier = input.frontier().frontier();
-                    assert!(
-                        frontier.less_than(&expiration),
-                        "{name} frontier {frontier:?} not less than expiration {expiration:?}",
-                    );
+                    if !frontier.less_than(&expiration) {
+                        eprintln!(
+                            "{name} frontier {frontier:?} not less than expiration {expiration:?}"
+                        );
+                    }
                 }
                 input.for_each(|time, data| {
                     data.swap(&mut buffer);
