@@ -45,6 +45,7 @@ use thiserror::Error;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use timely::PartialOrder;
+use tokio::sync::mpsc::error::SendError;
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
@@ -129,15 +130,15 @@ impl From<CollectionMissing> for ReadPolicyError {
 pub type Command<T> = Box<dyn FnOnce(&mut Instance<T>) + Send>;
 
 /// A client for an [`Instance`] task.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(super) struct Client<T: ComputeControllerTimestamp> {
     /// A sender for commands for the instance.
     command_tx: mpsc::UnboundedSender<Command<T>>,
 }
 
 impl<T: ComputeControllerTimestamp> Client<T> {
-    pub fn send(&self, command: Command<T>) {
-        self.command_tx.send(command).expect("instance not dropped");
+    pub fn send(&self, command: Command<T>) -> Result<(), SendError<Command<T>>> {
+        self.command_tx.send(command)
     }
 }
 
@@ -158,8 +159,6 @@ where
         dyncfg: Arc<ConfigSet>,
         response_tx: mpsc::UnboundedSender<ComputeControllerResponse<T>>,
         introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
-        read_holds_tx: mpsc::UnboundedSender<(GlobalId, ChangeBatch<T>)>,
-        read_holds_rx: mpsc::UnboundedReceiver<(GlobalId, ChangeBatch<T>)>,
     ) -> Self {
         let (command_tx, command_rx) = mpsc::unbounded_channel();
 
@@ -177,8 +176,6 @@ where
                 command_rx,
                 response_tx,
                 introspection_tx,
-                read_holds_tx,
-                read_holds_rx,
             )
             .run(),
         );
@@ -726,6 +723,17 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             .expect("Cannot error if target_replica_ids is None")
     }
 
+    /// Report an external read hold change.
+    ///
+    /// Changes to externally held read holds are sequenced through `command_rx`, to ensure that,
+    /// e.g., we don't receive changes for a collection before we have seen its creation command.
+    #[mz_ore::instrument(level = "debug")]
+    pub fn report_read_hold_change(&self, id: GlobalId, changes: ChangeBatch<T>) {
+        self.read_holds_tx
+            .send((id, changes))
+            .expect("rx is held by `self`");
+    }
+
     /// Clean up collection state that is not needed anymore.
     ///
     /// Three conditions need to be true before we can remove state for a collection:
@@ -869,9 +877,9 @@ where
         command_rx: mpsc::UnboundedReceiver<Command<T>>,
         response_tx: mpsc::UnboundedSender<ComputeControllerResponse<T>>,
         introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
-        read_holds_tx: mpsc::UnboundedSender<(GlobalId, ChangeBatch<T>)>,
-        read_holds_rx: mpsc::UnboundedReceiver<(GlobalId, ChangeBatch<T>)>,
     ) -> Self {
+        let (read_holds_tx, read_holds_rx) = mpsc::unbounded_channel();
+
         let mut collections = BTreeMap::new();
         let mut log_sources = BTreeMap::new();
         for (log, id, shared) in arranged_logs {
@@ -978,20 +986,35 @@ where
         }
     }
 
-    /// Check that the current instance is empty.
+    /// Shut down this instance.
     ///
-    /// This method exists to help us find bugs where the client drops a compute instance that
-    /// still has replicas or collections installed, and later assumes that said
-    /// replicas/collections still exists.
+    /// This method runs various assertions ensuring the instance state is empty. It exists to help
+    /// us find bugs where the client drops a compute instance that still has replicas or
+    /// collections installed, and later assumes that said replicas/collections still exists.
     ///
     /// # Panics
     ///
     /// Panics if the compute instance still has active replicas.
     /// Panics if the compute instance still has collections installed.
     #[mz_ore::instrument(level = "debug")]
-    pub fn check_empty(&mut self) {
+    pub fn shutdown(&mut self) {
+        // Taking the `command_rx` ensures that the [`Instance::run`] loop terminates.
+        let (_tx, rx) = mpsc::unbounded_channel();
+        let mut command_rx = std::mem::replace(&mut self.command_rx, rx);
+
+        // Apply all outstanding read hold changes. This might cause read hold downgrades to be
+        // added to `command_tx`, so we need to apply those in a loop.
+        while !self.read_holds_rx.is_empty() {
+            self.apply_read_hold_changes();
+
+            // TODO(teskje): Make `Command` an enum and assert that all received commands are read
+            // hold downgrades.
+            while let Ok(cmd) = command_rx.try_recv() {
+                cmd(self);
+            }
+        }
+
         // Collections might have been dropped but not cleaned up yet.
-        self.apply_read_hold_changes();
         self.cleanup_collections();
 
         let stray_replicas: Vec<_> = self.replicas.keys().collect();
@@ -2155,8 +2178,9 @@ impl<T: ComputeControllerTimestamp> CollectionState<T> {
         // Initialize collection read holds.
         // Note that the implied read hold was already added to the `read_capabilities` when
         // `shared` was created, so we only need to add the warmup read hold here.
-        let implied_read_hold = ReadHold::new(collection_id, since.clone(), read_holds_tx.clone());
-        let warmup_read_hold = ReadHold::new(collection_id, since.clone(), read_holds_tx);
+        let implied_read_hold =
+            ReadHold::with_channel(collection_id, since.clone(), read_holds_tx.clone());
+        let warmup_read_hold = ReadHold::with_channel(collection_id, since.clone(), read_holds_tx);
 
         let updates = warmup_read_hold.since().iter().map(|t| (t.clone(), 1));
         shared.lock_read_capabilities(|c| {
