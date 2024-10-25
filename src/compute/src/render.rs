@@ -122,6 +122,7 @@ use mz_compute_types::dataflows::{DataflowDescription, IndexDesc};
 use mz_compute_types::plan::flat_plan::{FlatPlan, FlatPlanNode};
 use mz_compute_types::plan::LirId;
 use mz_expr::{EvalError, Id};
+use mz_ore::shutdown::ShutdownToken;
 use mz_persist_client::operators::shard_source::SnapshotMode;
 use mz_repr::{Datum, GlobalId, Row, SharedRow};
 use mz_storage_operators::persist_source;
@@ -163,7 +164,6 @@ mod top_k;
 
 pub use context::CollectionBundle;
 pub use join::LinearJoinSpec;
-use mz_timely_util::shutdown::ShutdownToken;
 
 /// Assemble the "compute"  side of a dataflow, i.e. all but the sources.
 ///

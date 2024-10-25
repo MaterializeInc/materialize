@@ -12,8 +12,8 @@
 use std::hash::Hash;
 
 use differential_dataflow::ExchangeData;
+use mz_ore::shutdown::ShutdownToken;
 use mz_repr::Row;
-use mz_timely_util::shutdown::ShutdownToken;
 use timely::container::columnation::Columnation;
 
 /// Used to make possibly-validating code generic: think of this as a kind of `MaybeResult`,

@@ -462,9 +462,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         let dataflow_index = self.timely_worker.next_dataflow_index();
         let as_of = dataflow.as_of.clone().unwrap();
 
-        // Determine the dataflow expiration, if any.
-        let dataflow_expiration =
-            dataflow.expire_dataflow_at(&self.compute_state.replica_expiration);
+        let dataflow_expiration = self.determine_dataflow_expiration(&dataflow);
 
         // Add the dataflow expiration to `until`.
         let until = dataflow.until.meet(&dataflow_expiration);
@@ -936,6 +934,37 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         // Ignore send errors because the coordinator is free to ignore our
         // responses. This happens during shutdown.
         let _ = self.response_tx.send(response);
+    }
+
+    /// Returns the dataflow expiration, i.e, the timestamp beyond which diffs can be
+    /// dropped.
+    ///
+    /// Returns an empty timestamp if `replica_expiration` is unset or matches conditions under
+    /// which dataflow expiration should be disabled.
+    pub fn determine_dataflow_expiration<P, S>(
+        &self,
+        plan: &DataflowDescription<P, S, mz_repr::Timestamp>,
+    ) -> Antichain<mz_repr::Timestamp> {
+        if let (Some(time_dependence), Some(expiration)) = (
+            &plan.time_dependence,
+            self.compute_state.replica_expiration.as_option(),
+        ) {
+            // Evaluate time dependence with respect to the expiration time. Step time forward to
+            // ensure the expiration time is different to the moment a dataflow can legitimately
+            // jump to.
+            // We cannot expire dataflow with an until that is less or equal to the
+            // expiration time.
+            if let Some(expiration) = time_dependence
+                .apply(*expiration)
+                .as_ref()
+                .and_then(mz_repr::Timestamp::try_step_forward)
+                .filter(|expiration| !plan.until.less_equal(expiration))
+            {
+                println!("{} expiring at {expiration:?}", plan.debug_name);
+                return Antichain::from_elem(expiration);
+            }
+        }
+        Antichain::default()
     }
 }
 

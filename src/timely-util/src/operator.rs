@@ -19,6 +19,7 @@ use differential_dataflow::difference::{Multiply, Semigroup};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::{Batcher, Builder};
 use differential_dataflow::{AsCollection, Collection, Hashable};
+use mz_ore::shutdown::ShutdownToken;
 use timely::container::columnation::{Columnation, TimelyStack};
 use timely::container::{ContainerBuilder, PushInto};
 use timely::dataflow::channels::pact::{Exchange, ParallelizationContract, Pipeline};
@@ -35,7 +36,6 @@ use crate::builder_async::{
     AsyncInputHandle, AsyncOutputHandle, ConnectedToOne, Disconnected,
     OperatorBuilder as OperatorBuilderAsync,
 };
-use crate::shutdown::ShutdownToken;
 
 /// Extension methods for timely [`StreamCore`]s.
 pub trait StreamExt<G, C1>

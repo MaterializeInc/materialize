@@ -7,7 +7,7 @@
 
 use std::collections::BTreeMap;
 
-use mz_catalog::memory::objects::DataSourceDesc;
+use mz_catalog::memory::objects::{DataSourceDesc, TableDataSource};
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_controller_types::ClusterId;
 use mz_ore::soft_panic_or_log;
@@ -55,6 +55,40 @@ impl<'a> TimeDependenceHelper<'a> {
         time_dependence
     }
 
+    /// Determine the time dependence for a [`DataSourceDesc`].
+    ///
+    /// Non-epoch timelines are indeterminate, and load generators.
+    fn for_data_source_desc(
+        &mut self,
+        desc: &DataSourceDesc,
+        timeline: &Timeline,
+    ) -> TimeDependence {
+        use TimeDependence::*;
+        // We only know how to handle the epoch timeline.
+        if !matches!(timeline, Timeline::EpochMilliseconds) {
+            return Indeterminate;
+        }
+        match desc {
+            DataSourceDesc::Ingestion { ingestion_desc, .. } => {
+                match ingestion_desc.desc.connection {
+                    // Kafka, Postgres, MySql sources follow wall clock.
+                    GenericSourceConnection::Kafka(_)
+                    | GenericSourceConnection::Postgres(_)
+                    | GenericSourceConnection::MySql(_) => Wallclock,
+                    // Load generators not further specified.
+                    GenericSourceConnection::LoadGenerator(_) => Indeterminate,
+                }
+            }
+            DataSourceDesc::IngestionExport { ingestion_id, .. } => {
+                self.determine_dependence_inner(*ingestion_id)
+            }
+            // Introspection, progress and webhook sources follow wall clock.
+            DataSourceDesc::Introspection(_)
+            | DataSourceDesc::Progress
+            | DataSourceDesc::Webhook { .. } => Wallclock,
+        }
+    }
+
     fn determine_dependence_inner(&mut self, id: GlobalId) -> TimeDependence {
         use TimeDependence::*;
 
@@ -68,40 +102,26 @@ impl<'a> TimeDependenceHelper<'a> {
         println!("{indent}{}: {id:?} {:?}", entry.item_type(), entry.name());
         let mut time_dependence = match entry.item_type() {
             CatalogItemType::Table => {
-                // Follows wall clock.
-                Wallclock
-            }
-            CatalogItemType::Source => {
-                // Some sources don't have a `Source` entry, so we can't determine their time
-                // dependence.
-                if let Some(source) = entry.source() {
-                    // We only know how to handle the epoch timeline.
-                    let timeline = source.timeline.clone();
-                    if !matches!(timeline, Timeline::EpochMilliseconds) {
-                        Indeterminate
-                    } else {
-                        match &source.data_source {
-                            DataSourceDesc::Ingestion { ingestion_desc, .. } => {
-                                match ingestion_desc.desc.connection {
-                                    // Kafka, Postgres, MySql sources follow wall clock.
-                                    GenericSourceConnection::Kafka(_)
-                                    | GenericSourceConnection::Postgres(_)
-                                    | GenericSourceConnection::MySql(_) => Wallclock,
-                                    // Load generators not further specified.
-                                    GenericSourceConnection::LoadGenerator(_) => Indeterminate,
-                                }
-                            }
-                            DataSourceDesc::IngestionExport { ingestion_id, .. } => {
-                                self.determine_dependence_inner(*ingestion_id)
-                            }
-                            // Introspection, progress and webhook sources follow wall clock.
-                            DataSourceDesc::Introspection(_)
-                            | DataSourceDesc::Progress
-                            | DataSourceDesc::Webhook { .. } => Wallclock,
+                if let Some(data_source) = entry.table().map(|table| &table.data_source) {
+                    match data_source {
+                        // Tables follow wall clock.
+                        TableDataSource::TableWrites { .. } => Wallclock,
+                        TableDataSource::DataSource { desc, timeline } => {
+                            self.for_data_source_desc(desc, timeline)
                         }
                     }
                 } else {
                     Indeterminate
+                }
+            }
+            CatalogItemType::Source => {
+                // Some sources don't have a `Source` entry, so we can't determine their time
+                // dependence.
+                match entry.source() {
+                    Some(source) => {
+                        self.for_data_source_desc(&source.data_source, &source.timeline)
+                    }
+                    None => Indeterminate,
                 }
             }
             CatalogItemType::MaterializedView

@@ -2773,8 +2773,10 @@ impl Coordinator {
                         .to_string();
                     let (optimized_plan, mut physical_plan, metainfo) = self
                         .optimize_create_continual_task(ct, id, self.owned_catalog(), debug_name)?;
+                    // Filter our own id as it is not known yet.
+                    let id_bundle = dataflow_import_id_bundle(&physical_plan, ct.cluster_id);
                     let time_dependence = TimeDependenceHelper::new(self.catalog())
-                        .determine_time_dependence_plan(&physical_plan, ct.cluster_id);
+                        .determine_time_dependence_ids(id_bundle.iter().filter(|x| *x != id));
                     physical_plan.time_dependence = Some(time_dependence);
 
                     let catalog = self.catalog_mut();

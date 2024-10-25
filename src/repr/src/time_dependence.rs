@@ -67,10 +67,7 @@ impl TimeDependence {
             TimeDependence::RefreshSchedule(schedule, inner) => {
                 let result = inner.iter().map(|inner| inner.apply(wall_clock)).min()??;
                 if let Some(schedule) = schedule {
-                    schedule
-                        .round_up_timestamp(result)
-                        .as_ref()
-                        .and_then(Timestamp::try_step_forward)
+                    schedule.round_up_timestamp(result)
                 } else {
                     Some(result)
                 }

@@ -24,7 +24,6 @@ use proptest::strategy::{BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
-use timely::PartialOrder;
 
 use crate::dataflows::proto_dataflow_description::{
     ProtoIndexExport, ProtoIndexImport, ProtoSinkExport, ProtoSourceImport,
@@ -110,34 +109,6 @@ impl<P, S> DataflowDescription<P, S, mz_repr::Timestamp> {
         // Note that the `(as_of = MAX, until = {})` case also returns `true`
         // here (as expected) since we are going to compare two `None` values.
         as_of.try_step_forward().as_ref() == until.as_option()
-    }
-
-    /// Returns the dataflow expiration, i.e, the timestamp beyond which diffs can be
-    /// dropped.
-    ///
-    /// Returns an empty timestamp if `replica_expiration` is unset or matches conditions under
-    /// which dataflow expiration should be disabled.
-    pub fn expire_dataflow_at(
-        &self,
-        replica_expiration: &Antichain<mz_repr::Timestamp>,
-    ) -> Antichain<mz_repr::Timestamp> {
-        if let (Some(time_dependence), Some(expiration)) =
-            (&self.time_dependence, replica_expiration.as_option())
-        {
-            let mut result = Antichain::new();
-            if let Some(expiration) = time_dependence.apply(*expiration) {
-                result.insert(expiration);
-            }
-            // We don't need to expire data if the dataflow's until is less or equal to the expiration time.
-            if PartialOrder::less_equal(&self.until, &result) {
-                // Disable expiration if the until is less than or equal to the expiration.
-                result = Antichain::default();
-            }
-            println!("{} expiring at {result:?}", self.debug_name);
-            result
-        } else {
-            Antichain::default()
-        }
     }
 }
 

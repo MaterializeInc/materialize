@@ -135,8 +135,8 @@ ALTER SYSTEM SET compute_replica_expiration_offset = '20d'
 ## Transitive refresh disables expiration, resulting in retractions
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET compute_replica_expiration_offset = '20d'
-> CREATE CLUSTER test (SIZE = '1')
-> SET CLUSTER TO test
+> CREATE CLUSTER test (SIZE = '1');
+> SET CLUSTER TO test;
 > CREATE TABLE events (
     id INT,
     content TEXT,
