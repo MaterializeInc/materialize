@@ -1051,7 +1051,8 @@ pub fn reduction_type(func: &AggregateFunc) -> ReductionType {
         | AggregateFunc::FirstValue { .. }
         | AggregateFunc::LastValue { .. }
         | AggregateFunc::WindowAggregate { .. }
-        | AggregateFunc::FusedValueWindowFunc { .. } => ReductionType::Basic,
+        | AggregateFunc::FusedValueWindowFunc { .. }
+        | AggregateFunc::FusedWindowAggregate { .. } => ReductionType::Basic,
     }
 }
 

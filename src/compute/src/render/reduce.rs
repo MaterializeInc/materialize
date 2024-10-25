@@ -2519,7 +2519,8 @@ mod monoids {
             | AggregateFunc::FirstValue { .. }
             | AggregateFunc::LastValue { .. }
             | AggregateFunc::WindowAggregate { .. }
-            | AggregateFunc::FusedValueWindowFunc { .. } => None,
+            | AggregateFunc::FusedValueWindowFunc { .. }
+            | AggregateFunc::FusedWindowAggregate { .. } => None,
         }
     }
 }
