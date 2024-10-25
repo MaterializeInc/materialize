@@ -545,6 +545,17 @@ impl EquivalenceClasses {
                     }
                 });
             }
+            for expr in class.iter() {
+                // If `a OP b` and `OP` has a negation `NOP`, introduce `NOT(a NOP b)` equivalent to it.
+                if let MirScalarExpr::CallBinary { func, expr1, expr2 } = expr {
+                    if let Some(negated) = func.negate() {
+                        to_add.push(vec![
+                            expr.clone(),
+                            expr1.clone().call_binary((**expr2).clone(), negated).not(),
+                        ])
+                    }
+                }
+            }
         }
         self.classes.extend(to_add);
 
