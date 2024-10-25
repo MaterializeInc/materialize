@@ -487,6 +487,73 @@ where
             .drop_replica(replica_id);
     }
 
+    async fn evolve_nullability_for_bootstrap(
+        &mut self,
+        storage_metadata: &StorageMetadata,
+        collections: Vec<(GlobalId, RelationDesc)>,
+    ) -> Result<(), StorageError<Self::Timestamp>> {
+        let persist_client = self
+            .persist
+            .open(self.persist_location.clone())
+            .await
+            .unwrap();
+
+        for (global_id, relation_desc) in collections {
+            let shard_id = storage_metadata.get_collection_shard(global_id)?;
+            let diagnostics = Diagnostics {
+                shard_name: global_id.to_string(),
+                handle_purpose: "evolve nullability for bootstrap".to_string(),
+            };
+            let latest_schema = persist_client
+                .latest_schema::<SourceData, (), T, Diff>(shard_id, diagnostics)
+                .await
+                .expect("invalid persist usage");
+            let Some((schema_id, current_schema, _)) = latest_schema else {
+                tracing::debug!(?global_id, "no schema registered");
+                continue;
+            };
+            tracing::debug!(?global_id, ?current_schema, new_schema = ?relation_desc, "migrating schema");
+
+            let diagnostics = Diagnostics {
+                shard_name: global_id.to_string(),
+                handle_purpose: "evolve nullability for bootstrap".to_string(),
+            };
+            let evolve_result = persist_client
+                .compare_and_evolve_schema::<SourceData, (), T, Diff>(
+                    shard_id,
+                    schema_id,
+                    &relation_desc,
+                    &UnitSchema,
+                    diagnostics,
+                )
+                .await
+                .expect("invalid persist usage");
+            match evolve_result {
+                CaESchema::Ok(_) => (),
+                CaESchema::ExpectedMismatch {
+                    schema_id,
+                    key,
+                    val: _,
+                } => {
+                    return Err(StorageError::PersistSchemaEvolveRace {
+                        global_id,
+                        shard_id,
+                        schema_id,
+                        relation_desc: key,
+                    });
+                }
+                CaESchema::Incompatible => {
+                    return Err(StorageError::PersistInvalidSchemaEvolve {
+                        global_id,
+                        shard_id,
+                    });
+                }
+            };
+        }
+
+        Ok(())
+    }
+
     /// Create and "execute" the described collection.
     ///
     /// "Execute" is in scare quotes because what executing a collection means
