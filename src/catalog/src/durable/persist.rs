@@ -595,6 +595,20 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
                     ListenEvent::Progress(upper) => {
                         debug!("synced up to {upper:?}");
                         self.upper = antichain_to_timestamp(upper);
+                        // Attempt to apply updates in batches of a single timestamp. If another
+                        // catalog wrote a fence token at one timestamp and then updates in a new
+                        // format at a later timestamp, then we want to apply the fence token
+                        // before attempting to deserialize the new updates.
+                        let current_updates: BTreeMap<_, Vec<_>> = updates.drain(..).fold(
+                            BTreeMap::new(),
+                            |mut accum, update: StateUpdate<T>| {
+                                accum.entry(update.ts).or_default().push(update);
+                                accum
+                            },
+                        );
+                        for (_, updates) in current_updates {
+                            self.apply_updates(updates)?;
+                        }
                     }
                     ListenEvent::Updates(batch_updates) => {
                         debug!("syncing updates {batch_updates:?}");
@@ -603,17 +617,18 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
                             .map(Into::<StateUpdate<StateUpdateKindJson>>::into)
                             .map(|update| {
                                 let kind = T::try_from(update.kind).expect("kind decoding error");
-                                (kind, update.ts, update.diff)
+                                StateUpdate {
+                                    kind,
+                                    ts: update.ts,
+                                    diff: update.diff,
+                                }
                             });
                         updates.extend(batch_updates);
                     }
                 }
             }
         }
-        let updates = updates
-            .into_iter()
-            .map(|(kind, ts, diff)| StateUpdate { kind, ts, diff });
-        self.apply_updates(updates)?;
+        assert_eq!(updates, Vec::new(), "all updates should be applied");
         Ok(())
     }
 
