@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use anyhow::ensure;
+use anyhow::{ensure, Context};
 use async_stream::{stream, try_stream};
 use std::borrow::Cow;
 use std::cmp::Ordering;
@@ -1126,7 +1126,7 @@ pub struct EncodedSchemas {
     /// The arrow `DataType` produced by this `K::Schema` at the time it was
     /// registered, encoded as a `ProtoDataType`.
     pub key_data_type: Bytes,
-    /// A full in-mem `K::Schema` impl encoded via [Codec::encode_schema].
+    /// A full in-mem `V::Schema` impl encoded via [Codec::encode_schema].
     pub val: Bytes,
     /// The arrow `DataType` produced by this `V::Schema` at the time it was
     /// registered, encoded as a `ProtoDataType`.
@@ -1294,13 +1294,23 @@ where
         key_schema: &K::Schema,
         val_schema: &V::Schema,
     ) -> ControlFlow<NoOpStateTransition<Option<SchemaId>>, Option<SchemaId>> {
-        fn data_type<T>(schema: &impl Schema2<T>) -> Bytes {
+        fn data_type<T>(schema: &impl Schema2<T>) -> DataType {
             // To be defensive, create an empty batch and inspect the resulting
             // data type (as opposed to something like allowing the `Schema2` to
             // declare the DataType).
             let array = Schema2::encoder(schema).expect("valid schema").finish();
-            let proto = Array::data_type(&array).into_proto();
+            Array::data_type(&array).clone()
+        }
+
+        fn encoded_data_type(data_type: &DataType) -> Bytes {
+            let proto = data_type.into_proto();
             prost::Message::encode_to_vec(&proto).into()
+        }
+
+        fn decode_data_type(buf: Bytes) -> Result<DataType, anyhow::Error> {
+            let proto: mz_persist_types::arrow::ProtoDataType =
+                prost::Message::decode(buf).context("decoding schema DataType")?;
+            DataType::from_proto(proto).context("converting ProtoDataType into DataType")
         }
 
         // Look for an existing registered SchemaId for these schemas.
@@ -1318,12 +1328,62 @@ where
             K::decode_schema(&x.key) == *key_schema && V::decode_schema(&x.val) == *val_schema
         });
         match existing_id {
-            Some((schema_id, _)) => {
-                // TODO: Validate that the decoded schemas still produce records
-                // of the recorded DataType, to detect shenanigans. Probably
-                // best to wait until we've turned on Schema2 in prod and thus
-                // committed to the current mappings.
-                Break(NoOpStateTransition(Some(*schema_id)))
+            Some((schema_id, encoded_schemas)) => {
+                let schema_id = *schema_id;
+                let new_k_datatype = data_type(key_schema);
+                let new_v_datatype = data_type(val_schema);
+
+                let new_k_encoded_datatype = encoded_data_type(&new_k_datatype);
+                let new_v_encoded_datatype = encoded_data_type(&new_v_datatype);
+
+                // Check if the generated Arrow DataTypes have changed.
+                if encoded_schemas.key_data_type != new_k_encoded_datatype
+                    || encoded_schemas.val_data_type != new_v_encoded_datatype
+                {
+                    let old_k_datatype =
+                        decode_data_type(Bytes::clone(&encoded_schemas.key_data_type))
+                            .expect("failed to roundtrip Arrow DataType");
+                    let old_v_datatype =
+                        decode_data_type(Bytes::clone(&encoded_schemas.val_data_type))
+                            .expect("failed to roundtrip Arrow DataType");
+
+                    let k_atleast_as_nullable =
+                        crate::schema::is_atleast_as_nullable(&old_k_datatype, &new_k_datatype);
+                    let v_atleast_as_nullable =
+                        crate::schema::is_atleast_as_nullable(&old_v_datatype, &new_v_datatype);
+
+                    // If the Arrow DataType for `k` or `v` has changed, but it's only become more
+                    // nullable, then we allow in-place re-writing of the schema.
+                    match (k_atleast_as_nullable, v_atleast_as_nullable) {
+                        // TODO(parkmycar): Remove this one-time migration after v0.123 ships.
+                        (Ok(()), Ok(())) => {
+                            let key = Bytes::clone(&encoded_schemas.key);
+                            let val = Bytes::clone(&encoded_schemas.val);
+                            self.schemas.insert(
+                                schema_id,
+                                EncodedSchemas {
+                                    key,
+                                    key_data_type: new_k_encoded_datatype,
+                                    val,
+                                    val_data_type: new_v_encoded_datatype,
+                                },
+                            );
+                            Continue(Some(schema_id))
+                        }
+                        (k_err, _) => {
+                            tracing::info!(
+                                "register schemas, Arrow DataType changed\nkey: {:?}\nold: {:?}\nnew: {:?}",
+                                k_err,
+                                old_k_datatype,
+                                new_k_datatype,
+                            );
+                            Break(NoOpStateTransition(None))
+                        }
+                    }
+                } else {
+                    // Everything matches.
+                    Break(NoOpStateTransition(Some(schema_id)))
+                }
             }
             None if self.is_tombstone() => {
                 // TODO: Is this right?
@@ -1338,9 +1398,9 @@ where
                     id,
                     EncodedSchemas {
                         key: K::encode_schema(key_schema),
-                        key_data_type: data_type(key_schema),
+                        key_data_type: encoded_data_type(&data_type(key_schema)),
                         val: V::encode_schema(val_schema),
-                        val_data_type: data_type(val_schema),
+                        val_data_type: encoded_data_type(&data_type(val_schema)),
                     },
                 );
                 assert_eq!(prev, None);
