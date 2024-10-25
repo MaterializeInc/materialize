@@ -108,9 +108,8 @@ contains:cannot insert into non-writeable table 'materialize.public.source_data_
 > CREATE MATERIALIZED VIEW source_data_mat_view AS
   SELECT * FROM source_data_tbl;
 
-# TODO: database-issues#8692: does no longer fail
-# ! INSERT INTO t SELECT * FROM source_data_mat_view;
-# contains:invalid selection
+! INSERT INTO t SELECT * FROM source_data_mat_view;
+contains:invalid selection
 
 > SELECT * FROM t ORDER BY i
 1 2 a
@@ -121,12 +120,6 @@ contains:cannot insert into non-writeable table 'materialize.public.source_data_
 11 12 f
 13 14 g
 17 18 i
-
-# TODO: database-issues#8692: succeeds now
-> INSERT INTO t SELECT * FROM source_data_mat_view;
-
-> SELECT count(*) FROM t
-9
 
 # Multiple connections
 
