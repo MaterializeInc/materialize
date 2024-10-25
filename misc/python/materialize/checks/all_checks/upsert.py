@@ -198,12 +198,12 @@ class UpsertLegacy(Check):
                 $ kafka-ingest format=avro key-format=avro topic=upsert-legacy-syntax key-schema=${keyschema} schema=${schema} repeat=10000
                 {"key1": "A${kafka-ingest.iteration}"} {"f1": "A${kafka-ingest.iteration}"}
 
-                > CREATE SOURCE upsert_insert
+                > CREATE SOURCE upsert_insert_legacy
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-legacy-syntax-${testdrive.seed}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 
-                > CREATE MATERIALIZED VIEW upsert_insert_view AS SELECT COUNT(DISTINCT key1 || ' ' || f1) FROM upsert_insert;
+                > CREATE MATERIALIZED VIEW upsert_insert_legacy_view AS SELECT COUNT(DISTINCT key1 || ' ' || f1) FROM upsert_insert_legacy;
                 """
             )
         )
@@ -227,10 +227,10 @@ class UpsertLegacy(Check):
         return Testdrive(
             dedent(
                 """
-                > SELECT COUNT(*), COUNT(DISTINCT key1), COUNT(DISTINCT f1) FROM upsert_insert
+                > SELECT COUNT(*), COUNT(DISTINCT key1), COUNT(DISTINCT f1) FROM upsert_insert_legacy
                 10000 10000 10000
 
-                > SELECT * FROM upsert_insert_view;
+                > SELECT * FROM upsert_insert_legacy_view;
                 10000
            """
             )
