@@ -22,7 +22,7 @@ view billing information.
 
 - [SQL Shell](/console/sql-shell/): Issue SQL queries.
 
-- [Data](/console/data/): Explore your objects.
+- [Database object explorer](/console/data/): Explore your objects.
 
 - [Clusters](/console/clusters/): Manage your Materialize clusters.
 

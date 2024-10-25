@@ -21,5 +21,5 @@ The **Monitoring** section contains the following screens:
 |---------|-------------|
 | **Environment Overview** | Review the health of your environment. |
 | **Query History** | Access your query history. |
-| **Sources** | Review your sources. You can select a source to go to its [Object explorer page](/console/data/). |
-| **Sinks** | Review your sinks. You can select a sink to go to its [Object explorer page](/console/data/). |
+| **Sources** | Review your sources. You can select a source to go to its [Database object explorer page](/console/data/). |
+| **Sinks** | Review your sinks. You can select a sink to go to its [Database object explorer page](/console/data/). |

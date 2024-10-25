@@ -1,5 +1,5 @@
 ---
-title: "Data (Object Explorer)"
+title: "Database object explorer"
 description: "Explore the objects in your databases from the Materialize console."
 disable_toc: true
 menu:
@@ -10,15 +10,14 @@ menu:
 ---
 
 Under **Data**, the [Materialize Console](https://console.materialize.com/)
-provides an object explorer.
+provides a database object explorer.
 
-![Image of the Materialize Console Data
-](/images/console/console-data-explorer.png "Materialize Console Object
-Explorer")
+![Image of the Materialize Console Database Object
+Explorer](/images/console/console-data-explorer.png "Materialize Console Database Object Explorer")
 
 <span class="caption">
-When you select <em>Data</em>, the left panel collapses to reveal the Object
-explorer.
+When you select <em>Data</em>, the left panel collapses to reveal the database
+object explorer.
 </span>
 
 You can inspect the objects in your databases by navigating to the object.
