@@ -6261,7 +6261,7 @@ WITH MUTUALLY RECURSIVE
 
 SELECT
     h.id AS object_id,
-    h.hint,
+    h.hint AS recommendation,
     h.details
 FROM hints_resolved_ids AS h
 ORDER BY h.hint",

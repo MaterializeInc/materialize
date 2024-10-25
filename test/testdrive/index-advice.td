@@ -27,8 +27,8 @@
 > CREATE DEFAULT INDEX IN CLUSTER c2 ON v42;
 
 
-> SELECT o.name, a.hint, a.details FROM mz_internal.mz_index_advice AS a JOIN mz_objects AS o ON (a.id = o.id);
-name             hint                           details
+> SELECT o.name, a.recommendation, a.details FROM mz_internal.mz_index_advice AS a JOIN mz_objects AS o ON (a.object_id = o.id);
+name             recommendation                 details
 --------------------------------------------------------------------------------------------------------------------------------
 v21_primary_idx  "keep"                         "dependant objects: {v31,v42}"
 v31              "add index"                    "multiple maintained dependencies: {v41,v42}"
