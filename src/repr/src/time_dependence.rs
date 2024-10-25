@@ -142,7 +142,7 @@ impl Arbitrary for TimeDependence {
 mod tests {
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn test_indefiniteness_normalize() {
         let mut i = TimeDependence::RefreshSchedule(None, vec![TimeDependence::Wallclock]);
         i.normalize();
@@ -176,7 +176,7 @@ mod tests {
         assert_eq!(i, TimeDependence::Indeterminate);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_indefiniteness_unify() {
         let mut i = TimeDependence::Indeterminate;
         i.unify(&TimeDependence::Indeterminate);

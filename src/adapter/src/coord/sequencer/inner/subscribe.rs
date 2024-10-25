@@ -16,7 +16,6 @@ use tokio::sync::mpsc;
 use tracing::Span;
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveSubscribe};
-use crate::catalog::dataflow_expiration::TimeDependenceHelper;
 use crate::command::ExecuteResponse;
 use crate::coord::sequencer::inner::{check_log_reads, return_if_err};
 use crate::coord::{
@@ -331,9 +330,6 @@ impl Coordinator {
     ) -> Result<StageResult<Box<SubscribeStage>>, AdapterError> {
         let sink_id = global_lir_plan.sink_id();
 
-        let time_dependence = TimeDependenceHelper::new(self.catalog())
-            .determine_time_dependence_ids(dependency_ids.iter().copied());
-
         let (tx, rx) = mpsc::unbounded_channel();
         let active_subscribe = ActiveSubscribe {
             conn_id: ctx.session().conn_id().clone(),
@@ -351,9 +347,7 @@ impl Coordinator {
         };
         active_subscribe.initialize();
 
-        let (mut df_desc, df_meta) = global_lir_plan.unapply();
-
-        df_desc.time_dependence = Some(time_dependence);
+        let (df_desc, df_meta) = global_lir_plan.unapply();
 
         // Emit notices.
         self.emit_optimizer_notices(ctx.session(), &df_meta.optimizer_notices);
