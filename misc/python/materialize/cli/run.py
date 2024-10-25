@@ -313,6 +313,8 @@ def main() -> int:
             command += ["--test", test]
         command += args.args
         env["COCKROACH_URL"] = args.postgres
+        # some tests run into stack overflows
+        env["RUST_MIN_STACK"] = "4194304"
         dbconn = _connect_sql(args.postgres)
     else:
         raise UIError(f"unknown program {args.program}")
