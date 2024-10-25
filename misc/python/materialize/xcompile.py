@@ -229,8 +229,8 @@ def _enter_builder(arch: Arch, channel: str | None = None) -> list[str]:
             else "nightly"
         )
         return [
-            "env",
-            f"MZ_DEV_CI_BUILDER_ARCH={arch}",
+            # "env",
+            # f"MZ_DEV_CI_BUILDER_ARCH={arch}",
             "bin/ci-builder",
             "run",
             channel if channel else default_channel,
