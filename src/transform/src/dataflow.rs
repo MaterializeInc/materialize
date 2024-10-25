@@ -26,6 +26,8 @@ use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_ore::{assert_none, soft_assert_eq_or_log, soft_assert_or_log, soft_panic_or_log};
 use mz_repr::explain::{DeltaJoinIndexUsageType, IndexUsageType, UsedIndexes};
 use mz_repr::GlobalId;
+use proptest_derive::Arbitrary;
+use serde::{Deserialize, Serialize};
 
 use crate::monotonic::MonotonicFlag;
 use crate::notice::RawOptimizerNotice;
@@ -1223,13 +1225,15 @@ impl IndexUsageContext {
 
 /// Extra information about the dataflow. This is not going to be shipped, but has to be processed
 /// in other ways, e.g., showing notices to the user, or saving meta-information to the catalog.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
 pub struct DataflowMetainfo<Notice = RawOptimizerNotice> {
     /// Notices that the optimizer wants to show to users.
     /// For pushing a new element, use [`Self::push_optimizer_notice_dedup`].
     pub optimizer_notices: Vec<Notice>,
     /// What kind of operation (full scan, lookup, ...) will access each index. Computed by
     /// `prune_and_annotate_dataflow_index_imports`.
+    #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
+    #[serde(deserialize_with = "mz_ore::serde::string_key_to_btree_map")]
     pub index_usage_types: BTreeMap<GlobalId, Vec<IndexUsageType>>,
 }
 

@@ -27,8 +27,10 @@ mz-audit-log = { path = "../audit-log" }
 mz-build-info = { path = "../build-info" }
 mz-cloud-resources = { path = "../cloud-resources" }
 mz-compute-client = { path = "../compute-client" }
+mz-compute-types = { path = "../compute-types" }
 mz-controller = { path = "../controller" }
 mz-controller-types = { path = "../controller-types" }
+mz-durable-cache = { path = "../durable-cache" }
 mz-expr = { path = "../expr" }
 mz-orchestrator = { path = "../orchestrator" }
 mz-ore = { path = "../ore", features = ["chrono", "async", "tracing_"] }
@@ -44,6 +46,7 @@ mz-sql-parser = { path = "../sql-parser" }
 mz-storage-client = { path = "../storage-client" }
 mz-storage-controller = { path = "../storage-controller" }
 mz-storage-types = { path = "../storage-types" }
+mz-transform = { path = "../transform" }
 paste = "1.0.11"
 prometheus = { version = "0.13.3", default-features = false }
 proptest = { version = "1.0.0", default-features = false, features = ["std"] }
@@ -55,11 +58,13 @@ semver = { version = "1.0.16" }
 serde = "1.0.152"
 serde_json = "1.0.125"
 serde_plain = "1.0.1"
+smallvec = { version = "1.10.0", features = ["union"] }
 static_assertions = "1.1"
 sha2 = "0.10.6"
-timely = "0.12.0"
-tracing = "0.1.37"
 thiserror = "1.0.37"
+timely = "0.12.0"
+tokio = { version = "1.38.0" }
+tracing = "0.1.37"
 uuid = "1.2.2"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
@@ -69,7 +74,6 @@ insta = "1.32"
 mz-build-tools = { path = "../build-tools", default-features = false }
 mz-postgres-util = { path = "../postgres-util" }
 similar-asserts = "1.4"
-tokio = { version = "1.38.0" }
 tokio-postgres = { version = "0.7.8" }
 
 [build-dependencies]
