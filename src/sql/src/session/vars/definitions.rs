@@ -1496,6 +1496,20 @@ pub static DEFAULT_NETWORK_POLICY_ALLOW_LIST: VarDefinition = VarDefinition::new
     true,
 );
 
+pub static ENABLE_CREATE_TABLE_FROM_SOURCE: VarDefinition = VarDefinition::new(
+    "enable_create_table_from_source",
+    value!(bool; false),
+    "Whether to allow CREATE TABLE .. FROM SOURCE syntax.",
+    true,
+);
+
+pub static FORCE_SOURCE_TABLE_SYNTAX: VarDefinition = VarDefinition::new(
+    "force_source_table_syntax",
+    value!(bool; false),
+    "Force use of new source model (CREATE TABLE .. FROM SOURCE) and migrate existing sources",
+    true,
+);
+
 /// Configuration for gRPC client connections.
 pub mod grpc_client {
     use super::*;
@@ -1912,12 +1926,6 @@ feature_flags!(
     {
         name: enable_alter_set_cluster,
         desc: "ALTER ... SET CLUSTER syntax",
-        default: false,
-        enable_for_item_parsing: true,
-    },
-    {
-        name: enable_create_table_from_source,
-        desc: "CREATE TABLE .. FROM SOURCE",
         default: false,
         enable_for_item_parsing: true,
     },

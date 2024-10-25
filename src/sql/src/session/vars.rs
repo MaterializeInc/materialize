@@ -1298,6 +1298,8 @@ impl SystemVars {
             &PG_TIMESTAMP_ORACLE_CONNECTION_POOL_TTL,
             &PG_TIMESTAMP_ORACLE_CONNECTION_POOL_TTL_STAGGER,
             &USER_STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION,
+            &ENABLE_CREATE_TABLE_FROM_SOURCE,
+            &FORCE_SOURCE_TABLE_SYNTAX,
         ];
 
         let dyncfgs = mz_dyncfgs::all_dyncfgs();
@@ -2244,6 +2246,14 @@ impl SystemVars {
     /// Returns the `user_storage_managed_collections_batch_duration` configuration parameter.
     pub fn user_storage_managed_collections_batch_duration(&self) -> Duration {
         *self.expect_value(&USER_STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION)
+    }
+
+    pub fn enable_create_table_from_source(&self) -> bool {
+        *self.expect_value(&ENABLE_CREATE_TABLE_FROM_SOURCE)
+    }
+
+    pub fn force_source_table_syntax(&self) -> bool {
+        *self.expect_value(&FORCE_SOURCE_TABLE_SYNTAX)
     }
 
     /// Returns whether the named variable is a compute configuration parameter

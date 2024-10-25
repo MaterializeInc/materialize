@@ -16,7 +16,6 @@ from materialize.mzcompose.services.mysql import MySql
 
 
 class TableFromSourceBase(Check):
-
     def _can_run(self, e: Executor) -> bool:
         return self.base_version >= MzVersion.parse_mz("v0.116.0-dev")
 
@@ -34,7 +33,6 @@ class TableFromPgSource(TableFromSourceBase):
     suffix = "tbl_from_pg_source"
 
     def initialize(self) -> Testdrive:
-
         return Testdrive(
             self.generic_setup()
             + dedent(

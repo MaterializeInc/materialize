@@ -49,7 +49,9 @@ ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS = {
 
 
 def get_default_system_parameters(
-    version: MzVersion | None = None, zero_downtime: bool = False
+    version: MzVersion | None = None,
+    zero_downtime: bool = False,
+    force_source_table_syntax: bool = False,
 ) -> dict[str, str]:
     """For upgrade tests we only want parameters set when all environmentd /
     clusterd processes have reached a specific version (or higher)
@@ -113,6 +115,7 @@ def get_default_system_parameters(
         "enable_table_keys": "true",
         "enable_variadic_left_join_lowering": "true",
         "enable_worker_core_affinity": "true",
+        "force_source_table_syntax": "true" if force_source_table_syntax else "false",
         "persist_batch_columnar_format": (
             "both_v2" if version >= MzVersion.parse_mz("v0.112.0-dev") else "row"
         ),

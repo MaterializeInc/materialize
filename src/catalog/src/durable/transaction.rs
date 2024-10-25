@@ -1803,6 +1803,13 @@ impl<'a> Transaction<'a> {
             .map(|(k, v)| DurableType::from_key_value(k, v))
     }
 
+    pub fn get_schema(&self, id: &SchemaId) -> Option<Schema> {
+        let key = SchemaKey { id: *id };
+        self.schemas
+            .get(&key)
+            .map(|v| DurableType::from_key_value(key, v.clone()))
+    }
+
     pub fn get_introspection_source_indexes(
         &self,
         cluster_id: ClusterId,
