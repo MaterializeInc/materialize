@@ -2833,6 +2833,24 @@ pub static MZ_CLUSTER_REPLICA_STATUS_HISTORY: LazyLock<BuiltinSource> =
         access: vec![PUBLIC_SELECT],
     });
 
+pub static MZ_CLUSTER_REPLICA_STATUS_HISTORY_CT: LazyLock<BuiltinContinualTask> = LazyLock::new(
+    || {
+        BuiltinContinualTask {
+            name: "mz_cluster_replica_status_history_ct",
+            schema: MZ_INTERNAL_SCHEMA,
+            oid: oid::CT_MZ_CLUSTER_REPLICA_STATUS_HISTORY_OID,
+            desc: REPLICA_STATUS_HISTORY_DESC.clone(),
+            sql: "
+IN CLUSTER mz_catalog_server
+ON INPUT mz_internal.mz_cluster_replica_status_history AS (
+    DELETE FROM mz_internal.mz_cluster_replica_status_history_ct WHERE occurred_at + '30d' < mz_now();
+    INSERT INTO mz_internal.mz_cluster_replica_status_history_ct SELECT * FROM mz_internal.mz_cluster_replica_status_history;
+)",
+            access: vec![PUBLIC_SELECT],
+        }
+    },
+);
+
 pub static MZ_CLUSTER_REPLICA_SIZES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_cluster_replica_sizes",
     schema: MZ_CATALOG_SCHEMA,
@@ -3391,14 +3409,10 @@ pub static MZ_CLUSTER_REPLICA_METRICS_HISTORY_CT: LazyLock<BuiltinContinualTask>
             schema: MZ_INTERNAL_SCHEMA,
             oid: oid::CT_MZ_CLUSTER_REPLICA_METRICS_HISTORY_OID,
             desc: REPLICA_METRICS_HISTORY_DESC.clone(),
-            // The current mechanism for mz_cluster_replica_metrics_history
-            // truncates at 30d, but initially this to something smaller (1d) so we
-            // can verify the end-to-end behavior.
             sql: "
-(replica_id STRING, process_id UINT8, cpu_nano_cores UINT8, memory_bytes UINT8, disk_bytes UINT8, occurred_at TIMESTAMPTZ)
 IN CLUSTER mz_catalog_server
 ON INPUT mz_internal.mz_cluster_replica_metrics_history AS (
-    DELETE FROM mz_internal.mz_cluster_replica_metrics_history_ct WHERE occurred_at + '1d' < mz_now();
+    DELETE FROM mz_internal.mz_cluster_replica_metrics_history_ct WHERE occurred_at + '30d' < mz_now();
     INSERT INTO mz_internal.mz_cluster_replica_metrics_history_ct SELECT * FROM mz_internal.mz_cluster_replica_metrics_history;
 )",
             access: vec![PUBLIC_SELECT],
@@ -3456,6 +3470,22 @@ pub static MZ_WALLCLOCK_LAG_HISTORY: LazyLock<BuiltinSource> = LazyLock::new(|| 
     data_source: IntrospectionType::WallclockLagHistory,
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
+});
+
+pub static MZ_WALLCLOCK_LAG_HISTORY_CT: LazyLock<BuiltinContinualTask> = LazyLock::new(|| {
+    BuiltinContinualTask {
+    name: "mz_wallclock_lag_history_ct",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::CT_MZ_WALLCLOCK_LAG_HISTORY_OID,
+    desc: WALLCLOCK_LAG_HISTORY_DESC.clone(),
+    sql: "
+IN CLUSTER mz_catalog_server
+ON INPUT mz_internal.mz_wallclock_lag_history AS (
+    DELETE FROM mz_internal.mz_wallclock_lag_history_ct WHERE occurred_at + '30d' < mz_now();
+    INSERT INTO mz_internal.mz_wallclock_lag_history_ct SELECT * FROM mz_internal.mz_wallclock_lag_history;
+)",
+            access: vec![PUBLIC_SELECT],
+        }
 });
 
 pub static MZ_WALLCLOCK_GLOBAL_LAG_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
@@ -8993,6 +9023,8 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Index(&MZ_RECENT_STORAGE_USAGE_IND),
         Builtin::Connection(&MZ_ANALYTICS),
         Builtin::ContinualTask(&MZ_CLUSTER_REPLICA_METRICS_HISTORY_CT),
+        Builtin::ContinualTask(&MZ_CLUSTER_REPLICA_STATUS_HISTORY_CT),
+        Builtin::ContinualTask(&MZ_WALLCLOCK_LAG_HISTORY_CT),
     ]);
 
     builtins.extend(notice::builtins());
