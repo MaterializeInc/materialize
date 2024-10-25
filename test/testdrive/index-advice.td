@@ -27,14 +27,54 @@
 > CREATE DEFAULT INDEX IN CLUSTER c2 ON v42;
 
 
-> SELECT o.name, a.recommendation, a.details FROM mz_internal.mz_index_advice AS a JOIN mz_objects AS o ON (a.object_id = o.id);
+#                                   dependency tree of the above objects
+#
+#                                                                      ┌───────────────────┐
+#                                                                      │        v11        │
+#                                                          ┌──────────►│ materialized view │
+#                                                          │           └───────────────────┘
+#                                                          │
+#                                                          │
+#                                                          │
+#                                                ┌─────────┴─────────┐
+#                                                │        v21        │
+#                                    ┌──────────►│     index (c1)    │◄──────────┐
+#                                    │           └───────────────────┘           │
+#                                    │                                           │
+#                                    │                                           │
+#                                    │                                           │
+#                          ┌─────────┴─────────┐                       ┌─────────┴─────────┐
+#                          │        v31        │                       │        v32        │
+#             ┌───────────►│       view        │◄──────────┬──────────►│     index (c1)    │
+#             │            └───────────────────┘           │           └───────────────────┘
+#             │                                            │
+#             │                                            │
+#             │                                            │
+#   ┌─────────┴─────────┐                        ┌─────────┴─────────┐
+#   │        v41        │                        │        v42        │
+#   │   index (c1, c2)  │                        │ materialized view │
+#   └───────────────────┘                        │     index (c2)    │
+#                                                └───────────────────┘
+#
+# With these dependencies, the index on v32 and the materialized view on v11 should be removed
+# because these objects only have a single maintained dependency. But an index should be added
+# on v31 because the work can be reused by v41 and v42.
+
+
+> SELECT o.name, a.recommendation, a.details FROM mz_internal.mz_index_advice AS a JOIN mz_objects AS o ON (a.object_id = o.id) ORDER BY name;
 name             recommendation                 details
 --------------------------------------------------------------------------------------------------------------------------------
+v11              "convert to a view"            "no dependencies from sinks or objects on different clusters"
 v21_primary_idx  "keep"                         "dependant objects: {v31,v42}"
 v31              "add index"                    "multiple maintained dependencies: {v41,v42}"
-v11              "convert to a view"            "no dependencies from sinks or objects on different clusters"
-v42              "keep"                         "dependencies from sinks or objects on different clusters: {c2}"
 v32_primary_idx  "drop unless queried directly" "fewer than two maintained dependencies: {v42}"
 v41              "convert to materialized view" "indexes on multiple different clusters: {v41_primary_idx,v41_primary_idx1}"
 v41_primary_idx  "drop unless queried directly" "associated view does not have any dependencies (maintained or not maintained)"
 v41_primary_idx1 "drop unless queried directly" "associated view does not have any dependencies (maintained or not maintained)"
+v42              "keep"                         "dependencies from sinks or objects on different clusters: {c2}"
+
+
+# verify that all indexes and materialized views have a recommendation
+> SELECT name FROM mz_objects WHERE id LIKE 'u%' AND type IN ('index', 'materialized-view')
+  EXCEPT ALL
+  SELECT o.name FROM mz_internal.mz_index_advice AS a INNER JOIN mz_objects AS o ON (a.object_id = o.id) WHERE o.type IN ('index', 'materialized-view');
