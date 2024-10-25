@@ -88,6 +88,36 @@ idx1 r2
     frontiers.write_frontier > 0
 idx1
 
+# Test that frontiers of continual tasks are reported.
+
+> CREATE CONTINUAL TASK ct1 (a int) ON INPUT t1 AS (
+    INSERT INTO ct1 SELECT * FROM t1
+  )
+
+> SELECT
+    cts.name,
+    replicas.name
+  FROM mz_cluster_replica_frontiers frontiers
+  JOIN mz_internal.mz_continual_tasks cts
+    ON frontiers.object_id = cts.id
+  LEFT JOIN mz_cluster_replicas replicas
+    ON frontiers.replica_id = replicas.id
+  WHERE
+    frontiers.object_id LIKE 'u%' AND
+    frontiers.write_frontier > 0
+ct1 r1
+ct1 r2
+
+> SELECT
+    cts.name
+  FROM mz_internal.mz_frontiers frontiers
+  JOIN mz_internal.mz_continual_tasks cts
+    ON frontiers.object_id = cts.id
+  WHERE
+    frontiers.object_id LIKE 'u%' AND
+    frontiers.read_frontier > 0 AND
+    frontiers.write_frontier > 0
+ct1
 
 # Test that frontiers of sources are reported.
 
@@ -317,6 +347,7 @@ r3 <null>
 > DROP MATERIALIZED VIEW mv1
 > DROP MATERIALIZED VIEW mv2
 > DROP INDEX idx1
+> DROP CONTINUAL TASK ct1
 > DROP SOURCE source1 CASCADE
 > DROP SINK sink1
 > DROP TABLE t1
@@ -329,7 +360,7 @@ r3 <null>
   FROM mz_internal.mz_frontiers frontiers
   WHERE object_id LIKE 'u%'
 
-# Test that frontiers are correctly initialized on for collections on clusters
+# Test that frontiers are correctly initialized for collections on clusters
 # with zero replicas.
 
 > CREATE CLUSTER empty SIZE '1', REPLICATION FACTOR 0
