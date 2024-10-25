@@ -256,6 +256,16 @@ fn ast_rewrite_sources_to_tables(
         .collect::<Result<Vec<_>, anyhow::Error>>()?;
     let items_with_statements_copied = items_with_statements.clone();
 
+    let item_names_per_schema = items_with_statements_copied
+        .iter()
+        .map(|(item, _)| (item.schema_id.clone(), &item.name))
+        .fold(BTreeMap::new(), |mut acc, (schema_id, name)| {
+            acc.entry(schema_id)
+                .or_insert_with(|| btreeset! {})
+                .insert(name);
+            acc
+        });
+
     // Any GlobalId that should be changed to a new GlobalId in any statements that
     // reference it. This is necessary for ensuring downstream statements (e.g.
     // mat views, indexes) that reference a single-output source (e.g. kafka)
@@ -538,22 +548,40 @@ fn ast_rewrite_sources_to_tables(
                     && include_metadata.is_empty()
                 {
                     info!("migrate: skipping already migrated source: {}", name);
-                    return Ok(());
+                    continue;
                 }
 
                 // Use the current source name as the new table name, and rename the source to
                 // `<source_name>_source`. This is intended to allow users to continue using
                 // queries that reference the source name, since they will now need to query the
                 // table instead.
-                let new_source_name_ident = Ident::new_unchecked(
-                    name.0.last().expect("at least one ident").to_string() + "_source",
-                );
-                let mut new_source_name = name.clone();
-                *new_source_name.0.last_mut().expect("at least one ident") = new_source_name_ident;
 
-                // Also update the name of the source 'item'
-                let mut table_item_name = item.name.clone() + "_source";
-                std::mem::swap(&mut item.name, &mut table_item_name);
+                // First find an unused name within the same schema to avoid conflicts.
+                let mut new_source_item_name = format!("{}_source", item.name);
+                let mut new_source_name_inner =
+                    format!("{}_source", name.0.last().expect("at least one ident"));
+                let mut i = 0;
+                while item_names_per_schema
+                    .get(&item.schema_id)
+                    .expect("schema must exist")
+                    .contains(&new_source_item_name)
+                {
+                    new_source_item_name = format!("{}_source_{}", item.name, i);
+                    new_source_name_inner = format!(
+                        "{}_source_{}",
+                        name.0.last().expect("at least one ident"),
+                        i
+                    );
+                    i += 1;
+                }
+                // We will use the original item name for the new table item.
+                let table_item_name = item.name.clone();
+
+                // Update the source item/statement to use the new name.
+                let mut new_source_name = name.clone();
+                *new_source_name.0.last_mut().expect("at least one ident") =
+                    Ident::new_unchecked(new_source_name_inner);
+                item.name = new_source_item_name;
 
                 // A reference to the source that will be included in the table statement
                 let source_ref =
@@ -611,7 +639,6 @@ fn ast_rewrite_sources_to_tables(
                 // Generate the same external-reference that would have been generated
                 // during purification for single-output sources.
                 let external_reference = match &conn {
-                    // For kafka sources this proto is currently empty.
                     CreateSourceConnection::Kafka { options, .. } => {
                         let topic_option = options
                             .iter()
