@@ -58,7 +58,7 @@ message ProtoHollowBatchPart {
   optional uint64 schema_id = 12;
 
   optional bytes key_stats = 536870906;
-  
+
   reserved 536870907 to 536870911;
 
   optional uint64 deprecated_schema_id = 9;

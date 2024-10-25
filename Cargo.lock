@@ -4487,6 +4487,7 @@ name = "mz-catalog-debug"
 version = "0.126.0-dev.0"
 dependencies = [
  "anyhow",
+ "arrow",
  "clap",
  "futures",
  "mz-adapter",
@@ -4496,6 +4497,7 @@ dependencies = [
  "mz-orchestrator-tracing",
  "mz-ore",
  "mz-persist-client",
+ "mz-persist-types",
  "mz-repr",
  "mz-service",
  "mz-sql",

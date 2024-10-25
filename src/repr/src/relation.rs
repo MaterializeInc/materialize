@@ -224,7 +224,7 @@ impl fmt::Display for ColumnType {
 }
 
 /// How two types compare.
-/// 
+///
 /// Note: Variant ordering matters!
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TypeDiff {
