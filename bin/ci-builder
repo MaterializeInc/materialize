@@ -210,6 +210,7 @@ case "$cmd" in
             --env REDPANDA_CLOUD_CLIENT_ID
             --env REDPANDA_CLOUD_CLIENT_SECRET
             --env QA_BENCHMARKING_APP_PASSWORD
+            --env RUST_MIN_STACK
         )
 
         if [[ $detach_container == "true" ]]; then
