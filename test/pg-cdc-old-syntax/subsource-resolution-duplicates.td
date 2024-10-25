@@ -57,6 +57,3 @@ detail: subsources referencing table: x, y
  mz_source          postgres  quickstart  ""
  mz_source_progress progress  <null>      ""
  t                  subsource quickstart  ""
-
-$ postgres-execute connection=postgres://postgres:postgres@postgres
-DROP SCHEMA other CASCADE;
