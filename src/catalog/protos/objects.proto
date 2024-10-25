@@ -52,7 +52,10 @@ message GidMappingKey {
 }
 
 message GidMappingValue {
-  SystemCatalogItemId catalog_id = 1;
+  // TODO(parkmycar): Ideally this is a SystemCatalogItemId but making this change panics 0dt
+  // upgrades if there were new builtin objects added since the older version of Materialize
+  // doesn't know how to read the new SystemCatalogItemId type.
+  uint64 id = 1;
   SystemGlobalId global_id = 2;
   string fingerprint = 3;
 }

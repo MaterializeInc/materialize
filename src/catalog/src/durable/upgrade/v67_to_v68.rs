@@ -291,7 +291,7 @@ impl From<v67::SourceReferencesKey> for v68::SourceReferencesKey {
 impl From<v67::GidMappingValue> for v68::GidMappingValue {
     fn from(value: v67::GidMappingValue) -> Self {
         v68::GidMappingValue {
-            catalog_id: Some(v68::SystemCatalogItemId { value: value.id }),
+            id: value.id,
             global_id: Some(v68::SystemGlobalId { value: value.id }),
             fingerprint: value.fingerprint,
         }

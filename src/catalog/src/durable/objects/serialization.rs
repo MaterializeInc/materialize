@@ -328,7 +328,7 @@ impl RustType<proto::GidMappingKey> for GidMappingKey {
 impl RustType<proto::GidMappingValue> for GidMappingValue {
     fn into_proto(&self) -> proto::GidMappingValue {
         proto::GidMappingValue {
-            catalog_id: Some(self.catalog_id.into_proto()),
+            id: self.catalog_id.0,
             global_id: Some(self.global_id.into_proto()),
             fingerprint: self.fingerprint.to_string(),
         }
@@ -336,9 +336,7 @@ impl RustType<proto::GidMappingValue> for GidMappingValue {
 
     fn from_proto(proto: proto::GidMappingValue) -> Result<Self, TryFromProtoError> {
         Ok(GidMappingValue {
-            catalog_id: proto
-                .catalog_id
-                .into_rust_if_some("GidMappingValue::catalog_id")?,
+            catalog_id: SystemCatalogItemId(proto.id),
             global_id: proto
                 .global_id
                 .into_rust_if_some("GidMappingValue::global_id")?,
