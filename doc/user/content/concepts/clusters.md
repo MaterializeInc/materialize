@@ -82,7 +82,7 @@ Materialize makes the following guarantees when provisioning replicas:
   replicas are not guaranteed to be spread evenly across the underlying cloud
   provider's availability zones.
 
-## Size
+## Sizing your clusters
 
 When creating your cluster, choose the [size of your
 cluster](/sql/create-cluster/#size) (`25cc`, `50cc`, `100cc`, etc.) based on the
