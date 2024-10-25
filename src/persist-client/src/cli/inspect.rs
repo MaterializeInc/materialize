@@ -12,6 +12,7 @@
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::pin::pin;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
@@ -20,6 +21,7 @@ use bytes::{BufMut, Bytes};
 use differential_dataflow::difference::{IsZero, Semigroup};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
+use futures_util::{StreamExt, TryStreamExt};
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
@@ -391,7 +393,9 @@ async fn consolidated_size(args: &StateArgs) -> Result<(), anyhow::Error> {
 
     let mut updates = Vec::new();
     for batch in state.collections.trace.batches() {
-        for part in batch.parts.iter() {
+        let mut part_stream =
+            pin!(batch.part_stream(shard_id, &*state_versions.blob, &*state_versions.metrics));
+        while let Some(part) = part_stream.try_next().await? {
             tracing::info!("fetching {}", part.printable_name());
             let encoded_part = EncodedPart::fetch(
                 &shard_id,
@@ -400,7 +404,7 @@ async fn consolidated_size(args: &StateArgs) -> Result<(), anyhow::Error> {
                 &shard_metrics,
                 &state_versions.metrics.read.snapshot,
                 &batch.desc,
-                part,
+                &part,
             )
             .await
             .expect("part exists");
@@ -534,11 +538,7 @@ pub async fn shard_stats(blob_uri: &SensitiveUrl) -> anyhow::Result<()> {
                 empty_batches += 1;
             }
             for (_meta, run) in b.runs() {
-                let largest_part = run
-                    .iter()
-                    .map(|p| p.encoded_size_bytes())
-                    .max()
-                    .unwrap_or(0);
+                let largest_part = run.iter().map(|p| p.max_part_bytes()).max().unwrap_or(0);
                 runs += 1;
                 longest_run = longest_run.max(run.len());
                 byte_width += largest_part;
@@ -593,8 +593,13 @@ pub async fn unreferenced_blobs(args: &StateArgs) -> Result<impl serde::Serializ
             known_writers.insert(writer_id.clone());
         }
         for batch in v.collections.trace.batches() {
-            for batch_part in &batch.parts {
-                match batch_part {
+            // TODO: this may end up refetching externally-stored runs once per batch...
+            // but if we have enough parts for this to be a problem, we may need to track a more
+            // efficient state representation.
+            let mut parts =
+                pin!(batch.part_stream(shard_id, &*state_versions.blob, &*state_versions.metrics));
+            while let Some(batch_part) = parts.next().await {
+                match &*batch_part? {
                     BatchPart::Hollow(x) => known_parts.insert(x.key.clone()),
                     BatchPart::Inline { .. } => continue,
                 };

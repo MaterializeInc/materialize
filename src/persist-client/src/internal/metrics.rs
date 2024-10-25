@@ -464,6 +464,8 @@ impl MetricsVecs {
                 rollup_delete: self.retry_metrics("rollup::delete"),
                 rollup_get: self.retry_metrics("rollup::get"),
                 rollup_set: self.retry_metrics("rollup::set"),
+                hollow_run_get: self.retry_metrics("hollow_run::get"),
+                hollow_run_set: self.retry_metrics("hollow_run::set"),
                 storage_usage_shard_size: self.retry_metrics("storage_usage::shard_size"),
             },
             compare_and_append_idempotent: self.retry_metrics("compare_and_append_idempotent"),
@@ -672,6 +674,8 @@ pub struct RetryExternal {
     pub(crate) rollup_delete: RetryMetrics,
     pub(crate) rollup_get: RetryMetrics,
     pub(crate) rollup_set: RetryMetrics,
+    pub(crate) hollow_run_get: RetryMetrics,
+    pub(crate) hollow_run_set: RetryMetrics,
     pub(crate) storage_usage_shard_size: RetryMetrics,
 }
 

@@ -36,7 +36,7 @@ use crate::internal::machine::{retry_external, Machine};
 use crate::internal::maintenance::RoutineMaintenance;
 use crate::internal::metrics::{GcStepTimings, RetryMetrics};
 use crate::internal::paths::{BlobKey, PartialBlobKey, PartialRollupKey};
-use crate::internal::state::{BatchPart, HollowBlobRef};
+use crate::internal::state::HollowBlobRef;
 use crate::internal::state_versions::{InspectDiff, StateVersionsIter};
 use crate::ShardId;
 
@@ -467,12 +467,7 @@ where
             states.state().blobs().for_each(|blob| match blob {
                 HollowBlobRef::Batch(batch) => {
                     for live_part in &batch.parts {
-                        match live_part {
-                            BatchPart::Hollow(x) => {
-                                assert_eq!(batch_parts_to_delete.get(&x.key), None)
-                            }
-                            BatchPart::Inline { .. } => {}
-                        }
+                        assert!(!batch_parts_to_delete.contains(live_part));
                     }
                 }
                 HollowBlobRef::Rollup(live_rollup) => {
@@ -515,7 +510,7 @@ where
         truncate_lt: SeqNo,
         metrics: &GcStepTimings,
         timer: &mut F,
-        batch_parts_to_delete: &mut PartDeletes,
+        batch_parts_to_delete: &mut PartDeletes<T>,
         rollups_to_delete: &mut BTreeSet<PartialRollupKey>,
     ) where
         F: FnMut(&Counter),
@@ -550,7 +545,7 @@ where
     /// Truncates Consensus to `truncate_lt`.
     async fn delete_and_truncate<F>(
         truncate_lt: SeqNo,
-        batch_parts: &mut PartDeletes,
+        batch_parts: &mut PartDeletes<T>,
         rollups: &mut BTreeSet<PartialRollupKey>,
         machine: &Machine<K, V, T, D>,
         timer: &mut F,
@@ -566,15 +561,21 @@ where
                 .gc_blob_delete_concurrency_limit(),
         );
 
-        Self::delete_all(
-            machine.applier.state_versions.blob.borrow(),
-            batch_parts.iter().map(|k| k.complete(&shard_id)),
-            &machine.applier.metrics.retries.external.batch_delete,
-            debug_span!("batch::delete"),
-            &delete_semaphore,
-        )
-        .await;
-        *batch_parts = PartDeletes::default();
+        let batch_parts = std::mem::take(batch_parts);
+        batch_parts
+            .delete(
+                machine.applier.state_versions.blob.borrow(),
+                shard_id,
+                machine
+                    .applier
+                    .cfg
+                    .dynamic
+                    .gc_blob_delete_concurrency_limit(),
+                &*machine.applier.metrics,
+                &machine.applier.metrics.retries.external.batch_delete,
+            )
+            .instrument(debug_span!("batch::delete"))
+            .await;
         timer(&machine.applier.metrics.gc.steps.delete_batch_part_seconds);
 
         Self::delete_all(
