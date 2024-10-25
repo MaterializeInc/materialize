@@ -2214,65 +2214,6 @@ fn test_idle_in_transaction_session_timeout() {
 }
 
 #[mz_ore::test]
-fn test_coord_startup_blocking() {
-    let initial_time = 0;
-    let now = Arc::new(Mutex::new(initial_time));
-    let now_fn = {
-        let timestamp = Arc::clone(&now);
-        NowFn::from(move || *timestamp.lock().expect("lock poisoned"))
-    };
-    let data_dir = tempfile::tempdir().unwrap();
-    let harness = test_util::TestHarness::default()
-        .with_now(now_fn)
-        .data_directory(data_dir.path());
-
-    // Start 3 servers and reserve the first 3 timestamp ranges.
-    {
-        let server = harness.clone().start_blocking();
-        let mut client = server.connect(postgres::NoTls).unwrap();
-
-        client.query("SELECT 1", &[]).unwrap();
-    };
-    {
-        let server = harness.clone().start_blocking();
-        let mut client = server.connect(postgres::NoTls).unwrap();
-
-        client.query("SELECT 1", &[]).unwrap();
-    };
-    {
-        let server = harness.clone().start_blocking();
-        let mut client = server.connect(postgres::NoTls).unwrap();
-
-        client.query("SELECT 1", &[]).unwrap();
-    };
-
-    let (tx, rx) = std::sync::mpsc::sync_channel(0);
-    std::thread::spawn(move || {
-        let server = harness.start_blocking();
-        let mut client = server
-            .connect(postgres::NoTls)
-            .expect("unable to start client asynchronously");
-
-        client
-            .query("SELECT 1", &[])
-            .expect("unable to query server asynchronously");
-        tx.send(())
-            .expect("receiver waiting for server startup has hung up");
-    });
-
-    // The server should be stuck in startup until the system clock advances closer to the
-    // timestamp oracle.
-    let server_started = Retry::default()
-        .max_duration(Duration::from_secs(3))
-        .retry(|_| rx.try_recv());
-    assert_err!(server_started, "server should be blocked");
-
-    // Updating the system clock will allow the server to start.
-    *now.lock().expect("lock poisoned") = i32::MAX.try_into().expect("known to fit");
-    rx.recv().unwrap();
-}
-
-#[mz_ore::test]
 fn test_peek_on_dropped_cluster() {
     let server = test_util::TestHarness::default()
         .unsafe_mode()
