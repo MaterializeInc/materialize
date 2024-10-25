@@ -38,6 +38,7 @@ use mz_catalog::durable::debug::{
 use mz_catalog::durable::{
     persist_backed_catalog_state, BootstrapArgs, OpenableDurableCatalogState,
 };
+use mz_catalog::memory::objects::CatalogItem;
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig};
@@ -49,12 +50,14 @@ use mz_ore::url::SensitiveUrl;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::PubSubClientConnection;
-use mz_persist_client::PersistLocation;
-use mz_repr::{Diff, Timestamp};
+use mz_persist_client::{Diagnostics, PersistClient, PersistLocation};
+use mz_persist_types::columnar::ColumnEncoder;
+use mz_repr::{Diff, RelationDesc, Timestamp, TypeDiff};
 use mz_service::secrets::SecretsReaderCliArgs;
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::ConnectionCounter;
 use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::sources::SourceData;
 use serde::{Deserialize, Serialize};
 use tracing::{error, Instrument};
 
@@ -200,7 +203,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     let organization_id = args.environment_id.organization_id();
     let metrics = Arc::new(mz_catalog::durable::Metrics::new(&metrics_registry));
     let openable_state = persist_backed_catalog_state(
-        persist_client,
+        persist_client.clone(),
         organization_id,
         BUILD_INFO.semver_version(),
         args.deploy_generation,
@@ -254,7 +257,15 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                 None => Default::default(),
                 Some(json) => serde_json::from_str(&json).context("parsing replica size map")?,
             };
-            upgrade_check(args, openable_state, secrets, cluster_replica_sizes, start).await
+            upgrade_check(
+                args,
+                openable_state,
+                persist_client,
+                secrets,
+                cluster_replica_sizes,
+                start,
+            )
+            .await
         }
     }
 }
@@ -528,6 +539,7 @@ async fn epoch(
 async fn upgrade_check(
     args: Args,
     openable_state: Box<dyn OpenableDurableCatalogState>,
+    persist_client: PersistClient,
     secrets: SecretsReaderCliArgs,
     cluster_replica_sizes: ClusterReplicaSizeMap,
     start: Instant,
@@ -560,7 +572,7 @@ async fn upgrade_check(
     // get stored on the stack which is bad for runtime performance, and blow up our stack usage.
     // Because of that we purposefully move this Future onto the heap (i.e. Box it).
     let InitializeStateResult {
-        state: _state,
+        state,
         storage_collections_to_drop: _,
         migrated_storage_collections_0dt: _,
         new_builtins: _,
@@ -613,6 +625,79 @@ async fn upgrade_check(
         dur.as_millis(),
     );
     println!("{msg}");
+
+    // Check that we can evolve the schema for all Persist shards.
+    let storage_entries = state.get_entries().filter_map(|(id, entry)| {
+        let desc = match entry.item() {
+            CatalogItem::Table(table) => &table.desc,
+            CatalogItem::Source(source) => &source.desc,
+            CatalogItem::ContinualTask(ct) => &ct.desc,
+            CatalogItem::MaterializedView(mv) => &mv.desc,
+            _ => return None,
+        };
+        Some((id, desc))
+    });
+    for (item_id, item_desc) in storage_entries {
+        let shard_id = state
+            .storage_metadata()
+            .get_collection_shard::<Timestamp>(*item_id)
+            .context("getting shard_id")?;
+        let diagnostics = Diagnostics {
+            shard_name: item_id.to_string(),
+            handle_purpose: "catalog upgrade check".to_string(),
+        };
+        let persisted_schema = persist_client
+            .latest_schema::<SourceData, (), Timestamp, Diff>(shard_id, diagnostics)
+            .await
+            .expect("invalid persist usage");
+        // We should always have schemas registered for Shards, unless their environment happened
+        // to crash after running DDL and hasn't come back up yet.
+        let Some((_schema_id, persisted_relation_desc, _)) = persisted_schema else {
+            anyhow::bail!("no schema found for {item_id}, did their environment crash?");
+        };
+
+        // Validate we think the `RelationDesc`s are compatible.
+        match item_desc.diff(&persisted_relation_desc) {
+            TypeDiff::None => (),
+            TypeDiff::Nullability => {
+                tracing::warn!(
+                    "found nullability change for {}\nold: {:?}\nnew: {:?}",
+                    item_id,
+                    persisted_relation_desc,
+                    item_desc,
+                )
+            }
+            TypeDiff::Structural => anyhow::bail!(
+                "found structural schema change for {}\nold: {:?}\nnew: {:?}",
+                item_id,
+                persisted_relation_desc,
+                item_desc,
+            ),
+        }
+
+        // And that Persist thinks the change is backwards compatible.
+        fn data_type(desc: &RelationDesc) -> Result<arrow::datatypes::DataType, anyhow::Error> {
+            let encoder = mz_persist_types::columnar::Schema2::<SourceData>::encoder(desc)
+                .context("upgrade check")?;
+            Ok(arrow::array::Array::data_type(&encoder.finish()).clone())
+        }
+
+        let persisted_data_type = data_type(&persisted_relation_desc)?;
+        let new_data_type = data_type(item_desc)?;
+
+        let migration =
+            mz_persist_types::schema::backward_compatible(&persisted_data_type, &new_data_type);
+        if migration.is_none() {
+            anyhow::bail!(
+                "invalid Persist schema migration!\npersisted: {:?}\n{:?}\nnew: {:?}\n{:?}",
+                persisted_relation_desc,
+                persisted_data_type,
+                item_desc,
+                new_data_type,
+            );
+        }
+    }
+
     Ok(())
 }
 

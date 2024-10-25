@@ -38,6 +38,7 @@ rust_binary(
         "//src/orchestrator-tracing:mz_orchestrator_tracing",
         "//src/ore:mz_ore",
         "//src/persist-client:mz_persist_client",
+        "//src/persist-types:mz_persist_types",
         "//src/repr:mz_repr",
         "//src/service:mz_service",
         "//src/sql:mz_sql",

@@ -633,6 +633,10 @@ impl CatalogState {
             .unwrap_or_else(|| panic!("catalog out of sync, missing id {id}"))
     }
 
+    pub fn get_entries(&self) -> impl Iterator<Item = (&GlobalId, &CatalogEntry)> + '_ {
+        self.entry_by_id.iter()
+    }
+
     pub fn get_temp_items(&self, conn: &ConnectionId) -> impl Iterator<Item = ObjectId> + '_ {
         let schema = self
             .temporary_schemas
