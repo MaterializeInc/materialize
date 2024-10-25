@@ -42,13 +42,14 @@ use crate::internal::metrics::Metrics;
 use crate::internal::paths::{PartialBatchKey, PartialRollupKey};
 use crate::internal::state::{
     proto_hollow_batch_part, BatchPart, CriticalReaderState, EncodedSchemas, HandleDebugState,
-    HollowBatch, HollowBatchPart, HollowRollup, IdempotencyToken, LeasedReaderState, OpaqueState,
-    ProtoCompaction, ProtoCriticalReaderState, ProtoEncodedSchemas, ProtoHandleDebugState,
-    ProtoHollowBatch, ProtoHollowBatchPart, ProtoHollowRollup, ProtoIdHollowBatch, ProtoIdMerge,
-    ProtoIdSpineBatch, ProtoInlineBatchPart, ProtoInlinedDiffs, ProtoLeasedReaderState, ProtoMerge,
-    ProtoRollup, ProtoRunMeta, ProtoRunOrder, ProtoSpineBatch, ProtoSpineId, ProtoStateDiff,
-    ProtoStateField, ProtoStateFieldDiffType, ProtoStateFieldDiffs, ProtoTrace, ProtoU64Antichain,
-    ProtoU64Description, ProtoVersionedData, ProtoWriterState, RunMeta, RunOrder, State,
+    HollowBatch, HollowBatchPart, HollowRollup, HollowRun, HollowRunRef, IdempotencyToken,
+    LeasedReaderState, OpaqueState, ProtoCompaction, ProtoCriticalReaderState, ProtoEncodedSchemas,
+    ProtoHandleDebugState, ProtoHollowBatch, ProtoHollowBatchPart, ProtoHollowRollup,
+    ProtoHollowRun, ProtoHollowRunRef, ProtoIdHollowBatch, ProtoIdMerge, ProtoIdSpineBatch,
+    ProtoInlineBatchPart, ProtoInlinedDiffs, ProtoLeasedReaderState, ProtoMerge, ProtoRollup,
+    ProtoRunMeta, ProtoRunOrder, ProtoSpineBatch, ProtoSpineId, ProtoStateDiff, ProtoStateField,
+    ProtoStateFieldDiffType, ProtoStateFieldDiffs, ProtoTrace, ProtoU64Antichain,
+    ProtoU64Description, ProtoVersionedData, ProtoWriterState, RunMeta, RunOrder, RunPart, State,
     StateCollections, TypedState, WriterState,
 };
 use crate::internal::state_diff::{
@@ -1285,6 +1286,20 @@ impl RustType<ProtoHandleDebugState> for HandleDebugState {
     }
 }
 
+impl<T: Timestamp + Codec64> RustType<ProtoHollowRun> for HollowRun<T> {
+    fn into_proto(&self) -> ProtoHollowRun {
+        ProtoHollowRun {
+            parts: self.parts.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoHollowRun) -> Result<Self, TryFromProtoError> {
+        Ok(HollowRun {
+            parts: proto.parts.into_rust()?,
+        })
+    }
+}
+
 impl<T: Timestamp + Codec64> RustType<ProtoHollowBatch> for HollowBatch<T> {
     fn into_proto(&self) -> ProtoHollowBatch {
         let mut run_meta = self.run_meta.into_proto();
@@ -1304,11 +1319,11 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatch> for HollowBatch<T> {
     }
 
     fn from_proto(proto: ProtoHollowBatch) -> Result<Self, TryFromProtoError> {
-        let mut parts: Vec<BatchPart<T>> = proto.parts.into_rust()?;
+        let mut parts: Vec<RunPart<T>> = proto.parts.into_rust()?;
         // MIGRATION: We used to just have the keys instead of a more structured
         // part.
         parts.extend(proto.deprecated_keys.into_iter().map(|key| {
-            BatchPart::Hollow(HollowBatchPart {
+            RunPart::Single(BatchPart::Hollow(HollowBatchPart {
                 key: PartialBatchKey(key),
                 encoded_size_bytes: 0,
                 key_lower: vec![],
@@ -1318,7 +1333,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatch> for HollowBatch<T> {
                 diffs_sum: None,
                 format: None,
                 schema_id: None,
-            })
+            }))
         }));
         // We discard default metadatas from the proto above; re-add them here.
         let run_splits: Vec<usize> = proto.runs.into_rust()?;
@@ -1363,6 +1378,61 @@ impl RustType<ProtoRunMeta> for RunMeta {
         Ok(Self {
             order,
             schema: proto.schema_id.into_rust()?,
+        })
+    }
+}
+
+impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for RunPart<T> {
+    fn into_proto(&self) -> ProtoHollowBatchPart {
+        match self {
+            RunPart::Single(part) => part.into_proto(),
+            RunPart::Many(runs) => runs.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoHollowBatchPart) -> Result<Self, TryFromProtoError> {
+        let run_part = if let Some(proto_hollow_batch_part::Kind::RunRef(_)) = proto.kind {
+            RunPart::Many(proto.into_rust()?)
+        } else {
+            RunPart::Single(proto.into_rust()?)
+        };
+        Ok(run_part)
+    }
+}
+
+impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for HollowRunRef<T> {
+    fn into_proto(&self) -> ProtoHollowBatchPart {
+        let part = ProtoHollowBatchPart {
+            kind: Some(proto_hollow_batch_part::Kind::RunRef(ProtoHollowRunRef {
+                key: self.key.into_proto(),
+                max_part_bytes: self.max_part_bytes.into_proto(),
+            })),
+            encoded_size_bytes: self.hollow_bytes.into_proto(),
+            key_lower: Bytes::copy_from_slice(&self.key_lower),
+            diffs_sum: None,
+            key_stats: None,
+            ts_rewrite: None,
+            format: None,
+            schema_id: None,
+            structured_key_lower: None,
+        };
+        part
+    }
+
+    fn from_proto(proto: ProtoHollowBatchPart) -> Result<Self, TryFromProtoError> {
+        let run_proto = match proto.kind {
+            Some(proto_hollow_batch_part::Kind::RunRef(proto_ref)) => proto_ref,
+            _ => Err(TryFromProtoError::UnknownEnumVariant(
+                "ProtoHollowBatchPart::kind".to_string(),
+            ))?,
+        };
+        Ok(Self {
+            key: run_proto.key.into_rust()?,
+            hollow_bytes: proto.encoded_size_bytes.into_rust()?,
+            max_part_bytes: run_proto.max_part_bytes.into_rust()?,
+            key_lower: proto.key_lower.to_vec(),
+            structured_key_lower: None,
+            _phantom_data: Default::default(),
         })
     }
 }
@@ -1431,7 +1501,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for BatchPart<T> {
                     schema_id,
                 })
             }
-            None => Err(TryFromProtoError::unknown_enum_variant(
+            _ => Err(TryFromProtoError::unknown_enum_variant(
                 "ProtoHollowBatchPart::kind",
             )),
         }
@@ -1741,7 +1811,7 @@ mod tests {
                 Antichain::from_elem(2u64),
                 Antichain::from_elem(3u64),
             ),
-            vec![BatchPart::Hollow(HollowBatchPart {
+            vec![RunPart::Single(BatchPart::Hollow(HollowBatchPart {
                 key: PartialBatchKey("a".into()),
                 encoded_size_bytes: 5,
                 key_lower: vec![],
@@ -1751,7 +1821,7 @@ mod tests {
                 diffs_sum: None,
                 format: None,
                 schema_id: None,
-            })],
+            }))],
             4,
         );
         let mut old = x.into_proto();
@@ -1765,17 +1835,19 @@ mod tests {
         // will violate bounded memory usage compaction during the transition
         // (short-term issue), but that's better than creating unnecessary runs
         // (longer-term issue).
-        expected.parts.push(BatchPart::Hollow(HollowBatchPart {
-            key: PartialBatchKey("b".into()),
-            encoded_size_bytes: 0,
-            key_lower: vec![],
-            structured_key_lower: None,
-            stats: None,
-            ts_rewrite: None,
-            diffs_sum: None,
-            format: None,
-            schema_id: None,
-        }));
+        expected
+            .parts
+            .push(RunPart::Single(BatchPart::Hollow(HollowBatchPart {
+                key: PartialBatchKey("b".into()),
+                encoded_size_bytes: 0,
+                key_lower: vec![],
+                structured_key_lower: None,
+                stats: None,
+                ts_rewrite: None,
+                diffs_sum: None,
+                format: None,
+                schema_id: None,
+            })));
         assert_eq!(<HollowBatch<u64>>::from_proto(old).unwrap(), expected);
     }
 

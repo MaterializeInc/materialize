@@ -41,7 +41,7 @@ use crate::fetch::{EncodedPart, FetchBatchFilter};
 use crate::internal::encoding::Schemas;
 use crate::internal::metrics::{ReadMetrics, ShardMetrics};
 use crate::internal::paths::WriterKey;
-use crate::internal::state::{BatchPart, RunMeta, RunOrder};
+use crate::internal::state::{HollowRun, RunMeta, RunOrder, RunPart};
 use crate::metrics::Metrics;
 use crate::ShardId;
 
@@ -56,7 +56,7 @@ pub const MINIMUM_CONSOLIDATED_VERSION: Version = Version::new(0, 67, 0);
 pub(crate) struct FetchData<T> {
     run_meta: RunMeta,
     part_desc: Description<T>,
-    part: BatchPart<T>,
+    part: RunPart<T>,
     structured_lower: Option<ArrayBound>,
 }
 
@@ -295,6 +295,8 @@ impl<K: Codec, V: Codec, T: Codec64, D: Codec64> RowSort<T, D> for StructuredSor
     }
 }
 
+type FetchResult<T> = Result<EncodedPart<T>, HollowRun<T>>;
+
 impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
     async fn fetch(
         self,
@@ -303,18 +305,30 @@ impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
         metrics: &Metrics,
         shard_metrics: &ShardMetrics,
         read_metrics: &ReadMetrics,
-    ) -> anyhow::Result<EncodedPart<T>> {
-        EncodedPart::fetch(
-            &shard_id,
-            &*blob,
-            metrics,
-            shard_metrics,
-            read_metrics,
-            &self.part_desc,
-            &self.part,
-        )
-        .await
-        .map_err(|blob_key| anyhow!("missing unleased key {blob_key}"))
+    ) -> anyhow::Result<FetchResult<T>> {
+        match self.part {
+            RunPart::Single(part) => {
+                let part = EncodedPart::fetch(
+                    &shard_id,
+                    &*blob,
+                    metrics,
+                    shard_metrics,
+                    read_metrics,
+                    &self.part_desc,
+                    &part,
+                )
+                .await
+                .map_err(|blob_key| anyhow!("missing unleased key {blob_key}"))?;
+                Ok(Ok(part))
+            }
+            RunPart::Many(run_ref) => {
+                let runs = run_ref
+                    .get(shard_id, blob, metrics)
+                    .await
+                    .ok_or_else(|| anyhow!("missing run ref {}", run_ref.key))?;
+                Ok(Err(runs))
+            }
+        }
     }
 }
 
@@ -347,7 +361,7 @@ impl PartIndices {
 enum ConsolidationPart<T, D, Sort: RowSort<T, D> = CodecSort<T, D>> {
     Queued {
         data: FetchData<T>,
-        task: Option<JoinHandle<anyhow::Result<EncodedPart<T>>>>,
+        task: Option<JoinHandle<anyhow::Result<FetchResult<T>>>>,
     },
     Encoded {
         part: Sort::Updates,
@@ -492,7 +506,7 @@ where
         &mut self,
         desc: &Description<T>,
         run_meta: &RunMeta,
-        parts: impl IntoIterator<Item = BatchPart<T>>,
+        parts: impl IntoIterator<Item = RunPart<T>>,
     ) {
         let run = parts
             .into_iter()
@@ -618,8 +632,18 @@ where
         let mut ready_futures: FuturesUnordered<_> = self.runs[0..first_larger]
             .iter_mut()
             .map(|run| async {
-                let part = &mut run.front_mut().expect("trimmed run should be nonempty").0;
-                if let ConsolidationPart::Queued { data, task } = part {
+                // It's possible for there to be multiple layers of indirection between us and the first available encoded part:
+                // if the first part is a `HollowRuns`, we'll need to fetch both that and the first part in the run to have data
+                // to consolidate. So: we loop, and bail out of the loop when either the first part in the run is available or we
+                // hit some unrecoverable error.
+                loop {
+                    let (mut part, size) = run.pop_front().expect("trimmed run should be nonempty");
+
+                    let ConsolidationPart::Queued { data, task } = &mut part else {
+                        run.push_front((part, size));
+                        return Ok(true);
+                    };
+
                     let is_prefetched = task.as_ref().map_or(false, |t| t.is_finished());
                     if is_prefetched {
                         self.metrics.compaction.parts_prefetched.inc();
@@ -629,8 +653,10 @@ where
                     self.metrics.consolidation.parts_fetched.inc();
 
                     let wrong_sort = !Sort::desired_sort(data);
-                    let encoded_part = match task.take() {
-                        Some(handle) => handle.await??,
+                    let fetch_result: anyhow::Result<FetchResult<T>> = match task.take() {
+                        Some(handle) => handle
+                            .await
+                            .unwrap_or_else(|join_err| Err(anyhow!(join_err))),
                         None => {
                             data.clone()
                                 .fetch(
@@ -640,18 +666,47 @@ where
                                     &*self.shard_metrics,
                                     &self.read_metrics,
                                 )
-                                .await?
+                                .await
                         }
                     };
-                    *part = ConsolidationPart::from_encoded(
-                        encoded_part,
-                        wrong_sort,
-                        &self.metrics.columnar,
-                        &self.sort,
-                    );
+                    match fetch_result {
+                        Err(err) => {
+                            run.push_front((part, size));
+                            return Err(err);
+                        }
+                        Ok(Err(run_part)) => {
+                            // Since we're pushing these onto the _front_ of the queue, we need to
+                            // iterate in reverse order.
+                            for part in run_part.parts.into_iter().rev() {
+                                let structured_lower = part.structured_key_lower();
+                                let size = part.max_part_bytes();
+                                run.push_front((
+                                    ConsolidationPart::Queued {
+                                        data: FetchData {
+                                            run_meta: data.run_meta.clone(),
+                                            part_desc: data.part_desc.clone(),
+                                            part,
+                                            structured_lower,
+                                        },
+                                        task: None,
+                                    },
+                                    size,
+                                ));
+                            }
+                        }
+                        Ok(Ok(part)) => {
+                            run.push_front((
+                                ConsolidationPart::from_encoded(
+                                    part,
+                                    wrong_sort,
+                                    &self.metrics.columnar,
+                                    &self.sort,
+                                ),
+                                size,
+                            ));
+                        }
+                    }
                 }
-
-                Ok::<_, anyhow::Error>(true)
             })
             .collect();
 
@@ -1042,7 +1097,7 @@ mod tests {
 
     use crate::cfg::PersistConfig;
     use crate::internal::paths::PartialBatchKey;
-    use crate::internal::state::HollowBatchPart;
+    use crate::internal::state::{BatchPart, HollowBatchPart};
     use crate::metrics::Metrics;
     use crate::ShardId;
 
@@ -1198,7 +1253,7 @@ mod tests {
                 let parts: Vec<_> = run
                     .into_iter()
                     .map(|encoded_size_bytes| {
-                        BatchPart::Hollow(HollowBatchPart {
+                        RunPart::Single(BatchPart::Hollow(HollowBatchPart {
                             key: PartialBatchKey(
                                 "n0000000/p00000000-0000-0000-0000-000000000000".into(),
                             ),
@@ -1210,7 +1265,7 @@ mod tests {
                             diffs_sum: None,
                             format: None,
                             schema_id: None,
-                        })
+                        }))
                     })
                     .collect();
                 consolidator.enqueue_run(&desc, &RunMeta::default(), parts)

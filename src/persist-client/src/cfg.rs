@@ -318,6 +318,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::batch::STRUCTURED_ORDER)
         .add(&crate::batch::STRUCTURED_ORDER_UNTIL_SHARD)
         .add(&crate::batch::STRUCTURED_KEY_LOWER_LEN)
+        .add(&crate::batch::MAX_RUN_LEN)
         .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_TTL_STAGGER)
         .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_TTL)
         .add(&crate::cfg::CRDB_CONNECT_TIMEOUT)

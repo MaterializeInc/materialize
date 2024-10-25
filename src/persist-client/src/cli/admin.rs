@@ -335,7 +335,7 @@ pub async fn run(command: AdminArgs) -> Result<(), anyhow::Error> {
                 cfg.clone(),
                 Arc::clone(&consensus),
                 Arc::clone(&blob),
-                metrics,
+                Arc::clone(&metrics),
             );
 
             let not_restored: Vec<_> = consensus
@@ -351,6 +351,7 @@ pub async fn run(command: AdminArgs) -> Result<(), anyhow::Error> {
                             blob.as_ref(),
                             &cfg.build_version,
                             shard_id,
+                            &*metrics,
                         )
                         .await?;
                         info!(
