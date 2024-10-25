@@ -81,7 +81,6 @@ use crate::names::{
 use crate::plan::error::PlanError;
 use crate::plan::statement::ddl::load_generator_ast_to_generator;
 use crate::plan::{SourceReferences, StatementContext};
-use crate::session::vars;
 use crate::{kafka_util, normalize};
 
 use self::error::{
@@ -632,7 +631,7 @@ async fn purify_create_source(
     // If the user can use the `CREATE TABLE .. FROM SOURCE` statement to add tables
     // after this source is created, then we don't need to enforce that
     // any auto-generated subsources are created here.
-    let reference_policy = if scx.is_feature_flag_enabled(&vars::ENABLE_CREATE_TABLE_FROM_SOURCE) {
+    let reference_policy = if scx.catalog.system_vars().enable_create_table_from_source() {
         SourceReferencePolicy::Optional
     } else {
         SourceReferencePolicy::Required

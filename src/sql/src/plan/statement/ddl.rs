@@ -1542,7 +1542,9 @@ pub fn plan_create_table_from_source(
     scx: &StatementContext,
     stmt: CreateTableFromSourceStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    scx.require_feature_flag(&vars::ENABLE_CREATE_TABLE_FROM_SOURCE)?;
+    if !scx.catalog.system_vars().enable_create_table_from_source() {
+        sql_bail!("CREATE TABLE ... FROM SOURCE is not supported");
+    }
 
     let CreateTableFromSourceStatement {
         name,
