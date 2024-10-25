@@ -286,10 +286,10 @@ mod tests {
                     as_of: Default::default(),
                     up_to: Default::default(),
                 }),
-                primary_export: SourceExportDataConfig {
+                primary_export: Some(SourceExportDataConfig {
                     encoding: Default::default(),
                     envelope: SourceEnvelope::CdcV2,
-                },
+                }),
                 timestamp_interval: Default::default(),
             },
             ingestion_metadata: CollectionMetadata {

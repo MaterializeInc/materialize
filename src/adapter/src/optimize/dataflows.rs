@@ -303,7 +303,9 @@ impl<'a> DataflowBuilder<'a> {
                 ingestion_desc
                     .desc
                     .primary_export
-                    .monotonic(&ingestion_desc.desc.connection)
+                    .as_ref()
+                    .map(|e| e.monotonic(&ingestion_desc.desc.connection))
+                    .unwrap_or(false)
             }
             DataSourceDesc::Webhook { .. } => true,
             DataSourceDesc::IngestionExport {

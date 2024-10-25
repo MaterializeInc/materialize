@@ -645,11 +645,12 @@ pub fn plan_create_source(
         "referenced subsources must be cleared in purification"
     );
 
+    let force_source_table_syntax = scx.catalog.system_vars().enable_create_table_from_source()
+        && scx.catalog.system_vars().force_source_table_syntax();
+
     // If the new source table syntax is forced all the options related to the primary
     // source output should be un-set.
-    if scx.catalog.system_vars().enable_create_table_from_source()
-        && scx.catalog.system_vars().force_source_table_syntax()
-    {
+    if force_source_table_syntax {
         if envelope.is_some() || format.is_some() || !include_metadata.is_empty() {
             Err(PlanError::UseTablesForSources(
                 "CREATE SOURCE (ENVELOPE|FORMAT|INCLUDE)".to_string(),
@@ -1046,15 +1047,17 @@ pub fn plan_create_source(
         None => scx.catalog.config().timestamp_interval,
     };
 
-    // TODO: Refactor the above encoding and envelope checks to be re-used
-    // for `CREATE TABLE .. FROM SOURCE` statements as well.
-
     let source_desc = SourceDesc::<ReferencedConnection> {
         connection: external_connection,
-        // TODO: Remove this once sources no longer output to a primary collection.
-        primary_export: SourceExportDataConfig {
-            encoding,
-            envelope: envelope.clone(),
+        // We only define primary-export details for this source if we are still supporting
+        // the legacy source syntax. Otherwise, we will not output to the primary collection.
+        // TODO(database-issues#8620): Remove this field once the new syntax is enabled everywhere
+        primary_export: match force_source_table_syntax {
+            false => Some(SourceExportDataConfig {
+                encoding,
+                envelope: envelope.clone(),
+            }),
+            true => None,
         },
         timestamp_interval,
     };
