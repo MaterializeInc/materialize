@@ -239,6 +239,13 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 3  hydrated  boolean
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_index_advice' ORDER BY position
+----
+1  object_id  text
+2  recommendation  text
+3  details  text
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_materialization_dependencies' ORDER BY position
 ----
 1  object_id  text
@@ -667,6 +674,7 @@ mz_frontiers
 mz_global_frontiers
 mz_history_retention_strategies
 mz_hydration_statuses
+mz_index_advice
 mz_internal_cluster_replicas
 mz_kafka_source_tables
 mz_materialization_dependencies
