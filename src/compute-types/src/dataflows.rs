@@ -382,6 +382,7 @@ impl<P, S, T> DataflowDescription<P, S, T> {
             .iter()
             .filter_map(|(id, desc)| match desc.connection {
                 ComputeSinkConnection::MaterializedView(_) => Some(*id),
+                ComputeSinkConnection::ContinualTask(_) => Some(*id),
                 _ => None,
             })
     }

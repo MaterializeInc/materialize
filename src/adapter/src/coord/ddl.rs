@@ -21,7 +21,7 @@ use mz_adapter_types::compaction::SINCE_GRANULARITY;
 use mz_adapter_types::connection::ConnectionId;
 use mz_audit_log::VersionedEvent;
 use mz_catalog::memory::objects::{
-    CatalogItem, Connection, DataSourceDesc, Index, MaterializedView, Sink,
+    CatalogItem, Connection, ContinualTask, DataSourceDesc, Index, MaterializedView, Sink,
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_compute_client::protocol::response::PeekResponse;
@@ -199,6 +199,7 @@ impl Coordinator {
         let mut storage_sinks_to_drop = vec![];
         let mut indexes_to_drop = vec![];
         let mut materialized_views_to_drop = vec![];
+        let mut continual_tasks_to_drop = vec![];
         let mut views_to_drop = vec![];
         let mut replication_slots_to_drop: Vec<(PostgresConnection, String)> = vec![];
         let mut secrets_to_drop = vec![];
@@ -261,6 +262,12 @@ impl Coordinator {
                                         ..
                                     }) => {
                                         materialized_views_to_drop.push((*cluster_id, *id));
+                                    }
+                                    CatalogItem::ContinualTask(ContinualTask {
+                                        cluster_id,
+                                        ..
+                                    }) => {
+                                        continual_tasks_to_drop.push((*cluster_id, *id));
                                     }
                                     CatalogItem::View(_) => views_to_drop.push(*id),
                                     CatalogItem::Secret(_) => {
@@ -387,6 +394,7 @@ impl Coordinator {
             .chain(storage_sinks_to_drop.iter())
             .chain(indexes_to_drop.iter().map(|(_, id)| id))
             .chain(materialized_views_to_drop.iter().map(|(_, id)| id))
+            .chain(continual_tasks_to_drop.iter().map(|(_, id)| id))
             .chain(views_to_drop.iter())
             .collect();
 
@@ -449,10 +457,12 @@ impl Coordinator {
             .chain(storage_sinks_to_drop.iter())
             .chain(tables_to_drop.iter())
             .chain(materialized_views_to_drop.iter().map(|(_, id)| id))
+            .chain(continual_tasks_to_drop.iter().map(|(_, id)| id))
             .cloned();
         let compute_ids_to_drop = indexes_to_drop
             .iter()
             .chain(materialized_views_to_drop.iter())
+            .chain(continual_tasks_to_drop.iter())
             .cloned();
 
         // Check if any Timelines would become empty, if we dropped the specified storage or
@@ -650,6 +660,9 @@ impl Coordinator {
             }
             if !materialized_views_to_drop.is_empty() {
                 self.drop_materialized_views(materialized_views_to_drop);
+            }
+            if !continual_tasks_to_drop.is_empty() {
+                self.drop_continual_tasks(continual_tasks_to_drop);
             }
             if !vpc_endpoints_to_drop.is_empty() {
                 self.drop_vpc_endpoints_in_background(vpc_endpoints_to_drop)
@@ -1055,6 +1068,30 @@ impl Coordinator {
         let mut by_cluster: BTreeMap<_, Vec<_>> = BTreeMap::new();
         let mut source_ids = Vec::new();
         for (cluster_id, id) in mviews {
+            by_cluster.entry(cluster_id).or_default().push(id);
+            source_ids.push(id);
+        }
+
+        // Drop compute sinks.
+        for (cluster_id, ids) in by_cluster {
+            let compute = &mut self.controller.compute;
+            // A cluster could have been dropped, so verify it exists.
+            if compute.instance_exists(cluster_id) {
+                compute
+                    .drop_collections(cluster_id, ids)
+                    .unwrap_or_terminate("cannot fail to drop collections");
+            }
+        }
+
+        // Drop storage sources.
+        self.drop_sources(source_ids)
+    }
+
+    /// A convenience method for dropping continual tasks.
+    fn drop_continual_tasks(&mut self, cts: Vec<(ClusterId, GlobalId)>) {
+        let mut by_cluster: BTreeMap<_, Vec<_>> = BTreeMap::new();
+        let mut source_ids = Vec::new();
+        for (cluster_id, id) in cts {
             by_cluster.entry(cluster_id).or_default().push(id);
             source_ids.push(id);
         }
