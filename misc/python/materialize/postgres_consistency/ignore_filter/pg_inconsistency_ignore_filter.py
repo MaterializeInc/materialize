@@ -717,9 +717,20 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         ) and ExpressionCharacteristics.NULL in query_template.get_involved_characteristics(
             ALL_QUERY_COLUMNS_BY_INDEX_SELECTION
         ):
-            # known at least for unnest: where condition will not be evaluated if mz knows that the number of resulting
+            # where condition will not be evaluated if mz knows that the number of resulting
             # rows is zero
             return YesIgnore("Evaluation shortcut for table functions")
+
+        if (
+            query_template.matches_any_expression(
+                partial(
+                    matches_fun_by_name, function_name_in_lower_case="jsonb_object_agg"
+                ),
+                True,
+            )
+            and mz_outcome.row_count() == 0
+        ):
+            return YesIgnore("Evaluation shortcut")
 
         return NoIgnore()
 
