@@ -38,6 +38,7 @@ use mz_catalog::durable::debug::{
 use mz_catalog::durable::{
     persist_backed_catalog_state, BootstrapArgs, OpenableDurableCatalogState,
 };
+use mz_catalog::memory::objects::CatalogItem;
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig};
@@ -49,11 +50,12 @@ use mz_ore::url::SensitiveUrl;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::PubSubClientConnection;
-use mz_persist_client::{PersistClient, PersistLocation};
+use mz_persist_client::{Diagnostics, PersistClient, PersistLocation};
 use mz_repr::{Diff, Timestamp};
 use mz_service::secrets::SecretsReaderCliArgs;
 use mz_sql::catalog::EnvironmentId;
 use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::sources::SourceData;
 use serde::{Deserialize, Serialize};
 use tracing::{error, Instrument};
 
@@ -254,9 +256,9 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             upgrade_check(
                 args,
                 openable_state,
+                persist_client,
                 secrets,
                 cluster_replica_sizes,
-                persist_client,
                 start,
             )
             .await
@@ -533,9 +535,9 @@ async fn epoch(
 async fn upgrade_check(
     args: Args,
     openable_state: Box<dyn OpenableDurableCatalogState>,
+    persist_client: PersistClient,
     secrets: SecretsReaderCliArgs,
     cluster_replica_sizes: ClusterReplicaSizeMap,
-    persist_client: PersistClient,
     start: Instant,
 ) -> Result<(), anyhow::Error> {
     let secrets_reader = secrets.load().await.context("loading secrets reader")?;
@@ -568,7 +570,7 @@ async fn upgrade_check(
     // get stored on the stack which is bad for runtime performance, and blow up our stack usage.
     // Because of that we purposefully move this Future onto the heap (i.e. Box it).
     let InitializeStateResult {
-        state: _state,
+        state,
         storage_collections_to_drop: _,
         migrated_storage_collections_0dt: _,
         new_builtin_collections: _,
@@ -609,7 +611,7 @@ async fn upgrade_check(
                 None,
             ),
             builtin_item_migration_config: BuiltinItemMigrationConfig::Legacy,
-            persist_client,
+            persist_client: persist_client.clone(),
             enable_expression_cache_override: None,
             enable_0dt_deployment: true,
             helm_chart_version: None,
@@ -628,6 +630,61 @@ async fn upgrade_check(
         dur.as_millis(),
     );
     println!("{msg}");
+
+    // Check that we can evolve the schema for all Persist shards.
+    let storage_entries = state
+        .get_entries()
+        .filter_map(|(_item_id, entry)| match entry.item() {
+            // TODO(alter_table): Handle multiple versions of tables.
+            CatalogItem::Table(table) => Some((table.global_id_writes(), &table.desc)),
+            CatalogItem::Source(source) => Some((source.global_id(), &source.desc)),
+            CatalogItem::ContinualTask(ct) => Some((ct.global_id(), &ct.desc)),
+            CatalogItem::MaterializedView(mv) => Some((mv.global_id(), &mv.desc)),
+            CatalogItem::Log(_)
+            | CatalogItem::View(_)
+            | CatalogItem::Sink(_)
+            | CatalogItem::Index(_)
+            | CatalogItem::Type(_)
+            | CatalogItem::Func(_)
+            | CatalogItem::Secret(_)
+            | CatalogItem::Connection(_) => None,
+        });
+    for (gid, item_desc) in storage_entries {
+        let shard_id = state
+            .storage_metadata()
+            .get_collection_shard::<Timestamp>(gid)
+            .context("getting shard_id")?;
+        let diagnostics = Diagnostics {
+            shard_name: gid.to_string(),
+            handle_purpose: "catalog upgrade check".to_string(),
+        };
+        let persisted_schema = persist_client
+            .latest_schema::<SourceData, (), Timestamp, Diff>(shard_id, diagnostics)
+            .await
+            .expect("invalid persist usage");
+        // We should always have schemas registered for Shards, unless their environment happened
+        // to crash after running DDL and hasn't come back up yet.
+        let Some((_schema_id, persisted_relation_desc, _)) = persisted_schema else {
+            anyhow::bail!("no schema found for {gid}, did their environment crash?");
+        };
+
+        let persisted_data_type =
+            mz_persist_types::columnar::data_type::<SourceData>(&persisted_relation_desc)?;
+        let new_data_type = mz_persist_types::columnar::data_type::<SourceData>(item_desc)?;
+
+        let migration =
+            mz_persist_types::schema::backward_compatible(&persisted_data_type, &new_data_type);
+        if migration.is_none() {
+            anyhow::bail!(
+                "invalid Persist schema migration!\npersisted: {:?}\n{:?}\nnew: {:?}\n{:?}",
+                persisted_relation_desc,
+                persisted_data_type,
+                item_desc,
+                new_data_type,
+            );
+        }
+    }
+
     Ok(())
 }
 
