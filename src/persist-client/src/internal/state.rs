@@ -208,6 +208,9 @@ pub enum BatchPart<T> {
         updates: LazyInlineBatchPart,
         ts_rewrite: Option<Antichain<T>>,
         schema_id: Option<SchemaId>,
+
+        /// ID of a schema that has since been deprecated and exists only to cleanly roundtrip.
+        deprecated_schema_id: Option<SchemaId>,
     },
 }
 
@@ -603,21 +606,25 @@ impl<T: Ord> Ord for BatchPart<T> {
                     updates: s_updates,
                     ts_rewrite: s_ts_rewrite,
                     schema_id: s_schema_id,
+                    deprecated_schema_id: s_deprecated_schema_id,
                 },
                 BatchPart::Inline {
                     updates: o_updates,
                     ts_rewrite: o_ts_rewrite,
                     schema_id: o_schema_id,
+                    deprecated_schema_id: o_deprecated_schema_id,
                 },
             ) => (
                 s_updates,
                 s_ts_rewrite.as_ref().map(|x| x.elements()),
                 s_schema_id,
+                s_deprecated_schema_id,
             )
                 .cmp(&(
                     o_updates,
                     o_ts_rewrite.as_ref().map(|x| x.elements()),
                     o_schema_id,
+                    o_deprecated_schema_id,
                 )),
             (BatchPart::Hollow(_), BatchPart::Inline { .. }) => Ordering::Less,
             (BatchPart::Inline { .. }, BatchPart::Hollow(_)) => Ordering::Greater,
@@ -643,6 +650,9 @@ pub struct RunMeta {
     pub(crate) order: Option<RunOrder>,
     /// All parts in a run should have the same schema.
     pub(crate) schema: Option<SchemaId>,
+
+    /// ID of a schema that has since been deprecated and exists only to cleanly roundtrip.
+    pub(crate) deprecated_schema: Option<SchemaId>,
 }
 
 /// A subset of a [HollowBatch] corresponding 1:1 to a blob.
@@ -689,6 +699,9 @@ pub struct HollowBatchPart<T> {
     /// Or None for historical data written before the schema registry was
     /// added.
     pub schema_id: Option<SchemaId>,
+
+    /// ID of a schema that has since been deprecated and exists only to cleanly roundtrip.
+    pub deprecated_schema_id: Option<SchemaId>,
 }
 
 /// A [Batch] but with the updates themselves stored externally.
@@ -1020,6 +1033,7 @@ impl<T: Ord> Ord for HollowBatchPart<T> {
             diffs_sum: self_diffs_sum,
             format: self_format,
             schema_id: self_schema_id,
+            deprecated_schema_id: self_deprecated_schema_id,
         } = self;
         let HollowBatchPart {
             key: other_key,
@@ -1031,6 +1045,7 @@ impl<T: Ord> Ord for HollowBatchPart<T> {
             diffs_sum: other_diffs_sum,
             format: other_format,
             schema_id: other_schema_id,
+            deprecated_schema_id: other_deprecated_schema_id,
         } = other;
         (
             self_key,
@@ -1042,6 +1057,7 @@ impl<T: Ord> Ord for HollowBatchPart<T> {
             self_diffs_sum,
             self_format,
             self_schema_id,
+            self_deprecated_schema_id,
         )
             .cmp(&(
                 other_key,
@@ -1053,6 +1069,7 @@ impl<T: Ord> Ord for HollowBatchPart<T> {
                 other_diffs_sum,
                 other_format,
                 other_schema_id,
+                other_deprecated_schema_id,
             ))
     }
 }
@@ -2632,8 +2649,9 @@ pub(crate) mod tests {
                 any_hollow_batch_part(),
                 any::<Option<T>>(),
                 any::<Option<SchemaId>>(),
+                any::<Option<SchemaId>>(),
             ),
-            |(is_hollow, hollow, ts_rewrite, schema_id)| {
+            |(is_hollow, hollow, ts_rewrite, schema_id, deprecated_schema_id)| {
                 if is_hollow {
                     BatchPart::Hollow(hollow)
                 } else {
@@ -2643,6 +2661,7 @@ pub(crate) mod tests {
                         updates,
                         ts_rewrite,
                         schema_id,
+                        deprecated_schema_id,
                     }
                 }
             },
@@ -2665,6 +2684,7 @@ pub(crate) mod tests {
                 any::<[u8; 8]>(),
                 any::<Option<BatchColumnarFormat>>(),
                 any::<Option<SchemaId>>(),
+                any::<Option<SchemaId>>(),
             ),
             |(
                 key,
@@ -2675,6 +2695,7 @@ pub(crate) mod tests {
                 diffs_sum,
                 format,
                 schema_id,
+                deprecated_schema_id,
             )| {
                 HollowBatchPart {
                     key,
@@ -2686,6 +2707,7 @@ pub(crate) mod tests {
                     diffs_sum: Some(diffs_sum),
                     format,
                     schema_id,
+                    deprecated_schema_id,
                 }
             },
         )
@@ -2859,6 +2881,7 @@ pub(crate) mod tests {
                         diffs_sum: None,
                         format: None,
                         schema_id: None,
+                        deprecated_schema_id: None,
                     }))
                 })
                 .collect(),

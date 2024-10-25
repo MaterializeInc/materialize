@@ -1020,6 +1020,7 @@ class FlipFlagsAction(Action):
             "75",
             "100",
         ]
+        self.flags_with_values["persist_record_schema_id"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["persist_batch_structured_order"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["persist_batch_structured_key_lower_len"] = [
             "0",
