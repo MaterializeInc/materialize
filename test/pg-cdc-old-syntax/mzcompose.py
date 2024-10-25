@@ -18,10 +18,16 @@ import pg8000
 from pg8000 import Connection
 
 from materialize import buildkite
+from materialize.mz_version import MzVersion
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.service import Service, ServiceConfig
 from materialize.mzcompose.services.materialized import Materialized
-from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.minio import Minio
+from materialize.mzcompose.services.postgres import (
+    METADATA_STORE,
+    CockroachOrPostgresMetadata,
+    Postgres,
+)
 from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
@@ -88,8 +94,11 @@ SERVICES = [
         additional_system_parameter_defaults={
             "log_filter": "mz_storage::source::postgres=trace,debug,info,warn,error"
         },
+        external_minio=True,
     ),
     Testdrive(),
+    CockroachOrPostgresMetadata(),
+    Minio(setup_materialize=True),
     TestCerts(),
     Toxiproxy(),
     create_postgres(pg_version=None),
@@ -323,7 +332,11 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     workflows_with_internal_sharding = ["cdc"]
     sharded_workflows = workflows_with_internal_sharding + buildkite.shard_list(
-        [w for w in c.workflows if w not in workflows_with_internal_sharding],
+        [
+            w
+            for w in c.workflows
+            if w not in workflows_with_internal_sharding and w != "migration"
+        ],
         lambda w: w,
     )
     print(
@@ -348,3 +361,118 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         with c.test_case(name):
             c.workflow(name, *parser.args)
+
+
+def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
+    parser.add_argument(
+        "filter",
+        nargs="*",
+        default=["*.td"],
+        help="limit to only the files matching filter",
+    )
+    args = parser.parse_args()
+
+    matching_files = []
+    for filter in args.filter:
+        matching_files.extend(glob.glob(filter, root_dir="test/pg-cdc-old-syntax"))
+    sharded_files: list[str] = sorted(
+        buildkite.shard_list(matching_files, lambda file: file)
+    )
+    print(f"Files: {sharded_files}")
+
+    ssl_ca = c.run("test-certs", "cat", "/secrets/ca.crt", capture=True).stdout
+    ssl_cert = c.run("test-certs", "cat", "/secrets/certuser.crt", capture=True).stdout
+    ssl_key = c.run("test-certs", "cat", "/secrets/certuser.key", capture=True).stdout
+    ssl_wrong_cert = c.run(
+        "test-certs", "cat", "/secrets/postgres.crt", capture=True
+    ).stdout
+    ssl_wrong_key = c.run(
+        "test-certs", "cat", "/secrets/postgres.key", capture=True
+    ).stdout
+
+    pg_version = get_targeted_pg_version(parser)
+
+    mz_old_image = "materialize/materialized:v0.122.0"
+    mz_new_image = None
+
+    assert MzVersion.parse_cargo() < MzVersion.parse_mz(
+        "v0.130.0"
+    ), "migration test probably no longer needed"
+
+    for file in sharded_files:
+        mz_old = Materialized(
+            name="materialized",
+            image=mz_old_image,
+            volumes_extra=["secrets:/share/secrets"],
+            external_metadata_store=True,
+            external_minio=True,
+            additional_system_parameter_defaults={
+                "log_filter": "mz_storage::source::postgres=trace,debug,info,warn,error"
+            },
+        )
+
+        mz_new = Materialized(
+            name="materialized",
+            image=mz_new_image,
+            volumes_extra=["secrets:/share/secrets"],
+            external_metadata_store=True,
+            external_minio=True,
+            additional_system_parameter_defaults={
+                "log_filter": "mz_storage::source::postgres=trace,debug,info,warn,error",
+                "force_source_table_syntax": "true",
+            },
+        )
+        with c.override(mz_old, create_postgres(pg_version=pg_version)):
+            c.up("materialized", "test-certs", "postgres")
+
+            print(f"Running {file} with mz_old")
+
+            c.run_testdrive_files(
+                f"--var=ssl-ca={ssl_ca}",
+                f"--var=ssl-cert={ssl_cert}",
+                f"--var=ssl-key={ssl_key}",
+                f"--var=ssl-wrong-cert={ssl_wrong_cert}",
+                f"--var=ssl-wrong-key={ssl_wrong_key}",
+                f"--var=default-replica-size={Materialized.Size.DEFAULT_SIZE}-{Materialized.Size.DEFAULT_SIZE}",
+                f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
+                "--no-reset",
+                file,
+            )
+            c.kill("materialized", wait=True)
+
+            with c.override(mz_new):
+                c.up("materialized")
+
+                print("Running mz_new")
+                verify_sources(c, file)
+
+                c.kill("materialized", wait=True)
+                c.kill("postgres", wait=True)
+                c.kill(METADATA_STORE, wait=True)
+                c.rm("materialized")
+                c.rm(METADATA_STORE)
+                c.rm("postgres")
+                c.rm_volumes("mzdata")
+
+
+def verify_sources(c: Composition, file: str) -> None:
+    source_names = c.sql_query("SELECT name FROM mz_sources WHERE id LIKE 'u%';")
+
+    print(f"Sources created in {file} are: {source_names}")
+
+    for row in source_names:
+        verify_source(c, file, row[0])
+
+
+def verify_source(c: Composition, file: str, source_name: str) -> None:
+    try:
+        print(f"Checking source: {source_name}")
+        # must not crash
+        c.sql_query(f"SELECT count(*) FROM {source_name};")
+
+        result = c.sql_query(f"SHOW CREATE SOURCE {source_name};")
+        sql = result[0][1]
+        assert "FOR TABLE" not in sql, f"FOR TABLE found in: {sql}"
+        assert "FOR ALL TABLES" not in sql, f"FOR ALL TABLES found in: {sql}"
+    except Exception as e:
+        print(f"source-table-migration issue in {file}: {str(e)}")
