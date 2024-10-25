@@ -645,6 +645,36 @@ pub fn plan_create_source(
         "referenced subsources must be cleared in purification"
     );
 
+    // If the new source table syntax is forced all the options related to the primary
+    // source output should be un-set.
+    if scx.catalog.system_vars().enable_create_table_from_source()
+        && scx.catalog.system_vars().force_source_table_syntax()
+    {
+        if envelope.is_some() || format.is_some() || !include_metadata.is_empty() {
+            Err(PlanError::UseTablesForSources(
+                "CREATE SOURCE (ENVELOPE|FORMAT|INCLUDE)".to_string(),
+            ))?;
+        }
+        if with_options
+            .iter()
+            .find(|op| op.name == CreateSourceOptionName::IgnoreKeys)
+            .is_some()
+        {
+            Err(PlanError::UseTablesForSources(
+                "CREATE SOURCE WITH (IGNORE KEYS)".to_string(),
+            ))?;
+        }
+        if with_options
+            .iter()
+            .find(|op| op.name == CreateSourceOptionName::Timeline)
+            .is_some()
+        {
+            Err(PlanError::UseTablesForSources(
+                "CREATE SOURCE WITH (TIMELINE)".to_string(),
+            ))?;
+        }
+    }
+
     let envelope = envelope.clone().unwrap_or(ast::SourceEnvelope::None);
 
     let allowed_with_options = vec![
@@ -1444,6 +1474,16 @@ pub fn plan_create_subsource(
     let desc = plan_source_export_desc(scx, name, columns, constraints)?;
 
     let data_source = if let Some(source_reference) = of_source {
+        // If the new source table syntax is forced we should not be creating any non-progress
+        // subsources.
+        if scx.catalog.system_vars().enable_create_table_from_source()
+            && scx.catalog.system_vars().force_source_table_syntax()
+        {
+            Err(PlanError::UseTablesForSources(
+                "CREATE SUBSOURCE".to_string(),
+            ))?;
+        }
+
         // This is a subsource with the "natural" dependency order, i.e. it is
         // not a legacy subsource with the inverted structure.
         let ingestion_id = *source_reference.item_id();
