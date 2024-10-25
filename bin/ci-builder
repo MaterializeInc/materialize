@@ -191,6 +191,7 @@ case "$cmd" in
             --env PRODUCTION_ANALYTICS_USERNAME
             --env PRODUCTION_ANALYTICS_APP_PASSWORD
             --env PYPI_TOKEN
+            --env RUST_MIN_STACK
             --env MZ_DEV_BUILD_SHA
             # For Miri with nightly Rust
             --env ZOOKEEPER_ADDR
