@@ -5954,8 +5954,26 @@ pub static MZ_INDEX_ADVICE: LazyLock<BuiltinView> = LazyLock::new(|| {
         oid: oid::VIEW_MZ_INDEX_ADVICE_OID,
         column_defs: None,
         sql: "
--- to avoid confusion with sources and sinks in the materialize sense,
--- the following uses the terms leafs (instead of sinks) and roots (instead of sources) when referring to the object dependency graph
+-- To avoid confusion with sources and sinks in the materialize sense,
+-- the following uses the terms leafs (instead of sinks) and roots (instead of sources)
+-- when referring to the object dependency graph.
+--
+-- The basic idea is to walk up the debendency graph to propage the transitive dependencies
+-- of maintained objected upwards. The leaves of the dependency graph are maintained objects
+-- that are not depended on by other maintained objects and have a justification why they must
+-- be maintained (e.g. a materialized view that is depended on by a sink).
+-- Starting from these leaves, the dependencies are propagated upwards towards the roots according
+-- to the object dependencies. Whenever there is a node that is beeing depended on by multiple
+-- downstream objects, that node is marked to be converted into a maintained object and this
+-- node is then propagated further up. Once completed, the list of objects that are marked as
+-- maintained is checked agains all objects to generate appropriate recommendations.
+--
+-- Note that the recommendations only incorporate dependencies between objects.
+-- This can lead to bad recommendations, e.g. filters can no longer be pushed into (or close to)
+-- a sink if an index is added in between the sink and the filter. For very selecive filters,
+-- this can lead to tedundant work: the index is computing stuff only to dicarded by the selective
+-- filter later on. But these kind of aspects cannot be understood by merely looking at the
+-- dependencies.
 WITH MUTUALLY RECURSIVE
     -- for all objects, understand if they have an index on them and on which cluster they are running
     -- this avoids having different cases for views with an index and materialized views later on
@@ -6242,7 +6260,7 @@ WITH MUTUALLY RECURSIVE
     )
 
 SELECT
-    h.id,
+    h.id AS object_id,
     h.hint,
     h.details
 FROM hints_resolved_ids AS h

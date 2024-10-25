@@ -390,6 +390,17 @@ inputs.
 | `replica_id` | [`text`]    | The ID of a cluster replica. |
 | `hydrated`   | [`boolean`] | Whether the object is hydrated on the replica. |
 
+## `mz_index_advice`
+
+TODO: add further context
+
+<!-- RELATION_SPEC mz_internal.mz_index_advice -->
+| Field            | Type        | Meaning  |
+| ---------------  | ----------- | -------- |
+| `object_id`      | [`text`]    | The ID of the object. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), [`mz_catalog.mz_views.id`](../mz_catalog#mz_views). |
+| `recommendation` | [`text`]    | A proposed action to either change the object (e.g. turn a materialized view into an index or vice versa) or keep the object unchanged. |
+| `details`        | [`text`]    | An explanation why the `recommendation` was proposed based on the dependencies of the object. |
+
 ## `mz_materialization_dependencies`
 
 The `mz_materialization_dependencies` view describes the dependency structure between each materialization (materialized view, index, or sink) and the sources of its data.
