@@ -233,6 +233,7 @@ where
                         updates,
                         ts_rewrite,
                         schema_id,
+                        deprecated_schema_id: _,
                     }) => (updates, ts_rewrite, schema_id),
                     other @ RunPart::Many(_) | other @ RunPart::Single(BatchPart::Hollow(_)) => {
                         parts.push(other.clone());
@@ -356,6 +357,7 @@ pub struct BatchBuilderConfig {
     pub(crate) write_diffs_sum: bool,
     pub(crate) encoding_config: EncodingConfig,
     pub(crate) preferred_order: RunOrder,
+    pub(crate) record_schema_id: bool,
     pub(crate) structured_key_lower_len: usize,
     pub(crate) run_length_limit: usize,
     /// The number of runs to cap the built batch at, or None if we should
@@ -393,6 +395,12 @@ pub(crate) const ENCODING_COMPRESSION_FORMAT: Config<&'static str> = Config::new
     "persist_encoding_compression_format",
     "none",
     "A feature flag to enable compression of Parquet data (Materialize).",
+);
+
+pub(crate) const RECORD_SCHEMA_ID: Config<bool> = Config::new(
+    "persist_record_schema_id",
+    false,
+    "If set, record the ID for the shard's schema in Part and Run metadata (Materialize).",
 );
 
 pub(crate) const STRUCTURED_ORDER: Config<bool> = Config::new(
@@ -467,6 +475,7 @@ impl BatchBuilderConfig {
             BatchColumnarFormat::from_str(&BATCH_COLUMNAR_FORMAT.get(value));
         let batch_columnar_format_percent = BATCH_COLUMNAR_FORMAT_PERCENT.get(value);
 
+        let record_schema_id = RECORD_SCHEMA_ID.get(value);
         let structured_order = STRUCTURED_ORDER.get(value) && {
             shard_id.to_string() < STRUCTURED_ORDER_UNTIL_SHARD.get(value)
         };
@@ -493,6 +502,7 @@ impl BatchBuilderConfig {
                 compression: CompressionFormat::from_str(&ENCODING_COMPRESSION_FORMAT.get(value)),
             },
             preferred_order,
+            record_schema_id,
             structured_key_lower_len: STRUCTURED_KEY_LOWER_LEN.get(value),
             run_length_limit: MAX_RUN_LEN.get(value).clamp(2, usize::MAX),
             max_runs: match MAX_RUNS.get(value) {
@@ -737,6 +747,13 @@ where
 
         let batch_delete_enabled = self.parts.cfg.batch_delete_enabled;
         let shard_metrics = Arc::clone(&self.parts.shard_metrics);
+        // If we haven't switched over to the new schema_id field yet, keep writing the old one.
+        let (new_schema_id, deprecated_schema_id) = if self.parts.cfg.record_schema_id {
+            (self.write_schemas.id, None)
+        } else {
+            (None, self.write_schemas.id)
+        };
+
         let runs = self.parts.finish().await;
 
         let mut run_parts = vec![];
@@ -751,7 +768,8 @@ where
             }
             run_meta.push(RunMeta {
                 order: Some(order),
-                schema: self.write_schemas.id,
+                schema: new_schema_id,
+                deprecated_schema: deprecated_schema_id,
             });
             run_parts.extend(parts);
         }
@@ -1023,12 +1041,19 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                 let handle = mz_ore::task::spawn(
                     || "batch::compact_runs",
                     async move {
+                        // If we haven't switched over to the new schema_id field yet, keep writing the old one.
+                        let (new_schema_id, deprecated_schema_id) = if cfg.batch.record_schema_id {
+                            (schemas.id, None)
+                        } else {
+                            (None, schemas.id)
+                        };
                         let runs: Vec<_> = stream::iter(parts)
                             .then(|(order, parts)| async move {
                                 (
                                     RunMeta {
                                         order: Some(order),
-                                        schema: schemas.id,
+                                        schema: new_schema_id,
+                                        deprecated_schema: deprecated_schema_id,
                                     },
                                     parts.into_result().await,
                                 )
@@ -1171,6 +1196,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         // Decide this once per part and plumb it around as necessary so that we
         // use a consistent answer for things like inline threshold.
         let part_write_columnar_data = self.cfg.part_write_columnar_data();
+        let record_schema_id = self.cfg.record_schema_id;
 
         // If we're going to encode structured data then halve our limit since we're storing
         // it twice, once as binary encoded and once as structured.
@@ -1215,10 +1241,18 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                     batch_metrics
                         .step_inline
                         .inc_by(start.elapsed().as_secs_f64());
+                    // If we haven't switched over to the new schema_id field yet, keep writing the old one.
+                    let (new_schema_id, deprecated_schema_id) = if record_schema_id {
+                        (schema_id, None)
+                    } else {
+                        (None, schema_id)
+                    };
+
                     RunPart::Single(BatchPart::Inline {
                         updates,
                         ts_rewrite,
-                        schema_id,
+                        schema_id: new_schema_id,
+                        deprecated_schema_id,
                     })
                 }
                 .instrument(span)
@@ -1445,6 +1479,12 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             }
             stats
         });
+        // If we haven't switched over to the new schema_id field yet, keep writing the old one.
+        let (new_schema_id, deprecated_schema_id) = if cfg.record_schema_id {
+            (schema_id, None)
+        } else {
+            (None, schema_id)
+        };
 
         BatchPart::Hollow(HollowBatchPart {
             key: partial_key,
@@ -1455,7 +1495,8 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             ts_rewrite,
             diffs_sum: cfg.write_diffs_sum.then_some(diffs_sum),
             format: Some(cfg.batch_columnar_format),
-            schema_id,
+            schema_id: new_schema_id,
+            deprecated_schema_id,
         })
     }
 

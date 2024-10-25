@@ -12,6 +12,8 @@
 // making your Proto changes in a release before you populate non-default values,
 // or guard the code changes behind a feature flag.
 
+// buf breaking: ignore (we very carefully evolve these protobuf definitions)
+
 syntax = "proto3";
 
 package mz_persist_client.internal.state;
@@ -55,11 +57,13 @@ message ProtoHollowBatchPart {
     google.protobuf.Empty row = 7;
     uint64 row_and_columnar = 8;
   }
-  optional uint64 schema_id = 9;
+  optional uint64 schema_id = 12;
 
   optional bytes key_stats = 536870906;
-
+  
   reserved 536870907 to 536870911;
+
+  optional uint64 deprecated_schema_id = 9;
 }
 
 message ProtoInlineBatchPart {
@@ -83,7 +87,9 @@ enum ProtoRunOrder {
 // Data that should be common across all parts in a run.
 message ProtoRunMeta {
   ProtoRunOrder order = 1;
-  optional uint64 schema_id = 2;
+  optional uint64 schema_id = 3;
+
+  optional uint64 deprecated_schema_id = 2;
 }
 
 message ProtoHollowRun {
