@@ -366,6 +366,8 @@ impl<T> ShouldTerminateGracefully for StorageError<T> {
             StorageError::ResourceExhausted(_)
             | StorageError::CollectionMetadataAlreadyExists(_)
             | StorageError::PersistShardAlreadyInUse(_)
+            | StorageError::PersistSchemaEvolveRace { .. }
+            | StorageError::PersistInvalidSchemaEvolve { .. }
             | StorageError::TxnWalShardAlreadyExists
             | StorageError::UpdateBeyondUpper(_)
             | StorageError::ReadBeforeSince(_)

@@ -505,7 +505,7 @@ mod tests {
     use crate::cli::admin::info_log_non_zero_metrics;
     use crate::read::ReadHandle;
     use crate::tests::new_test_client;
-    use crate::{Diagnostics, DANGEROUS_ENABLE_SCHEMA_EVOLUTION};
+    use crate::Diagnostics;
 
     use super::*;
 
@@ -653,9 +653,7 @@ mod tests {
 
     #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)]
-    async fn compare_and_evolve_schema(mut dyncfgs: ConfigUpdates) {
-        dyncfgs.add(&DANGEROUS_ENABLE_SCHEMA_EVOLUTION, true);
-
+    async fn compare_and_evolve_schema(dyncfgs: ConfigUpdates) {
         let client = new_test_client(&dyncfgs).await;
         let d = Diagnostics::for_tests();
         let shard_id = ShardId::new();
@@ -742,9 +740,7 @@ mod tests {
 
     #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)]
-    async fn schema_evolution(mut dyncfgs: ConfigUpdates) {
-        dyncfgs.add(&DANGEROUS_ENABLE_SCHEMA_EVOLUTION, true);
-
+    async fn schema_evolution(dyncfgs: ConfigUpdates) {
         async fn snap_streaming(
             as_of: u64,
             read: &mut ReadHandle<Strings, (), u64, i64>,
