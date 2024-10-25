@@ -315,6 +315,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::batch::INLINE_WRITES_SINGLE_MAX_BYTES)
         .add(&crate::batch::ENCODING_ENABLE_DICTIONARY)
         .add(&crate::batch::ENCODING_COMPRESSION_FORMAT)
+        .add(&crate::batch::RECORD_SCHEMA_ID)
         .add(&crate::batch::STRUCTURED_ORDER)
         .add(&crate::batch::STRUCTURED_ORDER_UNTIL_SHARD)
         .add(&crate::batch::STRUCTURED_KEY_LOWER_LEN)
