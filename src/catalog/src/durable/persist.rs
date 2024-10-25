@@ -117,6 +117,8 @@ const CATALOG_SEED: usize = 1;
 const UPGRADE_SEED: usize = 2;
 /// Seed used to generate the persist shard ID for builtin table migrations.
 const BUILTIN_MIGRATION_SEED: usize = 3;
+/// Seed used to generate the persist shard ID for the expression cache.
+const EXPRESSION_CACHE_SEED: usize = 4;
 
 /// Durable catalog mode that dictates the effect of mutable operations.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -1699,6 +1701,12 @@ impl DurableCatalogState for PersistCatalogState {
 /// `organization_id`.
 pub fn builtin_migration_shard_id(organization_id: Uuid) -> ShardId {
     shard_id(organization_id, BUILTIN_MIGRATION_SEED)
+}
+
+/// Deterministically generate an expression cache shard ID for the given
+/// `organization_id`.
+pub fn expression_cache_shard_id(organization_id: Uuid) -> ShardId {
+    shard_id(organization_id, EXPRESSION_CACHE_SEED)
 }
 
 /// Deterministically generate a shard ID for the given `organization_id` and `seed`.

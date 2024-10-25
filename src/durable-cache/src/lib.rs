@@ -10,7 +10,7 @@
 //! The crate provides a durable key-value cache abstraction implemented by persist.
 
 use std::collections::BTreeMap;
-use std::fmt::Debug;
+use std::fmt::{Debug, Formatter};
 use std::hash::Hash;
 use std::sync::Arc;
 
@@ -22,6 +22,7 @@ use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient};
 use mz_persist_types::{Codec, ShardId};
 use timely::progress::Antichain;
+use tracing::debug;
 
 pub trait DurableCacheCodec {
     type Key: Ord + Hash + Clone + Debug;
@@ -37,9 +38,17 @@ pub trait DurableCacheCodec {
     fn decode(key: Self::KeyCodec, val: Self::ValCodec) -> (Self::Key, Self::Val);
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum Error {
-    WriteConflict,
+    WriteConflict(UpperMismatch<u64>),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::WriteConflict(err) => write!(f, "{err}"),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -61,7 +70,10 @@ impl<C: DurableCacheCodec> DurableCache<C> {
                 shard_id,
                 Arc::new(key_schema),
                 Arc::new(val_schema),
-                Diagnostics::from_purpose(&format!("durable persist cache: {purpose}")),
+                Diagnostics {
+                    shard_name: format!("{purpose}_cache"),
+                    handle_purpose: format!("durable persist cache: {purpose}"),
+                },
                 use_critical_since,
             )
             .await
@@ -186,7 +198,9 @@ impl<C: DurableCacheCodec> DurableCache<C> {
     ///
     /// Failures will update the cache and retry until the cache is written successfully.
     pub async fn set(&mut self, key: &C::Key, value: Option<&C::Val>) {
-        while self.try_set(key, value).await.is_err() {}
+        while let Err(err) = self.try_set(key, value).await {
+            debug!("failed to set entry: {err} ... retrying");
+        }
     }
 
     /// Durably set multiple key-value pairs in `entries`. Values of `None` deletes the
@@ -194,7 +208,9 @@ impl<C: DurableCacheCodec> DurableCache<C> {
     ///
     /// Failures will update the cache and retry until the cache is written successfully.
     pub async fn set_many(&mut self, entries: &[(&C::Key, Option<&C::Val>)]) {
-        while self.try_set_many(entries).await.is_err() {}
+        while let Err(err) = self.try_set_many(entries).await {
+            debug!("failed to set entries: {err} ... retrying");
+        }
     }
 
     /// Tries to durably set `key` to `value`. A `value` of `None` deletes the entry from the cache.
@@ -247,8 +263,8 @@ impl<C: DurableCacheCodec> DurableCache<C> {
                 Ok(())
             }
             Err(err) => {
-                self.sync_to(err.current.into_option()).await;
-                Err(Error::WriteConflict)
+                self.sync_to(err.current.clone().into_option()).await;
+                Err(Error::WriteConflict(err))
             }
         }
     }
