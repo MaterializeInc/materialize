@@ -3701,7 +3701,7 @@ pub(crate) mod tests {
     fn state_inspect_serde_json() {
         const STATE_SERDE_JSON: &str = include_str!("state_serde.json");
         let mut runner = proptest::test_runner::TestRunner::deterministic();
-        let tree = any_state::<u64>(5..6).new_tree(&mut runner).unwrap();
+        let tree = any_state::<u64>(6..8).new_tree(&mut runner).unwrap();
         let json = serde_json::to_string_pretty(&tree.current()).unwrap();
         assert_eq!(
             json.trim(),
