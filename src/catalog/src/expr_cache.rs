@@ -16,9 +16,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::sync::Arc;
 
-use mz_compute_types::dataflows::{DataflowDescription, DataflowExpirationDesc};
+use mz_compute_types::dataflows::DataflowDescription;
 use mz_durable_cache::{DurableCache, DurableCacheCodec};
-use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
+use mz_expr::OptimizedMirRelationExpr;
 use mz_ore::channel::trigger;
 use mz_ore::task::spawn;
 use mz_persist_client::PersistClient;
@@ -26,17 +26,13 @@ use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::Codec;
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::optimize::OptimizerFeatures;
-use mz_repr::{GlobalId, RelationDesc, RelationType, ScalarType};
+use mz_repr::{GlobalId, RelationDesc, ScalarType};
 use mz_storage_types::sources::SourceData;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::OptimizerNotice;
-use proptest::arbitrary::{any, Arbitrary};
-use proptest::prelude::BoxedStrategy;
-use proptest::strategy::Strategy;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
-use timely::progress::Antichain;
 use timely::Container;
 use tokio::sync::mpsc;
 use tracing::debug;
@@ -132,9 +128,9 @@ struct ExpressionCache {
 }
 
 impl ExpressionCache {
-    /// Creates a new [`ExpressionCache`] and reconciles all entries in current deploy generation
-    /// with the current objects, `current_ids`, and current optimizer features,
-    /// `optimizer_features`.
+    /// Creates a new [`ExpressionCache`] and reconciles all entries in current deploy generation.
+    /// Reconcilliation will remove all entries that are not in `current_ids` and remove all
+    /// entries that have optimizer features that are not equal to `optimizer_features`.
     ///
     /// If `remove_prior_gens` is `true`, all previous generations are durably removed from the
     /// cache.
@@ -151,7 +147,7 @@ impl ExpressionCache {
         }: ExpressionCacheConfig<'_>,
     ) -> (Self, BTreeMap<GlobalId, Expressions>) {
         let shard_id = expression_cache_shard_id(organization_id);
-        let durable_cache = DurableCache::new(persist, shard_id, "expression cache").await;
+        let durable_cache = DurableCache::new(persist, shard_id, "expressions").await;
         let mut cache = Self {
             deploy_generation,
             durable_cache,
@@ -301,74 +297,80 @@ impl ExpressionCacheHandle {
     }
 }
 
-impl Arbitrary for Expressions {
-    type Parameters = ();
-    fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
-        // It would be better to implement `Arbitrary for these types, but that would be extremely
-        // painful, so we just manually construct very simple instances.
-        let local_mir = OptimizedMirRelationExpr(MirRelationExpr::Constant {
-            rows: Ok(Vec::new()),
-            typ: RelationType::empty(),
-        });
-        let global_mir = DataflowDescription::new("gmir".to_string());
-        let physical_plan = DataflowDescription {
-            source_imports: Default::default(),
-            index_imports: Default::default(),
-            objects_to_build: Vec::new(),
-            index_exports: Default::default(),
-            sink_exports: Default::default(),
-            as_of: Default::default(),
-            until: Antichain::new(),
-            initial_storage_as_of: None,
-            refresh_schedule: None,
-            debug_name: "pp".to_string(),
-            dataflow_expiration_desc: DataflowExpirationDesc::default(),
-        };
-
-        let dataflow_metainfos = any::<DataflowMetainfo<Arc<OptimizerNotice>>>();
-        let notices = any::<[Arc<OptimizerNotice>; 4]>();
-        let optimizer_feature = any::<OptimizerFeatures>();
-
-        (dataflow_metainfos, notices, optimizer_feature)
-            .prop_map(move |(dataflow_metainfos, notices, optimizer_feature)| {
-                let local_mir = local_mir.clone();
-                let global_mir = global_mir.clone();
-                let physical_plan = physical_plan.clone();
-                let notices = SmallVec::from_const(notices);
-                Expressions {
-                    local_mir,
-                    global_mir,
-                    physical_plan,
-                    dataflow_metainfos,
-                    notices,
-                    optimizer_features: optimizer_feature,
-                }
-            })
-            .boxed()
-    }
-
-    type Strategy = BoxedStrategy<Self>;
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
+    use std::sync::Arc;
 
+    use mz_compute_types::dataflows::{DataflowDescription, DataflowExpirationDesc};
     use mz_durable_cache::DurableCacheCodec;
+    use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
     use mz_persist_client::PersistClient;
     use mz_repr::optimize::OptimizerFeatures;
-    use mz_repr::GlobalId;
-    use proptest::arbitrary::any;
-    use proptest::arbitrary::Arbitrary;
-    use proptest::prelude::ProptestConfig;
+    use mz_repr::{GlobalId, RelationType};
+    use mz_transform::dataflow::DataflowMetainfo;
+    use mz_transform::notice::OptimizerNotice;
+    use proptest::arbitrary::{any, Arbitrary};
+    use proptest::prelude::{BoxedStrategy, ProptestConfig};
     use proptest::proptest;
     use proptest::strategy::Strategy;
     use proptest::test_runner::TestRunner;
+    use smallvec::SmallVec;
+    use timely::progress::Antichain;
     use uuid::Uuid;
 
     use crate::expr_cache::{
         CacheKey, ExpressionCacheConfig, ExpressionCacheHandle, ExpressionCodec, Expressions,
     };
+
+    impl Arbitrary for Expressions {
+        type Parameters = ();
+        fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
+            // It would be better to implement `Arbitrary for these types, but that would be extremely
+            // painful, so we just manually construct very simple instances.
+            let local_mir = OptimizedMirRelationExpr(MirRelationExpr::Constant {
+                rows: Ok(Vec::new()),
+                typ: RelationType::empty(),
+            });
+            let global_mir = DataflowDescription::new("gmir".to_string());
+            let physical_plan = DataflowDescription {
+                source_imports: Default::default(),
+                index_imports: Default::default(),
+                objects_to_build: Vec::new(),
+                index_exports: Default::default(),
+                sink_exports: Default::default(),
+                as_of: Default::default(),
+                until: Antichain::new(),
+                initial_storage_as_of: None,
+                refresh_schedule: None,
+                debug_name: "pp".to_string(),
+                dataflow_expiration_desc: DataflowExpirationDesc::default(),
+            };
+
+            let dataflow_metainfos = any::<DataflowMetainfo<Arc<OptimizerNotice>>>();
+            let notices = any::<[Arc<OptimizerNotice>; 4]>();
+            let optimizer_feature = any::<OptimizerFeatures>();
+
+            (dataflow_metainfos, notices, optimizer_feature)
+                .prop_map(move |(dataflow_metainfos, notices, optimizer_feature)| {
+                    let local_mir = local_mir.clone();
+                    let global_mir = global_mir.clone();
+                    let physical_plan = physical_plan.clone();
+                    let notices = SmallVec::from_const(notices);
+                    Expressions {
+                        local_mir,
+                        global_mir,
+                        physical_plan,
+                        dataflow_metainfos,
+                        notices,
+                        optimizer_features: optimizer_feature,
+                    }
+                })
+                .boxed()
+        }
+
+        type Strategy = BoxedStrategy<Self>;
+    }
 
     fn generate_expressions() -> Expressions {
         Expressions::arbitrary()

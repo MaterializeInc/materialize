@@ -70,7 +70,10 @@ impl<C: DurableCacheCodec> DurableCache<C> {
                 shard_id,
                 Arc::new(key_schema),
                 Arc::new(val_schema),
-                Diagnostics::from_purpose(&format!("durable persist cache: {purpose}")),
+                Diagnostics {
+                    shard_name: format!("{purpose}_cache"),
+                    handle_purpose: format!("durable persist cache: {purpose}"),
+                },
                 use_critical_since,
             )
             .await
