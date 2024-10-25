@@ -277,7 +277,7 @@ fn ast_rewrite_sources_to_tables(
                 let raw_source_name = match of_source {
                     // If `of_source` is None then this is a `progress` subsource which we
                     // are not migrating as they are not currently relevant to the new table model.
-                    None => return Ok(()),
+                    None => continue,
                     Some(name) => name,
                 };
                 let source = match raw_source_name {
@@ -300,21 +300,17 @@ fn ast_rewrite_sources_to_tables(
 
                 // The external reference is a `with_option` on subsource statements but is a
                 // separate field on table statements.
-                let mut i = 0;
-                let external_reference = loop {
-                    if i >= with_options.len() {
-                        panic!("subsource must have an external reference");
-                    }
-                    if with_options[i].name == CreateSubsourceOptionName::ExternalReference {
-                        let option = with_options.remove(i);
-                        match option.value {
-                            Some(WithOptionValue::UnresolvedItemName(name)) => break name,
-                            _ => unreachable!("external reference must be an unresolved item name"),
-                        };
-                    } else {
-                        i += 1;
-                    }
+                let external_reference = match with_options
+                    .iter()
+                    .position(|opt| opt.name == CreateSubsourceOptionName::ExternalReference)
+                {
+                    Some(i) => match with_options.remove(i).value {
+                        Some(WithOptionValue::UnresolvedItemName(name)) => name,
+                        _ => unreachable!("external reference must be an unresolved item name"),
+                    },
+                    None => panic!("subsource must have an external reference"),
                 };
+
                 let with_options = with_options
                     .into_iter()
                     .map(|option| {
@@ -337,8 +333,7 @@ fn ast_rewrite_sources_to_tables(
                                 panic!("progress option should not exist on this subsource")
                             }
                             CreateSubsourceOptionName::ExternalReference => {
-                                // This option is handled separately above.
-                                unreachable!()
+                                unreachable!("This option is handled separately above.")
                             }
                         }
                     })
@@ -591,30 +586,26 @@ fn ast_rewrite_sources_to_tables(
                 }];
 
                 // Move over the IgnoreKeys option if it exists.
-                let mut i = 0;
-                while i < with_options.len() {
-                    if with_options[i].name == CreateSourceOptionName::IgnoreKeys {
-                        let option = with_options.remove(i);
-                        table_with_options.push(TableFromSourceOption {
-                            name: TableFromSourceOptionName::IgnoreKeys,
-                            value: option.value,
-                        });
-                    } else {
-                        i += 1;
-                    }
-                }
+                if let Some(i) = with_options
+                    .iter()
+                    .position(|opt| opt.name == CreateSourceOptionName::IgnoreKeys)
+                {
+                    let option = with_options.remove(i);
+                    table_with_options.push(TableFromSourceOption {
+                        name: TableFromSourceOptionName::IgnoreKeys,
+                        value: option.value,
+                    });
+                };
                 // Move over the Timeline option if it exists.
-                i = 0;
-                while i < with_options.len() {
-                    if with_options[i].name == CreateSourceOptionName::Timeline {
-                        let option = with_options.remove(i);
-                        table_with_options.push(TableFromSourceOption {
-                            name: TableFromSourceOptionName::Timeline,
-                            value: option.value,
-                        });
-                    } else {
-                        i += 1;
-                    }
+                if let Some(i) = with_options
+                    .iter()
+                    .position(|opt| opt.name == CreateSourceOptionName::Timeline)
+                {
+                    let option = with_options.remove(i);
+                    table_with_options.push(TableFromSourceOption {
+                        name: TableFromSourceOptionName::Timeline,
+                        value: option.value,
+                    });
                 }
 
                 // Generate the same external-reference that would have been generated
