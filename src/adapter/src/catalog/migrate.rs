@@ -38,7 +38,8 @@ where
 
     for mut item in tx.get_items() {
         let mut stmt = mz_sql::parse::parse(&item.create_sql)?.into_element().ast;
-        f(tx, item.id, &mut stmt).await?;
+        // TODO(alter_table): Switch this to CatalogItemId.
+        f(tx, item.global_id, &mut stmt).await?;
         item.create_sql = stmt.to_ast_string_stable();
 
         updated_items.insert(item.global_id, item);
@@ -303,7 +304,7 @@ fn ast_rewrite_sources_to_tables(
                                 _ => false,
                             })
                             .expect("source must exist");
-                        RawItemName::Id(source_item.id.to_string(), name, None)
+                        RawItemName::Id(source_item.global_id.to_string(), name, None)
                     }
                     RawItemName::Id(..) => raw_source_name,
                 };
@@ -368,7 +369,7 @@ fn ast_rewrite_sources_to_tables(
                     item.create_sql, table
                 );
                 item.create_sql = Statement::CreateTableFromSource(table).to_ast_string_stable();
-                tx.update_item(item.id, item)?;
+                tx.update_item(item.global_id, item)?;
             }
 
             // Postgres sources are multi-output sources whose subsources are
@@ -419,7 +420,7 @@ fn ast_rewrite_sources_to_tables(
                         progress_subsource,
                     });
                     item.create_sql = stmt.to_ast_string_stable();
-                    tx.update_item(item.id, item)?;
+                    tx.update_item(item.global_id, item)?;
                     info!("migrate: converted postgres source {stmt} to remove subsource options");
                 }
             }
@@ -477,7 +478,7 @@ fn ast_rewrite_sources_to_tables(
                         progress_subsource,
                     });
                     item.create_sql = stmt.to_ast_string_stable();
-                    tx.update_item(item.id, item)?;
+                    tx.update_item(item.global_id, item)?;
                     info!("migrate: converted mysql source {stmt} to remove subsource options");
                 }
             }
@@ -538,7 +539,7 @@ fn ast_rewrite_sources_to_tables(
                                         source_id.parse().expect("valid id")
                                     }
                                 };
-                                source == item.id
+                                source == item.global_id
                             }
                             _ => false,
                         });
@@ -585,7 +586,7 @@ fn ast_rewrite_sources_to_tables(
 
                 // A reference to the source that will be included in the table statement
                 let source_ref =
-                    RawItemName::Id(item.id.to_string(), new_source_name.clone(), None);
+                    RawItemName::Id(item.global_id.to_string(), new_source_name.clone(), None);
 
                 let columns = if col_names.is_empty() {
                     TableFromSourceColumns::NotSpecified
@@ -698,7 +699,7 @@ fn ast_rewrite_sources_to_tables(
                     progress_subsource,
                 };
 
-                let source_id = item.id;
+                let source_id = item.global_id;
                 let schema_id = item.schema_id.clone();
                 let schema = tx.get_schema(&item.schema_id).expect("schema must exist");
 
@@ -709,7 +710,7 @@ fn ast_rewrite_sources_to_tables(
                 // otherwise conflict with the new table statement.
                 info!("migrate: updated source {} to {source}", item.create_sql);
                 item.create_sql = Statement::CreateSource(source).to_ast_string_stable();
-                tx.update_item(item.id, item)?;
+                tx.update_item(item.global_id, item)?;
 
                 // Insert the new table statement into the catalog with a new id.
                 let ids = tx.allocate_user_item_ids(1)?;
@@ -785,7 +786,7 @@ fn ast_rewrite_sources_to_tables(
             _ => {
                 if mz_sql::names::modify_dependency_item_ids(&mut statement, &changed_ids) {
                     item.create_sql = statement.to_ast_string_stable();
-                    updated_items.insert(item.id, item);
+                    updated_items.insert(item.global_id, item);
                 }
             }
         }
