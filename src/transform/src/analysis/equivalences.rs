@@ -545,6 +545,24 @@ impl EquivalenceClasses {
                     }
                 });
             }
+
+            for expr in class.iter() {
+                // Record-building expressions introduce equivalences between their members and accessors of this.
+                if let MirScalarExpr::CallVariadic {
+                    func: mz_expr::VariadicFunc::RecordCreate { .. },
+                    exprs,
+                } = expr
+                {
+                    for (index, e) in exprs.iter().enumerate() {
+                        to_add.push(vec![
+                            e.clone(),
+                            expr.clone().call_unary(mz_expr::UnaryFunc::RecordGet(
+                                mz_expr::func::RecordGet(index),
+                            )),
+                        ]);
+                    }
+                }
+            }
         }
         self.classes.extend(to_add);
 
