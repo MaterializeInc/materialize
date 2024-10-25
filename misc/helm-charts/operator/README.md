@@ -98,7 +98,7 @@ Network policies can be enabled by setting `networkPolicies.enabled=true`. By de
 If you encounter issues with the Materialize operator, check the operator logs:
 
 ```shell
-kubectl logs -l app.kubernetes.io/name=materialize-operator
+kubectl logs -l app.kubernetes.io/name=materialize-operator -n materialize
 ```
 
 For more detailed information on using and troubleshooting the Materialize operator, refer to the [Materialize documentation](https://materialize.com/docs).
