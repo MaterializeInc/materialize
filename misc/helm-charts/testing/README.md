@@ -32,15 +32,16 @@ This directory contains simple examples for deploying MinIO, PostgreSQL, and Red
     kubectl get pods -w
     ```
 
-3. (Optional) Create a bucket in MinIO:
+3. (Optional) Create a bucket in MinIO (replace `minio-123456-abcdef` with the actual pod name):
 
     ```bash
     kubectl exec -it minio-123456-abcdef -n materialize -- /bin/sh
     mc alias set local http://localhost:9000 minio minio123
     mc mb local/bucket
+    exit
     ```
 
-## Optional: Node labels for ephemeral storage
+## Node labels for ephemeral storage
 
 When running Materialize locally on Kubernetes (e.g., Docker Desktop, Minikube, Kind), specific node labels need to be added to ensure that pods are scheduled correctly. These labels are required for the pod to satisfy node affinity rules defined in the deployment.
 
@@ -75,7 +76,7 @@ If you get TLS errors, you can disable TLS by editing the `metrics-server` deplo
 kubectl edit deployment metrics-server -n kube-system
 ```
 
-Look for the args section in the deployment and add the following:
+Then, look for the args section in the deployment and add the following:
 
 ```yml
     args:
@@ -86,7 +87,7 @@ Look for the args section in the deployment and add the following:
 Get the metrics server pod status:
 
 ```sh
-kubectl get pods -n kube-system
+kubectl get pods -n kube-system | grep metrics-server
 ```
 
 ## Notes

@@ -14,6 +14,8 @@ This Helm chart deploys a single Materialize environment on a Kubernetes cluster
 
 ## Installing the Chart
 
+Make sure that the namespace configured in `values.yaml` in `namespace.name` (default: `materialize-environment`) exists or that `namespace.create` is set to `true`.
+
 To install the chart for a production environment:
 
 ```shell
