@@ -36,11 +36,12 @@ where
 
     for mut item in tx.get_items() {
         let mut stmt = mz_sql::parse::parse(&item.create_sql)?.into_element().ast;
-        f(tx, item.id, &mut stmt).await?;
+        // TODO(alter_table): Switch this to CatalogItemId.
+        f(tx, item.global_id, &mut stmt).await?;
 
         item.create_sql = stmt.to_ast_string_stable();
 
-        updated_items.insert(item.id, item);
+        updated_items.insert(item.global_id, item);
     }
     tx.update_items(updated_items)?;
     Ok(())
@@ -63,12 +64,12 @@ where
     let items = tx.get_items();
     for mut item in items {
         let mut stmt = mz_sql::parse::parse(&item.create_sql)?.into_element().ast;
-
-        f(tx, &cat, item.id, &mut stmt).await?;
+        // TODO(alter_table): Switch this to CatalogItemId.
+        f(tx, &cat, item.global_id, &mut stmt).await?;
 
         item.create_sql = stmt.to_ast_string_stable();
 
-        updated_items.insert(item.id, item);
+        updated_items.insert(item.global_id, item);
     }
     tx.update_items(updated_items)?;
     Ok(())

@@ -211,7 +211,8 @@ async fn migrate_builtin_items_0dt(
                     object_name: entry.name().item.clone(),
                 },
                 unique_identifier: SystemObjectUniqueIdentifier {
-                    id: *id,
+                    catalog_id: id.to_item_id(),
+                    global_id: *id,
                     fingerprint: fingerprint.clone(),
                 },
             },

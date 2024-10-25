@@ -516,7 +516,7 @@ impl CatalogState {
         diff: StateDiff,
         retractions: &mut InProgressRetractions,
     ) {
-        let id = system_object_mapping.unique_identifier.id;
+        let id = system_object_mapping.unique_identifier.global_id;
 
         if system_object_mapping.unique_identifier.runtime_alterable() {
             // Runtime-alterable system objects have real entries in the items
@@ -871,13 +871,15 @@ impl CatalogState {
             StateDiff::Addition => {
                 let key = item.key();
                 let mz_catalog::durable::Item {
-                    id,
+                    id: _,
                     oid,
                     schema_id,
                     name,
                     create_sql,
                     owner_id,
                     privileges,
+                    global_id,
+                    extra_versions: _,
                 } = item;
                 let schema = self.find_non_temp_schema(&schema_id);
                 let name = QualifiedItemName {
@@ -889,18 +891,23 @@ impl CatalogState {
                 };
                 let entry = match retractions.items.remove(&key) {
                     Some(mut retraction) => {
-                        assert_eq!(retraction.id, item.id);
+                        // TODO(alter_table): Switch this to CatalogItemId.
+                        assert_eq!(retraction.id, item.global_id);
                         // We only reparse the SQL if it's changed. Otherwise, we use the existing
                         // item. This is a performance optimization and not needed for correctness.
                         // This makes it difficult to use the `UpdateFrom` trait, but the structure
                         // is still the same as the trait.
+                        //
+                        // TODO(alter_table): Switch this to CatalogItemId.
                         if retraction.create_sql() != create_sql {
-                            let item = self.deserialize_item(id, &create_sql).unwrap_or_else(|e| {
-                                panic!("{e:?}: invalid persisted SQL: {create_sql}")
-                            });
+                            let item = self
+                                .deserialize_item(global_id, &create_sql)
+                                .unwrap_or_else(|e| {
+                                    panic!("{e:?}: invalid persisted SQL: {create_sql}")
+                                });
                             retraction.item = item;
                         }
-                        retraction.id = id;
+                        retraction.id = global_id;
                         retraction.oid = oid;
                         retraction.name = name;
                         retraction.owner_id = owner_id;
@@ -909,15 +916,17 @@ impl CatalogState {
                         retraction
                     }
                     None => {
-                        let catalog_item =
-                            self.deserialize_item(id, &create_sql).unwrap_or_else(|e| {
+                        // TODO(alter_table): Switch this to CatalogItemId.
+                        let catalog_item = self
+                            .deserialize_item(global_id, &create_sql)
+                            .unwrap_or_else(|e| {
                                 panic!("{e:?}: invalid persisted SQL: {create_sql}")
                             });
                         CatalogEntry {
                             item: catalog_item,
                             referenced_by: Vec::new(),
                             used_by: Vec::new(),
-                            id,
+                            id: global_id,
                             oid,
                             name,
                             owner_id,
@@ -939,7 +948,8 @@ impl CatalogState {
                 self.insert_entry(entry);
             }
             StateDiff::Retraction => {
-                let entry = self.drop_item(item.id);
+                // TODO(alter_table): Switch this to CatalogItemId.
+                let entry = self.drop_item(item.global_id);
                 let key = item.into_key_value().0;
                 retractions.items.insert(key, entry);
             }
@@ -990,16 +1000,19 @@ impl CatalogState {
     ) {
         match diff {
             StateDiff::Addition => {
-                let prev = self
-                    .source_references
-                    .insert(source_references.source_id, source_references.into());
+                let prev = self.source_references.insert(
+                    source_references.source_id.to_global_id(),
+                    source_references.into(),
+                );
                 assert!(
                     prev.is_none(),
                     "values must be explicitly retracted before inserting a new value: {prev:?}"
                 );
             }
             StateDiff::Retraction => {
-                let prev = self.source_references.remove(&source_references.source_id);
+                let prev = self
+                    .source_references
+                    .remove(&source_references.source_id.to_global_id());
                 assert!(
                     prev.is_some(),
                     "retraction for a non-existent existing value: {source_references:?}"
@@ -1121,13 +1134,13 @@ impl CatalogState {
                 // items collection and so get handled through the normal
                 // `StateUpdateKind::Item`.`
                 if !system_object_mapping.unique_identifier.runtime_alterable() {
-                    self.pack_item_update(system_object_mapping.unique_identifier.id, diff)
+                    self.pack_item_update(system_object_mapping.unique_identifier.global_id, diff)
                 } else {
                     vec![]
                 }
             }
             StateUpdateKind::TemporaryItem(item) => self.pack_item_update(item.id, diff),
-            StateUpdateKind::Item(item) => self.pack_item_update(item.id, diff),
+            StateUpdateKind::Item(item) => self.pack_item_update(item.global_id, diff),
             StateUpdateKind::Comment(comment) => vec![self.pack_comment_update(
                 comment.object_id,
                 comment.sub_component,
@@ -1720,7 +1733,8 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
                 if item.create_sql.starts_with("CREATE SINK") {
                     GlobalId::User(u64::MAX)
                 } else {
-                    item.id
+                    // TODO(alter_table): Switch this to CatalogItemId.
+                    item.global_id
                 }
             })
             .collect()
@@ -1757,14 +1771,16 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
         while let (Some((item, _, _)), Some((temp_item, _, _))) =
             (item_updates.front(), temp_item_updates.front())
         {
-            if item.id < temp_item.id {
+            // TODO(alter_table): Switch this to CatalogItemId.
+            if item.global_id < temp_item.id {
                 let (item, ts, diff) = item_updates.pop_front().expect("non-empty");
                 state_updates.push(StateUpdate {
                     kind: StateUpdateKind::Item(item),
                     ts,
                     diff,
                 });
-            } else if item.id > temp_item.id {
+            // TODO(alter_table): Switch this to CatalogItemId.
+            } else if item.global_id > temp_item.id {
                 let (temp_item, ts, diff) = temp_item_updates.pop_front().expect("non-empty");
                 state_updates.push(StateUpdate {
                     kind: StateUpdateKind::TemporaryItem(temp_item),
@@ -2009,5 +2025,5 @@ fn lookup_builtin_view_addition(
     let (_, builtin) = BUILTIN_LOOKUP
         .get(&system_object_mapping.description)
         .expect("missing builtin view");
-    (*builtin, system_object_mapping.unique_identifier.id)
+    (*builtin, system_object_mapping.unique_identifier.global_id)
 }

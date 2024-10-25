@@ -511,7 +511,7 @@ impl From<SourceReference> for durable::SourceReference {
 impl SourceReferences {
     pub fn to_durable(self, source_id: GlobalId) -> durable::SourceReferences {
         durable::SourceReferences {
-            source_id,
+            source_id: source_id.to_item_id(),
             updated_at: self.updated_at,
             references: self.references.into_iter().map(Into::into).collect(),
         }
@@ -622,14 +622,17 @@ pub enum CatalogItem {
 
 impl From<CatalogEntry> for durable::Item {
     fn from(entry: CatalogEntry) -> durable::Item {
+        let global_id = entry.id();
         durable::Item {
-            id: entry.id,
+            id: global_id.to_item_id(),
             oid: entry.oid,
             schema_id: entry.name.qualifiers.schema_spec.into(),
             name: entry.name.item,
             create_sql: entry.item.into_serialized(),
             owner_id: entry.owner_id,
             privileges: entry.privileges.into_all_values().collect(),
+            global_id,
+            extra_versions: BTreeMap::new(),
         }
     }
 }
