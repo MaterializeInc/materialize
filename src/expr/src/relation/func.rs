@@ -881,9 +881,9 @@ where
         .map(|d| {
             let mut iter = d.unwrap_list().iter();
             let original_row = iter.next().unwrap();
-            let input_value = iter.next().unwrap();
+            let arg = iter.next().unwrap();
 
-            (original_row, input_value)
+            (original_row, arg)
         })
         .unzip();
 
@@ -1005,10 +1005,10 @@ where
     for (d, order_by_row) in datums.into_iter() {
         let mut iter = d.unwrap_list().iter();
         let original_row = iter.next().unwrap();
-        let input_value = iter.next().unwrap();
+        let arg = iter.next().unwrap();
         order_by_rows.push(order_by_row);
         original_rows.push(original_row);
-        args.push(input_value);
+        args.push(arg);
     }
 
     let results = last_value_inner(args, &order_by_rows, window_frame);
@@ -1207,8 +1207,8 @@ where
             }
             _ => panic!("unknown window function in FusedValueWindowFunc"),
         };
-        for (i, r) in results.into_iter().enumerate() {
-            results_per_row[i].push(r);
+        for (results, result) in results_per_row.iter_mut().zip_eq(results) {
+            results.push(result);
         }
     }
 
@@ -1284,10 +1284,10 @@ where
     for (d, order_by_row) in datums.into_iter() {
         let mut iter = d.unwrap_list().iter();
         let original_row = iter.next().unwrap();
-        let input_value = iter.next().unwrap();
+        let arg = iter.next().unwrap();
         order_by_rows.push(order_by_row);
         original_rows.push(original_row);
-        args.push(input_value);
+        args.push(arg);
     }
 
     let results = window_aggr_inner::<A>(
@@ -1691,10 +1691,10 @@ where
         let mut iter = d.unwrap_list().iter();
         let original_row = iter.next().unwrap();
         original_rows.push(original_row);
-        let mut args_iter = iter.next().unwrap().unwrap_list().iter();
-        for i in 0..wrapped_aggregates.len() {
-            let arg = args_iter.next().unwrap();
-            argss[i].push(arg);
+        let args_iter = iter.next().unwrap().unwrap_list().iter();
+        // Push each argument into the respective list
+        for (args, arg) in argss.iter_mut().zip_eq(args_iter) {
+            args.push(arg);
         }
         order_by_rows.push(order_by_row);
     }
@@ -1710,8 +1710,8 @@ where
             window_frame,
             callers_temp_storage,
         );
-        for (i, r) in results.into_iter().enumerate() {
-            results_per_row[i].push(r);
+        for (results, result) in results_per_row.iter_mut().zip_eq(results) {
+            results.push(result);
         }
     }
 
@@ -2849,7 +2849,7 @@ impl AggregateFunc {
                     .nullable(false);
                 let args_type = fields[0].unwrap_record_element_type()[1];
                 let arg_types = args_type.unwrap_record_element_type();
-                let out_fields = arg_types.iter().zip(wrapped_aggregates).map(|(arg_type, wrapped_agg)| {
+                let out_fields = arg_types.iter().zip_eq(wrapped_aggregates).map(|(arg_type, wrapped_agg)| {
                     (
                         ColumnName::from(wrapped_agg.name()),
                         wrapped_agg.output_type((**arg_type).clone().nullable(true)),

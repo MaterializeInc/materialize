@@ -2484,7 +2484,9 @@ impl AggregateExpr {
         }
     }
 
-    /// Extracts unique input from aggregate type
+    /// Returns an expression that computes `self` on a group that has exactly one row.
+    /// Instead of performing a `Reduce` with `self`, one can perform a `Map` with the expression
+    /// returned by `on_unique`, which is cheaper. (See `ReduceElision`.)
     pub fn on_unique(&self, input_type: &[ColumnType]) -> MirScalarExpr {
         match &self.func {
             // Count is one if non-null, and zero if null.
@@ -3089,7 +3091,7 @@ impl AggregateExpr {
         return_type: ScalarType,
         wrapped_aggr: &AggregateFunc,
     ) -> (MirScalarExpr, ColumnName) {
-        // If the window frame includes the current (single) row, evaluate the aggregate on
+        // If the window frame includes the current (single) row, evaluate the wrapped aggregate on
         // that row. Otherwise, return the default value for the aggregate.
         let result_expr = if window_frame.includes_current_row() {
             AggregateExpr {
