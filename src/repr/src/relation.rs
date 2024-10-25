@@ -124,6 +124,78 @@ impl ColumnType {
         self.nullable = nullable;
         self
     }
+
+    /// Returns the [`TypeDiff`] between two [`ColumnType`]s.
+    pub fn diff(&self, other: &ColumnType) -> TypeDiff {
+        fn diff_scalar_type(a: &ScalarType, b: &ScalarType) -> TypeDiff {
+            match (a, b) {
+                (ScalarType::Array(a_ty), ScalarType::Array(b_ty))
+                | (
+                    ScalarType::List {
+                        element_type: a_ty, ..
+                    },
+                    ScalarType::List {
+                        element_type: b_ty, ..
+                    },
+                )
+                | (
+                    ScalarType::Map {
+                        value_type: a_ty, ..
+                    },
+                    ScalarType::Map {
+                        value_type: b_ty, ..
+                    },
+                )
+                | (
+                    ScalarType::Range {
+                        element_type: a_ty, ..
+                    },
+                    ScalarType::Range {
+                        element_type: b_ty, ..
+                    },
+                ) => diff_scalar_type(a_ty, b_ty),
+                (
+                    ScalarType::Record {
+                        fields: a_fields, ..
+                    },
+                    ScalarType::Record {
+                        fields: b_fields, ..
+                    },
+                ) if a_fields.len() == b_fields.len() => a_fields
+                    .iter()
+                    .zip(b_fields.iter())
+                    .map(|((a_name, a_ty), (b_name, b_ty))| {
+                        let name_diff = if a_name != b_name {
+                            TypeDiff::Structural
+                        } else {
+                            TypeDiff::None
+                        };
+                        let ty_diff = ColumnType::diff(a_ty, b_ty);
+
+                        std::cmp::max(name_diff, ty_diff)
+                    })
+                    .max()
+                    // If there are no inner fields then there is no diff.
+                    .unwrap_or(TypeDiff::None),
+                (a, b) => {
+                    if a != b {
+                        TypeDiff::Structural
+                    } else {
+                        TypeDiff::None
+                    }
+                }
+            }
+        }
+
+        let nullability_diff = if self.nullable != other.nullable {
+            TypeDiff::Nullability
+        } else {
+            TypeDiff::None
+        };
+        let structural_diff = diff_scalar_type(&self.scalar_type, &other.scalar_type);
+
+        std::cmp::max(nullability_diff, structural_diff)
+    }
 }
 
 impl RustType<ProtoColumnType> for ColumnType {
@@ -149,6 +221,19 @@ impl fmt::Display for ColumnType {
         let nullable = if self.nullable { "Null" } else { "NotNull" };
         f.write_fmt(format_args!("{:?}:{}", self.scalar_type, nullable))
     }
+}
+
+/// How two types compare.
+/// 
+/// Note: Variant ordering matters!
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum TypeDiff {
+    /// Both are exactly the same.
+    None,
+    /// Differs only by nullability.
+    Nullability,
+    /// Different types, names, or nested types.
+    Structural,
 }
 
 /// The type of a relation.
@@ -799,6 +884,28 @@ impl RelationDesc {
         } else {
             Ok(())
         }
+    }
+
+    /// Returns the [`TypeDiff`] between two [`RelationDesc`]s.
+    pub fn diff(&self, other: &RelationDesc) -> TypeDiff {
+        if self.typ().arity() != other.typ().arity() {
+            return TypeDiff::Structural;
+        }
+
+        self.iter()
+            .zip(other.iter())
+            .map(|((a_name, a_ty), (b_name, b_ty))| {
+                let name_diff = if a_name != b_name {
+                    TypeDiff::Structural
+                } else {
+                    TypeDiff::None
+                };
+                let ty_diff = ColumnType::diff(a_ty, b_ty);
+
+                std::cmp::max(name_diff, ty_diff)
+            })
+            .max()
+            .unwrap_or(TypeDiff::None)
     }
 }
 

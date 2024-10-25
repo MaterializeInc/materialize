@@ -2567,6 +2567,7 @@ impl Coordinator {
                 }
             };
 
+        let mut compute_collections = vec![];
         let mut collections = vec![];
         let mut new_builtin_continual_tasks = vec![];
         for entry in catalog.entries() {
@@ -2606,6 +2607,7 @@ impl Coordinator {
                         status_collection_id: None,
                         timeline: None,
                     };
+                    compute_collections.push((mv.global_id(), mv.desc.clone()));
                     collections.push((mv.global_id(), collection_desc));
                 }
                 CatalogItem::ContinualTask(ct) => {
@@ -2622,6 +2624,7 @@ impl Coordinator {
                         // `create_collections_for_bootstrap`.
                         new_builtin_continual_tasks.push((ct.global_id(), collection_desc));
                     } else {
+                        compute_collections.push((ct.global_id(), ct.desc.clone()));
                         collections.push((ct.global_id(), collection_desc));
                     }
                 }
@@ -2642,6 +2645,16 @@ impl Coordinator {
             .into_iter()
             .flat_map(|item_id| self.catalog.get_entry(item_id).global_ids())
             .collect();
+
+        // Before possibly creating collections, make sure their schemas are correct.
+        //
+        // Across different versions of Materialize the nullability of columns can change based on
+        // updates to our optimizer.
+        self.controller
+            .storage
+            .evolve_nullability_for_bootstrap(storage_metadata, compute_collections)
+            .await
+            .unwrap_or_terminate("cannot fail to evolve collections");
 
         self.controller
             .storage
