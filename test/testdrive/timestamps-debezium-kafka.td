@@ -105,26 +105,22 @@ $ kafka-ingest format=avro topic=bar schema=${schema}
 > CREATE SOURCE data_foo
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-foo-${testdrive.seed}')
-  WITH (TIMELINE '${testdrive.seed}-timestamps-debezium-kafka')
 
 > CREATE TABLE data_foo_tbl FROM SOURCE data_foo (REFERENCE "testdrive-foo-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
+  WITH (TIMELINE '${testdrive.seed}-timestamps-debezium-kafka')
 
 > CREATE SOURCE data_bar
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-bar-${testdrive.seed}')
-  WITH (TIMELINE '${testdrive.seed}-timestamps-debezium-kafka')
 
 > CREATE TABLE data_bar_tbl FROM SOURCE data_bar (REFERENCE "testdrive-bar-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
+  WITH (TIMELINE '${testdrive.seed}-timestamps-debezium-kafka')
 
 > CREATE MATERIALIZED VIEW foo AS SELECT b, sum(a) FROM data_foo_tbl GROUP BY b
 
 > CREATE MATERIALIZED VIEW bar AS SELECT b, sum(a) FROM data_bar_tbl GROUP BY b
-
-# TODO: database-issues#8693
-$ skip-if
-SELECT true
 
 > CREATE MATERIALIZED VIEW join (b, foo_sum, bar_sum) AS SELECT * FROM foo JOIN bar USING (b);
 

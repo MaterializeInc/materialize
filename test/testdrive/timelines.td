@@ -36,11 +36,11 @@ $ kafka-create-topic topic=input-system
 > CREATE SOURCE source_system_user
   IN CLUSTER source_system_user_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-system-${testdrive.seed}')
-  WITH (TIMELINE '${testdrive.seed}-timelines')
 
 > CREATE TABLE source_system_user_tbl
   FROM SOURCE source_system_user (REFERENCE "testdrive-input-system-${testdrive.seed}")
   FORMAT BYTES
+  WITH (TIMELINE '${testdrive.seed}-timelines')
 
 $ set schema=[
   {
@@ -140,32 +140,33 @@ $ kafka-ingest format=avro topic=input-cdcv2 schema=${schema}
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE MATERIALIZE
 
-! CREATE SOURCE source_cdcv2_system
-  IN CLUSTER ${arg.single-replica-cluster}
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-cdcv2-${testdrive.seed}')
-  WITH (TIMELINE 'mz_foo')
-contains:unacceptable timeline name "mz_foo"
-
 > CREATE CLUSTER source_cdcv2_system_cluster SIZE '${arg.default-storage-size}';
 
 > CREATE SOURCE source_cdcv2_system
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-cdcv2-${testdrive.seed}')
-  WITH (TIMELINE 'mz_epoch_ms')
+
+! CREATE TABLE source_cdcv2_system_tbl FROM SOURCE source_cdcv2_system (REFERENCE "testdrive-input-cdcv2-${testdrive.seed}")
+  FORMAT AVRO USING SCHEMA '${schema}'
+  ENVELOPE MATERIALIZE
+  WITH (TIMELINE 'mz_foo')
+contains:unacceptable timeline name "mz_foo"
+
 > CREATE TABLE source_cdcv2_system_tbl FROM SOURCE source_cdcv2_system (REFERENCE "testdrive-input-cdcv2-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE MATERIALIZE
+  WITH (TIMELINE 'mz_epoch_ms')
 
 > CREATE CLUSTER source_cdcv2_user_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE source_cdcv2_user
   IN CLUSTER source_cdcv2_user_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-cdcv2-${testdrive.seed}')
-  WITH (TIMELINE '${testdrive.seed}-timelines')
 
 > CREATE TABLE source_cdcv2_user_tbl
   FROM SOURCE source_cdcv2_user (REFERENCE "testdrive-input-cdcv2-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE MATERIALIZE
+  WITH (TIMELINE '${testdrive.seed}-timelines')
 
 > CREATE TABLE input_table (a bigint);
 
@@ -177,7 +178,7 @@ contains:unacceptable timeline name "mz_foo"
 contains:multiple timelines within one dataflow are not supported
 
 # Verify that user timelines don't allow things to be joinable with their non-user versions.
-! CREATE MATERIALIZED VIEW must_fail (a, b) AS SELECT * FROM source_system, source_system_user;
+! CREATE MATERIALIZED VIEW must_fail (a, b) AS SELECT * FROM source_system, source_system_user_tbl;
 contains:multiple timelines within one dataflow are not supported
 
 # Can join static view with anything.
@@ -217,15 +218,13 @@ contains:multiple timelines within one dataflow are not supported
 ! EXPLAIN SELECT * FROM source_system_tbl, source_cdcv2_tbl;
 contains:multiple timelines within one dataflow are not supported
 
-# TODO: database-issues#8693
 # Can join user-specified timelines.
-# > CREATE MATERIALIZED VIEW source_system_cdcv2_user (a, b, c)
-#   AS SELECT * FROM source_system_user_tbl, source_cdcv2_user_tbl;
+> CREATE MATERIALIZED VIEW source_system_cdcv2_user (a, b, c)
+  AS SELECT * FROM source_system_user_tbl, source_cdcv2_user_tbl;
 
 # CDCv2 can only be joined with system time stuff if specified
-# TODO: database-issues#8693
-# > CREATE MATERIALIZED VIEW source_cdcv2_table_system
-#     AS SELECT * FROM source_cdcv2_system_tbl, input_table;
+> CREATE MATERIALIZED VIEW source_cdcv2_table_system
+  AS SELECT * FROM source_cdcv2_system_tbl, input_table;
 ! CREATE MATERIALIZED VIEW must_fail AS SELECT * FROM source_cdcv2_tbl, input_table;
 contains:multiple timelines within one dataflow are not supported
 
