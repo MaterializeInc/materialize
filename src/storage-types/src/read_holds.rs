@@ -17,7 +17,7 @@ use timely::PartialOrder;
 use tokio::sync::mpsc::error::SendError;
 use tokio::sync::mpsc::UnboundedSender;
 
-type ChangeTx<T> = Arc<
+pub type ChangeTx<T> = Arc<
     dyn Fn(GlobalId, ChangeBatch<T>) -> Result<(), SendError<(GlobalId, ChangeBatch<T>)>>
         + Send
         + Sync,
