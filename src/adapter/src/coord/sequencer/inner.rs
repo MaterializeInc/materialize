@@ -2661,7 +2661,15 @@ impl Coordinator {
                         Source | Secret | Connection => false,
                         // Cannot select from sinks or indexes
                         Sink | Index => unreachable!(),
-                        Table => id.is_user(),
+                        Table => {
+                            if !id.is_user() {
+                                // We can't read from non-user tables
+                                false
+                            } else {
+                                // We can't read from tables that are source-exports
+                                entry.source_export_details().is_none()
+                            }
+                        }
                         Type => true,
                     }
                 }
