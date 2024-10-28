@@ -371,6 +371,26 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: bounded-memory
+      - id: bounded-memory-search
+        label: "Bounded Memory Search (materialized only) %N"
+        depends_on: build-aarch64
+        timeout_in_minutes: 150
+        parallelism: 8
+        # disabled by default
+        skip: true
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: bounded-memory
+              args:
+                [
+                  --find-minimal-memory,
+                  --materialized-memory-search-step=0.3,
+                  --clusterd-memory-search-step=0,
+                  --materialized-memory-lower-bound-in-gb=0.5,
+                  --clusterd-memory-lower-bound-in-gb=0.5
+                ]
 
   - group: Upsert
     key: upsert
