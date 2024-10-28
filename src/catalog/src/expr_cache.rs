@@ -21,10 +21,11 @@ use mz_expr::OptimizedMirRelationExpr;
 use mz_ore::channel::trigger;
 use mz_ore::task::spawn;
 use mz_persist_client::PersistClient;
+use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::Codec;
-use mz_repr::adt::jsonb::Jsonb;
+use mz_repr::adt::jsonb::{Jsonb, JsonbPacker, JsonbRef};
 use mz_repr::optimize::OptimizerFeatures;
-use mz_repr::{GlobalId, RelationDesc, ScalarType};
+use mz_repr::{GlobalId, RelationDesc, Row, ScalarType};
 use mz_storage_types::sources::SourceData;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::OptimizerNotice;
@@ -65,7 +66,7 @@ impl DurableCacheCodec for ExpressionCodec {
     // requirement on `Expressions` between versions.
     type Val = serde_json::Value;
     type KeyCodec = SourceData;
-    type ValCodec = SourceData;
+    type ValCodec = ();
 
     fn schemas() -> (
         <Self::KeyCodec as Codec>::Schema,
@@ -74,29 +75,42 @@ impl DurableCacheCodec for ExpressionCodec {
         (
             RelationDesc::builder()
                 .with_column("key", ScalarType::Jsonb.nullable(false))
-                .finish(),
-            RelationDesc::builder()
                 .with_column("val", ScalarType::Jsonb.nullable(false))
                 .finish(),
+            UnitSchema::default(),
         )
     }
 
-    fn encode_key(key: &Self::Key) -> Self::KeyCodec {
-        let serde_value = to_value(key);
-        value_to_source_data(serde_value)
+    fn encode(key: &Self::Key, val: &Self::Val) -> (Self::KeyCodec, Self::ValCodec) {
+        let serde_key = to_value(key);
+        let mut row = Row::default();
+        let mut packer = row.packer();
+        JsonbPacker::new(&mut packer)
+            .pack_serde_json(serde_key)
+            .expect("contained integers should fit in f64");
+        JsonbPacker::new(&mut packer)
+            .pack_serde_json(val.clone())
+            .expect("contained integers should fit in f64");
+        let source_data = SourceData(Ok(row));
+        (source_data, ())
     }
 
-    fn encode_val(val: &Self::Val) -> Self::ValCodec {
-        value_to_source_data(val.clone())
-    }
+    fn decode(key: Self::KeyCodec, (): Self::ValCodec) -> (Self::Key, Self::Val) {
+        let row = key.0.expect("only Ok values stored in expression cache");
+        let datums = row.unpack();
+        if datums.len() != 2 {
+            panic!("ACTUAL LENGTH: {:?}", datums.len())
+        }
 
-    fn decode_key(key: Self::KeyCodec) -> Self::Key {
-        let serde_value = source_data_to_value(key);
-        from_value(serde_value)
-    }
+        let key_json = JsonbRef::from_datum(datums[0]);
+        let value_json = JsonbRef::from_datum(datums[1]);
 
-    fn decode_val(val: Self::ValCodec) -> Self::Val {
-        source_data_to_value(val)
+        let serde_key = key_json.to_serde_json();
+        let serde_value = value_json.to_serde_json();
+
+        let key = from_value(serde_key);
+
+        (key, serde_value)
     }
 }
 
@@ -104,14 +118,6 @@ fn value_to_source_data(serde_value: serde_json::Value) -> SourceData {
     let jsonb = Jsonb::from_serde_json(serde_value).expect("contained integers should fit in f64");
     let row = jsonb.into_row();
     SourceData(Ok(row))
-}
-
-fn source_data_to_value(source_data: SourceData) -> serde_json::Value {
-    let row = source_data
-        .0
-        .expect("only Ok values stored in expression cache");
-    let jsonb = Jsonb::from_row(row);
-    jsonb.as_ref().to_serde_json()
 }
 
 fn to_value<T: Serialize>(t: T) -> serde_json::Value {
@@ -600,11 +606,9 @@ mod tests {
         #[mz_ore::test]
         #[cfg_attr(miri, ignore)]
         fn expr_cache_roundtrip((key, val) in any::<(CacheKey, Expressions)>()) {
-            let encoded_key = ExpressionCodec::encode_key(&key);
             let serde_val = to_value(val.clone());
-            let encoded_val = ExpressionCodec::encode_val(&serde_val);
-            let decoded_key = ExpressionCodec::decode_key(encoded_key);
-            let decoded_val = ExpressionCodec::decode_val(encoded_val);
+            let (encoded_key, encoded_val) = ExpressionCodec::encode(&key, &serde_val);
+            let (decoded_key, decoded_val) = ExpressionCodec::decode(encoded_key, encoded_val);
             let decoded_val: Expressions = from_value(decoded_val);
 
             assert_eq!(key, decoded_key);

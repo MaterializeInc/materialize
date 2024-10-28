@@ -34,10 +34,8 @@ pub trait DurableCacheCodec {
         <Self::KeyCodec as Codec>::Schema,
         <Self::ValCodec as Codec>::Schema,
     );
-    fn encode_key(key: &Self::Key) -> Self::KeyCodec;
-    fn encode_val(val: &Self::Val) -> Self::ValCodec;
-    fn decode_key(key: Self::KeyCodec) -> Self::Key;
-    fn decode_val(val: Self::ValCodec) -> Self::Val;
+    fn encode(key: &Self::Key, val: &Self::Val) -> (Self::KeyCodec, Self::ValCodec);
+    fn decode(key: Self::KeyCodec, val: Self::ValCodec) -> (Self::Key, Self::Val);
 }
 
 #[derive(Debug)]
@@ -115,8 +113,7 @@ impl<C: DurableCacheCodec> DurableCache<C> {
                 match event {
                     ListenEvent::Updates(x) => {
                         for ((k, v), t, d) in x {
-                            let key = C::decode_key(k.unwrap());
-                            let val = C::decode_val(v.unwrap());
+                            let (key, val) = C::decode(k.unwrap(), v.unwrap());
                             if d == 1 {
                                 self.local.expect_insert(key, val, "duplicate cache entry");
                             } else if d == -1 {
@@ -165,7 +162,7 @@ impl<C: DurableCacheCodec> DurableCache<C> {
         let val = val_fn();
         let mut expected_upper = self.local_progress;
         loop {
-            let update = ((C::encode_key(key), C::encode_val(&val)), expected_upper, 1);
+            let update = (C::encode(key, &val), expected_upper, 1);
             let new_upper = expected_upper + 1;
             let ret = self
                 .write
@@ -241,14 +238,10 @@ impl<C: DurableCacheCodec> DurableCache<C> {
             // If there are duplicate keys we ignore all but the first one.
             if seen_keys.insert(key) {
                 if let Some(prev) = self.local.get(key) {
-                    updates.push((
-                        (C::encode_key(key), C::encode_val(prev)),
-                        expected_upper,
-                        -1,
-                    ));
+                    updates.push((C::encode(key, prev), expected_upper, -1));
                 }
                 if let Some(val) = val {
-                    updates.push(((C::encode_key(key), C::encode_val(val)), expected_upper, 1));
+                    updates.push((C::encode(key, val), expected_upper, 1));
                 }
             }
         }
@@ -301,20 +294,12 @@ mod tests {
             (StringSchema, StringSchema)
         }
 
-        fn encode_key(key: &Self::Key) -> Self::KeyCodec {
-            key.clone()
+        fn encode(key: &Self::Key, val: &Self::Val) -> (Self::KeyCodec, Self::ValCodec) {
+            (key.clone(), val.clone())
         }
 
-        fn encode_val(val: &Self::Val) -> Self::ValCodec {
-            val.clone()
-        }
-
-        fn decode_key(key: Self::KeyCodec) -> Self::Key {
-            key
-        }
-
-        fn decode_val(val: Self::ValCodec) -> Self::Val {
-            val
+        fn decode(key: Self::KeyCodec, val: Self::ValCodec) -> (Self::Key, Self::Val) {
+            (key, val)
         }
     }
 
