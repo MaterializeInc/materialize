@@ -321,7 +321,7 @@ def main() -> int:
     for issue_ref in issue_refs:
         url = buildkite.inline_link(
             f"https://github.com/{issue_ref.repository}/issues/{issue_ref.issue_id}",
-            f"#{issue_ref.issue_id}",
+            f"{issue_ref.repository}#{issue_ref.issue_id}",
         )
         print(f"--- Issue is referenced in comment but already closed: {url}")
         if issue_ref.text is not None:
