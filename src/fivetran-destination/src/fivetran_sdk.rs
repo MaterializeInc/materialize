@@ -9,7 +9,11 @@
 
 // Note(parkmycar): We wrap this in a `mod` block soley for the purpose of allowing lints for the
 // generated protobuf code.
-#[allow(clippy::enum_variant_names)]
+#[allow(
+    clippy::enum_variant_names,
+    clippy::clone_on_ref_ptr,
+    clippy::as_conversions
+)]
 mod proto {
     include!(concat!(env!("OUT_DIR"), "/fivetran_sdk.rs"));
 }

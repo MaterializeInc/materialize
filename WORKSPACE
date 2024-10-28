@@ -334,9 +334,9 @@ rules_rust_dependencies()
 # Fetch and register the relevant Rust toolchains. We use a custom macro that
 # depends on `rules_rust` but cuts down on bloat from their defaults.
 
-RUST_VERSION = "1.80.1"
+RUST_VERSION = "1.82.0"
 
-RUST_NIGHTLY_VERSION = "nightly/2024-08-01"
+RUST_NIGHTLY_VERSION = "nightly/2024-10-27"
 
 load("//misc/bazel/toolchains:rust.bzl", "rust_toolchains")
 

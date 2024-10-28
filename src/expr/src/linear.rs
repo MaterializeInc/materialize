@@ -1808,6 +1808,7 @@ pub mod plan {
         /// Attempt to convert self into a non-temporal MapFilterProject plan.
         ///
         /// If that is not possible, the original instance is returned as an error.
+        #[allow(clippy::result_large_err)]
         pub fn into_nontemporal(self) -> Result<SafeMfpPlan, Self> {
             if self.lower_bounds.is_empty() && self.upper_bounds.is_empty() {
                 Ok(self.mfp)
