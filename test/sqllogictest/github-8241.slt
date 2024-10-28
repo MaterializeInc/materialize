@@ -65,5 +65,6 @@ Only the following relations are available:
 "mz_catalog.mz_views"
 "mz_internal.mz_aggregates"
 "mz_internal.mz_comments"
+"mz_internal.mz_continual_tasks"
 "mz_internal.mz_object_dependencies"
 "mz_internal.mz_type_pg_metadata"

@@ -1134,6 +1134,7 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 17025  mz_kafka_source_tables
 17026  mz_continual_tasks
 17027  mz_show_continual_tasks
+17029  mz_cluster_replica_metrics_history_ct
 17030  mz_objects_id_namespace_types
 17031  mz_object_history
 17032  mz_object_history_ind
@@ -1141,3 +1142,6 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 17034  mz_cluster_replica_name_history_ind
 17035  mz_console_cluster_utilization_overview
 17036  mz_console_cluster_utilization_overview_ind
+17037  mz_cluster_replica_status_history_ct
+17038  mz_wallclock_lag_history_ct
+17039  mz_continual_tasks_ind

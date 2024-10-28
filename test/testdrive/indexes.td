@@ -328,6 +328,7 @@ mz_compute_import_frontiers_per_worker_s2_primary_idx       mz_compute_import_fr
 mz_compute_operator_durations_histogram_raw_s2_primary_idx  mz_compute_operator_durations_histogram_raw  mz_catalog_server    {id,worker_id,duration_ns}                  ""
 mz_connections_ind                                          mz_connections                               mz_catalog_server    {schema_id}                                 ""
 mz_console_cluster_utilization_overview_ind                 mz_console_cluster_utilization_overview      mz_catalog_server    {cluster_id}                                ""
+mz_continual_tasks_ind                                      mz_continual_tasks                           mz_catalog_server    {id}                                        ""
 mz_databases_ind                                            mz_databases                                 mz_catalog_server    {name}                                      ""
 mz_dataflow_addresses_per_worker_s2_primary_idx             mz_dataflow_addresses_per_worker             mz_catalog_server    {id,worker_id}                              ""
 mz_dataflow_channels_per_worker_s2_primary_idx              mz_dataflow_channels_per_worker              mz_catalog_server    {id,worker_id}                              ""

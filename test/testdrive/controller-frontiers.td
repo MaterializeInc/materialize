@@ -264,6 +264,8 @@ mz_frontiers
     objects.id LIKE 'u%' AND
     frontiers.write_frontier > 0 AND
     clusters.name = 'test'
+ct1  r1
+ct1  r2
 idx1 r1
 idx1 r2
 mv1  r1
@@ -285,6 +287,9 @@ mv1  r2
     objects.id LIKE 'u%' AND
     frontiers.write_frontier > 0 AND
     clusters.name = 'test'
+ct1  r1
+ct1  r2
+ct1  r3
 idx1 r1
 idx1 r2
 idx1 r3
@@ -310,6 +315,8 @@ mv1  r3
     objects.id LIKE 'u%' AND
     frontiers.write_frontier > 0 AND
     clusters.name = 'test'
+ct1  r2
+ct1  r3
 idx1 r2
 idx1 r3
 mv1  r2
