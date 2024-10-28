@@ -270,15 +270,6 @@ debug = 2
 # merged), after which point it becomes impossible to build that historical
 # version of Materialize.
 [patch.crates-io]
-# Projects that do not reliably release to crates.io.
-timely = { git = "https://github.com/TimelyDataflow/timely-dataflow.git", rev = "0d453df386ed6589d2f970540c3e1793f63d79f0" }
-timely_bytes = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
-timely_communication = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
-timely_container = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
-timely_logging = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
-differential-dataflow = { git = "https://github.com/MaterializeInc/differential-dataflow.git" }
-dogsdogsdogs = { git = "https://github.com/MaterializeInc/differential-dataflow.git" }
-
 # Waiting on https://github.com/sfackler/rust-postgres/pull/752.
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }

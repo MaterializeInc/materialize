@@ -81,17 +81,17 @@ SELECT mz_unsafe.mz_sleep(2)
 query IT
 SELECT id, global_id FROM mz_introspection.mz_dataflow_globalids ORDER BY id, global_id;
 ----
-11  t49
+11  t53
 
 
 query TI
 SELECT global_id, lir_id FROM mz_introspection.mz_lir_mapping ORDER BY global_id, lir_id DESC;
 ----
-t49  4
-t49  3
-t49  2
-t49  1
-t49  0
+t53  4
+t53  3
+t53  2
+t53  1
+t53  0
 
 
 statement ok
