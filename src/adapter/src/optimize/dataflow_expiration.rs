@@ -21,7 +21,7 @@
 //! The time dependence needs to be computed on the actual dependencies, and not on catalog
 //! uses. An optimized dataflow depends on concrete indexes, and has unnecessary dependencies
 //! pruned. Additionally, transitive dependencies can depend on indexes that do not exist anymore,
-//! which makes combining run-time information with catalog-based information difficult.
+//! which makes combining run-time information with catalog-based information inconclusive.
 
 use std::collections::BTreeMap;
 
@@ -38,8 +38,12 @@ use mz_storage_types::sources::{GenericSourceConnection, Timeline};
 use crate::catalog::Catalog;
 use crate::optimize::dataflows::dataflow_import_id_bundle;
 
+/// Helper type to determine the time dependence of a dataflow. See module-level documentation
+/// for more details.
 pub(crate) struct TimeDependenceHelper<'a> {
+    /// Map of seen objects to their time dependence.
     seen: BTreeMap<GlobalId, TimeDependence>,
+    /// Current catalog.
     catalog: &'a Catalog,
 }
 
@@ -138,6 +142,7 @@ impl<'a> TimeDependenceHelper<'a> {
         }
     }
 
+    /// Determine the time dependence for a single global ID.
     fn determine_dependence_inner(&mut self, id: GlobalId) -> TimeDependence {
         use TimeDependence::*;
 
@@ -173,7 +178,7 @@ impl<'a> TimeDependenceHelper<'a> {
             CatalogItemType::MaterializedView
             | CatalogItemType::Index
             | CatalogItemType::ContinualTask => {
-                // Follow dependencies, if any.
+                // Return cached information
                 if let Some(time_dependence) = self
                     .catalog
                     .try_get_physical_plan(&id)

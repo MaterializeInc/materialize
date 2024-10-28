@@ -14,10 +14,6 @@ use std::hash::{BuildHasher, Hash, Hasher};
 use std::marker::PhantomData;
 use std::rc::Weak;
 
-use crate::builder_async::{
-    AsyncInputHandle, AsyncOutputHandle, ConnectedToOne, Disconnected,
-    OperatorBuilder as OperatorBuilderAsync,
-};
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::difference::{Multiply, Semigroup};
 use differential_dataflow::lattice::Lattice;
@@ -34,6 +30,11 @@ use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, StreamCore};
 use timely::progress::{Antichain, Timestamp};
 use timely::{Container, Data, ExchangeData, PartialOrder};
+
+use crate::builder_async::{
+    AsyncInputHandle, AsyncOutputHandle, ConnectedToOne, Disconnected,
+    OperatorBuilder as OperatorBuilderAsync,
+};
 
 /// Extension methods for timely [`StreamCore`]s.
 pub trait StreamExt<G, C1>
@@ -158,7 +159,7 @@ where
         I: IntoIterator<Item = Result<D2, E>>,
         L: for<'a> FnMut(C1::Item<'a>) -> I + 'static;
 
-    /// Panic if the frontier of a [`StreamCore`] exceeds `expiration` time.
+    /// Block progress the frontier at `expiration` time, unless the token is dropped.
     fn expire_stream_at(
         &self,
         name: &str,
@@ -237,7 +238,7 @@ where
         I: IntoIterator<Item = Result<D2, E>>,
         L: FnMut(D1) -> I + 'static;
 
-    /// Panic if the frontier of a [`Collection`] exceeds `expiration` time.
+    /// Block progress the frontier at `expiration` time, unless the token is dropped.
     fn expire_collection_at(
         &self,
         name: &str,
