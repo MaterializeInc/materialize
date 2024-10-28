@@ -67,7 +67,7 @@ impl RustType<ProtoTimeDependence> for TimeDependence {
         use crate::time_dependence::proto_time_dependence::ProtoRefreshSchedule;
         ProtoTimeDependence {
             kind: Some(match self {
-                TimeDependence::Indeterminate => proto_time_dependence::Kind::Definite(()),
+                TimeDependence::Indeterminate => proto_time_dependence::Kind::Indeterminate(()),
                 TimeDependence::RefreshSchedule(schedule, inner) => {
                     proto_time_dependence::Kind::RefreshSchedule(ProtoRefreshSchedule {
                         refresh_schedule: schedule.as_ref().map(|s| s.into_proto()),
@@ -85,7 +85,7 @@ impl RustType<ProtoTimeDependence> for TimeDependence {
             .kind
             .ok_or_else(|| TryFromProtoError::missing_field("ProtoTimeDependence::kind"))?
         {
-            proto_time_dependence::Kind::Definite(()) => TimeDependence::Indeterminate,
+            proto_time_dependence::Kind::Indeterminate(()) => TimeDependence::Indeterminate,
             proto_time_dependence::Kind::RefreshSchedule(ProtoRefreshSchedule {
                 refresh_schedule,
                 dependence,

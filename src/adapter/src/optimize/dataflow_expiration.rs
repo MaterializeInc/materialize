@@ -93,7 +93,7 @@ impl<'a> TimeDependenceHelper<'a> {
             .any(|dep| matches!(dep, RefreshSchedule(_, _)))
         {
             // No immediate wall-clock dependency, found some dependency with a refresh schedule.
-            // Remove remaining Indefinite dependencies.
+            // Remove remaining Indeterminate dependencies.
             time_dependencies.retain(|dep| matches!(dep, RefreshSchedule(_, _)));
             RefreshSchedule(schedule, time_dependencies)
         } else {

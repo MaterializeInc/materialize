@@ -309,9 +309,6 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::sync::Arc;
 
-    use crate::expr_cache::{
-        CacheKey, ExpressionCacheConfig, ExpressionCacheHandle, ExpressionCodec, Expressions,
-    };
     use mz_compute_types::dataflows::DataflowDescription;
     use mz_compute_types::time_dependence::TimeDependence;
     use mz_durable_cache::DurableCacheCodec;
@@ -329,6 +326,10 @@ mod tests {
     use smallvec::SmallVec;
     use timely::progress::Antichain;
     use uuid::Uuid;
+
+    use crate::expr_cache::{
+        CacheKey, ExpressionCacheConfig, ExpressionCacheHandle, ExpressionCodec, Expressions,
+    };
 
     impl Arbitrary for Expressions {
         type Parameters = ();

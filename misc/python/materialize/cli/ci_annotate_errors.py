@@ -126,6 +126,7 @@ IGNORE_RE = re.compile(
     # Expected in cluster test
     | cluster-clusterd[12]-1\ .*\ halting\ process:\ new\ timely\ configuration\ does\ not\ match\ existing\ timely\ configuration
     | cluster-clusterd1-1\ .*\ not\ less\ than\ expiration
+    | cluster-clusterd1-1\ .*\ Replica\ expired
     # Emitted by tests employing explicit mz_panic()
     | forced\ panic
     # Emitted by broken_statements.slt in order to stop panic propagation, as 'forced panic' will unwantedly panic the `environmentd` thread.

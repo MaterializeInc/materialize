@@ -4890,7 +4890,7 @@ def workflow_crash_on_replica_expiration_mv(
 
         c1 = c.invoke("logs", "clusterd1", capture=True)
         assert (
-            "not less than expiration" in c1.stdout
+            "Replica expired" in c1.stdout
         ), "unexpected success in crash-on-replica-expiration"
 
 
@@ -4955,7 +4955,7 @@ def workflow_crash_on_replica_expiration_index(
 
         c1 = c.invoke("logs", "clusterd1", capture=True)
         assert (
-            "not less than expiration" in c1.stdout
+            "Replica expired" in c1.stdout
         ), "unexpected success in crash-on-replica-expiration"
 
         # Wait a bit to let the controller refresh its metrics.
