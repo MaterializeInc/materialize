@@ -418,6 +418,9 @@ pub fn optimize_dataflow_monotonic(
 ) -> Result<(), TransformError> {
     let mut monotonic_ids = BTreeSet::new();
     for (source_id, (_source, is_monotonic)) in dataflow.source_imports.iter() {
+        if ctx.force_non_monotonic.contains(source_id) {
+            continue;
+        }
         if *is_monotonic {
             monotonic_ids.insert(source_id.clone());
         }

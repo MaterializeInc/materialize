@@ -185,6 +185,10 @@ impl Coordinator {
             .override_from(&self.catalog.get_cluster(ct.cluster_id).config.features());
         let non_null_assertions = Vec::new();
         let refresh_schedule = None;
+        // Continual Tasks turn an "input" into diffs by inserting retractions,
+        // which removes any monotonicity properties the collection otherwise
+        // would have had.
+        let force_non_monotonic = [ct.input_id].into();
         let mut optimizer = optimize::materialized_view::Optimizer::new(
             catalog,
             compute_instance,
@@ -197,6 +201,7 @@ impl Coordinator {
             optimizer_config,
             self.optimizer_metrics(),
             is_timeline_epoch_ms,
+            force_non_monotonic,
         );
 
         // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local and global)

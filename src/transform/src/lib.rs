@@ -27,6 +27,7 @@ use std::sync::Arc;
 use std::{fmt, iter};
 
 use mz_expr::{MirRelationExpr, MirScalarExpr};
+use mz_ore::collections::HashSet;
 use mz_ore::id_gen::IdGen;
 use mz_ore::stack::RecursionLimitError;
 use mz_repr::optimize::OptimizerFeatures;
@@ -97,6 +98,8 @@ pub struct TransformCtx<'a> {
     pub features: &'a OptimizerFeatures,
     /// Typechecking context.
     pub typecheck_ctx: &'a SharedContext,
+    /// Overrides monotonicity for the given collections.
+    pub force_non_monotonic: HashSet<GlobalId>,
     /// Transforms can use this field to communicate information outside the result plans.
     pub df_meta: &'a mut DataflowMetainfo,
 }
@@ -121,6 +124,7 @@ impl<'a> TransformCtx<'a> {
             global_id: None,
             features,
             typecheck_ctx,
+            force_non_monotonic: HashSet::new(),
             df_meta,
         }
     }
@@ -141,8 +145,9 @@ impl<'a> TransformCtx<'a> {
             stats,
             global_id: None,
             features,
-            df_meta,
             typecheck_ctx,
+            force_non_monotonic: HashSet::new(),
+            df_meta,
         }
     }
 
@@ -156,6 +161,11 @@ impl<'a> TransformCtx<'a> {
 
     fn reset_global_id(&mut self) {
         self.global_id = None;
+    }
+
+    /// Overrides monotonicity for the given collections.
+    pub fn set_force_non_monotonic(&mut self, id: GlobalId) {
+        self.force_non_monotonic.insert(id);
     }
 }
 

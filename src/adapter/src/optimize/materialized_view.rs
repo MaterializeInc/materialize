@@ -25,6 +25,7 @@
 //!
 //! See also MaterializeInc/materialize#22940.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -82,6 +83,8 @@ pub struct Optimizer {
     ///
     /// Used to determine if it is safe to enable dataflow expiration.
     is_timeline_epoch_ms: bool,
+    /// Overrides monotonicity for the given collections.
+    force_non_monotonic: BTreeSet<GlobalId>,
 }
 
 impl Optimizer {
@@ -97,6 +100,7 @@ impl Optimizer {
         config: OptimizerConfig,
         metrics: OptimizerMetrics,
         is_timeline_epoch_ms: bool,
+        force_non_monotonic: BTreeSet<GlobalId>,
     ) -> Self {
         Self {
             typecheck_ctx: empty_context(),
@@ -112,6 +116,7 @@ impl Optimizer {
             metrics,
             duration: Default::default(),
             is_timeline_epoch_ms,
+            force_non_monotonic,
         }
     }
 }
@@ -270,6 +275,9 @@ impl Optimize<LocalMirPlan> for Optimizer {
             &self.typecheck_ctx,
             &mut df_meta,
         );
+        for id in self.force_non_monotonic.iter() {
+            transform_ctx.set_force_non_monotonic(*id);
+        }
         // Run global optimization.
         mz_transform::optimize_dataflow(&mut df_desc, &mut transform_ctx, false)?;
 

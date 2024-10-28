@@ -87,3 +87,21 @@ query T
 SELECT * FROM cast_int_to_string;
 ----
 2
+
+# Regression test for a bug where we'd incorrectly optimize (and panic at
+# runtime) a CT with a monotonic input.
+statement ok CREATE SOURCE counter FROM LOAD GENERATOR COUNTER
+
+statement ok
+CREATE CONTINUAL TASK input_not_monotonic FROM TRANSFORM counter USING
+    (SELECT max(counter) FROM counter)
+
+# Give the load generator time to produce some data.
+statement ok
+SELECT mz_unsafe.mz_sleep(3)
+
+# Ensure that we don't get a "monotonic reduction on non-monotonic input" error
+query T
+SELECT COUNT(*) > 0 FROM input_not_monotonic;
+----
+true
