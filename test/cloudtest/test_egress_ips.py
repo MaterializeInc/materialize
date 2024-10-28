@@ -12,7 +12,7 @@ from materialize.mz_version import MzVersion
 
 
 def test_egress_ips(mz: MaterializeApplication) -> None:
-    egress_ips = mz.environmentd.sql_query("SELECT * FROM mz_catalog.mz_egress_ips")
+    egress_ips = mz.sql_query("SELECT * FROM mz_catalog.mz_egress_ips")
 
     if MzVersion.parse_cargo() >= MzVersion.parse_mz("v0.118.0-dev"):
         assert egress_ips == (

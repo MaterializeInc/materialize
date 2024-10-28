@@ -12,7 +12,9 @@ import os
 import subprocess
 import time
 from datetime import datetime, timedelta
+from typing import Any
 
+from pg8000 import Connection, Cursor
 from pg8000.exceptions import InterfaceError
 
 from materialize.cloudtest.app.cloudtest_application_base import (
@@ -66,6 +68,27 @@ class MaterializeApplication(CloudtestApplicationBase):
         self.start_metrics_server()
 
         self.create_resources_and_wait()
+
+    def sql(
+        self,
+        sql: str,
+        port: str | None = None,
+        user: str = "materialize",
+    ) -> None:
+        self.environmentd.sql(sql=sql, port=port, user=user)
+
+    def sql_query(self, sql: str) -> Any:
+        return self.environmentd.sql_query(sql=sql)
+
+    def sql_conn(
+        self,
+        port: str | None = None,
+        user: str = "materialize",
+    ) -> Connection:
+        return self.environmentd.sql_conn(port=port, user=user)
+
+    def sql_cursor(self, autocommit: bool = True) -> Cursor:
+        return self.environmentd.sql_cursor(autocommit=autocommit)
 
     def get_resources(self, log_filter: str | None) -> list[K8sResource]:
         return [
