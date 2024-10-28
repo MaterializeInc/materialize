@@ -547,28 +547,40 @@ where
     }
 
     pub fn events_stream(&self) -> BoxStream<'static, ClusterEvent> {
-        fn translate_event(event: ServiceEvent) -> Result<ClusterEvent, anyhow::Error> {
+        let deploy_generation = self.deploy_generation;
+
+        fn translate_event(event: ServiceEvent) -> Result<(ClusterEvent, u64), anyhow::Error> {
             let ReplicaServiceName {
                 cluster_id,
                 replica_id,
+                generation: replica_generation,
                 ..
             } = event.service_id.parse()?;
-            Ok(ClusterEvent {
+
+            let event = ClusterEvent {
                 cluster_id,
                 replica_id,
                 process_id: event.process_id,
                 status: event.status,
                 time: event.time,
-            })
+            };
+
+            Ok((event, replica_generation))
         }
 
         let stream = self
             .orchestrator
             .watch_services()
             .map(|event| event.and_then(translate_event))
-            .filter_map(|event| async {
+            .filter_map(move |event| async move {
                 match event {
-                    Ok(event) => Some(event),
+                    Ok((event, replica_generation)) => {
+                        if replica_generation == deploy_generation {
+                            Some(event)
+                        } else {
+                            None
+                        }
+                    }
                     Err(error) => {
                         error!("service watch error: {error}");
                         None
@@ -578,6 +590,7 @@ where
 
         Box::pin(stream)
     }
+
     /// Provisions a replica with the service orchestrator.
     fn provision_replica(
         &self,
