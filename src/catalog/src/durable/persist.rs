@@ -586,7 +586,7 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
             return Ok(());
         }
 
-        let mut updates = Vec::new();
+        let mut updates: BTreeMap<_, Vec<_>> = BTreeMap::new();
 
         while self.upper < target_upper {
             let listen_events = self.listen.fetch_next().await;
@@ -599,36 +599,33 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
                         // catalog wrote a fence token at one timestamp and then updates in a new
                         // format at a later timestamp, then we want to apply the fence token
                         // before attempting to deserialize the new updates.
-                        let current_updates: BTreeMap<_, Vec<_>> = updates.drain(..).fold(
-                            BTreeMap::new(),
-                            |mut accum, update: StateUpdate<T>| {
-                                accum.entry(update.ts).or_default().push(update);
-                                accum
-                            },
-                        );
-                        for (_, updates) in current_updates {
+                        while let Some((ts, updates)) = updates.pop_first() {
+                            assert!(ts < self.upper, "expected {} < {}", ts, self.upper);
+                            let updates = updates.into_iter().map(
+                                |update: StateUpdate<StateUpdateKindJson>| {
+                                    let kind =
+                                        T::try_from(update.kind).expect("kind decoding error");
+                                    StateUpdate {
+                                        kind,
+                                        ts: update.ts,
+                                        diff: update.diff,
+                                    }
+                                },
+                            );
                             self.apply_updates(updates)?;
                         }
                     }
                     ListenEvent::Updates(batch_updates) => {
                         debug!("syncing updates {batch_updates:?}");
-                        let batch_updates = batch_updates
-                            .into_iter()
-                            .map(Into::<StateUpdate<StateUpdateKindJson>>::into)
-                            .map(|update| {
-                                let kind = T::try_from(update.kind).expect("kind decoding error");
-                                StateUpdate {
-                                    kind,
-                                    ts: update.ts,
-                                    diff: update.diff,
-                                }
-                            });
-                        updates.extend(batch_updates);
+                        for update in batch_updates {
+                            let update: StateUpdate<StateUpdateKindJson> = update.into();
+                            updates.entry(update.ts).or_default().push(update);
+                        }
                     }
                 }
             }
         }
-        assert_eq!(updates, Vec::new(), "all updates should be applied");
+        assert_eq!(updates, BTreeMap::new(), "all updates should be applied");
         Ok(())
     }
 
