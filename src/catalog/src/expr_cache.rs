@@ -11,7 +11,6 @@
 
 #![allow(dead_code)]
 
-use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::sync::Arc;
@@ -22,7 +21,6 @@ use mz_expr::OptimizedMirRelationExpr;
 use mz_ore::channel::trigger;
 use mz_ore::task::spawn;
 use mz_persist_client::PersistClient;
-use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::Codec;
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::optimize::OptimizerFeatures;
@@ -31,6 +29,7 @@ use mz_storage_types::sources::SourceData;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::OptimizerNotice;
 use proptest_derive::Arbitrary;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use timely::Container;
@@ -57,20 +56,16 @@ struct CacheKey {
     id: GlobalId,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct CodecKey<'a> {
-    cache_key: Cow<'a, CacheKey>,
-    expressions: Cow<'a, Expressions>,
-}
-
 #[derive(Debug)]
 struct ExpressionCodec;
 
 impl DurableCacheCodec for ExpressionCodec {
     type Key = CacheKey;
-    type Val = Expressions;
+    // We use a raw JSON value instead of `Expressions` so that there is no backwards compatibility
+    // requirement on `Expressions` between versions.
+    type Val = serde_json::Value;
     type KeyCodec = SourceData;
-    type ValCodec = ();
+    type ValCodec = SourceData;
 
     fn schemas() -> (
         <Self::KeyCodec as Codec>::Schema,
@@ -78,36 +73,53 @@ impl DurableCacheCodec for ExpressionCodec {
     ) {
         (
             RelationDesc::builder()
-                .with_column("data", ScalarType::Jsonb.nullable(false))
+                .with_column("key", ScalarType::Jsonb.nullable(false))
                 .finish(),
-            UnitSchema::default(),
+            RelationDesc::builder()
+                .with_column("val", ScalarType::Jsonb.nullable(false))
+                .finish(),
         )
     }
 
-    fn encode(key: &Self::Key, val: &Self::Val) -> (Self::KeyCodec, Self::ValCodec) {
-        let codec_key = CodecKey {
-            cache_key: Cow::Borrowed(key),
-            expressions: Cow::Borrowed(val),
-        };
-        let serde_value = serde_json::to_value(codec_key).expect("valid json");
-        let jsonb =
-            Jsonb::from_serde_json(serde_value).expect("contained integers should fit in f64");
-        let row = jsonb.into_row();
-        let source_data = SourceData(Ok(row));
-        (source_data, ())
+    fn encode_key(key: &Self::Key) -> Self::KeyCodec {
+        let serde_value = to_value(key);
+        value_to_source_data(serde_value)
     }
 
-    fn decode(key: Self::KeyCodec, _val: Self::ValCodec) -> (Self::Key, Self::Val) {
-        let row = key.0.expect("only Ok values stored in expression cache");
-        let jsonb = Jsonb::from_row(row);
-        let serde_value = jsonb.as_ref().to_serde_json();
-        let codec_key: CodecKey =
-            serde_json::from_value(serde_value).expect("jsonb should roundtrip");
-        (
-            codec_key.cache_key.into_owned(),
-            codec_key.expressions.into_owned(),
-        )
+    fn encode_val(val: &Self::Val) -> Self::ValCodec {
+        value_to_source_data(val.clone())
     }
+
+    fn decode_key(key: Self::KeyCodec) -> Self::Key {
+        let serde_value = source_data_to_value(key);
+        from_value(serde_value)
+    }
+
+    fn decode_val(val: Self::ValCodec) -> Self::Val {
+        source_data_to_value(val)
+    }
+}
+
+fn value_to_source_data(serde_value: serde_json::Value) -> SourceData {
+    let jsonb = Jsonb::from_serde_json(serde_value).expect("contained integers should fit in f64");
+    let row = jsonb.into_row();
+    SourceData(Ok(row))
+}
+
+fn source_data_to_value(source_data: SourceData) -> serde_json::Value {
+    let row = source_data
+        .0
+        .expect("only Ok values stored in expression cache");
+    let jsonb = Jsonb::from_row(row);
+    jsonb.as_ref().to_serde_json()
+}
+
+fn to_value<T: Serialize>(t: T) -> serde_json::Value {
+    serde_json::to_value(t).expect("valid json")
+}
+
+fn from_value<T: DeserializeOwned>(serde_value: serde_json::Value) -> T {
+    serde_json::from_value(serde_value).expect("jsonb should roundtrip")
 }
 
 /// Configuration needed to initialize an [`ExpressionCache`].
@@ -129,7 +141,7 @@ struct ExpressionCache {
 
 impl ExpressionCache {
     /// Creates a new [`ExpressionCache`] and reconciles all entries in current deploy generation.
-    /// Reconcilliation will remove all entries that are not in `current_ids` and remove all
+    /// Reconciliation will remove all entries that are not in `current_ids` and remove all
     /// entries that have optimizer features that are not equal to `optimizer_features`.
     ///
     /// If `remove_prior_gens` is `true`, all previous generations are durably removed from the
@@ -153,21 +165,15 @@ impl ExpressionCache {
             durable_cache,
         };
 
-        while let Err(err) = cache
-            .try_open(current_ids, optimizer_features, remove_prior_gens)
-            .await
-        {
-            debug!("failed to open cache: {err} ... retrying");
+        loop {
+            match cache
+                .try_open(current_ids, optimizer_features, remove_prior_gens)
+                .await
+            {
+                Ok(contents) => return (cache, contents),
+                Err(err) => debug!("failed to open cache: {err} ... retrying"),
+            }
         }
-
-        let entries = cache
-            .durable_cache
-            .entries_local()
-            .filter(|(key, _)| key.deploy_generation == cache.deploy_generation)
-            .map(|(key, expressions)| (key.id.clone(), expressions.clone()))
-            .collect();
-
-        (cache, entries)
     }
 
     async fn try_open(
@@ -175,19 +181,22 @@ impl ExpressionCache {
         current_ids: &BTreeSet<GlobalId>,
         optimizer_features: &OptimizerFeatures,
         remove_prior_gens: bool,
-    ) -> Result<(), mz_durable_cache::Error> {
+    ) -> Result<BTreeMap<GlobalId, Expressions>, mz_durable_cache::Error> {
         let mut keys_to_remove = Vec::new();
+        let mut current_contents = BTreeMap::new();
 
         for (key, expressions) in self.durable_cache.entries_local() {
             if key.deploy_generation == self.deploy_generation {
-                // Remove dropped IDs.
-                if !current_ids.contains(&key.id) {
-                    keys_to_remove.push((key.clone(), None));
-                }
+                // Only deserialize the current generation.
+                let expressions: Expressions = from_value(expressions.clone());
 
-                // Remove expressions that were cached with different features.
-                if expressions.optimizer_features != *optimizer_features {
+                // Remove dropped IDs and expressions that were cached with different features.
+                if !current_ids.contains(&key.id)
+                    || expressions.optimizer_features != *optimizer_features
+                {
                     keys_to_remove.push((key.clone(), None));
+                } else {
+                    current_contents.insert(key.id, expressions);
                 }
             } else if remove_prior_gens {
                 // Remove expressions from previous generations.
@@ -199,7 +208,9 @@ impl ExpressionCache {
             .iter()
             .map(|(key, expressions)| (key, expressions.as_ref()))
             .collect();
-        self.durable_cache.try_set_many(&keys_to_remove).await
+        self.durable_cache.try_set_many(&keys_to_remove).await?;
+
+        Ok(current_contents)
     }
 
     /// Durably removes all entries given by `invalidate_ids` and inserts `new_entries` into
@@ -224,6 +235,7 @@ impl ExpressionCache {
             );
         }
         for (id, expressions) in new_entries {
+            let expressions = to_value(expressions);
             entries.insert(
                 CacheKey {
                     id,
@@ -320,7 +332,8 @@ mod tests {
     use uuid::Uuid;
 
     use crate::expr_cache::{
-        CacheKey, ExpressionCacheConfig, ExpressionCacheHandle, ExpressionCodec, Expressions,
+        from_value, to_value, CacheKey, ExpressionCacheConfig, ExpressionCacheHandle,
+        ExpressionCodec, Expressions,
     };
 
     impl Arbitrary for Expressions {
@@ -584,8 +597,12 @@ mod tests {
         #[mz_ore::test]
         #[cfg_attr(miri, ignore)]
         fn expr_cache_roundtrip((key, val) in any::<(CacheKey, Expressions)>()) {
-            let (encoded_key, encoded_val) = ExpressionCodec::encode(&key, &val);
-            let (decoded_key, decoded_val) = ExpressionCodec::decode(encoded_key, encoded_val);
+            let encoded_key = ExpressionCodec::encode_key(&key);
+            let serde_val = to_value(val.clone());
+            let encoded_val = ExpressionCodec::encode_val(&serde_val);
+            let decoded_key = ExpressionCodec::decode_key(encoded_key);
+            let decoded_val = ExpressionCodec::decode_val(encoded_val);
+            let decoded_val: Expressions = from_value(decoded_val);
 
             assert_eq!(key, decoded_key);
             assert_eq!(val, decoded_val);
