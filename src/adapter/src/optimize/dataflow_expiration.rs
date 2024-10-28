@@ -4,6 +4,24 @@
 // included in the LICENSE file.
 
 //! Helper function for dataflow expiration checks.
+//!
+//! A [`TimeDependence`] describes how a dataflow follows wall-clock time, and the
+//! [`TimeDependenceHelper]` type offers functions to compute the time dependence based on the
+//! current state of the catalog.
+//!
+//! For a set of global IDs, the helper determines how a dataflow that depends on the set of IDs
+//! follows wall-clock time. Within the catalog, we remember how all installed objects follow
+//! wall-clock time, which turns this step into gathering and combining different time dependencies:
+//! * A meet of anything with wall-clock time results in wall-clock time.
+//! * A meet of anything but wall-clock time and a refresh schedule results in a refresh schedule
+//!   that depends on the deduplicated collection of dependencies.
+//! * Otherwise, a dataflow is indeterminate, which expresses that we either don't know how it
+//!   follows wall-clock time, or is a constant collection.
+//!
+//! The time dependence needs to be computed on the actual dependencies, and not on catalog
+//! uses. An optimized dataflow depends on concrete indexes, and has unnecessary dependencies
+//! pruned. Additionally, transitive dependencies can depend on indexes that do not exist anymore,
+//! which makes combining run-time information with catalog-based information difficult.
 
 use std::collections::BTreeMap;
 
@@ -67,13 +85,9 @@ impl<'a> TimeDependenceHelper<'a> {
         time_dependencies.sort();
         time_dependencies.dedup();
 
-        if time_dependencies.iter().any(|dep| matches!(dep, Wallclock)) {
+        let mut time_dependence = if time_dependencies.iter().any(|dep| matches!(dep, Wallclock)) {
             // Wall-clock dependency is dominant.
-            if schedule.is_some() {
-                RefreshSchedule(schedule, vec![Wallclock])
-            } else {
-                Wallclock
-            }
+            RefreshSchedule(schedule, vec![Wallclock])
         } else if time_dependencies
             .iter()
             .any(|dep| matches!(dep, RefreshSchedule(_, _)))
@@ -85,7 +99,9 @@ impl<'a> TimeDependenceHelper<'a> {
         } else {
             // No wall-clock dependence, no refresh schedule
             Indeterminate
-        }
+        };
+        time_dependence.normalize();
+        time_dependence
     }
 
     /// Determine the time dependence for a [`DataSourceDesc`].

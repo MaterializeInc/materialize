@@ -830,9 +830,9 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
     /// Checks for dataflow expiration. Panics if we're past the replica expiration time.
     pub(crate) fn check_expiration(&self) {
         let now = mz_ore::now::SYSTEM_TIME();
-        if !self.compute_state.replica_expiration.less_than(&now.into()) {
-            let now_utc = mz_ore::now::to_datetime(now);
-            let expiration_utc = self
+        if self.compute_state.replica_expiration.less_than(&now.into()) {
+            let now_datetime = mz_ore::now::to_datetime(now);
+            let expiration_datetime = self
                 .compute_state
                 .replica_expiration
                 .as_option()
@@ -841,17 +841,17 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
 
             error!(
                 now,
-                now_utc = ?now_utc,
-                expiration = ?self.compute_state.replica_expiration,
-                expiration_utc = ?expiration_utc,
+                now_datetime = ?now_datetime,
+                expiration = ?self.compute_state.replica_expiration.elements(),
+                expiration_datetime = ?expiration_datetime,
                 "Replica expired"
             );
 
             // Repeat condition for better error message.
             assert!(
-                self.compute_state.replica_expiration.less_than(&now.into()),
-                "Replica expired. now: {now} ({now_utc:?}), expiration: {:?} ({expiration_utc:?})",
-                self.compute_state.replica_expiration,
+                !self.compute_state.replica_expiration.less_than(&now.into()),
+                "Replica expired. now: {now} ({now_datetime:?}), expiration: {:?} ({expiration_datetime:?})",
+                self.compute_state.replica_expiration.elements(),
             );
         }
     }
