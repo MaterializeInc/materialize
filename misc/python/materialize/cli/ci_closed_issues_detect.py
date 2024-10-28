@@ -304,6 +304,7 @@ def main() -> int:
 
     if args.changed_lines_only:
         issue_refs = filter_changed_lines(issue_refs)
+        ambiguous_refs = filter_changed_lines(ambiguous_refs)
 
     issue_refs = filter_closed_issues(issue_refs)
 
