@@ -208,13 +208,13 @@ mz.testdrive.run(..., no_reset=True, seed = N)
 If no result set is expected:
 
 ```python
-mz.environmentd.sql("DROP TABLE t1;")
+mz.sql("DROP TABLE t1;")
 ```
 
 To fetch a result set:
 
 ```python
-id = mz.environmentd.sql_query("SELECT id FROM mz_secrets WHERE name = 'username'")[0][0]
+id = mz.sql_query("SELECT id FROM mz_secrets WHERE name = 'username'")[0][0]
 ```
 
 ## Interacting with the Kubernetes cluster via kubectl

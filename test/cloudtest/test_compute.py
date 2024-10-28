@@ -28,15 +28,11 @@ def test_cluster_sizing(mz: MaterializeApplication) -> None:
     """Test that a SIZE N cluster indeed creates N clusterd instances."""
     SIZE = 2
 
-    mz.environmentd.sql(
-        f"CREATE CLUSTER sized1 REPLICAS (sized_replica1 (SIZE '{SIZE}-1'))"
-    )
-    cluster_id = mz.environmentd.sql_query(
-        "SELECT id FROM mz_clusters WHERE name = 'sized1'"
-    )[0][0]
+    mz.sql(f"CREATE CLUSTER sized1 REPLICAS (sized_replica1 (SIZE '{SIZE}-1'))")
+    cluster_id = mz.sql_query("SELECT id FROM mz_clusters WHERE name = 'sized1'")[0][0]
     assert cluster_id is not None
 
-    replica_id = mz.environmentd.sql_query(
+    replica_id = mz.sql_query(
         "SELECT id FROM mz_cluster_replicas WHERE name = 'sized_replica1'"
     )[0][0]
     assert replica_id is not None
@@ -45,7 +41,7 @@ def test_cluster_sizing(mz: MaterializeApplication) -> None:
         compute_pod = cluster_pod_name(cluster_id, replica_id, compute_id)
         wait(condition="condition=Ready", resource=compute_pod)
 
-    mz.environmentd.sql("DROP CLUSTER sized1 CASCADE")
+    mz.sql("DROP CLUSTER sized1 CASCADE")
 
 
 @pytest.mark.parametrize(
@@ -65,23 +61,23 @@ def test_cluster_shutdown(mz: MaterializeApplication, failpoint: str) -> None:
         # wait until the SQL interface is available.
         mz.wait_for_sql()
         try:
-            mz.environmentd.sql(sql)
+            mz.sql(sql)
         except InterfaceError as e:
             LOGGER.error(f"Expected SQL error: {e}")
 
-    mz.environmentd.sql(
+    mz.sql(
         "CREATE CLUSTER shutdown1 REPLICAS (shutdown_replica1 (SIZE '1'), shutdown_replica2 (SIZE '1'))"
     )
 
-    cluster_id = mz.environmentd.sql_query(
-        "SELECT id FROM mz_clusters WHERE name = 'shutdown1'"
-    )[0][0]
+    cluster_id = mz.sql_query("SELECT id FROM mz_clusters WHERE name = 'shutdown1'")[0][
+        0
+    ]
     assert cluster_id is not None
 
     compute_pods = {}
     compute_svcs = {}
     for replica_name in ["shutdown_replica1", "shutdown_replica2"]:
-        replica_id = mz.environmentd.sql_query(
+        replica_id = mz.sql_query(
             f"SELECT id FROM mz_cluster_replicas WHERE name = '{replica_name}'"
         )[0][0]
         assert replica_id is not None
@@ -127,18 +123,16 @@ def test_disk_label(mz: MaterializeApplication) -> None:
     """Test that cluster replicas have the correct materialize.cloud/disk labels"""
 
     # If cluster_always_use_disk is set to true, it will take precedence over the DISK keyword in CREATE CLUSTER.
-    mz.environmentd.sql(
+    mz.sql(
         "ALTER SYSTEM SET cluster_always_use_disk = false;",
         port="internal",
         user="mz_system",
     )
 
     for value in ("true", "false"):
-        mz.environmentd.sql(
-            f"CREATE CLUSTER disk_{value} MANAGED, SIZE = '2-1', DISK = {value}"
-        )
+        mz.sql(f"CREATE CLUSTER disk_{value} MANAGED, SIZE = '2-1', DISK = {value}")
 
-        (cluster_id, replica_id) = mz.environmentd.sql_query(
+        (cluster_id, replica_id) = mz.sql_query(
             f"SELECT mz_clusters.id, mz_cluster_replicas.id FROM mz_cluster_replicas JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id WHERE mz_clusters.name = 'disk_{value}'"
         )[0]
         assert cluster_id is not None
@@ -153,10 +147,10 @@ def test_disk_label(mz: MaterializeApplication) -> None:
         else:
             assert node_selectors == "''"
 
-        mz.environmentd.sql(f"DROP CLUSTER disk_{value} CASCADE")
+        mz.sql(f"DROP CLUSTER disk_{value} CASCADE")
 
     # Reset
-    mz.environmentd.sql(
+    mz.sql(
         "ALTER SYSTEM SET cluster_always_use_disk = true;",
         port="internal",
         user="mz_system",
@@ -226,8 +220,8 @@ def test_cluster_replica_sizes(mz: MaterializeApplication) -> None:
         "small": cluster_replica_size_map["small"],
         "medium": cluster_replica_size_map["medium"],
     }.items():
-        mz.environmentd.sql(f"CREATE CLUSTER scale_{key} MANAGED, SIZE = '{key}'")
-        (cluster_id, replica_id) = mz.environmentd.sql_query(
+        mz.sql(f"CREATE CLUSTER scale_{key} MANAGED, SIZE = '{key}'")
+        (cluster_id, replica_id) = mz.sql_query(
             f"SELECT mz_clusters.id, mz_cluster_replicas.id FROM mz_cluster_replicas JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id WHERE mz_clusters.name = 'scale_{key}'"
         )[0]
         assert cluster_id is not None
@@ -246,7 +240,7 @@ def test_cluster_replica_sizes(mz: MaterializeApplication) -> None:
             node_selectors == expected
         ), f"actual: {node_selectors}, but expected {expected}"
 
-        mz.environmentd.sql(f"DROP CLUSTER scale_{key} CASCADE")
+        mz.sql(f"DROP CLUSTER scale_{key} CASCADE")
 
     # Cleanup
     stateful_set = [
