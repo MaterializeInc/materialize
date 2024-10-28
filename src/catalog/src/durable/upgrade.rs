@@ -181,7 +181,7 @@ macro_rules! objects {
     }
 }
 
-objects!(v60, v61, v62, v63, v64, v65, v66, v67, v68);
+objects!(v67, v68);
 
 /// The current version of the `Catalog`.
 ///
@@ -193,20 +193,13 @@ pub const CATALOG_VERSION: u64 = 68;
 /// The minimum `Catalog` version number that we support migrating from.
 ///
 /// After bumping this we can delete the old migrations.
-pub(crate) const MIN_CATALOG_VERSION: u64 = 60;
+pub(crate) const MIN_CATALOG_VERSION: u64 = 67;
 
 // Note(parkmycar): Ideally we wouldn't have to define these extra constants,
 // but const expressions aren't yet supported in match statements.
 const TOO_OLD_VERSION: u64 = MIN_CATALOG_VERSION - 1;
 const FUTURE_VERSION: u64 = CATALOG_VERSION + 1;
 
-mod v60_to_v61;
-mod v61_to_v62;
-mod v62_to_v63;
-mod v63_to_v64;
-mod v64_to_v65;
-mod v65_to_v66;
-mod v66_to_v67;
 mod v67_to_v68;
 
 /// Describes a single action to take during a migration from `V1` to `V2`.
@@ -286,13 +279,6 @@ async fn run_upgrade(
     match version {
         ..=TOO_OLD_VERSION => Err(incompatible),
 
-        60 => run_versioned_upgrade(unopened_catalog_state, version, v60_to_v61::upgrade).await,
-        61 => run_versioned_upgrade(unopened_catalog_state, version, v61_to_v62::upgrade).await,
-        62 => run_versioned_upgrade(unopened_catalog_state, version, v62_to_v63::upgrade).await,
-        63 => run_versioned_upgrade(unopened_catalog_state, version, v63_to_v64::upgrade).await,
-        64 => run_versioned_upgrade(unopened_catalog_state, version, v64_to_v65::upgrade).await,
-        65 => run_versioned_upgrade(unopened_catalog_state, version, v65_to_v66::upgrade).await,
-        66 => run_versioned_upgrade(unopened_catalog_state, version, v66_to_v67::upgrade).await,
         67 => run_versioned_upgrade(unopened_catalog_state, version, v67_to_v68::upgrade).await,
 
         // Up-to-date, no migration needed!
