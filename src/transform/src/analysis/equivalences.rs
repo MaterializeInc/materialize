@@ -231,7 +231,6 @@ impl Analysis for Equivalences {
             MirRelationExpr::Negate { .. } => results.get(index - 1).unwrap().clone(),
             MirRelationExpr::Threshold { .. } => results.get(index - 1).unwrap().clone(),
             MirRelationExpr::Union { .. } => {
-                // TODO: `EquivalenceClasses::union` takes references, and we could probably skip much of this cloning.
                 let expr_index = index;
                 let mut child_equivs = depends
                     .children_of_rev(expr_index, expr.children().count())
@@ -564,6 +563,10 @@ impl EquivalenceClasses {
 
     /// The equivalence classes of terms equivalent in all inputs.
     ///
+    /// This method relies on the `remap` member of each input, and bases the intersection on these rather than `classes`.
+    /// This means one should ensure `minimize()` has been called on all inputs, or risk getting a stale, but conservatively
+    /// correct, result.
+    ///
     /// This method currently misses opportunities, because it only looks for exactly matches in expressions,
     /// which may not include all possible matches. For example, `f(#1) == g(#1)` may exist in one class, but
     /// in another class where `#0 == #1` it may exist as `f(#0) == g(#0)`.
@@ -571,30 +574,30 @@ impl EquivalenceClasses {
         if others.is_empty() {
             self.clone()
         } else {
-            // Map from expression to an equivalence class identifier.
-            // That identifier is a pair of integer and expression reference, where
-            // the integer is a bit of a "hashcons" of accumulated class representatives.
-            let mut intersection: BTreeMap<&MirScalarExpr, usize> = Default::default();
-            let mut rekey: BTreeMap<_, _> = Default::default();
+            // List of expressions in the intersection, and a proxy equivalence class identifier.
+            let mut intersection: Vec<(&MirScalarExpr, usize)> = Default::default();
+            // Map from expression to a proxy equivalence class identifier.
+            let mut rekey: BTreeMap<&MirScalarExpr, usize> = Default::default();
             for (key, val) in self.remap.iter() {
                 if !rekey.contains_key(val) {
                     rekey.insert(val, rekey.len());
                 }
-                intersection.insert(key, rekey[val]);
+                intersection.push((key, rekey[val]));
             }
             for other in others {
+                // Map from proxy equivalence class identifier and equivalence class expr to a new proxy identifier.
                 let mut rekey: BTreeMap<(usize, &MirScalarExpr), usize> = Default::default();
-                intersection = intersection
-                    .into_iter()
-                    .flat_map(move |(key, idx)| {
-                        other.remap.get(key).map(|val| {
-                            if !rekey.contains_key(&(idx, val)) {
-                                rekey.insert((idx, val), rekey.len());
-                            }
-                            (key, rekey[&(idx, val)])
-                        })
-                    })
-                    .collect()
+                intersection.retain_mut(|(key, idx)| {
+                    if let Some(val) = other.remap.get(key) {
+                        if !rekey.contains_key(&(*idx, val)) {
+                            rekey.insert((*idx, val), rekey.len());
+                        }
+                        *idx = rekey[&(*idx, val)];
+                        true
+                    } else {
+                        false
+                    }
+                });
             }
             let mut classes: BTreeMap<_, Vec<MirScalarExpr>> = Default::default();
             for (key, vals) in intersection {
