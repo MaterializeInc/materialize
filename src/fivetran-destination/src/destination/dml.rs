@@ -57,7 +57,8 @@ pub async fn handle_truncate_table(request: TruncateRequest) -> Result<(), OpErr
             LEFT JOIN mz_schemas s
             ON t.schema_id = s.id
             WHERE s.name = $1 AND t.name = $2
-        )"#.to_string();
+        )"#
+    .to_string();
     let exists: bool = client
         .query_one(&exists_stmt, &[&request.schema_name, &request.table_name])
         .await
