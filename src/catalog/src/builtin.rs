@@ -4089,7 +4089,7 @@ pub static MZ_LIR_MAPPING: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView 
     oid: oid::VIEW_MZ_LIR_MAPPING_OID,
     column_defs: None,
     sql: "
-SELECT global_id, lir_id, operator, nesting, operator_id_start, operator_id_end
+SELECT global_id, lir_id, operator, parent_lir_id, nesting, operator_id_start, operator_id_end
 FROM mz_internal.mz_compute_lir_mapping_per_worker
 WHERE worker_id = 0",
     access: vec![PUBLIC_SELECT],

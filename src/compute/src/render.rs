@@ -876,20 +876,20 @@ where
     ///
     /// The plan must _not_ contain any `Let` or `LetRec` nodes.
     fn render_letfree_plan(&mut self, object_id: GlobalId, plan: FlatPlan) -> CollectionBundle<G> {
-        let (mut nodes, root_id, topological_order, mut nesting) = plan.destruct();
+        let (mut steps, root_id, topological_order) = plan.destruct();
 
         // Rendered collections by their `LirId`.
         let mut collections = BTreeMap::new();
 
         for lir_id in topological_order {
-            let node = nodes.remove(&lir_id).unwrap();
-            let nesting = nesting.remove(&lir_id).unwrap();
+            let step = steps.remove(&lir_id).unwrap();
 
-            // TODO(mgree) need ExprHumanizer in DataflowDescription (ActiveComputeState doesn't have a catalog reference)
-            let operator = node.humanize(&DummyHumanizer);
+            // TODO(mgree) need ExprHumanizer in DataflowDescription to get nice column names
+            // (ActiveComputeState doesn't have a catalog reference)
+            let operator = step.node.humanize(&DummyHumanizer);
 
             let operator_id_start = self.scope.peek_identifier();
-            let mut bundle = self.render_plan_node(node, &collections);
+            let mut bundle = self.render_plan_node(step.node, &collections);
             let operator_id_end = self.scope.peek_identifier();
 
             let operator_span = if operator_id_start == operator_id_end {
@@ -898,7 +898,14 @@ where
                 Some((operator_id_start, operator_id_end))
             };
 
-            self.log_lir_mapping(object_id, lir_id, operator, nesting, operator_span);
+            self.log_lir_mapping(
+                object_id,
+                lir_id,
+                operator,
+                step.parent,
+                step.nesting,
+                operator_span,
+            );
             self.log_operator_hydration(&mut bundle, lir_id);
 
             collections.insert(lir_id, bundle);
@@ -1118,6 +1125,7 @@ where
         global_id: GlobalId,
         lir_id: LirId,
         operator: String,
+        parent_lir_id: Option<LirId>,
         nesting: u8,
         operator_span: Option<(usize, usize)>,
     ) {
@@ -1126,6 +1134,7 @@ where
                 global_id,
                 lir_id,
                 operator,
+                parent_lir_id,
                 nesting,
                 operator_span,
             });
