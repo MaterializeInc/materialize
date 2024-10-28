@@ -1136,7 +1136,10 @@ impl<T> Default for ReferencedBlobValidator<T> {
 impl<T: Timestamp + Lattice + Codec64> ReferencedBlobValidator<T> {
     fn add_inc_blob(&mut self, x: HollowBlobRef<'_, T>) {
         match x {
-            HollowBlobRef::Batch(x) => assert!(self.inc_batches.insert(x.clone())),
+            HollowBlobRef::Batch(x) => assert!(
+                self.inc_batches.insert(x.clone()) || x.desc.lower() == x.desc.upper(),
+                "non-empty batches should only be appended once; duplicate: {x:?}"
+            ),
             HollowBlobRef::Rollup(x) => assert!(self.inc_rollups.insert(x.clone())),
         }
     }
