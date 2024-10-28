@@ -140,31 +140,25 @@ new `SourceExport` was added.
 
 1. Separate the planning of _sources_ and _subsources_ such that sources are fully
    planned before any linked subsources.
-   **Update: completed in [PR](https://github.com/MaterializeInc/materialize/pull/28310)**
 
 2. Update the CREATE TABLE statement to allow creation of a read-only table
    with a reference to a source and an upstream-reference:
    (`CREATE TABLE <new_table> FROM SOURCE <source> (REFERENCE <upstream_reference>)`)
-   **Update: statement introduced in [PR](https://github.com/MaterializeInc/materialize/pull/28125)**
 
 3. Copy subsource-specific details stored on `CREATE SOURCE` statement options to their
    relevant subsource statements.
-   **Update: completed in [PR](https://github.com/MaterializeInc/materialize/pull/28493)**
 
 4. Update the underlying `SourceDesc`/`IngestionDesc` and
    `SourceExport`/`IngestionExport` structs to include each export's specific
    details and options on its own struct, rather than using an implicit mapping into
    the top-level source's options.
-   **Update: done in [PR](https://github.com/MaterializeInc/materialize/pull/28503)**
 
 5. Update the source rendering operators to handle the new structures and allow
    outputting the same upstream table to more than one souce export.
-   **Update: open PRs: [MySQL](https://github.com/MaterializeInc/materialize/pull/28671) [Postgres](https://github.com/MaterializeInc/materialize/pull/28676)**
 
 6. Implement planning for `CREATE TABLE .. FROM SOURCE` and include a purification
    step akin to the purification for `ALTER SOURCE .. ADD SUBSOURCE`. This will verify
    the upstream permissions, schema, etc for the newly added source-fed table.
-   **Update: open PRs [purification](https://github.com/MaterializeInc/materialize/pull/28943) and [planning](https://github.com/MaterializeInc/materialize/pull/28954)**
 
 7. Update the storage controller to use both _subsources_ and _read-only tables_
    as _source_exports_ for existing multi-output sources (postgres & mysql).
@@ -238,9 +232,9 @@ pub struct Table {
 ```
 
 The `DataSourceDesc` struct's `IngestionExport` variant will be extended to
-include a `details: SourceExportDetails` field on each export, such that all
-the individual details necessary to render that export are stored here and
-not on the top-level `Ingestion`:
+include `details` and `data_config` fields on each export, such that all the
+individual details necessary to render that export are stored here and not on
+the top-level `Ingestion`:
 
 ```rust
 pub enum DataSourceDesc {
@@ -252,15 +246,17 @@ pub enum DataSourceDesc {
         ingestion_id: GlobalId,
         external_reference: UnresolvedItemName,
         details: SourceExportDetails,
+        data_config: SourceExportDataConfig<C>,
     },
 
     ...
 }
 
-
 /// this is an example and these enum structs would likely be their own types
 pub enum SourceExportDetails {
-    Kafka,
+    Kafka {
+        metadata_columns: ...,
+    },
     Postgres {
         column_casts: ...,
         table: PostgresTableDesc,
@@ -273,6 +269,11 @@ pub enum SourceExportDetails {
     LoadGenerator {
         ...
     }
+}
+
+pub enum SourceExportDataConfig {
+    pub encoding: Option<SourceDataEncoding<C>>,
+    pub envelope: SourceEnvelope,
 }
 ```
 
@@ -297,8 +298,8 @@ include the export details:
 ```rust
     IngestionExport {
         ingestion_id: GlobalId,
-        external_reference: UnresolvedItemName,
-        details: ExportDetails,
+        details: SourceExportDetails,
+        data_config: SourceExportDataConfig<C>,
     },
 ```
 
@@ -309,16 +310,16 @@ source. This is used in source rendering to figure out what upstream
 reference should be mapped to a specific output collection.
 
 The storage `SourceExport` struct will be updated to include the `details`
-field, populated from the `IngestionExport`'s `details`:
+field and `data_config` fields, populated from the `IngestionExport`:
 
 ```rust
-pub struct SourceExport<O: proptest::prelude::Arbitrary, S = ()> {
-   /// Which output from the ingestion this source refers to.
-   pub ingestion_output: O,
+pub struct SourceExport<S = (), C: ConnectionAccess = InlinedConnection> {
    /// The collection metadata needed to write the exported data
    pub storage_metadata: S,
-   /// How to project the ingestion output to this export's collection.
-   pub details: ExportDetails,
+   /// Details necessary for the source to export data to this export's collection.
+   pub details: SourceExportDetails,
+   /// Config necessary to handle (e.g. decode and envelope) the data for this export.
+   pub data_config: SourceExportDataConfig<C>,
 }
 ```
 
@@ -377,9 +378,9 @@ timely capabilities / progress of each source export independently.
 Envelope and encoding/format options are currently specified on a per-source level.
 These options will be moved to the `CREATE TABLE .. FROM SOURCE` statements such that
 they can be independently set on a per-table basis. The `envelope` and `encoding` fields
-will be moved from the primary source config to each `SourceExport`, and the source
-rendering pipeline will use per-export encoding/envelope settings rather than assuming
-each export for a source requires the same config, as it currently does.
+will be moved from the primary source config to the `data_config` on each `SourceExport`,
+and the source rendering pipeline will use per-export encoding/envelope settings rather
+than assuming each export for a source requires the same config, as it currently does.
 
 ### Webhook Sources
 
@@ -484,7 +485,7 @@ MySQL only has one level, and in Postgres all tables in a publication must belon
 'database' such that the 2nd level of namespacing doesn't matter. In the future if we encounter
 a situation where we need to expose more levels we can add columns as needed.
 
-A new `REFRESH SOURCE REFERENCES <source_id or name>` statement will be introduced that
+A new `ALTER SOURCE <source_id or name> REFRESH REFERENCES` statement will be introduced that
 can trigger a refresh of the rows in `mz_internal.mz_source_references` that pertain to the
 requested source. Otherwise, this catalog table will only be populated at source creation.
 
@@ -606,3 +607,141 @@ process, you are responsible for getting answers to these open
 questions. All open questions should be answered by the time a design
 document is merged.
 -->
+
+## Project Update - November 2024
+
+Almost all of the changes described in the design doc above have been implemented
+and are available for use internally with the appropriate feature-flag(s).
+
+The notable changes not yet implemented are:
+
+-   Converting webhook statements to `CREATE TABLE .. FROM WEBHOOK`. This is an open
+    task to complete.
+-   Removing the separate `<source>_progress` subsource and making the primary source
+    collection hold the progress data. This was punted to be done at a future date since
+    it is difficult to do while the legacy source syntax is still supported.
+-   Console changes to support the new syntax: https://github.com/MaterializeInc/console/issues/3400
+    Actively being worked on.
+
+Open bugs are being tracked in the associated epic:
+https://github.com/MaterializeInc/database-issues/issues/8322
+
+There are two feature-flags that control usage of the new syntax:
+
+-   `enable_create_table_from_source`: This flag unlocks the ability to use the new
+    `CREATE TABLE .. FROM SOURCE` statement and allows defining sources with
+    `CREATE SOURCE ..` statements that don't need to specify legacy 'required' fields.
+    Enabling this feature-flag for customers allows them to test the new syntax and to
+    use both the old and new syntaxes.
+-   `force_source_table_syntax`: This flag forces use of the new syntax and activates
+    a catalog migration to convert any legacy sources over to the new syntax model. It
+    also changes single-output sources to no longer output to their primary data collection.
+
+There are multiple ways to migrate a customer to the new syntax model:
+
+-   self migration: Once the customer has the `enable_create_table_from_source` flag
+    activated they can freely use the new syntax as desired. They can then opt to do one of
+    two things to migrate to the new model:
+
+    -   Keep their existing sources and add new `CREATE TABLE .. FROM SOURCE` statements
+        that reference these sources. Move all downstream dependencies to read from these
+        tables instead of existing subsources and primary sources. Then drop any legacy
+        subsources using `DROP SOURCE <subsource>`.
+    -   Create completely new sources and new tables explicitly on those sources. Move
+        over all downstream dependencies. Then drop all old sources using
+        `DROP SOURCE <source> CASCADE`.
+
+    Note that there is an important caveat: Kafka and single-output load generator sources
+    will continue to export data to the the primary source collection until
+    `force_source_table_syntax` is activated, in addition to any exports to tables.
+    The additional export can have adverse performance implications when using the `upsert`
+    envelope, such as requiring more disk when there are two upsert exports instead of one.
+
+-   auto migration: The customer can coordinate with Materialize to activate the
+    `force_source_table_syntax` flag and trigger a restart of their environment, which will
+    activate the catalog migration that automatically converts all existing sources and
+    depenencies to the new syntax. All name -> data relationships are unchanged such that
+    all queries should continue to work without modification, but state in dbt and terraform
+    may need to be updated to reference new statements.
+
+    Since the migration activated by the `force_source_table_syntax` flag will rewrite existing
+    source and subsource statements, activating this flag for a customer requires more care
+    than usual. This flag can cause weird behavior if activated in an environment containing
+    legacy sources without also triggering an environment restart or upgrade since it will
+    cause existing legacy sources to fail SQL planning until they are auto-migrated by the
+    catalog migration on the next environmentd boot.
+
+    When the migration is applied, the customer may also need to update their
+    existing dbt and/or terraform code to accommodate the changed statements.
+    In an ideal situation, each customer would work with their field-engineer to choose
+    the appropriate week to activate this migration during the usual weekly upgrade maintenance
+    window, and the release managers during the weekly maintenance window will activate the flag
+    for any customers designated for that week.
+
+The catalog migration activated by `force_source_table_syntax` does the following:
+
+-   For existing sources where the primary relation has the data (e.g. Kafka sources
+    and single-output load generator sources):
+    -   Assuming the existing source object is named `<source>` with id `u123`
+    -   Generate a new `CREATE TABLE` statement named `<source>` with a new id.
+        Make this new table statement use the current source's primary data collection.
+        Copy over all the options from the source statement that apply to the
+        table instead (envelope, format, etc).
+    -   Change the existing `CREATE SOURCE` statement to be named `<source>_source`
+        or `<source>_source_N` if `_source` is taken. Keep the same id, but use
+        a new empty primary data collection. Remove all the options on this source
+        statement that are no longer necessary.
+    -   Re-write any id-based references to the source statement in the catalog to
+        point to the new table id instead, so downstream statements continue reading
+        from the same data.
+-   For existing multi-output sources (e.g. Postgres, MySQL, and some load-gen sources):
+    -   Convert subsources to `CREATE TABLE` statements, each using the same name, id,
+        and options. In a previous migration we had already copied all the
+        export-specific options onto the subsource statements (e.g. `WITH (TEXT COLUMNS ..)`)
+    -   Change the `CREATE SOURCE` statement to remove any subsource-specification fields
+        (e.g. `FOR ALL TABLES`) and options `e.g. WITH (TEXT COLUMNS ..)`
+
+The suggested overall migration plan for moving customers to the new model:
+
+1. Enable private-preview for the new syntax with a select group of customers by
+   activating the `enable_create_table_from_source` flag for them. Encourage this group
+   to add new tables to their existing sources or to create entirely new sources using
+   the new syntax and report feedback on the experience.
+
+2. Also activate the `force_source_table_syntax` flag for any private-preview customers that
+   would like to test the auto-migration of their sources.
+
+3. Begin the 'public' migration:
+
+    - Set the `enable_create_table_from_source` syntax to `true` for all environments.
+
+    - Explicitly **set the `force_source_table_syntax` flag to `false` for each existing customer**
+      environment in Launch Darkly.
+
+    - Set the `force_source_table_syntax` flag default to `true`, such that all **new** customer
+      environments must use the new syntax.
+
+    - Roll out documentation changes that use the new syntax as the default and move the existing
+      syntax docs to a 'legacy' section.
+
+    - Send out an announcement to all existing customers of the migration plan. Outline a specific
+      window (e.g. 4 weeks) during which they can either self-migrate their sources to the new
+      model or request an auto-migration.
+
+    - Merge the terraform PR https://github.com/MaterializeInc/terraform-provider-materialize/pull/647
+      that starts warning users the old syntax is deprecated and allows using the new syntax
+      going forward.
+
+4. On a per-customer basis, offer to do the automatic catalog migration during a chosen
+   weekly release window. Coordinate with the release managers to ensure the correct customer
+   environments are activated with the `force_source_table_syntax` flag before the upgrade.
+
+5. After the multi-week migration 'window', notify all existing customers that their environments
+   will be migrated during the next release window if they haven't yet done so themselves.
+   Coordinate with the release manager to turn on `force_source_table_syntax` for all
+   environments right before the next release rollout.
+
+6. Delete all code related to the legacy syntax: all subsource code (besides being able
+   to create and parse `_progress` subsources), all code related to parsing and planning
+   options that apply to the primary data collection of a source, and code in the storage
+   layer to handle outputting to the primary collection of a source.
