@@ -441,7 +441,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "--runs-per-scenario",
         metavar="N",
         type=int,
-        default=3,
+        default=5,
     )
 
     parser.add_argument(
