@@ -333,7 +333,7 @@ def report(
         plt.yscale("log")
         title = f"{scenario_name}\nagainst {mz_string}"
         if num_plots > 1:
-            title += f"\n(part {i}/{num_plots})"
+            title += f"\n(part {i+1}/{num_plots})"
         plt.title(title)
         plt.legend(loc="best")
         plt.grid(True)
