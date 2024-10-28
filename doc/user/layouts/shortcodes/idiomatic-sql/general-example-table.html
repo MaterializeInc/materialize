@@ -1,0 +1,35 @@
+
+<!--
+  To render properly, keep the left-hand alignment of the table
+-->
+
+<table>
+<thead>
+<tr>
+<th></th>
+<th>Idiomatic Materialize SQL</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ANY()</code> Equi-join condition</td>
+<td class="copyableCode">
+
+```mzsql
+WITH individual_sales_items AS
+(SELECT unnest(items) as item, week_of FROM sales_items)
+SELECT s.week_of, o.order_id, o.item, o.quantity
+FROM orders o
+JOIN individual_sales_items s ON o.item = s.item
+WHERE date_trunc('week', o.order_date) = s.week_of;
+```
+
+</td>
+</tr>
+
+</tbody>
+</table>
+
+<!--
+  To render properly, keep the left-hand alignment of table
+-->
