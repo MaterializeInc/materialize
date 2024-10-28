@@ -121,7 +121,7 @@ message SchemaValue {
 }
 
 message ItemKey {
-  CatalogItemId id = 1;
+  CatalogItemId gid = 1;
 }
 
 message ItemValue {

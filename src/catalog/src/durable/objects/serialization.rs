@@ -538,13 +538,13 @@ impl RustType<proto::SchemaValue> for SchemaValue {
 impl RustType<proto::ItemKey> for ItemKey {
     fn into_proto(&self) -> proto::ItemKey {
         proto::ItemKey {
-            id: Some(self.id.into_proto()),
+            gid: Some(self.id.into_proto()),
         }
     }
 
     fn from_proto(proto: proto::ItemKey) -> Result<Self, TryFromProtoError> {
         Ok(ItemKey {
-            id: proto.id.into_rust_if_some("ItemKey::id")?,
+            id: proto.gid.into_rust_if_some("ItemKey::gid")?,
         })
     }
 }
