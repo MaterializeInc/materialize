@@ -18,7 +18,6 @@ import pg8000
 from pg8000 import Connection
 
 from materialize import buildkite
-from materialize.mz_version import MzVersion
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.service import Service, ServiceConfig
 from materialize.mzcompose.services.materialized import Materialized
@@ -31,6 +30,11 @@ from materialize.mzcompose.services.postgres import (
 from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
+from materialize.source_table_migration import (
+    get_new_image_for_source_table_migration_test,
+    get_old_image_for_source_table_migration_test,
+    verify_sources_after_source_table_migration,
+)
 
 # Set the max slot WAL keep size to 10MB
 DEFAULT_PG_EXTRA_COMMAND = ["-c", "max_slot_wal_keep_size=10"]
@@ -392,17 +396,10 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     pg_version = get_targeted_pg_version(parser)
 
-    mz_old_image = "materialize/materialized:v0.122.0"
-    mz_new_image = None
-
-    assert MzVersion.parse_cargo() < MzVersion.parse_mz(
-        "v0.130.0"
-    ), "migration test probably no longer needed"
-
     for file in sharded_files:
         mz_old = Materialized(
             name="materialized",
-            image=mz_old_image,
+            image=get_old_image_for_source_table_migration_test(),
             volumes_extra=["secrets:/share/secrets"],
             external_metadata_store=True,
             external_minio=True,
@@ -413,7 +410,7 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         mz_new = Materialized(
             name="materialized",
-            image=mz_new_image,
+            image=get_new_image_for_source_table_migration_test(),
             volumes_extra=["secrets:/share/secrets"],
             external_metadata_store=True,
             external_minio=True,
@@ -444,7 +441,7 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
                 c.up("materialized")
 
                 print("Running mz_new")
-                verify_sources(c, file)
+                verify_sources_after_source_table_migration(c, file)
 
                 c.kill("materialized", wait=True)
                 c.kill("postgres", wait=True)
@@ -453,26 +450,3 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
                 c.rm(METADATA_STORE)
                 c.rm("postgres")
                 c.rm_volumes("mzdata")
-
-
-def verify_sources(c: Composition, file: str) -> None:
-    source_names = c.sql_query("SELECT name FROM mz_sources WHERE id LIKE 'u%';")
-
-    print(f"Sources created in {file} are: {source_names}")
-
-    for row in source_names:
-        verify_source(c, file, row[0])
-
-
-def verify_source(c: Composition, file: str, source_name: str) -> None:
-    try:
-        print(f"Checking source: {source_name}")
-        # must not crash
-        c.sql_query(f"SELECT count(*) FROM {source_name};")
-
-        result = c.sql_query(f"SHOW CREATE SOURCE {source_name};")
-        sql = result[0][1]
-        assert "FOR TABLE" not in sql, f"FOR TABLE found in: {sql}"
-        assert "FOR ALL TABLES" not in sql, f"FOR ALL TABLES found in: {sql}"
-    except Exception as e:
-        print(f"source-table-migration issue in {file}: {str(e)}")
