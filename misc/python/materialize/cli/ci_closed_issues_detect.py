@@ -28,8 +28,8 @@ ISSUE_RE = re.compile(
     | ( cloud\# | cloud/issues/ ) (?P<cloud>[0-9]+)
     | ( incidents-and-escalations\# | incidents-and-escalations/issues/ ) (?P<incidentsandescalations>[0-9]+)
     | ( database-issues\# | database-issues/issues/ ) (?P<databaseissues>[0-9]+)
-    # with negative lookbehind to avoid matching Buildkite URLs
-    | (?<![0-9]) \# (?P<ambiguous>[0-9]+)
+    # only match from the beginning of the line or after a space character to avoid matching Buildkite URLs
+    | (^|\s) \# (?P<ambiguous>[0-9]+)
     )
     """,
     re.VERBOSE,
