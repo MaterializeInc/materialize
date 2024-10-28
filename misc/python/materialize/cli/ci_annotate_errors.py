@@ -148,6 +148,7 @@ IGNORE_RE = re.compile(
     | (txn-wal-fencing-mz_first-|platform-checks-mz_|parallel-workload-|data-ingest-|zippy-|legacy-upgrade-).* \| .*unexpected\ fence\ epoch
     | (txn-wal-fencing-mz_first-|platform-checks-mz_|parallel-workload-|data-ingest-|zippy-|legacy-upgrade-).* \| .*fenced\ by\ new\ catalog
     | (txn-wal-fencing-mz_first-|platform-checks-mz_|parallel-workload-|data-ingest-|zippy-|legacy-upgrade-).* \| .*starting\ catalog\ transaction:\ Durable\(Fence\(Epoch
+    | (txn-wal-fencing-mz_first-|platform-checks-mz_|parallel-workload-|data-ingest-|zippy-|legacy-upgrade-).* \| .*fenced\ by\ envd
     | internal\ error:\ no\ AWS\ external\ ID\ prefix\ configured
     # For platform-checks upgrade tests
     | platform-checks-.* \| .* received\ persist\ state\ from\ the\ future

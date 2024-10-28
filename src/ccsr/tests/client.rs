@@ -29,6 +29,7 @@ pub static SCHEMA_REGISTRY_URL: LazyLock<reqwest::Url> =
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/database-issues/issues/5588
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_method` on OS `linux`
+#[ignore] // TODO: Reenable when database-issues#8701 is fixed
 async fn test_client() -> Result<(), anyhow::Error> {
     let client = mz_ccsr::ClientConfig::new(SCHEMA_REGISTRY_URL.clone()).build()?;
 
