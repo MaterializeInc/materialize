@@ -77,18 +77,6 @@ impl GlobalId {
     pub fn is_transient(&self) -> bool {
         matches!(self, GlobalId::Transient(_))
     }
-
-    /// Converts a [`GlobalId`] to a [`CatalogItemId`].
-    ///
-    /// TODO(alter_table): Remove this method.
-    pub fn to_item_id(&self) -> CatalogItemId {
-        match self {
-            GlobalId::User(x) => CatalogItemId::User(*x),
-            GlobalId::System(x) => CatalogItemId::System(*x),
-            GlobalId::Transient(x) => CatalogItemId::Transient(*x),
-            GlobalId::Explain => panic!("'Explain' IDs cannot be stored in the Catalog"),
-        }
-    }
 }
 
 impl FromStr for GlobalId {
