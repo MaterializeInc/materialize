@@ -9,10 +9,10 @@ use std::collections::BTreeMap;
 
 use mz_catalog::memory::objects::{DataSourceDesc, TableDataSource};
 use mz_compute_types::dataflows::DataflowDescription;
+use mz_compute_types::time_dependence::TimeDependence;
 use mz_controller_types::ClusterId;
 use mz_ore::soft_panic_or_log;
 use mz_repr::refresh_schedule::RefreshSchedule;
-use mz_repr::time_dependence::TimeDependence;
 use mz_repr::GlobalId;
 use mz_sql::catalog::{CatalogItem, CatalogItemType};
 use mz_storage_types::sources::{GenericSourceConnection, Timeline};
@@ -23,7 +23,6 @@ use crate::optimize::dataflows::dataflow_import_id_bundle;
 pub(crate) struct TimeDependenceHelper<'a> {
     seen: BTreeMap<GlobalId, TimeDependence>,
     catalog: &'a Catalog,
-    level: usize,
 }
 
 impl<'a> TimeDependenceHelper<'a> {
@@ -32,7 +31,6 @@ impl<'a> TimeDependenceHelper<'a> {
         Self {
             seen: BTreeMap::new(),
             catalog,
-            level: 0,
         }
     }
 
@@ -130,11 +128,8 @@ impl<'a> TimeDependenceHelper<'a> {
         if let Some(dependence) = self.seen.get(&id).cloned() {
             return dependence;
         }
-        let indent = "  ".repeat(self.level);
 
-        self.level += 1;
         let entry = self.catalog.get_entry(&id);
-        println!("{indent}{}: {id:?} {:?}", entry.item_type(), entry.name());
         let mut time_dependence = match entry.item_type() {
             CatalogItemType::Table => {
                 if let Some(data_source) = entry.table().map(|table| &table.data_source) {
@@ -169,10 +164,13 @@ impl<'a> TimeDependenceHelper<'a> {
                     .and_then(|plan| plan.time_dependence.as_ref())
                     .cloned()
                 {
-                    println!("{indent}mv|index|CT cached value: {time_dependence:?}");
                     time_dependence
                 } else {
-                    soft_panic_or_log!("{indent}mv|index|CT physical plan absent");
+                    soft_panic_or_log!(
+                        "Physical plan alarmingly absent for {} {:?}",
+                        entry.item_type(),
+                        entry.id
+                    );
                     Indeterminate
                 }
             }
@@ -184,11 +182,9 @@ impl<'a> TimeDependenceHelper<'a> {
             | CatalogItemType::Type
             | CatalogItemType::View => Indeterminate,
         };
-        self.level -= 1;
 
         time_dependence.normalize();
 
-        println!("{indent}-> time dependence: {id:?} {time_dependence:?}");
         self.seen.insert(id, time_dependence.clone());
         time_dependence
     }

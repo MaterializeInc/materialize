@@ -124,7 +124,6 @@ filegroup(
         "src/row.proto",
         "src/row/collection.proto",
         "src/strconv.proto",
-        "src/time_dependence.proto",
         "src/timestamp.proto",
         "src/url.proto",
         "//src/proto:all_protos",

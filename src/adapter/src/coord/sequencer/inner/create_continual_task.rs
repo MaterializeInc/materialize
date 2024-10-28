@@ -36,10 +36,10 @@ use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::OptimizerNotice;
 
 use crate::catalog;
-use crate::catalog::dataflow_expiration::TimeDependenceHelper;
 use crate::command::ExecuteResponse;
 use crate::coord::Coordinator;
 use crate::error::AdapterError;
+use crate::optimize::dataflow_expiration::TimeDependenceHelper;
 use crate::optimize::dataflows::dataflow_import_id_bundle;
 use crate::optimize::{self, Optimize, OptimizerCatalog};
 use crate::session::Session;

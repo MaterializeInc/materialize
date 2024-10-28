@@ -11,12 +11,11 @@
 
 use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet};
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
 use differential_dataflow::Collection;
 use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc};
 use mz_expr::{permutation_for_arrangement, EvalError, MapFilterProject};
-use mz_ore::shutdown::ShutdownToken;
 use mz_ore::soft_assert_or_log;
 use mz_ore::str::StrExt;
 use mz_ore::vec::PartialOrdVecExt;
@@ -97,11 +96,16 @@ where
         // we might write down incorrect data.
         if let Some(&expiration) = self.dataflow_expiration.as_option() {
             let token = Rc::new(());
-            let shutdown_token = ShutdownToken::new(Rc::downgrade(&token));
+            let shutdown_token = Rc::downgrade(&token);
             ok_collection = ok_collection.expire_collection_at(
                 &format!("{}_export_sink_oks", self.debug_name),
                 expiration,
-                shutdown_token.clone(),
+                Weak::clone(&shutdown_token),
+            );
+            err_collection = err_collection.expire_collection_at(
+                &format!("{}_export_sink_errs", self.debug_name),
+                expiration,
+                shutdown_token,
             );
             needed_tokens.push(token);
         }

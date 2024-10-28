@@ -10,15 +10,17 @@
 //! Description of how a dataflow follows time, independent of time.
 
 use mz_proto::{RustType, TryFromProtoError};
+use mz_repr::refresh_schedule::RefreshSchedule;
+use mz_repr::Timestamp;
 use proptest::arbitrary::{any, Arbitrary};
 use proptest::prelude::BoxedStrategy;
 use proptest::strategy::{Just, Strategy, Union};
 use serde::{Deserialize, Serialize};
 
-use crate::refresh_schedule::RefreshSchedule;
-use crate::Timestamp;
-
-include!(concat!(env!("OUT_DIR"), "/mz_repr.time_dependence.rs"));
+include!(concat!(
+    env!("OUT_DIR"),
+    "/mz_compute_types.time_dependence.rs"
+));
 
 /// Description of how a dataflow follows time.
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
@@ -62,13 +64,14 @@ impl TimeDependence {
 
 impl RustType<ProtoTimeDependence> for TimeDependence {
     fn into_proto(&self) -> ProtoTimeDependence {
+        use crate::time_dependence::proto_time_dependence::ProtoRefreshSchedule;
         ProtoTimeDependence {
             kind: Some(match self {
                 TimeDependence::Indeterminate => proto_time_dependence::Kind::Definite(()),
                 TimeDependence::RefreshSchedule(schedule, inner) => {
                     proto_time_dependence::Kind::RefreshSchedule(ProtoRefreshSchedule {
                         refresh_schedule: schedule.as_ref().map(|s| s.into_proto()),
-                        definity: inner.into_proto(),
+                        dependence: inner.into_proto(),
                     })
                 }
                 TimeDependence::Wallclock => proto_time_dependence::Kind::Wallclock(()),
@@ -77,6 +80,7 @@ impl RustType<ProtoTimeDependence> for TimeDependence {
     }
 
     fn from_proto(proto: ProtoTimeDependence) -> Result<Self, TryFromProtoError> {
+        use crate::time_dependence::proto_time_dependence::ProtoRefreshSchedule;
         let inner = match proto
             .kind
             .ok_or_else(|| TryFromProtoError::missing_field("ProtoTimeDependence::kind"))?
@@ -84,12 +88,12 @@ impl RustType<ProtoTimeDependence> for TimeDependence {
             proto_time_dependence::Kind::Definite(()) => TimeDependence::Indeterminate,
             proto_time_dependence::Kind::RefreshSchedule(ProtoRefreshSchedule {
                 refresh_schedule,
-                definity,
+                dependence,
             }) => TimeDependence::RefreshSchedule(
                 refresh_schedule
                     .map(RefreshSchedule::from_proto)
                     .transpose()?,
-                definity
+                dependence
                     .into_iter()
                     .map(TimeDependence::from_proto)
                     .collect::<Result<_, _>>()?,
@@ -123,7 +127,7 @@ mod tests {
     use super::*;
 
     #[mz_ore::test]
-    fn test_indefiniteness_normalize() {
+    fn test_time_dependence_normalize() {
         let mut i = TimeDependence::RefreshSchedule(None, vec![TimeDependence::Wallclock]);
         i.normalize();
         assert_eq!(i, TimeDependence::Wallclock);

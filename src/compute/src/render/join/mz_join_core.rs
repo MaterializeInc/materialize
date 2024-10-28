@@ -47,7 +47,6 @@ use differential_dataflow::operators::arrange::arrangement::Arranged;
 use differential_dataflow::trace::cursor::IntoOwned;
 use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
 use differential_dataflow::Data;
-use mz_ore::shutdown::ShutdownToken;
 use mz_repr::Diff;
 use timely::container::{CapacityContainerBuilder, PushInto, SizableContainer};
 use timely::dataflow::channels::pact::Pipeline;
@@ -59,6 +58,8 @@ use timely::dataflow::{Scope, StreamCore};
 use timely::progress::timestamp::Timestamp;
 use timely::PartialOrder;
 use tracing::trace;
+
+use crate::render::context::ShutdownToken;
 
 /// Joins two arranged collections with the same key type.
 ///

@@ -309,7 +309,11 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::sync::Arc;
 
-    use mz_compute_types::dataflows::{DataflowDescription, DataflowExpirationDesc};
+    use crate::expr_cache::{
+        CacheKey, ExpressionCacheConfig, ExpressionCacheHandle, ExpressionCodec, Expressions,
+    };
+    use mz_compute_types::dataflows::DataflowDescription;
+    use mz_compute_types::time_dependence::TimeDependence;
     use mz_durable_cache::DurableCacheCodec;
     use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
     use mz_persist_client::PersistClient;
@@ -325,10 +329,6 @@ mod tests {
     use smallvec::SmallVec;
     use timely::progress::Antichain;
     use uuid::Uuid;
-
-    use crate::expr_cache::{
-        CacheKey, ExpressionCacheConfig, ExpressionCacheHandle, ExpressionCodec, Expressions,
-    };
 
     impl Arbitrary for Expressions {
         type Parameters = ();
@@ -351,7 +351,7 @@ mod tests {
                 initial_storage_as_of: None,
                 refresh_schedule: None,
                 debug_name: "pp".to_string(),
-                dataflow_expiration_desc: DataflowExpirationDesc::default(),
+                time_dependence: Some(TimeDependence::Indeterminate),
             };
 
             let dataflow_metainfos = any::<DataflowMetainfo<Arc<OptimizerNotice>>>();

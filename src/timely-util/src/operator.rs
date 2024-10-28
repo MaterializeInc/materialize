@@ -14,12 +14,15 @@ use std::hash::{BuildHasher, Hash, Hasher};
 use std::marker::PhantomData;
 use std::rc::Weak;
 
+use crate::builder_async::{
+    AsyncInputHandle, AsyncOutputHandle, ConnectedToOne, Disconnected,
+    OperatorBuilder as OperatorBuilderAsync,
+};
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::difference::{Multiply, Semigroup};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::{Batcher, Builder};
 use differential_dataflow::{AsCollection, Collection, Hashable};
-use mz_ore::shutdown::ShutdownToken;
 use timely::container::columnation::{Columnation, TimelyStack};
 use timely::container::{ContainerBuilder, PushInto};
 use timely::dataflow::channels::pact::{Exchange, ParallelizationContract, Pipeline};
@@ -31,11 +34,6 @@ use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, StreamCore};
 use timely::progress::{Antichain, Timestamp};
 use timely::{Container, Data, ExchangeData, PartialOrder};
-
-use crate::builder_async::{
-    AsyncInputHandle, AsyncOutputHandle, ConnectedToOne, Disconnected,
-    OperatorBuilder as OperatorBuilderAsync,
-};
 
 /// Extension methods for timely [`StreamCore`]s.
 pub trait StreamExt<G, C1>
@@ -165,7 +163,7 @@ where
         &self,
         name: &str,
         expiration: G::Timestamp,
-        token: ShutdownToken,
+        token: Weak<()>,
     ) -> StreamCore<G, C1>;
 
     /// Take a Timely stream and convert it to a Differential stream, where each diff is "1"
@@ -244,7 +242,7 @@ where
         &self,
         name: &str,
         expiration: G::Timestamp,
-        token: ShutdownToken,
+        token: Weak<()>,
     ) -> Collection<G, D1, R>;
 
     /// Replaces each record with another, with a new difference type.
@@ -475,21 +473,26 @@ where
         &self,
         name: &str,
         expiration: G::Timestamp,
-        token: ShutdownToken,
+        token: Weak<()>,
     ) -> StreamCore<G, C1> {
         let name = format!("expire_stream_at({name})");
         self.unary_frontier(Pipeline, &name.clone(), move |cap, _| {
             let mut cap = Some(cap.delayed(&expiration));
             let mut buffer = Default::default();
+            let mut warned = false;
             move |input, output| {
-                if token.in_shutdown() {
+                if token.upgrade().is_none() {
                     drop(cap.take());
                 } else {
                     let frontier = input.frontier().frontier();
-                    if !frontier.less_than(&expiration) {
-                        eprintln!(
-                            "{name} frontier {frontier:?} not less than expiration {expiration:?}"
+                    if !frontier.less_than(&expiration) && !warned {
+                        tracing::error!(
+                            name = name,
+                            frontier = ?frontier,
+                            expiration = ?expiration,
+                            "frontier not less than expiration"
                         );
+                        warned = true;
                     }
                 }
                 input.for_each(|time, data| {
@@ -593,7 +596,7 @@ where
         &self,
         name: &str,
         expiration: G::Timestamp,
-        token: ShutdownToken,
+        token: Weak<()>,
     ) -> Collection<G, D1, R> {
         self.inner
             .expire_stream_at(name, expiration, token)

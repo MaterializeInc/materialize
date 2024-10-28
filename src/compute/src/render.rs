@@ -122,13 +122,12 @@ use mz_compute_types::dataflows::{DataflowDescription, IndexDesc};
 use mz_compute_types::plan::flat_plan::{FlatPlan, FlatPlanNode};
 use mz_compute_types::plan::LirId;
 use mz_expr::{EvalError, Id};
-use mz_ore::shutdown::ShutdownToken;
 use mz_persist_client::operators::shard_source::SnapshotMode;
 use mz_repr::{Datum, GlobalId, Row, SharedRow};
 use mz_storage_operators::persist_source;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
-use mz_timely_util::operator::CollectionExt;
+use mz_timely_util::operator::{CollectionExt, StreamExt};
 use timely::communication::Allocate;
 use timely::container::columnation::Columnation;
 use timely::dataflow::channels::pact::Pipeline;
@@ -148,7 +147,9 @@ use crate::compute_state::ComputeState;
 use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
 use crate::logging::compute::LogDataflowErrors;
-use crate::render::context::{ArrangementFlavor, Context, MzArrangement, MzArrangementImport};
+use crate::render::context::{
+    ArrangementFlavor, Context, MzArrangement, MzArrangementImport, ShutdownToken,
+};
 use crate::render::continual_task::ContinualTaskCtx;
 use crate::typedefs::{ErrSpine, KeyBatcher};
 
@@ -541,16 +542,21 @@ where
         });
 
         match bundle.arrangement(&idx.key) {
-            Some(ArrangementFlavor::Local(mut oks, errs)) => {
+            Some(ArrangementFlavor::Local(mut oks, mut errs)) => {
                 // Ensure that the frontier does not advance past the expiration time, if set.
                 // Otherwise, we might write down incorrect data.
                 if let Some(&expiration) = self.dataflow_expiration.as_option() {
                     let token = Rc::new(());
-                    let shutdown_token = ShutdownToken::new(Rc::downgrade(&token));
+                    let shutdown_token = Rc::downgrade(&token);
                     oks.expire_arrangement_at(
                         &format!("{}_export_index_oks", self.debug_name),
                         expiration,
-                        shutdown_token.clone(),
+                        Weak::clone(&shutdown_token),
+                    );
+                    errs.stream = errs.stream.expire_stream_at(
+                        &format!("{}_export_index_errs", self.debug_name),
+                        expiration,
+                        shutdown_token,
                     );
                     needed_tokens.push(token);
                 }
@@ -623,7 +629,7 @@ where
             Some(ArrangementFlavor::Local(oks, errs)) => {
                 let mut oks = self.dispatch_rearrange_iterative(oks, "Arrange export iterative");
 
-                let errs = errs
+                let mut errs = errs
                     .as_collection(|k, v| (k.clone(), v.clone()))
                     .leave()
                     .mz_arrange("Arrange export iterative err");
@@ -632,11 +638,16 @@ where
                 // Otherwise, we might write down incorrect data.
                 if let Some(&expiration) = self.dataflow_expiration.as_option() {
                     let token = Rc::new(());
-                    let shutdown_token = ShutdownToken::new(Rc::downgrade(&token));
+                    let shutdown_token = Rc::downgrade(&token);
                     oks.expire_arrangement_at(
                         &format!("{}_export_index_iterative_oks", self.debug_name),
                         expiration,
-                        shutdown_token.clone(),
+                        Weak::clone(&shutdown_token),
+                    );
+                    errs.stream = errs.stream.expire_stream_at(
+                        &format!("{}_export_index_iterative_err", self.debug_name),
+                        expiration,
+                        shutdown_token,
                     );
                     needed_tokens.push(token);
                 }

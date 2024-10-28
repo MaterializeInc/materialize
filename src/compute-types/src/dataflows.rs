@@ -16,7 +16,6 @@ use mz_expr::{CollectionPlan, MirRelationExpr, MirScalarExpr, OptimizedMirRelati
 use mz_ore::soft_assert_or_log;
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::refresh_schedule::RefreshSchedule;
-use mz_repr::time_dependence::TimeDependence;
 use mz_repr::{GlobalId, RelationType};
 use mz_storage_types::controller::CollectionMetadata;
 use proptest::prelude::{any, Arbitrary};
@@ -32,6 +31,7 @@ use crate::plan::flat_plan::FlatPlan;
 use crate::plan::Plan;
 use crate::sinks::{ComputeSinkConnection, ComputeSinkDesc};
 use crate::sources::{SourceInstanceArguments, SourceInstanceDesc};
+use crate::time_dependence::TimeDependence;
 
 include!(concat!(env!("OUT_DIR"), "/mz_compute_types.dataflows.rs"));
 

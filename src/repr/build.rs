@@ -37,7 +37,6 @@ fn main() {
                 "repr/src/row.proto",
                 "repr/src/row/collection.proto",
                 "repr/src/strconv.proto",
-                "repr/src/time_dependence.proto",
                 "repr/src/timestamp.proto",
                 "repr/src/url.proto",
             ],

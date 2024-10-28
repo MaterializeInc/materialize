@@ -166,7 +166,6 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 
 use crate::active_compute_sink::ActiveComputeSink;
-use crate::catalog::dataflow_expiration::TimeDependenceHelper;
 use crate::catalog::{BuiltinTableUpdate, Catalog, OpenCatalogResult};
 use crate::client::{Client, Handle};
 use crate::command::{Command, ExecuteResponse};
@@ -187,6 +186,7 @@ use crate::error::AdapterError;
 use crate::explain::insights::PlanInsightsContext;
 use crate::explain::optimizer_trace::{DispatchGuard, OptimizerTrace};
 use crate::metrics::Metrics;
+use crate::optimize::dataflow_expiration::TimeDependenceHelper;
 use crate::optimize::dataflows::{
     dataflow_import_id_bundle, ComputeInstanceSnapshot, DataflowBuilder,
 };

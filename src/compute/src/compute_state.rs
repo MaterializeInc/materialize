@@ -827,6 +827,35 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         }
     }
 
+    /// Checks for dataflow expiration. Panics if we're past the replica expiration time.
+    pub(crate) fn check_expiration(&self) {
+        let now = mz_ore::now::SYSTEM_TIME();
+        if !self.compute_state.replica_expiration.less_than(&now.into()) {
+            let now_utc = mz_ore::now::to_datetime(now);
+            let expiration_utc = self
+                .compute_state
+                .replica_expiration
+                .as_option()
+                .map(Into::into)
+                .map(mz_ore::now::to_datetime);
+
+            error!(
+                now,
+                now_utc = ?now_utc,
+                expiration = ?self.compute_state.replica_expiration,
+                expiration_utc = ?expiration_utc,
+                "Replica expired"
+            );
+
+            // Repeat condition for better error message.
+            assert!(
+                self.compute_state.replica_expiration.less_than(&now.into()),
+                "Replica expired. now: {now} ({now_utc:?}), expiration: {:?} ({expiration_utc:?})",
+                self.compute_state.replica_expiration,
+            );
+        }
+    }
+
     /// Either complete the peek (and send the response) or put it in the pending set.
     fn process_peek(&mut self, upper: &mut Antichain<Timestamp>, mut peek: PendingPeek) {
         let response = match &mut peek {

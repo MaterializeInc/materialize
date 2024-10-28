@@ -34,7 +34,6 @@ use std::collections::BTreeMap;
 use timely::progress::Antichain;
 use tracing::Span;
 
-use crate::catalog::dataflow_expiration::TimeDependenceHelper;
 use crate::command::ExecuteResponse;
 use crate::coord::sequencer::inner::return_if_err;
 use crate::coord::{
@@ -46,6 +45,7 @@ use crate::error::AdapterError;
 use crate::explain::explain_dataflow;
 use crate::explain::explain_plan;
 use crate::explain::optimizer_trace::OptimizerTrace;
+use crate::optimize::dataflow_expiration::TimeDependenceHelper;
 use crate::optimize::dataflows::dataflow_import_id_bundle;
 use crate::optimize::{self, Optimize};
 use crate::session::Session;

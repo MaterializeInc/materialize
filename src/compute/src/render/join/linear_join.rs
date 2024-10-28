@@ -22,7 +22,6 @@ use mz_compute_types::dyncfgs::{ENABLE_MZ_JOIN_CORE, LINEAR_JOIN_YIELDING};
 use mz_compute_types::plan::join::linear_join::{LinearJoinPlan, LinearStagePlan};
 use mz_compute_types::plan::join::JoinClosure;
 use mz_dyncfg::ConfigSet;
-use mz_ore::shutdown::ShutdownToken;
 use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_storage_types::errors::DataflowError;
@@ -36,7 +35,7 @@ use timely::progress::timestamp::{Refines, Timestamp};
 
 use crate::extensions::arrange::MzArrange;
 use crate::render::context::{
-    ArrangementFlavor, CollectionBundle, Context, MzArrangement, MzArrangementImport,
+    ArrangementFlavor, CollectionBundle, Context, MzArrangement, MzArrangementImport, ShutdownToken,
 };
 use crate::render::join::mz_join_core::mz_join_core;
 use crate::row_spine::RowRowSpine;
