@@ -207,6 +207,8 @@ def workflow_create(c: Composition, parser: WorkflowArgumentParser) -> None:
             > CREATE TABLE IF NOT EXISTS public_table.table (c INT);
 
             > GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public_table.table TO "infra+qacanaryload@materialize.io"
+            > GRANT SELECT ON TABLE public_table.table TO "dennis.felsing@materialize.com"
+            > GRANT SELECT ON TABLE public_table.table TO "rainer@materialize.com"
             """
             )
         )
