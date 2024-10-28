@@ -53,6 +53,7 @@ use crate::cfg::MiB;
 use crate::error::InvalidUsage;
 use crate::internal::encoding::{LazyInlineBatchPart, LazyPartStats, LazyProto, Schemas};
 use crate::internal::machine::retry_external;
+use crate::internal::merge::MergeTree;
 use crate::internal::metrics::{BatchWriteMetrics, Metrics, RetryMetrics, ShardMetrics};
 use crate::internal::paths::{PartId, PartialBatchKey, WriterKey};
 use crate::internal::state::{
@@ -1005,12 +1006,7 @@ pub(crate) struct BatchParts<T> {
     blob: Arc<dyn Blob>,
     isolated_runtime: Arc<IsolatedRuntime>,
     next_index: u64,
-    /// A hierarchy of runs. `writing_runs[0]` is a run of individual batch parts;
-    /// `writing_runs[1]` is a run of hollow runs, and so on. As individual runs
-    /// get too long, they are spilled out to `blob` and a new hollow run part is added
-    /// one level up, LSM-style. This helps us ensure both that no run is "too long"
-    /// and that no batch part is more than O(log(n)) levels deep in the resulting tree.
-    writing_runs: Vec<Vec<Pending<RunPart<T>>>>,
+    writing_runs: MergeTree<Pending<RunPart<T>>>,
     batch_metrics: BatchWriteMetrics,
 }
 
@@ -1025,6 +1021,42 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         isolated_runtime: Arc<IsolatedRuntime>,
         batch_metrics: &BatchWriteMetrics,
     ) -> Self {
+        let writing_runs = {
+            let blob = Arc::clone(&blob);
+            let writer_key = cfg.writer_key.clone();
+            let metrics = Arc::clone(&metrics);
+            MergeTree::new(
+                (cfg.expected_order == RunOrder::Unordered)
+                    .then_some(usize::MAX)
+                    .unwrap_or(cfg.run_length_limit),
+                move |parts: Vec<Pending<RunPart<T>>>| {
+                    let blob = Arc::clone(&blob);
+                    let writer_key = writer_key.clone();
+                    let metrics = Arc::clone(&metrics);
+                    let handle = mz_ore::task::spawn(
+                        || "batch::inline_part",
+                        async move {
+                            let parts = stream::iter(parts)
+                                .then(|p| p.into_result())
+                                .collect()
+                                .await;
+                            let run_ref = HollowRunRef::set(
+                                shard_id,
+                                blob.as_ref(),
+                                &writer_key,
+                                HollowRun { parts },
+                                &*metrics,
+                            )
+                            .await;
+
+                            RunPart::Many(run_ref)
+                        }
+                        .instrument(debug_span!("batch::spill_run")),
+                    );
+                    Pending::new(handle)
+                },
+            )
+        };
         BatchParts {
             cfg,
             metrics,
@@ -1034,7 +1066,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             blob,
             isolated_runtime,
             next_index: 0,
-            writing_runs: vec![vec![]],
+            writing_runs,
             batch_metrics: batch_metrics.clone(),
         }
     }
@@ -1138,7 +1170,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                 .instrument(write_span),
             )
         };
-        self.push_part(Pending::new(handle), 0).await;
+        self.push_part(Pending::new(handle)).await;
     }
 
     async fn write_hollow_part<K: Codec, V: Codec>(
@@ -1294,93 +1326,26 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         })
     }
 
-    async fn push_part(&mut self, mut part: Pending<RunPart<T>>, mut depth: usize) {
-        // When a run get too long, we want to write them out as a hollow run and store
-        // a reference to that run as a part of another run... and we want this tree of runs to be
-        // relatively balanced, so that we don't need to load O(n) runs into memory at once
-        // when we're enumerating parts at read time. This code implements an LSM/spine-like
-        // approach, recursively "merging" runs into entries in higher-level runs when they get
-        // too large.
-        loop {
-            // Make sure a run of parts at _depth_ exists.
-            if depth >= self.writing_runs.len() {
-                self.writing_runs.resize_with(depth + 1, Vec::new);
-            }
-            let parts = &mut self.writing_runs[depth];
+    async fn push_part(&mut self, part: Pending<RunPart<T>>) {
+        self.writing_runs.push(part);
 
-            parts.push(part);
-
-            // If there are more than the max outstanding parts, block on all but the
-            //  most recent.
-            for part in parts
-                .iter_mut()
-                .rev()
-                .skip(self.cfg.batch_builder_max_outstanding_parts)
-                .take_while(|p| !p.is_finished())
-            {
-                self.batch_metrics.write_stalls.inc();
-                part.block_until_ready().await;
-            }
-
-            // If we have too many parts at a given level, roll it up to the next level...
-            // unless this is an unordered batch, in which case we're later going to split
-            // all these parts up into separate runs later anyways.
-            if parts.len() <= self.cfg.run_length_limit
-                || self.cfg.expected_order == RunOrder::Unordered
-            {
-                break;
-            }
-
-            let parts: Vec<_> = parts.drain(0..self.cfg.run_length_limit).collect();
-            let shard_id = self.shard_id;
-            let blob = Arc::clone(&self.blob);
-            let writer_key = self.cfg.writer_key.clone();
-            let metrics = Arc::clone(&self.metrics);
-            let handle = mz_ore::task::spawn(
-                || "batch::inline_part",
-                async move {
-                    let parts = stream::iter(parts)
-                        .then(|p| p.into_result())
-                        .collect()
-                        .await;
-                    let run_ref = HollowRunRef::set(
-                        shard_id,
-                        blob.as_ref(),
-                        &writer_key,
-                        HollowRun { parts },
-                        &*metrics,
-                    )
-                    .await;
-
-                    RunPart::Many(run_ref)
-                }
-                .instrument(debug_span!("batch::spill_run")),
-            );
-            part = Pending::new(handle);
-            depth += 1;
+        // If there are more than the max outstanding parts, block on all but the
+        //  most recent.
+        for part in self
+            .writing_runs
+            .iter_mut()
+            .rev()
+            .skip(self.cfg.batch_builder_max_outstanding_parts)
+            .take_while(|p| !p.is_finished())
+        {
+            self.batch_metrics.write_stalls.inc();
+            part.block_until_ready().await;
         }
     }
 
     #[instrument(level = "debug", name = "batch::finish_upload", fields(shard = %self.shard_id))]
-    pub(crate) async fn finish(mut self) -> Vec<RunPart<T>> {
-        // At this point we have a series of runs, but we'd like a single one.
-        // Push parts at shallow depths into the runs at higher depths until they're all in the
-        // final run.
-        for depth in 0.. {
-            // Note that we check this every iteration... `push_part` may increase the length.
-            if depth + 1 == self.writing_runs.len() {
-                break;
-            }
-            for part in mem::take(&mut self.writing_runs[depth]) {
-                self.push_part(part, depth + 1).await;
-            }
-        }
-
-        let parts = self.writing_runs.pop().expect("at least one level");
-        assert!(
-            self.writing_runs.iter().all(|r| r.is_empty()),
-            "all parts should be in the last run"
-        );
+    pub(crate) async fn finish(self) -> Vec<RunPart<T>> {
+        let parts = self.writing_runs.finish();
         let mut output = Vec::with_capacity(parts.len());
         for part in parts {
             output.push(part.into_result().await);
@@ -1584,7 +1549,7 @@ mod tests {
 
         // Currently we don't spill out runs for unordered data, so we need to override this
         // for now.
-        builder.parts.cfg.expected_order = RunOrder::Codec;
+        builder.parts.writing_runs.max_len = 3;
 
         fn assert_writing(
             builder: &BatchBuilderInternal<String, String, u64, i64>,
@@ -1593,6 +1558,7 @@ mod tests {
             for (depth, (actual, expected)) in builder
                 .parts
                 .writing_runs
+                .levels
                 .iter()
                 .zip_eq(expected_finished)
                 .enumerate()

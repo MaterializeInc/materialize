@@ -101,6 +101,7 @@ mod internal {
     pub mod gc;
     pub mod machine;
     pub mod maintenance;
+    pub mod merge;
     pub mod metrics;
     pub mod paths;
     pub mod restore;
