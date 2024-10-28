@@ -12,12 +12,10 @@ aliases:
 [//]: # "TODO: Move to Serve results section"
 
 [Subscriptions](/sql/subscribe/) allow you to stream changing results from
-Materialize to an external application programatically. Like any connection
-over the network, subscriptions might get disrupted for both expected and
-unexpected reasons, in which case it's useful to have a mechanism to gracefully
+Materialize to an external application programatically. Like any connection over
+the network, subscriptions might get disrupted for both expected and unexpected
+reasons. In such cases, it can be useful to have a mechanism to gracefully
 recover data processing.
-
-
 
 To avoid the need for re-processing data that was already sent to your external
 application following a connection disruption, you can:
@@ -25,8 +23,9 @@ application following a connection disruption, you can:
 - Adjust the [history retention period](#history-retention-period) for the
   objects that a subscription depends on, and
 
-- [Access past versions of this data](#enabling-durable-subscriptions-in-your-application)
-  at specific points in time to pick up data processing where you left off.
+- [Access past versions of this
+  data](#enabling-durable-subscriptions-in-your-application) at specific points
+  in time to pick up data processing where you left off.
 
 ## History retention period
 
@@ -35,12 +34,12 @@ application following a connection disruption, you can:
 By default, all user-defined sources, tables, materialized views, and indexes
 keep track of the most recent version of their underlying data. To gracefully
 recover from connection disruptions and enable lossless, _durable
-subscriptions_, you can configure the objects the subscription depends on
-to **retain history**.
+subscriptions_, you can configure the sources, tables, and materialized views
+that the subscription depends on to **retain history**.[^1]
 
-To configure the history retention period for an object, use the `RETAIN
-HISTORY` option in its `CREATE` statement. This value can also be adjusted at
-any time using the object-specific `ALTER` statement.
+To configure the history retention period for sources, tables and materialized
+views, use the `RETAIN HISTORY` option in its `CREATE` statement. This value can
+also be adjusted at any time using the object-specific `ALTER` statement.
 
 ### Semantics
 
@@ -50,14 +49,9 @@ When you increase the history retention period for an object, both the existing
 historical data and any subsequently produced historical data are retained for
 the specified time period.
 
-* **For sources, tables and materialized views:** increasing the history retention
+**For sources, tables and materialized views:** increasing the history retention
   period will not restore older historical data that was already outside the
   previous history retention period before the change.
-
-* **For indexes:** if all of the underlying source, table, and materialized view
-  historical data is available for the increased history retention period, the
-  index can use that data to backfill as far back as the underlying historical
-  data is available.
 
 See also [Considerations](#considerations).
 
@@ -82,9 +76,8 @@ increased resource utilization.  See [Considerations](#considerations).
 {{</ note >}}
 
 To set the history retention period for [sources](/sql/create-source/),
-[tables](/sql/create-table/), [materialized
-views](/sql/create-materialized-view/), and [indexes](/sql/create-index/), you
-can either:
+[tables](/sql/create-table/), and [materialized
+views](/sql/create-materialized-view/)[^1], you can either:
 
 - Specify the `RETAIN HISTORY` option in the `CREATE` statement. The `RETAIN
    HISTORY` option accepts positive [interval](/sql/types/interval/)
@@ -157,30 +150,18 @@ ALTER MATERIALIZED VIEW winning_bids RESET (RETAIN HISTORY);
 It's important to note that increasing the history retention period for an
 object will lead to increased resource utilization in Materialize.
 
-* **For sources, tables and materialized views:** increasing the history
-    retention period for these objects increases the amount of historical data
-    that is retained in the storage layer. You can expect storage resource
-    utilization to increase, which may incur additional costs.
+**For sources, tables and materialized views[^1]:**  Increasing the history
+retention period for these objects increases the amount of historical data that
+is retained in the storage layer. You can expect storage resource utilization to
+increase, which may incur additional costs.
 
-* **For indexes:** increasing the history retention period for an index
-    increases the amount of historical data that is retained in memory in the
-    cluster maintaining the index. You can expect memory resource utilization
-    for that cluster to go up, which might require you to size up your cluster
-    and consume additional compute credits.
 
 #### Best practices
 
-- Given the additional memory costs associated with increasing the history
-  retention period on indexes, if you don't need the performance benefits of an
-  index, consider creating a materialized view for your subscription query and
-  configuring the history retention period on that materialized view instead.
-
-- Similarly, because of the increased storage costs and processing time for the
-  additional historical data on whichever object has an increased history
-  retention period, consider configuring history retention period on the index
-  or materialized view directly powering the subscription, rather than all the
-  way through the dependency chain from the source to the index or materialized
-  view.
+Because of the increased storage costs and processing time for the additional
+historical data, consider configuring history retention period on the object[^1]
+directly powering the subscription, rather than all the way through the
+dependency chain from the source to the materialized view.
 
 #### Clean-up
 
@@ -188,7 +169,6 @@ The history retention period represents the minimum amount of historical data
 guaranteed to be retained by Materialize. History clean-up is processed in the
 background, so older history may be accessible for the period of time between
 when it falls outside the retention period and when it is cleaned up.
-
 
 ## Enabling durable subscriptions in your application
 
@@ -253,5 +233,6 @@ As a result, to guarantee that the data processing occurs only once after your
 application crashes, you must write the progress message `mz_timestamp` and all
 buffered data **together in a single transaction**.
 
-<!--TODO(chaas): add top-level section on point-in-time queries, similar to Durable
-subscriptions section-->
+[^1]: Configuring indexes to retain history is not fully supported and is not
+recommended. Instead, consider creating a materialized view for your
+subscription query and configuring the history retention period on that view.
