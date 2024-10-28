@@ -114,12 +114,6 @@ impl DurableCacheCodec for ExpressionCodec {
     }
 }
 
-fn value_to_source_data(serde_value: serde_json::Value) -> SourceData {
-    let jsonb = Jsonb::from_serde_json(serde_value).expect("contained integers should fit in f64");
-    let row = jsonb.into_row();
-    SourceData(Ok(row))
-}
-
 fn to_value<T: Serialize>(t: T) -> serde_json::Value {
     serde_json::to_value(t).expect("valid json")
 }
