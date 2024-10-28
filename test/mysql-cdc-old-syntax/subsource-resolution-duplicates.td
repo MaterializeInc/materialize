@@ -53,6 +53,3 @@ detail: subsources referencing table: x, y
  mz_source          mysql     quickstart  ""
  mz_source_progress progress  <null>      ""
  t                  subsource quickstart  ""
-
-$ mysql-execute name=mysql
-DROP DATABASE other;
