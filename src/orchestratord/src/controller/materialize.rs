@@ -74,7 +74,7 @@ pub struct Args {
 
     #[clap(
         long,
-        default_values = &["http://local.dev.materialize.com:3000", "http://localhost:3000", "https://staging.console.materialize.com"],
+        default_values = &["http://local.dev.materialize.com:3000", "http://local.mtrlz.dev:3000", "http://localhost:3000", "https://staging.console.materialize.com"],
     )]
     environmentd_allowed_origins: Vec<HeaderValue>,
     #[clap(long, default_value = "https://console.materialize.com")]
