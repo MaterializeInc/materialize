@@ -610,6 +610,7 @@ mz_show_sources  type
 mz_show_tables  comment
 mz_show_tables  name
 mz_show_tables  schema_id
+mz_show_tables  source_id
 mz_show_types  comment
 mz_show_types  name
 mz_show_types  schema_id

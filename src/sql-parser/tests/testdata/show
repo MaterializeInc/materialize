@@ -172,14 +172,14 @@ SHOW TABLES
 ----
 SHOW TABLES
 =>
-Show(ShowObjects(ShowObjectsStatement { object_type: Table, from: None, filter: None }))
+Show(ShowObjects(ShowObjectsStatement { object_type: Table { on_source: None }, from: None, filter: None }))
 
 parse-statement
 SHOW TABLES FROM foo.bar
 ----
 SHOW TABLES FROM foo.bar
 =>
-Show(ShowObjects(ShowObjectsStatement { object_type: Table, from: Some(UnresolvedSchemaName([Ident("foo"), Ident("bar")])), filter: None }))
+Show(ShowObjects(ShowObjectsStatement { object_type: Table { on_source: None }, from: Some(UnresolvedSchemaName([Ident("foo"), Ident("bar")])), filter: None }))
 
 parse-statement
 SHOW TABLES IN CLUSTER baz
@@ -187,6 +187,13 @@ SHOW TABLES IN CLUSTER baz
 error: Expected end of statement, found IN
 SHOW TABLES IN CLUSTER baz
             ^
+
+parse-statement
+SHOW TABLES ON foo.bar
+----
+SHOW TABLES ON foo.bar
+=>
+Show(ShowObjects(ShowObjectsStatement { object_type: Table { on_source: Some(Name(UnresolvedItemName([Ident("foo"), Ident("bar")]))) }, from: None, filter: None }))
 
 parse-statement
 SHOW SINKS
@@ -214,7 +221,7 @@ SHOW TABLES LIKE '%foo%'
 ----
 SHOW TABLES LIKE '%foo%'
 =>
-Show(ShowObjects(ShowObjectsStatement { object_type: Table, from: None, filter: Some(Like("%foo%")) }))
+Show(ShowObjects(ShowObjectsStatement { object_type: Table { on_source: None }, from: None, filter: Some(Like("%foo%")) }))
 
 parse-statement
 SHOW SOURCES

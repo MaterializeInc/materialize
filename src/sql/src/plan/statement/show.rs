@@ -289,7 +289,7 @@ pub fn show_objects<'a>(
     }: ShowObjectsStatement<Aug>,
 ) -> Result<ShowSelect<'a>, PlanError> {
     match object_type {
-        ShowObjectType::Table => show_tables(scx, from, filter),
+        ShowObjectType::Table { on_source } => show_tables(scx, from, on_source, filter),
         ShowObjectType::Source { in_cluster } => show_sources(scx, from, in_cluster, filter),
         ShowObjectType::Subsource { on_source } => show_subsources(scx, from, on_source, filter),
         ShowObjectType::View => show_views(scx, from, filter),
@@ -360,14 +360,26 @@ fn show_connections<'a>(
 fn show_tables<'a>(
     scx: &'a StatementContext<'a>,
     from: Option<ResolvedSchemaName>,
+    on_source: Option<ResolvedItemName>,
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, PlanError> {
     let schema_spec = scx.resolve_optional_schema(&from)?;
-    let query = format!(
+    let mut query = format!(
         "SELECT name, comment
         FROM mz_internal.mz_show_tables tables
         WHERE tables.schema_id = '{schema_spec}'",
     );
+    if let Some(on_source) = &on_source {
+        let on_item = scx.get_item_by_resolved_name(on_source)?;
+        if on_item.item_type() != CatalogItemType::Source {
+            sql_bail!(
+                "cannot show tables on {} because it is a {}",
+                on_source.full_name_str(),
+                on_item.item_type(),
+            );
+        }
+        query += &format!(" AND tables.source_id = '{}'", on_item.id());
+    }
     ShowSelect::new(scx, query, filter, None, Some(&["name", "comment"]))
 }
 
