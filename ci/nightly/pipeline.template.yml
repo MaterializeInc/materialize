@@ -571,6 +571,17 @@ steps:
         agents:
           queue: hetzner-aarch64-4cpu-8gb
 
+      - id: mysql-cdc-migration
+        label: MySQL CDC source-versioning migration tests
+        depends_on: build-aarch64
+        timeout_in_minutes: 360
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: mysql-cdc-old-syntax
+              run: migration
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+
       - id: mysql-cdc-resumption-old-syntax
         label: MySQL CDC resumption tests (before source versioning)
         depends_on: build-aarch64
