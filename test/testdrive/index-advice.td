@@ -74,7 +74,7 @@ v32_primary_idx  "drop unless queried directly" "fewer than two maintained depen
 v41              "convert to materialized view" "indexes on multiple different clusters: {v41_primary_idx,v41_primary_idx1}"
 v41_primary_idx  "drop unless queried directly" "associated view does not have any dependencies (maintained or not maintained)"
 v41_primary_idx1 "drop unless queried directly" "associated view does not have any dependencies (maintained or not maintained)"
-v42              "keep"                         "dependencies from sinks or objects on different clusters: {c2,v42_primary_idx}"
+v42              "keep"                         "dependencies from sinks or objects on different clusters: {v42_primary_idx}"
 v42_primary_idx  "drop unless queried directly" "associated view does not have any dependencies (maintained or not maintained)"
 
 # verify that all indexes and materialized views have a recommendation

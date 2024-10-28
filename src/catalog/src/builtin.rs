@@ -6025,20 +6025,6 @@ WITH MUTUALLY RECURSIVE
 
         UNION ALL
 
-        -- materialized views that are referenced from a different cluster
-        SELECT DISTINCT
-            m.id,
-            child.cluster_id
-        FROM objects AS m
-        -- fixme: this only works if the materialized view is directly used by a maintained object on the remote cluster (but transitive dependencies are also valid)
-        JOIN mz_internal.mz_object_dependencies AS d
-            ON (m.id = d.referenced_object_id)
-        JOIN mz_objects AS child
-            ON (child.id = d.object_id)
-        WHERE m.type = 'materialized-view' AND child.type IN ('index', 'sink', 'materialized-view') AND child.cluster_id != m.cluster_id
-
-        UNION ALL
-
         -- (materialized) views with an index that are not transitively depend on by maintained objects on the same cluster
         SELECT
             v.id,
@@ -6113,10 +6099,11 @@ WITH MUTUALLY RECURSIVE
         )
     ),
 
-    objects_with_justification(id text, type text, maintained_children text list, justification text list, indexes text list) AS (
+    objects_with_justification(id text, type text, cluster_id text, maintained_children text list, justification text list, indexes text list) AS (
         SELECT
             p.id,
             o.type,
+            o.cluster_id,
             p.maintained_children,
             p.justification,
             o.indexes
@@ -6137,13 +6124,13 @@ WITH MUTUALLY RECURSIVE
 
         UNION ALL
 
-        -- materialized views that are required because a sink or a maintained object on a different cluster depends on them
+        -- materialized views that are required because a sink or a maintained object from a different cluster depends on them
         SELECT
             id,
             'keep' AS hint,
             'dependencies from sinks or objects on different clusters: ' AS details,
             justification
-        FROM objects_with_justification
+        FROM objects_with_justification AS m
         WHERE type = 'materialized-view' AND justification IS NOT NULL AND EXISTS (
             SELECT FROM unnest(justification) AS dependency
             JOIN mz_objects s ON (s.type = 'sink' AND s.id = dependency)
@@ -6151,18 +6138,19 @@ WITH MUTUALLY RECURSIVE
             UNION ALL
 
             SELECT FROM unnest(justification) AS dependency
-            JOIN mz_clusters c ON (c.id = dependency)
+            JOIN mz_objects AS d ON (d.id = dependency)
+            WHERE d.cluster_id != m.cluster_id
         )
 
         UNION ALL
 
-        -- materialized views that can be concerted to an index because a sink or a maintained object on a different cluster depends on them
+        -- materialized views that can be converted to an index because NO sink or a maintained object from a different cluster depends on them
         SELECT
             id,
             'convert to a view with an index' AS hint,
             'no dependencies from sinks or objects on different clusters, but maintained dependencies on the same cluster: ' AS details,
             justification
-        FROM objects_with_justification
+        FROM objects_with_justification AS m
         WHERE type = 'materialized-view' AND justification IS NOT NULL AND NOT EXISTS (
             SELECT FROM unnest(justification) AS dependency
             JOIN mz_objects s ON (s.type = 'sink' AND s.id = dependency)
@@ -6170,7 +6158,8 @@ WITH MUTUALLY RECURSIVE
             UNION ALL
 
             SELECT FROM unnest(justification) AS dependency
-            JOIN mz_clusters c ON (c.id = dependency)
+            JOIN mz_objects AS d ON (d.id = dependency)
+            WHERE d.cluster_id != m.cluster_id
         )
 
         UNION ALL
