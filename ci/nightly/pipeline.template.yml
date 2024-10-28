@@ -654,6 +654,17 @@ steps:
         agents:
           queue: hetzner-aarch64-8cpu-16gb
 
+      - id: testdrive-kafka-migration
+        label: "Testdrive %N migration tests"
+        depends_on: build-aarch64
+        timeout_in_minutes: 180
+        parallelism: 8
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: testdrive-old-kafka-src-syntax
+              run: migration
+        agents:
+          queue: hetzner-aarch64-8cpu-16gb
 
   - group: AWS
     key: aws
