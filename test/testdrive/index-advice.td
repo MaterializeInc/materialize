@@ -30,10 +30,10 @@
 
 #                                   dependency graph of the above objects
 #
-#                                                                      ┌───────────────────┐
-#                                                                      │        v11        │
-#                                                          ┌──────────►│ materialized view │
-#                                                          │           └───────────────────┘
+#                                                                      ┌────────────────────────┐
+#                                                                      │          v11           │
+#                                                          ┌──────────►│ materialized view (c1) │
+#                                                          │           └────────────────────────┘
 #                                                          │
 #                                                          │
 #                                                          │
@@ -51,11 +51,11 @@
 #             │                                            │
 #             │                                            │
 #             │                                            │
-#   ┌─────────┴─────────┐                        ┌─────────┴─────────┐
-#   │        v41        │                        │        v42        │
-#   │   index (c1, c2)  │                        │ materialized view │
-#   └───────────────────┘                        │     index (c2)    │
-#                                                └───────────────────┘
+#   ┌─────────┴─────────┐                     ┌────────────┴───────────┐
+#   │        v41        │                     │          v42           │
+#   │   index (c1, c2)  │                     │ materialized view (c1) │
+#   └───────────────────┘                     │       index (c2)       │
+#                                             └────────────────────────┘
 #
 # With these dependencies, the index on v32 and the materialized view on v11 should be removed
 # because these objects only have a single maintained dependency. But an index should be added
@@ -83,16 +83,14 @@ v42_primary_idx  "drop unless queried directly" "associated view does not have a
   SELECT o.name FROM mz_internal.mz_index_advice AS a INNER JOIN mz_objects AS o ON (a.object_id = o.id) WHERE o.type IN ('index', 'materialized-view');
 
 # cleanup test
-> DROP CLUSTER c1 CASCADE;
-> DROP CLUSTER c2 CASCADE;
+> DROP MATERIALIZED VIEW v11 CASCADE;
 
 
 
 
 
-> CREATE CLUSTER c3 REPLICAS (r1 (SIZE '1'));
-> CREATE MATERIALIZED VIEW v11 IN CLUSTER c3 AS (SELECT 1);
-> CREATE DEFAULT INDEX IN CLUSTER c3 ON v11;
+> CREATE MATERIALIZED VIEW v11 IN CLUSTER c1 AS (SELECT 1);
+> CREATE DEFAULT INDEX IN CLUSTER c1 ON v11;
 
 > SELECT o.name, a.recommendation, a.details FROM mz_internal.mz_index_advice AS a JOIN mz_objects AS o ON (a.object_id = o.id) ORDER BY name;
 name              recommendation                     details
@@ -106,15 +104,14 @@ name              recommendation                     details
   SELECT o.name FROM mz_internal.mz_index_advice AS a INNER JOIN mz_objects AS o ON (a.object_id = o.id) WHERE o.type IN ('index', 'materialized-view');
 
 # cleanup  test
-> DROP CLUSTER c3 CASCADE;
+> DROP MATERIALIZED VIEW v11 CASCADE;
 
 
 
 
 
-> CREATE CLUSTER c4 REPLICAS (r1 (SIZE '1'));
 > CREATE VIEW v11 AS (SELECT 1);
-> CREATE DEFAULT INDEX IN CLUSTER c4 ON v11;
+> CREATE DEFAULT INDEX IN CLUSTER c1 ON v11;
 
 > SELECT o.name, a.recommendation, a.details FROM mz_internal.mz_index_advice AS a JOIN mz_objects AS o ON (a.object_id = o.id) ORDER BY name;
 name              recommendation                  details
@@ -128,4 +125,3 @@ name              recommendation                  details
 
 # cleanup test
 > DROP VIEW v11 CASCADE;
-> DROP CLUSTER c4 CASCADE;
