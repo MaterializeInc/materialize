@@ -6229,13 +6229,11 @@ WITH MUTUALLY RECURSIVE
         SELECT
             h.id,
             h.hint,
-            h.details || list_agg(COALESCE(o.name, c.name))::text AS details
+            h.details || list_agg(o.name)::text AS details
         FROM hints AS h,
             LATERAL unnest(h.justification) j
-        LEFT JOIN mz_objects AS o
+        JOIN mz_objects AS o
             ON (o.id = j)
-        LEFT JOIN mz_clusters AS c
-            ON (c.id = j)
         GROUP BY h.id, h.hint, h.details
 
         UNION ALL
