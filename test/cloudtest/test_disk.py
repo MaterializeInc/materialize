@@ -60,11 +60,11 @@ def test_disk_replica(mz: MaterializeApplication) -> None:
         )
     )
 
-    cluster_id, replica_id = mz.environmentd.sql_query(
+    cluster_id, replica_id = mz.sql_query(
         "SELECT r.cluster_id, r.id as replica_id FROM mz_cluster_replicas r, mz_clusters c WHERE c.id = r.cluster_id AND c.name = 'testdrive_no_reset_disk_cluster1';"
     )[0]
 
-    source_global_id = mz.environmentd.sql_query(
+    source_global_id = mz.sql_query(
         "SELECT id FROM mz_sources WHERE name = 'source1';"
     )[0][0]
 
@@ -84,7 +84,7 @@ def test_disk_replica(mz: MaterializeApplication) -> None:
 
 def test_always_use_disk_replica(mz: MaterializeApplication) -> None:
     """Testing `DISK = false, cluster_always_use_disk = true` cluster replicas"""
-    mz.environmentd.sql(
+    mz.sql(
         "ALTER SYSTEM SET cluster_always_use_disk = true",
         port="internal",
         user="mz_system",
@@ -133,11 +133,11 @@ def test_always_use_disk_replica(mz: MaterializeApplication) -> None:
         )
     )
 
-    cluster_id, replica_id = mz.environmentd.sql_query(
+    cluster_id, replica_id = mz.sql_query(
         "SELECT r.cluster_id, r.id as replica_id FROM mz_cluster_replicas r, mz_clusters c WHERE c.id = r.cluster_id AND c.name = 'disk_cluster2';"
     )[0]
 
-    source_global_id = mz.environmentd.sql_query(
+    source_global_id = mz.sql_query(
         "SELECT id FROM mz_sources WHERE name = 'source1';"
     )[0][0]
 

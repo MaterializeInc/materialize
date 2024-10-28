@@ -38,9 +38,7 @@ def test_secrets(mz: MaterializeApplication) -> None:
         )
     )
 
-    id = mz.environmentd.sql_query("SELECT id FROM mz_secrets WHERE name = 'username'")[
-        0
-    ][0]
+    id = mz.sql_query("SELECT id FROM mz_secrets WHERE name = 'username'")[0][0]
     assert id is not None
 
     secret = f"user-managed-{id}"
@@ -50,12 +48,12 @@ def test_secrets(mz: MaterializeApplication) -> None:
     describe = mz.kubectl("describe", "secret", secret)
     assert "contents:  3 bytes" in describe
 
-    mz.environmentd.sql("ALTER SECRET username AS '1234567890'")
+    mz.sql("ALTER SECRET username AS '1234567890'")
 
     describe = mz.kubectl("describe", "secret", secret)
     assert "contents:  10 bytes" in describe
 
-    mz.environmentd.sql("DROP SECRET username CASCADE")
+    mz.sql("DROP SECRET username CASCADE")
 
     wait(condition="delete", resource=f"secret/{secret}")
 
@@ -69,18 +67,16 @@ def test_orphaned_secrets(mz: MaterializeApplication) -> None:
     # that we can prevent a racy startup from cleaning up the secret before we
     # observed it.
     mz.set_environmentd_failpoints("orphan_secrets=panic")
-    mz.environmentd.sql("SET failpoints = 'drop_secrets=panic'")
-    mz.environmentd.sql("CREATE SECRET orphan AS '123'")
+    mz.sql("SET failpoints = 'drop_secrets=panic'")
+    mz.sql("CREATE SECRET orphan AS '123'")
 
-    id = mz.environmentd.sql_query("SELECT id FROM mz_secrets WHERE name = 'orphan'")[
-        0
-    ][0]
+    id = mz.sql_query("SELECT id FROM mz_secrets WHERE name = 'orphan'")[0][0]
     assert id is not None
     secret = f"user-managed-{id}"
 
     # The failpoint should cause this to fail.
     try:
-        mz.environmentd.sql("DROP SECRET orphan")
+        mz.sql("DROP SECRET orphan")
         raise Exception("Unexpected success")
     except InterfaceError:
         pass
@@ -147,9 +143,7 @@ def test_missing_secret(mz: MaterializeApplication) -> None:
         )
     )
 
-    id = mz.environmentd.sql_query(
-        "SELECT id FROM mz_secrets WHERE name = 'to_be_deleted'"
-    )[0][0]
+    id = mz.sql_query("SELECT id FROM mz_secrets WHERE name = 'to_be_deleted'")[0][0]
     assert id is not None
     secret = f"user-managed-{id}"
 
@@ -175,7 +169,7 @@ def test_missing_secret(mz: MaterializeApplication) -> None:
 
     # Restart the storage computed and confirm that the source errors out properly
 
-    cluster_id, replica_id = mz.environmentd.sql_query(
+    cluster_id, replica_id = mz.sql_query(
         "SELECT cluster_id, id FROM mz_cluster_replicas WHERE name = 'to_be_killed'"
     )[0]
     pod_name = cluster_pod_name(cluster_id, replica_id, 0)

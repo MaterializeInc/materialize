@@ -26,7 +26,7 @@ def test_ssh_tunnels(mz: MaterializeApplication) -> None:
         )
     )
 
-    (id, public_key) = mz.environmentd.sql_query(
+    (id, public_key) = mz.sql_query(
         "SELECT id, public_key_1 FROM mz_ssh_tunnel_connections"
     )[0]
     assert id is not None
@@ -129,7 +129,7 @@ def test_ssh_tunnels(mz: MaterializeApplication) -> None:
         no_reset=True,
     )
 
-    mz.environmentd.sql("DROP CONNECTION ssh_conn CASCADE")
+    mz.sql("DROP CONNECTION ssh_conn CASCADE")
 
     # Verify that secret associated with the SSH tunnel is deleted from k8s
     wait(condition="delete", resource=f"secret/{secret}")
