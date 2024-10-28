@@ -12,16 +12,23 @@ from materialize.mz_version import MzVersion
 from materialize.mzcompose.composition import Composition
 
 
-def verify_sources_after_source_table_migration(c: Composition, file: str) -> None:
-    source_names = c.sql_query("SELECT name FROM mz_sources WHERE id LIKE 'u%';")
+def verify_sources_after_source_table_migration(
+    c: Composition, file: str, fail: bool = False
+) -> None:
+    source_names_rows = c.sql_query(
+        "SELECT sm.name || '.' || src.name FROM mz_sources src INNER JOIN mz_schemas sm ON src.schema_id = sm.id WHERE src.id LIKE 'u%';"
+    )
+    source_names = [row[0] for row in source_names_rows]
 
     print(f"Sources created in {file} are: {source_names}")
 
-    for row in source_names:
-        _verify_source(c, file, row[0])
+    for source_name in source_names:
+        _verify_source(c, file, source_name, fail=fail)
 
 
-def _verify_source(c: Composition, file: str, source_name: str) -> None:
+def _verify_source(
+    c: Composition, file: str, source_name: str, fail: bool = False
+) -> None:
     try:
         print(f"Checking source: {source_name}")
         # must not crash
@@ -32,8 +39,13 @@ def _verify_source(c: Composition, file: str, source_name: str) -> None:
         sql = result[0][1]
         assert "FOR TABLE" not in sql, f"FOR TABLE found in: {sql}"
         assert "FOR ALL TABLES" not in sql, f"FOR ALL TABLES found in: {sql}"
+        assert "CREATE SUBSOURCE" not in sql, f"FOR ALL TABLES found in: {sql}"
+        print("OK.")
     except Exception as e:
         print(f"source-table-migration issue in {file}: {str(e)}")
+
+        if fail:
+            raise e
 
 
 def check_source_table_migration_test_sensible() -> None:
