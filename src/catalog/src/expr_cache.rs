@@ -165,7 +165,8 @@ impl ExpressionCache {
             durable_cache,
         };
 
-        loop {
+        const RETRIES: usize = 100;
+        for _ in 0..RETRIES {
             match cache
                 .try_open(current_ids, optimizer_features, remove_prior_gens)
                 .await
@@ -174,6 +175,8 @@ impl ExpressionCache {
                 Err(err) => debug!("failed to open cache: {err} ... retrying"),
             }
         }
+
+        panic!("Unable to open expression cache after {RETRIES} retries");
     }
 
     async fn try_open(
