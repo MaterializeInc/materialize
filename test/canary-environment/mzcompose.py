@@ -230,7 +230,11 @@ def workflow_test(c: Composition, parser: WorkflowArgumentParser) -> None:
             result = cur.fetchall()
         assert (
             result[0][0] == 1
-        ), f"RDS Postgres has wrong number of pg_replication_slots {result[0][0]}, please fix manually to prevent Postgres from going out of disk from stalled Materialize connections"
+        ), f"""RDS Postgres has wrong number of pg_replication_slots {result[0][0]}, please fix manually to prevent Postgres from going out of disk from stalled Materialize connections:
+$ psql postgres://postgres:$MATERIALIZE_PROD_SANDBOX_RDS_PASSWORD@$MATERIALIZE_PROD_SANDBOX_RDS_HOSTNAME
+postgres=> SELECT * FROM pg_replication_slots;
+postgres=> SELECT pg_drop_replication_slot('...');
+"""
     finally:
         con.close()
 
