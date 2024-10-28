@@ -30,6 +30,9 @@ from materialize.test_analytics.config.test_analytics_db_config import (
     create_test_analytics_config,
 )
 from materialize.test_analytics.data.bounded_memory.bounded_memory_minimal_search_storage import (
+    BOUNDED_MEMORY_STATUS_CONFIGURED,
+    BOUNDED_MEMORY_STATUS_FAILURE,
+    BOUNDED_MEMORY_STATUS_SUCCESS,
     BoundedMemoryMinimalSearchEntry,
 )
 from materialize.test_analytics.test_analytics_db import TestAnalyticsDb
@@ -1242,9 +1245,29 @@ def run_memory_search(
     materialized_memory = scenario.materialized_memory
     clusterd_memory = scenario.clusterd_memory
 
+    none_minimization_target = "none"
+    search_entry = BoundedMemoryMinimalSearchEntry(
+        scenario_name=scenario.name,
+        tested_memory_mz_in_gb=_get_memory_in_gb(materialized_memory),
+        tested_memory_clusterd_in_gb=_get_memory_in_gb(clusterd_memory),
+    )
+    test_analytics.bounded_memory_search.add_entry(
+        BOUNDED_MEMORY_FRAMEWORK_VERSION,
+        search_entry,
+        minimization_target=none_minimization_target,
+        flush=True,
+    )
+    test_analytics.bounded_memory_search.update_status(
+        search_entry,
+        minimization_target=none_minimization_target,
+        status=BOUNDED_MEMORY_STATUS_CONFIGURED,
+        flush=True,
+    )
+
     if materialized_search_step_in_gb > 0:
         materialized_memory, clusterd_memory = find_minimal_memory(
             c,
+            test_analytics,
             scenario,
             initial_materialized_memory=materialized_memory,
             initial_clusterd_memory=clusterd_memory,
@@ -1256,6 +1279,7 @@ def run_memory_search(
     if clusterd_search_step_in_gb > 0:
         materialized_memory, clusterd_memory = find_minimal_memory(
             c,
+            test_analytics,
             scenario,
             initial_materialized_memory=materialized_memory,
             initial_clusterd_memory=clusterd_memory,
@@ -1274,20 +1298,10 @@ def run_memory_search(
     )
     print("Consider adding some buffer to avoid flakiness.")
 
-    search_result = BoundedMemoryMinimalSearchEntry(
-        scenario_name=scenario.name,
-        configured_memory_mz_in_gb=_get_memory_in_gb(scenario.materialized_memory),
-        configured_memory_clusterd_in_gb=_get_memory_in_gb(scenario.clusterd_memory),
-        found_memory_mz_in_gb=_get_memory_in_gb(materialized_memory),
-        found_memory_clusterd_in_gb=_get_memory_in_gb(clusterd_memory),
-    )
-    test_analytics.bounded_memory_search.add_entry(
-        BOUNDED_MEMORY_FRAMEWORK_VERSION, search_result
-    )
-
 
 def find_minimal_memory(
     c: Composition,
+    test_analytics: TestAnalyticsDb,
     scenario: Scenario,
     initial_materialized_memory: str,
     initial_clusterd_memory: str,
@@ -1296,9 +1310,16 @@ def find_minimal_memory(
     materialized_memory_lower_bound_in_gb: float,
     clusterd_memory_lower_bound_in_gb: float,
 ) -> tuple[str, str]:
-    assert (
-        reduce_materialized_memory_by_gb >= 0.1 or reduce_clusterd_memory_by_gb >= 0.1
-    )
+    if reduce_materialized_memory_by_gb > 0 and reduce_clusterd_memory_by_gb > 0:
+        raise RuntimeError(
+            "Cannot reduce both materialized and clusterd memory at once"
+        )
+    elif reduce_materialized_memory_by_gb >= 0.1:
+        minimalization_target = "materialized_memory"
+    elif reduce_clusterd_memory_by_gb >= 0.1:
+        minimalization_target = "clusterd_memory"
+    else:
+        raise RuntimeError("No valid reduction set")
 
     materialized_memory = initial_materialized_memory
     clusterd_memory = initial_clusterd_memory
@@ -1323,6 +1344,18 @@ def find_minimal_memory(
 
         scenario_desc = f"{scenario.name} with materialized_memory={new_materialized_memory} and clusterd_memory={new_clusterd_memory}"
 
+        search_entry = BoundedMemoryMinimalSearchEntry(
+            scenario_name=scenario.name,
+            tested_memory_mz_in_gb=_get_memory_in_gb(new_materialized_memory),
+            tested_memory_clusterd_in_gb=_get_memory_in_gb(new_clusterd_memory),
+        )
+        test_analytics.bounded_memory_search.add_entry(
+            BOUNDED_MEMORY_FRAMEWORK_VERSION,
+            search_entry,
+            minimization_target=minimalization_target,
+            flush=True,
+        )
+
         print(f"Trying scenario {scenario_desc}")
         success = try_run_scenario(
             c,
@@ -1337,8 +1370,20 @@ def find_minimal_memory(
             clusterd_memory = new_clusterd_memory
             materialized_memory_steps.append(new_materialized_memory)
             clusterd_memory_steps.append(new_clusterd_memory)
+            test_analytics.bounded_memory_search.update_status(
+                search_entry,
+                status=BOUNDED_MEMORY_STATUS_SUCCESS,
+                minimization_target=minimalization_target,
+                flush=True,
+            )
         else:
             print(f"Scenario {scenario_desc} failed.")
+            test_analytics.bounded_memory_search.update_status(
+                search_entry,
+                status=BOUNDED_MEMORY_STATUS_FAILURE,
+                minimization_target=minimalization_target,
+                flush=True,
+            )
             break
 
     if (
