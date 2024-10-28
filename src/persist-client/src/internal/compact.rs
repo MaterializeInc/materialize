@@ -717,12 +717,11 @@ where
     /// Compacts runs together. If the input runs are sorted, a single run will be created as output.
     ///
     /// Maximum possible memory usage is `(# runs + 2) * [crate::PersistConfig::blob_target_size]`
-    async fn compact_runs<'a>(
-        // note: 'a cannot be elided due to https://github.com/rust-lang/rust/issues/63033
-        cfg: &'a CompactConfig,
-        shard_id: &'a ShardId,
-        desc: &'a Description<T>,
-        runs: Vec<(&'a Description<T>, &'a RunMeta, &'a [RunPart<T>])>,
+    async fn compact_runs(
+        cfg: &CompactConfig,
+        shard_id: &ShardId,
+        desc: &Description<T>,
+        runs: Vec<(&Description<T>, &RunMeta, &[RunPart<T>])>,
         blob: Arc<dyn Blob>,
         metrics: Arc<Metrics>,
         shard_metrics: Arc<ShardMetrics>,
