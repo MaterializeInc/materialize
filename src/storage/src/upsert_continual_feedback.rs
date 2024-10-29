@@ -185,7 +185,7 @@ where
             state_fn().await,
             upsert_shared_metrics,
             &upsert_metrics,
-            source_config.source_statistics,
+            source_config.source_statistics.clone(),
             upsert_config.shrink_upsert_unused_buffers_by_ratio,
         );
 
@@ -224,11 +224,24 @@ where
                     while let Some(persist_event) = persist_input.next_sync() {
                         match persist_event {
                             AsyncEvent::Data(_cap, data) => {
+                                tracing::trace!(
+                                    worker_id = %source_config.worker_id,
+                                    source_id = %source_config.id,
+                                    time=?_cap,
+                                    updates=%data.len(),
+                                    "received persist data");
                                 persist_stash.extend(data.into_iter().map(|((key, value), ts, diff)| {
                                     (key, value, ts, diff)
                                 }))
                             }
-                            AsyncEvent::Progress(upper) => persist_upper = upper,
+                            AsyncEvent::Progress(upper) => {
+                                tracing::trace!(
+                                    worker_id = %source_config.worker_id,
+                                    source_id = %source_config.id,
+                                    ?upper,
+                                    "received persist progress");
+                                persist_upper = upper;
+                            }
                         }
                     }
 
@@ -268,7 +281,14 @@ where
                             PartialOrder::less_equal(&resume_upper, &persist_upper)
                         };
 
-                        tracing::debug!(persist_stash = %persist_stash.len(), %last_snapshot_chunk, ?resume_upper, ?persist_upper, "ingesting persist snapshot chunk");
+                        tracing::debug!(
+                            worker_id = %source_config.worker_id,
+                            source_id = %source_config.id,
+                            persist_stash = %persist_stash.len(),
+                            %last_snapshot_chunk,
+                            ?resume_upper,
+                            ?persist_upper,
+                            "ingesting persist snapshot chunk");
 
                         hydrating = !last_snapshot_chunk;
 
@@ -343,7 +363,10 @@ where
                                     error.is_legacy_dont_touch_it,
                                     "attempted to correct non-legacy error"
                                 );
-                                tracing::info!("correcting legacy error {error:?} with diff {diff}");
+                                tracing::info!(
+                                    worker_id = %source_config.worker_id,
+                                    source_id = %source_config.id,
+                                    "correcting legacy error {error:?} with diff {diff}");
                                 let time = output_cap.time().clone();
                                 let retraction = Err(UpsertError::Value(error.clone()));
                                 error.is_legacy_dont_touch_it = false;
@@ -353,9 +376,9 @@ where
                             }
 
                             tracing::info!(
-                                "timely-{} upsert source {} finished rehydration",
-                                source_config.worker_id,
-                                source_config.id
+                                worker_id = %source_config.worker_id,
+                                source_id = %source_config.id,
+                                "upsert source finished rehydration",
                             );
 
                             snapshot_cap.downgrade(&[]);
@@ -367,13 +390,19 @@ where
                     // done snapshotting but already have some more persist
                     // updates staged. We have to work them off eagerly here.
                     if !hydrating {
-                        tracing::debug!(persist_stash = %persist_stash.len(), ?persist_upper, "ingesting state updates from persist");
+                        tracing::debug!(
+                            worker_id = %source_config.worker_id,
+                            source_id = %source_config.id,
+                            persist_stash = %persist_stash.len(),
+                            ?persist_upper,
+                            "ingesting state updates from persist");
 
                         ingest_state_updates::<_, G, _, _, _>(
                             &mut persist_stash,
                             &persist_upper,
                             &mut error_emitter,
                             &mut state,
+                            &source_config,
                             ).await;
                     }
                 }
@@ -383,10 +412,11 @@ where
                         match event {
                             AsyncEvent::Data(cap, mut data) => {
                                 tracing::trace!(
+                                    worker_id = %source_config.worker_id,
+                                    source_id = %source_config.id,
                                     time=?cap.time(),
                                     updates=%data.len(),
-                                    "received data in upsert"
-                                );
+                                    "received data");
 
                                 let event_time = cap.time().clone();
 
@@ -417,21 +447,39 @@ where
                                 // required to avoid buffering the entire source
                                 // snapshot in the `stash`.
                                 if prevent_snapshot_buffering && resume_upper.less_equal(&G::Timestamp::minimum()) && event_time == G::Timestamp::minimum() {
-                                    tracing::debug!(?event_time, ?resume_upper, ?output_cap, "partial drain not implemented, yet");
+                                    tracing::debug!(
+                                        worker_id = %source_config.worker_id,
+                                        source_id = %source_config.id,
+                                        ?event_time,
+                                        ?resume_upper,
+                                        ?output_cap, "partial drain not implemented, yet");
                                 }
                             }
                             AsyncEvent::Progress(upper) => {
-                                tracing::trace!(?upper, "received progress in upsert");
+                                tracing::trace!(
+                                    worker_id = %source_config.worker_id,
+                                    source_id = %source_config.id,
+                                    ?upper,
+                                    "received progress");
 
                                 // Ignore progress updates before the `resume_upper`, which is our initial
                                 // capability post-snapshotting.
                                 if PartialOrder::less_than(&upper, &resume_upper) {
-                                    tracing::trace!(?upper, ?resume_upper, "ignoring progress updates before resume_upper");
+                                    tracing::trace!(
+                                        worker_id = %source_config.worker_id,
+                                        source_id = %source_config.id,
+                                        ?upper,
+                                        ?resume_upper,
+                                        "ignoring progress updates before resume_upper");
                                     continue;
                                 }
 
                                 if let Some(ts) = upper.as_option() {
-                                    tracing::trace!(?ts, "downgrading output capability");
+                                    tracing::trace!(
+                                        worker_id = %source_config.worker_id,
+                                        source_id = %source_config.id,
+                                        ?ts,
+                                        "downgrading output capability");
                                     let _ = output_cap.try_downgrade(ts);
                                 }
                                 input_upper = upper;
@@ -461,10 +509,15 @@ where
                 DrainStyle::ToUpper{input_upper: &input_upper, persist_upper: &persist_upper},
                 &mut error_emitter,
                 &mut state,
+                &source_config,
             )
             .await;
 
-            tracing::trace!(?output_updates, "output updates for complete timestamp");
+            tracing::trace!(
+                worker_id = %source_config.worker_id,
+                source_id = %source_config.id,
+                output_updates = %output_updates.len(),
+                "output updates for complete timestamp");
 
             for (update, cap, diff) in output_updates.drain(..) {
                 let ts = cap.time().clone();
@@ -472,7 +525,10 @@ where
             }
 
             if input_upper.is_empty() {
-                tracing::debug!("input exhausted, shutting down");
+                tracing::debug!(
+                    worker_id = %source_config.worker_id,
+                    source_id = %source_config.id,
+                    "input exhausted, shutting down");
                 break;
             };
 
@@ -555,6 +611,7 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
     drain_style: DrainStyle<'_, T>,
     error_emitter: &mut E,
     state: &mut UpsertState<'_, S, Option<FromTime>>,
+    source_config: &crate::source::RawSourceCreationConfig,
 ) where
     S: UpsertStateBackend<Option<FromTime>>,
     G: Scope,
@@ -591,7 +648,12 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
         DrainStyle::AtTime(time) => ts.time() <= time,
     });
 
-    tracing::debug!(?drain_style, updates = idx, "draining stash");
+    tracing::debug!(
+        worker_id = %source_config.worker_id,
+        source_id = %source_config.id,
+        ?drain_style,
+        updates = idx,
+        "draining stash");
 
     // Read the previous values _per key_ out of `state`, recording it
     // along with the value with the _latest timestamp for that key_.
@@ -694,6 +756,7 @@ async fn ingest_state_updates<S, G, T, FromTime, E>(
     persist_upper: &Antichain<T>,
     error_emitter: &mut E,
     state: &mut UpsertState<'_, S, Option<FromTime>>,
+    source_config: &crate::source::RawSourceCreationConfig,
 ) where
     S: UpsertStateBackend<Option<FromTime>>,
     G: Scope,
@@ -713,7 +776,12 @@ async fn ingest_state_updates<S, G, T, FromTime, E>(
     // Find the prefix that we can ingest.
     let idx = updates.partition_point(|(_, _, ts, _)| !persist_upper.less_equal(ts));
 
-    tracing::debug!(?persist_upper, updates = idx, "ingesting state updates");
+    tracing::debug!(
+        worker_id = %source_config.worker_id,
+        source_id = %source_config.id,
+        ?persist_upper,
+        updates = idx,
+        "ingesting state updates");
 
     let mut precomputed_putstats = PutStats::default();
 
