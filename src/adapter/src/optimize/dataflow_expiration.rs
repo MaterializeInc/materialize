@@ -23,16 +23,14 @@
 //! pruned. Additionally, transitive dependencies can depend on indexes that do not exist anymore,
 //! which makes combining run-time information with catalog-based information inconclusive.
 
-use std::collections::BTreeMap;
-
-use mz_catalog::memory::objects::{DataSourceDesc, TableDataSource};
+use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, TableDataSource};
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::time_dependence::TimeDependence;
 use mz_controller_types::ClusterId;
 use mz_ore::soft_panic_or_log;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::GlobalId;
-use mz_sql::catalog::{CatalogItem, CatalogItemType};
+use mz_sql::catalog::CatalogItem as _;
 use mz_storage_types::sources::{GenericSourceConnection, Timeline};
 
 use crate::catalog::Catalog;
@@ -41,8 +39,6 @@ use crate::optimize::dataflows::dataflow_import_id_bundle;
 /// Helper type to determine the time dependence of a dataflow. See module-level documentation
 /// for more details.
 pub(crate) struct TimeDependenceHelper<'a> {
-    /// Map of seen objects to their time dependence.
-    seen: BTreeMap<GlobalId, TimeDependence>,
     /// Current catalog.
     catalog: &'a Catalog,
 }
@@ -50,10 +46,7 @@ pub(crate) struct TimeDependenceHelper<'a> {
 impl<'a> TimeDependenceHelper<'a> {
     /// Construct a new helper.
     pub(crate) fn new(catalog: &'a Catalog) -> Self {
-        Self {
-            seen: BTreeMap::new(),
-            catalog,
-        }
+        Self { catalog }
     }
 
     /// Determine a time dependence based on a plan. The result can have an optional
@@ -61,28 +54,29 @@ impl<'a> TimeDependenceHelper<'a> {
     ///
     /// Note that the cluster IDs is only required to make [`dataflow_import_id_bundle`] happy.
     pub(crate) fn determine_time_dependence_plan<P>(
-        &mut self,
+        &self,
         plan: &DataflowDescription<P>,
-        cluster: ClusterId,
+        cluster_id: ClusterId,
         schedule: Option<RefreshSchedule>,
-    ) -> TimeDependence {
-        let id_bundle = dataflow_import_id_bundle(plan, cluster);
+    ) -> Option<TimeDependence> {
+        let id_bundle = dataflow_import_id_bundle(plan, cluster_id);
         self.determine_time_dependence_ids(id_bundle.iter(), schedule)
     }
 
     /// Determine a time dependence based on a set of global IDs. The result can have an optional
-    /// refresh schedule.
+    /// refresh schedule. Returns `None` if called with an empty iterator, or if all dependencies
+    /// are indeterminate.
     pub(crate) fn determine_time_dependence_ids(
-        &mut self,
+        &self,
         ids: impl IntoIterator<Item = GlobalId>,
         schedule: Option<RefreshSchedule>,
-    ) -> TimeDependence {
+    ) -> Option<TimeDependence> {
         use TimeDependence::*;
 
         // Collect all time dependencies of our dependencies.
         let mut time_dependencies = ids
             .into_iter()
-            .map(|id| self.determine_dependence_inner(id))
+            .filter_map(|id| self.determine_dependence_inner(id))
             .collect::<Vec<_>>();
 
         // Sort and dedupe to remove redundancy.
@@ -91,20 +85,20 @@ impl<'a> TimeDependenceHelper<'a> {
 
         let mut time_dependence = if time_dependencies.iter().any(|dep| matches!(dep, Wallclock)) {
             // Wall-clock dependency is dominant.
-            RefreshSchedule(schedule, vec![Wallclock])
+            Some(RefreshSchedule(schedule, vec![Wallclock]))
         } else if time_dependencies
             .iter()
             .any(|dep| matches!(dep, RefreshSchedule(_, _)))
         {
             // No immediate wall-clock dependency, found some dependency with a refresh schedule.
-            // Remove remaining Indeterminate dependencies.
-            time_dependencies.retain(|dep| matches!(dep, RefreshSchedule(_, _)));
-            RefreshSchedule(schedule, time_dependencies)
+            Some(RefreshSchedule(schedule, time_dependencies))
         } else {
             // No wall-clock dependence, no refresh schedule
-            Indeterminate
+            None
         };
-        time_dependence.normalize();
+        if let Some(time_dependence) = &mut time_dependence {
+            time_dependence.normalize();
+        }
         time_dependence
     }
 
@@ -112,14 +106,14 @@ impl<'a> TimeDependenceHelper<'a> {
     ///
     /// Non-epoch timelines are indeterminate, and load generators.
     fn for_data_source_desc(
-        &mut self,
+        &self,
         desc: &DataSourceDesc,
         timeline: &Timeline,
-    ) -> TimeDependence {
+    ) -> Option<TimeDependence> {
         use TimeDependence::*;
         // We only know how to handle the epoch timeline.
         if !matches!(timeline, Timeline::EpochMilliseconds) {
-            return Indeterminate;
+            return None;
         }
         match desc {
             DataSourceDesc::Ingestion { ingestion_desc, .. } => {
@@ -127,9 +121,9 @@ impl<'a> TimeDependenceHelper<'a> {
                     // Kafka, Postgres, MySql sources follow wall clock.
                     GenericSourceConnection::Kafka(_)
                     | GenericSourceConnection::Postgres(_)
-                    | GenericSourceConnection::MySql(_) => Wallclock,
+                    | GenericSourceConnection::MySql(_) => Some(Wallclock),
                     // Load generators not further specified.
-                    GenericSourceConnection::LoadGenerator(_) => Indeterminate,
+                    GenericSourceConnection::LoadGenerator(_) => None,
                 }
             }
             DataSourceDesc::IngestionExport { ingestion_id, .. } => {
@@ -138,52 +132,38 @@ impl<'a> TimeDependenceHelper<'a> {
             // Introspection, progress and webhook sources follow wall clock.
             DataSourceDesc::Introspection(_)
             | DataSourceDesc::Progress
-            | DataSourceDesc::Webhook { .. } => Wallclock,
+            | DataSourceDesc::Webhook { .. } => Some(Wallclock),
         }
     }
 
     /// Determine the time dependence for a single global ID.
-    fn determine_dependence_inner(&mut self, id: GlobalId) -> TimeDependence {
+    fn determine_dependence_inner(&self, id: GlobalId) -> Option<TimeDependence> {
         use TimeDependence::*;
 
-        if let Some(dependence) = self.seen.get(&id).cloned() {
-            return dependence;
-        }
-
         let entry = self.catalog.get_entry(&id);
-        let mut time_dependence = match entry.item_type() {
-            CatalogItemType::Table => {
-                if let Some(data_source) = entry.table().map(|table| &table.data_source) {
-                    match data_source {
-                        // Tables follow wall clock.
-                        TableDataSource::TableWrites { .. } => Wallclock,
-                        TableDataSource::DataSource { desc, timeline } => {
-                            self.for_data_source_desc(desc, timeline)
-                        }
+        match entry.item() {
+            // Introspection sources follow wall-clock.
+            CatalogItem::Log(_) => Some(Wallclock),
+            CatalogItem::Table(table) => {
+                match &table.data_source {
+                    // Tables follow wall clock.
+                    TableDataSource::TableWrites { .. } => Some(Wallclock),
+                    TableDataSource::DataSource { desc, timeline } => {
+                        self.for_data_source_desc(desc, timeline)
                     }
-                } else {
-                    Indeterminate
                 }
             }
-            CatalogItemType::Source => {
-                // Some sources don't have a `Source` entry, so we can't determine their time
-                // dependence.
-                match entry.source() {
-                    Some(source) => {
-                        self.for_data_source_desc(&source.data_source, &source.timeline)
-                    }
-                    None => Indeterminate,
-                }
+            CatalogItem::Source(source) => {
+                self.for_data_source_desc(&source.data_source, &source.timeline)
             }
-            CatalogItemType::MaterializedView
-            | CatalogItemType::Index
-            | CatalogItemType::ContinualTask => {
+            CatalogItem::MaterializedView(_)
+            | CatalogItem::Index(_)
+            | CatalogItem::ContinualTask(_) => {
                 // Return cached information
                 if let Some(time_dependence) = self
                     .catalog
                     .try_get_physical_plan(&id)
-                    .and_then(|plan| plan.time_dependence.as_ref())
-                    .cloned()
+                    .map(|plan| plan.time_dependence.clone())
                 {
                     time_dependence
                 } else {
@@ -192,21 +172,16 @@ impl<'a> TimeDependenceHelper<'a> {
                         entry.item_type(),
                         entry.id
                     );
-                    Indeterminate
+                    None
                 }
             }
             // All others are indeterminate.
-            CatalogItemType::Connection
-            | CatalogItemType::Func
-            | CatalogItemType::Secret
-            | CatalogItemType::Sink
-            | CatalogItemType::Type
-            | CatalogItemType::View => Indeterminate,
-        };
-
-        time_dependence.normalize();
-
-        self.seen.insert(id, time_dependence.clone());
-        time_dependence
+            CatalogItem::Connection(_)
+            | CatalogItem::Func(_)
+            | CatalogItem::Secret(_)
+            | CatalogItem::Sink(_)
+            | CatalogItem::Type(_)
+            | CatalogItem::View(_) => None,
+        }
     }
 }

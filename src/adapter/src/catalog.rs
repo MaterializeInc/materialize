@@ -171,10 +171,6 @@ impl Catalog {
         id: GlobalId,
         plan: DataflowDescription<mz_compute_types::plan::Plan>,
     ) {
-        soft_assert_or_log!(
-            plan.time_dependence.is_some(),
-            "Plan must specify time dependence"
-        );
         self.plans.physical_plan_by_id.insert(id, plan.into());
     }
 

@@ -128,12 +128,11 @@ impl Coordinator {
             .catalog_transact_with_side_effects(Some(session), ops, |coord| async {
                 // We're referencing ourselves, so filter out our ID.
                 let id_bundle = dataflow_import_id_bundle(&physical_plan, cluster_id);
-                let time_dependence = TimeDependenceHelper::new(coord.catalog())
+                physical_plan.time_dependence = TimeDependenceHelper::new(coord.catalog())
                     .determine_time_dependence_ids(
                         id_bundle.iter().filter(|x| *x != sink_id),
                         None,
                     );
-                physical_plan.time_dependence = Some(time_dependence);
 
                 let catalog = coord.catalog_mut();
                 catalog.set_optimized_plan(sink_id, optimized_plan);

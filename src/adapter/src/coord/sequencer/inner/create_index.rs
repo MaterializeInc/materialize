@@ -448,9 +448,8 @@ impl Coordinator {
         let transact_result = self
             .catalog_transact_with_side_effects(Some(session), ops, |coord| async {
                 let (mut df_desc, df_meta) = global_lir_plan.unapply();
-                let time_dependence = TimeDependenceHelper::new(coord.catalog())
+                df_desc.time_dependence = TimeDependenceHelper::new(coord.catalog())
                     .determine_time_dependence_plan(&df_desc, cluster_id, None);
-                df_desc.time_dependence = Some(time_dependence);
 
                 // Save plan structures.
                 coord

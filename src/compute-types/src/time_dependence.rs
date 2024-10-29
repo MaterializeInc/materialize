@@ -25,8 +25,6 @@ include!(concat!(
 /// Description of how a dataflow follows time.
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub enum TimeDependence {
-    /// Potentially valid for all times.
-    Indeterminate,
     /// Valid up to a some nested time, rounded according to the refresh schedule.
     RefreshSchedule(Option<RefreshSchedule>, Vec<Self>),
     /// Valid up to the wall-clock time.
@@ -48,7 +46,6 @@ impl TimeDependence {
     /// Applies the indefiniteness to a wall clock time.
     pub fn apply(&self, wall_clock: Timestamp) -> Option<Timestamp> {
         match self {
-            TimeDependence::Indeterminate => None,
             TimeDependence::RefreshSchedule(schedule, inner) => {
                 let result = inner.iter().map(|inner| inner.apply(wall_clock)).min()??;
                 if let Some(schedule) = schedule {
@@ -67,7 +64,6 @@ impl RustType<ProtoTimeDependence> for TimeDependence {
         use crate::time_dependence::proto_time_dependence::ProtoRefreshSchedule;
         ProtoTimeDependence {
             kind: Some(match self {
-                TimeDependence::Indeterminate => proto_time_dependence::Kind::Indeterminate(()),
                 TimeDependence::RefreshSchedule(schedule, inner) => {
                     proto_time_dependence::Kind::RefreshSchedule(ProtoRefreshSchedule {
                         refresh_schedule: schedule.as_ref().map(|s| s.into_proto()),
@@ -85,7 +81,6 @@ impl RustType<ProtoTimeDependence> for TimeDependence {
             .kind
             .ok_or_else(|| TryFromProtoError::missing_field("ProtoTimeDependence::kind"))?
         {
-            proto_time_dependence::Kind::Indeterminate(()) => TimeDependence::Indeterminate,
             proto_time_dependence::Kind::RefreshSchedule(ProtoRefreshSchedule {
                 refresh_schedule,
                 dependence,
@@ -110,7 +105,6 @@ impl Arbitrary for TimeDependence {
 
     fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
         Union::new(vec![
-            Just(TimeDependence::Indeterminate).boxed(),
             any::<RefreshSchedule>()
                 .prop_map(|s| {
                     TimeDependence::RefreshSchedule(Some(s), vec![TimeDependence::Wallclock])
@@ -154,9 +148,5 @@ mod tests {
         i = TimeDependence::Wallclock;
         i.normalize();
         assert_eq!(i, TimeDependence::Wallclock);
-
-        i = TimeDependence::Indeterminate;
-        i.normalize();
-        assert_eq!(i, TimeDependence::Indeterminate);
     }
 }

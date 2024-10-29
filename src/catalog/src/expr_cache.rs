@@ -310,7 +310,6 @@ mod tests {
     use std::sync::Arc;
 
     use mz_compute_types::dataflows::DataflowDescription;
-    use mz_compute_types::time_dependence::TimeDependence;
     use mz_durable_cache::DurableCacheCodec;
     use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
     use mz_persist_client::PersistClient;
@@ -352,7 +351,7 @@ mod tests {
                 initial_storage_as_of: None,
                 refresh_schedule: None,
                 debug_name: "pp".to_string(),
-                time_dependence: Some(TimeDependence::Indeterminate),
+                time_dependence: None,
             };
 
             let dataflow_metainfos = any::<DataflowMetainfo<Arc<OptimizerNotice>>>();

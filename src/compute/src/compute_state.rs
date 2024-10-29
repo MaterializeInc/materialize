@@ -31,6 +31,7 @@ use mz_compute_client::protocol::response::{
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::flat_plan::FlatPlan;
 use mz_compute_types::plan::LirId;
+use mz_compute_types::time_dependence::TimeDependence;
 use mz_dyncfg::ConfigSet;
 use mz_expr::SafeMfpPlan;
 use mz_ore::cast::CastFrom;
@@ -462,7 +463,13 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         let dataflow_index = self.timely_worker.next_dataflow_index();
         let as_of = dataflow.as_of.clone().unwrap();
 
-        let dataflow_expiration = self.determine_dataflow_expiration(&dataflow);
+        let dataflow_expiration = dataflow
+            .time_dependence
+            .as_ref()
+            .map(|time_dependence| {
+                self.determine_dataflow_expiration(time_dependence, &dataflow.until)
+            })
+            .unwrap_or_default();
 
         // Add the dataflow expiration to `until`.
         let until = dataflow.until.meet(&dataflow_expiration);
@@ -473,7 +480,10 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                 import_ids = %dataflow.display_import_ids(),
                 export_ids = %dataflow.display_export_ids(),
                 as_of = ?as_of.elements(),
-                dataflow_expiration = ?dataflow_expiration.elements(),
+                time_dependence = ?dataflow.time_dependence,
+                expiration = ?dataflow_expiration.elements(),
+                expiration_datetime = ?dataflow_expiration.as_option().map(|t| mz_ore::now::to_datetime(t.into())),
+                plan_until = ?dataflow.until.elements(),
                 until = ?until.elements(),
                 "creating dataflow",
             );
@@ -483,7 +493,10 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                 import_ids = %dataflow.display_import_ids(),
                 export_ids = %dataflow.display_export_ids(),
                 as_of = ?as_of.elements(),
-                dataflow_expiration = ?dataflow_expiration.elements(),
+                time_dependence = ?dataflow.time_dependence,
+                expiration = ?dataflow_expiration.elements(),
+                expiration_datetime = ?dataflow_expiration.as_option().map(|t| mz_ore::now::to_datetime(t.into())),
+                plan_until = ?dataflow.until.elements(),
                 until = ?until.elements(),
                 "creating dataflow",
             );
@@ -827,35 +840,6 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         }
     }
 
-    /// Checks for dataflow expiration. Panics if we're past the replica expiration time.
-    pub(crate) fn check_expiration(&self) {
-        let now = mz_ore::now::SYSTEM_TIME();
-        if self.compute_state.replica_expiration.less_than(&now.into()) {
-            let now_datetime = mz_ore::now::to_datetime(now);
-            let expiration_datetime = self
-                .compute_state
-                .replica_expiration
-                .as_option()
-                .map(Into::into)
-                .map(mz_ore::now::to_datetime);
-
-            error!(
-                now,
-                now_datetime = ?now_datetime,
-                expiration = ?self.compute_state.replica_expiration.elements(),
-                expiration_datetime = ?expiration_datetime,
-                "Replica expired"
-            );
-
-            // Repeat condition for better error message.
-            assert!(
-                !self.compute_state.replica_expiration.less_than(&now.into()),
-                "Replica expired. now: {now} ({now_datetime:?}), expiration: {:?} ({expiration_datetime:?})",
-                self.compute_state.replica_expiration.elements(),
-            );
-        }
-    }
-
     /// Either complete the peek (and send the response) or put it in the pending set.
     fn process_peek(&mut self, upper: &mut Antichain<Timestamp>, mut peek: PendingPeek) {
         let response = match &mut peek {
@@ -965,40 +949,59 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         let _ = self.response_tx.send(response);
     }
 
+    /// Checks for dataflow expiration. Panics if we're past the replica expiration time.
+    pub(crate) fn check_expiration(&self) {
+        let now = mz_ore::now::SYSTEM_TIME();
+        if self.compute_state.replica_expiration.less_than(&now.into()) {
+            let now_datetime = mz_ore::now::to_datetime(now);
+            let expiration_datetime = self
+                .compute_state
+                .replica_expiration
+                .as_option()
+                .map(Into::into)
+                .map(mz_ore::now::to_datetime);
+
+            // We error and assert separately to produce structured logs in anything that depends
+            // on tracing.
+            error!(
+                now,
+                now_datetime = ?now_datetime,
+                expiration = ?self.compute_state.replica_expiration.elements(),
+                expiration_datetime = ?expiration_datetime,
+                "replica expired"
+            );
+
+            // Repeat condition for better error message.
+            assert!(
+                !self.compute_state.replica_expiration.less_than(&now.into()),
+                "replica expired. now: {now} ({now_datetime:?}), expiration: {:?} ({expiration_datetime:?})",
+                self.compute_state.replica_expiration.elements(),
+            );
+        }
+    }
+
     /// Returns the dataflow expiration, i.e, the timestamp beyond which diffs can be
     /// dropped.
     ///
     /// Returns an empty timestamp if `replica_expiration` is unset or matches conditions under
     /// which dataflow expiration should be disabled.
-    pub fn determine_dataflow_expiration<P, S>(
+    pub fn determine_dataflow_expiration(
         &self,
-        plan: &DataflowDescription<P, S, mz_repr::Timestamp>,
+        time_dependence: &TimeDependence,
+        until: &Antichain<mz_repr::Timestamp>,
     ) -> Antichain<mz_repr::Timestamp> {
-        if let (Some(time_dependence), Some(expiration)) = (
-            &plan.time_dependence,
-            self.compute_state.replica_expiration.as_option(),
-        ) {
-            // Evaluate time dependence with respect to the expiration time. Step time forward to
-            // ensure the expiration time is different to the moment a dataflow can legitimately
-            // jump to.
-            // We cannot expire dataflow with an until that is less or equal to the
-            // expiration time.
-            if let Some(expiration) = time_dependence
-                .apply(*expiration)
-                .as_ref()
-                .and_then(mz_repr::Timestamp::try_step_forward)
-                .filter(|expiration| !plan.until.less_equal(expiration))
-            {
-                debug!(
-                    name = plan.debug_name,
-                    expiration = ?expiration,
-                    expiration_datetime = ?mz_ore::now::to_datetime(expiration.into()),
-                    "expiring dataflow",
-                );
-                return Antichain::from_elem(expiration);
-            }
-        }
-        Antichain::default()
+        // Evaluate time dependence with respect to the expiration time.
+        // * Step time forward to ensure the expiration time is different to the moment a dataflow
+        //   can legitimately jump to.
+        // * We cannot expire dataflow with an until that is less or equal to the expiration time.
+        let iter = self
+            .compute_state
+            .replica_expiration
+            .iter()
+            .filter_map(|t| time_dependence.apply(*t))
+            .filter_map(|t| mz_repr::Timestamp::try_step_forward(&t))
+            .filter(|expiration| !until.less_equal(expiration));
+        Antichain::from_iter(iter)
     }
 }
 

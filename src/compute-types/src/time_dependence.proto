@@ -21,8 +21,7 @@ message ProtoTimeDependence {
   }
 
   oneof kind {
-    google.protobuf.Empty Indeterminate = 1;
-    ProtoRefreshSchedule RefreshSchedule = 2;
-    google.protobuf.Empty Wallclock = 3;
+    ProtoRefreshSchedule RefreshSchedule = 1;
+    google.protobuf.Empty Wallclock = 2;
   }
 }
