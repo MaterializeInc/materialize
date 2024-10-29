@@ -35,7 +35,7 @@ pub trait DurableCacheCodec: Debug + Eq {
         <Self::ValCodec as Codec>::Schema,
     );
     fn encode(key: &Self::Key, val: &Self::Val) -> (Self::KeyCodec, Self::ValCodec);
-    fn decode(key: Self::KeyCodec, val: Self::ValCodec) -> (Self::Key, Self::Val);
+    fn decode(key: &Self::KeyCodec, val: &Self::ValCodec) -> (Self::Key, Self::Val);
 }
 
 #[derive(Debug)]
@@ -122,8 +122,7 @@ impl<C: DurableCacheCodec> DurableCache<C> {
                         for ((k, v), t, d) in x {
                             let encoded_key = k.unwrap();
                             let encoded_val = v.unwrap();
-                            let (decoded_key, decoded_val) =
-                                C::decode(encoded_key.clone(), encoded_val.clone());
+                            let (decoded_key, decoded_val) = C::decode(&encoded_key, &encoded_val);
                             let val = LocalVal {
                                 encoded_key,
                                 decoded_val,
@@ -325,8 +324,8 @@ mod tests {
             (key.clone(), val.clone())
         }
 
-        fn decode(key: Self::KeyCodec, val: Self::ValCodec) -> (Self::Key, Self::Val) {
-            (key, val)
+        fn decode(key: &Self::KeyCodec, val: &Self::ValCodec) -> (Self::Key, Self::Val) {
+            (key.clone(), val.clone())
         }
     }
 
