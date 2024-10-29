@@ -118,9 +118,6 @@ def get_default_system_parameters(
         ),
         "persist_batch_columnar_format_percent": "100",
         "persist_batch_delete_enabled": "true",
-        "persist_batch_record_run_meta": (
-            "true" if version >= MzVersion.parse_mz("v0.115.0-dev") else "false"
-        ),
         "persist_batch_structured_order": (
             "true" if version >= MzVersion.parse_mz("v0.119.0-dev") else "false"
         ),
