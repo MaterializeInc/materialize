@@ -22,6 +22,8 @@ def verify_sources_after_source_table_migration(
 
     print(f"Sources created in {file} are: {source_names}")
 
+    c.sql("SET statement_timeout = '20s'")
+
     for source_name in source_names:
         _verify_source(c, file, source_name, fail=fail)
 
@@ -31,11 +33,15 @@ def _verify_source(
 ) -> None:
     try:
         print(f"Checking source: {source_name}")
-        # must not crash
-        c.sql("SET statement_timeout = '20s'")
-        c.sql_query(f"SELECT count(*) FROM {source_name};")
 
-        result = c.sql_query(f"SHOW CREATE SOURCE {source_name};")
+        # must not crash
+        statement = f"SELECT count(*) FROM {source_name};"
+        print(statement)
+        c.sql_query(statement)
+
+        statement = f"SHOW CREATE SOURCE {source_name};"
+        print(statement)
+        result = c.sql_query(statement)
         sql = result[0][1]
         assert "FOR TABLE" not in sql, f"FOR TABLE found in: {sql}"
         assert "FOR ALL TABLES" not in sql, f"FOR ALL TABLES found in: {sql}"
