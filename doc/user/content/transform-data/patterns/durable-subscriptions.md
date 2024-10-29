@@ -35,7 +35,15 @@ By default, all user-defined sources, tables, materialized views, and indexes
 keep track of the most recent version of their underlying data. To gracefully
 recover from connection disruptions and enable lossless, _durable
 subscriptions_, you can configure the sources, tables, and materialized views
-that the subscription depends on to **retain history**.[^1]
+that the subscription depends on to **retain history**.
+
+{{< important >}}
+
+Configuring indexes to retain history is not fully supported and is not
+recommended. Instead, consider creating a materialized view for your
+subscription query and configuring the history retention period on that view.
+
+{{</ important >}}
 
 To configure the history retention period for sources, tables and materialized
 views, use the `RETAIN HISTORY` option in its `CREATE` statement. This value can
@@ -52,6 +60,10 @@ the specified time period.
 **For sources, tables and materialized views:** increasing the history retention
   period will not restore older historical data that was already outside the
   previous history retention period before the change.
+
+Configuring indexes to retain history is not fully supported and is not
+recommended. Instead, consider creating a materialized view for your
+subscription query and configuring the history retention period on that view.
 
 See also [Considerations](#considerations).
 
@@ -70,14 +82,19 @@ See also [Considerations](#considerations).
 
 ### Set history retention period
 
-{{< note >}}
-Setting the history retention period for an object will lead to
-increased resource utilization.  See [Considerations](#considerations).
-{{</ note >}}
+{{< important >}}
+
+Setting the history retention period for an object will lead to increased
+resource utilization. Moreover, for indexes, setting history retention period is
+not recommended. Instead, consider creating a materialized view for your
+subscription query and configuring the history retention period on that view.
+See [Considerations](#considerations).
+
+{{</ important >}}
 
 To set the history retention period for [sources](/sql/create-source/),
 [tables](/sql/create-table/), and [materialized
-views](/sql/create-materialized-view/)[^1], you can either:
+views](/sql/create-materialized-view/), you can either:
 
 - Specify the `RETAIN HISTORY` option in the `CREATE` statement. The `RETAIN
    HISTORY` option accepts positive [interval](/sql/types/interval/)
@@ -147,21 +164,23 @@ ALTER MATERIALIZED VIEW winning_bids RESET (RETAIN HISTORY);
 
 #### Resource utilization
 
-It's important to note that increasing the history retention period for an
-object will lead to increased resource utilization in Materialize.
+Increasing the history retention period for an object will lead to increased
+resource utilization in Materialize.
 
-**For sources, tables and materialized views[^1]:**  Increasing the history
+**For sources, tables and materialized views:**  Increasing the history
 retention period for these objects increases the amount of historical data that
 is retained in the storage layer. You can expect storage resource utilization to
 increase, which may incur additional costs.
 
+**For indexes:** Configuring indexes to retain history is not fully supported and is not recommended. Instead, consider creating a materialized view for your subscription query and configuring the history retention period on that view.
 
 #### Best practices
 
-Because of the increased storage costs and processing time for the additional
-historical data, consider configuring history retention period on the object[^1]
-directly powering the subscription, rather than all the way through the
-dependency chain from the source to the materialized view.
+- Because of the increased storage costs and processing time for the additional
+  historical data, consider configuring history retention period on the object directly powering the subscription, rather than all the way through the  dependency chain from the source to the materialized view.
+
+- Configuring indexes to retain history is not fully supported and is not
+  recommended. Instead, consider creating a materialized view for your subscription query and configuring the history retention period on that view.
 
 #### Clean-up
 
@@ -232,7 +251,3 @@ buffered data from before that progress message: you may end up dropping some da
 As a result, to guarantee that the data processing occurs only once after your
 application crashes, you must write the progress message `mz_timestamp` and all
 buffered data **together in a single transaction**.
-
-[^1]: Configuring indexes to retain history is not fully supported and is not
-recommended. Instead, consider creating a materialized view for your
-subscription query and configuring the history retention period on that view.
