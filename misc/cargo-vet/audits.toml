@@ -1219,25 +1219,25 @@ version = "0.6.0"
 [[audits.timely]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.12.0@git:460f95b3dfb103f3fa444a4ef6eefb161a617c7e"
+version = "0.12.0@git:14e2e994b99905e18dca4852e57d153a81f9f02e"
 importable = false
 
 [[audits.timely_bytes]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.12.0@git:460f95b3dfb103f3fa444a4ef6eefb161a617c7e"
+version = "0.12.0@git:14e2e994b99905e18dca4852e57d153a81f9f02e"
 importable = false
 
 [[audits.timely_communication]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.12.0@git:460f95b3dfb103f3fa444a4ef6eefb161a617c7e"
+version = "0.12.0@git:14e2e994b99905e18dca4852e57d153a81f9f02e"
 importable = false
 
 [[audits.timely_logging]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.12.0@git:460f95b3dfb103f3fa444a4ef6eefb161a617c7e"
+version = "0.12.0@git:14e2e994b99905e18dca4852e57d153a81f9f02e"
 importable = false
 
 [[audits.tokio]]
