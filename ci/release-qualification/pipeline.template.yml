@@ -76,7 +76,7 @@ steps:
         - ./ci/plugins/mzcompose:
             composition: zippy
             # OoM and out of disk
-            args: [--scenario=DataflowsLarge, --actions=15000]
+            args: [--scenario=DataflowsLarge, --actions=8000]
 
     - id: zippy-pg-cdc-large
       label: "Large Zippy PostgresCdc"
