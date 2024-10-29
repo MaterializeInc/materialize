@@ -68,7 +68,7 @@
 name             recommendation                 details
 --------------------------------------------------------------------------------------------------------------------------------
 v11              "convert to a view"            "no dependencies from sinks nor from objects on different clusters"
-v21_primary_idx  "keep"                         "dependant objects: {v31,v42}"
+v21_primary_idx  "keep"                         "downstream dependencies: {v31,v42}"
 v31              "add index"                    "multiple downstream dependencies: {v41,v42}"
 v32_primary_idx  "drop unless queried directly" "fewer than two downstream dependencies: {v42}"
 v41              "convert to materialized view" "dependencies on multiple clusters: {v41_primary_idx,v41_primary_idx1}"

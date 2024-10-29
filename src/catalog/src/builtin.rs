@@ -6015,7 +6015,7 @@ WITH MUTUALLY RECURSIVE
         -- materialized views that are connected to a sink
         SELECT
             m.id,
-            s.id
+            s.id AS justification
         FROM objects AS m
         JOIN mz_internal.mz_object_dependencies AS d
             ON (m.id = d.referenced_object_id)
@@ -6028,7 +6028,7 @@ WITH MUTUALLY RECURSIVE
         -- (materialized) views with an index that are not transitively depend on by maintained objects on the same cluster
         SELECT
             v.id,
-            unnest(v.indexes)
+            unnest(v.indexes) AS justification
         FROM objects AS v
         WHERE v.type IN ('view', 'materialized-view') AND NOT EXISTS (
             SELECT FROM mz_internal.mz_object_transitive_dependencies AS d
@@ -6218,7 +6218,7 @@ WITH MUTUALLY RECURSIVE
         SELECT
             unnest(indexes) AS id,
             'keep' AS hint,
-            'dependant objects: ' AS details,
+            'downstream dependencies: ' AS details,
             justification
         FROM objects_with_justification
         -- indexes can only be part of justification for leaf nodes
@@ -6243,8 +6243,8 @@ WITH MUTUALLY RECURSIVE
             id,
             hint,
             details,
-            h.justification
-        FROM hints AS h
+            justification
+        FROM hints
         WHERE justification IS NULL
     )
 
