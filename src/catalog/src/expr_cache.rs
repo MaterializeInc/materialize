@@ -23,7 +23,7 @@ use mz_ore::task::spawn;
 use mz_persist_client::PersistClient;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::Codec;
-use mz_repr::adt::jsonb::{Jsonb, JsonbPacker, JsonbRef};
+use mz_repr::adt::jsonb::{JsonbPacker, JsonbRef};
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::{GlobalId, RelationDesc, Row, ScalarType};
 use mz_storage_types::sources::SourceData;
