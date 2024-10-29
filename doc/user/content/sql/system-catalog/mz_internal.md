@@ -409,7 +409,7 @@ It hence requires some consideration and experimentation to verify that the give
 | `object_id`      | [`text`]    | The ID of the object. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), [`mz_catalog.mz_views.id`](../mz_catalog#mz_views). |
 | `recommendation` | [`text`]    | A proposed action to either change the object (e.g. turn a materialized view into an index or vice versa) or keep the object unchanged. |
 | `details`        | [`text`]    | An explanation why the `recommendation` was proposed based on the dependencies of the object. |
-| `justification`  | [`text`]    | The object ids that support the `recommendation`. `details` resolves the ids to names, which can be abiguous in case of multiple schemas or databases. |
+| `justification`  | [`list`]    | The object ids that support the `recommendation`. `details` resolves the ids to names, which can be abiguous in case of multiple schemas or databases. |
 
 ## `mz_materialization_dependencies`
 
