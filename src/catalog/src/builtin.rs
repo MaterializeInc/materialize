@@ -6225,23 +6225,25 @@ WITH MUTUALLY RECURSIVE
         WHERE type = 'view' AND justification IS NOT NULL AND NOT indexes = '{}'::text list AND NOT justification @> indexes
     ),
 
-    hints_resolved_ids(id text, hint text, details text) AS (
+    hints_resolved_ids(id text, hint text, details text, justification text list) AS (
         SELECT
             h.id,
             h.hint,
-            h.details || list_agg(o.name)::text AS details
+            h.details || list_agg(o.name)::text AS details,
+            h.justification
         FROM hints AS h,
             LATERAL unnest(h.justification) j
         JOIN mz_objects AS o
             ON (o.id = j)
-        GROUP BY h.id, h.hint, h.details
+        GROUP BY h.id, h.hint, h.details, h.justification
 
         UNION ALL
 
         SELECT
             id,
             hint,
-            details
+            details,
+            h.justification
         FROM hints AS h
         WHERE justification IS NULL
     )
@@ -6249,9 +6251,9 @@ WITH MUTUALLY RECURSIVE
 SELECT
     h.id AS object_id,
     h.hint AS recommendation,
-    h.details
-FROM hints_resolved_ids AS h
-ORDER BY h.hint",
+    h.details,
+    h.justification
+FROM hints_resolved_ids AS h",
         access: vec![PUBLIC_SELECT],
     }
 });

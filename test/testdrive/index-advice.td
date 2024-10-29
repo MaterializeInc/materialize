@@ -51,11 +51,11 @@
 #             │                                            │
 #             │                                            │
 #             │                                            │
-#   ┌─────────┴─────────┐                     ┌────────────┴───────────┐
-#   │        v41        │                     │          v42           │
-#   │   index (c1, c2)  │                     │ materialized view (c1) │
-#   └───────────────────┘                     │       index (c2)       │
-#                                             └────────────────────────┘
+#   ┌─────────┴─────────┐                      ┌───────────┴────────────┐
+#   │        v41        │                      │          v42           │
+#   │   index (c1, c2)  │                      │ materialized view (c1) │
+#   └───────────────────┘                      │       index (c2)       │
+#                                              └────────────────────────┘
 #
 # With these dependencies, the index on v32 and the materialized view on v11 should be removed
 # because these objects only have a single maintained dependency. But an index should be added
@@ -78,9 +78,9 @@ v42              "keep"                         "dependencies from sinks or obje
 v42_primary_idx  "drop unless queried directly" "associated view does not have any dependencies (maintained or not maintained)"
 
 # verify that all indexes and materialized views have a recommendation
-> SELECT name FROM mz_objects WHERE id LIKE 'u%' AND type IN ('index', 'materialized-view')
+> SELECT id FROM mz_objects WHERE id LIKE 'u%' AND type IN ('index', 'materialized-view')
   EXCEPT ALL
-  SELECT o.name FROM mz_internal.mz_index_advice AS a INNER JOIN mz_objects AS o ON (a.object_id = o.id) WHERE o.type IN ('index', 'materialized-view');
+  SELECT o.id FROM mz_internal.mz_index_advice AS a INNER JOIN mz_objects AS o ON (a.object_id = o.id) WHERE o.type IN ('index', 'materialized-view');
 
 # cleanup test
 > DROP MATERIALIZED VIEW v11 CASCADE;
@@ -99,9 +99,9 @@ name              recommendation                     details
  v11_primary_idx  "drop unless queried directly"     "associated view does not have any dependencies (maintained or not maintained)"
 
 # verify that all indexes and materialized views have a recommendation
-> SELECT name FROM mz_objects WHERE id LIKE 'u%' AND type IN ('index', 'materialized-view')
+> SELECT id FROM mz_objects WHERE id LIKE 'u%' AND type IN ('index', 'materialized-view')
   EXCEPT ALL
-  SELECT o.name FROM mz_internal.mz_index_advice AS a INNER JOIN mz_objects AS o ON (a.object_id = o.id) WHERE o.type IN ('index', 'materialized-view');
+  SELECT o.id FROM mz_internal.mz_index_advice AS a INNER JOIN mz_objects AS o ON (a.object_id = o.id) WHERE o.type IN ('index', 'materialized-view');
 
 # cleanup  test
 > DROP MATERIALIZED VIEW v11 CASCADE;
@@ -119,9 +119,9 @@ name              recommendation                  details
  v11_primary_idx  "drop unless queried directly"  "associated view does not have any dependencies (maintained or not maintained)"
 
 # verify that all indexes and materialized views have a recommendation
-> SELECT name FROM mz_objects WHERE id LIKE 'u%' AND type IN ('index', 'materialized-view')
+> SELECT id FROM mz_objects WHERE id LIKE 'u%' AND type IN ('index', 'materialized-view')
   EXCEPT ALL
-  SELECT o.name FROM mz_internal.mz_index_advice AS a INNER JOIN mz_objects AS o ON (a.object_id = o.id) WHERE o.type IN ('index', 'materialized-view');
+  SELECT o.id FROM mz_internal.mz_index_advice AS a INNER JOIN mz_objects AS o ON (a.object_id = o.id) WHERE o.type IN ('index', 'materialized-view');
 
 # cleanup test
 > DROP VIEW v11 CASCADE;
