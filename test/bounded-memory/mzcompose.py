@@ -1089,6 +1089,18 @@ SCENARIOS = [
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
+    for name in c.workflows:
+        if name == "default":
+            continue
+
+        if name == "minimization-search":
+            continue
+
+        with c.test_case(name):
+            c.workflow(name)
+
+
+def workflow_main(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Process various datasets in a memory-constrained environment in order
     to exercise compaction/garbage collection and confirm no OOMs or thrashing."""
 
