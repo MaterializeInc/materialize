@@ -2710,6 +2710,7 @@ impl Coordinator {
                         .catalog()
                         .resolve_full_name(entry.name(), None)
                         .to_string();
+                    let force_non_monotonic = Default::default();
 
                     let (optimized_plan, global_lir_plan) = {
                         // Build an optimizer for this MATERIALIZED VIEW.
@@ -2725,6 +2726,7 @@ impl Coordinator {
                             optimizer_config.clone(),
                             self.optimizer_metrics(),
                             is_timeline_epoch_ms,
+                            force_non_monotonic,
                         );
 
                         // MIR ⇒ MIR optimization (global)

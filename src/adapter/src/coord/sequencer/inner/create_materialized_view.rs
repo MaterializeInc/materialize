@@ -441,6 +441,7 @@ impl Coordinator {
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
             .override_from(&self.catalog.get_cluster(*cluster_id).config.features())
             .override_from(&explain_ctx);
+        let force_non_monotonic = Default::default();
 
         // Build an optimizer for this MATERIALIZED VIEW.
         let mut optimizer = optimize::materialized_view::Optimizer::new(
@@ -455,6 +456,7 @@ impl Coordinator {
             optimizer_config,
             self.optimizer_metrics(),
             is_timeline_epoch_ms,
+            force_non_monotonic,
         );
 
         let span = Span::current();
