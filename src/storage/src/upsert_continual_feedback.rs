@@ -417,7 +417,7 @@ where
                                 // required to avoid buffering the entire source
                                 // snapshot in the `stash`.
                                 if prevent_snapshot_buffering && resume_upper.less_equal(&G::Timestamp::minimum()) && event_time == G::Timestamp::minimum() {
-                                    tracing::info!(?event_time, ?resume_upper, ?output_cap, "partial drain not implemented, yet");
+                                    tracing::debug!(?event_time, ?resume_upper, ?output_cap, "partial drain not implemented, yet");
                                 }
                             }
                             AsyncEvent::Progress(upper) => {
