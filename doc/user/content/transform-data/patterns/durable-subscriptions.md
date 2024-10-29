@@ -39,9 +39,9 @@ that the subscription depends on to **retain history**.
 
 {{< important >}}
 
-Configuring indexes to retain history is not fully supported and is not
-recommended. Instead, consider creating a materialized view for your
-subscription query and configuring the history retention period on that view.
+Configuring indexes to retain history is not recommended. Instead, consider
+creating a materialized view for your subscription query and configuring the
+history retention period on that view.
 
 {{</ important >}}
 
@@ -61,9 +61,9 @@ the specified time period.
   period will not restore older historical data that was already outside the
   previous history retention period before the change.
 
-Configuring indexes to retain history is not fully supported and is not
-recommended. Instead, consider creating a materialized view for your
-subscription query and configuring the history retention period on that view.
+Configuring indexes to retain history is not recommended. Instead, consider
+creating a materialized view for your subscription query and configuring the
+history retention period on that view.
 
 See also [Considerations](#considerations).
 
@@ -172,7 +172,9 @@ retention period for these objects increases the amount of historical data that
 is retained in the storage layer. You can expect storage resource utilization to
 increase, which may incur additional costs.
 
-**For indexes:** Configuring indexes to retain history is not fully supported and is not recommended. Instead, consider creating a materialized view for your subscription query and configuring the history retention period on that view.
+**For indexes:** Configuring indexes to retain history is not recommended.
+Instead, consider creating a materialized view for your subscription query and
+configuring the history retention period on that view.
 
 #### Best practices
 
@@ -181,9 +183,9 @@ increase, which may incur additional costs.
   directly powering the subscription, rather than all the way through the
   dependency chain from the source to the materialized view.
 
-- Configuring indexes to retain history is not fully supported and is not
-  recommended. Instead, consider creating a materialized view for your
-  subscription query and configuring the history retention period on that view.
+- Configuring indexes to retain history is not recommended. Instead, consider
+  creating a materialized view for your subscription query and configuring the
+  history retention period on that view.
 
 #### Clean-up
 
