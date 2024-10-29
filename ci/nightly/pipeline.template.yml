@@ -172,6 +172,7 @@ steps:
               args:
                 - --other-tag
                 - common-ancestor
+                - --sqlite-store
 
   - group: Kafka
     key: kafka

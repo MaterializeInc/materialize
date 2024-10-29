@@ -190,6 +190,7 @@ steps:
                 - common-ancestor
                 - --load-phase-duration
                 - 1200
+                - --sqlite-store
 
   - group: SQLsmith
     key: sqlsmith
