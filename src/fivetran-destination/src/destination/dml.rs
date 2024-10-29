@@ -51,15 +51,14 @@ pub async fn handle_truncate_table(request: TruncateRequest) -> Result<(), OpErr
 
     let (_dbname, client) = config::connect(request.configuration).await?;
 
-    let exists_stmt = format!(
-        r#"
+    let exists_stmt = r#"
         SELECT EXISTS(
             SELECT 1 FROM mz_tables t
             LEFT JOIN mz_schemas s
             ON t.schema_id = s.id
             WHERE s.name = $1 AND t.name = $2
         )"#
-    );
+    .to_string();
     let exists: bool = client
         .query_one(&exists_stmt, &[&request.schema_name, &request.table_name])
         .await
