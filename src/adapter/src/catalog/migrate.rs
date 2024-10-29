@@ -785,6 +785,7 @@ fn ast_rewrite_sources_to_tables(
             // for all sources that were migrated.
             _ => {
                 if mz_sql::names::modify_dependency_item_ids(&mut statement, &changed_ids) {
+                    info!("migrate: updated dependency reference in statement {statement}");
                     item.create_sql = statement.to_ast_string_stable();
                     updated_items.insert(item.global_id, item);
                 }
