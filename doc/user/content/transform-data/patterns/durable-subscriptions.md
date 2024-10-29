@@ -177,10 +177,13 @@ increase, which may incur additional costs.
 #### Best practices
 
 - Because of the increased storage costs and processing time for the additional
-  historical data, consider configuring history retention period on the object directly powering the subscription, rather than all the way through the  dependency chain from the source to the materialized view.
+  historical data, consider configuring history retention period on the object
+  directly powering the subscription, rather than all the way through the
+  dependency chain from the source to the materialized view.
 
 - Configuring indexes to retain history is not fully supported and is not
-  recommended. Instead, consider creating a materialized view for your subscription query and configuring the history retention period on that view.
+  recommended. Instead, consider creating a materialized view for your
+  subscription query and configuring the history retention period on that view.
 
 #### Clean-up
 
