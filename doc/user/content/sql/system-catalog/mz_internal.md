@@ -393,7 +393,7 @@ inputs.
 ## `mz_index_advice`
 
 The `mz_index_advice` view provides recommendations on where to add (or remove) indexes and materialized view based on the interdependencies between objects.
-The recommendations are intended to reduce resource usage (CPU and memory) by creating indexes and materialized view to precompute intermediate results that can be reused across several object.
+The recommendations are intended to reduce resource usage (CPU and memory) by creating indexes and materialized views to precompute intermediate results that can be reused across several objects.
 It also highlights indexes that can be removed and materialized views that can be turned into plain views when they are unnecessary.
 
 Note, however, that the recommendations are purely based on object dependencies. They do not take the actual query definitions into account.
