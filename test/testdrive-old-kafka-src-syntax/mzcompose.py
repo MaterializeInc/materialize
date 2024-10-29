@@ -343,6 +343,8 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         additional_system_parameter_defaults[key] = val
 
+    additional_system_parameter_defaults["force_source_table_syntax"] = "true"
+
     mz_old = Materialized(
         default_size=Materialized.Size.DEFAULT_SIZE,
         image=get_old_image_for_source_table_migration_test(),
