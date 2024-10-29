@@ -17,8 +17,6 @@ use std::sync::Arc;
 use differential_dataflow::consolidation;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::{AsCollection, Collection};
-use futures::future::FutureExt;
-use futures::StreamExt;
 use indexmap::map::Entry;
 use itertools::Itertools;
 use mz_ore::cast::CastFrom;
@@ -220,19 +218,9 @@ where
 
         loop {
             tokio::select! {
-                Some(persist_event) = persist_input.next() => {
-
-                    // Buffer as many events as possible. This should be
-                    // bounded, as new data can't be produced in this worker
-                    // until we yield to timely.
-                    let persist_events = [persist_event]
-                        .into_iter()
-                        .chain(std::iter::from_fn(|| persist_input.next().now_or_never().flatten()));
-
+                _ = persist_input.ready() => {
                     // Read away as much input as we can.
-                    for persist_event in persist_events {
-                        tracing::trace!(?persist_event, "persist input");
-
+                    while let Some(persist_event) = persist_input.next_sync() {
                         match persist_event {
                             AsyncEvent::Data(_cap, data) => {
                                 persist_stash.extend(data.into_iter().map(|((key, value), ts, diff)| {
@@ -395,21 +383,9 @@ where
                             ).await;
                     }
                 }
-                input_event = input.next() => {
-                    let Some(input_event) = input_event else {
-                        tracing::debug!("input exhausted, shutting down");
-                        break;
-                    };
-                    // Buffer as many events as possible. This should be bounded, as new data can't be
-                    // produced in this worker until we yield to timely.
-                    let events = [input_event]
-                        .into_iter()
-                        .chain(std::iter::from_fn(|| input.next().now_or_never().flatten()))
-                        .enumerate();
-
-                    for (i, event) in events {
-                        tracing::trace!(?event, "source input");
-
+                _ = input.ready() => {
+                    let mut events_processed = 0;
+                    while let Some(event) = input.next_sync() {
                         match event {
                             AsyncEvent::Data(cap, mut data) => {
                                 tracing::trace!(
@@ -467,7 +443,8 @@ where
                                 input_upper = upper;
                             }
                         }
-                        let events_processed = i + 1;
+
+                        events_processed += 1;
                         if let Some(max) = snapshot_buffering_max {
                             if events_processed >= max {
                                 break;
@@ -512,6 +489,12 @@ where
 
                 output_handle.give_container(&cap,&mut ts_updates);
             }
+
+            if input_upper.is_empty() {
+                tracing::debug!("input exhausted, shutting down");
+                break;
+            };
+
         }
     });
 
