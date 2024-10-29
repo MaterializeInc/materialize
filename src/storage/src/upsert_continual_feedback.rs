@@ -736,7 +736,16 @@ where
         let existing_value = &mut command_state.get_mut().value;
 
         if let Some(cs) = existing_value.as_mut() {
-            cs.ensure_decoded(bincode_opts);
+            match cs.ensure_decoded(bincode_opts) {
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::error!(
+                        worker_id = %source_config.worker_id,
+                        source_id = %source_config.id,
+                        "invalid upsert state: {}", e);
+                    panic!("invalid upsert state: {}", e);
+                }
+            }
         }
 
         // Skip this command if its order key is below the one in the upsert state.
