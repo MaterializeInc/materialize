@@ -1848,14 +1848,6 @@ impl CatalogEntry {
         }
     }
 
-    /// Returns the inner [`Table`] if this entry is a table, else `None`.
-    pub fn table(&self) -> Option<&Table> {
-        match self.item() {
-            CatalogItem::Table(table) => Some(table),
-            _ => None,
-        }
-    }
-
     pub fn connection(&self) -> Result<&Connection, SqlCatalogError> {
         match self.item() {
             CatalogItem::Connection(connection) => Ok(connection),
