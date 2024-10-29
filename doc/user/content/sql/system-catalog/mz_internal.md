@@ -396,12 +396,34 @@ The `mz_index_advice` view provides recommendations on where to add (or remove) 
 The recommendations are intended to reduce resource usage (CPU and memory) by creating indexes and materialized views to precompute intermediate results that can be reused across several objects.
 It also highlights indexes that can be removed and materialized views that can be turned into plain views when they are unnecessary.
 
-Note, however, that the recommendations are purely based on object dependencies. They do not take the actual query definitions into account.
-There are several ways how the recommendation can be misleading and even increase resource usage:
-- when a materialized view or an index has been created because they are queried directly, that's not apparent from the dependencies and it's recommended to use plain views instead
-- when a view is depended on by multiple maintained objects that all use very selective filters or use lots of projections that can be pushed into or even beyond the view, adding an index may increase resource usage
-- when indexes have been created to enable delta joins, removing indexes may lead to lower memory utilization but the join implementation can no longer choose a delta join
-It hence requires some consideration and experimentation to verify that the given recommendations actually lead to reduced resource usage.
+{{< callout >}}
+
+### Limitations and considerations
+
+The recommendations are based solely on object dependencies. They do not take
+the actual query definitions into account and as such, can be misleading and
+even increase resource usage. For example:
+
+- When a materialized view or an index has been created because they are queried
+  directly, that is not apparent from the object dependencies, and using plain
+  views (recommendation based solely on object dependencies) is inappropriate
+  for the actual query pattern.
+
+- When a view is depended on by multiple maintained objects that all use very
+  selective filters or use lots of projections that can be pushed into or even
+  beyond the view, adding an index (recommendation based soley on object
+  dependencies) may increase resource usage.
+
+- When indexes have been created to enable [delta
+  joins](/transform-data/optimization/#optimize-multi-way-joins-with-delta-joins),
+  removing indexes (recommendation based soley on object dependencies) may lead
+  to lower memory utilization but the join implementation can no longer choose a
+  delta join.
+
+As such, test to confirm that the proposed recommendations reduce resource usage
+for your actual usage patterns.
+
+{{< /callout >}}
 
 <!-- RELATION_SPEC mz_internal.mz_index_advice -->
 | Field            | Type        | Meaning  |
