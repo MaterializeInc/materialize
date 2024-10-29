@@ -289,16 +289,21 @@ where
 
         // A closure that will initialize and return a configured RocksDB instance
         let rocksdb_init_fn = move || async move {
-            let merge_operator = if rocksdb_use_native_merge_operator {
-                Some((
-                    "upsert_state_snapshot_merge_v1".to_string(),
-                    |a: &[u8], b: ValueIterator<BincodeOpts, StateValue<Option<FromTime>>>| {
-                        snapshot_merge_function::<Option<FromTime>>(a.into(), b)
-                    },
-                ))
-            } else {
-                None
-            };
+            let merge_operator =
+                if rocksdb_use_native_merge_operator {
+                    Some((
+                        "upsert_state_snapshot_merge_v1".to_string(),
+                        |a: &[u8],
+                         b: ValueIterator<
+                            BincodeOpts,
+                            StateValue<G::Timestamp, Option<FromTime>>,
+                        >| {
+                            snapshot_merge_function::<G::Timestamp, Option<FromTime>>(a.into(), b)
+                        },
+                    ))
+                } else {
+                    None
+                };
             rocksdb::RocksDB::new(
                 mz_rocksdb::RocksDBInstance::new(
                     &rocksdb_dir,
@@ -403,7 +408,7 @@ where
     G::Timestamp: TotalOrder + Sync,
     F: FnOnce() -> Fut + 'static,
     Fut: std::future::Future<Output = US>,
-    US: UpsertStateBackend<Option<FromTime>>,
+    US: UpsertStateBackend<G::Timestamp, Option<FromTime>>,
     FromTime: Debug + timely::ExchangeData + Ord + Sync,
 {
     let use_continual_feedback_upsert =
@@ -543,16 +548,19 @@ enum DrainStyle<'a, T> {
 /// from the input timely edge.
 async fn drain_staged_input<S, G, T, FromTime, E>(
     stash: &mut Vec<(T, UpsertKey, Reverse<FromTime>, Option<UpsertValue>)>,
-    commands_state: &mut indexmap::IndexMap<UpsertKey, types::UpsertValueAndSize<Option<FromTime>>>,
+    commands_state: &mut indexmap::IndexMap<
+        UpsertKey,
+        types::UpsertValueAndSize<T, Option<FromTime>>,
+    >,
     output_updates: &mut Vec<(Result<Row, UpsertError>, T, Diff)>,
     multi_get_scratch: &mut Vec<UpsertKey>,
     drain_style: DrainStyle<'_, T>,
     error_emitter: &mut E,
-    state: &mut UpsertState<'_, S, Option<FromTime>>,
+    state: &mut UpsertState<'_, S, T, Option<FromTime>>,
 ) where
-    S: UpsertStateBackend<Option<FromTime>>,
+    S: UpsertStateBackend<T, Option<FromTime>>,
     G: Scope,
-    T: PartialOrder + Ord + Clone + Debug,
+    T: PartialOrder + Ord + Clone + Send + Sync + Serialize + Debug + 'static,
     FromTime: timely::ExchangeData + Ord + Sync,
     E: UpsertErrorEmitter<G>,
 {
@@ -638,10 +646,11 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
 
         match value {
             Some(value) => {
-                if let Some(old_value) = existing_value
-                    .replace(StateValue::value(value.clone(), Some(from_time.0.clone())))
-                {
-                    if let Value::Value(old_value, _) = old_value.into_decoded() {
+                if let Some(old_value) = existing_value.replace(StateValue::finalized_value(
+                    value.clone(),
+                    Some(from_time.0.clone()),
+                )) {
+                    if let Value::FinalizedValue(old_value, _) = old_value.into_decoded() {
                         output_updates.push((old_value, ts.clone(), -1));
                     }
                 }
@@ -649,7 +658,7 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
             }
             None => {
                 if let Some(old_value) = existing_value.take() {
-                    if let Value::Value(old_value, _) = old_value.into_decoded() {
+                    if let Value::FinalizedValue(old_value, _) = old_value.into_decoded() {
                         output_updates.push((old_value, ts, -1));
                     }
                 }
@@ -661,18 +670,21 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
     }
 
     match state
-        .multi_put(commands_state.drain(..).map(|(k, cv)| {
-            (
-                k,
-                types::PutValue {
-                    value: cv.value.map(|cv| cv.into_decoded()),
-                    previous_value_metadata: cv.metadata.map(|v| ValueMetadata {
-                        size: v.size.try_into().expect("less than i64 size"),
-                        is_tombstone: v.is_tombstone,
-                    }),
-                },
-            )
-        }))
+        .multi_put(
+            true, // Do update per-update stats.
+            commands_state.drain(..).map(|(k, cv)| {
+                (
+                    k,
+                    types::PutValue {
+                        value: cv.value.map(|cv| cv.into_decoded()),
+                        previous_value_metadata: cv.metadata.map(|v| ValueMetadata {
+                            size: v.size.try_into().expect("less than i64 size"),
+                            is_tombstone: v.is_tombstone,
+                        }),
+                    },
+                )
+            }),
+        )
         .await
     {
         Ok(_) => {}
@@ -712,7 +724,7 @@ where
     G::Timestamp: TotalOrder + Sync,
     F: FnOnce() -> Fut + 'static,
     Fut: std::future::Future<Output = US>,
-    US: UpsertStateBackend<Option<FromTime>>,
+    US: UpsertStateBackend<G::Timestamp, Option<FromTime>>,
     FromTime: timely::ExchangeData + Ord + Sync,
 {
     let mut builder = AsyncOperatorBuilder::new("Upsert".to_string(), input.scope());
@@ -756,7 +768,7 @@ where
         // The order key of the `UpsertState` is `Option<FromTime>`, which implements `Default`
         // (as required for `consolidate_snapshot_chunk`), with slightly more efficient serialization
         // than a default `Partitioned`.
-        let mut state = UpsertState::<_, Option<FromTime>>::new(
+        let mut state = UpsertState::<_, _, Option<FromTime>>::new(
             state().await,
             upsert_shared_metrics,
             &upsert_metrics,
@@ -893,8 +905,10 @@ where
 
         // A re-usable buffer of changes, per key. This is an `IndexMap` because it has to be `drain`-able
         // and have a consistent iteration order.
-        let mut commands_state: indexmap::IndexMap<_, types::UpsertValueAndSize<Option<FromTime>>> =
-            indexmap::IndexMap::new();
+        let mut commands_state: indexmap::IndexMap<
+            _,
+            types::UpsertValueAndSize<G::Timestamp, Option<FromTime>>,
+        > = indexmap::IndexMap::new();
         let mut multi_get_scratch = Vec::new();
 
         // Now can can resume consuming the collection

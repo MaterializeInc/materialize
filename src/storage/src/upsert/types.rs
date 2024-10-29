@@ -114,13 +114,31 @@ pub fn upsert_bincode_opts() -> BincodeOpts {
 /// can reuse this value as they overwrite this value, keeping
 /// track of the previous metadata. Additionally, values
 /// may be `None` for tombstones.
-#[derive(Debug, Default, Clone)]
-pub struct UpsertValueAndSize<O> {
+#[derive(Clone)]
+pub struct UpsertValueAndSize<T, O> {
     /// The value, if there was one.
-    pub value: Option<StateValue<O>>,
+    pub value: Option<StateValue<T, O>>,
     /// The size of original`value` as persisted,
     /// Useful for users keeping track of statistics.
     pub metadata: Option<ValueMetadata<u64>>,
+}
+
+impl<T, O> std::fmt::Debug for UpsertValueAndSize<T, O> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("UpsertValueAndSize")
+            .field("value", &self.value)
+            .field("metadata", &self.metadata)
+            .finish()
+    }
+}
+
+impl<T, O> Default for UpsertValueAndSize<T, O> {
+    fn default() -> Self {
+        Self {
+            value: None,
+            metadata: None,
+        }
+    }
 }
 
 /// Metadata about an existing value in the upsert state backend, as returned
@@ -171,19 +189,52 @@ pub struct MergeValue<V> {
 /// `O` typically required to be `: Default`, with the default value sorting below all others.
 /// Values consolidated during snapshotting consolidate correctly (as they are actual
 /// differential updates with diffs), so order keys are not required.
-#[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
-pub enum StateValue<O> {
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub enum StateValue<T, O> {
+    // TODO(aljoscha): This should really be called Consolidating, or Ingesting.
     Snapshotting(Snapshotting),
-    Value(Value<O>),
+    Value(Value<T, O>),
+}
+
+impl<T, O> std::fmt::Debug for StateValue<T, O> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            StateValue::Snapshotting(_) => write!(f, "Snapshotting"),
+            StateValue::Value(_) => write!(f, "Value"),
+        }
+    }
 }
 
 /// A totally consolidated value stored within the `UpsertStateBackend`.
 ///
-/// This type contains support for _tombstones_, that contain an _order key_.
+/// This type contains support for _tombstones_, that contain an _order key_,
+/// and provisional values.
+///
+/// What is considered finalized and provisional depends on the implementation
+/// of the UPSERT operator: it might consider everything that it writes to its
+/// state finalized, and assume that what it emits will be written down in the
+/// output exactly as presented. Or it might consider everything it writes down
+/// provisional, and only consider updates that it _knows_ to be persisted as
+/// finalized.
+///
+/// Provisional values should only be considered while still "working off"
+/// updates with the same timestamp at which the provisional update was
+/// recorded.
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
-pub enum Value<O> {
-    Value(UpsertValue, O),
+pub enum Value<T, O> {
+    FinalizedValue(UpsertValue, O),
     Tombstone(O),
+    ProvisionalValue {
+        // We keep the finalized value around, because the provisional value is
+        // only valid when processing updates at the same timestamp. And at any
+        // point we might still require access to the finalized value.
+        finalized_value: Option<Box<(UpsertValue, O)>>,
+        // A provisional value of `None` is a provisional tombstone.
+        //
+        // WIP: We can also box this, to keep the size of StateValue as it was
+        // previously.
+        provisional_value: (Option<UpsertValue>, T, O),
+    },
 }
 
 /// A value as produced during consolidation of a snapshot.
@@ -206,10 +257,11 @@ impl fmt::Display for Snapshotting {
     }
 }
 
-impl<O> StateValue<O> {
-    /// A normal value occurring at some order key.
-    pub fn value(value: UpsertValue, order: O) -> Self {
-        Self::Value(Value::Value(value, order))
+impl<T, O> StateValue<T, O> {
+    /// A finalized, that is (assumed) persistent, value occurring at some order
+    /// key.
+    pub fn finalized_value(value: UpsertValue, order: O) -> Self {
+        Self::Value(Value::FinalizedValue(value, order))
     }
 
     #[allow(unused)]
@@ -229,14 +281,17 @@ impl<O> StateValue<O> {
     /// Pull out the order for the given `Value`, assuming `ensure_decoded` has been called.
     pub fn order(&self) -> &O {
         match self {
-            Self::Value(Value::Value(_, order)) => order,
+            Self::Value(Value::FinalizedValue(_, order)) => order,
+            Self::Value(Value::ProvisionalValue { .. }) => {
+                panic!("order() called on provisional value")
+            }
             Self::Value(Value::Tombstone(order)) => order,
             _ => panic!("called `order` without calling `ensure_decoded`"),
         }
     }
 
     /// Pull out the `Value` value for a `StateValue`, after `ensure_decoded` has been called.
-    pub fn into_decoded(self) -> Value<O> {
+    pub fn into_decoded(self) -> Value<T, O> {
         match self {
             Self::Value(value) => value,
             _ => panic!("called `into_decoded without calling `ensure_decoded`"),
@@ -254,21 +309,51 @@ impl<O> StateValue<O> {
             Self::Snapshotting(Snapshotting { value_xor, .. }) => {
                 u64::cast_from(value_xor.len()) + u64::cast_from(std::mem::size_of::<Self>())
             }
-            Self::Value(Value::Value(Ok(row), ..)) => {
+            Self::Value(Value::FinalizedValue(Ok(row), ..)) => {
                 // `Row::byte_len` includes the size of `Row`, which is also in `Self`, so we
                 // subtract it.
-                u64::cast_from(row.byte_len())
+                u64::cast_from(row.byte_len()) - u64::cast_from(std::mem::size_of::<mz_repr::Row>())
                 // This assumes the size of any `O` instantiation is meaningful (i.e. not a heap
                 // object).
                 + u64::cast_from(std::mem::size_of::<Self>())
-                    - u64::cast_from(std::mem::size_of::<mz_repr::Row>())
+            }
+            Self::Value(Value::ProvisionalValue {
+                finalized_value,
+                provisional_value,
+            }) => {
+                finalized_value.as_ref().map(|v| match v.as_ref() {
+                    (Ok(row), _order) =>
+                        // The finalized value is boxed, so the size of Row is
+                        // not included in the outer size of Self. We therefore
+                        // don't subtract it here like for the other branches.
+                        u64::cast_from(row.byte_len())
+                        // Add the size of the order, because it's also behind
+                        // the box.
+                        + u64::cast_from(std::mem::size_of::<O>()),
+                    // Assume errors are rare enough to not move the needle.
+                    (Err(_), _order) => 0,
+                }).unwrap_or(0)
+                +
+                provisional_value.0.as_ref().map(|v| match v{
+                    Ok(row) =>
+                        // `Row::byte_len` includes the size of `Row`, which is
+                        // also in `Self`, so we subtract it.
+                        u64::cast_from(row.byte_len()) - u64::cast_from(std::mem::size_of::<mz_repr::Row>()),
+                        // The size of order is already included in the outer
+                        // size of self.
+                    // Assume errors are rare enough to not move the needle.
+                    Err(_) => 0,
+                }).unwrap_or(0)
+                // This assumes the size of any `O` instantiation is meaningful (i.e. not a heap
+                // object).
+                + u64::cast_from(std::mem::size_of::<Self>())
             }
             Self::Value(Value::Tombstone(_)) => {
                 // This assumes the size of any `O` instantiation is meaningful (i.e. not a heap
                 // object).
                 u64::cast_from(std::mem::size_of::<Self>())
             }
-            Self::Value(Value::Value(Err(_), ..)) => {
+            Self::Value(Value::FinalizedValue(Err(_), ..)) => {
                 // Assume errors are rare enough to not move the needle.
                 0
             }
@@ -276,7 +361,196 @@ impl<O> StateValue<O> {
     }
 }
 
-impl<O: Default> StateValue<O> {
+impl<T: Eq, O> StateValue<T, O> {
+    /// Creates a new provisional value, occurring at some order key, observed
+    /// at the given timestamp.
+    pub fn new_provisional_value(
+        provisional_value: UpsertValue,
+        provisional_ts: T,
+        order: O,
+    ) -> Self {
+        Self::Value(Value::ProvisionalValue {
+            finalized_value: None,
+            provisional_value: (Some(provisional_value), provisional_ts, order),
+        })
+    }
+
+    /// Creates a provisional value, that retains the finalized value along with
+    /// its order in this `StateValue`, if any.
+    ///
+    /// We record the finalized value, so that we can present it when needed or
+    /// when trying to read a provisional value at a different timestamp.
+    pub fn into_provisional_value(
+        self,
+        provisional_value: UpsertValue,
+        provisional_ts: T,
+        provisional_order: O,
+    ) -> Self {
+        match self {
+            StateValue::Value(Value::FinalizedValue(value, order)) => {
+                StateValue::Value(Value::ProvisionalValue {
+                    finalized_value: Some(Box::new((value, order))),
+                    provisional_value: (Some(provisional_value), provisional_ts, provisional_order),
+                })
+            }
+            StateValue::Value(Value::Tombstone(_)) => {
+                // This cannot happen with how the new feedback UPSERT uses
+                // state. There are only ever provisional tombstones, and all
+                // updates that are merged/consolidated into upsert state come
+                // from the persist input, which doesn't need tombstones.
+                //
+                // Regular, finalized tombstones are only used by the classic
+                // UPSERT operator when doing partial processing.
+                panic!("cannot turn a finalized tombstone into a provisional value")
+            }
+            StateValue::Value(Value::ProvisionalValue {
+                finalized_value,
+                provisional_value: _,
+            }) => StateValue::Value(Value::ProvisionalValue {
+                finalized_value,
+                provisional_value: (Some(provisional_value), provisional_ts, provisional_order),
+            }),
+            StateValue::Snapshotting(_) => {
+                panic!("called `into_provisional_value` without calling `ensure_decoded`")
+            }
+        }
+    }
+
+    /// Creates a new provisional tombstone occurring at some order key,
+    /// observed at the given timestamp.
+    pub fn new_provisional_tombstone(provisional_ts: T, order: O) -> Self {
+        Self::Value(Value::ProvisionalValue {
+            finalized_value: None,
+            provisional_value: (None, provisional_ts, order),
+        })
+    }
+
+    /// Creates a provisional tombstone, that retains the finalized value along
+    /// with its order in this `StateValue`, if any.
+    ///
+    /// We record the current finalized value, so that we can present it when
+    /// needed or when trying to read a provisional value at a different
+    /// timestamp.
+    pub fn into_provisional_tombstone(self, provisional_ts: T, provisional_order: O) -> Self {
+        match self {
+            StateValue::Value(Value::FinalizedValue(value, order)) => {
+                StateValue::Value(Value::ProvisionalValue {
+                    finalized_value: Some(Box::new((value, order))),
+                    provisional_value: (None, provisional_ts, provisional_order),
+                })
+            }
+            StateValue::Value(Value::Tombstone(order)) => {
+                StateValue::Value(Value::ProvisionalValue {
+                    finalized_value: None,
+                    provisional_value: (None, provisional_ts, order),
+                })
+            }
+            StateValue::Value(Value::ProvisionalValue {
+                finalized_value,
+                provisional_value: _,
+            }) => StateValue::Value(Value::ProvisionalValue {
+                finalized_value,
+                provisional_value: (None, provisional_ts, provisional_order),
+            }),
+            StateValue::Snapshotting(_) => {
+                panic!("called `into_provisional_tombstone` without calling `ensure_decoded`")
+            }
+        }
+    }
+
+    /// Returns the order of a provisional value at the given timestamp. If that
+    /// doesn't exist, the order of the finalized value.
+    ///
+    /// Returns `None` if none of the above exist.
+    pub fn provisional_order(&self, ts: &T) -> Option<&O> {
+        match self {
+            Self::Value(Value::FinalizedValue(_, order)) => Some(order),
+            Self::Value(Value::Tombstone(order)) => Some(order),
+            Self::Value(Value::ProvisionalValue {
+                finalized_value: _,
+                provisional_value: (_, provisional_ts, provisional_order),
+            }) if provisional_ts == ts => Some(provisional_order),
+            Self::Value(Value::ProvisionalValue {
+                finalized_value,
+                provisional_value: _,
+            }) => finalized_value.as_ref().map(|v| &v.1),
+            Self::Snapshotting(_) => {
+                panic!("called `provisional_order` without calling `ensure_decoded`")
+            }
+        }
+    }
+
+    // WIP: We don't need these after all, but leave in for review.
+    ///// Returns the order of this value, if a finalized value is present.
+    //pub fn finalized_order(&self) -> Option<&O> {
+    //    match self {
+    //        Self::Value(Value::FinalizedValue(_, order)) => Some(order),
+    //        Self::Value(Value::Tombstone(order)) => Some(order),
+    //        Self::Value(Value::ProvisionalValue {
+    //            finalized_value,
+    //            provisional_value: _,
+    //        }) => finalized_value.as_ref().map(|v| &v.1),
+    //        Self::Snapshotting(_) => {
+    //            panic!("called `finalized_order` without calling `ensure_decoded`")
+    //        }
+    //    }
+    //}
+
+    ///// Returns the provisional value, if one is present at the given timestamp.
+    ///// Falls back to the finalized value, or `None` if there is neither.
+    //pub fn into_provisional_value(self, ts: &T) -> Option<(UpsertValue, O)> {
+    //    match self {
+    //        Self::Value(Value::FinalizedValue(value, order)) => Some((value, order)),
+    //        Self::Value(Value::Tombstone(_)) => None,
+    //        Self::Value(Value::ProvisionalValue {
+    //            finalized_value: _,
+    //            provisional_value: (provisional_value, provisional_ts, provisional_order),
+    //        }) if provisional_ts == *ts => provisional_value.map(|v| (v, provisional_order)),
+    //        Self::Value(Value::ProvisionalValue {
+    //            finalized_value,
+    //            provisional_value: _,
+    //        }) => finalized_value.map(|boxed| *boxed),
+    //        Self::Snapshotting(_) => {
+    //            panic!("called `into_provisional_value` without calling `ensure_decoded`")
+    //        }
+    //    }
+    //}
+
+    /// Returns the provisional value, if one is present at the given timestamp.
+    /// Falls back to the finalized value, or `None` if there is neither.
+    pub fn provisional_value_ref(&self, ts: &T) -> Option<&UpsertValue> {
+        match self {
+            Self::Value(Value::FinalizedValue(value, _order)) => Some(value),
+            Self::Value(Value::Tombstone(_)) => None,
+            Self::Value(Value::ProvisionalValue {
+                finalized_value: _,
+                provisional_value: (provisional_value, provisional_ts, _provisional_order),
+            }) if provisional_ts == ts => provisional_value.as_ref(),
+            Self::Value(Value::ProvisionalValue {
+                finalized_value,
+                provisional_value: _,
+            }) => finalized_value.as_ref().map(|boxed| &boxed.0),
+            Self::Snapshotting(_) => {
+                panic!("called `provisional_value_ref` without calling `ensure_decoded`")
+            }
+        }
+    }
+
+    /// Returns the the finalized value, if one is present.
+    pub fn into_finalized_value(self) -> Option<(UpsertValue, O)> {
+        match self {
+            Self::Value(Value::FinalizedValue(value, order)) => Some((value, order)),
+            Self::Value(Value::Tombstone(_order)) => None,
+            Self::Value(Value::ProvisionalValue {
+                finalized_value,
+                provisional_value: _,
+            }) => finalized_value.map(|boxed| *boxed),
+            _ => panic!("called `order` without calling `ensure_decoded`"),
+        }
+    }
+}
+
+impl<T: Eq, O: Default> StateValue<T, O> {
     /// We use a XOR trick in order to accumulate the snapshot without having to store the full
     /// unconsolidated history in memory. For all (value, diff) updates of a key we track:
     /// - diff_sum = SUM(diff)
@@ -319,43 +593,62 @@ impl<O: Default> StateValue<O> {
         bincode_opts: BincodeOpts,
         bincode_buffer: &mut Vec<u8>,
     ) -> bool {
-        if let Self::Snapshotting(Snapshotting {
-            value_xor,
-            len_sum,
-            checksum_sum,
-            diff_sum,
-        }) = self
-        {
-            bincode_buffer.clear();
-            bincode_opts
-                .serialize_into(&mut *bincode_buffer, &value)
-                .unwrap();
-            let len = i64::try_from(bincode_buffer.len()).unwrap();
+        match self {
+            Self::Snapshotting(Snapshotting {
+                value_xor,
+                len_sum,
+                checksum_sum,
+                diff_sum,
+            }) => {
+                bincode_buffer.clear();
+                bincode_opts
+                    .serialize_into(&mut *bincode_buffer, &value)
+                    .unwrap();
+                let len = i64::try_from(bincode_buffer.len()).unwrap();
 
-            *diff_sum += diff;
-            *len_sum += len.wrapping_mul(diff);
-            // Truncation is fine (using `as`) as this is just a checksum
-            *checksum_sum += (seahash::hash(&*bincode_buffer) as i64).wrapping_mul(diff);
+                *diff_sum += diff;
+                *len_sum += len.wrapping_mul(diff);
+                // Truncation is fine (using `as`) as this is just a checksum
+                *checksum_sum += (seahash::hash(&*bincode_buffer) as i64).wrapping_mul(diff);
 
-            // XOR of even diffs cancel out, so we only do it if diff is odd
-            if diff.abs() % 2 == 1 {
-                if value_xor.len() < bincode_buffer.len() {
-                    value_xor.resize(bincode_buffer.len(), 0);
+                // XOR of even diffs cancel out, so we only do it if diff is odd
+                if diff.abs() % 2 == 1 {
+                    if value_xor.len() < bincode_buffer.len() {
+                        value_xor.resize(bincode_buffer.len(), 0);
+                    }
+                    // Note that if the new value is _smaller_ than the `value_xor`, and
+                    // the values at the end are zeroed out, we can shrink the buffer. This
+                    // is extremely sensitive code, so we don't (yet) do that.
+                    for (acc, val) in value_xor.iter_mut().zip(bincode_buffer.drain(..)) {
+                        *acc ^= val;
+                    }
                 }
-                // Note that if the new value is _smaller_ than the `value_xor`, and
-                // the values at the end are zeroed out, we can shrink the buffer. This
-                // is extremely sensitive code, so we don't (yet) do that.
-                for (acc, val) in value_xor.iter_mut().zip(bincode_buffer.drain(..)) {
-                    *acc ^= val;
+
+                // Returns whether or not the value can be deleted. This allows us to delete values in
+                // `UpsertState::consolidate_snapshot_chunk` (even if they come back later) during snapshotting,
+                // to minimize space usage.
+                diff_sum.0 == 0 && checksum_sum.0 == 0 && value_xor.iter().all(|&x| x == 0)
+            }
+            StateValue::Value(_value) => {
+                // We can turn a Value back into a Snapshotting state:
+                // `std::mem::take` will leave behind a default value, which
+                // happens to be a default `Snapshotting` `StateValue`.
+                let this = std::mem::take(self);
+
+                let finalized_value = this.into_finalized_value();
+                if let Some((finalized_value, _order)) = finalized_value {
+                    // If we had a value before, merge it into the now-snapshotting
+                    // state first.
+                    let _ = self.merge_update(finalized_value, 1, bincode_opts, bincode_buffer);
+
+                    // Then merge the new value in.
+                    self.merge_update(value, diff, bincode_opts, bincode_buffer)
+                } else {
+                    // We didn't have a value before, might have been a
+                    // tombstone. So just merge in the new value.
+                    self.merge_update(value, diff, bincode_opts, bincode_buffer)
                 }
             }
-
-            // Returns whether or not the value can be deleted. This allows us to delete values in
-            // `UpsertState::consolidate_snapshot_chunk` (even if they come back later) during snapshotting,
-            // to minimize space usage.
-            return diff_sum.0 == 0 && checksum_sum.0 == 0 && value_xor.iter().all(|&x| x == 0);
-        } else {
-            panic!("`merge_update` called after snapshot consolidation")
         }
     }
 
@@ -421,7 +714,7 @@ impl<O: Default> StateValue<O> {
                             ));
                         }
 
-                        *self = Self::Value(Value::Value(
+                        *self = Self::Value(Value::FinalizedValue(
                             bincode_opts.deserialize(value).unwrap(),
                             Default::default(),
                         ));
@@ -469,7 +762,7 @@ impl<O: Default> StateValue<O> {
     }
 }
 
-impl<O> Default for StateValue<O> {
+impl<T, O> Default for StateValue<T, O> {
     fn default() -> Self {
         Self::Snapshotting(Snapshotting::default())
     }
@@ -547,9 +840,9 @@ impl PutStats {
     /// as some backends increase the total size after an entire batch is processed.
     ///
     /// This method is provided for implementors of `UpsertStateBackend::multi_put`.
-    pub fn adjust<O>(
+    pub fn adjust<T, O>(
         &mut self,
-        new_value: Option<&StateValue<O>>,
+        new_value: Option<&StateValue<T, O>>,
         new_size: Option<i64>,
         previous_metdata: &Option<ValueMetadata<i64>>,
     ) {
@@ -558,9 +851,9 @@ impl PutStats {
         self.adjust_tombstone(new_value, previous_metdata);
     }
 
-    fn adjust_size<O>(
+    fn adjust_size<T, O>(
         &mut self,
-        new_value: Option<&StateValue<O>>,
+        new_value: Option<&StateValue<T, O>>,
         new_size: Option<i64>,
         previous_metdata: &Option<ValueMetadata<i64>>,
     ) {
@@ -583,9 +876,9 @@ impl PutStats {
         }
     }
 
-    fn adjust_values<O>(
+    fn adjust_values<T, O>(
         &mut self,
-        new_value: Option<&StateValue<O>>,
+        new_value: Option<&StateValue<T, O>>,
         previous_metdata: &Option<ValueMetadata<i64>>,
     ) {
         let truly_new_value = new_value.map_or(false, |v| !v.is_tombstone());
@@ -602,9 +895,9 @@ impl PutStats {
         }
     }
 
-    fn adjust_tombstone<O>(
+    fn adjust_tombstone<T, O>(
         &mut self,
-        new_value: Option<&StateValue<O>>,
+        new_value: Option<&StateValue<T, O>>,
         previous_metdata: &Option<ValueMetadata<i64>>,
     ) {
         let new_tombstone = new_value.map_or(false, |v| v.is_tombstone());
@@ -646,8 +939,9 @@ pub struct GetStats {
 /// This **must** is not a correctness requirement (we won't panic when emitting statistics), but
 /// rather a requirement to ensure the upsert operator is introspectable.
 #[async_trait::async_trait(?Send)]
-pub trait UpsertStateBackend<O>
+pub trait UpsertStateBackend<T, O>
 where
+    T: 'static,
     O: 'static,
 {
     /// Whether this backend supports the `multi_merge` operation.
@@ -669,7 +963,7 @@ where
     /// in the backend, regardless of whether the values are tombstones or not.
     async fn multi_put<P>(&mut self, puts: P) -> Result<PutStats, anyhow::Error>
     where
-        P: IntoIterator<Item = (UpsertKey, PutValue<StateValue<O>>)>;
+        P: IntoIterator<Item = (UpsertKey, PutValue<StateValue<T, O>>)>;
 
     /// Get the `gets` keys, which must be unique, placing the results in `results_out`.
     ///
@@ -681,7 +975,7 @@ where
     ) -> Result<GetStats, anyhow::Error>
     where
         G: IntoIterator<Item = UpsertKey>,
-        R: IntoIterator<Item = &'r mut UpsertValueAndSize<O>>;
+        R: IntoIterator<Item = &'r mut UpsertValueAndSize<T, O>>;
 
     /// For each key in `merges` writes a 'merge operand' to the backend. The backend stores these
     /// merge operands and periodically calls the `snapshot_merge_function` to merge them into
@@ -705,7 +999,7 @@ where
     ///    merge operands are merged by the backend.
     async fn multi_merge<P>(&mut self, merges: P) -> Result<MergeStats, anyhow::Error>
     where
-        P: IntoIterator<Item = (UpsertKey, MergeValue<StateValue<O>>)>;
+        P: IntoIterator<Item = (UpsertKey, MergeValue<StateValue<T, O>>)>;
 }
 
 /// A function that merges a set of updates for a key into the existing value for the key, expected
@@ -717,24 +1011,31 @@ where
 /// - The key for which the merge is being performed.
 /// - An iterator over any current value and merge operands queued for the key.
 /// The function should return the new value for the key after merging all the updates.
-pub(crate) fn snapshot_merge_function<O>(
+pub(crate) fn snapshot_merge_function<T, O>(
     _key: UpsertKey,
-    updates: impl Iterator<Item = StateValue<O>>,
-) -> StateValue<O>
+    updates: impl Iterator<Item = StateValue<T, O>>,
+) -> StateValue<T, O>
 where
     O: Default,
+    T: std::cmp::Eq,
 {
-    let mut current = Default::default();
-    assert!(
-        matches!(current, StateValue::Snapshotting(_)),
-        "merge_function called with non-snapshotting default"
-    );
+    let mut current: StateValue<T, O> = Default::default();
+
     for update in updates {
-        assert!(
-            matches!(update, StateValue::Snapshotting(_)),
-            "merge_function called with non-snapshot update"
-        );
-        current.merge_update_state(&update);
+        match update {
+            StateValue::Snapshotting(_) => {
+                current.merge_update_state(&update);
+            }
+            StateValue::Value(_) => {
+                // This branch is more expensive, but we hopefully rarely hit
+                // it.
+                if let Some((finalized_value, _order)) = update.into_finalized_value() {
+                    let mut update = StateValue::default();
+                    update.merge_update(finalized_value, 1, upsert_bincode_opts(), &mut Vec::new());
+                    current.merge_update_state(&update);
+                }
+            }
+        }
     }
 
     current
@@ -742,11 +1043,11 @@ where
 
 /// An `UpsertStateBackend` wrapper that supports
 /// snapshot merging, and reports basic metrics about the usage of the `UpsertStateBackend`.
-pub struct UpsertState<'metrics, S, O> {
+pub struct UpsertState<'metrics, S, T, O> {
     inner: S,
 
     // The status, start time, and stats about calls to `consolidate_snapshot_chunk`.
-    snapshot_start: Instant,
+    pub snapshot_start: Instant,
     snapshot_stats: SnapshotStats,
     snapshot_completed: bool,
 
@@ -766,13 +1067,13 @@ pub struct UpsertState<'metrics, S, O> {
     // twice, so we have a scratch vector for this.
     consolidate_scratch: Vec<(UpsertKey, UpsertValue, mz_repr::Diff)>,
     // "mini-upsert" map used in `consolidate_snapshot_chunk`
-    consolidate_upsert_scratch: indexmap::IndexMap<UpsertKey, UpsertValueAndSize<O>>,
+    consolidate_upsert_scratch: indexmap::IndexMap<UpsertKey, UpsertValueAndSize<T, O>>,
     // a scratch vector for calling `multi_get`
     multi_get_scratch: Vec<UpsertKey>,
     shrink_upsert_unused_buffers_by_ratio: usize,
 }
 
-impl<'metrics, S, O> UpsertState<'metrics, S, O> {
+impl<'metrics, S, T, O> UpsertState<'metrics, S, T, O> {
     pub(crate) fn new(
         inner: S,
         metrics: Arc<UpsertSharedMetrics>,
@@ -798,11 +1099,13 @@ impl<'metrics, S, O> UpsertState<'metrics, S, O> {
     }
 }
 
-impl<S, O> UpsertState<'_, S, O>
+impl<S, T, O> UpsertState<'_, S, T, O>
 where
-    S: UpsertStateBackend<O>,
+    S: UpsertStateBackend<T, O>,
+    T: Eq + Clone + Send + Sync + Serialize + 'static,
     O: Default + Clone + Send + Sync + Serialize + DeserializeOwned + 'static,
 {
+    // TODO: Update docs.
     /// Consolidate the following differential updates into the state, during snapshotting.
     /// Updates provided to this method can be assumed to consolidate into a single value
     /// per-key, after all chunks have been processed.
@@ -883,28 +1186,30 @@ where
             .merge_snapshot_deletes
             .inc_by(stats.deletes);
 
-        self.snapshot_stats += stats;
-        // Updating the metrics
-        self.worker_metrics.rehydration_total.set(
-            self.snapshot_stats.values_diff.try_into().unwrap_or_else(
-                |e: std::num::TryFromIntError| {
-                    tracing::warn!(
-                        "rehydration_total metric overflowed or is negative \
-                        and is innacurate: {}. Defaulting to 0",
-                        e.display_with_causes(),
-                    );
+        self.stats.update_bytes_indexed_by(stats.size_diff);
+        self.stats.update_records_indexed_by(stats.values_diff);
 
-                    0
-                },
-            ),
-        );
-        self.worker_metrics
-            .rehydration_updates
-            .set(self.snapshot_stats.updates);
-        // These `set_` functions also ensure that these values are non-negative.
-        self.stats.set_bytes_indexed(self.snapshot_stats.size_diff);
-        self.stats
-            .set_records_indexed(self.snapshot_stats.values_diff);
+        self.snapshot_stats += stats;
+
+        if !self.snapshot_completed {
+            // Updating the metrics
+            self.worker_metrics.rehydration_total.set(
+                self.snapshot_stats.values_diff.try_into().unwrap_or_else(
+                    |e: std::num::TryFromIntError| {
+                        tracing::warn!(
+                            "rehydration_total metric overflowed or is negative \
+                        and is innacurate: {}. Defaulting to 0",
+                            e.display_with_causes(),
+                        );
+
+                        0
+                    },
+                ),
+            );
+            self.worker_metrics
+                .rehydration_updates
+                .set(self.snapshot_stats.updates);
+        }
 
         if completed {
             if self.shrink_upsert_unused_buffers_by_ratio > 0 {
@@ -950,7 +1255,7 @@ where
                 .multi_merge(updates.map(|(k, v, diff)| {
                     // Transform into a `StateValue<O>` that can be used by the `snapshot_merge_function`
                     // to merge with any existing value for the key.
-                    let mut val: StateValue<O> = Default::default();
+                    let mut val: StateValue<T, O> = Default::default();
                     val.merge_update(v, diff, self.bincode_opts, &mut self.bincode_buffer);
 
                     stats.updates += 1;
@@ -1016,6 +1321,13 @@ where
                 } else if diff < 0 {
                     stats.deletes += 1;
                 }
+
+                // We rely on the diffs in our input instead of the result of
+                // multi_put below. This makes sure we report the same stats as
+                // `consolidate_snapshot_merge_inner`, regardless of what values
+                // there were in state before.
+                stats.values_diff += diff;
+
                 let entry = self.consolidate_upsert_scratch.get_mut(&key).unwrap();
                 let val = entry.value.get_or_insert_with(Default::default);
 
@@ -1043,7 +1355,6 @@ where
                 }))
                 .await?;
 
-            stats.values_diff = p_stats.values_diff;
             stats.size_diff = p_stats.size_diff;
         }
 
@@ -1052,9 +1363,13 @@ where
 
     /// Insert or delete for all `puts` keys, prioritizing the last value for
     /// repeated keys.
-    pub async fn multi_put<P>(&mut self, puts: P) -> Result<(), anyhow::Error>
+    pub async fn multi_put<P>(
+        &mut self,
+        update_per_record_stats: bool,
+        puts: P,
+    ) -> Result<(), anyhow::Error>
     where
-        P: IntoIterator<Item = (UpsertKey, PutValue<Value<O>>)>,
+        P: IntoIterator<Item = (UpsertKey, PutValue<Value<T, O>>)>,
     {
         fail::fail_point!("fail_state_multi_put", |_| {
             Err(anyhow::anyhow!("Error putting values into state"))
@@ -1079,70 +1394,17 @@ where
         self.worker_metrics
             .multi_put_size
             .inc_by(stats.processed_puts);
-        self.worker_metrics.upsert_inserts.inc_by(stats.inserts);
-        self.worker_metrics.upsert_updates.inc_by(stats.updates);
-        self.worker_metrics.upsert_deletes.inc_by(stats.deletes);
 
-        self.stats.update_bytes_indexed_by(stats.size_diff);
-        self.stats.update_records_indexed_by(stats.values_diff);
-        self.stats
-            .update_envelope_state_tombstones_by(stats.tombstones_diff);
+        if update_per_record_stats {
+            self.worker_metrics.upsert_inserts.inc_by(stats.inserts);
+            self.worker_metrics.upsert_updates.inc_by(stats.updates);
+            self.worker_metrics.upsert_deletes.inc_by(stats.deletes);
 
-        Ok(())
-    }
-
-    /// Insert or delete for all `puts` keys, prioritizing the last value for
-    /// repeated keys.
-    ///
-    /// Version of `multi_put` that uses the given stats, for when the caller
-    /// cannot provide [`PutValues`](PutValue) with meaningful
-    /// `previous_value_metadata`. This is the case then the caller is updating
-    /// state without having previously read state, which latter would yield the
-    /// required [`ValueMetadata`]. In those cases the caller hopefully has a
-    /// better way of computing the same stats.
-    pub async fn multi_put_with_stats<P>(
-        &mut self,
-        puts: P,
-        precomputed_stats: PutStats,
-    ) -> Result<(), anyhow::Error>
-    where
-        P: IntoIterator<Item = (UpsertKey, PutValue<StateValue<O>>)>,
-    {
-        fail::fail_point!("fail_state_multi_put", |_| {
-            Err(anyhow::anyhow!("Error putting values into state"))
-        });
-        let now = Instant::now();
-        let stats = self
-            .inner
-            .multi_put(puts.into_iter().map(|(k, pv)| (k, pv)))
-            .await?;
-
-        self.metrics
-            .multi_put_latency
-            .observe(now.elapsed().as_secs_f64());
-
-        // We use `processed_puts`, because the backend has special knowledge
-        // here.
-        self.worker_metrics
-            .multi_put_size
-            .inc_by(stats.processed_puts);
-
-        self.worker_metrics
-            .upsert_inserts
-            .inc_by(precomputed_stats.inserts);
-        self.worker_metrics
-            .upsert_updates
-            .inc_by(precomputed_stats.updates);
-        self.worker_metrics
-            .upsert_deletes
-            .inc_by(precomputed_stats.deletes);
-
-        self.stats
-            .update_bytes_indexed_by(precomputed_stats.size_diff);
-        self.stats
-            .update_records_indexed_by(precomputed_stats.values_diff);
-        self.stats
-            .update_envelope_state_tombstones_by(precomputed_stats.tombstones_diff);
+            self.stats.update_bytes_indexed_by(stats.size_diff);
+            self.stats.update_records_indexed_by(stats.values_diff);
+            self.stats
+                .update_envelope_state_tombstones_by(stats.tombstones_diff);
+        }
 
         Ok(())
     }
@@ -1157,7 +1419,7 @@ where
     ) -> Result<(), anyhow::Error>
     where
         G: IntoIterator<Item = UpsertKey>,
-        R: IntoIterator<Item = &'r mut UpsertValueAndSize<O>>,
+        R: IntoIterator<Item = &'r mut UpsertValueAndSize<T, O>>,
         O: 'r,
     {
         fail::fail_point!("fail_state_multi_get", |_| {
@@ -1185,13 +1447,15 @@ where
 
 #[cfg(test)]
 mod tests {
+    use mz_repr::Row;
+
     use super::*;
     #[mz_ore::test]
     fn test_merge_update() {
         let mut buf = Vec::new();
         let opts = upsert_bincode_opts();
 
-        let mut s = StateValue::<()>::Snapshotting(Snapshotting::default());
+        let mut s = StateValue::<(), ()>::Snapshotting(Snapshotting::default());
 
         let small_row = Ok(mz_repr::Row::default());
         let longer_row = Ok(mz_repr::Row::pack([mz_repr::Datum::Null]));
@@ -1206,6 +1470,48 @@ mod tests {
         s.ensure_decoded(opts).expect("invalid upsert state");
     }
 
+    // We guard some of our assumptions. Increasing in-memory size of StateValue
+    // has a direct impact on memory usage of in-memory UPSERT sources.
+    #[mz_ore::test]
+    fn test_memory_size() {
+        let finalized_value: StateValue<(), ()> =
+            StateValue::finalized_value(Ok(Row::default()), ());
+        assert!(
+            finalized_value.memory_size() <= 88,
+            "memory size is {}",
+            finalized_value.memory_size(),
+        );
+
+        let provisional_value_with_finalized_value: StateValue<(), ()> =
+            finalized_value.into_provisional_value(Ok(Row::default()), (), ());
+        assert!(
+            provisional_value_with_finalized_value.memory_size() <= 112,
+            "memory size is {}",
+            provisional_value_with_finalized_value.memory_size(),
+        );
+
+        let provisional_value_without_finalized_value: StateValue<(), ()> =
+            StateValue::new_provisional_value(Ok(Row::default()), (), ());
+        assert!(
+            provisional_value_without_finalized_value.memory_size() <= 88,
+            "memory size is {}",
+            provisional_value_without_finalized_value.memory_size(),
+        );
+
+        let mut snapshotting_value: StateValue<(), ()> = StateValue::default();
+        snapshotting_value.merge_update(
+            Ok(Row::default()),
+            1,
+            upsert_bincode_opts(),
+            &mut Vec::new(),
+        );
+        assert!(
+            snapshotting_value.memory_size() <= 90,
+            "memory size is {}",
+            snapshotting_value.memory_size(),
+        );
+    }
+
     #[mz_ore::test]
     #[should_panic(
         expected = "invalid upsert state: len_sum is non-0, state: Snapshotting { len_sum: 1"
@@ -1214,7 +1520,7 @@ mod tests {
         let mut buf = Vec::new();
         let opts = upsert_bincode_opts();
 
-        let mut s = StateValue::<()>::Snapshotting(Snapshotting::default());
+        let mut s = StateValue::<(), ()>::Snapshotting(Snapshotting::default());
 
         let small_row = Ok(mz_repr::Row::default());
         let longer_row = Ok(mz_repr::Row::pack([mz_repr::Datum::Null]));
@@ -1232,7 +1538,7 @@ mod tests {
         let mut buf = Vec::new();
         let opts = upsert_bincode_opts();
 
-        let mut s = StateValue::<()>::Snapshotting(Snapshotting::default());
+        let mut s = StateValue::<(), ()>::Snapshotting(Snapshotting::default());
 
         let small_row = Ok(mz_repr::Row::default());
         let longer_row = Ok(mz_repr::Row::pack([mz_repr::Datum::Null]));
@@ -1254,7 +1560,7 @@ mod tests {
         let mut buf = Vec::new();
         let opts = upsert_bincode_opts();
 
-        let mut s = StateValue::<()>::Snapshotting(Snapshotting::default());
+        let mut s = StateValue::<(), ()>::Snapshotting(Snapshotting::default());
 
         let small_row = Ok(mz_repr::Row::pack([mz_repr::Datum::Int64(2)]));
         let longer_row = Ok(mz_repr::Row::pack([mz_repr::Datum::Int64(1)]));
