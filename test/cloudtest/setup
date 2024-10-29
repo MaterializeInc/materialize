@@ -25,6 +25,8 @@ if ! kind get clusters | grep -q "$K8S_CLUSTER_NAME"; then
     run kubectl --context="$K8S_CONTEXT" taint nodes --selector=environmentd=true "environmentd=true:NoSchedule"
 fi
 
+helm install materialize-operator-cloudtest ../../misc/helm-charts/operator
+
 for f in misc/kind/configmaps/*; do
     run kubectl --context="$K8S_CONTEXT" apply -f "$f"
 done
