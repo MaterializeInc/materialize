@@ -41,6 +41,7 @@ use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::{Capability, InputCapability, Operator};
 use timely::dataflow::{Scope, ScopeParent, Stream};
 use timely::order::{PartialOrder, TotalOrder};
+use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 
 use crate::healthcheck::HealthStatusUpdate;
@@ -204,7 +205,7 @@ pub fn rehydration_finished<G, T>(
 /// Returns a tuple of
 /// - A collection of the computed upsert operator and,
 /// - A health update stream to propagate errors
-pub(crate) fn upsert<G: Scope, FromTime>(
+pub(crate) fn upsert<G: Scope, FromTime, OuterTime>(
     input: &Collection<G, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
     upsert_envelope: UpsertEnvelope,
     resume_upper: Antichain<G::Timestamp>,
@@ -223,6 +224,8 @@ pub(crate) fn upsert<G: Scope, FromTime>(
 )
 where
     G::Timestamp: TotalOrder,
+    G::Timestamp: Refines<OuterTime>,
+    OuterTime: Timestamp + TotalOrder,
     FromTime: Timestamp,
 {
     let upsert_metrics = source_config.metrics.get_upsert_metrics(
@@ -380,7 +383,7 @@ where
 
 // A shim so we can dispatch based on the dyncfg that tells us which upsert
 // operator to use.
-fn upsert_operator<G: Scope, FromTime, F, Fut, US>(
+fn upsert_operator<G: Scope, FromTime, OuterTime, F, Fut, US>(
     input: &Collection<G, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
     key_indices: Vec<usize>,
     resume_upper: Antichain<G::Timestamp>,
@@ -401,6 +404,8 @@ fn upsert_operator<G: Scope, FromTime, F, Fut, US>(
 )
 where
     G::Timestamp: TotalOrder,
+    G::Timestamp: Refines<OuterTime>,
+    OuterTime: Timestamp + TotalOrder,
     F: FnOnce() -> Fut + 'static,
     Fut: std::future::Future<Output = US>,
     US: UpsertStateBackend<Option<FromTime>>,
@@ -692,7 +697,7 @@ pub(crate) struct UpsertConfig {
     pub shrink_upsert_unused_buffers_by_ratio: usize,
 }
 
-fn upsert_classic<G: Scope, FromTime, F, Fut, US>(
+fn upsert_classic<G: Scope, FromTime, OuterTime, F, Fut, US>(
     input: &Collection<G, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
     key_indices: Vec<usize>,
     resume_upper: Antichain<G::Timestamp>,
@@ -712,6 +717,8 @@ fn upsert_classic<G: Scope, FromTime, F, Fut, US>(
 )
 where
     G::Timestamp: TotalOrder,
+    G::Timestamp: Refines<OuterTime>,
+    OuterTime: Timestamp + TotalOrder,
     F: FnOnce() -> Fut + 'static,
     Fut: std::future::Future<Output = US>,
     US: UpsertStateBackend<Option<FromTime>>,

@@ -302,7 +302,7 @@ where
                         )
                     };
                     let (upsert, health_update, snapshot_progress, upsert_token) =
-                        crate::upsert::upsert(
+                        crate::upsert::upsert::<_, _, mz_repr::Timestamp>(
                             &upsert_input.enter(scope),
                             upsert_envelope.clone(),
                             refine_antichain(&resume_upper),
