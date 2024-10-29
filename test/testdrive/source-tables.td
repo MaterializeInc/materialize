@@ -501,3 +501,36 @@ kv_1 ""
 kv_2 ""
 
 > DROP SOURCE keyvalue CASCADE;
+
+
+#
+# Force usage of the new syntax and check that old statements are disallowed
+#
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET force_source_table_syntax = true
+
+! CREATE SOURCE auction_legacy
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM LOAD GENERATOR AUCTION (AS OF 300, UP TO 301)
+  FOR TABLES (bids AS bids_3);
+contains:not supported; use CREATE TABLE .. FROM SOURCE instead
+
+! CREATE SOURCE pg_source_2
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source', TEXT COLUMNS = (public.pg_table.a))
+  FOR ALL TABLES
+contains:not supported; use CREATE TABLE .. FROM SOURCE instead
+
+! CREATE SOURCE mysql_source_2
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM MYSQL CONNECTION mysql_conn
+  FOR SCHEMAS (public);
+contains:not supported; use CREATE TABLE .. FROM SOURCE instead
+
+! CREATE SOURCE avro_source_2
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avroavro-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE UPSERT;
+contains:not supported; use CREATE TABLE .. FROM SOURCE instead

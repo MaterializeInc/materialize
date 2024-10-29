@@ -620,12 +620,14 @@ where
             to_execute.insert(id);
             new_collections.insert(id);
 
-            // Ensure that the ingestion has an export for its primary source.
+            // Ensure that the ingestion has an export for its primary source if applicable.
             // This is done in an awkward spot to appease the borrow checker.
+            // TODO(database-issues#8620): This will be removed once sources no longer export
+            // to primary collections and only export to explicit SourceExports (tables).
             if let DataSource::Ingestion(ingestion) = &mut description.data_source {
-                ingestion
-                    .source_exports
-                    .insert(id, ingestion.desc.primary_source_export());
+                if let Some(export) = ingestion.desc.primary_source_export() {
+                    ingestion.source_exports.insert(id, export);
+                }
             }
 
             let write_frontier = write.upper();

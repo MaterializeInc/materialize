@@ -81,7 +81,6 @@ use crate::names::{
 use crate::plan::error::PlanError;
 use crate::plan::statement::ddl::load_generator_ast_to_generator;
 use crate::plan::{SourceReferences, StatementContext};
-use crate::session::vars;
 use crate::{kafka_util, normalize};
 
 use self::error::{
@@ -582,6 +581,9 @@ where
 /// Defines whether purification should enforce that at least one valid source
 /// reference is provided on the provided statement.
 pub(crate) enum SourceReferencePolicy {
+    /// Don't allow source references to be provided. This is used for
+    /// enforcing that `CREATE SOURCE` statements don't create subsources.
+    NotAllowed,
     /// Allow empty references, such as when creating a source that
     /// will have tables added afterwards.
     Optional,
@@ -629,10 +631,14 @@ async fn purify_create_source(
     };
     let scx = StatementContext::new(None, &catalog);
 
-    // If the user can use the `CREATE TABLE .. FROM SOURCE` statement to add tables
-    // after this source is created, then we don't need to enforce that
-    // any auto-generated subsources are created here.
-    let reference_policy = if scx.is_feature_flag_enabled(&vars::ENABLE_CREATE_TABLE_FROM_SOURCE) {
+    // Depending on if the user must or can use the `CREATE TABLE .. FROM SOURCE` statement
+    // to add tables after this source is created we might need to enforce that
+    // auto-generated subsources are created or not created by this source statement.
+    let reference_policy = if scx.catalog.system_vars().enable_create_table_from_source()
+        && scx.catalog.system_vars().force_source_table_syntax()
+    {
+        SourceReferencePolicy::NotAllowed
+    } else if scx.catalog.system_vars().enable_create_table_from_source() {
         SourceReferencePolicy::Optional
     } else {
         SourceReferencePolicy::Required
@@ -1054,6 +1060,11 @@ async fn purify_create_source(
                 .collect::<Vec<_>>();
 
             match external_references {
+                Some(requested)
+                    if matches!(reference_policy, SourceReferencePolicy::NotAllowed) =>
+                {
+                    Err(PlanError::UseTablesForSources(requested.to_string()))?
+                }
                 Some(requested) => {
                     let requested_exports = retrieved_source_references
                         .requested_source_exports(Some(requested), source_name)?;
@@ -1108,9 +1119,6 @@ async fn purify_create_source(
     *external_references = None;
 
     // Generate progress subsource
-
-    // Create the targeted AST node for the original CREATE SOURCE statement
-    let scx = StatementContext::new(None, &catalog);
 
     // Take name from input or generate name
     let name = match progress_subsource {
@@ -1230,6 +1238,14 @@ async fn purify_alter_source(
             external_references,
             options,
         } => {
+            if scx.catalog.system_vars().enable_create_table_from_source()
+                && scx.catalog.system_vars().force_source_table_syntax()
+            {
+                Err(PlanError::UseTablesForSources(
+                    "ALTER SOURCE .. ADD SUBSOURCES ..".to_string(),
+                ))?;
+            }
+
             purify_alter_source_add_subsources(
                 external_references,
                 options,

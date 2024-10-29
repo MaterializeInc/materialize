@@ -645,6 +645,37 @@ pub fn plan_create_source(
         "referenced subsources must be cleared in purification"
     );
 
+    let force_source_table_syntax = scx.catalog.system_vars().enable_create_table_from_source()
+        && scx.catalog.system_vars().force_source_table_syntax();
+
+    // If the new source table syntax is forced all the options related to the primary
+    // source output should be un-set.
+    if force_source_table_syntax {
+        if envelope.is_some() || format.is_some() || !include_metadata.is_empty() {
+            Err(PlanError::UseTablesForSources(
+                "CREATE SOURCE (ENVELOPE|FORMAT|INCLUDE)".to_string(),
+            ))?;
+        }
+        if with_options
+            .iter()
+            .find(|op| op.name == CreateSourceOptionName::IgnoreKeys)
+            .is_some()
+        {
+            Err(PlanError::UseTablesForSources(
+                "CREATE SOURCE WITH (IGNORE KEYS)".to_string(),
+            ))?;
+        }
+        if with_options
+            .iter()
+            .find(|op| op.name == CreateSourceOptionName::Timeline)
+            .is_some()
+        {
+            Err(PlanError::UseTablesForSources(
+                "CREATE SOURCE WITH (TIMELINE)".to_string(),
+            ))?;
+        }
+    }
+
     let envelope = envelope.clone().unwrap_or(ast::SourceEnvelope::None);
 
     let allowed_with_options = vec![
@@ -1016,15 +1047,17 @@ pub fn plan_create_source(
         None => scx.catalog.config().timestamp_interval,
     };
 
-    // TODO: Refactor the above encoding and envelope checks to be re-used
-    // for `CREATE TABLE .. FROM SOURCE` statements as well.
-
     let source_desc = SourceDesc::<ReferencedConnection> {
         connection: external_connection,
-        // TODO: Remove this once sources no longer output to a primary collection.
-        primary_export: SourceExportDataConfig {
-            encoding,
-            envelope: envelope.clone(),
+        // We only define primary-export details for this source if we are still supporting
+        // the legacy source syntax. Otherwise, we will not output to the primary collection.
+        // TODO(database-issues#8620): Remove this field once the new syntax is enabled everywhere
+        primary_export: match force_source_table_syntax {
+            false => Some(SourceExportDataConfig {
+                encoding,
+                envelope: envelope.clone(),
+            }),
+            true => None,
         },
         timestamp_interval,
     };
@@ -1444,6 +1477,16 @@ pub fn plan_create_subsource(
     let desc = plan_source_export_desc(scx, name, columns, constraints)?;
 
     let data_source = if let Some(source_reference) = of_source {
+        // If the new source table syntax is forced we should not be creating any non-progress
+        // subsources.
+        if scx.catalog.system_vars().enable_create_table_from_source()
+            && scx.catalog.system_vars().force_source_table_syntax()
+        {
+            Err(PlanError::UseTablesForSources(
+                "CREATE SUBSOURCE".to_string(),
+            ))?;
+        }
+
         // This is a subsource with the "natural" dependency order, i.e. it is
         // not a legacy subsource with the inverted structure.
         let ingestion_id = *source_reference.item_id();
@@ -1542,7 +1585,9 @@ pub fn plan_create_table_from_source(
     scx: &StatementContext,
     stmt: CreateTableFromSourceStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    scx.require_feature_flag(&vars::ENABLE_CREATE_TABLE_FROM_SOURCE)?;
+    if !scx.catalog.system_vars().enable_create_table_from_source() {
+        sql_bail!("CREATE TABLE ... FROM SOURCE is not supported");
+    }
 
     let CreateTableFromSourceStatement {
         name,
