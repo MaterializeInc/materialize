@@ -10,10 +10,6 @@
 $ set-arg-default default-replica-size=1
 $ set-arg-default single-replica-cluster=quickstart
 
-# TODO(def-) Remove when database-issues#8515 and database-issues#8526 are fixed
-$ skip-if
-SELECT '${arg.default-replica-size}' = '8'
-
 #
 # Validate feature flag
 #
@@ -339,9 +335,6 @@ contains:unknown catalog item 'mysql_table_3'
 
 > SELECT count(*) FROM mz_internal.mz_source_references;
 0
-
-# TODO(def-) Remove when database-issues#8515 and database-issues#8526 are fixed
-$ skip-end
 
 #
 # Kafka source using source-fed tables
