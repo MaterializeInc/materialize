@@ -6117,7 +6117,7 @@ WITH MUTUALLY RECURSIVE
         SELECT
             id,
             'convert to a view' AS hint,
-            'no dependencies from sinks or objects on different clusters' AS details,
+            'no dependencies from sinks nor from objects on different clusters' AS details,
             justification
         FROM objects_with_justification
         WHERE type = 'materialized-view' AND justification IS NULL
@@ -6144,11 +6144,11 @@ WITH MUTUALLY RECURSIVE
 
         UNION ALL
 
-        -- materialized views that can be converted to an index because NO sink or a maintained object from a different cluster depends on them
+        -- materialized views that can be converted to a view with or without an index because NO sink or a maintained object from a different cluster depends on them
         SELECT
             id,
             'convert to a view with an index' AS hint,
-            'no dependencies from sinks or objects on different clusters, but maintained dependencies on the same cluster: ' AS details,
+            'no dependencies from sinks nor from objects on different clusters, but maintained dependencies on the same cluster: ' AS details,
             justification
         FROM objects_with_justification AS m
         WHERE type = 'materialized-view' AND justification IS NOT NULL AND NOT EXISTS (
@@ -6167,16 +6167,16 @@ WITH MUTUALLY RECURSIVE
         -- views that have indexes on different clusters should be a materialized view
         SELECT
             o.id,
-            'convert to materialized view',
-            'indexes on multiple different clusters: ',
+            'convert to materialized view' AS hint,
+            'dependencies on multiple clusters: ' AS details,
             o.justification
         FROM objects_with_justification o,
             LATERAL unnest(o.justification) j
-        LEFT JOIN mz_objects AS i
-            ON (i.id = j AND i.type = 'index')
+        LEFT JOIN mz_objects AS m
+            ON (m.id = j AND m.type IN ('index', 'materialized-view'))
         WHERE o.type = 'view' AND o.justification IS NOT NULL
         GROUP BY o.id, o.justification
-        HAVING count(DISTINCT i.cluster_id) >= 2
+        HAVING count(DISTINCT m.cluster_id) >= 2
 
         UNION ALL
 
@@ -6184,7 +6184,7 @@ WITH MUTUALLY RECURSIVE
         SELECT
             id,
             'add index' AS hint,
-            'multiple maintained dependencies: ' AS details,
+            'multiple downstream dependencies: ' AS details,
             justification
         FROM objects_with_justification
         WHERE type = 'view' AND justification IS NOT NULL AND indexes = '{}'::text list
@@ -6195,7 +6195,7 @@ WITH MUTUALLY RECURSIVE
         SELECT
             unnest(indexes) AS id,
             'drop unless queried directly' AS hint,
-            'fewer than two maintained dependencies: ' AS details,
+            'fewer than two downstream dependencies: ' AS details,
             maintained_children AS justification
         FROM objects_with_justification
         WHERE type = 'view' AND NOT indexes = '{}'::text list AND justification IS NULL

@@ -67,11 +67,11 @@
 > SELECT o.name, a.recommendation, a.details FROM mz_internal.mz_index_advice AS a JOIN mz_objects AS o ON (a.object_id = o.id) ORDER BY name;
 name             recommendation                 details
 --------------------------------------------------------------------------------------------------------------------------------
-v11              "convert to a view"            "no dependencies from sinks or objects on different clusters"
+v11              "convert to a view"            "no dependencies from sinks nor from objects on different clusters"
 v21_primary_idx  "keep"                         "dependant objects: {v31,v42}"
-v31              "add index"                    "multiple maintained dependencies: {v41,v42}"
-v32_primary_idx  "drop unless queried directly" "fewer than two maintained dependencies: {v42}"
-v41              "convert to materialized view" "indexes on multiple different clusters: {v41_primary_idx,v41_primary_idx1}"
+v31              "add index"                    "multiple downstream dependencies: {v41,v42}"
+v32_primary_idx  "drop unless queried directly" "fewer than two downstream dependencies: {v42}"
+v41              "convert to materialized view" "dependencies on multiple clusters: {v41_primary_idx,v41_primary_idx1}"
 v41_primary_idx  "drop unless queried directly" "associated view does not have any dependencies (maintained or not maintained)"
 v41_primary_idx1 "drop unless queried directly" "associated view does not have any dependencies (maintained or not maintained)"
 v42              "keep"                         "dependencies from sinks or objects on different clusters: {v42_primary_idx}"
@@ -95,7 +95,7 @@ v42_primary_idx  "drop unless queried directly" "associated view does not have a
 > SELECT o.name, a.recommendation, a.details FROM mz_internal.mz_index_advice AS a JOIN mz_objects AS o ON (a.object_id = o.id) ORDER BY name;
 name              recommendation                     details
 ---------------------------------------------------------------------------------------------------------------------------------
- v11              "convert to a view with an index"  "no dependencies from sinks or objects on different clusters, but maintained dependencies on the same cluster: {v11_primary_idx}"
+ v11              "convert to a view with an index"  "no dependencies from sinks nor from objects on different clusters, but maintained dependencies on the same cluster: {v11_primary_idx}"
  v11_primary_idx  "drop unless queried directly"     "associated view does not have any dependencies (maintained or not maintained)"
 
 # verify that all indexes and materialized views have a recommendation
