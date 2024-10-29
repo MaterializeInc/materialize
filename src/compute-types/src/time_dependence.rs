@@ -25,7 +25,7 @@ include!(concat!(
 /// Description of how a dataflow follows time.
 ///
 /// The default value indicates the dataflow follows wall-clock without modifications.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Clone, Default, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct TimeDependence {
     /// Optional refresh schedule. None indicates an implicit wall-clock dependency, if no inner
     /// dependencies exist.
@@ -68,6 +68,19 @@ impl TimeDependence {
             schedule.round_up_timestamp(result)
         } else {
             Some(result)
+        }
+    }
+}
+
+impl std::fmt::Debug for TimeDependence {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if *self == TimeDependence::default() {
+            write!(f, "TimeDependence::default (wall-clock)")
+        } else {
+            f.debug_struct("TimeDependence")
+                .field("schedule", &self.schedule)
+                .field("dependence", &self.dependence)
+                .finish()
         }
     }
 }
