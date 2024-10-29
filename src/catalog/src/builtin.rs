@@ -5984,10 +5984,10 @@ WITH MUTUALLY RECURSIVE
             o.type,
             o.cluster_id,
             '{}'::text list AS indexes
-        FROM mz_objects o
+        FROM mz_catalog.mz_objects o
         WHERE o.id LIKE 'u%' AND o.type IN ('materialized-view', 'view') AND NOT EXISTS (
             SELECT FROM mz_internal.mz_object_dependencies d
-            JOIN mz_objects AS i
+            JOIN mz_catalog.mz_objects AS i
                 ON (i.id = d.object_id AND i.type = 'index')
             WHERE (o.id = d.referenced_object_id)
         )
@@ -6001,10 +6001,10 @@ WITH MUTUALLY RECURSIVE
             -- o.cluster_id is always NULL for views, so use the cluster of the index instead
             COALESCE(o.cluster_id, i.cluster_id) AS cluster_id,
             list_agg(i.id) AS indexes
-        FROM mz_objects o
+        FROM mz_catalog.mz_objects o
         JOIN mz_internal.mz_object_dependencies AS d
             ON (o.id = d.referenced_object_id)
-        JOIN mz_objects AS i
+        JOIN mz_catalog.mz_objects AS i
             ON (i.id = d.object_id AND i.type = 'index')
         WHERE o.id LIKE 'u%' AND o.type IN ('materialized-view', 'view')
         GROUP BY o.id, o.type, o.cluster_id, i.cluster_id
@@ -6019,7 +6019,7 @@ WITH MUTUALLY RECURSIVE
         FROM objects AS m
         JOIN mz_internal.mz_object_dependencies AS d
             ON (m.id = d.referenced_object_id)
-        JOIN mz_objects AS s
+        JOIN mz_catalog.mz_objects AS s
             ON (s.id = d.object_id AND s.type = 'sink')
         WHERE m.type = 'materialized-view'
 
@@ -6032,7 +6032,7 @@ WITH MUTUALLY RECURSIVE
         FROM objects AS v
         WHERE v.type IN ('view', 'materialized-view') AND NOT EXISTS (
             SELECT FROM mz_internal.mz_object_transitive_dependencies AS d
-            INNER JOIN mz_objects AS child
+            INNER JOIN mz_catalog.mz_objects AS child
                 ON (d.object_id = child.id)
             WHERE d.referenced_object_id = v.id AND child.type IN ('materialized-view', 'index') AND v.cluster_id = child.cluster_id AND NOT v.indexes @> LIST[child.id]
         )
@@ -6133,12 +6133,12 @@ WITH MUTUALLY RECURSIVE
         FROM objects_with_justification AS m
         WHERE type = 'materialized-view' AND justification IS NOT NULL AND EXISTS (
             SELECT FROM unnest(justification) AS dependency
-            JOIN mz_objects s ON (s.type = 'sink' AND s.id = dependency)
+            JOIN mz_catalog.mz_objects s ON (s.type = 'sink' AND s.id = dependency)
 
             UNION ALL
 
             SELECT FROM unnest(justification) AS dependency
-            JOIN mz_objects AS d ON (d.id = dependency)
+            JOIN mz_catalog.mz_objects AS d ON (d.id = dependency)
             WHERE d.cluster_id != m.cluster_id
         )
 
@@ -6153,12 +6153,12 @@ WITH MUTUALLY RECURSIVE
         FROM objects_with_justification AS m
         WHERE type = 'materialized-view' AND justification IS NOT NULL AND NOT EXISTS (
             SELECT FROM unnest(justification) AS dependency
-            JOIN mz_objects s ON (s.type = 'sink' AND s.id = dependency)
+            JOIN mz_catalog.mz_objects s ON (s.type = 'sink' AND s.id = dependency)
 
             UNION ALL
 
             SELECT FROM unnest(justification) AS dependency
-            JOIN mz_objects AS d ON (d.id = dependency)
+            JOIN mz_catalog.mz_objects AS d ON (d.id = dependency)
             WHERE d.cluster_id != m.cluster_id
         )
 
@@ -6172,7 +6172,7 @@ WITH MUTUALLY RECURSIVE
             o.justification
         FROM objects_with_justification o,
             LATERAL unnest(o.justification) j
-        LEFT JOIN mz_objects AS m
+        LEFT JOIN mz_catalog.mz_objects AS m
             ON (m.id = j AND m.type IN ('index', 'materialized-view'))
         WHERE o.type = 'view' AND o.justification IS NOT NULL
         GROUP BY o.id, o.justification
@@ -6233,7 +6233,7 @@ WITH MUTUALLY RECURSIVE
             h.justification
         FROM hints AS h,
             LATERAL unnest(h.justification) j
-        JOIN mz_objects AS o
+        JOIN mz_catalog.mz_objects AS o
             ON (o.id = j)
         GROUP BY h.id, h.hint, h.details, h.justification
 
