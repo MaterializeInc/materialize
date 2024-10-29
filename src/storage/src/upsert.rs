@@ -191,7 +191,9 @@ pub fn rehydration_finished<G, T>(
             }
         }
         tracing::info!(
-            "timely-{worker_id} upsert source {id} has downgraded past the resume upper ({resume_upper:?}) across all workers",
+            %worker_id,
+            source_id = %id,
+            "upsert source has downgraded past the resume upper ({resume_upper:?}) across all workers",
         );
         drop(token);
     });
@@ -266,12 +268,12 @@ where
             .spill_to_disk_threshold_bytes;
 
         tracing::info!(
+            worker_id = %source_config.worker_id,
+            source_id = %source_config.id,
             ?tuning,
             ?storage_configuration.parameters.upsert_auto_spill_config,
             ?rocksdb_use_native_merge_operator,
-            "timely-{} rendering {} with rocksdb-backed upsert state",
-            source_config.worker_id,
-            source_config.id
+            "rendering upsert source with rocksdb-backed upsert state"
         );
         let rocksdb_shared_metrics = Arc::clone(&upsert_metrics.rocksdb_shared);
         let rocksdb_instance_metrics = Arc::clone(&upsert_metrics.rocksdb_instance_metrics);
@@ -355,9 +357,9 @@ where
         }
     } else {
         tracing::info!(
-            "timely-{} rendering {} with memory-backed upsert state",
-            source_config.worker_id,
-            source_config.id
+            worker_id = %source_config.worker_id,
+            source_id = %source_config.id,
+            "rendering upsert source with memory-backed upsert state",
         );
         upsert_operator(
             &thin_input,
