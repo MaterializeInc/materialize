@@ -25,7 +25,7 @@ use mz_catalog::builtin::{
 use mz_catalog::durable::objects::{
     ClusterKey, DatabaseKey, DurableType, ItemKey, NetworkPolicyKey, RoleKey, SchemaKey,
 };
-use mz_catalog::durable::{CatalogError, DurableCatalogError, SystemObjectMapping};
+use mz_catalog::durable::{CatalogError,  SystemObjectMapping};
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, Cluster, ClusterReplica, DataSourceDesc, Database, Func, Index, Log,
@@ -37,6 +37,7 @@ use mz_compute_types::config::ComputeReplicaConfig;
 use mz_controller::clusters::{ReplicaConfig, ReplicaLogging};
 use mz_controller_types::ClusterId;
 use mz_expr::MirScalarExpr;
+use mz_ore::collections::CollectionExt;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{instrument, soft_assert_no_log};
 use mz_pgrepr::oid::INVALID_OID;
@@ -54,7 +55,7 @@ use mz_sql::session::vars::{VarError, VarInput};
 use mz_sql::{plan, rbac};
 use mz_sql_parser::ast::Expr;
 use mz_storage_types::sources::Timeline;
-use tracing::{error, info_span, warn, Instrument};
+use tracing::{info_span, warn, Instrument};
 
 use crate::catalog::state::LocalExpressionCache;
 use crate::catalog::{BuiltinTableUpdate, CatalogState};
@@ -1023,17 +1024,7 @@ impl CatalogState {
                         }
                     }
                 };
-                // We allow sinks to break this invariant due to a know issue with `ALTER SINK`.
-                // https://github.com/MaterializeInc/materialize/pull/28708.
-                if !entry.is_sink() && entry.uses().iter().any(|id| *id > entry.id) {
-                    let msg = format!(
-                        "item cannot depend on items with larger GlobalIds, item: {:?}, dependencies: {:?}",
-                        entry,
-                        entry.uses()
-                    );
-                    error!("internal catalog errr: {msg}");
-                    return Err(CatalogError::Durable(DurableCatalogError::Internal(msg)));
-                }
+
                 self.insert_entry(entry);
             }
             StateDiff::Retraction => {
@@ -1887,25 +1878,63 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
         }
     }
 
-    /// Sort item updates by [`CatalogItemId`].
+    /// Sort item updates by parsing statements to identify any id-based dependencies within
+    /// this set of updates and then performing a topological sort.
     fn sort_item_updates(
         item_updates: Vec<(mz_catalog::durable::Item, Timestamp, StateDiff)>,
     ) -> VecDeque<(mz_catalog::durable::Item, Timestamp, StateDiff)> {
-        item_updates
+        let mut items_with_dependencies = item_updates
             .into_iter()
-            // HACK: due to `ALTER SINK`, sinks can appear before the objects they
-            // depend upon. Fortunately, because sinks can never have dependencies
-            // and can never depend upon one another, to fix the topological sort,
-            // we can just always move sinks to the end.
-            .sorted_by_key(|(item, _ts, _diff)| {
-                if item.create_sql.starts_with("CREATE SINK") {
-                    CatalogItemId::User(u64::MAX)
-                } else {
-                    item.id
-                }
+            .map(|(item, ts, diff)| {
+                let parsed = mz_sql::parse::parse(&item.create_sql)
+                    .expect("failed to parse persisted SQL")
+                    .into_element()
+                    .ast;
+                let deps = mz_sql::names::raw_item_dependency_ids(&parsed);
+
+                (item.global_id, (deps, (item, ts, diff)))
             })
+            .collect::<BTreeMap<_, _>>();
+        let mut visited = BTreeSet::new();
+        let mut sorted = Vec::new();
+        fn dfs(
+            id: GlobalId,
+            visited: &mut BTreeSet<GlobalId>,
+            sorted: &mut Vec<GlobalId>,
+            items_with_dependencies: &BTreeMap<
+                GlobalId,
+                (
+                    BTreeSet<GlobalId>,
+                    (mz_catalog::durable::Item, Timestamp, StateDiff),
+                ),
+            >,
+        ) {
+            visited.insert(id);
+            let deps = items_with_dependencies
+                .get(&id)
+                .map(|(deps, _)| deps)
+                .expect("item should be in the map");
+            for dep in deps {
+                // We only want to visit dependencies that are in the current set of updates.
+                if !visited.contains(dep) && items_with_dependencies.contains_key(dep) {
+                    dfs(*dep, visited, sorted, items_with_dependencies);
+                }
+            }
+            sorted.push(id);
+        }
+        for id in items_with_dependencies.keys() {
+            if !visited.contains(id) {
+                dfs(*id, &mut visited, &mut sorted, &items_with_dependencies);
+            }
+        }
+        // return the values from items_with_dependencies in the order of sorted
+        sorted
+            .into_iter()
+            .filter_map(|id| items_with_dependencies.remove(&id))
+            .map(|item| item.1)
             .collect()
     }
+
     let item_retractions = sort_item_updates(item_retractions);
     let item_additions = sort_item_updates(item_additions);
 
