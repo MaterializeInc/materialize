@@ -38,7 +38,8 @@ Idiomatic Materialize
 </td>
 <td>
 
-[Use `UNNEST()` to expand the values and join](/transform-data/idiomatic-materialize-sql/any/).
+[Use `UNNEST()` or `DISTINCT UNNEST()` to expand the values and
+join](/transform-data/idiomatic-materialize-sql/any/).
 
 </td>
 </tr>

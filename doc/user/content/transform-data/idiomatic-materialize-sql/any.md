@@ -32,12 +32,12 @@ the query to perform an equi-join on the unnested values.
 
 ## Idiomatic Materialize SQL
 
-**Idiomatic Materialize SQL:**   For equi-join whose `ON` expression includes
-the [`ANY` operator
-expression](/sql/functions/#expression-bool_op-any)
-(`ON fieldX = ANY(<array|list|map>)`), use [UNNEST()](/sql/functions/#unnest) in
-a [Common Table Expression (CTE)](/sql/select/#common-table-expressions-ctes) to
-unnest the values and perform the equi-join on the unnested values.
+**Idiomatic Materialize SQL:**  For equi-join whose `ON` expression includes
+the [`ANY` operator expression](/sql/functions/#expression-bool_op-any) (`ON
+fieldX = ANY(<array|list|map>)`), use [UNNEST()](/sql/functions/#unnest) in a
+[Common Table Expression (CTE)](/sql/select/#common-table-expressions-ctes) to
+unnest the values and perform the equi-join on the unnested values. If the
+array/list/map contains duplicates, include [`DISTINCT`](/sql/select/#select-distinct) to remove duplicates.
 
 <table>
 <thead>
@@ -51,15 +51,44 @@ unnest the values and perform the equi-join on the unnested values.
 <td><blue>Materialize SQL</blue></td>
 <td class="copyableCode">
 
-Use a Common Table Expression (CTE) to [UNNEST()](/sql/functions/#unnest) the
-array of values and perform the equi-join on the unnested values.
+**If no duplicates exist in the unnested field:** Use a Common Table
+Expression (CTE) to [`UNNEST()`](/sql/functions/#unnest) the array of values and
+perform the equi-join on the unnested values.
 
 <br>
 <div style="background-color: var(--code-block)">
 
 ```mzsql
+-- array_field contains no duplicates.--
+
 WITH my_expanded_values AS
 (SELECT UNNEST(array_field) AS fieldZ FROM tableB)
+SELECT a.fieldA, ...
+FROM tableA a
+JOIN my_expanded_values t ON a.fieldZ = t.fieldZ
+;
+```
+
+</td>
+</tr>
+<tr>
+<td><blue>Materialize SQL</blue></td>
+<td class="copyableCode">
+
+**Duplicates may exist in the unnested field:** Use a Common Table
+Expression (CTE) to [`DISTINCT`](/sql/select/#select-distinct)
+[`UNNEST()`](/sql/functions/#unnest) the array of values and perform the
+equi-join on the unnested values.
+
+<br>
+<div style="background-color: var(--code-block)">
+
+
+```mzsql
+-- array_field may contain duplicates.--
+
+WITH my_expanded_values AS
+(SELECT DISTINCT UNNEST(array_field) AS fieldZ FROM tableB)
 SELECT a.fieldA, ...
 FROM tableA a
 JOIN my_expanded_values t ON a.fieldZ = t.fieldZ
@@ -108,9 +137,10 @@ The example data can be found in the
 
 Using idiomatic Materialize SQL, the following example finds orders that contain
 any of the sales items for the week of the order. That is, the example uses a
-CTE to [UNNEST()](/sql/functions/#unnest) the `items` field from the
-`sales_items` table, and then performs an equi-join with the `orders` table on
-the unnested values.
+CTE to [`UNNEST()`](/sql/functions/#unnest) (or
+[`DISTINCT`](/sql/select/#select-distinct)[`UNNEST()`](/sql/functions/#unnest))
+the `items` field from the `sales_items` table, and then performs an equi-join
+with the `orders` table on the unnested values.
 
 <table>
 <thead>
@@ -125,13 +155,34 @@ the unnested values.
 <td><blue>Materialize SQL</blue> ✅</td>
 <td class="copyableCode">
 
+***If no duplicates in the unnested field***
+
 ```mzsql
+-- sales_items.items contains no duplicates. --
+
 WITH individual_sales_items AS
 (SELECT unnest(items) as item, week_of FROM sales_items)
 SELECT s.week_of, o.order_id, o.item, o.quantity
 FROM orders o
 JOIN individual_sales_items s ON o.item = s.item
-WHERE date_trunc('week', o.order_date) = s.week_of;
+WHERE date_trunc('week', o.order_date) = s.week_of
+ORDER BY s.week_of, o.order_id, o.item, o.quantity
+;
+```
+
+***To omit duplicates that may exist in the unnested field***
+
+```mzsql
+-- sales_items.items may contains duplicates --
+
+WITH individual_sales_items AS
+(SELECT DISTINCT unnest(items) as item, week_of FROM sales_items)
+SELECT s.week_of, o.order_id, o.item, o.quantity
+FROM orders o
+JOIN individual_sales_items s ON o.item = s.item
+WHERE date_trunc('week', o.order_date) = s.week_of
+ORDER BY s.week_of, o.order_id, o.item, o.quantity
+;
 ```
 
 </td>
@@ -151,8 +202,12 @@ WHERE date_trunc('week', o.order_date) = s.week_of;
 SELECT s.week_of, o.order_id, o.item, o.quantity
 FROM orders o
 JOIN sales_items s ON o.item = ANY(s.items)
-WHERE date_trunc('week', o.order_date) = s.week_of;
+WHERE date_trunc('week', o.order_date) = s.week_of
+ORDER BY s.week_of, o.order_id, o.item, o.quantity
+;
 ```
+
+</div>
 
 </td>
 </tr>
@@ -161,7 +216,6 @@ WHERE date_trunc('week', o.order_date) = s.week_of;
 </table>
 
 ## See also
-
 
 - [`ANY()`](/sql/functions/#expression-bool_op-any)
 
