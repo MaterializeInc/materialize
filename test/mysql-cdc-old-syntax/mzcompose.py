@@ -305,9 +305,6 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
     for filter in args.filter:
         matching_files.extend(glob.glob(filter, root_dir="test/mysql-cdc-old-syntax"))
 
-    # TODO: database-issues#8706
-    matching_files = [file for file in matching_files if file != "alter-source.td"]
-
     sharded_files: list[str] = sorted(
         buildkite.shard_list(matching_files, lambda file: file)
     )
@@ -333,7 +330,8 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
             external_metadata_store=True,
             external_minio=True,
             additional_system_parameter_defaults={
-                "log_filter": "mz_storage::source::mysql=trace,info"
+                "log_filter": "mz_storage::source::mysql=trace,info",
+                "force_source_table_syntax": "true",
             },
         )
 
