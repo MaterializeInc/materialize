@@ -309,7 +309,7 @@ where
                             .await
                         {
                             Ok(_) => {
-                                let _ = snapshot_cap.downgrade(persist_upper.iter());
+                                snapshot_cap.downgrade(persist_upper.iter());
                             }
                             Err(e) => {
                                 // Make sure our persist source can shut down.
@@ -358,7 +358,7 @@ where
                                 source_config.id
                             );
 
-                            let _ = snapshot_cap.downgrade(&[]);
+                            snapshot_cap.downgrade(&[]);
                         }
 
                     }
