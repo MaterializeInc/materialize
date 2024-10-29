@@ -98,9 +98,7 @@ impl DurableCacheCodec for ExpressionCodec {
     fn decode(key: Self::KeyCodec, (): Self::ValCodec) -> (Self::Key, Self::Val) {
         let row = key.0.expect("only Ok values stored in expression cache");
         let datums = row.unpack();
-        if datums.len() != 2 {
-            panic!("ACTUAL LENGTH: {:?}", datums.len())
-        }
+        assert_eq!(datums.len(), 2, "Row should have 2 columns: {datums:?}");
 
         let key_json = JsonbRef::from_datum(datums[0]);
         let value_json = JsonbRef::from_datum(datums[1]);
