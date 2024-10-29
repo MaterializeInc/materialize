@@ -20,6 +20,7 @@ use differential_dataflow::{AsCollection, Collection};
 use indexmap::map::Entry;
 use itertools::Itertools;
 use mz_ore::cast::CastFrom;
+use mz_ore::vec::VecExt;
 use mz_repr::{Diff, Row};
 use mz_storage_types::errors::{DataflowError, EnvelopeError, UpsertError};
 use mz_timely_util::builder_async::{
@@ -267,49 +268,42 @@ where
                             PartialOrder::less_equal(&resume_upper, &persist_upper)
                         };
 
-                        // Sort by ts and only present updates that are not
-                        // beyond the resume upper.
-                        persist_stash.sort_unstable_by(|a, b| {
-                            let (_, _, ts1, _) = a;
-                            let (_, _, ts2, _) = b;
-                            Ord::cmp(
-                                ts1,
-                                ts2,
-                            )
-                        });
-
-                        // Find the prefix that we can ingest.
-                        let idx = persist_stash.partition_point(|(_, _, ts, _)| {
-                            let first_source_snapshot = ts == &G::Timestamp::minimum();
-                            let rehydration_snapshot = !resume_upper.less_equal(ts);
-                            first_source_snapshot || rehydration_snapshot
-                        });
-
-                        tracing::debug!(persist_stash = %persist_stash.len(), %idx, %last_snapshot_chunk, ?resume_upper, ?persist_upper, "ingesting persist snapshot chunk");
-
-                        // Check for errors in the prefix that we will ingest.
-                        for (_, value, _ts, diff) in persist_stash.iter_mut().take(idx) {
-                            if let Err(UpsertError::Value(ref mut err)) = value {
-                                // If we receive a legacy error in the snapshot we will keep a note of it but
-                                // insert a non-legacy error in our state. This is so that if this error is
-                                // ever retracted we will correctly retract the non-legacy version because by
-                                // that time we will have emitted the error correction, which happens before
-                                // processing any of the new source input.
-                                if err.is_legacy_dont_touch_it {
-                                    legacy_errors_to_correct.push((err.clone(), diff.clone()));
-                                    err.is_legacy_dont_touch_it = false;
-                                }
-                            }
-                        }
-
+                        tracing::debug!(persist_stash = %persist_stash.len(), %last_snapshot_chunk, ?resume_upper, ?persist_upper, "ingesting persist snapshot chunk");
 
                         hydrating = !last_snapshot_chunk;
 
+                        let ready_updates = persist_stash.drain_filter_swapping(|(_key, value, ts, diff)| {
+                            let first_source_snapshot = ts == &G::Timestamp::minimum();
+                            let rehydration_snapshot = !resume_upper.less_equal(ts);
+                            let ready = first_source_snapshot || rehydration_snapshot;
+
+                            // Also collect any legacy errors as they're flying
+                            // by.
+                            if ready {
+                                if let Err(UpsertError::Value(ref mut err)) = value {
+                                    // If we receive a legacy error in the snapshot we will keep a note of it but
+                                    // insert a non-legacy error in our state. This is so that if this error is
+                                    // ever retracted we will correctly retract the non-legacy version because by
+                                    // that time we will have emitted the error correction, which happens before
+                                    // processing any of the new source input.
+                                    if err.is_legacy_dont_touch_it {
+                                        legacy_errors_to_correct.push((err.clone(), diff.clone()));
+                                        err.is_legacy_dont_touch_it = false;
+                                    }
+                                }
+                            }
+                            ready
+                        });
+
+                        // We have to collect into a vec because
+                        // consolidate_snapshot_chunk needs a ExactSizeIterator
+                        // iterator. And I (aljoscha) don't want to go down the
+                        // rabbit hole of changing that right now.
+                        let ready_updates = ready_updates.map(|(key, val, _ts, diff)| (key, val, diff)).collect_vec();
+
                         match state
                             .consolidate_snapshot_chunk(
-                                persist_stash
-                                    .drain(..idx)
-                                    .map(|(key, val, _ts, diff)| (key, val, diff)),
+                                ready_updates.into_iter(),
                                 last_snapshot_chunk,
                             )
                             .await
