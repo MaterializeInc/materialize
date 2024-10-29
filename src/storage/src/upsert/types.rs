@@ -394,75 +394,77 @@ impl<O: Default> StateValue<O> {
     /// Afterwards, if we need to retract one of these values, we need to assert that its in this correct state,
     /// then mutate it to its `Value` state, so the `upsert` operator can use it.
     #[allow(clippy::as_conversions)]
-    pub fn ensure_decoded(&mut self, bincode_opts: BincodeOpts) {
+    pub fn ensure_decoded(&mut self, bincode_opts: BincodeOpts) -> Result<(), anyhow::Error> {
         match self {
             StateValue::Snapshotting(snapshotting) => {
                 match snapshotting.diff_sum.0 {
                     1 => {
-                        let len = usize::try_from(snapshotting.len_sum.0)
-                            .map_err(|_| {
-                                format!(
-                                    "len_sum can't be made into a usize, state: {}",
-                                    snapshotting
-                                )
-                            })
-                            .expect("invalid upsert state");
-                        let value = &snapshotting
-                            .value_xor
-                            .get(..len)
-                            .ok_or_else(|| {
-                                format!(
-                                    "value_xor is not the same length ({}) as len ({}), state: {}",
-                                    snapshotting.value_xor.len(),
-                                    len,
-                                    snapshotting
-                                )
-                            })
-                            .expect("invalid upsert state");
+                        let len = usize::try_from(snapshotting.len_sum.0).map_err(|_| {
+                            anyhow::anyhow!(
+                                "len_sum can't be made into a usize, state: {}",
+                                snapshotting
+                            )
+                        })?;
+                        let value = &snapshotting.value_xor.get(..len).ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "value_xor is not the same length ({}) as len ({}), state: {}",
+                                snapshotting.value_xor.len(),
+                                len,
+                                snapshotting
+                            )
+                        })?;
                         // Truncation is fine (using `as`) as this is just a checksum
-                        assert_eq!(
-                            snapshotting.checksum_sum.0,
-                            // Hash the value, not the full buffer, which may have extra 0's
-                            seahash::hash(value) as i64,
-                            "invalid upsert state: checksum_sum does not match, state: {}",
-                            snapshotting
-                        );
+                        if snapshotting.checksum_sum.0 != seahash::hash(value) as i64 {
+                            return Err(anyhow::anyhow!(
+                                "invalid upsert state: checksum_sum does not match, state: {}",
+                                snapshotting
+                            ));
+                        }
+
                         *self = Self::Value(Value::Value(
                             bincode_opts.deserialize(value).unwrap(),
                             Default::default(),
                         ));
+
+                        Ok(())
                     }
                     0 => {
-                        assert_eq!(
-                            snapshotting.len_sum.0, 0,
-                            "invalid upsert state: len_sum is non-0, state: {}",
-                            snapshotting
-                        );
-                        assert_eq!(
-                            snapshotting.checksum_sum.0, 0,
-                            "invalid upsert state: checksum_sum is non-0, state: {}",
-                            snapshotting
-                        );
-                        assert!(
-                            snapshotting.value_xor.iter().all(|&x| x == 0),
-                            "invalid upsert state: value_xor not all 0s with 0 diff. \
-                            Non-zero positions: {:?}, state: {}",
-                            snapshotting
-                                .value_xor
-                                .iter()
-                                .positions(|&x| x != 0)
-                                .collect::<Vec<_>>(),
-                            snapshotting
-                        );
+                        if snapshotting.len_sum.0 != 0 {
+                            return Err(anyhow::anyhow!(
+                                "invalid upsert state: len_sum is non-0, state: {}",
+                                snapshotting
+                            ));
+                        }
+                        if snapshotting.checksum_sum.0 != 0 {
+                            return Err(anyhow::anyhow!(
+                                "invalid upsert state: checksum_sum is non-0, state: {}",
+                                snapshotting
+                            ));
+                        }
+
+                        if !snapshotting.value_xor.iter().all(|&x| x == 0) {
+                            return Err(anyhow::anyhow!(
+                                "invalid upsert state: value_xor not all 0s with 0 diff. \
+                                Non-zero positions: {:?}, state: {}",
+                                snapshotting
+                                    .value_xor
+                                    .iter()
+                                    .positions(|&x| x != 0)
+                                    .collect::<Vec<_>>(),
+                                snapshotting
+                            ));
+                        }
                         *self = Self::Value(Value::Tombstone(Default::default()));
+                        Ok(())
                     }
-                    other => panic!(
+                    other => Err(anyhow::anyhow!(
                         "invalid upsert state: non 0/1 diff_sum: {}, state: {}",
-                        other, snapshotting
-                    ),
+                        other,
+                        snapshotting
+                    )),
                 }
             }
-            _ => {}
+            _ => Ok(()),
         }
     }
 }
@@ -1219,7 +1221,7 @@ mod tests {
         s.merge_update(longer_row, 1, opts, &mut buf);
 
         // Assert that the `Snapshotting` value is fully merged.
-        s.ensure_decoded(opts);
+        s.ensure_decoded(opts).expect("invalid upsert state");
     }
 
     #[mz_ore::test]
@@ -1237,12 +1239,12 @@ mod tests {
         s.merge_update(longer_row.clone(), 1, opts, &mut buf);
         s.merge_update(small_row.clone(), -1, opts, &mut buf);
 
-        s.ensure_decoded(opts);
+        s.ensure_decoded(opts).expect("invalid upsert state");
     }
 
     #[mz_ore::test]
     #[should_panic(
-        expected = "invalid upsert state: \"value_xor is not the same length (3) as len (4), state: Snapshotting { len_sum: 4"
+        expected = "invalid upsert state: value_xor is not the same length (3) as len (4), state: Snapshotting { len_sum: 4"
     )]
     fn test_merge_update_len_to_long_assert() {
         let mut buf = Vec::new();
@@ -1256,7 +1258,12 @@ mod tests {
         s.merge_update(small_row.clone(), -1, opts, &mut buf);
         s.merge_update(longer_row.clone(), 1, opts, &mut buf);
 
-        s.ensure_decoded(opts);
+        match s.ensure_decoded(opts) {
+            Ok(()) => {}
+            Err(e) => {
+                panic!("invalid upsert state: {e}");
+            }
+        }
     }
 
     #[mz_ore::test]
@@ -1273,6 +1280,6 @@ mod tests {
         s.merge_update(small_row.clone(), -1, opts, &mut buf);
         s.merge_update(longer_row.clone(), 1, opts, &mut buf);
 
-        s.ensure_decoded(opts);
+        s.ensure_decoded(opts).expect("invalid upsert state");
     }
 }
