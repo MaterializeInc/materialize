@@ -466,22 +466,9 @@ where
 
             tracing::trace!(?output_updates, "output updates for complete timestamp");
 
-            // TODO: Feels somewhat inefficient to be peeling
-            // of and creating new vecs per group of
-            // timestamp. Especially since at steady state
-            // we're expecting to only have one group...
-            while !output_updates.is_empty() {
-                let cap = output_updates[0].1.clone();
-                let ts = cap.time();
-
-                let partition_point = output_updates
-                    .partition_point(|update| update.1.time() == ts);
-
-                let mut ts_updates: Vec<_> = output_updates.drain(0..partition_point)
-                    .map(|(update, cap, diff)| (update, cap.time().clone(), diff))
-                    .collect();
-
-                output_handle.give_container(&cap,&mut ts_updates);
+            for (update, cap, diff) in output_updates.drain(..) {
+                let ts = cap.time().clone();
+                output_handle.give(&cap, (update, ts, diff));
             }
 
             if input_upper.is_empty() {
