@@ -61,7 +61,7 @@ struct ExpressionCodec;
 
 impl DurableCacheCodec for ExpressionCodec {
     type Key = CacheKey;
-    // We use a raw JSON value instead of `Expressions` so that there is no backwards compatibility
+    // We use a raw JSON string instead of `Expressions` so that there is no backwards compatibility
     // requirement on `Expressions` between versions.
     type Val = String;
     type KeyCodec = SourceData;
@@ -180,7 +180,7 @@ impl ExpressionCache {
             if key.deploy_generation == self.deploy_generation {
                 // Only deserialize the current generation.
                 let expressions: Expressions =
-                    serde_json::from_str(expressions).expect("TODO(jkosh44)");
+                    serde_json::from_str(expressions).expect("expressions should roundtrip");
 
                 // Remove dropped IDs and expressions that were cached with different features.
                 if !current_ids.contains(&key.id)
@@ -227,7 +227,7 @@ impl ExpressionCache {
             );
         }
         for (id, expressions) in new_entries {
-            let expressions = serde_json::to_string(&expressions).expect("TODO(jkosh44)");
+            let expressions = serde_json::to_string(&expressions).expect("valid json");
             entries.insert(
                 CacheKey {
                     id,
@@ -588,10 +588,10 @@ mod tests {
         #[mz_ore::test]
         #[cfg_attr(miri, ignore)]
         fn expr_cache_roundtrip((key, val) in any::<(CacheKey, Expressions)>()) {
-            let serde_val = serde_json::to_string(&val).unwrap();
+            let serde_val = serde_json::to_string(&val).expect("valid json");
             let (encoded_key, encoded_val) = ExpressionCodec::encode(&key, &serde_val);
             let (decoded_key, decoded_val) = ExpressionCodec::decode(encoded_key, encoded_val);
-            let decoded_val: Expressions = serde_json::from_str(&decoded_val).unwrap();
+            let decoded_val: Expressions = serde_json::from_str(&decoded_val).expect("expressions should roundtrip");
 
             assert_eq!(key, decoded_key);
             assert_eq!(val, decoded_val);
