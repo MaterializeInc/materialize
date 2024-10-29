@@ -1058,7 +1058,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         &mut self,
         write_schemas: &Schemas<K, V>,
         key_lower: Vec<u8>,
-        updates: BlobTraceUpdates,
+        mut updates: BlobTraceUpdates,
         upper: Antichain<T>,
         since: Antichain<T>,
         diffs_sum: D,
@@ -1090,35 +1090,29 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             mz_ore::task::spawn(
                 || "batch::inline_part",
                 async move {
-                    let structured_ext = if part_write_columnar_data {
-                        let result = metrics
+                    let updates = if part_write_columnar_data {
+                        let records = updates.records().clone();
+                        let structured = metrics
                             .columnar
                             .arrow()
-                            .measure_part_build(|| encode_updates(&write_schemas, &updates));
-                        match result {
-                            Ok((struct_ext, _stats)) => struct_ext,
-                            Err(err) => {
-                                soft_panic_or_log!(
-                                    "failed to encode in columnar format! {:?}",
-                                    err
-                                );
-                                None
-                            }
-                        }
+                            .measure_part_build(|| {
+                                updates.get_or_make_structured::<K, V>(
+                                    write_schemas.key.as_ref(),
+                                    write_schemas.val.as_ref(),
+                                )
+                            })
+                            .clone();
+                        BlobTraceUpdates::Both(records, structured)
                     } else {
-                        None
-                    };
-
-                    // Take our updates back out.
-                    let BlobTraceUpdates::Row(updates) = updates else {
-                        panic!("programming error, checked above");
+                        let records = updates.records().clone();
+                        BlobTraceUpdates::Row(records)
                     };
 
                     let start = Instant::now();
                     let updates = LazyInlineBatchPart::from(&ProtoInlineBatchPart {
                         desc: Some(desc.into_proto()),
                         index: index.into_proto(),
-                        updates: Some(updates.into_proto(structured_ext)),
+                        updates: Some(updates.into_proto()),
                     });
                     batch_metrics
                         .step_inline

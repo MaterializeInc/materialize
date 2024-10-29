@@ -13,6 +13,7 @@ use differential_dataflow::trace::Description;
 use mz_dyncfg::{Config, ConfigSet};
 use mz_ore::cast::CastFrom;
 use mz_persist::indexed::columnar::ColumnarRecordsBuilder;
+use mz_persist::indexed::encoding::BlobTraceUpdates;
 use mz_persist_types::stats::PartStats;
 use mz_persist_types::Codec64;
 use mz_proto::RustType;
@@ -149,7 +150,7 @@ impl ProjectionPushdown {
 
         let mut faked_data = ColumnarRecordsBuilder::default();
         assert!(faked_data.push(((key_bytes, val_bytes), T::encode(as_of), diffs_sum)));
-        let updates = faked_data.finish(&metrics.columnar).into_proto(None);
+        let updates = BlobTraceUpdates::Row(faked_data.finish(&metrics.columnar)).into_proto();
         let faked_data = LazyInlineBatchPart::from(&ProtoInlineBatchPart {
             desc: Some(desc.into_proto()),
             index: 0,

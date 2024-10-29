@@ -450,29 +450,6 @@ impl ColumnarRecordsBuilder {
 }
 
 impl ColumnarRecords {
-    /// See [RustType::into_proto].
-    pub fn into_proto(
-        &self,
-        structured_ext: Option<ColumnarRecordsStructuredExt>,
-    ) -> ProtoColumnarRecords {
-        let (k_struct, v_struct) = match structured_ext.map(|x| x.into_proto()) {
-            None => (None, None),
-            Some((k, v)) => (Some(k), Some(v)),
-        };
-
-        ProtoColumnarRecords {
-            len: self.len.into_proto(),
-            key_offsets: self.key_data.offsets().to_vec(),
-            key_data: Bytes::copy_from_slice(self.key_data.value_data()),
-            val_offsets: self.val_data.offsets().to_vec(),
-            val_data: Bytes::copy_from_slice(self.val_data.value_data()),
-            timestamps: self.timestamps.values().to_vec(),
-            diffs: self.diffs.values().to_vec(),
-            key_structured: k_struct,
-            val_structured: v_struct,
-        }
-    }
-
     /// See [RustType::from_proto].
     pub fn from_proto(
         lgbytes: &ColumnarMetrics,
