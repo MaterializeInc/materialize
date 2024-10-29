@@ -2659,7 +2659,7 @@ impl Coordinator {
                             valid_id
                         }
                         Source | Secret | Connection => false,
-                        // Cannot select from sinks or indexes
+                        // Cannot select from sinks or indexes.
                         Sink | Index => unreachable!(),
                         Table => {
                             if !id.is_user() {

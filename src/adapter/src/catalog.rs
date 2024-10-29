@@ -30,7 +30,9 @@ use mz_catalog::config::{BuiltinItemMigrationConfig, ClusterReplicaSizeMap, Conf
 use mz_catalog::durable::CatalogError;
 use mz_catalog::durable::{test_bootstrap_args, DurableCatalogState, TestCatalogStateBuilder};
 use mz_catalog::memory::error::{Error, ErrorKind};
-use mz_catalog::memory::objects::{CatalogEntry, Cluster, ClusterReplica, Database, Role, Schema};
+use mz_catalog::memory::objects::{
+    CatalogEntry, Cluster, ClusterReplica, Database, NetworkPolicy, Role, Schema,
+};
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_controller::clusters::ReplicaLocation;
 use mz_controller_types::{ClusterId, ReplicaId};
@@ -44,14 +46,15 @@ use mz_persist_client::PersistClient;
 use mz_repr::adt::mz_acl_item::{AclMode, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::namespaces::MZ_TEMP_SCHEMA;
+use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
 use mz_repr::{Diff, GlobalId, ScalarType};
 use mz_secrets::InMemorySecretsController;
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError as SqlCatalogError,
-    CatalogItem as SqlCatalogItem, CatalogItemType as SqlCatalogItemType, CatalogRole,
-    CatalogSchema, DefaultPrivilegeAclItem, DefaultPrivilegeObject, EnvironmentId, SessionCatalog,
-    SystemObjectType,
+    CatalogItem as SqlCatalogItem, CatalogItemType as SqlCatalogItemType, CatalogNetworkPolicy,
+    CatalogRole, CatalogSchema, DefaultPrivilegeAclItem, DefaultPrivilegeObject, EnvironmentId,
+    SessionCatalog, SystemObjectType,
 };
 use mz_sql::names::{
     CommentObjectId, DatabaseId, FullItemName, FullSchemaName, ItemQualifiers, ObjectId,
@@ -998,6 +1001,7 @@ impl Catalog {
                 ),
                 ObjectId::Item(id) => Some(self.get_entry(id).privileges()),
                 ObjectId::ClusterReplica(_) | ObjectId::Role(_) => None,
+                ObjectId::NetworkPolicy(id) => Some(self.get_network_policy(*id).privileges()),
             },
             SystemObjectId::System => Some(&self.state.system_privileges),
         }
@@ -1069,6 +1073,10 @@ impl Catalog {
     pub fn user_secrets(&self) -> impl Iterator<Item = &CatalogEntry> {
         self.entries()
             .filter(|entry| entry.is_secret() && entry.id().is_user())
+    }
+
+    pub fn get_network_policy(&self, network_policy_id: NetworkPolicyId) -> &NetworkPolicy {
+        self.state.get_network_policy(&network_policy_id)
     }
 
     pub fn clusters(&self) -> impl Iterator<Item = &Cluster> {
@@ -1172,6 +1180,14 @@ impl Catalog {
         self.state.ensure_not_predefined_role(role_id)
     }
 
+    pub fn ensure_not_reserved_network_policy(
+        &self,
+        network_policy_id: &NetworkPolicyId,
+    ) -> Result<(), Error> {
+        self.state
+            .ensure_not_reserved_network_policy(network_policy_id)
+    }
+
     pub fn ensure_not_reserved_object(
         &self,
         object_id: &ObjectId,
@@ -1227,6 +1243,9 @@ impl Catalog {
                 } else {
                     Ok(())
                 }
+            }
+            ObjectId::NetworkPolicy(network_policy_id) => {
+                self.ensure_not_reserved_network_policy(network_policy_id)
             }
         }
     }
@@ -1290,6 +1309,7 @@ pub(crate) fn comment_id_to_audit_object_type(id: CommentObjectId) -> ObjectType
         CommentObjectId::Cluster(_) => ObjectType::Cluster,
         CommentObjectId::ClusterReplica(_) => ObjectType::ClusterReplica,
         CommentObjectId::ContinualTask(_) => ObjectType::ContinualTask,
+        CommentObjectId::NetworkPolicy(_) => ObjectType::NetworkPolicy,
     }
 }
 
@@ -1320,6 +1340,7 @@ pub(crate) fn system_object_type_to_audit_object_type(
             mz_sql::catalog::ObjectType::Schema => ObjectType::Schema,
             mz_sql::catalog::ObjectType::Func => ObjectType::Func,
             mz_sql::catalog::ObjectType::ContinualTask => ObjectType::ContinualTask,
+            mz_sql::catalog::ObjectType::NetworkPolicy => ObjectType::NetworkPolicy,
         },
         SystemObjectType::System => ObjectType::System,
     }
@@ -1678,6 +1699,23 @@ impl SessionCatalog for ConnCatalog<'_> {
         self.state.collect_role_membership(id)
     }
 
+    fn get_network_policy(
+        &self,
+        id: &NetworkPolicyId,
+    ) -> &dyn mz_sql::catalog::CatalogNetworkPolicy {
+        self.state.get_network_policy(id)
+    }
+
+    fn get_network_policies(&self) -> Vec<&dyn mz_sql::catalog::CatalogNetworkPolicy> {
+        // `as` is ok to use to cast to a trait object.
+        #[allow(clippy::as_conversions)]
+        self.state
+            .network_policies_by_id
+            .values()
+            .map(|policy| policy as &dyn CatalogNetworkPolicy)
+            .collect()
+    }
+
     fn resolve_cluster(
         &self,
         cluster_name: Option<&str>,
@@ -1875,6 +1913,9 @@ impl SessionCatalog for ConnCatalog<'_> {
                 Some(self.get_schema(database_spec, schema_spec).privileges())
             }
             SystemObjectId::Object(ObjectId::Item(id)) => Some(self.get_item(id).privileges()),
+            SystemObjectId::Object(ObjectId::NetworkPolicy(id)) => {
+                Some(self.get_network_policy(id).privileges())
+            }
             SystemObjectId::Object(ObjectId::ClusterReplica(_))
             | SystemObjectId::Object(ObjectId::Role(_)) => None,
         }

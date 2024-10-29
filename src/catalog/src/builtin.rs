@@ -2485,6 +2485,37 @@ pub static MZ_CONTINUAL_TASKS: LazyLock<BuiltinTable> = LazyLock::new(|| Builtin
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
+pub static MZ_NETWORK_POLICIES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+    name: "mz_network_policies",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::TABLE_MZ_NETWORK_POLICIES_OID,
+    desc: RelationDesc::builder()
+        .with_column("id", ScalarType::String.nullable(false))
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("owner_id", ScalarType::String.nullable(false))
+        .with_column(
+            "privileges",
+            ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
+        )
+        .with_column("oid", ScalarType::Oid.nullable(false))
+        .finish(),
+    is_retained_metrics_object: false,
+    access: vec![PUBLIC_SELECT],
+});
+pub static MZ_NETWORK_POLICY_RULES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+    name: "mz_network_policy_rules",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::TABLE_MZ_NETWORK_POLICY_RULES_OID,
+    desc: RelationDesc::builder()
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("policy_id", ScalarType::String.nullable(false))
+        .with_column("action", ScalarType::String.nullable(false))
+        .with_column("address", ScalarType::String.nullable(false))
+        .with_column("direction", ScalarType::String.nullable(false))
+        .finish(),
+    is_retained_metrics_object: false,
+    access: vec![PUBLIC_SELECT],
+});
 /// PostgreSQL-specific metadata about types that doesn't make sense to expose
 /// in the `mz_types` table as part of our public, stable API.
 pub static MZ_TYPE_PG_METADATA: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
@@ -8801,6 +8832,8 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Table(&MZ_WEBHOOKS_SOURCES),
         Builtin::Table(&MZ_HISTORY_RETENTION_STRATEGIES),
         Builtin::Table(&MZ_CONTINUAL_TASKS),
+        Builtin::Table(&MZ_NETWORK_POLICIES),
+        Builtin::Table(&MZ_NETWORK_POLICY_RULES),
         Builtin::View(&MZ_RELATIONS),
         Builtin::View(&MZ_OBJECT_OID_ALIAS),
         Builtin::View(&MZ_OBJECTS),

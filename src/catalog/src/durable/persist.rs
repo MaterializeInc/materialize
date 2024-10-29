@@ -809,6 +809,9 @@ impl<U: ApplyUpdate<StateUpdateKind>> PersistHandle<StateUpdateKind, U> {
                     StateUpdateKind::Item(key, value) => {
                         apply(&mut snapshot.items, key, value, diff);
                     }
+                    StateUpdateKind::NetworkPolicy(key, value) => {
+                        apply(&mut snapshot.network_policies, key, value, diff);
+                    }
                     StateUpdateKind::Role(key, value) => {
                         apply(&mut snapshot.roles, key, value, diff);
                     }
@@ -1856,6 +1859,9 @@ impl Trace {
                     trace.introspection_sources.values.push(((k, v), ts, diff))
                 }
                 StateUpdateKind::Item(k, v) => trace.items.values.push(((k, v), ts, diff)),
+                StateUpdateKind::NetworkPolicy(k, v) => {
+                    trace.network_policies.values.push(((k, v), ts, diff))
+                }
                 StateUpdateKind::Role(k, v) => trace.roles.values.push(((k, v), ts, diff)),
                 StateUpdateKind::Schema(k, v) => trace.schemas.values.push(((k, v), ts, diff)),
                 StateUpdateKind::Setting(k, v) => trace.settings.values.push(((k, v), ts, diff)),

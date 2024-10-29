@@ -24,6 +24,7 @@ use mz_persist_types::ShardId;
 use mz_pgrepr::oid::FIRST_USER_OID;
 use mz_proto::{RustType, TryFromProtoError};
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
+use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
 use mz_repr::{Diff, GlobalId};
 use mz_sql::catalog::{
@@ -31,6 +32,7 @@ use mz_sql::catalog::{
     RoleVars,
 };
 use mz_sql::names::{CommentObjectId, DatabaseId, ResolvedDatabaseSpecifier, SchemaId};
+use mz_sql::plan::NetworkPolicyRule;
 use mz_sql_parser::ast::QualifiedReplica;
 use mz_storage_client::controller::StorageTxn;
 use mz_storage_types::controller::StorageError;
@@ -47,17 +49,17 @@ use crate::durable::objects::{
     ClusterReplicaValue, ClusterValue, CommentKey, CommentValue, Config, ConfigKey, ConfigValue,
     Database, DatabaseKey, DatabaseValue, DefaultPrivilegesKey, DefaultPrivilegesValue,
     DurableType, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
-    IntrospectionSourceIndex, Item, ItemKey, ItemValue, ReplicaConfig, Role, RoleKey, RoleValue,
-    Schema, SchemaKey, SchemaValue, ServerConfigurationKey, ServerConfigurationValue, SettingKey,
-    SettingValue, SourceReference, SourceReferencesKey, SourceReferencesValue,
-    StorageCollectionMetadataKey, StorageCollectionMetadataValue, SystemObjectDescription,
-    SystemObjectMapping, SystemPrivilegesKey, SystemPrivilegesValue, TxnWalShardValue,
-    UnfinalizedShardKey,
+    IntrospectionSourceIndex, Item, ItemKey, ItemValue, NetworkPolicyKey, NetworkPolicyValue,
+    ReplicaConfig, Role, RoleKey, RoleValue, Schema, SchemaKey, SchemaValue,
+    ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue, SourceReference,
+    SourceReferencesKey, SourceReferencesValue, StorageCollectionMetadataKey,
+    StorageCollectionMetadataValue, SystemObjectDescription, SystemObjectMapping,
+    SystemPrivilegesKey, SystemPrivilegesValue, TxnWalShardValue, UnfinalizedShardKey,
 };
 use crate::durable::{
-    CatalogError, DefaultPrivilege, DurableCatalogError, DurableCatalogState, Snapshot,
-    AUDIT_LOG_ID_ALLOC_KEY, CATALOG_CONTENT_VERSION_KEY, DATABASE_ID_ALLOC_KEY, OID_ALLOC_KEY,
-    SCHEMA_ID_ALLOC_KEY, STORAGE_USAGE_ID_ALLOC_KEY, SYSTEM_ITEM_ALLOC_KEY,
+    CatalogError, DefaultPrivilege, DurableCatalogError, DurableCatalogState, NetworkPolicy,
+    Snapshot, AUDIT_LOG_ID_ALLOC_KEY, CATALOG_CONTENT_VERSION_KEY, DATABASE_ID_ALLOC_KEY,
+    OID_ALLOC_KEY, SCHEMA_ID_ALLOC_KEY, STORAGE_USAGE_ID_ALLOC_KEY, SYSTEM_ITEM_ALLOC_KEY,
     SYSTEM_REPLICA_ID_ALLOC_KEY, USER_ITEM_ALLOC_KEY, USER_REPLICA_ID_ALLOC_KEY,
     USER_ROLE_ID_ALLOC_KEY,
 };
@@ -90,6 +92,7 @@ pub struct Transaction<'a> {
     default_privileges: TableTransaction<DefaultPrivilegesKey, DefaultPrivilegesValue>,
     source_references: TableTransaction<SourceReferencesKey, SourceReferencesValue>,
     system_privileges: TableTransaction<SystemPrivilegesKey, SystemPrivilegesValue>,
+    network_policies: TableTransaction<NetworkPolicyKey, NetworkPolicyValue>,
     storage_collection_metadata:
         TableTransaction<StorageCollectionMetadataKey, StorageCollectionMetadataValue>,
     unfinalized_shards: TableTransaction<UnfinalizedShardKey, ()>,
@@ -113,6 +116,7 @@ impl<'a> Transaction<'a> {
             items,
             comments,
             clusters,
+            network_policies,
             cluster_replicas,
             introspection_sources,
             id_allocator,
@@ -154,6 +158,10 @@ impl<'a> Transaction<'a> {
             clusters: TableTransaction::new_with_uniqueness_fn(clusters, |a: &ClusterValue, b| {
                 a.name == b.name
             })?,
+            network_policies: TableTransaction::new_with_uniqueness_fn(
+                network_policies,
+                |a: &NetworkPolicyValue, b| a.name == b.name,
+            )?,
             cluster_replicas: TableTransaction::new_with_uniqueness_fn(
                 cluster_replicas,
                 |a: &ClusterReplicaValue, b| a.cluster_id == b.cluster_id && a.name == b.name,
@@ -555,6 +563,44 @@ impl<'a> Transaction<'a> {
             .into());
         };
         Ok(())
+    }
+
+    pub fn insert_user_network_policy(
+        &mut self,
+        id: NetworkPolicyId,
+        name: String,
+        rules: Vec<NetworkPolicyRule>,
+        privileges: Vec<MzAclItem>,
+        owner_id: RoleId,
+        temporary_oids: &HashSet<u32>,
+    ) -> Result<NetworkPolicyId, CatalogError> {
+        let oid = self.allocate_oid(temporary_oids)?;
+        self.insert_network_policy(id, name, rules, privileges, owner_id, oid)
+    }
+
+    pub fn insert_network_policy(
+        &mut self,
+        id: NetworkPolicyId,
+        name: String,
+        rules: Vec<NetworkPolicyRule>,
+        privileges: Vec<MzAclItem>,
+        owner_id: RoleId,
+        oid: u32,
+    ) -> Result<NetworkPolicyId, CatalogError> {
+        match self.network_policies.insert(
+            NetworkPolicyKey { id },
+            NetworkPolicyValue {
+                name: name.clone(),
+                rules,
+                privileges,
+                owner_id,
+                oid,
+            },
+            self.op_id,
+        ) {
+            Ok(_) => Ok(id),
+            Err(_) => Err(SqlCatalogError::NetworkPolicyAlreadyExists(name).into()),
+        }
     }
 
     /// Updates persisted information about persisted introspection source
@@ -1465,6 +1511,29 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    /// Updates `network_policy_id` in the transaction to `network policy`.
+    ///
+    /// Returns an error if `id` is not found.
+    ///
+    /// Runtime is linear with respect to the total number of databases in the catalog.
+    /// DO NOT call this function in a loop.
+    pub fn update_network_policy(
+        &mut self,
+        id: NetworkPolicyId,
+        network_policy: NetworkPolicy,
+    ) -> Result<(), CatalogError> {
+        let updated = self.network_policies.update_by_key(
+            NetworkPolicyKey { id },
+            network_policy.into_key_value().1,
+            self.op_id,
+        )?;
+        if updated {
+            Ok(())
+        } else {
+            Err(SqlCatalogError::UnknownNetworkPolicy(id.to_string()).into())
+        }
+    }
+
     /// Set persisted default privilege.
     ///
     /// DO NOT call this function in a loop, use [`Self::set_default_privileges`] instead.
@@ -1836,6 +1905,14 @@ impl<'a> Transaction<'a> {
             .map(|(k, v)| DurableType::from_key_value(k, v))
     }
 
+    pub fn get_network_policies(&self) -> impl Iterator<Item = NetworkPolicy> {
+        self.network_policies
+            .items()
+            .clone()
+            .into_iter()
+            .map(|(k, v)| DurableType::from_key_value(k, v))
+    }
+
     pub fn get_system_object_mappings(&self) -> impl Iterator<Item = SystemObjectMapping> {
         self.system_gid_mapping
             .items()
@@ -1943,6 +2020,7 @@ impl<'a> Transaction<'a> {
             comments,
             roles,
             clusters,
+            network_policies,
             cluster_replicas,
             introspection_sources,
             system_gid_mapping,
@@ -1996,6 +2074,11 @@ impl<'a> Transaction<'a> {
             .chain(get_collection_op_updates(
                 clusters,
                 StateUpdateKind::Cluster,
+                self.op_id,
+            ))
+            .chain(get_collection_op_updates(
+                network_policies,
+                StateUpdateKind::NetworkPolicy,
                 self.op_id,
             ))
             .chain(get_collection_op_updates(

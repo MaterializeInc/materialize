@@ -378,6 +378,24 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 5  connected_at  timestamp␠with␠time␠zone
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_network_policies' ORDER BY position
+----
+1  id  text
+2  name  text
+3  owner_id  text
+4  privileges  mz_aclitem[]
+5  oid  oid
+
+query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_network_policy_rules' ORDER BY position
+----
+1  name  text
+2  policy_id  text
+3  action  text
+4  address  text
+5  direction  text
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_all_privileges' ORDER BY position
 ----
 1  grantor  text
@@ -656,6 +674,8 @@ mz_materialization_lag
 mz_materialized_view_refresh_strategies
 mz_materialized_view_refreshes
 mz_mysql_source_tables
+mz_network_policies
+mz_network_policy_rules
 mz_notices
 mz_notices_redacted
 mz_object_dependencies

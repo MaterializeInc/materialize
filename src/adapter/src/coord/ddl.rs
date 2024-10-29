@@ -44,7 +44,7 @@ use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::vars::{
     self, SystemVars, Var, MAX_AWS_PRIVATELINK_CONNECTIONS, MAX_CLUSTERS, MAX_CONTINUAL_TASKS,
     MAX_CREDIT_CONSUMPTION_RATE, MAX_DATABASES, MAX_KAFKA_CONNECTIONS, MAX_MATERIALIZED_VIEWS,
-    MAX_MYSQL_CONNECTIONS, MAX_OBJECTS_PER_SCHEMA, MAX_POSTGRES_CONNECTIONS,
+    MAX_MYSQL_CONNECTIONS, MAX_NETWORK_POLICIES, MAX_OBJECTS_PER_SCHEMA, MAX_POSTGRES_CONNECTIONS,
     MAX_REPLICAS_PER_CLUSTER, MAX_ROLES, MAX_SCHEMAS_PER_DATABASE, MAX_SECRETS, MAX_SINKS,
     MAX_SOURCES, MAX_TABLES,
 };
@@ -1362,6 +1362,7 @@ impl Coordinator {
         let mut new_secrets = 0;
         let mut new_roles = 0;
         let mut new_continual_tasks = 0;
+        let mut new_network_policies = 0;
         for op in ops {
             match op {
                 Op::CreateDatabase { .. } => {
@@ -1472,6 +1473,9 @@ impl Coordinator {
                             DropObjectInfo::Role(_) => {
                                 new_roles -= 1;
                             }
+                            DropObjectInfo::NetworkPolicy(_) => {
+                                new_network_policies -= 1;
+                            }
                             DropObjectInfo::Item(id) => {
                                 let entry = self.catalog().get_entry(id);
                                 *new_objects_per_schema
@@ -1561,7 +1565,8 @@ impl Coordinator {
                 | Op::ResetAllSystemConfiguration { .. }
                 | Op::Comment { .. }
                 | Op::WeirdStorageUsageUpdates { .. }
-                | Op::TransactionDryRun => {}
+                | Op::TransactionDryRun
+                | Op::CreateNetworkPolicy { .. } => {}
             }
         }
 
@@ -1748,6 +1753,13 @@ impl Coordinator {
             SystemVars::max_continual_tasks,
             "continual_task",
             MAX_CONTINUAL_TASKS.name(),
+        )?;
+        self.validate_resource_limit(
+            self.catalog().user_continual_tasks().count(),
+            new_network_policies,
+            SystemVars::max_network_policies,
+            "network_policy",
+            MAX_NETWORK_POLICIES.name(),
         )?;
         Ok(())
     }
