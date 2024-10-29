@@ -277,6 +277,10 @@ ROLLBACK
 
 > INSERT INTO t_offset_limit SELECT generate_series(1, 5);
 
+# Make sure the table has its data already, otherwise Testdrive might execute it multiple times
+> SELECT COUNT(*) FROM t_offset_limit
+5
+
 > SELECT * FROM t_offset_limit ORDER BY a DESC OFFSET 4;
 1
 
