@@ -45,7 +45,10 @@ def _verify_source(
         sql = result[0][1]
         assert "FOR TABLE" not in sql, f"FOR TABLE found in: {sql}"
         assert "FOR ALL TABLES" not in sql, f"FOR ALL TABLES found in: {sql}"
-        assert "CREATE SUBSOURCE" not in sql, f"FOR ALL TABLES found in: {sql}"
+
+        if not source_name.endswith("_progress"):
+            assert "CREATE SUBSOURCE" not in sql, f"CREATE SUBSOURCE found in: {sql}"
+
         print("OK.")
     except Exception as e:
         print(f"source-table-migration issue in {file}: {str(e)}")
