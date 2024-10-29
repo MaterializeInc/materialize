@@ -383,9 +383,9 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: bounded-memory
+              run: minimization-search
               args:
                 [
-                  --find-minimal-memory,
                   --materialized-memory-search-step=0.3,
                   --clusterd-memory-search-step=0,
                   --materialized-memory-lower-bound-in-gb=0.5,

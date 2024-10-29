@@ -11,7 +11,7 @@
 Tests with limited amount of memory, makes sure that the scenarios keep working
 and do not regress. Contains tests for large data ingestions.
 """
-
+import argparse
 import math
 from dataclasses import dataclass
 from string import ascii_lowercase
@@ -1095,46 +1095,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "scenarios", nargs="*", default=None, help="run specified Scenarios"
     )
-    parser.add_argument("--find-minimal-memory", action="store_true")
-    parser.add_argument(
-        "--materialized-memory-search-step",
-        default=0.2,
-        type=float,
-        help="only applied when used with --find-minimal-memory",
-    )
-    parser.add_argument(
-        "--clusterd-memory-search-step",
-        default=0.2,
-        type=float,
-        help="only applied when used with --find-minimal-memory",
-    )
-    parser.add_argument(
-        "--materialized-memory-lower-bound-in-gb",
-        default=1.5,
-        type=float,
-        help="only applied when used with --find-minimal-memory",
-    )
-    parser.add_argument(
-        "--clusterd-memory-lower-bound-in-gb",
-        default=0.5,
-        type=float,
-        help="only applied when used with --find-minimal-memory",
-    )
     args = parser.parse_args()
 
-    test_analytics = TestAnalyticsDb(create_test_analytics_config(c))
-    find_minimal_memory_mode = args.find_minimal_memory
-
-    if find_minimal_memory_mode:
-        # will be updated to True at the end
-        test_analytics.builds.add_build_job(was_successful=False)
-
     for scenario in shard_list(SCENARIOS, lambda scenario: scenario.name):
-        if (
-            args.scenarios is not None
-            and len(args.scenarios) > 0
-            and scenario.name not in args.scenarios
-        ):
+        if shall_skip_scenario(scenario, args):
             continue
 
         if scenario.disabled:
@@ -1143,38 +1107,89 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         c.override_current_testcase_name(f"Scenario '{scenario.name}'")
 
-        if find_minimal_memory_mode:
-            print(f"+++ Starting memory search for scenario {scenario.name}")
+        print(
+            f"+++ Running scenario {scenario.name} with materialized_memory={scenario.materialized_memory} and clusterd_memory={scenario.clusterd_memory} ..."
+        )
 
-            run_memory_search(
-                c,
-                scenario,
-                args.materialized_memory_search_step,
-                args.clusterd_memory_search_step,
-                args.materialized_memory_lower_bound_in_gb,
-                args.clusterd_memory_lower_bound_in_gb,
-                test_analytics,
-            )
-        else:
-            print(
-                f"+++ Running scenario {scenario.name} with materialized_memory={scenario.materialized_memory} and clusterd_memory={scenario.clusterd_memory} ..."
-            )
+        run_scenario(
+            c,
+            scenario,
+            materialized_memory=scenario.materialized_memory,
+            clusterd_memory=scenario.clusterd_memory,
+        )
 
-            run_scenario(
-                c,
-                scenario,
-                materialized_memory=scenario.materialized_memory,
-                clusterd_memory=scenario.clusterd_memory,
-            )
 
-    if find_minimal_memory_mode:
-        try:
-            test_analytics.builds.update_build_job_success(True)
-            test_analytics.submit_updates()
-            print("Uploaded results.")
-        except Exception as e:
-            # An error during an upload must never cause the build to fail
-            test_analytics.on_upload_failed(e)
+def workflow_minimization_search(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """Find the minimal working memory configurations."""
+
+    parser.add_argument(
+        "scenarios", nargs="*", default=None, help="run specified Scenarios"
+    )
+    parser.add_argument(
+        "--materialized-memory-search-step",
+        default=0.2,
+        type=float,
+    )
+    parser.add_argument(
+        "--clusterd-memory-search-step",
+        default=0.2,
+        type=float,
+    )
+    parser.add_argument(
+        "--materialized-memory-lower-bound-in-gb",
+        default=1.5,
+        type=float,
+    )
+    parser.add_argument(
+        "--clusterd-memory-lower-bound-in-gb",
+        default=0.5,
+        type=float,
+    )
+    args = parser.parse_args()
+
+    test_analytics = TestAnalyticsDb(create_test_analytics_config(c))
+    # will be updated to True at the end
+    test_analytics.builds.add_build_job(was_successful=False)
+
+    for scenario in shard_list(SCENARIOS, lambda scenario: scenario.name):
+        if shall_skip_scenario(scenario, args):
+            continue
+
+        if scenario.disabled:
+            print(f"+++ Scenario {scenario.name} is disabled, skipping.")
+            continue
+
+        c.override_current_testcase_name(f"Scenario '{scenario.name}'")
+
+        print(f"+++ Starting memory search for scenario {scenario.name}")
+
+        run_memory_search(
+            c,
+            scenario,
+            args.materialized_memory_search_step,
+            args.clusterd_memory_search_step,
+            args.materialized_memory_lower_bound_in_gb,
+            args.clusterd_memory_lower_bound_in_gb,
+            test_analytics,
+        )
+
+    try:
+        test_analytics.builds.update_build_job_success(True)
+        test_analytics.submit_updates()
+        print("Uploaded results.")
+    except Exception as e:
+        # An error during an upload must never cause the build to fail
+        test_analytics.on_upload_failed(e)
+
+
+def shall_skip_scenario(scenario: Scenario, args: argparse.Namespace) -> bool:
+    return (
+        args.scenarios is not None
+        and len(args.scenarios) > 0
+        and scenario.name not in args.scenarios
+    )
 
 
 def run_scenario(
