@@ -71,8 +71,6 @@ impl<'a> TimeDependenceHelper<'a> {
         ids: impl IntoIterator<Item = GlobalId>,
         schedule: Option<RefreshSchedule>,
     ) -> Option<TimeDependence> {
-        use TimeDependence::*;
-
         // Collect all time dependencies of our dependencies.
         let mut time_dependencies = ids
             .into_iter()
@@ -83,23 +81,20 @@ impl<'a> TimeDependenceHelper<'a> {
         time_dependencies.sort();
         time_dependencies.dedup();
 
-        let mut time_dependence = if time_dependencies.iter().any(|dep| matches!(dep, Wallclock)) {
-            // Wall-clock dependency is dominant.
-            Some(RefreshSchedule(schedule, vec![Wallclock]))
-        } else if time_dependencies
+        let time_dependence = if time_dependencies
             .iter()
-            .any(|dep| matches!(dep, RefreshSchedule(_, _)))
+            .any(|dep| *dep == TimeDependence::default())
         {
+            // Wall-clock dependency is dominant.
+            Some(TimeDependence::default())
+        } else if !time_dependencies.is_empty() {
             // No immediate wall-clock dependency, found some dependency with a refresh schedule.
-            Some(RefreshSchedule(schedule, time_dependencies))
+            Some(TimeDependence::new(schedule, time_dependencies))
         } else {
             // No wall-clock dependence, no refresh schedule
             None
         };
-        if let Some(time_dependence) = &mut time_dependence {
-            time_dependence.normalize();
-        }
-        time_dependence
+        TimeDependence::normalize(time_dependence)
     }
 
     /// Determine the time dependence for a [`DataSourceDesc`].
@@ -110,7 +105,6 @@ impl<'a> TimeDependenceHelper<'a> {
         desc: &DataSourceDesc,
         timeline: &Timeline,
     ) -> Option<TimeDependence> {
-        use TimeDependence::*;
         // We only know how to handle the epoch timeline.
         if !matches!(timeline, Timeline::EpochMilliseconds) {
             return None;
@@ -121,7 +115,7 @@ impl<'a> TimeDependenceHelper<'a> {
                     // Kafka, Postgres, MySql sources follow wall clock.
                     GenericSourceConnection::Kafka(_)
                     | GenericSourceConnection::Postgres(_)
-                    | GenericSourceConnection::MySql(_) => Some(Wallclock),
+                    | GenericSourceConnection::MySql(_) => Some(TimeDependence::default()),
                     // Load generators not further specified.
                     GenericSourceConnection::LoadGenerator(_) => None,
                 }
@@ -132,22 +126,20 @@ impl<'a> TimeDependenceHelper<'a> {
             // Introspection, progress and webhook sources follow wall clock.
             DataSourceDesc::Introspection(_)
             | DataSourceDesc::Progress
-            | DataSourceDesc::Webhook { .. } => Some(Wallclock),
+            | DataSourceDesc::Webhook { .. } => Some(TimeDependence::default()),
         }
     }
 
     /// Determine the time dependence for a single global ID.
     fn determine_dependence_inner(&self, id: GlobalId) -> Option<TimeDependence> {
-        use TimeDependence::*;
-
         let entry = self.catalog.get_entry(&id);
         match entry.item() {
             // Introspection sources follow wall-clock.
-            CatalogItem::Log(_) => Some(Wallclock),
+            CatalogItem::Log(_) => Some(TimeDependence::default()),
             CatalogItem::Table(table) => {
                 match &table.data_source {
                     // Tables follow wall clock.
-                    TableDataSource::TableWrites { .. } => Some(Wallclock),
+                    TableDataSource::TableWrites { .. } => Some(TimeDependence::default()),
                     TableDataSource::DataSource { desc, timeline } => {
                         self.for_data_source_desc(desc, timeline)
                     }

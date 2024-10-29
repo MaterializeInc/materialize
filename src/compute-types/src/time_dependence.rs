@@ -14,7 +14,7 @@ use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::Timestamp;
 use proptest::arbitrary::{any, Arbitrary};
 use proptest::prelude::BoxedStrategy;
-use proptest::strategy::{Just, Strategy, Union};
+use proptest::strategy::Strategy;
 use serde::{Deserialize, Serialize};
 
 include!(concat!(
@@ -23,79 +23,75 @@ include!(concat!(
 ));
 
 /// Description of how a dataflow follows time.
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
-pub enum TimeDependence {
-    /// Valid up to a some nested time, rounded according to the refresh schedule.
-    RefreshSchedule(Option<RefreshSchedule>, Vec<Self>),
-    /// Valid up to the wall-clock time.
-    Wallclock,
+///
+/// The default value indicates the dataflow follows wall-clock without modifications.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
+pub struct TimeDependence {
+    /// Optional refresh schedule. None indicates an implicit wall-clock dependency, if no inner
+    /// dependencies exist.
+    pub schedule: Option<RefreshSchedule>,
+    /// Inner dependencies to evaluate first.
+    pub dependence: Vec<Self>,
 }
 
 impl TimeDependence {
+    /// Construct a new [`TimeDependence`] from an optional schedule and a collection of
+    /// dependencies.
+    pub fn new(schedule: Option<RefreshSchedule>, dependence: Vec<Self>) -> Self {
+        Self {
+            schedule,
+            dependence,
+        }
+    }
+
     /// Normalizes by removing unnecessary nesting.
-    pub fn normalize(&mut self) {
-        use TimeDependence::*;
-        match self {
-            RefreshSchedule(None, existing) if existing.len() == 1 => {
-                *self = existing.remove(0);
-            }
-            _ => {}
+    pub fn normalize(this: Option<Self>) -> Option<Self> {
+        match this {
+            Some(TimeDependence {
+                schedule: None,
+                mut dependence,
+            }) if dependence.len() == 1 => Some(dependence.remove(0)),
+            other => other,
         }
     }
 
     /// Applies the indefiniteness to a wall clock time.
     pub fn apply(&self, wall_clock: Timestamp) -> Option<Timestamp> {
-        match self {
-            TimeDependence::RefreshSchedule(schedule, inner) => {
-                let result = inner.iter().map(|inner| inner.apply(wall_clock)).min()??;
-                if let Some(schedule) = schedule {
-                    schedule.round_up_timestamp(result)
-                } else {
-                    Some(result)
-                }
-            }
-            TimeDependence::Wallclock => Some(wall_clock),
+        let result = self
+            .dependence
+            .iter()
+            .map(|inner| inner.apply(wall_clock))
+            .min()
+            .unwrap_or(Some(wall_clock))?;
+
+        if let Some(schedule) = &self.schedule {
+            schedule.round_up_timestamp(result)
+        } else {
+            Some(result)
         }
     }
 }
 
 impl RustType<ProtoTimeDependence> for TimeDependence {
     fn into_proto(&self) -> ProtoTimeDependence {
-        use crate::time_dependence::proto_time_dependence::ProtoRefreshSchedule;
         ProtoTimeDependence {
-            kind: Some(match self {
-                TimeDependence::RefreshSchedule(schedule, inner) => {
-                    proto_time_dependence::Kind::RefreshSchedule(ProtoRefreshSchedule {
-                        refresh_schedule: schedule.as_ref().map(|s| s.into_proto()),
-                        dependence: inner.into_proto(),
-                    })
-                }
-                TimeDependence::Wallclock => proto_time_dependence::Kind::Wallclock(()),
-            }),
+            schedule: self.schedule.as_ref().map(|s| s.into_proto()),
+            dependence: self.dependence.into_proto(),
         }
     }
 
     fn from_proto(proto: ProtoTimeDependence) -> Result<Self, TryFromProtoError> {
-        use crate::time_dependence::proto_time_dependence::ProtoRefreshSchedule;
-        let inner = match proto
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoTimeDependence::kind"))?
-        {
-            proto_time_dependence::Kind::RefreshSchedule(ProtoRefreshSchedule {
-                refresh_schedule,
-                dependence,
-            }) => TimeDependence::RefreshSchedule(
-                refresh_schedule
-                    .map(RefreshSchedule::from_proto)
-                    .transpose()?,
-                dependence
-                    .into_iter()
-                    .map(TimeDependence::from_proto)
-                    .collect::<Result<_, _>>()?,
-            ),
-            proto_time_dependence::Kind::Wallclock(()) => TimeDependence::Wallclock,
-        };
-        Ok(inner)
+        Ok(TimeDependence {
+            schedule: proto
+                .schedule
+                .map(RefreshSchedule::from_proto)
+                .transpose()?,
+            dependence: proto
+                .dependence
+                .into_iter()
+                .map(TimeDependence::from_proto)
+                .collect::<Result<_, _>>()?,
+        })
     }
 }
 
@@ -104,15 +100,9 @@ impl Arbitrary for TimeDependence {
     type Parameters = ();
 
     fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
-        Union::new(vec![
-            any::<RefreshSchedule>()
-                .prop_map(|s| {
-                    TimeDependence::RefreshSchedule(Some(s), vec![TimeDependence::Wallclock])
-                })
-                .boxed(),
-            Just(TimeDependence::Wallclock).boxed(),
-        ])
-        .boxed()
+        any::<Option<RefreshSchedule>>()
+            .prop_map(|s| TimeDependence::new(s, vec![]))
+            .boxed()
     }
 }
 
@@ -122,31 +112,27 @@ mod tests {
 
     #[mz_ore::test]
     fn test_time_dependence_normalize() {
-        let mut i = TimeDependence::RefreshSchedule(None, vec![TimeDependence::Wallclock]);
-        i.normalize();
-        assert_eq!(i, TimeDependence::Wallclock);
+        let i = TimeDependence::default();
+        let i = TimeDependence::normalize(Some(i));
+        assert_eq!(i, Some(TimeDependence::default()),);
 
-        let mut i = TimeDependence::RefreshSchedule(
+        let i = TimeDependence::new(
             Some(RefreshSchedule {
                 everies: vec![],
                 ats: vec![Timestamp::from(1000)],
             }),
-            vec![TimeDependence::Wallclock],
+            vec![],
         );
-        i.normalize();
+        let i = TimeDependence::normalize(Some(i));
         assert_eq!(
             i,
-            TimeDependence::RefreshSchedule(
-                Some(RefreshSchedule {
+            Some(TimeDependence {
+                schedule: Some(RefreshSchedule {
                     everies: vec![],
                     ats: vec![Timestamp::from(1000)],
                 }),
-                vec![TimeDependence::Wallclock]
-            )
+                dependence: vec![],
+            })
         );
-
-        i = TimeDependence::Wallclock;
-        i.normalize();
-        assert_eq!(i, TimeDependence::Wallclock);
     }
 }

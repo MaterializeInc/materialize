@@ -15,13 +15,6 @@ import "proto/src/proto.proto";
 import "repr/src/refresh_schedule.proto";
 
 message ProtoTimeDependence {
-  message ProtoRefreshSchedule {
-    optional mz_repr.refresh_schedule.ProtoRefreshSchedule refresh_schedule = 1;
-    repeated ProtoTimeDependence dependence = 2;
-  }
-
-  oneof kind {
-    ProtoRefreshSchedule RefreshSchedule = 1;
-    google.protobuf.Empty Wallclock = 2;
-  }
+  optional mz_repr.refresh_schedule.ProtoRefreshSchedule schedule = 1;
+  repeated ProtoTimeDependence dependence = 2;
 }
