@@ -23,6 +23,7 @@ use mz_kafka_util::client::{get_partitions, MzClientContext, PartitionId, Tunnel
 use mz_ore::assert_none;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
+use mz_ore::iter::IteratorExt;
 use mz_ore::thread::{JoinHandleExt, UnparkOnDropHandle};
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{adt::jsonb::Jsonb, Datum, Diff, GlobalId, Row};
@@ -372,18 +373,20 @@ impl SourceRender for KafkaSourceConnection {
                             ),
                             None,
                         );
-                        health_output.give(
-                            &health_cap,
-                            HealthStatusMessage {
-                                index: 0,
-                                namespace: if matches!(e, ContextCreationError::Ssh(_)) {
-                                    StatusNamespace::Ssh
-                                } else {
-                                    Self::STATUS_NAMESPACE.clone()
+                        for (output, update) in outputs.iter().repeat_clone(update) {
+                            health_output.give(
+                                &health_cap,
+                                HealthStatusMessage {
+                                    index: output.output_index,
+                                    namespace: if matches!(e, ContextCreationError::Ssh(_)) {
+                                        StatusNamespace::Ssh
+                                    } else {
+                                        Self::STATUS_NAMESPACE.clone()
+                                    },
+                                    update,
                                 },
-                                update,
-                            },
-                        );
+                            );
+                        }
                         // IMPORTANT: wedge forever until the `SuspendAndRestart` is processed.
                         // Returning would incorrectly present to the remap operator as progress to the
                         // empty frontier which would be incorrectly recorded to the remap shard.
@@ -620,9 +623,14 @@ impl SourceRender for KafkaSourceConnection {
                                 ),
                             }));
                             let time = data_cap.time().clone();
-                            data_output
-                                .give_fueled(&data_cap, ((0, Err(err)), time, 1))
-                                .await;
+                            let err = Err(err);
+                            for (output, err) in
+                                outputs.iter().map(|o| o.output_index).repeat_clone(err)
+                            {
+                                data_output
+                                    .give_fueled(&data_cap, ((output, err), time, 1))
+                                    .await;
+                            }
                             return;
                         }
 
@@ -642,9 +650,14 @@ impl SourceRender for KafkaSourceConnection {
                                         ),
                                     }));
                                     let time = data_cap.time().clone();
-                                    data_output
-                                        .give_fueled(&data_cap, ((0, Err(err)), time, 1))
-                                        .await;
+                                    let err = Err(err);
+                                    for (output, err) in
+                                        outputs.iter().map(|o| o.output_index).repeat_clone(err)
+                                    {
+                                        data_output
+                                            .give_fueled(&data_cap, ((output, err), time, 1))
+                                            .await;
+                                    }
                                     return;
                                 }
                             }
@@ -730,14 +743,16 @@ impl SourceRender for KafkaSourceConnection {
                                 reader.source_name, reader.topic_name, e
                             );
                                 let status = HealthStatusUpdate::stalled(error, None);
-                                health_output.give(
-                                    &health_cap,
-                                    HealthStatusMessage {
-                                        index: 0,
-                                        namespace: Self::STATUS_NAMESPACE.clone(),
-                                        update: status,
-                                    },
-                                );
+                                for (output, status) in outputs.iter().repeat_clone(status) {
+                                    health_output.give(
+                                        &health_cap,
+                                        HealthStatusMessage {
+                                            index: output.output_index,
+                                            namespace: Self::STATUS_NAMESPACE.clone(),
+                                            update: status,
+                                        },
+                                    );
+                                }
                             }
                             Ok(message) => {
                                 let output_messages = outputs
@@ -921,24 +936,28 @@ impl SourceRender for KafkaSourceConnection {
                         (health_status.kafka.take(), health_status.ssh.take())
                     };
                     if let Some(status) = kafka_status {
-                        health_output.give(
-                            &health_cap,
-                            HealthStatusMessage {
-                                index: 0,
-                                namespace: Self::STATUS_NAMESPACE.clone(),
-                                update: status,
-                            },
-                        );
+                        for (output, status) in outputs.iter().repeat_clone(status) {
+                            health_output.give(
+                                &health_cap,
+                                HealthStatusMessage {
+                                    index: output.output_index,
+                                    namespace: Self::STATUS_NAMESPACE.clone(),
+                                    update: status,
+                                },
+                            );
+                        }
                     }
                     if let Some(status) = ssh_status {
-                        health_output.give(
-                            &health_cap,
-                            HealthStatusMessage {
-                                index: 0,
-                                namespace: StatusNamespace::Ssh,
-                                update: status,
-                            },
-                        );
+                        for (output, status) in outputs.iter().repeat_clone(status) {
+                            health_output.give(
+                                &health_cap,
+                                HealthStatusMessage {
+                                    index: output.output_index,
+                                    namespace: StatusNamespace::Ssh,
+                                    update: status,
+                                },
+                            );
+                        }
                     }
 
                     // If we have a new `offset_known` from the partition metadata thread, and
