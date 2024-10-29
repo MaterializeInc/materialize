@@ -56,7 +56,7 @@ struct CacheKey {
     id: GlobalId,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 struct ExpressionCodec;
 
 impl DurableCacheCodec for ExpressionCodec {
