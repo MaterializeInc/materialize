@@ -56,7 +56,7 @@ struct CacheKey {
     id: GlobalId,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 struct ExpressionCodec;
 
 impl DurableCacheCodec for ExpressionCodec {
@@ -95,8 +95,11 @@ impl DurableCacheCodec for ExpressionCodec {
         (source_data, ())
     }
 
-    fn decode(key: Self::KeyCodec, (): Self::ValCodec) -> (Self::Key, Self::Val) {
-        let row = key.0.expect("only Ok values stored in expression cache");
+    fn decode(key: &Self::KeyCodec, (): &Self::ValCodec) -> (Self::Key, Self::Val) {
+        let row = key
+            .0
+            .as_ref()
+            .expect("only Ok values stored in expression cache");
         let datums = row.unpack();
         assert_eq!(datums.len(), 2, "Row should have 2 columns: {datums:?}");
 
@@ -591,7 +594,7 @@ mod tests {
         fn expr_cache_roundtrip((key, val) in any::<(CacheKey, Expressions)>()) {
             let serde_val = serde_json::to_string(&val).expect("valid json");
             let (encoded_key, encoded_val) = ExpressionCodec::encode(&key, &serde_val);
-            let (decoded_key, decoded_val) = ExpressionCodec::decode(encoded_key, encoded_val);
+            let (decoded_key, decoded_val) = ExpressionCodec::decode(&encoded_key, &encoded_val);
             let decoded_val: Expressions = serde_json::from_str(&decoded_val).expect("expressions should roundtrip");
 
             assert_eq!(key, decoded_key);

@@ -24,18 +24,18 @@ use mz_persist_types::{Codec, ShardId};
 use timely::progress::Antichain;
 use tracing::debug;
 
-pub trait DurableCacheCodec {
+pub trait DurableCacheCodec: Debug + Eq {
     type Key: Ord + Hash + Clone + Debug;
     type Val: Eq + Debug;
-    type KeyCodec: Codec + Ord + Debug;
-    type ValCodec: Codec + Ord + Debug;
+    type KeyCodec: Codec + Ord + Debug + Clone;
+    type ValCodec: Codec + Ord + Debug + Clone;
 
     fn schemas() -> (
         <Self::KeyCodec as Codec>::Schema,
         <Self::ValCodec as Codec>::Schema,
     );
     fn encode(key: &Self::Key, val: &Self::Val) -> (Self::KeyCodec, Self::ValCodec);
-    fn decode(key: Self::KeyCodec, val: Self::ValCodec) -> (Self::Key, Self::Val);
+    fn decode(key: &Self::KeyCodec, val: &Self::ValCodec) -> (Self::Key, Self::Val);
 }
 
 #[derive(Debug)]
@@ -51,12 +51,19 @@ impl std::fmt::Display for Error {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct LocalVal<C: DurableCacheCodec> {
+    encoded_key: C::KeyCodec,
+    decoded_val: C::Val,
+    encoded_val: C::ValCodec,
+}
+
 #[derive(Debug)]
 pub struct DurableCache<C: DurableCacheCodec> {
     write: WriteHandle<C::KeyCodec, C::ValCodec, u64, i64>,
     subscribe: Subscribe<C::KeyCodec, C::ValCodec, u64, i64>,
 
-    local: BTreeMap<C::Key, C::Val>,
+    local: BTreeMap<C::Key, LocalVal<C>>,
     local_progress: u64,
 }
 
@@ -113,14 +120,28 @@ impl<C: DurableCacheCodec> DurableCache<C> {
                 match event {
                     ListenEvent::Updates(x) => {
                         for ((k, v), t, d) in x {
-                            let (key, val) = C::decode(k.unwrap(), v.unwrap());
+                            let encoded_key = k.unwrap();
+                            let encoded_val = v.unwrap();
+                            let (decoded_key, decoded_val) = C::decode(&encoded_key, &encoded_val);
+                            let val = LocalVal {
+                                encoded_key,
+                                decoded_val,
+                                encoded_val,
+                            };
+
                             if d == 1 {
-                                self.local.expect_insert(key, val, "duplicate cache entry");
+                                self.local
+                                    .expect_insert(decoded_key, val, "duplicate cache entry");
                             } else if d == -1 {
-                                let prev = self.local.expect_remove(&key, "entry does not exist");
+                                let prev = self
+                                    .local
+                                    .expect_remove(&decoded_key, "entry does not exist");
                                 assert_eq!(val, prev, "removed val does not match expected val");
                             } else {
-                                panic!("unexpected diff: (({key:?}, {val:?}), {t}, {d})");
+                                panic!(
+                                    "unexpected diff: (({:?}, {:?}), {}, {})",
+                                    decoded_key, val.decoded_val, t, d
+                                );
                             }
                         }
                     }
@@ -137,7 +158,7 @@ impl<C: DurableCacheCodec> DurableCache<C> {
     /// Get and return the value associated with `key` if it exists, without syncing with the
     /// durable store.
     pub fn get_local(&self, key: &C::Key) -> Option<&C::Val> {
-        self.local.get(key)
+        self.local.get(key).map(|val| &val.decoded_val)
     }
 
     /// Get and return the value associated with `key`, syncing with the durable store if
@@ -148,14 +169,14 @@ impl<C: DurableCacheCodec> DurableCache<C> {
         // N.B. This pattern of calling `contains_key` followed by `expect` is required to appease
         // the borrow checker.
         if self.local.contains_key(key) {
-            return self.local.get(key).expect("checked above");
+            return self.get_local(key).expect("checked above");
         }
 
         // Reduce wasted work by ensuring we're caught up to at least the
         // pubsub-updated shared_upper, and then trying again.
         self.sync_to(self.write.shared_upper().into_option()).await;
         if self.local.contains_key(key) {
-            return self.local.get(key).expect("checked above");
+            return self.get_local(key).expect("checked above");
         }
 
         // Okay compute it and write it durably to the cache.
@@ -181,7 +202,7 @@ impl<C: DurableCacheCodec> DurableCache<C> {
                 Err(err) => {
                     expected_upper = self.sync_to(err.current.into_option()).await;
                     if self.local.contains_key(key) {
-                        return self.local.get(key).expect("checked above");
+                        return self.get_local(key).expect("checked above");
                     }
                     continue;
                 }
@@ -191,7 +212,7 @@ impl<C: DurableCacheCodec> DurableCache<C> {
 
     /// Return all entries stored in the cache, without syncing with the durable store.
     pub fn entries_local(&self) -> impl Iterator<Item = (&C::Key, &C::Val)> {
-        self.local.iter()
+        self.local.iter().map(|(key, val)| (key, &val.decoded_val))
     }
 
     /// Durably set `key` to `value`. A `value` of `None` deletes the entry from the cache.
@@ -238,7 +259,11 @@ impl<C: DurableCacheCodec> DurableCache<C> {
             // If there are duplicate keys we ignore all but the first one.
             if seen_keys.insert(key) {
                 if let Some(prev) = self.local.get(key) {
-                    updates.push((C::encode(key, prev), expected_upper, -1));
+                    updates.push((
+                        (prev.encoded_key.clone(), prev.encoded_val.clone()),
+                        expected_upper,
+                        -1,
+                    ));
                 }
                 if let Some(val) = val {
                     updates.push((C::encode(key, val), expected_upper, 1));
@@ -279,6 +304,7 @@ mod tests {
 
     use super::*;
 
+    #[derive(Debug, PartialEq, Eq)]
     struct TestCodec;
 
     impl DurableCacheCodec for TestCodec {
@@ -298,8 +324,8 @@ mod tests {
             (key.clone(), val.clone())
         }
 
-        fn decode(key: Self::KeyCodec, val: Self::ValCodec) -> (Self::Key, Self::Val) {
-            (key, val)
+        fn decode(key: &Self::KeyCodec, val: &Self::ValCodec) -> (Self::Key, Self::Val) {
+            (key.clone(), val.clone())
         }
     }
 
