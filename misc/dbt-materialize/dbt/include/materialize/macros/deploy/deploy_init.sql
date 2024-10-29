@@ -146,7 +146,7 @@
             force_deploy_suffix=True
         ) %}
 
-        {{ internal_copy_cluster_grants(schema, deploy_schema) }}
+        {{ internal_copy_cluster_grants(cluster, deploy_cluster) }}
     {% endif %}
 {% endfor %}
 {% endmacro %}
