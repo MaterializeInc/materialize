@@ -124,3 +124,12 @@ class BumpVersion(Action):
 
     def join(self, e: Executor) -> None:
         pass
+
+
+class GitResetHard(Action):
+    def execute(self, e: Executor) -> None:
+        MzVersion.parse_cargo().bump_minor()
+        spawn.runv(["git", "reset", "--hard"], cwd=MZ_ROOT)
+
+    def join(self, e: Executor) -> None:
+        pass

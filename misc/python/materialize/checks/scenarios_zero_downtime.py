@@ -11,6 +11,7 @@
 from materialize.checks.actions import (
     Action,
     BumpVersion,
+    GitResetHard,
     Initialize,
     Manipulate,
     Validate,
@@ -194,6 +195,7 @@ class ZeroDowntimeBumpedVersion(Scenario):
             Validate(self, mz_service="mz_2"),
             *wait_ready_and_promote("mz_3"),
             Validate(self, mz_service="mz_3"),
+            GitResetHard(),  # Undo the previous version bump in case we need to run the mz container
         ]
 
 
