@@ -30,6 +30,10 @@ fn main() {
             "#[derive(serde::Deserialize)]",
         )
         .type_attribute(
+            ".mz_persist_client.internal.state.ProtoHollowRunRef",
+            "#[derive(serde::Deserialize)]",
+        )
+        .type_attribute(
             ".mz_persist_client.internal.state.ProtoRunMeta",
             "#[derive(serde::Deserialize)]",
         )

@@ -1029,6 +1029,13 @@ class FlipFlagsAction(Action):
             "1000",
             "50000",
         ]
+        self.flags_with_values["persist_batch_max_run_len"] = [
+            "2",
+            "3",
+            "4",
+            "16",
+            "1000",
+        ]
         self.flags_with_values["persist_part_decode_format"] = [
             "row_with_validate",
             "arrow",

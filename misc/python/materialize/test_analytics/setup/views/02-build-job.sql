@@ -28,31 +28,6 @@ INNER JOIN build_job bj
 WHERE bj.success = TRUE
   AND bj.is_latest_retry = TRUE;
 
-CREATE OR REPLACE VIEW v_monthly_build_step_success AS
-SELECT
-    EXTRACT(YEAR FROM b.date) AS year,
-    EXTRACT(MONTH FROM b.date) AS month,
-    b.branch,
-    b.pipeline,
-    bj.build_step_key,
-    bj.shard_index,
-    count(*) AS count_all,
-    sum(CASE WHEN bj.success THEN 1 ELSE 0 END) AS count_successful,
-    -- avg(bj.end_time - bj.start_time) AS mean_duration_on_success, -- TODO database-issues#8346: avg(interval) not supported
-    avg(bj.retry_count) AS mean_retry_count
-FROM build b
-INNER JOIN build_job bj
-  ON b.build_id = bj.build_id
-WHERE bj.is_latest_retry = TRUE
-GROUP BY
-    EXTRACT(YEAR FROM b.date),
-    EXTRACT(MONTH FROM b.date),
-    b.branch,
-    b.pipeline,
-    bj.build_step_key,
-    bj.shard_index
-;
-
 CREATE OR REPLACE VIEW v_build_job_success_unsharded AS
 SELECT
     bj.build_id,
@@ -91,7 +66,6 @@ SELECT * FROM (
 ;
 
 ALTER VIEW v_successful_build_jobs OWNER TO qa;
-ALTER VIEW v_monthly_build_step_success OWNER TO qa;
 ALTER VIEW v_build_job_success_unsharded OWNER TO qa;
 ALTER MATERIALIZED VIEW mv_recent_build_job_success_on_main_v2 OWNER TO qa;
 GRANT SELECT ON TABLE mv_recent_build_job_success_on_main_v2 TO "hetzner-ci";

@@ -46,20 +46,14 @@ FROM (SELECT DISTINCT ON(x) * FROM t_using_dataflow_rendering);
 ----
 Explained Query:
   Project (#3, #6, #5, #4)
-    Map (record_get[1](#1), record_get[0](#2), record_get[2](#2), record_get[3](#2), record_get[0](#1))
+    Map (record_get[1](#1), record_get[0](#2), record_get[3](#2), record_get[4](#2), record_get[0](#1))
       FlatMap unnest_list(#0)
-        Reduce aggregates=[window_agg[sum order_by=[#0 asc nulls_last]](row(row(row(record_get[0](record_get[1](#0)), record_get[1](record_get[1](#0)), record_get[3](record_get[1](#0)), record_get[5](record_get[1](#0)), record_get[0](#0)), record_get[0](#0)), record_get[0](record_get[1](#0))))]
+        Reduce aggregates=[window_agg[sum order_by=[#0 asc nulls_last]](row(row(row(record_get[0](record_get[1](#0)), record_get[1](record_get[1](#0)), record_get[0](#0), record_get[0](record_get[0](#0)), record_get[1](record_get[0](#0)), record_get[2](record_get[0](#0))), record_get[2](record_get[0](#0))), record_get[0](record_get[1](#0))))]
           Project (#1)
             FlatMap unnest_list(#0)
-              Reduce aggregates=[window_agg[sum order_by=[#0 asc nulls_last]](row(row(row(record_get[0](record_get[1](#0)), record_get[1](record_get[1](#0)), record_get[2](record_get[1](#0)), record_get[3](record_get[1](#0)), record_get[0](#0), record_get[0](#0)), record_get[0](record_get[1](#0))), record_get[0](record_get[1](#0))))]
-                Project (#1)
-                  FlatMap unnest_list(#0)
-                    Reduce aggregates=[window_agg[sum order_by=[#0 asc nulls_last]](row(row(row(record_get[0](record_get[1](#0)), record_get[1](record_get[1](#0)), record_get[0](#0), record_get[0](#0)), (integer_to_numeric(record_get[0](record_get[1](#0))) / 3.14)), record_get[0](record_get[1](#0))))]
-                      Project (#1)
-                        FlatMap unnest_list(#0)
-                          Reduce aggregates=[window_agg[max order_by=[#0 asc nulls_last]](row(row(row(#0, #1), (integer_to_numeric(#0) / 3.14)), #0))]
-                            TopK group_by=[#0] limit=1
-                              ReadStorage materialize.public.t_using_dataflow_rendering
+              Reduce aggregates=[fused_window_agg(row(row(row(#0, #1), row((integer_to_numeric(#0) / 3.14), (integer_to_numeric(#0) / 3.14), #0)), #0))]
+                TopK group_by=[#0] limit=1
+                  ReadStorage materialize.public.t_using_dataflow_rendering
 
 Source materialize.public.t_using_dataflow_rendering
 

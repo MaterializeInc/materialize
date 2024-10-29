@@ -143,7 +143,7 @@ pub fn upgrade(
 impl From<v67::state_update_kind::Item> for v68::state_update_kind::Item {
     fn from(value: v67::state_update_kind::Item) -> Self {
         let new_key = value.key.map(|k| v68::ItemKey {
-            id: k.gid.map(v68::CatalogItemId::from),
+            gid: k.gid.map(v68::CatalogItemId::from),
         });
         let new_val = value.value.map(|val| v68::ItemValue {
             global_id: value

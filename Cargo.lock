@@ -2346,7 +2346,7 @@ dependencies = [
 [[package]]
 name = "eventsource-client"
 version = "0.11.0"
-source = "git+https://github.com/MaterializeInc/rust-eventsource-client#fb749fde693a9757289238ee71d4e9b3590fb24b"
+source = "git+https://github.com/MaterializeInc/rust-eventsource-client#7a446462e9cec0da283b100258c706286e9486e5"
 dependencies = [
  "futures",
  "hyper 0.14.27",
@@ -9786,7 +9786,7 @@ dependencies = [
 [[package]]
 name = "timely"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#460f95b3dfb103f3fa444a4ef6eefb161a617c7e"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#14e2e994b99905e18dca4852e57d153a81f9f02e"
 dependencies = [
  "bincode",
  "crossbeam-channel",
@@ -9802,12 +9802,12 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#460f95b3dfb103f3fa444a4ef6eefb161a617c7e"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#14e2e994b99905e18dca4852e57d153a81f9f02e"
 
 [[package]]
 name = "timely_communication"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#460f95b3dfb103f3fa444a4ef6eefb161a617c7e"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#14e2e994b99905e18dca4852e57d153a81f9f02e"
 dependencies = [
  "bincode",
  "byteorder",
@@ -9821,7 +9821,7 @@ dependencies = [
 [[package]]
 name = "timely_container"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#460f95b3dfb103f3fa444a4ef6eefb161a617c7e"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#14e2e994b99905e18dca4852e57d153a81f9f02e"
 dependencies = [
  "columnation",
  "flatcontainer",
@@ -9831,7 +9831,7 @@ dependencies = [
 [[package]]
 name = "timely_logging"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#460f95b3dfb103f3fa444a4ef6eefb161a617c7e"
+source = "git+https://github.com/MaterializeInc/timely-dataflow.git#14e2e994b99905e18dca4852e57d153a81f9f02e"
 
 [[package]]
 name = "tiny-keccak"

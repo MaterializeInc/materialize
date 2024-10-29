@@ -223,6 +223,8 @@ impl Catalog {
             clusters_by_id: BTreeMap::new(),
             roles_by_name: BTreeMap::new(),
             roles_by_id: BTreeMap::new(),
+            network_policies_by_id: BTreeMap::new(),
+            network_policies_by_name: BTreeMap::new(),
             system_configuration: {
                 let mut s =
                     SystemVars::new(config.active_connection_count).set_unsafe(config.unsafe_mode);
@@ -348,6 +350,7 @@ impl Catalog {
                 | BootstrapStateUpdateKind::SystemPrivilege(_)
                 | BootstrapStateUpdateKind::SystemConfiguration(_)
                 | BootstrapStateUpdateKind::Cluster(_)
+                | BootstrapStateUpdateKind::NetworkPolicy(_)
                 | BootstrapStateUpdateKind::IntrospectionSourceIndex(_)
                 | BootstrapStateUpdateKind::ClusterReplica(_)
                 | BootstrapStateUpdateKind::SystemObjectMapping(_) => {

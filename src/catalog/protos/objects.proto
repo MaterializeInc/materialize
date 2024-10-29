@@ -121,7 +121,7 @@ message SchemaValue {
 }
 
 message ItemKey {
-  CatalogItemId id = 1;
+  CatalogItemId gid = 1;
 }
 
 message ItemValue {
@@ -149,6 +149,18 @@ message RoleValue {
   RoleAttributes attributes = 2;
   RoleMembership membership = 3;
   RoleVars vars = 4;
+  uint32 oid = 5;
+}
+
+message NetworkPolicyKey {
+  NetworkPolicyId id = 1;
+}
+
+message NetworkPolicyValue {
+  string name = 1;
+  repeated NetworkPolicyRule rules = 2;
+  RoleId owner_id = 3;
+  repeated MzAclItem privileges = 4;
   uint32 oid = 5;
 }
 
@@ -184,6 +196,7 @@ message CommentKey {
     ResolvedSchema schema = 14;
     ClusterId cluster = 15;
     ClusterReplicaId cluster_replica = 16;
+    NetworkPolicyId network_policy = 18;
   }
   oneof sub_component {
     uint64 column_pos = 3;
@@ -368,6 +381,13 @@ message ClusterReplicaId {
   ReplicaId replica_id = 2;
 }
 
+message NetworkPolicyId {
+  oneof value {
+    uint64 system = 1;
+    uint64 user = 2;
+  }
+}
+
 message ReplicaLogging {
   bool log_logging = 1;
   Duration interval = 2;
@@ -470,6 +490,17 @@ message RoleVars {
   repeated Entry entries = 1;
 }
 
+message NetworkPolicyRule {
+  string name = 1;
+  oneof action {
+    Empty allow = 2;
+  }
+  oneof direction {
+    Empty ingress = 3;
+  }
+  string address = 4;
+}
+
 message AclMode {
   // A bit flag representing all the privileges that can be granted to a role.
   uint64 bitflags = 1;
@@ -499,6 +530,7 @@ enum ObjectType {
   OBJECT_TYPE_SCHEMA = 14;
   OBJECT_TYPE_FUNC = 15;
   OBJECT_TYPE_CONTINUAL_TASK = 16;
+  OBJECT_TYPE_NETWORK_POLICY = 17;
 }
 
 message DefaultPrivilegesKey {
@@ -552,6 +584,7 @@ message AuditLogEventV1 {
     OBJECT_TYPE_VIEW = 15;
     OBJECT_TYPE_SYSTEM = 16;
     OBJECT_TYPE_CONTINUAL_TASK = 17;
+    OBJECT_TYPE_NETWORK_POLICY = 18;
   }
 
   message IdFullNameV1 {
@@ -906,6 +939,11 @@ message StateUpdateKind {
     RoleValue value = 2;
   }
 
+  message NetworkPolicy {
+    NetworkPolicyKey key = 1;
+    NetworkPolicyValue value = 2;
+  }
+
   message Schema {
     SchemaKey key = 1;
     SchemaValue value = 2;
@@ -980,5 +1018,6 @@ message StateUpdateKind {
     TxnWalShard txn_wal_shard = 23;
     SourceReferences source_references = 24;
     FenceToken fence_token = 25;
+    NetworkPolicy network_policy = 26;
   }
 }

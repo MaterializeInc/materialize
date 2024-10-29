@@ -146,9 +146,8 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 ! UPDATE source_data_tbl SET i = 3;
 contains:cannot mutate non-writeable table 'materialize.public.source_data_tbl'
 
-# TODO: database-issues#8692: now possible
-# ! UPDATE t SET i = i + 1 WHERE i IN (SELECT a FROM source_data_mat_view)
-# contains:invalid selection
+! UPDATE t SET i = i + 1 WHERE i IN (SELECT a FROM source_data_mat_view)
+contains:invalid selection
 
 # Verify that multiple inserts can be run in a transaction.
 > BEGIN

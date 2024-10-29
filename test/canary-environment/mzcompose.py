@@ -207,6 +207,8 @@ def workflow_create(c: Composition, parser: WorkflowArgumentParser) -> None:
             > CREATE TABLE IF NOT EXISTS public_table.table (c INT);
 
             > GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public_table.table TO "infra+qacanaryload@materialize.io"
+            > GRANT SELECT ON TABLE public_table.table TO "dennis.felsing@materialize.com"
+            > GRANT SELECT ON TABLE public_table.table TO "rainer@materialize.com"
             """
             )
         )
@@ -230,7 +232,11 @@ def workflow_test(c: Composition, parser: WorkflowArgumentParser) -> None:
             result = cur.fetchall()
         assert (
             result[0][0] == 1
-        ), f"RDS Postgres has wrong number of pg_replication_slots {result[0][0]}, please fix manually to prevent Postgres from going out of disk from stalled Materialize connections"
+        ), f"""RDS Postgres has wrong number of pg_replication_slots {result[0][0]}, please fix manually to prevent Postgres from going out of disk from stalled Materialize connections:
+$ psql postgres://postgres:$MATERIALIZE_PROD_SANDBOX_RDS_PASSWORD@$MATERIALIZE_PROD_SANDBOX_RDS_HOSTNAME
+postgres=> SELECT * FROM pg_replication_slots;
+postgres=> SELECT pg_drop_replication_slot('...');
+"""
     finally:
         con.close()
 

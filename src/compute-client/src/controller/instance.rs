@@ -1619,9 +1619,18 @@ where
             }
             None => {
                 // Write-only collections cannot be read within the context of the compute
-                // controller, so we can immediately advance their read frontier to the new write
-                // frontier.
-                new_frontier.clone()
+                // controller, so their read frontier only controls the read holds taken on their
+                // inputs. We can safely downgrade the input read holds to any time less than the
+                // write frontier.
+                //
+                // Note that some write-only collections (continual tasks) need to observe changes
+                // at their current write frontier during hydration. Thus, we cannot downgrade the
+                // read frontier to the write frontier and instead step it back by one.
+                Antichain::from_iter(
+                    new_frontier
+                        .iter()
+                        .map(|t| t.step_back().unwrap_or(T::minimum())),
+                )
             }
         };
         let _ = collection.implied_read_hold.try_downgrade(new_since);

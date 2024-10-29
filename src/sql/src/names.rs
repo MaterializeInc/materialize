@@ -20,6 +20,7 @@ use mz_expr::LocalId;
 use mz_ore::assert_none;
 use mz_ore::cast::CastFrom;
 use mz_ore::str::StrExt;
+use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
 use mz_repr::{CatalogItemId, GlobalId};
 use mz_repr::{ColumnName, RelationVersionSelector};
@@ -935,6 +936,7 @@ pub enum ObjectId {
     Schema((ResolvedDatabaseSpecifier, SchemaSpecifier)),
     Role(RoleId),
     Item(GlobalId),
+    NetworkPolicy(NetworkPolicyId),
 }
 
 impl ObjectId {
@@ -983,6 +985,7 @@ impl ObjectId {
             ObjectId::Schema((_database_id, schema_id)) => schema_id.is_system(),
             ObjectId::Role(role_id) => role_id.is_system(),
             ObjectId::Item(global_id) => global_id.is_system(),
+            ObjectId::NetworkPolicy(network_policy_id) => network_policy_id.is_system(),
         }
     }
 
@@ -994,6 +997,7 @@ impl ObjectId {
             ObjectId::Schema((_database_id, schema_id)) => schema_id.is_user(),
             ObjectId::Role(role_id) => role_id.is_user(),
             ObjectId::Item(global_id) => global_id.is_user(),
+            ObjectId::NetworkPolicy(network_policy_id) => network_policy_id.is_user(),
         }
     }
 }
@@ -1015,6 +1019,7 @@ impl fmt::Display for ObjectId {
             }
             ObjectId::Role(role_id) => write!(f, "R{role_id}"),
             ObjectId::Item(item_id) => write!(f, "I{item_id}"),
+            ObjectId::NetworkPolicy(network_policy_id) => write!(f, "NP{network_policy_id}"),
         }
     }
 }
@@ -1153,6 +1158,7 @@ impl From<CommentObjectId> for ObjectId {
             CommentObjectId::Schema(id) => ObjectId::Schema(id),
             CommentObjectId::Cluster(id) => ObjectId::Cluster(id),
             CommentObjectId::ClusterReplica(id) => ObjectId::ClusterReplica(id),
+            CommentObjectId::NetworkPolicy(id) => ObjectId::NetworkPolicy(id),
         }
     }
 }
@@ -1207,6 +1213,7 @@ pub enum CommentObjectId {
     Schema((ResolvedDatabaseSpecifier, SchemaSpecifier)),
     Cluster(ClusterId),
     ClusterReplica((ClusterId, ReplicaId)),
+    NetworkPolicy(NetworkPolicyId),
 }
 
 /// Whether to resolve an name in the types namespace, the functions namespace,

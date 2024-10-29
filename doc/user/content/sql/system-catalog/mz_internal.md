@@ -671,6 +671,31 @@ The `mz_sessions` table contains a row for each active session in the system.
 | `client_ip`      | [`text`]                       | The IP address of the client that initiated the session.                                                                  |
 | `connected_at`   | [`timestamp with time zone`]   | The time at which the session connected to the system.                                                                    |
 
+
+## `mz_network_policies`
+The `mz_network_policies` table contains a row for each network policy.
+
+<!-- RELATION_SPEC mz_internal.mz_network_policies -->
+| Field            | Type                  | Meaning                                                                                                            |
+| -----------------| ----------------------| --------                                                                                                           |
+| `id`             | [`text`]              | The ID of the network policy.                                                                                      |
+| `name`           | [`text`]              | The name of the network policy.                                                                                    |
+| `owner_id`       | [`text`]              | The role ID of the owner of the network policy. Corresponds to [`mz_catalog.mz_roles.id`](../mz_catalog#mz_roles). |
+| `privileges`     | [`mz_aclitem array`]  | The privileges belonging to the network policy.                                                                    |
+| `oid`            | [`oid`]               | A [PostgreSQL-compatible OID][`oid`] for the network policy.                                                       |
+
+## `mz_network_policy_rules`
+The `mz_network_policy_rules` table contains a row for each network policy rule.
+
+<!-- RELATION_SPEC mz_internal.mz_network_policy_rules -->
+| Field            | Type       | Meaning                                                                                                |
+| -----------------| ----------------------| --------                                                                                    |
+| `name`           | [`text`]   | The name of the network policy rule. Can be used with `network_policy_id` to form a unique identifier. |
+| `policy_id`      | [`text`]   | The id the network policy the rule is part of. Can be used with `name` to form a unique identifier.    |
+| `action`         | [`text`]   | The action of the rule. `allow` is the only action.                                                    |
+| `address`        | [`text`]   | The address the rule will take action on.                                                              |
+| `direction`      | [`text`]   | The direction of traffic the rule applies to. `ingress` is the only supported direction.               |
+
 ## `mz_show_all_privileges`
 
 The `mz_show_all_privileges` view contains a row for each privilege granted
@@ -1157,7 +1182,10 @@ The `mz_webhook_sources` table contains a row for each webhook source in the sys
 [`interval`]: /sql/types/interval
 [`jsonb`]: /sql/types/jsonb
 [`mz_timestamp`]: /sql/types/mz_timestamp
+[`mz_aclitem`]: /sql/types/mz_aclitem
+[`mz_aclitem array`]: /sql/types/mz_aclitem
 [`numeric`]: /sql/types/numeric
+[`oid`]: /sql/types/oid
 [`text`]: /sql/types/text
 [`text array`]: /sql/types/array
 [`text list`]: /sql/types/list
@@ -1168,6 +1196,8 @@ The `mz_webhook_sources` table contains a row for each webhook source in the sys
 [`timestamp with time zone`]: /sql/types/timestamp
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_activity_log_thinned -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_cluster_replica_metrics_history_ct -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_cluster_replica_status_history_ct -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_cluster_workload_classes -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_compute_error_counts_raw_unified -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_continual_tasks -->
@@ -1202,6 +1232,7 @@ The `mz_webhook_sources` table contains a row for each webhook source in the sys
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_storage_shards -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_storage_usage_by_shard -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_type_pg_metadata -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_wallclock_lag_history_ct -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_object_oid_alias -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_objects_id_namespace_types -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_console_cluster_utilization_overview -->

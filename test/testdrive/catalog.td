@@ -361,6 +361,7 @@ table
 source
 view
 materialized-view
+continual-task
 sink
 index
 connection
@@ -607,6 +608,8 @@ mz_pending_cluster_replicas              ""
 mz_kafka_source_tables                   ""
 mz_materialized_view_refresh_strategies  ""
 mz_mysql_source_tables                   ""
+mz_network_policies                      ""
+mz_network_policy_rules                  ""
 mz_object_dependencies                   ""
 mz_optimizer_notices                     ""
 mz_postgres_sources                      ""
@@ -787,11 +790,11 @@ test_table ""
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-59
+61
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-241
+242
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2

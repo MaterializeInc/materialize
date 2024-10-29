@@ -1321,6 +1321,11 @@ class ExactlyOnce(Sink):
     the data to determine completion.
     """
 
+    FIXED_SCALE = True  # TODO: Remove when database-issues#8705 is fixed
+
+    def version(self) -> ScenarioVersion:
+        return ScenarioVersion.create(1, 1, 0)
+
     def shared(self) -> Action:
         return TdAction(
             self.keyschema()

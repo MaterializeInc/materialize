@@ -2567,11 +2567,12 @@ impl Coordinator {
         }
     }
 
-    /// TODO(ct1): Hack to make as_of selection happy. It assumes that anything
-    /// with a zero upper has the since set to the initial as_of. Ideally we'd
-    /// write this down in the durable catalog, but that's hard because of boot
-    /// ordering and it's possible that a better long-term fix would be in as_of
-    /// selection itself.
+    /// Make as_of selection happy for builtin CTs. Ideally we'd write the
+    /// initial as_of down in the durable catalog, but that's hard because of
+    /// boot ordering. Instead, we set the since of the storage collection to
+    /// something that's a reasonable lower bound for the as_of. Then, if the
+    /// upper is 0, the as_of selection code will allow us to jump it forward to
+    /// this since.
     async fn bootstrap_builtin_continual_tasks(
         &mut self,
         mut collections: Vec<(GlobalId, CollectionDescription<Timestamp>)>,

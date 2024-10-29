@@ -378,6 +378,24 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 5  connected_at  timestamp␠with␠time␠zone
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_network_policies' ORDER BY position
+----
+1  id  text
+2  name  text
+3  owner_id  text
+4  privileges  mz_aclitem[]
+5  oid  oid
+
+query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_network_policy_rules' ORDER BY position
+----
+1  name  text
+2  policy_id  text
+3  action  text
+4  address  text
+5  direction  text
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_all_privileges' ORDER BY position
 ----
 1  grantor  text
@@ -627,8 +645,10 @@ mz_aws_privatelink_connection_statuses
 mz_cluster_replica_history
 mz_cluster_replica_metrics
 mz_cluster_replica_metrics_history
+mz_cluster_replica_metrics_history_ct
 mz_cluster_replica_name_history
 mz_cluster_replica_status_history
+mz_cluster_replica_status_history_ct
 mz_cluster_replica_statuses
 mz_cluster_replica_utilization
 mz_cluster_replica_utilization_history
@@ -654,6 +674,8 @@ mz_materialization_lag
 mz_materialized_view_refresh_strategies
 mz_materialized_view_refreshes
 mz_mysql_source_tables
+mz_network_policies
+mz_network_policy_rules
 mz_notices
 mz_notices_redacted
 mz_object_dependencies
@@ -730,6 +752,7 @@ mz_type_pg_metadata
 mz_wallclock_global_lag_history
 mz_wallclock_global_lag_recent_history
 mz_wallclock_lag_history
+mz_wallclock_lag_history_ct
 mz_webhook_sources
 pg_attrdef_all_databases
 pg_attribute_all_databases

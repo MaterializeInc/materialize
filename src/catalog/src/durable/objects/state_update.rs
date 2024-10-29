@@ -222,6 +222,7 @@ pub enum StateUpdateKind {
         proto::ClusterIntrospectionSourceIndexValue,
     ),
     Item(proto::ItemKey, proto::ItemValue),
+    NetworkPolicy(proto::NetworkPolicyKey, proto::NetworkPolicyValue),
     Role(proto::RoleKey, proto::RoleValue),
     Schema(proto::SchemaKey, proto::SchemaValue),
     Setting(proto::SettingKey, proto::SettingValue),
@@ -256,6 +257,7 @@ impl StateUpdateKind {
                 Some(CollectionType::ComputeIntrospectionSourceIndex)
             }
             StateUpdateKind::Item(_, _) => Some(CollectionType::Item),
+            StateUpdateKind::NetworkPolicy(_, _) => Some(CollectionType::NetworkPolicy),
             StateUpdateKind::Role(_, _) => Some(CollectionType::Role),
             StateUpdateKind::Schema(_, _) => Some(CollectionType::Schema),
             StateUpdateKind::Setting(_, _) => Some(CollectionType::Setting),
@@ -372,6 +374,10 @@ impl TryFrom<&StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
                 Some(memory::objects::StateUpdateKind::IntrospectionSourceIndex(
                     introspection_source_index,
                 ))
+            }
+            StateUpdateKind::NetworkPolicy(key, value) => {
+                let policy = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::NetworkPolicy(policy))
             }
             StateUpdateKind::Role(key, value) => {
                 let role = into_durable(key, value)?;
@@ -542,6 +548,14 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
                         key: Some(key),
                         value: Some(value),
                     })
+                }
+                StateUpdateKind::NetworkPolicy(key, value) => {
+                    proto::state_update_kind::Kind::NetworkPolicy(
+                        proto::state_update_kind::NetworkPolicy {
+                            key: Some(key),
+                            value: Some(value),
+                        },
+                    )
                 }
                 StateUpdateKind::Role(key, value) => {
                     proto::state_update_kind::Kind::Role(proto::state_update_kind::Role {
@@ -855,6 +869,16 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
                         TryFromProtoError::missing_field(
                             "state_update_kind::SourceReferences::value",
                         )
+                    })?,
+                ),
+                proto::state_update_kind::Kind::NetworkPolicy(
+                    proto::state_update_kind::NetworkPolicy { key, value },
+                ) => StateUpdateKind::NetworkPolicy(
+                    key.ok_or_else(|| {
+                        TryFromProtoError::missing_field("state_update_kind::NetworkPolicy::key")
+                    })?,
+                    value.ok_or_else(|| {
+                        TryFromProtoError::missing_field("state_update_kind::NetworkPolicy::value")
                     })?,
                 ),
             },

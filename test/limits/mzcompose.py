@@ -935,6 +935,8 @@ class DerivedTables(Generator):
         Generator.COUNT, 10
     )  # https://github.com/MaterializeInc/database-issues/issues/2630
 
+    FIND_NEW_LIMITS = False  # Too long-running with count=320
+
     @classmethod
     def body(cls) -> None:
         print("> CREATE TABLE t1 (f1 INTEGER);")

@@ -30,14 +30,23 @@ message ProtoU64Description {
   ProtoU64Antichain since = 3;
 }
 
+message ProtoHollowRunRef {
+  // The location of the run struct in the blob store.
+  string key = 1;
+  // The largest size in bytes of any part in the run.
+  // This is useful to limit memory use during compaction.
+  uint64 max_part_bytes = 2;
+}
+
 message ProtoHollowBatchPart {
   oneof kind {
     string key = 1;
     bytes inline = 5;
+    ProtoHollowRunRef run_ref = 11;
   }
   ProtoU64Antichain ts_rewrite = 4;
 
-  // Only set when Kind is Key
+  // Only set when Kind is Key or RunRef
   uint64 encoded_size_bytes = 2;
   bytes key_lower = 3;
   optional bytes structured_key_lower = 10;
@@ -75,6 +84,10 @@ enum ProtoRunOrder {
 message ProtoRunMeta {
   ProtoRunOrder order = 1;
   optional uint64 schema_id = 2;
+}
+
+message ProtoHollowRun {
+  repeated ProtoHollowBatchPart parts = 4;
 }
 
 message ProtoHollowBatch {

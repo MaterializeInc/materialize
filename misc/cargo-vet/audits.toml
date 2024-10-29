@@ -349,6 +349,12 @@ who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "safe-to-deploy"
 version = "0.5.2"
 
+[[audits.eventsource-client]]
+who = "Jan Teske <jteske@posteo.net>"
+criteria = "maintained-and-necessary"
+version = "0.11.0@git:7a446462e9cec0da283b100258c706286e9486e5"
+importable = false
+
 [[audits.fixedbitset]]
 who = "Parker Timmerman <parker.timmerman@materialize.com>"
 criteria = "safe-to-deploy"
@@ -1213,25 +1219,25 @@ version = "0.6.0"
 [[audits.timely]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.12.0@git:460f95b3dfb103f3fa444a4ef6eefb161a617c7e"
+version = "0.12.0@git:14e2e994b99905e18dca4852e57d153a81f9f02e"
 importable = false
 
 [[audits.timely_bytes]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.12.0@git:460f95b3dfb103f3fa444a4ef6eefb161a617c7e"
+version = "0.12.0@git:14e2e994b99905e18dca4852e57d153a81f9f02e"
 importable = false
 
 [[audits.timely_communication]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.12.0@git:460f95b3dfb103f3fa444a4ef6eefb161a617c7e"
+version = "0.12.0@git:14e2e994b99905e18dca4852e57d153a81f9f02e"
 importable = false
 
 [[audits.timely_logging]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.12.0@git:460f95b3dfb103f3fa444a4ef6eefb161a617c7e"
+version = "0.12.0@git:14e2e994b99905e18dca4852e57d153a81f9f02e"
 importable = false
 
 [[audits.tokio]]

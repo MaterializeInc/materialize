@@ -10,10 +10,6 @@
 $ set-arg-default default-replica-size=1
 $ set-arg-default single-replica-cluster=quickstart
 
-# TODO(def-) Remove when database-issues#8515 and database-issues#8526 are fixed
-$ skip-if
-SELECT true
-
 #
 # Validate feature flag
 #
@@ -47,8 +43,15 @@ ALTER SYSTEM SET enable_load_generator_key_value = true
 > SELECT count(*) FROM bids
 255
 
+# TODO(def-) Reenable when database-issues#8703 is fixed
+$ skip-if
+SELECT true
+
 > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'bids';
 running
+
+# TODO(def-) Reenable when database-issues#8703 is fixed
+$ skip-end
 
 # Create another table from the same bids upstream using a less qualified reference
 > CREATE TABLE bids2 FROM SOURCE auction_house (REFERENCE "bids");
@@ -339,9 +342,6 @@ contains:unknown catalog item 'mysql_table_3'
 
 > SELECT count(*) FROM mz_internal.mz_source_references;
 0
-
-# TODO(def-) Remove when database-issues#8515 and database-issues#8526 are fixed
-$ skip-end
 
 #
 # Kafka source using source-fed tables

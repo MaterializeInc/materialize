@@ -293,12 +293,20 @@ mz_cluster_replica_metrics_history
 SOURCE
 materialize
 mz_internal
+mz_cluster_replica_metrics_history_ct
+CONTINUAL-TASK
+materialize
+mz_internal
 mz_cluster_replica_name_history
 VIEW
 materialize
 mz_internal
 mz_cluster_replica_status_history
 SOURCE
+materialize
+mz_internal
+mz_cluster_replica_status_history_ct
+CONTINUAL-TASK
 materialize
 mz_internal
 mz_cluster_replica_statuses
@@ -398,6 +406,14 @@ SOURCE
 materialize
 mz_internal
 mz_mysql_source_tables
+BASE TABLE
+materialize
+mz_internal
+mz_network_policies
+BASE TABLE
+materialize
+mz_internal
+mz_network_policy_rules
 BASE TABLE
 materialize
 mz_internal
@@ -703,6 +719,10 @@ materialize
 mz_internal
 mz_wallclock_lag_history
 SOURCE
+materialize
+mz_internal
+mz_wallclock_lag_history_ct
+CONTINUAL-TASK
 materialize
 mz_internal
 mz_webhook_sources

@@ -39,7 +39,7 @@ use crate::internal::paths::{BlobKey, PartialBlobKey, PartialRollupKey, RollupId
 #[cfg(debug_assertions)]
 use crate::internal::state::HollowBatch;
 use crate::internal::state::{
-    BatchPart, HollowBlobRef, HollowRollup, NoOpStateTransition, State, TypedState,
+    BatchPart, HollowBlobRef, HollowRollup, NoOpStateTransition, RunPart, State, TypedState,
 };
 use crate::internal::state_diff::{StateDiff, StateFieldValDiff};
 use crate::{Metrics, PersistConfig, ShardId};
@@ -351,20 +351,20 @@ impl StateVersions {
                     .trace
                     .batches()
                     .flat_map(|x| x.parts.iter())
-                    .flat_map(|x| match x {
-                        BatchPart::Hollow(x) => {
-                            // Carefully avoid any String allocs by splitting.
-                            let writer_key =
-                                x.key.0.split_once('/').map(|(writer_key, _)| writer_key);
-                            writer_key.and_then(|s| match &s[..1] {
-                                "w" => Some(("old", x.encoded_size_bytes)),
-                                "n" => Some((&s[1..], x.encoded_size_bytes)),
-                                _ => None,
-                            })
+                    .flat_map(|part| {
+                        let key = match part {
+                            RunPart::Many(x) => Some(&x.key),
+                            RunPart::Single(BatchPart::Hollow(x)) => Some(&x.key),
+                            // TODO: Would be nice to include these too, but we lose the info atm.
+                            RunPart::Single(BatchPart::Inline { .. }) => None,
+                        }?;
+                        // Carefully avoid any String allocs by splitting.
+                        let (writer_key, _) = key.0.split_once('/')?;
+                        match &writer_key[..1] {
+                            "w" => Some(("old", part.encoded_size_bytes())),
+                            "n" => Some((&writer_key[1..], part.encoded_size_bytes())),
+                            _ => None,
                         }
-                        // TODO: Would be nice to include these too, but we lose the
-                        // info atm.
-                        BatchPart::Inline { .. } => None,
                     });
                 shard_metrics.set_batch_part_versions(batch_parts_by_version);
 
@@ -1136,7 +1136,10 @@ impl<T> Default for ReferencedBlobValidator<T> {
 impl<T: Timestamp + Lattice + Codec64> ReferencedBlobValidator<T> {
     fn add_inc_blob(&mut self, x: HollowBlobRef<'_, T>) {
         match x {
-            HollowBlobRef::Batch(x) => assert!(self.inc_batches.insert(x.clone())),
+            HollowBlobRef::Batch(x) => assert!(
+                self.inc_batches.insert(x.clone()) || x.desc.lower() == x.desc.upper(),
+                "non-empty batches should only be appended once; duplicate: {x:?}"
+            ),
             HollowBlobRef::Rollup(x) => assert!(self.inc_rollups.insert(x.clone())),
         }
     }
@@ -1176,19 +1179,19 @@ impl<T: Timestamp + Lattice + Codec64> ReferencedBlobValidator<T> {
         assert_eq!(inc_lower, full_lower);
         assert_eq!(inc_upper, full_upper);
 
-        fn part_unique<T: Hash>(x: &BatchPart<T>) -> String {
+        fn part_unique<T: Hash>(x: &RunPart<T>) -> String {
             match x {
-                BatchPart::Hollow(x) => x.key.to_string(),
-                BatchPart::Inline {
+                RunPart::Single(BatchPart::Inline {
                     updates,
                     ts_rewrite,
                     ..
-                } => {
+                }) => {
                     let mut h = DefaultHasher::new();
                     updates.hash(&mut h);
                     ts_rewrite.as_ref().map(|x| x.elements()).hash(&mut h);
                     h.finish().to_string()
                 }
+                other => other.printable_name().to_string(),
             }
         }
 

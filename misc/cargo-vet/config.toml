@@ -410,10 +410,6 @@ criteria = "safe-to-deploy"
 version = "0.12.4"
 criteria = "safe-to-deploy"
 
-[[exemptions.eventsource-client]]
-version = "0.11.0@git:fb749fde693a9757289238ee71d4e9b3590fb24b"
-criteria = "safe-to-deploy"
-
 [[exemptions.exclusion-set]]
 version = "0.1.2"
 criteria = "safe-to-deploy"

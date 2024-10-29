@@ -8,11 +8,11 @@
 // by the Apache License, Version 2.0.
 
 use crate::durable::upgrade::MigrationAction;
-use crate::durable::upgrade::{objects_v62 as v62, objects_v63 as v63};
+use crate::durable::upgrade::{objects_v68 as v68, objects_v69 as v69};
 
-/// In v63, we added the SourceReferences object kind.
+/// In v68, we add the Network Policy resources.
 pub fn upgrade(
-    _snapshot: Vec<v62::StateUpdateKind>,
-) -> Vec<MigrationAction<v62::StateUpdateKind, v63::StateUpdateKind>> {
-    vec![]
+    _snapshot: Vec<v68::StateUpdateKind>,
+) -> Vec<MigrationAction<v68::StateUpdateKind, v69::StateUpdateKind>> {
+    Vec::new()
 }

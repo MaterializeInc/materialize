@@ -49,3 +49,9 @@ contains:catalog item 't' already exists
 
 $ mysql-execute name=mysql
 DROP DATABASE other;
+
+# TODO: database-issues#8708
+# > SET statement_timeout = '5s'
+
+# ! SELECT * FROM t
+# contains:statement timeout

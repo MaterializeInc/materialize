@@ -27,13 +27,17 @@ use mz_controller_types::ReplicaId;
 use mz_ore::cast::CastFrom;
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
+use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
 use mz_repr::{CatalogItemId, GlobalId, RelationVersion, Timestamp};
 use mz_sql::catalog::{CatalogItemType, ObjectType, RoleAttributes, RoleMembership, RoleVars};
 use mz_sql::names::{
     CommentObjectId, DatabaseId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier,
 };
-use mz_sql::plan::ClusterSchedule;
+use mz_sql::plan::{
+    ClusterSchedule, NetworkPolicyRule, NetworkPolicyRuleAction, NetworkPolicyRuleDirection,
+    PolicyAddress,
+};
 use mz_sql::session::vars::OwnedVarInput;
 use mz_storage_types::instances::StorageInstanceId;
 
@@ -46,11 +50,11 @@ use crate::durable::objects::{
     ClusterKey, ClusterReplicaKey, ClusterReplicaValue, ClusterValue, CommentKey, CommentValue,
     ConfigKey, ConfigValue, DatabaseKey, DatabaseValue, DefaultPrivilegesKey,
     DefaultPrivilegesValue, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue, ItemKey,
-    ItemValue, RoleKey, RoleValue, SchemaKey, SchemaValue, ServerConfigurationKey,
-    ServerConfigurationValue, SettingKey, SettingValue, SourceReference, SourceReferencesKey,
-    SourceReferencesValue, StorageCollectionMetadataKey, StorageCollectionMetadataValue,
-    SystemCatalogItemId, SystemGlobalId, SystemPrivilegesKey, SystemPrivilegesValue,
-    TxnWalShardValue, UnfinalizedShardKey,
+    ItemValue, NetworkPolicyKey, NetworkPolicyValue, RoleKey, RoleValue, SchemaKey, SchemaValue,
+    ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue, SourceReference,
+    SourceReferencesKey, SourceReferencesValue, StorageCollectionMetadataKey,
+    StorageCollectionMetadataValue, SystemCatalogItemId, SystemGlobalId, SystemPrivilegesKey,
+    SystemPrivilegesValue, TxnWalShardValue, UnfinalizedShardKey,
 };
 use crate::durable::{
     ClusterConfig, ClusterVariant, ClusterVariantManaged, ReplicaConfig, ReplicaLocation,
@@ -538,13 +542,13 @@ impl RustType<proto::SchemaValue> for SchemaValue {
 impl RustType<proto::ItemKey> for ItemKey {
     fn into_proto(&self) -> proto::ItemKey {
         proto::ItemKey {
-            id: Some(self.id.into_proto()),
+            gid: Some(self.id.into_proto()),
         }
     }
 
     fn from_proto(proto: proto::ItemKey) -> Result<Self, TryFromProtoError> {
         Ok(ItemKey {
-            id: proto.id.into_rust_if_some("ItemKey::id")?,
+            id: proto.gid.into_rust_if_some("ItemKey::gid")?,
         })
     }
 }
@@ -699,6 +703,80 @@ impl RustType<proto::RoleValue> for RoleValue {
                 .membership
                 .into_rust_if_some("RoleValue::membership")?,
             vars: proto.vars.into_rust_if_some("RoleValue::vars")?,
+            oid: proto.oid,
+        })
+    }
+}
+
+impl RustType<proto::NetworkPolicyRule> for NetworkPolicyRule {
+    fn into_proto(&self) -> proto::NetworkPolicyRule {
+        use proto::network_policy_rule::{Action, Direction};
+        proto::NetworkPolicyRule {
+            name: self.name.clone(),
+            action: match self.action {
+                NetworkPolicyRuleAction::Allow => Some(Action::Allow(Empty {})),
+            },
+            direction: match self.direction {
+                NetworkPolicyRuleDirection::Ingress => Some(Direction::Ingress(Empty {})),
+            },
+            address: self.address.clone().to_string(),
+        }
+    }
+
+    fn from_proto(proto: proto::NetworkPolicyRule) -> Result<Self, TryFromProtoError> {
+        use proto::network_policy_rule::{Action, Direction};
+        Ok(NetworkPolicyRule {
+            name: proto.name,
+            action: match proto
+                .action
+                .ok_or_else(|| TryFromProtoError::missing_field("NetworkPolicyRule::action"))?
+            {
+                Action::Allow(_) => NetworkPolicyRuleAction::Allow,
+            },
+            address: PolicyAddress::from(proto.address),
+            direction: match proto
+                .direction
+                .ok_or_else(|| TryFromProtoError::missing_field("NetworkPolicyRule::direction"))?
+            {
+                Direction::Ingress(_) => NetworkPolicyRuleDirection::Ingress,
+            },
+        })
+    }
+}
+
+impl RustType<proto::NetworkPolicyKey> for NetworkPolicyKey {
+    fn into_proto(&self) -> proto::NetworkPolicyKey {
+        proto::NetworkPolicyKey {
+            id: Some(self.id.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: proto::NetworkPolicyKey) -> Result<Self, TryFromProtoError> {
+        Ok(NetworkPolicyKey {
+            id: proto.id.into_rust_if_some("NetworkPolicyKey::id")?,
+        })
+    }
+}
+
+impl RustType<proto::NetworkPolicyValue> for NetworkPolicyValue {
+    fn into_proto(&self) -> proto::NetworkPolicyValue {
+        proto::NetworkPolicyValue {
+            name: self.name.to_string(),
+            rules: self.rules.into_proto(),
+            owner_id: Some(self.owner_id.into_proto()),
+            privileges: self.privileges.into_proto(),
+            oid: self.oid,
+        }
+    }
+
+    fn from_proto(proto: proto::NetworkPolicyValue) -> Result<Self, TryFromProtoError> {
+        Ok(NetworkPolicyValue {
+            name: proto.name,
+            rules: proto.rules.into_rust()?,
+            owner_id: proto
+                .owner_id
+                .into_rust_if_some("NetworkPolicyValue::owner_id,")?,
+            privileges: proto.privileges.into_rust()?,
             oid: proto.oid,
         })
     }
@@ -1144,6 +1222,28 @@ impl RustType<proto::RoleVars> for RoleVars {
     }
 }
 
+impl RustType<proto::NetworkPolicyId> for NetworkPolicyId {
+    fn into_proto(&self) -> proto::NetworkPolicyId {
+        let value = match self {
+            NetworkPolicyId::User(id) => proto::network_policy_id::Value::User(*id),
+            NetworkPolicyId::System(id) => proto::network_policy_id::Value::System(*id),
+        };
+
+        proto::NetworkPolicyId { value: Some(value) }
+    }
+
+    fn from_proto(proto: proto::NetworkPolicyId) -> Result<Self, TryFromProtoError> {
+        let value = proto
+            .value
+            .ok_or_else(|| TryFromProtoError::missing_field("NetworkPolicyId::value"))?;
+        let id = match value {
+            proto::network_policy_id::Value::User(id) => NetworkPolicyId::User(id),
+            proto::network_policy_id::Value::System(id) => NetworkPolicyId::System(id),
+        };
+        Ok(id)
+    }
+}
+
 impl RustType<proto::CatalogItemType> for CatalogItemType {
     fn into_proto(&self) -> proto::CatalogItemType {
         match self {
@@ -1201,6 +1301,7 @@ impl RustType<proto::ObjectType> for ObjectType {
             ObjectType::Schema => proto::ObjectType::Schema,
             ObjectType::Func => proto::ObjectType::Func,
             ObjectType::ContinualTask => proto::ObjectType::ContinualTask,
+            ObjectType::NetworkPolicy => proto::ObjectType::NetworkPolicy,
         }
     }
 
@@ -1222,6 +1323,7 @@ impl RustType<proto::ObjectType> for ObjectType {
             proto::ObjectType::Schema => Ok(ObjectType::Schema),
             proto::ObjectType::Func => Ok(ObjectType::Func),
             proto::ObjectType::ContinualTask => Ok(ObjectType::ContinualTask),
+            proto::ObjectType::NetworkPolicy => Ok(ObjectType::NetworkPolicy),
             proto::ObjectType::Unknown => Err(TryFromProtoError::unknown_enum_variant(
                 "ObjectType::Unknown",
             )),
@@ -1398,6 +1500,9 @@ impl RustType<proto::comment_key::Object> for CommentObjectId {
             CommentObjectId::ContinualTask(global_id) => {
                 proto::comment_key::Object::ContinualTask(global_id.into_proto())
             }
+            CommentObjectId::NetworkPolicy(network_policy_id) => {
+                proto::comment_key::Object::NetworkPolicy(network_policy_id.into_proto())
+            }
             CommentObjectId::Schema((database, schema)) => {
                 proto::comment_key::Object::Schema(proto::ResolvedSchema {
                     database: Some(database.into_proto()),
@@ -1451,6 +1556,9 @@ impl RustType<proto::comment_key::Object> for CommentObjectId {
             }
             proto::comment_key::Object::ContinualTask(item_id) => {
                 CommentObjectId::ContinualTask(item_id.into_rust()?)
+            }
+            proto::comment_key::Object::NetworkPolicy(global_id) => {
+                CommentObjectId::NetworkPolicy(global_id.into_rust()?)
             }
             proto::comment_key::Object::Role(role_id) => {
                 CommentObjectId::Role(role_id.into_rust()?)
@@ -1643,6 +1751,9 @@ impl RustType<proto::audit_log_event_v1::ObjectType> for mz_audit_log::ObjectTyp
             mz_audit_log::ObjectType::MaterializedView => {
                 proto::audit_log_event_v1::ObjectType::MaterializedView
             }
+            mz_audit_log::ObjectType::NetworkPolicy => {
+                proto::audit_log_event_v1::ObjectType::NetworkPolicy
+            }
             mz_audit_log::ObjectType::Role => proto::audit_log_event_v1::ObjectType::Role,
             mz_audit_log::ObjectType::Secret => proto::audit_log_event_v1::ObjectType::Secret,
             mz_audit_log::ObjectType::Schema => proto::audit_log_event_v1::ObjectType::Schema,
@@ -1674,6 +1785,9 @@ impl RustType<proto::audit_log_event_v1::ObjectType> for mz_audit_log::ObjectTyp
             proto::audit_log_event_v1::ObjectType::Index => Ok(mz_audit_log::ObjectType::Index),
             proto::audit_log_event_v1::ObjectType::MaterializedView => {
                 Ok(mz_audit_log::ObjectType::MaterializedView)
+            }
+            proto::audit_log_event_v1::ObjectType::NetworkPolicy => {
+                Ok(mz_audit_log::ObjectType::NetworkPolicy)
             }
             proto::audit_log_event_v1::ObjectType::Role => Ok(mz_audit_log::ObjectType::Role),
             proto::audit_log_event_v1::ObjectType::Secret => Ok(mz_audit_log::ObjectType::Secret),

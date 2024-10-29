@@ -5343,17 +5343,22 @@ fn plan_is_expr<'a>(
         IsExprConstruct::DistinctFrom(expr2) => {
             let expr1 = expr.type_as_any(ecx)?;
             let expr2 = plan_expr(ecx, expr2)?.type_as_any(ecx)?;
-            let expr1_is_null = expr1.clone().call_is_null();
-            let expr2_is_null = expr2.clone().call_is_null();
-            HirScalarExpr::If {
-                cond: Box::new(expr1_is_null.clone()),
-                then: Box::new(expr2_is_null.clone().not()),
-                els: Box::new(HirScalarExpr::If {
-                    cond: Box::new(expr2_is_null),
-                    then: Box::new(expr1_is_null.not()),
-                    els: Box::new(expr1.call_binary(expr2, BinaryFunc::NotEq)),
-                }),
-            }
+            // There are three cases:
+            // 1. Both terms are non-null, in which case the result should be `a != b`.
+            // 2. Exactly one term is null, in which case the result should be true.
+            // 3. Both terms are null, in which case the result should be false.
+            //
+            // (a != b OR a IS NULL OR b IS NULL) AND (a IS NOT NULL OR b IS NOT NULL)
+            let term1 = HirScalarExpr::variadic_or(vec![
+                expr1.clone().call_binary(expr2.clone(), BinaryFunc::NotEq),
+                expr1.clone().call_is_null(),
+                expr2.clone().call_is_null(),
+            ]);
+            let term2 = HirScalarExpr::variadic_or(vec![
+                expr1.call_is_null().not(),
+                expr2.call_is_null().not(),
+            ]);
+            term1.and(term2)
         }
     };
     if not {

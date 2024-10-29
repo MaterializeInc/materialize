@@ -588,7 +588,7 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
             return Ok(());
         }
 
-        let mut updates = Vec::new();
+        let mut updates: BTreeMap<_, Vec<_>> = BTreeMap::new();
 
         while self.upper < target_upper {
             let listen_events = self.listen.fetch_next().await;
@@ -597,25 +597,37 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
                     ListenEvent::Progress(upper) => {
                         debug!("synced up to {upper:?}");
                         self.upper = antichain_to_timestamp(upper);
+                        // Attempt to apply updates in batches of a single timestamp. If another
+                        // catalog wrote a fence token at one timestamp and then updates in a new
+                        // format at a later timestamp, then we want to apply the fence token
+                        // before attempting to deserialize the new updates.
+                        while let Some((ts, updates)) = updates.pop_first() {
+                            assert!(ts < self.upper, "expected {} < {}", ts, self.upper);
+                            let updates = updates.into_iter().map(
+                                |update: StateUpdate<StateUpdateKindJson>| {
+                                    let kind =
+                                        T::try_from(update.kind).expect("kind decoding error");
+                                    StateUpdate {
+                                        kind,
+                                        ts: update.ts,
+                                        diff: update.diff,
+                                    }
+                                },
+                            );
+                            self.apply_updates(updates)?;
+                        }
                     }
                     ListenEvent::Updates(batch_updates) => {
                         debug!("syncing updates {batch_updates:?}");
-                        let batch_updates = batch_updates
-                            .into_iter()
-                            .map(Into::<StateUpdate<StateUpdateKindJson>>::into)
-                            .map(|update| {
-                                let kind = T::try_from(update.kind).expect("kind decoding error");
-                                (kind, update.ts, update.diff)
-                            });
-                        updates.extend(batch_updates);
+                        for update in batch_updates {
+                            let update: StateUpdate<StateUpdateKindJson> = update.into();
+                            updates.entry(update.ts).or_default().push(update);
+                        }
                     }
                 }
             }
         }
-        let updates = updates
-            .into_iter()
-            .map(|(kind, ts, diff)| StateUpdate { kind, ts, diff });
-        self.apply_updates(updates)?;
+        assert_eq!(updates, BTreeMap::new(), "all updates should be applied");
         Ok(())
     }
 
@@ -796,6 +808,9 @@ impl<U: ApplyUpdate<StateUpdateKind>> PersistHandle<StateUpdateKind, U> {
                     }
                     StateUpdateKind::Item(key, value) => {
                         apply(&mut snapshot.items, key, value, diff);
+                    }
+                    StateUpdateKind::NetworkPolicy(key, value) => {
+                        apply(&mut snapshot.network_policies, key, value, diff);
                     }
                     StateUpdateKind::Role(key, value) => {
                         apply(&mut snapshot.roles, key, value, diff);
@@ -1844,6 +1859,9 @@ impl Trace {
                     trace.introspection_sources.values.push(((k, v), ts, diff))
                 }
                 StateUpdateKind::Item(k, v) => trace.items.values.push(((k, v), ts, diff)),
+                StateUpdateKind::NetworkPolicy(k, v) => {
+                    trace.network_policies.values.push(((k, v), ts, diff))
+                }
                 StateUpdateKind::Role(k, v) => trace.roles.values.push(((k, v), ts, diff)),
                 StateUpdateKind::Schema(k, v) => trace.schemas.values.push(((k, v), ts, diff)),
                 StateUpdateKind::Setting(k, v) => trace.settings.values.push(((k, v), ts, diff)),

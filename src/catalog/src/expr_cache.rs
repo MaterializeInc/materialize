@@ -384,6 +384,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn expression_cache() {
         let first_deploy_generation = 0;
         let second_deploy_generation = 1;

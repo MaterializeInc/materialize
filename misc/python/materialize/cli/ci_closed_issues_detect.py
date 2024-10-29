@@ -28,7 +28,8 @@ ISSUE_RE = re.compile(
     | ( cloud\# | cloud/issues/ ) (?P<cloud>[0-9]+)
     | ( incidents-and-escalations\# | incidents-and-escalations/issues/ ) (?P<incidentsandescalations>[0-9]+)
     | ( database-issues\# | database-issues/issues/ ) (?P<databaseissues>[0-9]+)
-    | \# (?P<ambiguous>[0-9]+)
+    # only match from the beginning of the line or after a space character to avoid matching Buildkite URLs
+    | (^|\s) \# (?P<ambiguous>[0-9]+)
     )
     """,
     re.VERBOSE,
@@ -304,6 +305,7 @@ def main() -> int:
 
     if args.changed_lines_only:
         issue_refs = filter_changed_lines(issue_refs)
+        ambiguous_refs = filter_changed_lines(ambiguous_refs)
 
     issue_refs = filter_closed_issues(issue_refs)
 
@@ -321,7 +323,7 @@ def main() -> int:
     for issue_ref in issue_refs:
         url = buildkite.inline_link(
             f"https://github.com/{issue_ref.repository}/issues/{issue_ref.issue_id}",
-            f"#{issue_ref.issue_id}",
+            f"{issue_ref.repository}#{issue_ref.issue_id}",
         )
         print(f"--- Issue is referenced in comment but already closed: {url}")
         if issue_ref.text is not None:

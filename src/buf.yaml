@@ -18,23 +18,11 @@ breaking:
     # reason: does currently not require backward-compatibility
     - catalog/protos/objects.proto
     # reason: does currently not require backward-compatibility
-    - catalog/protos/objects_v60.proto
-    # reason: does currently not require backward-compatibility
-    - catalog/protos/objects_v61.proto
-    # reason: does currently not require backward-compatibility
-    - catalog/protos/objects_v62.proto
-    # reason: does currently not require backward-compatibility
-    - catalog/protos/objects_v63.proto
-    # reason: does currently not require backward-compatibility
-    - catalog/protos/objects_v64.proto
-    # reason: does currently not require backward-compatibility
-    - catalog/protos/objects_v65.proto
-    # reason: does currently not require backward-compatibility
-    - catalog/protos/objects_v66.proto
-    # reason: does currently not require backward-compatibility
     - catalog/protos/objects_v67.proto
     # reason: does currently not require backward-compatibility
     - catalog/protos/objects_v68.proto
+    # reason: does currently not require backward-compatibility
+    - catalog/protos/objects_v69.proto
     # reason: does currently not require backward-compatibility
     - cluster-client/src/client.proto
     # reason: does currently not require backward-compatibility

@@ -1,35 +1,7 @@
 [
   {
     "name": "objects.proto",
-    "md5": "b023c4e7ca71ae263d80a609dd586c72"
-  },
-  {
-    "name": "objects_v60.proto",
-    "md5": "42a5831ff118d0d2a0c69ca775dbd472"
-  },
-  {
-    "name": "objects_v61.proto",
-    "md5": "f9724fa22748a24183cd808595953cd4"
-  },
-  {
-    "name": "objects_v62.proto",
-    "md5": "a368be313c910034bc2593627cd16466"
-  },
-  {
-    "name": "objects_v63.proto",
-    "md5": "c161797ce69b954ceb2dd0f406d820e9"
-  },
-  {
-    "name": "objects_v64.proto",
-    "md5": "ec9c044f58a24672909c02987ad74c04"
-  },
-  {
-    "name": "objects_v65.proto",
-    "md5": "48f13eb7c005b643552826f40ff63a9d"
-  },
-  {
-    "name": "objects_v66.proto",
-    "md5": "fa88cb9ab6332a050120acbe139e193f"
+    "md5": "fcf9955ad176500fb86cd43d65dc77f6"
   },
   {
     "name": "objects_v67.proto",
@@ -37,6 +9,10 @@
   },
   {
     "name": "objects_v68.proto",
-    "md5": "f9ae9b93103620bce86b07c0a35b9c6d"
+    "md5": "6c7cae7aeb2da4bdd6aa8bca367850ce"
+  },
+  {
+    "name": "objects_v69.proto",
+    "md5": "638e206754da134b10a0712d63bdd8dc"
   }
 ]
