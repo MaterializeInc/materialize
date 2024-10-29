@@ -39,7 +39,7 @@ use crate::catalog;
 use crate::command::ExecuteResponse;
 use crate::coord::Coordinator;
 use crate::error::AdapterError;
-use crate::optimize::dataflow_expiration::TimeDependenceHelper;
+use crate::optimize::dataflow_expiration::time_dependence;
 use crate::optimize::dataflows::dataflow_import_id_bundle;
 use crate::optimize::{self, Optimize, OptimizerCatalog};
 use crate::session::Session;
@@ -127,12 +127,8 @@ impl Coordinator {
         let () = self
             .catalog_transact_with_side_effects(Some(session), ops, |coord| async {
                 // We're referencing ourselves, so filter out our ID.
-                let id_bundle = dataflow_import_id_bundle(&physical_plan, cluster_id);
-                physical_plan.time_dependence = TimeDependenceHelper::new(coord.catalog())
-                    .determine_time_dependence_ids(
-                        id_bundle.iter().filter(|x| *x != sink_id),
-                        None,
-                    );
+                let ids = physical_plan.import_ids().filter(|x| *x != sink_id);
+                physical_plan.time_dependence = time_dependence(coord.catalog(), ids, None);
 
                 let catalog = coord.catalog_mut();
                 catalog.set_optimized_plan(sink_id, optimized_plan);

@@ -5,9 +5,8 @@
 
 //! Helper function for dataflow expiration checks.
 //!
-//! A [`TimeDependence`] describes how a dataflow follows wall-clock time, and the
-//! [`TimeDependenceHelper]` type offers functions to compute the time dependence based on the
-//! current state of the catalog.
+//! A [`TimeDependence`] describes how a dataflow follows wall-clock time, and this module offers
+//! functions to compute the time dependence based on the current state of the catalog.
 //!
 //! For a set of global IDs, the helper determines how a dataflow that depends on the set of IDs
 //! follows wall-clock time. Within the catalog, we remember how all installed objects follow
@@ -24,9 +23,7 @@
 //! which makes combining run-time information with catalog-based information inconclusive.
 
 use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, TableDataSource};
-use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::time_dependence::TimeDependence;
-use mz_controller_types::ClusterId;
 use mz_ore::soft_panic_or_log;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::GlobalId;
@@ -34,146 +31,116 @@ use mz_sql::catalog::CatalogItem as _;
 use mz_storage_types::sources::{GenericSourceConnection, Timeline};
 
 use crate::catalog::Catalog;
-use crate::optimize::dataflows::dataflow_import_id_bundle;
 
-/// Helper type to determine the time dependence of a dataflow. See module-level documentation
-/// for more details.
-pub(crate) struct TimeDependenceHelper<'a> {
-    /// Current catalog.
-    catalog: &'a Catalog,
+/// Determine a time dependence based on a set of global IDs. The result includes the schedule if
+/// supplied and needed. Returns `None` if called with an empty iterator, or if all dependencies
+/// are indeterminate.
+pub(crate) fn time_dependence(
+    catalog: &Catalog,
+    ids: impl IntoIterator<Item = GlobalId>,
+    schedule: Option<RefreshSchedule>,
+) -> Option<TimeDependence> {
+    // Collect all time dependencies of our dependencies.
+    let mut time_dependencies = ids
+        .into_iter()
+        .filter_map(|id| time_dependence_for_id(catalog, id))
+        .collect::<Vec<_>>();
+
+    // Sort and dedupe to remove redundancy.
+    time_dependencies.sort();
+    time_dependencies.dedup();
+
+    let time_dependence = if time_dependencies
+        .iter()
+        .any(|dep| *dep == TimeDependence::default())
+    {
+        // Wall-clock dependency is dominant.
+        Some(TimeDependence::default())
+    } else if !time_dependencies.is_empty() {
+        // No immediate wall-clock dependency, found some dependency with a refresh schedule.
+        Some(TimeDependence::new(schedule, time_dependencies))
+    } else {
+        // No wall-clock dependence, no refresh schedule
+        None
+    };
+    TimeDependence::normalize(time_dependence)
 }
 
-impl<'a> TimeDependenceHelper<'a> {
-    /// Construct a new helper.
-    pub(crate) fn new(catalog: &'a Catalog) -> Self {
-        Self { catalog }
+/// Determine the time dependence for a [`DataSourceDesc`].
+///
+/// Non-epoch timelines are indeterminate, and load generators.
+fn time_dependence_for_source_desc(
+    catalog: &Catalog,
+    desc: &DataSourceDesc,
+    timeline: &Timeline,
+) -> Option<TimeDependence> {
+    // We only know how to handle the epoch timeline.
+    if !matches!(timeline, Timeline::EpochMilliseconds) {
+        return None;
     }
-
-    /// Determine a time dependence based on a plan. The result can have an optional
-    /// refresh schedule.
-    ///
-    /// Note that the cluster IDs is only required to make [`dataflow_import_id_bundle`] happy.
-    pub(crate) fn determine_time_dependence_plan<P>(
-        &self,
-        plan: &DataflowDescription<P>,
-        cluster_id: ClusterId,
-        schedule: Option<RefreshSchedule>,
-    ) -> Option<TimeDependence> {
-        let id_bundle = dataflow_import_id_bundle(plan, cluster_id);
-        self.determine_time_dependence_ids(id_bundle.iter(), schedule)
-    }
-
-    /// Determine a time dependence based on a set of global IDs. The result can have an optional
-    /// refresh schedule. Returns `None` if called with an empty iterator, or if all dependencies
-    /// are indeterminate.
-    pub(crate) fn determine_time_dependence_ids(
-        &self,
-        ids: impl IntoIterator<Item = GlobalId>,
-        schedule: Option<RefreshSchedule>,
-    ) -> Option<TimeDependence> {
-        // Collect all time dependencies of our dependencies.
-        let mut time_dependencies = ids
-            .into_iter()
-            .filter_map(|id| self.determine_dependence_inner(id))
-            .collect::<Vec<_>>();
-
-        // Sort and dedupe to remove redundancy.
-        time_dependencies.sort();
-        time_dependencies.dedup();
-
-        let time_dependence = if time_dependencies
-            .iter()
-            .any(|dep| *dep == TimeDependence::default())
-        {
-            // Wall-clock dependency is dominant.
-            Some(TimeDependence::default())
-        } else if !time_dependencies.is_empty() {
-            // No immediate wall-clock dependency, found some dependency with a refresh schedule.
-            Some(TimeDependence::new(schedule, time_dependencies))
-        } else {
-            // No wall-clock dependence, no refresh schedule
-            None
-        };
-        TimeDependence::normalize(time_dependence)
-    }
-
-    /// Determine the time dependence for a [`DataSourceDesc`].
-    ///
-    /// Non-epoch timelines are indeterminate, and load generators.
-    fn for_data_source_desc(
-        &self,
-        desc: &DataSourceDesc,
-        timeline: &Timeline,
-    ) -> Option<TimeDependence> {
-        // We only know how to handle the epoch timeline.
-        if !matches!(timeline, Timeline::EpochMilliseconds) {
-            return None;
+    match desc {
+        DataSourceDesc::Ingestion { ingestion_desc, .. } => {
+            match ingestion_desc.desc.connection {
+                // Kafka, Postgres, MySql sources follow wall clock.
+                GenericSourceConnection::Kafka(_)
+                | GenericSourceConnection::Postgres(_)
+                | GenericSourceConnection::MySql(_) => Some(TimeDependence::default()),
+                // Load generators not further specified.
+                GenericSourceConnection::LoadGenerator(_) => None,
+            }
         }
-        match desc {
-            DataSourceDesc::Ingestion { ingestion_desc, .. } => {
-                match ingestion_desc.desc.connection {
-                    // Kafka, Postgres, MySql sources follow wall clock.
-                    GenericSourceConnection::Kafka(_)
-                    | GenericSourceConnection::Postgres(_)
-                    | GenericSourceConnection::MySql(_) => Some(TimeDependence::default()),
-                    // Load generators not further specified.
-                    GenericSourceConnection::LoadGenerator(_) => None,
+        DataSourceDesc::IngestionExport { ingestion_id, .. } => {
+            time_dependence_for_id(catalog, *ingestion_id)
+        }
+        // Introspection, progress and webhook sources follow wall clock.
+        DataSourceDesc::Introspection(_)
+        | DataSourceDesc::Progress
+        | DataSourceDesc::Webhook { .. } => Some(TimeDependence::default()),
+    }
+}
+
+/// Determine the time dependence for a single global ID.
+fn time_dependence_for_id(catalog: &Catalog, id: GlobalId) -> Option<TimeDependence> {
+    let entry = catalog.get_entry(&id);
+    match entry.item() {
+        // Introspection sources follow wall-clock.
+        CatalogItem::Log(_) => Some(TimeDependence::default()),
+        CatalogItem::Table(table) => {
+            match &table.data_source {
+                // Tables follow wall clock.
+                TableDataSource::TableWrites { .. } => Some(TimeDependence::default()),
+                TableDataSource::DataSource { desc, timeline } => {
+                    time_dependence_for_source_desc(catalog, desc, timeline)
                 }
             }
-            DataSourceDesc::IngestionExport { ingestion_id, .. } => {
-                self.determine_dependence_inner(*ingestion_id)
-            }
-            // Introspection, progress and webhook sources follow wall clock.
-            DataSourceDesc::Introspection(_)
-            | DataSourceDesc::Progress
-            | DataSourceDesc::Webhook { .. } => Some(TimeDependence::default()),
         }
-    }
-
-    /// Determine the time dependence for a single global ID.
-    fn determine_dependence_inner(&self, id: GlobalId) -> Option<TimeDependence> {
-        let entry = self.catalog.get_entry(&id);
-        match entry.item() {
-            // Introspection sources follow wall-clock.
-            CatalogItem::Log(_) => Some(TimeDependence::default()),
-            CatalogItem::Table(table) => {
-                match &table.data_source {
-                    // Tables follow wall clock.
-                    TableDataSource::TableWrites { .. } => Some(TimeDependence::default()),
-                    TableDataSource::DataSource { desc, timeline } => {
-                        self.for_data_source_desc(desc, timeline)
-                    }
-                }
-            }
-            CatalogItem::Source(source) => {
-                self.for_data_source_desc(&source.data_source, &source.timeline)
-            }
-            CatalogItem::MaterializedView(_)
-            | CatalogItem::Index(_)
-            | CatalogItem::ContinualTask(_) => {
-                // Return cached information
-                if let Some(time_dependence) = self
-                    .catalog
-                    .try_get_physical_plan(&id)
-                    .map(|plan| plan.time_dependence.clone())
-                {
-                    time_dependence
-                } else {
-                    soft_panic_or_log!(
-                        "Physical plan alarmingly absent for {} {:?}",
-                        entry.item_type(),
-                        entry.id
-                    );
-                    None
-                }
-            }
-            // All others are indeterminate.
-            CatalogItem::Connection(_)
-            | CatalogItem::Func(_)
-            | CatalogItem::Secret(_)
-            | CatalogItem::Sink(_)
-            | CatalogItem::Type(_)
-            | CatalogItem::View(_) => None,
+        CatalogItem::Source(source) => {
+            time_dependence_for_source_desc(catalog, &source.data_source, &source.timeline)
         }
+        CatalogItem::MaterializedView(_)
+        | CatalogItem::Index(_)
+        | CatalogItem::ContinualTask(_) => {
+            // Return cached information
+            if let Some(time_dependence) = catalog
+                .try_get_physical_plan(&id)
+                .map(|plan| plan.time_dependence.clone())
+            {
+                time_dependence
+            } else {
+                soft_panic_or_log!(
+                    "Physical plan alarmingly absent for {} {:?}",
+                    entry.item_type(),
+                    entry.id
+                );
+                None
+            }
+        }
+        // All others are indeterminate.
+        CatalogItem::Connection(_)
+        | CatalogItem::Func(_)
+        | CatalogItem::Secret(_)
+        | CatalogItem::Sink(_)
+        | CatalogItem::Type(_)
+        | CatalogItem::View(_) => None,
     }
 }

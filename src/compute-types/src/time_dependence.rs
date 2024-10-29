@@ -25,7 +25,7 @@ include!(concat!(
 /// Description of how a dataflow follows time.
 ///
 /// The default value indicates the dataflow follows wall-clock without modifications.
-#[derive(Clone, Default, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct TimeDependence {
     /// Optional refresh schedule. None indicates an implicit wall-clock dependency, if no inner
     /// dependencies exist.
@@ -68,19 +68,6 @@ impl TimeDependence {
             schedule.round_up_timestamp(result)
         } else {
             Some(result)
-        }
-    }
-}
-
-impl std::fmt::Debug for TimeDependence {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if *self == TimeDependence::default() {
-            write!(f, "TimeDependence::default (wall-clock)")
-        } else {
-            f.debug_struct("TimeDependence")
-                .field("schedule", &self.schedule)
-                .field("dependence", &self.dependence)
-                .finish()
         }
     }
 }
@@ -146,6 +133,89 @@ mod tests {
                 }),
                 dependence: vec![],
             })
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_apply() {
+        let schedule = |at| RefreshSchedule {
+            everies: vec![],
+            ats: vec![at],
+        };
+        // A default schedule follows wall-clock.
+        assert_eq!(
+            Some(100.into()),
+            TimeDependence::default().apply(100.into())
+        );
+
+        // Nesting default schedules follows wall-clock.
+        assert_eq!(
+            Some(100.into()),
+            TimeDependence::new(None, vec![TimeDependence::default()]).apply(100.into())
+        );
+
+        // Default refresh schedules refresh never, no wall-clock dependence.
+        assert_eq!(
+            None,
+            TimeDependence::new(Some(RefreshSchedule::default()), vec![]).apply(100.into())
+        );
+
+        // Refresh schedule rounds up
+        assert_eq!(
+            Some(200.into()),
+            TimeDependence::new(Some(schedule(200.into())), vec![]).apply(100.into())
+        );
+
+        // Smallest refresh wins.
+        assert_eq!(
+            Some(300.into()),
+            TimeDependence::new(
+                None,
+                vec![
+                    TimeDependence::new(Some(schedule(400.into())), vec![]),
+                    TimeDependence::new(Some(schedule(300.into())), vec![])
+                ]
+            )
+            .apply(100.into())
+        );
+
+        // Defined for all times, dependence rounds up.
+        assert_eq!(
+            None,
+            TimeDependence::new(
+                Some(schedule(200.into())),
+                vec![
+                    TimeDependence::new(Some(schedule(400.into())), vec![]),
+                    TimeDependence::new(Some(schedule(300.into())), vec![])
+                ]
+            )
+            .apply(100.into())
+        );
+
+        // Schedule rounds up minimum of dependence.
+        assert_eq!(
+            Some(350.into()),
+            TimeDependence::new(
+                Some(schedule(350.into())),
+                vec![
+                    TimeDependence::new(Some(schedule(400.into())), vec![]),
+                    TimeDependence::new(Some(schedule(300.into())), vec![])
+                ]
+            )
+            .apply(100.into())
+        );
+
+        // Any default dependence forces wall-clock dependence.
+        assert_eq!(
+            Some(100.into()),
+            TimeDependence::new(
+                None,
+                vec![
+                    TimeDependence::new(Some(schedule(400.into())), vec![]),
+                    TimeDependence::new(None, vec![])
+                ]
+            )
+            .apply(100.into())
         );
     }
 }

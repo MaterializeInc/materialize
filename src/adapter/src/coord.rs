@@ -186,7 +186,7 @@ use crate::error::AdapterError;
 use crate::explain::insights::PlanInsightsContext;
 use crate::explain::optimizer_trace::{DispatchGuard, OptimizerTrace};
 use crate::metrics::Metrics;
-use crate::optimize::dataflow_expiration::TimeDependenceHelper;
+use crate::optimize::dataflow_expiration::time_dependence;
 use crate::optimize::dataflows::{
     dataflow_import_id_bundle, ComputeInstanceSnapshot, DataflowBuilder,
 };
@@ -2588,9 +2588,8 @@ impl Coordinator {
                 .expect("builtin CT should optimize successfully");
 
             // Filter our own ID because we don't exist yet.
-            let id_bundle = dataflow_import_id_bundle(&physical_plan, ct.cluster_id);
-            physical_plan.time_dependence = TimeDependenceHelper::new(self.catalog())
-                .determine_time_dependence_ids(id_bundle.iter().filter(|x| x != id), None);
+            let ids = physical_plan.import_ids().filter(|x| x != id);
+            physical_plan.time_dependence = time_dependence(self.catalog(), ids, None);
 
             // Determine an as of for the new continual task.
             let mut id_bundle = dataflow_import_id_bundle(&physical_plan, ct.cluster_id);
@@ -2677,8 +2676,8 @@ impl Coordinator {
                     };
 
                     let (mut physical_plan, metainfo) = global_lir_plan.unapply();
-                    physical_plan.time_dependence = TimeDependenceHelper::new(self.catalog())
-                        .determine_time_dependence_plan(&physical_plan, idx.cluster_id, None);
+                    physical_plan.time_dependence =
+                        time_dependence(self.catalog(), physical_plan.import_ids(), None);
                     let metainfo = {
                         // Pre-allocate a vector of transient GlobalIds for each notice.
                         let notice_ids = std::iter::repeat_with(|| self.allocate_transient_id())
@@ -2738,12 +2737,11 @@ impl Coordinator {
                     };
 
                     let (mut physical_plan, metainfo) = global_lir_plan.unapply();
-                    physical_plan.time_dependence = TimeDependenceHelper::new(self.catalog())
-                        .determine_time_dependence_plan(
-                            &physical_plan,
-                            mv.cluster_id,
-                            mv.refresh_schedule.clone(),
-                        );
+                    physical_plan.time_dependence = time_dependence(
+                        self.catalog(),
+                        physical_plan.import_ids(),
+                        mv.refresh_schedule.clone(),
+                    );
                     let metainfo = {
                         // Pre-allocate a vector of transient GlobalIds for each notice.
                         let notice_ids = std::iter::repeat_with(|| self.allocate_transient_id())
@@ -2775,9 +2773,8 @@ impl Coordinator {
                     let (optimized_plan, mut physical_plan, metainfo) = self
                         .optimize_create_continual_task(ct, id, self.owned_catalog(), debug_name)?;
                     // Filter our own id as it is not known yet.
-                    let id_bundle = dataflow_import_id_bundle(&physical_plan, ct.cluster_id);
-                    physical_plan.time_dependence = TimeDependenceHelper::new(self.catalog())
-                        .determine_time_dependence_ids(id_bundle.iter().filter(|x| *x != id), None);
+                    let ids = physical_plan.import_ids().filter(|x| *x != id);
+                    physical_plan.time_dependence = time_dependence(self.catalog(), ids, None);
 
                     let catalog = self.catalog_mut();
                     catalog.set_optimized_plan(id, optimized_plan);
