@@ -71,3 +71,9 @@ y                  ""
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 DROP SCHEMA other CASCADE;
+
+# TODO: database-issues#8708
+# > SET statement_timeout = '5s'
+
+# ! SELECT * FROM t
+# contains:statement timeout
