@@ -3211,7 +3211,9 @@ pub enum ShowObjectType<T: AstInfo> {
         in_cluster: Option<T::ClusterName>,
         on_object: Option<T::ItemName>,
     },
-    Table,
+    Table {
+        on_source: Option<T::ItemName>,
+    },
     View,
     Source {
         in_cluster: Option<T::ClusterName>,
@@ -3269,7 +3271,7 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
         f.write_str(" ");
 
         f.write_str(match &self.object_type {
-            ShowObjectType::Table => "TABLES",
+            ShowObjectType::Table { .. } => "TABLES",
             ShowObjectType::View => "VIEWS",
             ShowObjectType::Source { .. } => "SOURCES",
             ShowObjectType::Sink { .. } => "SINKS",
@@ -3324,6 +3326,13 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
         }
 
         if let ShowObjectType::Subsource { on_source } = &self.object_type {
+            if let Some(on_source) = on_source {
+                f.write_str(" ON ");
+                f.write_node(on_source);
+            }
+        }
+
+        if let ShowObjectType::Table { on_source } = &self.object_type {
             if let Some(on_source) = on_source {
                 f.write_str(" ON ");
                 f.write_node(on_source);

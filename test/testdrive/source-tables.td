@@ -56,6 +56,10 @@ $ skip-end
 # Create another table from the same bids upstream using a less qualified reference
 > CREATE TABLE bids2 FROM SOURCE auction_house (REFERENCE "bids");
 
+> SHOW TABLES ON auction_house;
+bids ""
+bids2 ""
+
 > DROP TABLE bids;
 
 > SELECT count(*) FROM bids2
@@ -100,6 +104,10 @@ users auction {id,org_id,name}
 
 > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'counter_2';
 running
+
+> SHOW TABLES ON counter;
+counter_1 ""
+counter_2 ""
 
 > DROP SOURCE counter CASCADE;
 
@@ -222,6 +230,13 @@ INSERT INTO pg_table_added_later VALUES (777);
 666
 777
 
+> SHOW TABLES on pg_source;
+pg_table_1 ""
+pg_table_2 ""
+pg_table_3 ""
+pg_table_6a ""
+pg_table_6b ""
+
 > DROP SOURCE pg_source CASCADE;
 
 
@@ -333,6 +348,9 @@ CREATE TABLE mysql_table_new (foo INTEGER, bar INTEGER);
 mysql_table public {a,b,c}
 mysql_table_new public {foo,bar}
 
+> SHOW TABLES ON mysql_source;
+mysql_table_2 ""
+mysql_table_3 ""
 
 > DROP SOURCE mysql_source CASCADE;
 
@@ -432,6 +450,12 @@ moose    1
 moose    2
 moose    42
 
+> SHOW TABLES ON avro_source;
+avro_table_append ""
+avro_table_append_cols ""
+avro_table_upsert ""
+
+> DROP SOURCE avro_source CASCADE
 
 #
 # Key-value load generator source using source-fed tables
@@ -471,5 +495,9 @@ running
 1   true
 2   true
 3   true
+
+> SHOW TABLES ON keyvalue;
+kv_1 ""
+kv_2 ""
 
 > DROP SOURCE keyvalue CASCADE;

@@ -7427,7 +7427,14 @@ impl<'a> Parser<'a> {
                     };
                     ShowObjectType::Schema { from }
                 }
-                ObjectType::Table => ShowObjectType::Table,
+                ObjectType::Table => {
+                    let on_source = if self.parse_one_of_keywords(&[ON]).is_some() {
+                        Some(self.parse_raw_name()?)
+                    } else {
+                        None
+                    };
+                    ShowObjectType::Table { on_source }
+                }
                 ObjectType::View => ShowObjectType::View,
                 ObjectType::Source => {
                     let in_cluster = self.parse_optional_in_cluster()?;

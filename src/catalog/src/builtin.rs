@@ -6819,7 +6819,7 @@ pub static MZ_SHOW_TABLES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView 
         FROM mz_internal.mz_comments
         WHERE object_type = 'table' AND object_sub_id IS NULL
     )
-    SELECT schema_id, name, COALESCE(comment, '') as comment
+    SELECT schema_id, name, COALESCE(comment, '') as comment, source_id
     FROM mz_catalog.mz_tables tables
     LEFT JOIN comments ON tables.id = comments.id",
     access: vec![PUBLIC_SELECT],
