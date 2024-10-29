@@ -2180,6 +2180,32 @@ where
 }
 
 #[derive(Debug)]
+pub struct RawItemDependencyIds {
+    pub ids: BTreeSet<GlobalId>,
+}
+
+impl<'ast> Visit<'ast, Raw> for RawItemDependencyIds {
+    fn visit_item_name(&mut self, item_name: &RawItemName) {
+        if let RawItemName::Id(id, _, _) = item_name {
+            let parsed_id = id.parse::<GlobalId>().unwrap();
+            self.ids.insert(parsed_id);
+        }
+    }
+}
+
+/// Collect any ID-based dependencies of the provided raw AST node.
+pub fn raw_item_dependency_ids<'ast, N>(node: &'ast N) -> BTreeSet<GlobalId>
+where
+    N: VisitNode<'ast, Raw>,
+{
+    let mut deps = RawItemDependencyIds {
+        ids: BTreeSet::new(),
+    };
+    node.visit(&mut deps);
+    deps.ids
+}
+
+#[derive(Debug)]
 pub struct ItemDependencyModifier<'a> {
     pub modified: bool,
     pub id_map: &'a BTreeMap<GlobalId, GlobalId>,
