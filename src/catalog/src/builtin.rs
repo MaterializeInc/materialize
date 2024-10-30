@@ -1914,7 +1914,7 @@ pub static MZ_COMPUTE_EXPORTS_PER_WORKER: LazyLock<BuiltinLog> = LazyLock::new(|
 pub static MZ_COMPUTE_DATAFLOW_GLOBALIDS_PER_WORKER: LazyLock<BuiltinLog> =
     LazyLock::new(|| BuiltinLog {
         name: "mz_compute_dataflow_globalids_per_worker",
-        schema: MZ_INTERNAL_SCHEMA,
+        schema: MZ_INTROSPECTION_SCHEMA,
         oid: oid::LOG_MZ_COMPUTE_DATAFLOW_GLOBALIDS_PER_WORKER_OID,
         variant: LogVariant::Compute(ComputeLog::DataflowGlobal),
         access: vec![PUBLIC_SELECT],
@@ -1964,7 +1964,7 @@ pub static MZ_ACTIVE_PEEKS_PER_WORKER: LazyLock<BuiltinLog> = LazyLock::new(|| B
 
 pub static MZ_COMPUTE_LIR_MAPPING_PER_WORKER: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
     name: "mz_compute_lir_mapping_per_worker",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::LOG_MZ_COMPUTE_LIR_MAPPING_PER_WORKER_OID,
     variant: LogVariant::Compute(ComputeLog::LirMapping),
     access: vec![PUBLIC_SELECT],
@@ -4073,24 +4073,24 @@ WHERE worker_id = 0",
 
 pub static MZ_DATAFLOW_GLOBAL_IDS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_dataflow_globalids",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_DATAFLOW_GLOBALIDS_OID,
     column_defs: None,
     sql: "
 SELECT id, global_id
-FROM mz_internal.mz_compute_dataflow_globalids_per_worker
+FROM mz_introspection.mz_compute_dataflow_globalids_per_worker
 WHERE worker_id = 0",
     access: vec![PUBLIC_SELECT],
 });
 
 pub static MZ_LIR_MAPPING: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_lir_mapping",
-    schema: MZ_INTERNAL_SCHEMA,
+    schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_LIR_MAPPING_OID,
     column_defs: None,
     sql: "
 SELECT global_id, lir_id, operator, parent_lir_id, nesting, operator_id_start, operator_id_end
-FROM mz_internal.mz_compute_lir_mapping_per_worker
+FROM mz_introspection.mz_compute_lir_mapping_per_worker
 WHERE worker_id = 0",
     access: vec![PUBLIC_SELECT],
 });

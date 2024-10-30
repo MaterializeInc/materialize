@@ -333,10 +333,6 @@ mz_comments
 BASE TABLE
 materialize
 mz_internal
-mz_compute_dataflow_globalids_per_worker
-SOURCE
-materialize
-mz_internal
 mz_compute_dependencies
 SOURCE
 materialize
@@ -350,10 +346,6 @@ VIEW
 materialize
 mz_internal
 mz_compute_hydration_times
-SOURCE
-materialize
-mz_internal
-mz_compute_lir_mapping_per_worker
 SOURCE
 materialize
 mz_internal
@@ -371,10 +363,6 @@ materialize
 mz_internal
 mz_continual_tasks
 BASE TABLE
-materialize
-mz_internal
-mz_dataflow_globalids
-VIEW
 materialize
 mz_internal
 mz_frontiers
@@ -403,10 +391,6 @@ materialize
 mz_internal
 mz_kafka_source_tables
 BASE TABLE
-materialize
-mz_internal
-mz_lir_mapping
-VIEW
 materialize
 mz_internal
 mz_materialization_dependencies
@@ -841,6 +825,10 @@ mz_arrangement_sizes_per_worker
 VIEW
 materialize
 mz_introspection
+mz_compute_dataflow_globalids_per_worker
+SOURCE
+materialize
+mz_introspection
 mz_compute_error_counts
 VIEW
 materialize
@@ -878,6 +866,10 @@ VIEW
 materialize
 mz_introspection
 mz_compute_import_frontiers_per_worker
+SOURCE
+materialize
+mz_introspection
+mz_compute_lir_mapping_per_worker
 SOURCE
 materialize
 mz_introspection
@@ -919,6 +911,10 @@ materialize
 mz_introspection
 mz_dataflow_channels_per_worker
 SOURCE
+materialize
+mz_introspection
+mz_dataflow_globalids
+VIEW
 materialize
 mz_introspection
 mz_dataflow_operator_dataflows
@@ -978,6 +974,10 @@ VIEW
 materialize
 mz_introspection
 mz_expected_group_size_advice
+VIEW
+materialize
+mz_introspection
+mz_lir_mapping
 VIEW
 materialize
 mz_introspection

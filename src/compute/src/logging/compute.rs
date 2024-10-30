@@ -145,13 +145,14 @@ pub enum ComputeEvent {
         /// The LIR identifier (local to `export_id`).
         lir_id: LirId,
         /// The LIR operator, as a string (see `FlatPlanNode::humanize`).
-        operator: String,
+        operator: Box<str>,
         /// The LIR identifier of the parent (if any).
         parent_lir_id: Option<LirId>,
         /// How nested this operator is.
         nesting: u8,
-        /// Operator id span; may not be present if not operators were rendered.
-        operator_span: Option<(usize, usize)>,
+        /// Operator id span start (inclusive) and end (exclusive).
+        /// If the two numbers are equal, then no operators were used.
+        operator_span: (usize, usize),
     },
     DataflowGlobal {
         /// The identifier of the dataflow.

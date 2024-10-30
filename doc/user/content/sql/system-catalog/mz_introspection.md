@@ -408,3 +408,7 @@ The `mz_scheduling_parks_histogram` view describes a histogram of [dataflow] wor
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_dataflow_operator_reachability -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_dataflow_operator_reachability_per_worker -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_dataflow_operator_reachability_raw -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_compute_lir_mapping_per_worker -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_compute_dataflow_globalids_per_worker -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_lir_mapping -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_dataflow_globalids -->
