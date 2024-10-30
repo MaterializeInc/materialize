@@ -29,13 +29,13 @@ mz-orchestrator-kubernetes = { path = "../orchestrator-kubernetes" }
 mz-ore = { path = "../ore" }
 os_info = "3.5.1"
 prometheus = { version = "0.13.3", default-features = false }
-proptest = { version = "1.0.0", default-features = false, features = ["std"]}
-proptest-derive = { version = "0.3.0", features = ["boxed_union"]}
+proptest = { version = "1.0.0", default-features = false, features = ["std"] }
+proptest-derive = { version = "0.3.0", features = ["boxed_union"] }
 prost = { version = "0.13.2", features = ["no-recursion-limit"] }
 semver = "1.0.16"
 serde = { version = "1.0.152", features = ["derive"] }
 sysinfo = "0.27.2"
-timely = "0.12.0"
+timely = "0.13.0"
 tokio = "1.38.0"
 tokio-stream = "0.1.11"
 tonic = "0.12.1"
