@@ -34,7 +34,7 @@ class AuditLogCT(Check):
                 > INSERT INTO t_input VALUES (1);
                 > CREATE MATERIALIZED VIEW anomalies AS SELECT sum(key)::INT FROM t_input;
                 > CREATE CONTINUAL TASK audit_log (count INT) ON INPUT anomalies AS (
-                    INSERT INTO audit_log SELECT * FROM anomalies WHERE sum > 1;
+                    INSERT INTO audit_log SELECT * FROM anomalies WHERE sum IS NOT NULL;
                   )
                 """
             )
@@ -58,6 +58,7 @@ class AuditLogCT(Check):
             dedent(
                 """
                 > SELECT * FROM audit_log
+                1
                 6
                 21
            """

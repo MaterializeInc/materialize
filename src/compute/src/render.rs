@@ -226,9 +226,12 @@ pub fn build_compute_dataflow<A: Allocate>(
                     });
 
                     let mut snapshot_mode = SnapshotMode::Include;
+                    let mut suppress_early_progress_as_of = dataflow.as_of.clone();
                     let ct_source_transformer = ct_ctx.get_ct_source_transformer(*source_id);
                     if let Some(x) = ct_source_transformer.as_ref() {
                         snapshot_mode = x.snapshot_mode();
+                        suppress_early_progress_as_of = suppress_early_progress_as_of
+                            .map(|as_of| x.suppress_early_progress_as_of(as_of));
                     }
 
                     // Note: For correctness, we require that sources only emit times advanced by
@@ -256,7 +259,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                     // To avoid a memory spike during arrangement hydration (database-issues#6368), need to
                     // ensure that the first frontier we report into the dataflow is beyond the
                     // `as_of`.
-                    if let Some(as_of) = dataflow.as_of.clone() {
+                    if let Some(as_of) = suppress_early_progress_as_of {
                         ok_stream = suppress_early_progress(ok_stream, as_of);
                     }
 
