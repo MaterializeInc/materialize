@@ -34,9 +34,9 @@ resources. However, workloads on different clusters are strictly isolated from
 one another. A given workload has access only to the CPU, memory, and scratch
 disk of the cluster that it is running on.
 
-Clusters are commonly used to isolate different classes of workloads. For
-example, you could place your development workloads in a cluster named
-`dev` and your production workloads in a cluster named `prod`.
+It is a **best practice** to use clusters to isolate different classes of
+workloads. For example, you could place your development workloads in a cluster
+named `dev` and your production workloads in a cluster named `prod`.
 
 ## Fault tolerance
 
