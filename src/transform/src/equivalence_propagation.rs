@@ -118,13 +118,7 @@ impl EquivalencePropagation {
 
         // Optimize `outer_equivalences` in the context of `expr_type`.
         // If it ends up unsatisfiable, we can replace `expr` with an empty constant of the same relation type.
-        let reducer = expr_equivalences.reducer();
-        for class in outer_equivalences.classes.iter_mut() {
-            for expr in class.iter_mut() {
-                reducer.reduce_expr(expr);
-            }
-        }
-
+        outer_equivalences.extend(expr_equivalences.classes().clone());
         outer_equivalences.minimize(expr_type);
         if outer_equivalences.unsatisfiable() {
             expr.take_safely();
@@ -140,7 +134,7 @@ impl EquivalencePropagation {
                     rows.retain(|(row, _count)| {
                         let temp_storage = mz_repr::RowArena::new();
                         let datums = datum_vec.borrow_with(row);
-                        outer_equivalences.classes.iter().all(|class| {
+                        outer_equivalences.classes().iter().all(|class| {
                             // Any subset of `Ok` results must equate, or we can drop the row.
                             let mut oks = class
                                 .iter()
@@ -274,7 +268,7 @@ impl EquivalencePropagation {
                         Datum::True,
                         mz_repr::ScalarType::Bool,
                     ));
-                    outer_equivalences.classes.push(class);
+                    outer_equivalences.push(class);
                     outer_equivalences.minimize(input_types);
                     self.apply(
                         input,
@@ -340,21 +334,12 @@ impl EquivalencePropagation {
                     columns += child_arity;
                 }
 
-                // Form the equivalences we will use to replace `equivalences`.
-                let mut join_equivalences = EquivalenceClasses::default();
-                join_equivalences
-                    .classes
-                    .extend(equivalences.iter().cloned());
-                // // Optionally, introduce `outer_equivalences` into `equivalences`.
-                // // This is not required, but it could be very helpful. To be seen.
-                // join_equivalences
-                //     .classes
-                //     .extend(outer_equivalences.classes.clone());
-
+                // Working equivalences that we will develop.
+                let mut temp_equivalences = equivalences.clone();
                 // Reduce join equivalences by the input equivalences.
                 for input_equivs in input_equivalences.iter() {
                     let reducer = input_equivs.reducer();
-                    for class in join_equivalences.classes.iter_mut() {
+                    for class in temp_equivalences.iter_mut() {
                         for expr in class.iter_mut() {
                             // Semijoin elimination currently fails if you do more advanced simplification than
                             // literal substitution.
@@ -367,6 +352,15 @@ impl EquivalencePropagation {
                         }
                     }
                 }
+
+                // Form the equivalences we will use to replace `equivalences`.
+                let mut join_equivalences = EquivalenceClasses::default();
+                join_equivalences.extend(temp_equivalences);
+
+                // // Optionally, introduce `outer_equivalences` into `equivalences`.
+                // // This is not required, but it could be very helpful. To be seen.
+                // join_equivalences.extend(outer_equivalences.classes.clone());
+
                 // Minimize relative to appended input types.
                 join_equivalences.minimize(&input_types);
 
@@ -378,14 +372,10 @@ impl EquivalencePropagation {
                     let child_arity = child.value::<Arity>().expect("Arity required");
 
                     let mut push_equivalences = join_equivalences.clone();
-                    push_equivalences
-                        .classes
-                        .extend(outer_equivalences.classes.clone());
+                    push_equivalences.extend(outer_equivalences.classes().clone());
                     for (other, input_equivs) in input_equivalences.iter().enumerate() {
                         if index != other {
-                            push_equivalences
-                                .classes
-                                .extend(input_equivs.classes.clone());
+                            push_equivalences.extend(input_equivs.classes().clone());
                         }
                     }
                     push_equivalences.project(columns..(columns + child_arity));
@@ -394,7 +384,7 @@ impl EquivalencePropagation {
                     columns += child_arity;
                 }
 
-                equivalences.clone_from(&join_equivalences.classes);
+                equivalences.clone_from(join_equivalences.classes());
             }
             MirRelationExpr::Reduce {
                 input,
@@ -445,7 +435,7 @@ impl EquivalencePropagation {
                 let permutation = (input_arity..(input_arity + output_arity)).collect::<Vec<_>>();
                 outer_equivalences.permute(&permutation[..]);
                 for (index, group) in group_key.iter().enumerate() {
-                    outer_equivalences.classes.push(vec![
+                    outer_equivalences.push(vec![
                         MirScalarExpr::Column(input_arity + index),
                         group.clone(),
                     ]);

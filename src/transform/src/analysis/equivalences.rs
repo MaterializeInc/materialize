@@ -298,7 +298,7 @@ pub struct EquivalenceClasses {
     /// These classes are unified whenever possible, to minimize the number of classes.
     /// They are only guaranteed to form an equivalence relation after a call to `minimimize`,
     /// which refreshes both `self.classes` and `self.remap`.
-    pub classes: Vec<Vec<MirScalarExpr>>,
+    classes: Vec<Vec<MirScalarExpr>>,
 
     /// An expression simplification map.
     ///
@@ -306,9 +306,38 @@ pub struct EquivalenceClasses {
     /// As users may add to `self.classes`, `self.remap` may become stale. We refresh `remap`
     /// only in `self.refresh()`, to the equivalence relation that derives from `self.classes`.
     remap: BTreeMap<MirScalarExpr, MirScalarExpr>,
+
+    /// An indication that `self.classes` has changed since the most recent `refresh`.
+    dirty: bool,
 }
 
 impl EquivalenceClasses {
+    /// Introduce a new class of equivalent expressions.
+    ///
+    /// This method only dirties the type by adding an item to its todo list, and does not
+    /// update the information it will use when other public methods are called. To refresh
+    /// the information maintained by the type, incorporating the todo list, call `minimize()`.
+    pub fn push(&mut self, class: Vec<MirScalarExpr>) {
+        if class.len() > 1 {
+            if let Some(rep) = self.remap.get(&class[0]) {
+                if class[1..].iter().any(|e| self.remap.get(e) != Some(rep)) {
+                    self.classes.push(class);
+                    self.dirty = true;
+                }
+            } else {
+                self.classes.push(class);
+                self.dirty = true;
+            }
+        }
+    }
+
+    /// Introduce a sequence of equivalence classes of expressions.
+    pub fn extend(&mut self, iter: impl IntoIterator<Item = Vec<MirScalarExpr>>) {
+        for item in iter {
+            self.push(item);
+        }
+    }
+
     /// Comparator function for the complexity of scalar expressions. Simpler expressions are
     /// smaller. Can be used when we need to decide which of several equivalent expressions to use.
     pub fn mir_scalar_expr_complexity(
@@ -417,6 +446,10 @@ impl EquivalenceClasses {
     ///
     /// Informally this means simplifying constraints, removing redundant constraints, and unifying equivalence classes.
     pub fn minimize(&mut self, columns: &Option<Vec<ColumnType>>) {
+        if !self.dirty {
+            return;
+        }
+
         // Repeatedly, we reduce each of the classes themselves, then unify the classes.
         // This should strictly reduce complexity, and reach a fixed point.
         // Ideally it is *confluent*, arriving at the same fixed point no matter the order of operations.
@@ -445,6 +478,8 @@ impl EquivalenceClasses {
         while !stable {
             stable = !self.minimize_once(&columns);
         }
+
+        self.dirty = false;
     }
 
     /// A single iteration of minimization, which we expect to repeat but benefit from factoring out.
@@ -606,6 +641,7 @@ impl EquivalenceClasses {
         let mut equivalences = EquivalenceClasses {
             classes,
             remap: Default::default(),
+            dirty: true,
         };
         equivalences.minimize(&None);
         equivalences
@@ -618,6 +654,8 @@ impl EquivalenceClasses {
                 expr.permute(permutation);
             }
         }
+        self.dirty = true;
+        self.minimize(&None);
     }
 
     /// Subject the constraints to the column projection, reworking and removing equivalences.
@@ -700,6 +738,7 @@ impl EquivalenceClasses {
                 MirScalarExpr::Column(col2),
             ]);
         }
+        self.dirty = true;
         self.minimize(&None);
     }
 
@@ -782,6 +821,16 @@ impl EquivalenceClasses {
     /// Returns a map that can be used to replace (sub-)expressions.
     pub fn reducer(&self) -> &BTreeMap<MirScalarExpr, MirScalarExpr> {
         &self.remap
+    }
+
+    /// Results a list of equivalence classes, each described by their members.
+    ///
+    /// These classes always correspond to the map returned by `reduced`, and are always
+    /// an equivalence relation. Moreover, the first element in each class is the least
+    /// under `Self::mir_scalar_expr_complexity`, and should be substituted for members
+    /// of its equivalence class, rather than the other way around.
+    pub fn classes(&self) -> &Vec<Vec<MirScalarExpr>> {
+        &self.classes
     }
 }
 
