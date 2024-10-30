@@ -121,27 +121,11 @@ async fn test_balancer() {
     let envid = config.environment_id.clone();
     let envd_server = config.start().await;
 
-    // Ensure we could connect directly to envd without SSL on the balancer port.
-    let pg_client_envd = envd_server
-        .connect()
-        .balancer()
-        .user(frontegg_user)
-        .password(&frontegg_password)
-        .await
-        .unwrap();
-
-    let res: i32 = pg_client_envd
-        .query_one("SELECT 4", &[])
-        .await
-        .unwrap()
-        .get(0);
-    assert_eq!(res, 4);
-
     let resolvers = vec![
-        Resolver::Static(envd_server.inner.balancer_sql_local_addr().to_string()),
+        Resolver::Static(envd_server.inner.sql_local_addr().to_string()),
         Resolver::Frontegg(FronteggResolver {
             auth: frontegg_auth,
-            addr_template: envd_server.inner.balancer_sql_local_addr().to_string(),
+            addr_template: envd_server.inner.sql_local_addr().to_string(),
         }),
     ];
     let cert_config = Some(TlsCertConfig {
@@ -182,7 +166,7 @@ async fn test_balancer() {
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             Some(cancel_dir.path().to_path_buf()),
             resolver,
-            envd_server.inner.balancer_http_local_addr().to_string(),
+            envd_server.inner.http_local_addr().to_string(),
             cert_config.clone(),
             MetricsRegistry::new(),
             ticker,
