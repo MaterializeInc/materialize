@@ -6218,7 +6218,7 @@ WITH MUTUALLY RECURSIVE
         SELECT
             unnest(indexes) AS id,
             'keep' AS hint,
-            'downstream dependencies: ' AS details,
+            'multiple downstream dependencies: ' AS details,
             justification
         FROM objects_with_justification
         -- indexes can only be part of justification for leaf nodes
@@ -6250,9 +6250,9 @@ WITH MUTUALLY RECURSIVE
 
 SELECT
     h.id AS object_id,
-    h.hint AS recommendation,
+    h.hint AS hint,
     h.details,
-    h.justification
+    h.justification AS referenced_object_ids
 FROM hints_resolved_ids AS h",
         access: vec![PUBLIC_SELECT],
     }

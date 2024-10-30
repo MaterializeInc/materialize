@@ -242,9 +242,9 @@ query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_index_advice' ORDER BY position
 ----
 1  object_id  text
-2  recommendation  text
+2  hint  text
 3  details  text
-4  justification  list
+4  referenced_object_ids  list
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_materialization_dependencies' ORDER BY position

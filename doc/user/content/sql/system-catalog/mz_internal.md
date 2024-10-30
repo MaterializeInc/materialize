@@ -432,12 +432,12 @@ deploying the changes to production.
 
 
 <!-- RELATION_SPEC mz_internal.mz_index_advice -->
-| Field            | Type        | Meaning  |
-| ---------------  | ----------- | -------- |
-| `object_id`      | [`text`]    | The ID of the object. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), or [`mz_catalog.mz_views.id`](../mz_catalog#mz_views). |
-| `recommendation` | [`text`]    | A suggestion to either change the object (e.g. create an index, turn a materialized view into an indexed view) or keep the object unchanged. |
-| `details`        | [`text`]    | Additional details on why the `recommendation` was proposed based on the dependencies of the object. |
-| `justification`  | [`list`]    | The object ids that support the `recommendation`. `details` resolves the ids to names, which can be abiguous in case of multiple schemas or databases. |
+| Field                    | Type        | Meaning  |
+| ------------------------ | ----------- | -------- |
+| `object_id`              | [`text`]    | The ID of the object. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), or [`mz_catalog.mz_views.id`](../mz_catalog#mz_views). |
+| `hint`                   | [`text`]    | A suggestion to either change the object (e.g. create an index, turn a materialized view into an indexed view) or keep the object unchanged. |
+| `details`                | [`text`]    | Additional details on why the `hint` was proposed based on the dependencies of the object. |
+| `referenced_object_ids`  | [`list`]    | The object ids that support the `hint`. `details` resolves the ids to names, which can be ambiguous in case of multiple schemas or databases. |
 
 ## `mz_materialization_dependencies`
 
