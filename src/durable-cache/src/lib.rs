@@ -14,7 +14,7 @@ use std::fmt::{Debug, Formatter};
 use std::hash::Hash;
 use std::sync::Arc;
 
-use differential_dataflow::consolidation::consolidate_updates;
+use differential_dataflow::consolidation::consolidate;
 use mz_ore::collections::{AssociativeExt, HashSet};
 use mz_ore::soft_panic_or_log;
 use mz_persist_client::critical::SinceHandle;
@@ -201,14 +201,13 @@ impl<C: DurableCacheCodec> DurableCache<C> {
         // Okay compute it and write it durably to the cache.
         let val = val_fn();
         let mut expected_upper = self.local_progress;
+        let update = (C::encode(key, &val), 1);
         loop {
-            let update = (C::encode(key, &val), expected_upper, 1);
-            let new_upper = expected_upper + 1;
             let ret = self
-                .compare_and_append([update], expected_upper, new_upper)
+                .compare_and_append([update.clone()], expected_upper)
                 .await;
             match ret {
-                Ok(()) => {
+                Ok(new_upper) => {
                     self.sync_to(Some(new_upper)).await;
                     return self.get_local(key).expect("just inserted");
                 }
@@ -272,25 +271,18 @@ impl<C: DurableCacheCodec> DurableCache<C> {
             // If there are duplicate keys we ignore all but the first one.
             if seen_keys.insert(key) {
                 if let Some(prev) = self.local.get(key) {
-                    updates.push((
-                        (prev.encoded_key.clone(), prev.encoded_val.clone()),
-                        expected_upper,
-                        -1,
-                    ));
+                    updates.push(((prev.encoded_key.clone(), prev.encoded_val.clone()), -1));
                 }
                 if let Some(val) = val {
-                    updates.push((C::encode(key, val), expected_upper, 1));
+                    updates.push((C::encode(key, val), 1));
                 }
             }
         }
-        consolidate_updates(&mut updates);
+        consolidate(&mut updates);
 
-        let new_upper = expected_upper + 1;
-        let ret = self
-            .compare_and_append(updates, expected_upper, new_upper)
-            .await;
+        let ret = self.compare_and_append(updates, expected_upper).await;
         match ret {
-            Ok(()) => {
+            Ok(new_upper) => {
                 self.sync_to(Some(new_upper)).await;
                 Ok(())
             }
@@ -301,15 +293,26 @@ impl<C: DurableCacheCodec> DurableCache<C> {
         }
     }
 
+    /// Applies `updates` to the cache at `write_ts`. See [`WriteHandle::compare_and_append`] for
+    /// more details.
+    ///
+    /// This method will also downgrade the critical since of the underlying persist shard on
+    /// success.
     async fn compare_and_append<I>(
         &mut self,
         updates: I,
-        expected_upper: u64,
-        new_upper: u64,
-    ) -> Result<(), UpperMismatch<u64>>
+        write_ts: u64,
+    ) -> Result<u64, UpperMismatch<u64>>
     where
-        I: IntoIterator<Item = ((C::KeyCodec, C::ValCodec), u64, i64)>,
+        // TODO(jkosh44) With the proper lifetime incantations, we might be able to accept
+        // references to `C::KeyCodec` and `C::ValCodec`, since that's what
+        // `WriteHandle::compare_and_append` wants. That would avoid some clones from callers of
+        // this method.i
+        I: IntoIterator<Item = ((C::KeyCodec, C::ValCodec), i64)>,
     {
+        let expected_upper = write_ts;
+        let new_upper = expected_upper + 1;
+        let updates = updates.into_iter().map(|((k, v), d)| ((k, v), write_ts, d));
         self.write
             .compare_and_append(
                 updates,
@@ -320,22 +323,22 @@ impl<C: DurableCacheCodec> DurableCache<C> {
             .expect("usage should be valid")?;
 
         // Lag the shard's upper by 1 to keep it readable.
-        let downgrade_to = Antichain::from_elem(new_upper.saturating_sub(1));
+        let downgrade_to = Antichain::from_elem(write_ts);
 
         // The since handle gives us the ability to fence out other downgraders using an opaque token.
         // (See the method documentation for details.)
         // That's not needed here, so we use the since handle's opaque token to avoid any comparison
         // failures.
         let opaque = *self.since_handle.opaque();
-        let downgrade = self
+        let ret = self
             .since_handle
-            .maybe_compare_and_downgrade_since(&opaque, (&opaque, &downgrade_to))
+            .compare_and_downgrade_since(&opaque, (&opaque, &downgrade_to))
             .await;
-        if let Some(Err(e)) = downgrade {
+        if let Err(e) = ret {
             soft_panic_or_log!("found opaque value {e}, but expected {opaque}");
         }
 
-        Ok(())
+        Ok(new_upper)
     }
 }
 
