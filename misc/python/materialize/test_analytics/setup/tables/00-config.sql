@@ -27,6 +27,6 @@ VALUES
 );
 
 CREATE ROLE qa;
-GRANT qa TO "dennis.felsing@materialize.com", "rainer@materialize.com";
+GRANT qa TO "dennis.felsing@materialize.com";
 ALTER TABLE config OWNER TO qa;
 GRANT SELECT ON TABLE config TO "hetzner-ci";
