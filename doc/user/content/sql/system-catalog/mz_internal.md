@@ -437,7 +437,7 @@ deploying the changes to production.
 | `object_id`              | [`text`]    | The ID of the object. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), or [`mz_catalog.mz_views.id`](../mz_catalog#mz_views). |
 | `hint`                   | [`text`]    | A suggestion to either change the object (e.g. create an index, turn a materialized view into an indexed view) or keep the object unchanged. |
 | `details`                | [`text`]    | Additional details on why the `hint` was proposed based on the dependencies of the object. |
-| `referenced_object_ids`  | [`list`]    | The object ids that support the `hint`. `details` resolves the ids to names, which can be ambiguous in case of multiple schemas or databases. |
+| `referenced_object_ids`  | [`list`]    | The IDs of objects referenced by `details`. Corresponds to [mz_objects.id](https://materialize.com/docs/sql/system-catalog/mz_catalog/#mz_objects). |
 
 ## `mz_materialization_dependencies`
 
