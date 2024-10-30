@@ -55,7 +55,7 @@ Name                                        | Default value             |  Descr
 `server_version`                            | Version-dependent         | The PostgreSQL compatible server version.                                                                                                                              | No
 `sql_safe_updates`                          | `false`                   | Boolean flag indicating whether to prohibit SQL statements that may be overly destructive.                                                                             | Yes
 `standard_conforming_strings`               | `true`                    | Boolean flag indicating whether ordinary string literals (`'...'`) should treat backslashes literally. The only supported value is `true`.                             | Yes
-`statement_timeout`                         | `10s`                     | The maximum allowed duration of `INSERT`, `UPDATE`, and `DELETE` operations. If this value is specified without units, it is taken as milliseconds (`ms`).             | Yes
+`statement_timeout`                         | `10s`                     | The maximum allowed duration of the read portion of write operations; i.e., the `SELECT` portion of `INSERT INTO ... (SELECT ...)`; the `WHERE` portion of `UPDATE ... WHERE ...` and `DELETE FROM ... WHERE ...`. If this value is specified without units, it is taken as milliseconds (`ms`). | Yes
 `timezone`                                  | `UTC`                     | The time zone for displaying and interpreting timestamps. The only supported value is `UTC`.                                                                           | Yes
 
 [Contact support]: /support
