@@ -1035,7 +1035,7 @@ impl RustType<ProtoFlatPlanStep> for FlatPlanStep {
         Ok(Self {
             node: proto.node.into_rust_if_some("node")?,
             parent: proto.parent.into_rust()?,
-            nesting: u8::try_from(proto.nesting).unwrap_or_else(|_| u8::MAX),
+            nesting: u8::try_from(proto.nesting).unwrap_or(u8::MAX),
         })
     }
 }
