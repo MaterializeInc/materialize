@@ -94,23 +94,23 @@ Explained Query:
   Return
     Return
       Union
-        Get l5
+        Get l7
         Map (null)
           Union
             Negate
               Project ()
-                Get l5
+                Get l7
             Constant
               - ()
     With
-      cte l5 =
+      cte l7 =
         Reduce aggregates=[sum(#0)]
           Project (#3)
             TopK group_by=[#0] order_by=[#1 desc nulls_first, #2 desc nulls_first] limit=1
               Reduce group_by=[#0..=#2] aggregates=[count(*)]
-                Get l4
+                Get l6
   With Mutually Recursive
-    cte l4 =
+    cte l6 =
       Union
         Project (#0, #3, #4)
           Map (0, 0)
@@ -119,16 +119,22 @@ Explained Query:
           Map ((#1 + 1))
             Join on=(#0 = #3 AND #4 = (#1 + 1)) type=differential
               ArrangeBy keys=[[#0, (#1 + 1)]]
-                Get l4
+                Get l6
               ArrangeBy keys=[[#0, #1]]
                 Project (#0, #1)
                   Filter (#2 != "#")
                     Get l1
-        Project (#0, #7, #8)
-          Map (((#1 + #3) + 1), (#2 + 1))
-            Join on=(#0 = #4 AND #1 = #5 AND #3 = #6) type=differential
-              ArrangeBy keys=[[#0, #1, #3]]
-                Get l2
+        Project (#0, #20, #21)
+          Map (((#1 + #4) + 1), (#2 + 1))
+            Join on=(#0 = #7 = #14 = #17 AND #1 = #8 = #15 = #18 AND #2 = #9 AND #3 = #10 AND #4 = #11 = #16 = #19 AND #5 = #12 AND #6 = #13) type=delta
+              ArrangeBy keys=[[#0..=#6], [#0, #1, #4]]
+                Project (#0..=#2, #4, #5, #7, #8)
+                  Filter (#8 != "#") AND (#0 = #3) AND (#0 = #6) AND (#3 = #6) AND (#4 = (#2 + 1)) AND (#7 = ((#1 + #5) + 1))
+                    Get l2
+              ArrangeBy keys=[[#0..=#6]]
+                Project (#0..=#2, #4, #5, #7, #8)
+                  Filter (#8 != "#") AND (#0 = #3) AND (#0 = #6) AND (#3 = #6) AND (#4 = (#2 + 1)) AND (#7 = ((#1 + #5) + 1))
+                    Get l3
               ArrangeBy keys=[[#0..=#2]]
                 Union
                   Negate
@@ -137,32 +143,36 @@ Explained Query:
                         Filter (#4 >= (#1 + 1)) AND (#4 <= (#1 + #2))
                           Join on=(#0 = #3) type=differential
                             ArrangeBy keys=[[#0]]
-                              Get l3
+                              Get l4
                             ArrangeBy keys=[[#0]]
                               Project (#0, #1)
                                 Filter (#2 = ".")
                                   Get l1
-                  Get l3
-    cte l3 =
+                  Get l5
+              ArrangeBy keys=[[#0..=#2]]
+                Get l5
+    cte l5 =
+      Filter (#2) IS NOT NULL
+        Get l4
+    cte l4 =
       Distinct project=[#0..=#2]
-        Project (#0, #1, #3)
-          Get l2
+        Project (#0, #1, #5)
+          Get l3
+    cte l3 =
+      Distinct project=[#0..=#8]
+        Get l2
     cte l2 =
-      Project (#0..=#2, #5)
-        Join on=(#0 = #3 = #6 AND #4 = (#2 + 1) AND #7 = ((#1 + #5) + 1)) type=delta
-          ArrangeBy keys=[[#0], [#0, (#2 + 1)]]
-            Filter (#2) IS NOT NULL
-              Get l4
-          ArrangeBy keys=[[#0, #1]]
-            Project (#0, #2, #3)
-              Map (text_to_integer(array_index(regexp_split_to_array[",", case_insensitive=false](#1), integer_to_bigint(#2))))
-                FlatMap generate_series(1, (regexp_split_to_array[",", case_insensitive=false](#1) array_length 1), 1)
-                  Project (#0, #2)
-                    Get l0
-          ArrangeBy keys=[[#0, #1]]
-            Project (#0, #1)
-              Filter (#2 != "#")
-                Get l1
+      CrossJoin type=delta
+        ArrangeBy keys=[[]]
+          Get l6
+        ArrangeBy keys=[[]]
+          Project (#0, #2, #3)
+            Map (text_to_integer(array_index(regexp_split_to_array[",", case_insensitive=false](#1), integer_to_bigint(#2))))
+              FlatMap generate_series(1, (regexp_split_to_array[",", case_insensitive=false](#1) array_length 1), 1)
+                Project (#0, #2)
+                  Get l0
+        ArrangeBy keys=[[]]
+          Get l1
     cte l1 =
       Project (#0, #2, #3)
         Map (substr(#1, #2, 1))

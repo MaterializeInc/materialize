@@ -399,20 +399,26 @@ Explained Query:
       cte l15 =
         Reduce aggregates=[count(*)]
           Project ()
-            Union
-              Negate
+            Join on=(#0 = #2 AND #1 = #3) type=differential
+              ArrangeBy keys=[[#0, #1]]
                 Project (#0, #1)
-                  Join on=(#0 = #2 AND #1 = #3) type=differential
-                    ArrangeBy keys=[[#0, #1]]
-                      Get l14
-                    ArrangeBy keys=[[#0, #1]]
-                      Distinct project=[#0, #1]
-                        Project (#0, #1)
-                          Get l6
-              Get l14
+                  Filter (#2 = true)
+                    Get l13
+              ArrangeBy keys=[[#0, #1]]
+                Union
+                  Negate
+                    Project (#0, #1)
+                      Join on=(#0 = #2 AND #1 = #3) type=differential
+                        ArrangeBy keys=[[#0, #1]]
+                          Get l14
+                        ArrangeBy keys=[[#0, #1]]
+                          Distinct project=[#0, #1]
+                            Project (#0, #1)
+                              Get l6
+                  Get l14
       cte l14 =
-        Project (#0, #1)
-          Filter (#2 = true)
+        Distinct project=[#0, #1]
+          Project (#0, #1)
             Get l13
   With Mutually Recursive
     cte l13 =

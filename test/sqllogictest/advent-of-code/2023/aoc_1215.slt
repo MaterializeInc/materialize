@@ -216,113 +216,112 @@ Explained Query:
           Project (#1)
             Map (numeric_to_bigint(#0))
               Union
-                Get l19
+                Get l20
                 Map (null)
                   Union
                     Negate
                       Project ()
-                        Get l19
+                        Get l20
                     Constant
                       - ()
     With
-      cte l19 =
+      cte l20 =
         Reduce aggregates=[sum((((1 + #0) * #2) * integer_to_bigint(#1)))]
           Project (#0, #1, #5)
             Join on=(#0 = #3 AND #2 = #4) type=differential
               ArrangeBy keys=[[#0, #2]]
-                Get l15
+                Get l16
               ArrangeBy keys=[[#0, #1]]
                 Union
-                  Get l18
+                  Get l19
                   Map (null)
                     Union
                       Negate
                         Project (#0, #1)
-                          Get l18
-                      Get l16
-      cte l18 =
+                          Get l19
+                      Get l17
+      cte l19 =
         Union
-          Get l17
+          Get l18
           Map (0)
             Union
               Negate
                 Project (#0, #1)
-                  Get l17
-              Get l16
-      cte l17 =
+                  Get l18
+              Get l17
+      cte l18 =
         Reduce group_by=[#0, #1] aggregates=[count(*)]
           Project (#0, #1)
             Filter (#1 >= #3)
               Join on=(#0 = #2) type=differential
                 ArrangeBy keys=[[#0]]
                   Filter (#0) IS NOT NULL
-                    Get l16
+                    Get l17
                 ArrangeBy keys=[[#0]]
                   Project (#0, #2)
                     Filter (#0) IS NOT NULL
-                      Get l15
-      cte l16 =
+                      Get l16
+      cte l17 =
         Distinct project=[#0, #1]
           Project (#0, #2)
-            Get l15
-      cte l15 =
+            Get l16
+      cte l16 =
         Project (#1, #3, #4)
           Join on=(#0 = #2) type=differential
             ArrangeBy keys=[[#0]]
               Project (#0, #2)
                 Filter (#1 = "") AND (#0) IS NOT NULL
-                  Get l14
+                  Get l15
             ArrangeBy keys=[[#0]]
-              Project (#0..=#2)
-                Filter NOT(#3)
-                  Get l13
+              Project (#0, #1, #3)
+                Filter NOT(#2)
+                  Get l14
   With Mutually Recursive
-    cte [recursion_limit=10, return_at_limit] l14 =
+    cte [recursion_limit=10, return_at_limit] l15 =
       Union
         Project (#0, #0, #4)
           Map (0)
-            Get l13
+            Get l14
         Project (#0, #3, #4)
           Filter (char_length(#1) > 0)
             Map (substr(#1, 2), (((#2 + integer_to_bigint(ascii(substr(#1, 1, 1)))) * 17) % 256))
-              Get l14
-    cte l13 =
+              Get l15
+    cte l14 =
       Project (#1..=#4)
         TopK group_by=[#1] order_by=[#0 desc nulls_first, #2 asc nulls_last] limit=1
-          Project (#0..=#2, #7, #8)
-            Map ((#1) IS NULL)
-              Join on=(#0 = #3 AND #1 = #4 = #6 AND #2 = #5) type=delta
-                ArrangeBy keys=[[#0..=#2], [#1]]
-                  Get l7
-                ArrangeBy keys=[[#0..=#2]]
-                  Get l8
-                ArrangeBy keys=[[#0]]
-                  Union
-                    Get l12
-                    Project (#0, #2)
-                      Map (null)
-                        Join on=(#0 = #1) type=differential
-                          ArrangeBy keys=[[#0]]
-                            Union
-                              Negate
-                                Distinct project=[#0]
-                                  Project (#0)
-                                    Get l12
-                              Get l9
-                          ArrangeBy keys=[[#0]]
-                            Get l9
-    cte l12 =
+          Project (#0..=#3, #8)
+            Join on=(#0 = #4 AND #1 = #5 = #7 AND #2 = #6) type=delta
+              ArrangeBy keys=[[#0..=#2], [#1]]
+                Get l8
+              ArrangeBy keys=[[#0..=#2]]
+                Get l9
+              ArrangeBy keys=[[#0]]
+                Union
+                  Get l13
+                  Project (#0, #2)
+                    Map (null)
+                      Join on=(#0 = #1) type=differential
+                        ArrangeBy keys=[[#0]]
+                          Union
+                            Negate
+                              Distinct project=[#0]
+                                Project (#0)
+                                  Get l13
+                            Get l10
+                        ArrangeBy keys=[[#0]]
+                          Get l10
+    cte l13 =
       Union
-        Get l11
+        Get l12
         Map (error("more than one record produced in subquery"))
           Project (#0)
             Filter (#1 > 1)
               Reduce group_by=[#0] aggregates=[count(*)]
                 Project (#0)
-                  Get l11
-    cte l11 =
+                  Get l12
+    cte l12 =
       Union
-        Get l10
+        Get l11
         Project (#0, #2)
           Map (null)
             Join on=(#0 = #1) type=differential
@@ -330,63 +329,67 @@ Explained Query:
                 Union
                   Negate
                     Project (#0)
-                      Get l10
-                  Get l9
+                      Get l11
+                  Get l10
               ArrangeBy keys=[[#0]]
-                Get l9
-    cte l10 =
+                Get l10
+    cte l11 =
       Reduce group_by=[#0] aggregates=[min(#1)]
         Project (#0, #1)
           Join on=(#0 = #2) type=differential
             ArrangeBy keys=[[#0]]
               Filter (#0) IS NOT NULL
-                Get l9
+                Get l10
             ArrangeBy keys=[[#1]]
               Project (#0, #1)
-                Filter (#1) IS NOT NULL
-                  Get l7
-    cte l9 =
+                Filter NOT(#3)
+                  Get l8
+    cte l10 =
       Distinct project=[#0]
         Project (#1)
+          Get l9
+    cte l9 =
+      Distinct project=[#0..=#2]
+        Project (#0..=#2)
           Get l8
     cte l8 =
-      Distinct project=[#0..=#2]
-        Get l7
+      Project (#0..=#2, #8)
+        Filter (#0 > coalesce(#7, 0))
+          Map ((#1) IS NULL)
+            Join on=(#0 = #3 AND #1 = #4 = #6 AND #2 = #5) type=delta
+              ArrangeBy keys=[[#0..=#2], [#1]]
+                Project (#0, #3, #4)
+                  Map (("-" = substr(#1, char_length(#1))), case when #2 then substr(#1, 1, (char_length(#1) - 1)) else substr(#1, 1, (char_length(#1) - 2)) end, case when #2 then 0 else text_to_integer(substr(#1, char_length(#1))) end)
+                    Get l0
+              ArrangeBy keys=[[#0..=#2]]
+                Get l3
+              ArrangeBy keys=[[#0]]
+                Union
+                  Get l7
+                  Project (#0, #2)
+                    Map (null)
+                      Join on=(#0 = #1) type=differential
+                        ArrangeBy keys=[[#0]]
+                          Union
+                            Negate
+                              Distinct project=[#0]
+                                Project (#0)
+                                  Get l7
+                            Get l4
+                        ArrangeBy keys=[[#0]]
+                          Get l4
     cte l7 =
-      Project (#0..=#2)
-        Filter (#0 > coalesce(#4, 0))
-          Join on=(#1 = #3) type=differential
-            ArrangeBy keys=[[#1]]
-              Project (#0, #3, #4)
-                Map (("-" = substr(#1, char_length(#1))), case when #2 then substr(#1, 1, (char_length(#1) - 1)) else substr(#1, 1, (char_length(#1) - 2)) end, case when #2 then 0 else text_to_integer(substr(#1, char_length(#1))) end)
-                  Get l0
-            ArrangeBy keys=[[#0]]
-              Union
-                Get l6
-                Project (#0, #2)
-                  Map (null)
-                    Join on=(#0 = #1) type=differential
-                      ArrangeBy keys=[[#0]]
-                        Union
-                          Negate
-                            Distinct project=[#0]
-                              Project (#0)
-                                Get l6
-                          Get l3
-                      ArrangeBy keys=[[#0]]
-                        Get l3
-    cte l6 =
       Union
-        Get l5
+        Get l6
         Map (error("more than one record produced in subquery"))
           Project (#0)
             Filter (#1 > 1)
               Reduce group_by=[#0] aggregates=[count(*)]
                 Project (#0)
-                  Get l5
-    cte l5 =
+                  Get l6
+    cte l6 =
       Union
-        Get l4
+        Get l5
         Project (#0, #2)
           Map (null)
             Join on=(#0 = #1) type=differential
@@ -394,26 +397,30 @@ Explained Query:
                 Union
                   Negate
                     Project (#0)
-                      Get l4
-                  Get l3
+                      Get l5
+                  Get l4
               ArrangeBy keys=[[#0]]
-                Get l3
-    cte l4 =
+                Get l4
+    cte l5 =
       Reduce group_by=[#0] aggregates=[max(#1)]
         Project (#0, #1)
           Join on=(#0 = #2) type=differential
             ArrangeBy keys=[[#0]]
               Filter (#0) IS NOT NULL
-                Get l3
+                Get l4
             ArrangeBy keys=[[#1]]
               Project (#0, #3)
                 Filter (#3) IS NOT NULL AND (0 = case when #2 then 0 else text_to_integer(substr(#1, char_length(#1))) end)
                   Map (("-" = substr(#1, char_length(#1))), case when #2 then substr(#1, 1, (char_length(#1) - 1)) else substr(#1, 1, (char_length(#1) - 2)) end)
                     Get l0
-    cte l3 =
+    cte l4 =
       Distinct project=[#0]
-        Project (#2)
-          Map (case when ("-" = substr(#1, char_length(#1))) then substr(#1, 1, (char_length(#1) - 1)) else substr(#1, 1, (char_length(#1) - 2)) end)
+        Project (#1)
+          Get l3
+    cte l3 =
+      Distinct project=[#0..=#2]
+        Project (#0, #3, #4)
+          Map (("-" = substr(#1, char_length(#1))), case when #2 then substr(#1, 1, (char_length(#1) - 1)) else substr(#1, 1, (char_length(#1) - 2)) end, case when #2 then 0 else text_to_integer(substr(#1, char_length(#1))) end)
             Get l0
     cte l2 =
       Reduce aggregates=[sum(#0)]
