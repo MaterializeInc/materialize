@@ -441,6 +441,9 @@ pub fn create_statement(
                 Some(CreateContinualTaskSugar::Transform { transform }) => {
                     normalizer.visit_query_mut(transform)
                 }
+                Some(CreateContinualTaskSugar::Retain { retain }) => {
+                    normalizer.visit_expr_mut(retain)
+                }
                 None => {}
             }
             if let Some(err) = normalizer.err {

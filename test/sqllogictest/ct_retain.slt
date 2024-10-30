@@ -1,0 +1,53 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+# Retention Window
+
+statement ok
+CREATE TABLE append_only (val STRING, ts_col TIMESTAMPTZ)
+
+statement ok
+CREATE CONTINUAL TASK retain
+    FROM RETAIN append_only
+    WHILE (ts_col + INTERVAL '2s' > mz_now())
+
+# The 1m row will never be inserted in the first place because the INSERT in the
+# de-sugared version filters by the retain expr.
+statement ok
+INSERT INTO append_only VALUES ('1s', now() - INTERVAL '1s'), ('1m', now() - INTERVAL '1m')
+
+query T
+SELECT val FROM retain
+----
+1s
+
+# Sleep so that the 1s row has aged out.
+statement ok
+SELECT mz_unsafe.mz_sleep(2)
+
+# SUBTLE: CTs (currently) only write at times in the input, not at every time.
+# This means the aged out data will not be deleted until the next INSERT.
+# Further, that insert has to actually insert data, so we can't use 1m again.
+#
+# It is currently an open question whether this is the right semantics. There
+# are some tradeoffs the other way too.
+query T
+SELECT val FROM retain
+----
+1s
+
+statement ok
+INSERT INTO append_only VALUES ('0s', now())
+
+query T
+SELECT val FROM retain
+----
+0s

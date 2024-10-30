@@ -1419,9 +1419,19 @@ pub enum ContinualTaskStmt<T: AstInfo> {
     Insert(InsertStatement<T>),
 }
 
+impl<T: AstInfo> AstDisplay for ContinualTaskStmt<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            ContinualTaskStmt::Delete(stmt) => f.write_node(stmt),
+            ContinualTaskStmt::Insert(stmt) => f.write_node(stmt),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CreateContinualTaskSugar<T: AstInfo> {
     Transform { transform: Query<T> },
+    Retain { retain: Expr<T> },
 }
 
 impl<T: AstInfo> AstDisplay for CreateContinualTaskStatement<T> {
@@ -1454,6 +1464,19 @@ impl<T: AstInfo> AstDisplay for CreateContinualTaskStatement<T> {
                 f.write_node(transform);
                 f.write_str(")");
             }
+            Some(CreateContinualTaskSugar::Retain { retain }) => {
+                if !self.with_options.is_empty() {
+                    f.write_str(" WITH (");
+                    f.write_node(&display::comma_separated(&self.with_options));
+                    f.write_str(")");
+                }
+                f.write_str(" FROM RETAIN ");
+                f.write_node(&self.input);
+                f.write_str(" WHILE ");
+                f.write_str("(");
+                f.write_node(retain);
+                f.write_str(")");
+            }
             None => {
                 f.write_str(" ON INPUT ");
                 f.write_node(&self.input);
@@ -1471,10 +1494,7 @@ impl<T: AstInfo> AstDisplay for CreateContinualTaskStatement<T> {
                     if idx > 0 {
                         f.write_str("; ");
                     }
-                    match stmt {
-                        ContinualTaskStmt::Delete(stmt) => f.write_node(stmt),
-                        ContinualTaskStmt::Insert(stmt) => f.write_node(stmt),
-                    }
+                    f.write_node(stmt);
                 }
                 f.write_str(")");
             }

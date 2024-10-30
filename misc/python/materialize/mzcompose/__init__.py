@@ -91,6 +91,7 @@ def get_default_system_parameters(
         "enable_connection_validation_syntax": "true",
         "enable_continual_task_builtins": "true",
         "enable_continual_task_create": "true",
+        "enable_continual_task_retain": "true",
         "enable_continual_task_transform": "true",
         "enable_copy_to_expr": "true",
         "enable_create_continual_task": "true",

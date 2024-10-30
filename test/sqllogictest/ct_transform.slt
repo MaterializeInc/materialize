@@ -9,24 +9,6 @@
 
 mode cockroach
 
-# Retention Window
-
-statement ok
-CREATE TABLE append_only (val STRING, ts_col TIMESTAMPTZ)
-
-statement ok
-CREATE CONTINUAL TASK retain
-    FROM TRANSFORM append_only USING
-    (SELECT * FROM append_only WHERE ts_col + '1h' > mz_now())
-
-statement ok
-INSERT INTO append_only VALUES ('1m', now() - INTERVAL '1m'), ('1d', now() - INTERVAL '1d')
-
-query T
-SELECT val FROM retain
-----
-1m
-
 # Stream Table Join
 
 statement ok

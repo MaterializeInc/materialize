@@ -484,6 +484,7 @@ Warning
 Webhook
 When
 Where
+While
 Window
 Wire
 With
