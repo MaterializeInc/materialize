@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from string import ascii_lowercase
 from textwrap import dedent
 
+from materialize import buildkite
 from materialize.buildkite import shard_list
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.clusterd import Clusterd
@@ -27,6 +28,7 @@ from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.test_analytics.config.test_analytics_db_config import (
+    create_dummy_test_analytics_config,
     create_test_analytics_config,
 )
 from materialize.test_analytics.data.bounded_memory.bounded_memory_minimal_search_storage import (
@@ -1161,7 +1163,12 @@ def workflow_minimization_search(
     )
     args = parser.parse_args()
 
-    test_analytics = TestAnalyticsDb(create_test_analytics_config(c))
+    if buildkite.is_in_buildkite():
+        test_analytics_config = create_test_analytics_config(c)
+    else:
+        test_analytics_config = create_dummy_test_analytics_config()
+
+    test_analytics = TestAnalyticsDb(test_analytics_config)
     # will be updated to True at the end
     test_analytics.builds.add_build_job(was_successful=False)
 
