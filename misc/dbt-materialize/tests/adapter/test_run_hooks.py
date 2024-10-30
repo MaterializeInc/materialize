@@ -20,6 +20,7 @@ from dbt.tests.adapter.hooks.test_run_hooks import (
     BaseAfterRunHooks,
     BasePrePostRunHooks,
 )
+from dbt.tests.util import run_dbt
 from fixtures import run_hook, test_run_operation
 
 
@@ -56,4 +57,7 @@ class TestPrePostRunHooksMaterialize(BasePrePostRunHooks):
 
 
 class TestAfterRunHooksMaterialize(BaseAfterRunHooks):
+    def test_missing_column_pre_hook(self, project):
+        run_dbt(["run"], expect_pass=False)
+
     pass
