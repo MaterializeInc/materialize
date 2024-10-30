@@ -511,12 +511,12 @@ Explained Query:
       Project (#12, #19) // { arity: 2 }
         Join on=(#0 = #7 AND #1 = #5 = #9 AND #2 = #6 = #10 = #14 AND #3 = #17 = #18 AND #4 = #8 AND #11 = #13 AND #15 = #16 AND #20 = #21) type=delta // { arity: 22 }
           implementation
-            %0:customer » %5:nation[#0]UK » %6:region[#0]UKef » %1:order[#2, #1, #3]KKKAif » %2:orderline[#2, #1, #0]KKKA » %3:stock[#0, #1]UKK » %4:supplier[#0, #1]UKK
-            %1:order » %0:customer[#0..=#2]UKKK » %5:nation[#0]UK » %6:region[#0]UKef » %2:orderline[#2, #1, #0]KKKA » %3:stock[#0, #1]UKK » %4:supplier[#0, #1]UKK
-            %2:orderline » %1:order[#0..=#2]UKKKif » %0:customer[#0..=#2]UKKK » %3:stock[#0, #1]UKK » %4:supplier[#0, #1]UKK » %5:nation[#0]UK » %6:region[#0]UKef
-            %3:stock » %4:supplier[#0]UK » %5:nation[#0]UK » %6:region[#0]UKef » %0:customer[#2, #3]KK » %1:order[#2, #1, #3]KKKAif » %2:orderline[#0..=#3]KKKK
-            %4:supplier » %5:nation[#0]UK » %6:region[#0]UKef » %0:customer[#3]KA » %1:order[#2, #1, #3]KKKAif » %2:orderline[#2, #1, #0]KKKA » %3:stock[#0..=#2]UKKK
-            %5:nation » %6:region[#0]UKef » %0:customer[#3]KA » %1:order[#2, #1, #3]KKKAif » %2:orderline[#2, #1, #0]KKKA » %3:stock[#0, #1]UKK » %4:supplier[#0, #1]UKK
+            %0:customer » %5:nation[#0]UK » %6:region[#0]UKenf » %1:order[#2, #1, #3]KKKAif » %2:orderline[#2, #1, #0]KKKA » %3:stock[#0, #1]UKK » %4:supplier[#0, #1]UKK
+            %1:order » %0:customer[#0..=#2]UKKK » %5:nation[#0]UK » %6:region[#0]UKenf » %2:orderline[#2, #1, #0]KKKA » %3:stock[#0, #1]UKK » %4:supplier[#0, #1]UKK
+            %2:orderline » %1:order[#0..=#2]UKKKif » %0:customer[#0..=#2]UKKK » %3:stock[#0, #1]UKK » %4:supplier[#0, #1]UKK » %5:nation[#0]UK » %6:region[#0]UKenf
+            %3:stock » %4:supplier[#0]UK » %5:nation[#0]UK » %6:region[#0]UKenf » %0:customer[#2, #3]KK » %1:order[#2, #1, #3]KKKAif » %2:orderline[#0..=#3]KKKK
+            %4:supplier » %5:nation[#0]UK » %6:region[#0]UKenf » %0:customer[#3]KA » %1:order[#2, #1, #3]KKKAif » %2:orderline[#2, #1, #0]KKKA » %3:stock[#0..=#2]UKKK
+            %5:nation » %6:region[#0]UKenf » %0:customer[#3]KA » %1:order[#2, #1, #3]KKKAif » %2:orderline[#2, #1, #0]KKKA » %3:stock[#0, #1]UKK » %4:supplier[#0, #1]UKK
             %6:region » %5:nation[#2]KA » %0:customer[#3]KA » %1:order[#2, #1, #3]KKKAif » %2:orderline[#2, #1, #0]KKKA » %3:stock[#0, #1]UKK » %4:supplier[#0, #1]UKK
           ArrangeBy keys=[[#0..=#2], [#2, #3], [#3]] // { arity: 4 }
             Project (#0..=#2, #21) // { arity: 4 }
@@ -714,14 +714,14 @@ Explained Query:
             Filter (#0 < 1000) // { arity: 30 }
               Join on=(#0 = #3 = #10 AND #1 = #5 AND #2 = #27 AND #4 = #11 AND #6 = #16 AND #7 = #17 = #22 AND #8 = #18 = #23 AND #19 = #21 AND #24 = #25 AND #26 = #29) type=delta // { arity: 30 }
                 implementation
-                  %0:item » %2:stock[#0]KAif » %1:supplier[#0]UK » %7:nation[#0]UK » %3:orderline[#5, #4]KKAif » %4:order[#0..=#2]UKKKiif » %5:customer[#0..=#2]UKKK » %6:nation[#0]UK » %8:region[#0]UKef
-                  %1:supplier » %7:nation[#0]UK » %2:stock[#2]KAif » %0:item[#0]UKlif » %3:orderline[#5, #4]KKAif » %4:order[#0..=#2]UKKKiif » %5:customer[#0..=#2]UKKK » %6:nation[#0]UK » %8:region[#0]UKef
-                  %2:stock » %0:item[#0]UKlif » %1:supplier[#0]UK » %7:nation[#0]UK » %3:orderline[#5, #4]KKAif » %4:order[#0..=#2]UKKKiif » %5:customer[#0..=#2]UKKK » %6:nation[#0]UK » %8:region[#0]UKef
-                  %3:orderline » %4:order[#0..=#2]UKKKiif » %5:customer[#0..=#2]UKKK » %2:stock[#0, #1]UKKif » %0:item[#0]UKlif » %1:supplier[#0]UK » %6:nation[#0]UK » %8:region[#0]UKef » %7:nation[#0]UK
-                  %4:order » %5:customer[#0..=#2]UKKK » %6:nation[#0]UK » %8:region[#0]UKef » %3:orderline[#2, #1, #0]KKKAif » %2:stock[#0, #1]UKKif » %0:item[#0]UKlif » %1:supplier[#0]UK » %7:nation[#0]UK
-                  %5:customer » %6:nation[#0]UK » %8:region[#0]UKef » %4:order[#2, #1, #3]KKKAiif » %3:orderline[#2, #1, #0]KKKAif » %2:stock[#0, #1]UKKif » %0:item[#0]UKlif » %1:supplier[#0]UK » %7:nation[#0]UK
-                  %6:nation » %8:region[#0]UKef » %5:customer[#3]KA » %4:order[#2, #1, #3]KKKAiif » %3:orderline[#2, #1, #0]KKKAif » %2:stock[#0, #1]UKKif » %0:item[#0]UKlif » %1:supplier[#0]UK » %7:nation[#0]UK
-                  %7:nation » %1:supplier[#1]KA » %2:stock[#2]KAif » %0:item[#0]UKlif » %3:orderline[#5, #4]KKAif » %4:order[#0..=#2]UKKKiif » %5:customer[#0..=#2]UKKK » %6:nation[#0]UK » %8:region[#0]UKef
+                  %0:item » %2:stock[#0]KAif » %1:supplier[#0]UK » %7:nation[#0]UK » %3:orderline[#5, #4]KKAif » %4:order[#0..=#2]UKKKiif » %5:customer[#0..=#2]UKKK » %6:nation[#0]UK » %8:region[#0]UKenf
+                  %1:supplier » %7:nation[#0]UK » %2:stock[#2]KAif » %0:item[#0]UKlif » %3:orderline[#5, #4]KKAif » %4:order[#0..=#2]UKKKiif » %5:customer[#0..=#2]UKKK » %6:nation[#0]UK » %8:region[#0]UKenf
+                  %2:stock » %0:item[#0]UKlif » %1:supplier[#0]UK » %7:nation[#0]UK » %3:orderline[#5, #4]KKAif » %4:order[#0..=#2]UKKKiif » %5:customer[#0..=#2]UKKK » %6:nation[#0]UK » %8:region[#0]UKenf
+                  %3:orderline » %4:order[#0..=#2]UKKKiif » %5:customer[#0..=#2]UKKK » %2:stock[#0, #1]UKKif » %0:item[#0]UKlif » %1:supplier[#0]UK » %6:nation[#0]UK » %8:region[#0]UKenf » %7:nation[#0]UK
+                  %4:order » %5:customer[#0..=#2]UKKK » %6:nation[#0]UK » %8:region[#0]UKenf » %3:orderline[#2, #1, #0]KKKAif » %2:stock[#0, #1]UKKif » %0:item[#0]UKlif » %1:supplier[#0]UK » %7:nation[#0]UK
+                  %5:customer » %6:nation[#0]UK » %8:region[#0]UKenf » %4:order[#2, #1, #3]KKKAiif » %3:orderline[#2, #1, #0]KKKAif » %2:stock[#0, #1]UKKif » %0:item[#0]UKlif » %1:supplier[#0]UK » %7:nation[#0]UK
+                  %6:nation » %8:region[#0]UKenf » %5:customer[#3]KA » %4:order[#2, #1, #3]KKKAiif » %3:orderline[#2, #1, #0]KKKAif » %2:stock[#0, #1]UKKif » %0:item[#0]UKlif » %1:supplier[#0]UK » %7:nation[#0]UK
+                  %7:nation » %1:supplier[#1]KA » %2:stock[#2]KAif » %0:item[#0]UKlif » %3:orderline[#5, #4]KKAif » %4:order[#0..=#2]UKKKiif » %5:customer[#0..=#2]UKKK » %6:nation[#0]UK » %8:region[#0]UKenf
                   %8:region » %6:nation[#1]KA » %5:customer[#3]KA » %4:order[#2, #1, #3]KKKAiif » %3:orderline[#2, #1, #0]KKKAif » %2:stock[#0, #1]UKKif » %0:item[#0]UKlif » %1:supplier[#0]UK » %7:nation[#0]UK
                 ArrangeBy keys=[[#0]] // { arity: 1 }
                   Project (#0) // { arity: 1 }
@@ -931,8 +931,8 @@ Explained Query:
         Project (#0, #14) // { arity: 2 }
           Join on=(#17 = #18 AND #19 = #20) type=delta // { arity: 21 }
             implementation
-              %0:stock » %1:supplier[#0]UK » %2:nation[#0]UKef
-              %1:supplier » %2:nation[#0]UKef » %0:stock[#17]KA
+              %0:stock » %1:supplier[#0]UK » %2:nation[#0]UKenf
+              %1:supplier » %2:nation[#0]UKenf » %0:stock[#17]KA
               %2:nation » %1:supplier[#1]KA » %0:stock[#17]KA
             ArrangeBy keys=[[#17]] // { arity: 18 }
               ReadIndex on=stock fk_stock_supplier=[delta join 1st input (full scan)] // { arity: 18 }
@@ -1018,8 +1018,8 @@ Explained Query:
               Map (null) // { arity: 2 }
                 Union // { arity: 1 }
                   Negate // { arity: 1 }
-                    Project (#0) // { arity: 1 }
-                      Distinct project=[#0..=#2] // { arity: 3 }
+                    Project (#2) // { arity: 1 }
+                      Distinct project=[#1, #2, #0] // { arity: 3 }
                         Project (#0..=#2) // { arity: 3 }
                           Get l0 // { arity: 4 }
                   Project (#0) // { arity: 1 }
@@ -1475,7 +1475,7 @@ Explained Query:
         Project (#0..=#2) // { arity: 3 }
           Join on=(#3 = #7) type=differential // { arity: 8 }
             implementation
-              %1:nation[#0]UKef » %0:supplier[#3]KAef
+              %1:nation[#0]UKenf » %0:supplier[#3]KAenf
             ArrangeBy keys=[[#3]] // { arity: 7 }
               ReadIndex on=supplier fk_supplier_nationkey=[differential join] // { arity: 7 }
             ArrangeBy keys=[[#0]] // { arity: 1 }
@@ -1557,10 +1557,10 @@ Explained Query:
           Filter (#7 > #11) // { arity: 16 }
             Join on=(#0 = #14 AND #2 = #15 AND #3 = #8 AND #4 = #9 AND #5 = #10 = #13 AND #6 = #12) type=delta // { arity: 16 }
               implementation
-                %0:supplier » %4:nation[#0]UKef » %3:stock[#2]KA » %1:orderline[#2, #3]KK » %2:order[#0..=#2]UKKK
-                %1:orderline » %2:order[#0..=#2]UKKK » %3:stock[#0, #1]UKK » %0:supplier[#0]UK » %4:nation[#0]UKef
-                %2:order » %1:orderline[#2, #1, #0]KKKA » %3:stock[#0, #1]UKK » %0:supplier[#0]UK » %4:nation[#0]UKef
-                %3:stock » %0:supplier[#0]UK » %4:nation[#0]UKef » %1:orderline[#2, #3]KK » %2:order[#0..=#2]UKKK
+                %0:supplier » %4:nation[#0]UKenf » %3:stock[#2]KA » %1:orderline[#2, #3]KK » %2:order[#0..=#2]UKKK
+                %1:orderline » %2:order[#0..=#2]UKKK » %3:stock[#0, #1]UKK » %0:supplier[#0]UK » %4:nation[#0]UKenf
+                %2:order » %1:orderline[#2, #1, #0]KKKA » %3:stock[#0, #1]UKK » %0:supplier[#0]UK » %4:nation[#0]UKenf
+                %3:stock » %0:supplier[#0]UK » %4:nation[#0]UKenf » %1:orderline[#2, #3]KK » %2:order[#0..=#2]UKKK
                 %4:nation » %0:supplier[#2]KA » %3:stock[#2]KA » %1:orderline[#2, #3]KK » %2:order[#0..=#2]UKKK
               ArrangeBy keys=[[#0], [#2]] // { arity: 3 }
                 Project (#0, #1, #3) // { arity: 3 }
