@@ -50,7 +50,7 @@ steps:
         depends_on: []
         agents:
           queue: hetzner-aarch64-4cpu-8gb
-        branches: "!v*.*"
+        branches: "main"
         sanitizer: skip
 
       - id: unused-deps
