@@ -16,18 +16,22 @@
 {% macro deploy_init(ignore_existing_objects=False) %}
 
 {% set current_target_name = target.name %}
-{% set deployment = var('deployment') %}
-{% set target_config = deployment[current_target_name] %}
+{% set deployment = var('deployment', {}) %}
+{% set target_config = deployment.get(current_target_name, {}) %}
 
--- Check if the target-specific configuration exists
-{% if not target_config %}
-    {{ exceptions.raise_compiler_error("No deployment configuration found for target " ~ current_target_name) }}
-{% endif %}
+-- Get clusters and schemas using deploy_get_objects
+{% set objects = deploy_get_objects() %}
+{% set clusters = objects.clusters %}
+{% set schemas = objects.schemas %}
 
 {{ log("Creating deployment environment for target " ~ current_target_name, info=True) }}
 
-{% set clusters = target_config.get('clusters', []) %}
-{% set schemas = target_config.get('schemas', []) %}
+{% if not clusters %}
+    {{ exceptions.raise_compiler_error("No clusters found for deployment") }}
+{% endif %}
+{% if not schemas %}
+    {{ exceptions.raise_compiler_error("No schemas found for deployment") }}
+{% endif %}
 
 -- Check that all production schemas
 -- and clusters already exist
@@ -39,6 +43,7 @@
         {{ exceptions.raise_compiler_error("""
         Production schema " ~ schema ~ " contains sinks.
         Blue/green deployments require sinks to be in a dedicated schema.
+        Exclude this schema by adding it to the exclude_schemas list in your deployment configuration.
         """) }}
     {% endif %}
 {% endfor %}
@@ -51,6 +56,7 @@
         {{ exceptions.raise_compiler_error("""
         Production cluster " ~ cluster ~ " contains sinks.
         Blue/green deployments require sinks to be in a dedicated cluster.
+        Exclude this cluster by adding it to the exclude_clusters list in your deployment configuration.
         """) }}
     {% endif %}
 {% endfor %}
