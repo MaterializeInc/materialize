@@ -508,7 +508,7 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
 
         // The since handle gives us the ability to fence out other downgraders using an opaque token.
         // (See the method documentation for details.)
-        // That's not needed here, so we the since handle's opaque token to avoid any comparison
+        // That's not needed here, so we use the since handle's opaque token to avoid any comparison
         // failures.
         let opaque = *self.since_handle.opaque();
         let downgrade = self
