@@ -132,10 +132,10 @@ earlier than the earliest historical state retained by the underlying objects,
 an error is thrown.
 
 To configure the history retention period for objects used in a subscription,
-see
-[Durable subscription](/transform-data/patterns/durable-subscriptions/#histo
-ry-retention-period). If `AS OF` is unspecified, the system automatically
-chooses an `AS OF` timestamp.
+see [Durable
+subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period).
+If `AS OF` is unspecified, the system automatically chooses an `AS OF`
+timestamp.
 
 ### `UP TO`
 
