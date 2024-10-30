@@ -1302,6 +1302,9 @@ class SinkPartitionByDebezium(Check):
         return Testdrive(
             dedent(
                 """
+                # Can be slow in 0dt upgrade scenarios
+                $ set-sql-timeout duration=120s
+
                 $ schema-registry-verify schema-type=avro subject=testdrive-sink-partition-by-debezium-sink-${testdrive.seed}-value
                 {"type":"record","name":"envelope","fields":[{"name":"before","type":["null",{"type":"record","name":"row","fields":[{"name":"f1","type":"int"},{"name":"f2","type":["null","string"]}]}]},{"name":"after","type":["null","row"]}]}
 
