@@ -392,45 +392,51 @@ inputs.
 
 ## `mz_index_advice`
 
-The `mz_index_advice` view provides recommendations on where to add (or remove) indexes and materialized view based on the interdependencies between objects.
-The recommendations are intended to reduce resource usage (CPU and memory) by creating indexes and materialized views to precompute intermediate results that can be reused across several objects.
-It also highlights indexes that can be removed and materialized views that can be turned into plain views when they are unnecessary.
+{{< warning >}}
+Following the advice in this view might not always yield resource usage
+optimizations. You should test any changes in a development environment
+before deploying the changes to production.
+{{< /warning >}}
 
-{{< callout >}}
+The `mz_index_advice` view provides advice on opportunities to optimize resource
+usage (memory and CPU) in Materialize. The advice provided suggests either
+creating indexes or materialized views to precompute intermediate results that
+can be reused across several objects, or removing unnecessary indexes or
+materialized views.
 
-### Limitations and considerations
 
-The recommendations are based solely on object dependencies. They do not take
-the actual query definitions into account and as such, can be misleading and
-even increase resource usage. For example:
+### Known limitations
 
-- When a materialized view or an index has been created because they are queried
-  directly, that is not apparent from the object dependencies, and using plain
-  views (recommendation based solely on object dependencies) is inappropriate
-  for the actual query pattern.
+The suggestions are based on the graph of dependencies between objects and do
+not take into account other important factors, like the actual usage patterns
+and execution plans. This means that following the advice in this view **might
+not always lead to resource usage optimizations**. In some cases, the provided
+advice might even lead to suboptimal execution plans or even increased resource
+usage. For example:
 
-- When a view is depended on by multiple maintained objects that all use very
-  selective filters or use lots of projections that can be pushed into or even
-  beyond the view, adding an index (recommendation based soley on object
-  dependencies) may increase resource usage.
+- If a materialized view or an index has been created for direct querying, the
+  dependency graph will not reflect this nuance and `mz_index_advice` might
+  recommend using and unindexed view instead. In this case, you should refer to
+  the the reference documentation for [query optimization](/transform-data/optimization/#indexes)
+  instead.
+- If a view is depended on by multiple objects that use very selective filters,
+  or a multiple projections that can be pushed into or even beyond the view,
+  adding an index may increase resource usage.
+- If an index has been created to [enable delta joins](/transform-data/optimization/#optimize-multi-way-joins-with-delta-joins),
+  removing it may lead to lower memory utilization, but the delta join
+  optimization will no longer be used in the join implementation.
 
-- When indexes have been created to enable [delta
-  joins](/transform-data/optimization/#optimize-multi-way-joins-with-delta-joins),
-  removing indexes (recommendation based soley on object dependencies) may lead
-  to lower memory utilization but the join implementation can no longer choose a
-  delta join.
+To guarantee that there are no regressions given your specific usage patterns,
+it's important to test any changes in a development environment before
+deploying the changes to production.
 
-As such, test to confirm that the proposed recommendations reduce resource usage
-for your actual usage patterns.
-
-{{< /callout >}}
 
 <!-- RELATION_SPEC mz_internal.mz_index_advice -->
 | Field            | Type        | Meaning  |
 | ---------------  | ----------- | -------- |
-| `object_id`      | [`text`]    | The ID of the object. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), [`mz_catalog.mz_views.id`](../mz_catalog#mz_views). |
-| `recommendation` | [`text`]    | A proposed action to either change the object (e.g. turn a materialized view into an index or vice versa) or keep the object unchanged. |
-| `details`        | [`text`]    | An explanation why the `recommendation` was proposed based on the dependencies of the object. |
+| `object_id`      | [`text`]    | The ID of the object. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), or [`mz_catalog.mz_views.id`](../mz_catalog#mz_views). |
+| `recommendation` | [`text`]    | A suggestion to either change the object (e.g. create an index, turn a materialized view into an indexed view) or keep the object unchanged. |
+| `details`        | [`text`]    | Additional details on why the `recommendation` was proposed based on the dependencies of the object. |
 | `justification`  | [`list`]    | The object ids that support the `recommendation`. `details` resolves the ids to names, which can be abiguous in case of multiple schemas or databases. |
 
 ## `mz_materialization_dependencies`
