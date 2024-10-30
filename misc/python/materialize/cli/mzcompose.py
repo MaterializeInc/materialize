@@ -378,7 +378,13 @@ class SqlCommand(Command):
     help = "connect a SQL shell to a running materialized service"
 
     def configure(self, parser: argparse.ArgumentParser) -> None:
-        parser.add_argument("service", metavar="SERVICE", help="the service to target")
+        parser.add_argument(
+            "service",
+            metavar="SERVICE",
+            nargs="?",
+            default="materialized",
+            help="the service to target",
+        )
 
     def run(self, args: argparse.Namespace) -> None:
         composition = load_composition(args)
@@ -408,6 +414,40 @@ class SqlCommand(Command):
                     "materialize",
                 ],
                 docker_args=["--interactive", f"--network={composition.name}_default"],
+                env={"PGCLIENTENCODING": "utf-8"},
+            )
+        elif image == "materialize/postgres":
+            deps = composition.repo.resolve_dependencies(
+                [composition.repo.images["psql"]]
+            )
+            deps.acquire()
+            deps["psql"].run(
+                [
+                    "-h",
+                    service.get("hostname", args.service),
+                    "-U",
+                    "postgres",
+                    "postgres",
+                ],
+                docker_args=["--interactive", f"--network={composition.name}_default"],
+                env={"PGPASSWORD": "postgres", "PGCLIENTENCODING": "utf-8"},
+            )
+        elif image == "cockroachdb/cockroach" or args.service == "postgres-metadata":
+            deps = composition.repo.resolve_dependencies(
+                [composition.repo.images["psql"]]
+            )
+            deps.acquire()
+            deps["psql"].run(
+                [
+                    "-h",
+                    service.get("hostname", args.service),
+                    "-p" "26257",
+                    "-U",
+                    "root",
+                    "root",
+                ],
+                docker_args=["--interactive", f"--network={composition.name}_default"],
+                env={"PGCLIENTENCODING": "utf-8"},
             )
         elif image == "mysql":
             deps = composition.repo.resolve_dependencies(
@@ -431,7 +471,7 @@ class SqlCommand(Command):
             )
         else:
             raise UIError(
-                f"cannot connect SQL shell to non-materialized service {args.service!r}"
+                f"cannot connect SQL shell to unhandled service {args.service!r}"
             )
 
 
