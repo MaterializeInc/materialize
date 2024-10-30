@@ -25,7 +25,7 @@ Optimizer engineers will be able to deploy hotfixes to cloud customers.
 
 We propose the following solution:
 
-  1. Refactor existing `sql`, `expr`, `compute-types`, and `transform` crates into `optimizer` and `optimizer-types` crates.
+  1. Refactor existing `sql`, `expr`, `compute-types`, and `transform` crates to extract `optimizer` and `optimizer-types` crates.
   2. Version the `optimizer` crate. The `optimizer-types` crate will contain traits and types that are stable across all three versions (e.g., sufficient interfaces to calculate the dependencies of various expression `enum`s without fixing any of their details).
   3. Work on three versions of the `optimizer` crate at once:
      - **unstable**/**hot** active development
@@ -48,7 +48,7 @@ where `version` is a version number (or, possibly one of our three fixed names).
 
 ### The `optimizer` and `optimizer-types` crates
 
-The `optimizer` create will containe the definitions of HIR, MIR, and LIR, along with the HIR-to-MIR and MIR-to_LIR lowerings and the MIR-to-MIR transformations. These come from the `sql` (HIR, HIR -> MIR), `expr` (MIR), `transform` (MIR -> MIR), and `compute-types` (LIR, MIR -> LIR) crates.
+The `optimizer` crate will contain the definitions of HIR, MIR, and LIR, along with the HIR-to-MIR and MIR-to_LIR lowerings and the MIR-to-MIR transformations. These come from the `sql` (HIR, HIR -> MIR), `expr` (MIR), `transform` (MIR -> MIR), and `compute-types` (LIR, MIR -> LIR) crates.
 
 The `optimizer-types` crate will have traits and definitions that are global across all three live versions of the optimizer. The AST types may change version to version, but the traits will be more stable.
 
