@@ -55,7 +55,7 @@ pub(crate) fn time_dependence(
         .any(|dep| *dep == TimeDependence::default())
     {
         // Wall-clock dependency is dominant.
-        Some(TimeDependence::default())
+        Some(TimeDependence::new(schedule, vec![]))
     } else if !time_dependencies.is_empty() {
         // No immediate wall-clock dependency, found some dependency with a refresh schedule.
         Some(TimeDependence::new(schedule, time_dependencies))

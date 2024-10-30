@@ -23,6 +23,7 @@ use crate::coord::{
     SubscribeStage, SubscribeTimestampOptimizeLir, TargetCluster,
 };
 use crate::error::AdapterError;
+use crate::optimize::dataflow_expiration::time_dependence;
 use crate::optimize::Optimize;
 use crate::session::{Session, TransactionOps};
 use crate::{optimize, AdapterNotice, ExecuteContext, TimelineContext};
@@ -347,7 +348,8 @@ impl Coordinator {
         };
         active_subscribe.initialize();
 
-        let (df_desc, df_meta) = global_lir_plan.unapply();
+        let (mut df_desc, df_meta) = global_lir_plan.unapply();
+        df_desc.time_dependence = time_dependence(self.catalog(), df_desc.import_ids(), None);
 
         // Emit notices.
         self.emit_optimizer_notices(ctx.session(), &df_meta.optimizer_notices);

@@ -27,10 +27,9 @@ include!(concat!(
 /// The default value indicates the dataflow follows wall-clock without modifications.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct TimeDependence {
-    /// Optional refresh schedule. None indicates an implicit wall-clock dependency, if no inner
-    /// dependencies exist.
+    /// Optional refresh schedule. None indicates no rounding.
     pub schedule: Option<RefreshSchedule>,
-    /// Inner dependencies to evaluate first.
+    /// Inner dependencies to evaluate first. Empty implies wall-clock dependence.
     pub dependence: Vec<Self>,
 }
 

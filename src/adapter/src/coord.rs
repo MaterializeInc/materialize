@@ -2583,13 +2583,9 @@ impl Coordinator {
                 .catalog()
                 .resolve_full_name(entry.name(), None)
                 .to_string();
-            let (optimized_plan, mut physical_plan, metainfo) = self
+            let (_optimized_plan, physical_plan, _metainfo) = self
                 .optimize_create_continual_task(&ct, *id, self.owned_catalog(), debug_name)
                 .expect("builtin CT should optimize successfully");
-
-            // Filter our own ID because we don't exist yet.
-            let ids = physical_plan.import_ids().filter(|x| x != id);
-            physical_plan.time_dependence = time_dependence(self.catalog(), ids, None);
 
             // Determine an as of for the new continual task.
             let mut id_bundle = dataflow_import_id_bundle(&physical_plan, ct.cluster_id);
@@ -2599,10 +2595,6 @@ impl Coordinator {
             let as_of = read_holds.least_valid_read();
 
             collection.since = Some(as_of.clone());
-            let catalog = self.catalog_mut();
-            catalog.set_optimized_plan(*id, optimized_plan);
-            catalog.set_physical_plan(*id, physical_plan);
-            catalog.set_dataflow_metainfo(*id, metainfo);
         }
         self.controller
             .storage
