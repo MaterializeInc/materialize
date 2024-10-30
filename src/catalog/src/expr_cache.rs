@@ -87,7 +87,7 @@ impl DurableCacheCodec for ExpressionCodec {
         let serde_key = serde_json::to_value(key).expect("valid json");
         JsonbPacker::new(&mut packer)
             .pack_serde_json(serde_key)
-            .expect("contained integers should fit in f64");
+            .expect("valid json");
 
         packer.push(Datum::String(val));
 

@@ -281,8 +281,7 @@ pub struct StateUpdateKindJson(Jsonb);
 impl StateUpdateKindJson {
     pub(crate) fn from_serde<S: serde::Serialize>(s: S) -> Self {
         let serde_value = serde_json::to_value(s).expect("valid json");
-        let row =
-            Jsonb::from_serde_json(serde_value).expect("contained integers should fit in f64");
+        let row = Jsonb::from_serde_json(serde_value).expect("valid json");
         StateUpdateKindJson(row)
     }
 
