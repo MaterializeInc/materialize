@@ -17,9 +17,11 @@ use std::sync::Arc;
 
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_durable_cache::{DurableCache, DurableCacheCodec};
+use mz_dyncfg::ConfigSet;
 use mz_expr::OptimizedMirRelationExpr;
 use mz_ore::channel::trigger;
 use mz_ore::task::spawn;
+use mz_persist_client::cli::admin::{CATALOG_FORCE_COMPACTION_FUEL, CATALOG_FORCE_COMPACTION_WAIT};
 use mz_persist_client::PersistClient;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::Codec;
@@ -122,6 +124,8 @@ pub struct ExpressionCacheConfig<'a> {
     current_ids: &'a BTreeSet<GlobalId>,
     optimizer_features: &'a OptimizerFeatures,
     remove_prior_gens: bool,
+    compact_shard: bool,
+    dyncfgs: &'a ConfigSet,
 }
 
 /// A durable cache of optimized expressions.
@@ -147,6 +151,8 @@ impl ExpressionCache {
             current_ids,
             optimizer_features,
             remove_prior_gens,
+            compact_shard,
+            dyncfgs,
         }: ExpressionCacheConfig<'_>,
     ) -> (Self, BTreeMap<GlobalId, Expressions>) {
         let shard_id = expression_cache_shard_id(organization_id);
@@ -159,7 +165,14 @@ impl ExpressionCache {
         const RETRIES: usize = 100;
         for _ in 0..RETRIES {
             match cache
-                .try_open(current_ids, optimizer_features, remove_prior_gens)
+                .try_open(
+                    persist,
+                    current_ids,
+                    optimizer_features,
+                    remove_prior_gens,
+                    compact_shard,
+                    dyncfgs,
+                )
                 .await
             {
                 Ok(contents) => return (cache, contents),
@@ -172,9 +185,12 @@ impl ExpressionCache {
 
     async fn try_open(
         &mut self,
+        persist: &PersistClient,
         current_ids: &BTreeSet<GlobalId>,
         optimizer_features: &OptimizerFeatures,
         remove_prior_gens: bool,
+        compact_shard: bool,
+        dyncfgs: &ConfigSet,
     ) -> Result<BTreeMap<GlobalId, Expressions>, mz_durable_cache::Error> {
         let mut keys_to_remove = Vec::new();
         let mut current_contents = BTreeMap::new();
@@ -204,6 +220,18 @@ impl ExpressionCache {
             .map(|(key, expressions)| (key, expressions.as_ref()))
             .collect();
         self.durable_cache.try_set_many(&keys_to_remove).await?;
+
+        if compact_shard {
+            // The expression cache re-uses the catalog compaction dyncfgs because they are tightly
+            // related.
+            let fuel = CATALOG_FORCE_COMPACTION_FUEL.handle(dyncfgs);
+            let wait = CATALOG_FORCE_COMPACTION_WAIT.handle(dyncfgs);
+            let _handle = self.durable_cache.dangerous_compact_shard(
+                persist.clone(),
+                move || fuel.get(),
+                move || wait.get(),
+            );
+        }
 
         Ok(current_contents)
     }
@@ -311,6 +339,7 @@ mod tests {
 
     use mz_compute_types::dataflows::{DataflowDescription, DataflowExpirationDesc};
     use mz_durable_cache::DurableCacheCodec;
+    use mz_dyncfg::ConfigSet;
     use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
     use mz_persist_client::PersistClient;
     use mz_repr::optimize::OptimizerFeatures;
@@ -397,6 +426,8 @@ mod tests {
         let current_ids = &mut BTreeSet::new();
         let optimizer_features = &mut OptimizerFeatures::default();
         let mut remove_prior_gens = false;
+        let mut compact_shard = false;
+        let dyncfgs = &mz_persist_client::cfg::all_dyncfgs(ConfigSet::default());
 
         let mut next_id = 0;
 
@@ -410,6 +441,8 @@ mod tests {
                     current_ids,
                     optimizer_features,
                     remove_prior_gens,
+                    compact_shard,
+                    dyncfgs,
                 })
                 .await;
             assert_eq!(entries, BTreeMap::new(), "new cache should be empty");
@@ -439,6 +472,8 @@ mod tests {
                     current_ids,
                     optimizer_features,
                     remove_prior_gens,
+                    compact_shard,
+                    dyncfgs,
                 })
                 .await;
             assert_eq!(
@@ -469,6 +504,8 @@ mod tests {
                     current_ids,
                     optimizer_features,
                     remove_prior_gens,
+                    compact_shard,
+                    dyncfgs,
                 })
                 .await;
             assert_eq!(
@@ -492,6 +529,8 @@ mod tests {
                     current_ids,
                     optimizer_features,
                     remove_prior_gens,
+                    compact_shard,
+                    dyncfgs,
                 })
                 .await;
             assert_eq!(
@@ -510,6 +549,8 @@ mod tests {
                     current_ids,
                     optimizer_features,
                     remove_prior_gens,
+                    compact_shard,
+                    dyncfgs,
                 })
                 .await;
             assert_eq!(entries, BTreeMap::new(), "new generation should be empty");
@@ -539,6 +580,8 @@ mod tests {
                     current_ids,
                     optimizer_features,
                     remove_prior_gens,
+                    compact_shard,
+                    dyncfgs,
                 })
                 .await;
             assert_eq!(
@@ -558,6 +601,8 @@ mod tests {
                     current_ids,
                     optimizer_features,
                     remove_prior_gens,
+                    compact_shard,
+                    dyncfgs,
                 })
                 .await;
             assert_eq!(
@@ -576,6 +621,8 @@ mod tests {
                     current_ids,
                     optimizer_features,
                     remove_prior_gens,
+                    compact_shard,
+                    dyncfgs,
                 })
                 .await;
             assert_eq!(
@@ -583,6 +630,23 @@ mod tests {
                 BTreeMap::new(),
                 "Previous generation expressions should be cleared"
             );
+        }
+
+        {
+            // Re-open the cache and compact the shard.
+            compact_shard = true;
+            let (_cache, _entries) =
+                ExpressionCacheHandle::spawn_expression_cache(ExpressionCacheConfig {
+                    deploy_generation: first_deploy_generation,
+                    persist,
+                    organization_id,
+                    current_ids,
+                    optimizer_features,
+                    remove_prior_gens,
+                    compact_shard,
+                    dyncfgs,
+                })
+                .await;
         }
     }
 

@@ -4444,6 +4444,7 @@ dependencies = [
  "mz-controller",
  "mz-controller-types",
  "mz-durable-cache",
+ "mz-dyncfg",
  "mz-expr",
  "mz-orchestrator",
  "mz-ore",
