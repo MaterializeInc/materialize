@@ -145,8 +145,11 @@ pub enum ComputeEvent {
         /// The LIR identifier (local to `export_id`).
         lir_id: LirId,
         /// The LIR operator, as a string (see `FlatPlanNode::humanize`).
+        /// We use `Box<str>` to reduce the size of the `ComputeEvent` representation.
         operator: Box<str>,
         /// The LIR identifier of the parent (if any).
+        /// Since `LirId`s are strictly positive, Rust can steal the low bit.
+        /// TODO(mgree) write a test to ensure that low bit is stolen
         parent_lir_id: Option<LirId>,
         /// How nested this operator is.
         nesting: u8,
@@ -423,25 +426,18 @@ pub(super) fn construct<A: Allocate + 'static>(
             move |datum| {
                 let mut scratch1 = String::new();
                 let mut scratch2 = String::new();
-                let (span_start, span_end) = match datum.operator_span {
-                    Some((start, end)) => (
-                        Datum::UInt64(u64::cast_from(start)),
-                        Datum::UInt64(u64::cast_from(end)),
-                    ),
-                    None => (Datum::Null, Datum::Null),
-                };
                 packer.pack_slice(&[
                     make_string_datum(datum.global_id, &mut scratch1),
-                    Datum::UInt64(datum.lir_id),
+                    Datum::UInt64(datum.lir_id.into()),
                     Datum::UInt64(u64::cast_from(worker_id)),
                     make_string_datum(&datum.operator, &mut scratch2),
                     datum
                         .parent_lir_id
-                        .map(Datum::UInt64)
+                        .map(|lir_id| Datum::UInt64(lir_id.into()))
                         .unwrap_or_else(|| Datum::Null),
                     Datum::UInt16(u16::cast_from(datum.nesting)),
-                    span_start,
-                    span_end,
+                    Datum::UInt64(u64::cast_from(datum.operator_span.0)),
+                    Datum::UInt64(u64::cast_from(datum.operator_span.1)),
                 ])
             }
         });
@@ -536,12 +532,13 @@ struct DemuxState<A: Allocate> {
 #[derive(Debug)]
 struct LirMetadata {
     /// The operator rendered as a string.
-    operator: String,
+    operator: Box<str>,
     parent_lir_id: Option<LirId>,
     /// How nested the operator is (for nice indentation).
     nesting: u8,
     /// The dataflow operator ids, given as start (inclusive) and end (exclusive).
-    operator_span: Option<(usize, usize)>,
+    /// If `start == end`, then no operators were used.
+    operator_span: (usize, usize),
 }
 
 impl<A: Allocate> DemuxState<A> {
@@ -671,10 +668,10 @@ struct ErrorCountDatum {
 struct LirMappingDatum {
     global_id: GlobalId,
     lir_id: LirId,
-    operator: String,
+    operator: Box<str>,
     parent_lir_id: Option<LirId>,
     nesting: u8,
-    operator_span: Option<(usize, usize)>,
+    operator_span: (usize, usize),
 }
 
 #[derive(Clone)]
@@ -1119,10 +1116,10 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
         &mut self,
         global_id: GlobalId,
         lir_id: LirId,
-        operator: String,
+        operator: Box<str>,
         parent_lir_id: Option<LirId>,
         nesting: u8,
-        operator_span: Option<(usize, usize)>,
+        operator_span: (usize, usize),
     ) {
         // record the state (for the later drop)
         self.state
@@ -1359,6 +1356,6 @@ mod tests {
     #[mz_ore::test]
     fn test_compute_event_size() {
         // This could be a static assertion, but we don't use those yet in this crate.
-        assert_eq!(96, std::mem::size_of::<ComputeEvent>())
+        assert_eq!(72, std::mem::size_of::<ComputeEvent>())
     }
 }

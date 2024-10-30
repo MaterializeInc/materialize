@@ -991,11 +991,21 @@ impl Arbitrary for FlatPlan {
     }
 }
 
+impl RustType<u64> for LirId {
+    fn into_proto(&self) -> u64 {
+        u64::from(self.0)
+    }
+
+    fn from_proto(proto: u64) -> Result<Self, mz_proto::TryFromProtoError> {
+        Ok(Self(proto.try_into()?))
+    }
+}
+
 impl RustType<ProtoFlatPlan> for FlatPlan {
     fn into_proto(&self) -> ProtoFlatPlan {
         ProtoFlatPlan {
             steps: self.steps.into_proto(),
-            root: self.root,
+            root: self.root.into_proto(),
             topological_order: self.topological_order.into_proto(),
         }
     }
@@ -1003,7 +1013,7 @@ impl RustType<ProtoFlatPlan> for FlatPlan {
     fn from_proto(proto: ProtoFlatPlan) -> Result<Self, mz_proto::TryFromProtoError> {
         Ok(Self {
             steps: proto.steps.into_rust()?,
-            root: proto.root,
+            root: LirId::from_proto(proto.root)?,
             topological_order: proto.topological_order.into_rust()?,
         })
     }
@@ -1012,13 +1022,16 @@ impl RustType<ProtoFlatPlan> for FlatPlan {
 impl ProtoMapEntry<LirId, FlatPlanStep> for proto_flat_plan::ProtoStep {
     fn from_rust(entry: (&LirId, &FlatPlanStep)) -> Self {
         Self {
-            id: *entry.0,
+            id: entry.0.into_proto(),
             step: Some(entry.1.into_proto()),
         }
     }
 
     fn into_rust(self) -> Result<(LirId, FlatPlanStep), TryFromProtoError> {
-        Ok((self.id, self.step.into_rust_if_some("ProtoStep::step")?))
+        Ok((
+            LirId::from_proto(self.id)?,
+            self.step.into_rust_if_some("ProtoStep::step")?,
+        ))
     }
 }
 
@@ -1070,8 +1083,8 @@ impl RustType<ProtoFlatPlanNode> for FlatPlanNode {
             }),
             Self::Let { id, value, body } => Kind::Let(ProtoLet {
                 id: Some(id.into_proto()),
-                value: *value,
-                body: *body,
+                value: value.into_proto(),
+                body: body.into_proto(),
             }),
             Self::LetRec {
                 ids,
@@ -1105,7 +1118,7 @@ impl RustType<ProtoFlatPlanNode> for FlatPlanNode {
                     values: values.into_proto(),
                     limits: proto_limits,
                     limit_is_some: proto_limit_is_some,
-                    body: *body,
+                    body: body.into_proto(),
                 })
             }
             Self::Mfp {
@@ -1113,7 +1126,7 @@ impl RustType<ProtoFlatPlanNode> for FlatPlanNode {
                 mfp,
                 input_key_val,
             } => Kind::Mfp(ProtoMfp {
-                input: *input,
+                input: input.into_proto(),
                 mfp: Some(mfp.into_proto()),
                 input_key_val: input_kv_into(input_key_val),
             }),
@@ -1124,7 +1137,7 @@ impl RustType<ProtoFlatPlanNode> for FlatPlanNode {
                 mfp_after,
                 input_key,
             } => Kind::FlatMap(ProtoFlatMap {
-                input: *input,
+                input: input.into_proto(),
                 func: Some(func.into_proto()),
                 exprs: exprs.into_proto(),
                 mfp_after: Some(mfp_after.into_proto()),
@@ -1141,22 +1154,24 @@ impl RustType<ProtoFlatPlanNode> for FlatPlanNode {
                 input_key,
                 mfp_after,
             } => Kind::Reduce(ProtoReduce {
-                input: *input,
+                input: input.into_proto(),
                 key_val_plan: Some(key_val_plan.into_proto()),
                 plan: Some(plan.into_proto()),
                 input_key: input_k_into(input_key),
                 mfp_after: Some(mfp_after.into_proto()),
             }),
             Self::TopK { input, top_k_plan } => Kind::TopK(ProtoTopK {
-                input: *input,
+                input: input.into_proto(),
                 top_k_plan: Some(top_k_plan.into_proto()),
             }),
-            Self::Negate { input } => Kind::Negate(ProtoNegate { input: *input }),
+            Self::Negate { input } => Kind::Negate(ProtoNegate {
+                input: input.into_proto(),
+            }),
             Self::Threshold {
                 input,
                 threshold_plan,
             } => Kind::Threshold(ProtoThreshold {
-                input: *input,
+                input: input.into_proto(),
                 threshold_plan: Some(threshold_plan.into_proto()),
             }),
             Self::Union {
@@ -1172,7 +1187,7 @@ impl RustType<ProtoFlatPlanNode> for FlatPlanNode {
                 input_key,
                 input_mfp,
             } => Kind::ArrangeBy(ProtoArrangeBy {
-                input: *input,
+                input: input.into_proto(),
                 forms: Some(forms.into_proto()),
                 input_key: input_k_into(input_key),
                 input_mfp: Some(input_mfp.into_proto()),
@@ -1220,8 +1235,8 @@ impl RustType<ProtoFlatPlanNode> for FlatPlanNode {
             },
             Kind::Let(proto) => Self::Let {
                 id: proto.id.into_rust_if_some("ProtoLet::id")?,
-                value: proto.value,
-                body: proto.body,
+                value: LirId::from_proto(proto.value)?,
+                body: LirId::from_proto(proto.body)?,
             },
             Kind::LetRec(proto) => {
                 let mut limits = Vec::with_capacity(proto.limits.len());
@@ -1237,16 +1252,16 @@ impl RustType<ProtoFlatPlanNode> for FlatPlanNode {
                     ids: proto.ids.into_rust()?,
                     values: proto.values.into_rust()?,
                     limits,
-                    body: proto.body,
+                    body: LirId::from_proto(proto.body)?,
                 }
             }
             Kind::Mfp(proto) => Self::Mfp {
-                input: proto.input,
+                input: LirId::from_proto(proto.input)?,
                 mfp: proto.mfp.into_rust_if_some("ProtoMfp::mfp")?,
                 input_key_val: input_kv_try_into(proto.input_key_val)?,
             },
             Kind::FlatMap(proto) => Self::FlatMap {
-                input: proto.input,
+                input: LirId::from_proto(proto.input)?,
                 func: proto.func.into_rust_if_some("ProtoFlatMap::func")?,
                 exprs: proto.exprs.into_rust()?,
                 mfp_after: proto
@@ -1259,7 +1274,7 @@ impl RustType<ProtoFlatPlanNode> for FlatPlanNode {
                 plan: proto.plan.into_rust_if_some("ProtoJoin::plan")?,
             },
             Kind::Reduce(proto) => Self::Reduce {
-                input: proto.input,
+                input: LirId::from_proto(proto.input)?,
                 key_val_plan: proto
                     .key_val_plan
                     .into_rust_if_some("ProtoReduce::key_val_plan")?,
@@ -1268,14 +1283,16 @@ impl RustType<ProtoFlatPlanNode> for FlatPlanNode {
                 mfp_after: proto.mfp_after.into_rust_if_some("Proto::mfp_after")?,
             },
             Kind::TopK(proto) => Self::TopK {
-                input: proto.input,
+                input: LirId::from_proto(proto.input)?,
                 top_k_plan: proto
                     .top_k_plan
                     .into_rust_if_some("ProtoTopK::top_k_plan")?,
             },
-            Kind::Negate(proto) => Self::Negate { input: proto.input },
+            Kind::Negate(proto) => Self::Negate {
+                input: LirId::from_proto(proto.input)?,
+            },
             Kind::Threshold(proto) => Self::Threshold {
-                input: proto.input,
+                input: LirId::from_proto(proto.input)?,
                 threshold_plan: proto
                     .threshold_plan
                     .into_rust_if_some("ProtoThreshold::threshold_plan")?,
@@ -1285,7 +1302,7 @@ impl RustType<ProtoFlatPlanNode> for FlatPlanNode {
                 consolidate_output: proto.consolidate_output,
             },
             Kind::ArrangeBy(proto) => Self::ArrangeBy {
-                input: proto.input,
+                input: LirId::from_proto(proto.input)?,
                 forms: proto.forms.into_rust_if_some("ProtoArrangeBy::forms")?,
                 input_key: input_k_try_into(proto.input_key)?,
                 input_mfp: proto

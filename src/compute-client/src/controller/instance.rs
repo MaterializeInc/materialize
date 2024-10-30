@@ -2969,7 +2969,7 @@ impl<T: ComputeControllerTimestamp> ReplicaCollectionIntrospection<T> {
         self.operators.get(&(lir_id, worker_id)).map(|hydrated| {
             Row::pack_slice(&[
                 Datum::String(&self.collection_id.to_string()),
-                Datum::UInt64(lir_id),
+                Datum::UInt64(lir_id.into()),
                 Datum::String(&self.replica_id.to_string()),
                 Datum::UInt64(u64::cast_from(worker_id)),
                 Datum::from(*hydrated),

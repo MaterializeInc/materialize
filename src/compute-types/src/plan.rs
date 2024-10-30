@@ -188,7 +188,26 @@ impl AvailableCollections {
 }
 
 /// An identifier for an LIR node.
-pub type LirId = u64;
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct LirId(NonZeroU64);
+
+impl LirId {
+    fn as_u64(&self) -> u64 {
+        self.0.into()
+    }
+}
+
+impl From<LirId> for u64 {
+    fn from(value: LirId) -> Self {
+        value.as_u64()
+    }
+}
+
+impl std::fmt::Display for LirId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
 
 /// A rendering plan with as much conditional logic as possible removed.
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -501,6 +520,16 @@ impl Plan {
             annotations: BTreeMap::default(),
             config,
         })
+    }
+}
+
+impl Arbitrary for LirId {
+    type Strategy = BoxedStrategy<LirId>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        let lir_id = NonZeroU64::arbitrary();
+        lir_id.prop_map(LirId).boxed()
     }
 }
 

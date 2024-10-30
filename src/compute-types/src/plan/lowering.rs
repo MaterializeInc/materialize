@@ -45,7 +45,7 @@ impl Context {
     pub fn new(debug_name: String, features: &OptimizerFeatures) -> Self {
         Self {
             arrangements: Default::default(),
-            next_lir_id: 0,
+            next_lir_id: LirId(std::num::NonZero::new(1).unwrap()),
             debug_info: LirDebugInfo {
                 debug_name,
                 id: GlobalId::Transient(0),
@@ -57,7 +57,11 @@ impl Context {
 
     fn allocate_lir_id(&mut self) -> LirId {
         let id = self.next_lir_id;
-        self.next_lir_id += 1;
+        if let Some(next_lir_id) = self.next_lir_id.0.checked_add(1) {
+            self.next_lir_id = LirId(next_lir_id);
+        } else {
+            panic!("ran out of LirIds")
+        }
         id
     }
 

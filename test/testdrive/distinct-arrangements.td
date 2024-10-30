@@ -793,7 +793,7 @@ ReduceMinsMaxes
 "Arrange Compute(DataflowGlobal)"
 "Arrange Compute(ErrorCount)"
 "Arrange Compute(FrontierCurrent)"
-"Arrange Compyte(LirMapping)"
+"Arrange Compute(LirMapping)"
 "Arrange Compute(HydrationTime)"
 "Arrange Compute(ImportFrontierCurrent)"
 "Arrange Compute(PeekCurrent)"

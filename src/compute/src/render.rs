@@ -891,12 +891,7 @@ where
             let operator_id_start = self.scope.peek_identifier();
             let mut bundle = self.render_plan_node(step.node, &collections);
             let operator_id_end = self.scope.peek_identifier();
-
-            let operator_span = if operator_id_start == operator_id_end {
-                None
-            } else {
-                Some((operator_id_start, operator_id_end))
-            };
+            let operator_span = (operator_id_start, operator_id_end);
 
             self.log_lir_mapping(
                 object_id,
@@ -1127,9 +1122,10 @@ where
         operator: String,
         parent_lir_id: Option<LirId>,
         nesting: u8,
-        operator_span: Option<(usize, usize)>,
+        operator_span: (usize, usize),
     ) {
         if let Some(logger) = &self.compute_logger {
+            let operator = operator.into();
             logger.log(ComputeEvent::LirMapping {
                 global_id,
                 lir_id,
@@ -1141,7 +1137,7 @@ where
         }
     }
 
-    fn log_operator_hydration(&self, bundle: &mut CollectionBundle<G>, lir_id: u64) {
+    fn log_operator_hydration(&self, bundle: &mut CollectionBundle<G>, lir_id: LirId) {
         // A `CollectionBundle` can contain more than one collection, which makes it not obvious to
         // which we should attach the logging operator.
         //
@@ -1187,7 +1183,7 @@ where
         }
     }
 
-    fn log_operator_hydration_inner<D>(&self, stream: &Stream<G, D>, lir_id: u64) -> Stream<G, D>
+    fn log_operator_hydration_inner<D>(&self, stream: &Stream<G, D>, lir_id: LirId) -> Stream<G, D>
     where
         D: Clone + 'static,
     {

@@ -21,7 +21,7 @@ use differential_dataflow::trace::cursor::IntoOwned;
 use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
 use differential_dataflow::{Collection, Data};
 use mz_compute_types::dataflows::DataflowDescription;
-use mz_compute_types::plan::AvailableCollections;
+use mz_compute_types::plan::{AvailableCollections, LirId};
 use mz_expr::{Id, MapFilterProject, MirScalarExpr};
 use mz_repr::fixed_length::{FromDatumIter, ToDatumIter};
 use mz_repr::{DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena, SharedRow};
@@ -278,7 +278,7 @@ impl HydrationLogger {
     /// The expectation is that rendering code arranges for `hydrated = false` to be logged for
     /// each LIR node when a dataflow is first created. Then `hydrated = true` should be logged as
     /// operators become hydrated.
-    pub fn log(&self, lir_id: u64, hydrated: bool) {
+    pub fn log(&self, lir_id: LirId, hydrated: bool) {
         for &export_id in &self.export_ids {
             let event = HydrationEvent {
                 export_id,
