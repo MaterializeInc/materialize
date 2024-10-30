@@ -1298,3 +1298,7 @@ The `mz_webhook_sources` table contains a row for each webhook source in the sys
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.pg_description_all_databases -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.pg_attrdef_all_databases -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.pg_attribute_all_databases -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_compute_lir_mapping_per_worker -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_compute_dataflow_globalids_per_worker -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_lir_mapping -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_dataflow_globalids -->
