@@ -161,6 +161,12 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
     /// Resolves the named role.
     fn resolve_role(&self, role_name: &str) -> Result<&dyn CatalogRole, CatalogError>;
 
+    /// Resolves the named network policy.
+    fn resolve_network_policy(
+        &self,
+        network_policy_name: &str,
+    ) -> Result<&dyn CatalogNetworkPolicy, CatalogError>;
+
     /// Gets a role by its ID.
     fn try_get_role(&self, id: &RoleId) -> Option<&dyn CatalogRole>;
 
@@ -1412,6 +1418,7 @@ impl From<mz_sql_parser::ast::ObjectType> for ObjectType {
             mz_sql_parser::ast::ObjectType::Schema => ObjectType::Schema,
             mz_sql_parser::ast::ObjectType::Func => ObjectType::Func,
             mz_sql_parser::ast::ObjectType::ContinualTask => ObjectType::ContinualTask,
+            mz_sql_parser::ast::ObjectType::NetworkPolicy => ObjectType::NetworkPolicy,
         }
     }
 }

@@ -289,7 +289,7 @@ public.bool
 > DROP DATABASE foo
 
 ! DROP OBJECT v1
-contains:Expected one of TABLE or VIEW or MATERIALIZED or SOURCE or SINK or INDEX or TYPE or ROLE or USER or CLUSTER or SECRET or CONNECTION or DATABASE or SCHEMA or FUNCTION or CONTINUAL, found identifier
+contains:Expected one of TABLE or VIEW or MATERIALIZED or SOURCE or SINK or INDEX or TYPE or ROLE or USER or CLUSTER or SECRET or CONNECTION or DATABASE or SCHEMA or FUNCTION or CONTINUAL or NETWORK, found identifier
 
 > SHOW OBJECTS
 name        type        comment
@@ -671,6 +671,7 @@ mz_show_my_object_privileges             ""
 mz_show_my_role_members                  ""
 mz_show_my_schema_privileges             ""
 mz_show_my_system_privileges             ""
+mz_show_network_policies                 ""
 mz_show_object_privileges                ""
 mz_show_role_members                     ""
 mz_show_roles                            ""

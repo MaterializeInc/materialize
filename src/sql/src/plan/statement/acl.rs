@@ -27,7 +27,7 @@ use crate::names::{
 };
 use crate::plan::error::PlanError;
 use crate::plan::statement::ddl::{
-    resolve_cluster, resolve_database, resolve_item_or_type, resolve_schema,
+    resolve_cluster, resolve_database, resolve_item_or_type, resolve_network_policy, resolve_schema,
 };
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{
@@ -76,6 +76,9 @@ pub fn plan_alter_owner(
         (ObjectType::Schema, UnresolvedObjectName::Schema(name)) => {
             plan_alter_schema_owner(scx, if_exists, name, new_owner.id)
         }
+        (ObjectType::NetworkPolicy, UnresolvedObjectName::NetworkPolicy(name)) => {
+            plan_alter_network_policy_owner(scx, if_exists, name, new_owner.id)
+        }
         (ObjectType::Role, UnresolvedObjectName::Role(_)) => unreachable!("rejected by the parser"),
         (
             object_type @ ObjectType::Cluster
@@ -91,6 +94,7 @@ pub fn plan_alter_owner(
             | name @ UnresolvedObjectName::ClusterReplica(_)
             | name @ UnresolvedObjectName::Database(_)
             | name @ UnresolvedObjectName::Schema(_)
+            | name @ UnresolvedObjectName::NetworkPolicy(_)
             | name @ UnresolvedObjectName::Role(_),
         ) => {
             unreachable!("parser set the wrong object type '{object_type:?}' for name {name:?}")
@@ -232,6 +236,31 @@ fn plan_alter_item_owner(
             });
 
             Ok(Plan::AlterNoop(AlterNoopPlan { object_type }))
+        }
+    }
+}
+
+fn plan_alter_network_policy_owner(
+    scx: &StatementContext,
+    if_exists: bool,
+    name: Ident,
+    new_owner: RoleId,
+) -> Result<Plan, PlanError> {
+    match resolve_network_policy(scx, name.clone(), if_exists)? {
+        Some(policy_id) => Ok(Plan::AlterOwner(AlterOwnerPlan {
+            id: ObjectId::NetworkPolicy(policy_id.id),
+            object_type: ObjectType::Schema,
+            new_owner,
+        })),
+        None => {
+            scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
+                name: name.to_ast_string(),
+                object_type: ObjectType::NetworkPolicy,
+            });
+
+            Ok(Plan::AlterNoop(AlterNoopPlan {
+                object_type: ObjectType::NetworkPolicy,
+            }))
         }
     }
 }
@@ -581,6 +610,7 @@ fn privilege_to_acl_mode(privilege: Privilege) -> AclMode {
         Privilege::CREATEROLE => AclMode::CREATE_ROLE,
         Privilege::CREATEDB => AclMode::CREATE_DB,
         Privilege::CREATECLUSTER => AclMode::CREATE_CLUSTER,
+        Privilege::CREATENETWORKPOLICY => AclMode::CREATE_NETWORK_POLICY,
     }
 }
 

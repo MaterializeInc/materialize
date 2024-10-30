@@ -22,7 +22,7 @@ use mz_audit_log::{
     ObjectType, SchedulingDecisionsWithReasonsV1, VersionedEvent, VersionedStorageUsage,
 };
 use mz_catalog::builtin::BuiltinLog;
-use mz_catalog::durable::Transaction;
+use mz_catalog::durable::{NetworkPolicy, Transaction};
 use mz_catalog::memory::error::{AmbiguousRename, Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogItem, ClusterConfig, DataSourceDesc, SourceReferences, StateDiff, StateUpdate,
@@ -81,6 +81,12 @@ pub enum Op {
         attributes: RoleAttributes,
         vars: RoleVars,
     },
+    AlterNetworkPolicy {
+        id: NetworkPolicyId,
+        rules: Vec<NetworkPolicyRule>,
+        name: String,
+        owner_id: RoleId,
+    },
     CreateDatabase {
         name: String,
         owner_id: RoleId,
@@ -115,7 +121,6 @@ pub enum Op {
         owner_id: RoleId,
     },
     CreateNetworkPolicy {
-        id: NetworkPolicyId,
         rules: Vec<NetworkPolicyRule>,
         name: String,
         owner_id: RoleId,
@@ -655,6 +660,38 @@ impl Catalog {
 
                 info!("update role {name} ({id})");
             }
+            Op::AlterNetworkPolicy {
+                id,
+                rules,
+                name,
+                owner_id: _owner_id,
+            } => {
+                let existing_policy = state.get_network_policy(&id).clone();
+                let mut policy: NetworkPolicy = existing_policy.into();
+                policy.rules = rules;
+                if is_reserved_name(&name) {
+                    return Err(AdapterError::Catalog(Error::new(
+                        ErrorKind::ReservedNetworkPolicyName(name),
+                    )));
+                }
+                tx.update_network_policy(id, policy.clone())?;
+
+                CatalogState::add_to_audit_log(
+                    &state.system_configuration,
+                    oracle_write_ts,
+                    session,
+                    tx,
+                    audit_events,
+                    EventType::Alter,
+                    ObjectType::NetworkPolicy,
+                    EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
+                        id: id.to_string(),
+                        name: name.clone(),
+                    }),
+                )?;
+
+                info!("update network policy {name} ({id})");
+            }
             Op::CreateDatabase { name, owner_id } => {
                 let database_owner_privileges = vec![rbac::owner_privilege(
                     mz_sql::catalog::ObjectType::Database,
@@ -1123,7 +1160,6 @@ impl Catalog {
                 }
             }
             Op::CreateNetworkPolicy {
-                id,
                 rules,
                 name,
                 owner_id,
@@ -1157,14 +1193,29 @@ impl Catalog {
                         .collect();
 
                 let temporary_oids: HashSet<_> = state.get_temporary_oids().collect();
-                tx.insert_user_network_policy(
-                    id,
-                    name,
+                let id = tx.insert_user_network_policy(
+                    name.clone(),
                     rules,
                     privileges,
                     owner_id,
                     &temporary_oids,
                 )?;
+
+                CatalogState::add_to_audit_log(
+                    &state.system_configuration,
+                    oracle_write_ts,
+                    session,
+                    tx,
+                    audit_events,
+                    EventType::Create,
+                    ObjectType::NetworkPolicy,
+                    EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
+                        id: id.to_string(),
+                        name: name.clone(),
+                    }),
+                )?;
+
+                info!("created network policy {name} ({id})");
             }
             Op::Comment {
                 object_id,
@@ -1355,6 +1406,31 @@ impl Catalog {
                         }),
                     )?;
                     info!("drop role {}", role.name());
+                }
+
+                // Drop any network policies.
+                tx.remove_network_policies(&delta.network_policies)?;
+
+                for network_policy_id in delta.network_policies {
+                    let policy = state
+                        .network_policies_by_id
+                        .get(&network_policy_id)
+                        .expect("catalog out of sync");
+
+                    CatalogState::add_to_audit_log(
+                        &state.system_configuration,
+                        oracle_write_ts,
+                        session,
+                        tx,
+                        audit_events,
+                        EventType::Drop,
+                        ObjectType::NetworkPolicy,
+                        EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
+                            id: policy.id.to_string(),
+                            name: policy.name.clone(),
+                        }),
+                    )?;
+                    info!("drop network policy {}", policy.name.clone());
                 }
 
                 // Drop any replicas.

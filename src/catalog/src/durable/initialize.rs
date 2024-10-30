@@ -42,8 +42,8 @@ use crate::durable::{
     DefaultPrivilege, ReplicaConfig, ReplicaLocation, Role, Schema, Transaction,
     AUDIT_LOG_ID_ALLOC_KEY, CATALOG_CONTENT_VERSION_KEY, DATABASE_ID_ALLOC_KEY, OID_ALLOC_KEY,
     SCHEMA_ID_ALLOC_KEY, STORAGE_USAGE_ID_ALLOC_KEY, SYSTEM_CLUSTER_ID_ALLOC_KEY,
-    SYSTEM_REPLICA_ID_ALLOC_KEY, USER_CLUSTER_ID_ALLOC_KEY, USER_REPLICA_ID_ALLOC_KEY,
-    USER_ROLE_ID_ALLOC_KEY,
+    SYSTEM_REPLICA_ID_ALLOC_KEY, USER_CLUSTER_ID_ALLOC_KEY, USER_NETWORK_POLICY_ID_ALLOC_KEY,
+    USER_REPLICA_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
 };
 
 /// The key within the "config" Collection that stores the version of the catalog.
@@ -227,6 +227,10 @@ pub(crate) async fn initialize(
         ),
         (
             SYSTEM_REPLICA_ID_ALLOC_KEY.to_string(),
+            DEFAULT_ALLOCATOR_ID,
+        ),
+        (
+            USER_NETWORK_POLICY_ID_ALLOC_KEY.to_string(),
             DEFAULT_ALLOCATOR_ID,
         ),
         (AUDIT_LOG_ID_ALLOC_KEY.to_string(), DEFAULT_ALLOCATOR_ID),

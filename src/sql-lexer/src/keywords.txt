@@ -24,8 +24,10 @@
 # For details on the code that is generated, see keywords.rs.
 
 Access
+Action
 Add
 Added
+Address
 Addresses
 Aggregate
 Aggregation
@@ -104,6 +106,7 @@ Counter
 Create
 Createcluster
 Createdb
+Createnetworkpolicy
 Createrole
 Creation
 Cross
@@ -132,6 +135,7 @@ Delimiter
 Delta
 Desc
 Details
+Direction
 Discard
 Disk
 Distinct
@@ -276,6 +280,7 @@ Name
 Names
 Natural
 Negative
+Network
 New
 Next
 No
@@ -317,6 +322,8 @@ Path
 Physical
 Plan
 Plans
+Policies
+Policy
 Port
 Position
 Postgres
@@ -376,6 +383,7 @@ Rotate
 Rounds
 Row
 Rows
+Rules
 Sasl
 Scale
 Schedule

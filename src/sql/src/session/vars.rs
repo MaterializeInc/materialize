@@ -1190,6 +1190,8 @@ impl SystemVars {
             &MAX_SECRETS,
             &MAX_ROLES,
             &MAX_CONTINUAL_TASKS,
+            &MAX_NETWORK_POLICIES,
+            &MAX_RULES_PER_NETWORK_POLICY,
             &MAX_RESULT_SIZE,
             &MAX_COPY_FROM_SIZE,
             &ALLOWED_CLUSTER_REPLICA_SIZES,
@@ -1712,6 +1714,11 @@ impl SystemVars {
     /// Returns the value of the `max_network_policies` configuration parameter.
     pub fn max_network_policies(&self) -> u32 {
         *self.expect_value(&MAX_NETWORK_POLICIES)
+    }
+
+    /// Returns the value of the `max_network_policies` configuration parameter.
+    pub fn max_rules_per_network_policy(&self) -> u32 {
+        *self.expect_value(&MAX_RULES_PER_NETWORK_POLICY)
     }
 
     /// Returns the value of the `max_result_size` configuration parameter.

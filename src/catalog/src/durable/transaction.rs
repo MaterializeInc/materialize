@@ -60,8 +60,8 @@ use crate::durable::{
     CatalogError, DefaultPrivilege, DurableCatalogError, DurableCatalogState, NetworkPolicy,
     Snapshot, AUDIT_LOG_ID_ALLOC_KEY, CATALOG_CONTENT_VERSION_KEY, DATABASE_ID_ALLOC_KEY,
     OID_ALLOC_KEY, SCHEMA_ID_ALLOC_KEY, STORAGE_USAGE_ID_ALLOC_KEY, SYSTEM_ITEM_ALLOC_KEY,
-    SYSTEM_REPLICA_ID_ALLOC_KEY, USER_ITEM_ALLOC_KEY, USER_REPLICA_ID_ALLOC_KEY,
-    USER_ROLE_ID_ALLOC_KEY,
+    SYSTEM_REPLICA_ID_ALLOC_KEY, USER_ITEM_ALLOC_KEY, USER_NETWORK_POLICY_ID_ALLOC_KEY,
+    USER_REPLICA_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
 };
 use crate::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
 
@@ -567,7 +567,6 @@ impl<'a> Transaction<'a> {
 
     pub fn insert_user_network_policy(
         &mut self,
-        id: NetworkPolicyId,
         name: String,
         rules: Vec<NetworkPolicyRule>,
         privileges: Vec<MzAclItem>,
@@ -575,6 +574,8 @@ impl<'a> Transaction<'a> {
         temporary_oids: &HashSet<u32>,
     ) -> Result<NetworkPolicyId, CatalogError> {
         let oid = self.allocate_oid(temporary_oids)?;
+        let id = self.get_and_increment_id(USER_NETWORK_POLICY_ID_ALLOC_KEY.to_string())?;
+        let id = NetworkPolicyId::User(id);
         self.insert_network_policy(id, name, rules, privileges, owner_id, oid)
     }
 
@@ -1533,7 +1534,38 @@ impl<'a> Transaction<'a> {
             Err(SqlCatalogError::UnknownNetworkPolicy(id.to_string()).into())
         }
     }
+    /// Removes all network policies in `network policies` from the transaction.
+    ///
+    /// Returns an error if any id in `network policy` is not found.
+    ///
+    /// NOTE: On error, there still may be some roles removed from the transaction. It
+    /// is up to the caller to either abort the transaction or commit.
+    pub fn remove_network_policies(
+        &mut self,
+        network_policies: &BTreeSet<NetworkPolicyId>,
+    ) -> Result<(), CatalogError> {
+        if network_policies.is_empty() {
+            return Ok(());
+        }
 
+        let to_remove = network_policies
+            .iter()
+            .map(|policy_id| (NetworkPolicyKey { id: *policy_id }, None))
+            .collect();
+        let mut prev = self.network_policies.set_many(to_remove, self.op_id)?;
+        assert!(
+            prev.iter().all(|(k, _)| k.id.is_user()),
+            "cannot delete non-user network policy"
+        );
+
+        prev.retain(|_k, v| v.is_none());
+        if !prev.is_empty() {
+            let err = prev.keys().map(|k| k.id.to_string()).join(", ");
+            return Err(SqlCatalogError::UnknownNetworkPolicy(err).into());
+        }
+
+        Ok(())
+    }
     /// Set persisted default privilege.
     ///
     /// DO NOT call this function in a loop, use [`Self::set_default_privileges`] instead.
@@ -2167,6 +2199,7 @@ impl<'a> Transaction<'a> {
             roles: self.roles.pending(),
             clusters: self.clusters.pending(),
             cluster_replicas: self.cluster_replicas.pending(),
+            network_policies: self.network_policies.pending(),
             introspection_sources: self.introspection_sources.pending(),
             id_allocator: self.id_allocator.pending(),
             configs: self.configs.pending(),
@@ -2204,6 +2237,7 @@ impl<'a> Transaction<'a> {
             roles,
             clusters,
             cluster_replicas,
+            network_policies,
             introspection_sources,
             id_allocator,
             configs,
@@ -2228,6 +2262,7 @@ impl<'a> Transaction<'a> {
         differential_dataflow::consolidation::consolidate_updates(roles);
         differential_dataflow::consolidation::consolidate_updates(clusters);
         differential_dataflow::consolidation::consolidate_updates(cluster_replicas);
+        differential_dataflow::consolidation::consolidate_updates(network_policies);
         differential_dataflow::consolidation::consolidate_updates(introspection_sources);
         differential_dataflow::consolidation::consolidate_updates(id_allocator);
         differential_dataflow::consolidation::consolidate_updates(configs);
@@ -2407,6 +2442,7 @@ pub struct TransactionBatch {
     pub(crate) roles: Vec<(proto::RoleKey, proto::RoleValue, Diff)>,
     pub(crate) clusters: Vec<(proto::ClusterKey, proto::ClusterValue, Diff)>,
     pub(crate) cluster_replicas: Vec<(proto::ClusterReplicaKey, proto::ClusterReplicaValue, Diff)>,
+    pub(crate) network_policies: Vec<(proto::NetworkPolicyKey, proto::NetworkPolicyValue, Diff)>,
     pub(crate) introspection_sources: Vec<(
         proto::ClusterIntrospectionSourceIndexKey,
         proto::ClusterIntrospectionSourceIndexValue,
@@ -2458,6 +2494,7 @@ impl TransactionBatch {
             roles,
             clusters,
             cluster_replicas,
+            network_policies,
             introspection_sources,
             id_allocator,
             configs,
@@ -2480,6 +2517,7 @@ impl TransactionBatch {
             && roles.is_empty()
             && clusters.is_empty()
             && cluster_replicas.is_empty()
+            && network_policies.is_empty()
             && introspection_sources.is_empty()
             && id_allocator.is_empty()
             && configs.is_empty()

@@ -193,7 +193,7 @@ expression: audit_log
                     object_id: "SYSTEM",
                     grantee_id: "s1",
                     grantor_id: "s1",
-                    privileges: "RBN",
+                    privileges: "RBNP",
                 },
             ),
             user: None,

@@ -1672,6 +1672,16 @@ impl SessionCatalog for ConnCatalog<'_> {
         }
     }
 
+    fn resolve_network_policy(
+        &self,
+        policy_name: &str,
+    ) -> Result<&dyn mz_sql::catalog::CatalogNetworkPolicy, SqlCatalogError> {
+        match self.state.try_get_network_policy_by_name(policy_name) {
+            Some(policy) => Ok(policy),
+            None => Err(SqlCatalogError::UnknownNetworkPolicy(policy_name.into())),
+        }
+    }
+
     fn try_get_role(&self, id: &RoleId) -> Option<&dyn CatalogRole> {
         Some(self.state.roles_by_id.get(id)?)
     }

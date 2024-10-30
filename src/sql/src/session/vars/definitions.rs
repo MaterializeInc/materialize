@@ -557,11 +557,18 @@ pub static MAX_NETWORK_POLICIES: VarDefinition = VarDefinition::new(
     true,
 );
 
+pub static MAX_RULES_PER_NETWORK_POLICY: VarDefinition = VarDefinition::new(
+    "max_rules_per_network_policy",
+    value!(u32; 25),
+    "The maximum number of rules per network policies.",
+    true,
+);
+
 // Cloud environmentd is configured with 4 GiB of RAM, so 1 GiB is a good heuristic for a single
 // query.
 //
 // We constrain this parameter to a minimum of 1MB, to avoid accidental usage of values that will
-// interfer with queries executed by the system itself.
+// interfere with queries executed by the system itself.
 //
 // TODO(jkosh44) Eventually we want to be able to return arbitrary sized results.
 pub static MAX_RESULT_SIZE: VarDefinition = VarDefinition::new(
@@ -2174,6 +2181,12 @@ feature_flags!(
     {
         name: enable_continual_task_retain,
         desc: "CREATE CONTINUAL TASK .. FROM RETAIN .. WHILE",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_network_policies,
+        desc: "ENABLE NETWORK POLICIES",
         default: false,
         enable_for_item_parsing: true,
     },

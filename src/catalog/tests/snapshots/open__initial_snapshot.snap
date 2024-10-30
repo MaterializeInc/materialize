@@ -1357,6 +1357,11 @@ Snapshot {
             next_id: 2,
         },
         IdAllocKey {
+            name: "user_network_policy",
+        }: IdAllocValue {
+            next_id: 1,
+        },
+        IdAllocKey {
             name: "user_role",
         }: IdAllocValue {
             next_id: 1,
@@ -1520,7 +1525,7 @@ Snapshot {
         }: SystemPrivilegesValue {
             acl_mode: Some(
                 AclMode {
-                    bitflags: 3758096384,
+                    bitflags: 8053063680,
                 },
             ),
         },

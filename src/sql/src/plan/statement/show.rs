@@ -280,6 +280,20 @@ pub fn show_roles<'a>(
     ShowSelect::new(scx, query, filter, None, Some(&["name", "comment"]))
 }
 
+pub fn show_network_policies<'a>(
+    scx: &'a StatementContext<'a>,
+    filter: Option<ShowStatementFilter<Aug>>,
+) -> Result<ShowSelect<'a>, PlanError> {
+    let query = "SELECT name, rules, comment FROM mz_internal.mz_show_network_policies".to_string();
+    ShowSelect::new(
+        scx,
+        query,
+        filter,
+        None,
+        Some(&["name", "rules", "comment"]),
+    )
+}
+
 pub fn show_objects<'a>(
     scx: &'a StatementContext<'a>,
     ShowObjectsStatement {
@@ -339,6 +353,10 @@ pub fn show_objects<'a>(
         }
         ShowObjectType::ContinualTask { in_cluster } => {
             show_continual_tasks(scx, from, in_cluster, filter)
+        }
+        ShowObjectType::NetworkPolicy => {
+            assert_none!(from, "parser should reject from");
+            show_network_policies(scx, filter)
         }
     }
 }
