@@ -1401,18 +1401,27 @@ where
             // to run again.
             true
         } else {
+            // Ignore self-dependencies. Any self-dependencies do not need to be
+            // available at the as_of for the dataflow to make progress, so we
+            // can ignore them here. At the moment, only continual tasks have
+            // self-dependencies, but this logic is correct for any dataflow, so
+            // we don't special case it to CTs.
+            let not_self_dep = |x: &GlobalId| *x != id;
+
             // Check dependency frontiers to determine if all inputs are
             // available. An input is available when its frontier is greater
             // than the `as_of`, i.e., all input data up to and including the
             // `as_of` has been sealed.
-            let compute_frontiers = collection.compute_dependency_ids().map(|id| {
+            let compute_deps = collection.compute_dependency_ids().filter(not_self_dep);
+            let compute_frontiers = compute_deps.map(|id| {
                 let dep = &self.expect_collection(id);
                 dep.write_frontier()
             });
 
+            let storage_deps = collection.storage_dependency_ids().filter(not_self_dep);
             let storage_frontiers = self
                 .storage_collections
-                .collections_frontiers(collection.storage_dependency_ids().collect())
+                .collections_frontiers(storage_deps.collect())
                 .expect("must exist");
             let storage_frontiers = storage_frontiers.into_iter().map(|f| f.write_frontier);
 

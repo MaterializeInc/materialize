@@ -100,6 +100,50 @@
 //!  - `let result = logic(concat(I, proposed, R))`
 //!  - `proposed.set(result)`
 //! - Then we return `proposed.leave()` for attempted write to persist.
+//!
+//! ## As Ofs and Output Uppers
+//!
+//! - A continual task is first created with an initial as_of `I`. It is
+//!   initially rendered at as_of `I==A` but as it makes progress, it may be
+//!   rendered at later as_ofs `I<A`.
+//! - It is required that the output collection springs into existence at `I`
+//!   (i.e. receives the initial contents at `I`).
+//!   - For a snapshot CT, the full contents of the input at `I` are run through
+//!     the CT logic and written at `I`.
+//!   - For a non-snapshot CT, the collection is defined to be empty at `I`
+//!     (i.e. if the input happened to be written exactly at `I`, we'd ignore
+//!     it) and then start writing at `I+1`.
+//! - As documented in [DataflowDescription::as_of], `A` is the time we render
+//!   the inputs.
+//!   - An MV with an as_of of `A` will both have inputs rendered at `A` and
+//!     also the first time it could write is also `A`.
+//!   - A CT is the same on the initial render (`I==A`), but on renders after it
+//!     has made progress (`I<A`) the first time that  it could potentially
+//!     write is `A+1`. This is because a persist_source started with
+//!     SnapshotMode::Exclude can only start emitting diffs at `as_of+1`.
+//!   - As a result, we hold back the since on inputs to be strictly less than
+//!     the upper of the output. (This is only necessary for CTs, but we also do
+//!     it for MVs to avoid the special case.)
+//!   - For CT "inputs" (which are disallowed from being the output), we render
+//!     the persist_source with as_of `A`.
+//!     - When `I==A` we include the snapshot iff the snapshot option is used.
+//!     - When `I<A` we always exclude the snapshot. It would be unnecessary and
+//!       this is an absolutely critical performance optimization to make CT
+//!       rehydration times independent of input size.
+//!   - For CT "references", we render the persist_source with as_of `A` and
+//!     always include the snapshot.
+//!     - There is one subtlety: self-references on the initial render. We need
+//!       the contents to be available at `A-1`, so that we can do the
+//!       step_forward described above to get it at `A`. However, the collection
+//!       springs into existence at `I`, so we when `I==A`, we're not allowed to
+//!       read it as_of `A-1` (the since of the shard may have advanced past
+//!       that). We address this by rendering the persist_source as normal at
+//!       `A`. On startup, persist_source immediately downgrades its frontier to
+//!       `A` (making `A-1` readable). Combined with step_forward, this is
+//!       enough to unblock the CT self-reference. We do however have to tweak
+//!       the `suppress_early_progress` operator to use `A-1` instead of `A` for
+//!       this case.
+//!     - On subsequent renders, self-references work as normal.
 
 use std::any::Any;
 use std::cell::RefCell;
@@ -192,6 +236,23 @@ impl ContinualTaskSourceTransformer {
             }
             | SelfReference { .. }
             | NormalReference => SnapshotMode::Include,
+        }
+    }
+
+    /// Returns the as_of to use with the suppress_early_progress operator for
+    /// this source. See the module rustdoc for context.
+    pub fn suppress_early_progress_as_of(
+        &self,
+        as_of: Antichain<Timestamp>,
+    ) -> Antichain<Timestamp> {
+        use ContinualTaskSourceTransformer::*;
+        match self {
+            InsertsInput { .. } => as_of,
+            SelfReference { .. } => as_of
+                .iter()
+                .map(|x| x.step_back().unwrap_or_else(Timestamp::minimum))
+                .collect(),
+            NormalReference => as_of,
         }
     }
 
@@ -467,17 +528,13 @@ fn continual_task_sink<G: Scope<Timestamp = Timestamp>>(
         // advance the output's (exclusive) upper to the first time that this CT
         // might write: `as_of+1`. Because we don't want this to happen on
         // restarts, only do it if the upper is `T::minimum()`.
-        //
-        // TODO(ct2): This should be `as_of`, not `as_of+1` when the input
-        // snapshot option is used.
         let mut write_handle = write_handle.await;
         {
-            let new_upper = as_of.into_iter().map(|x| x.step_forward()).collect();
             let res = write_handle
                 .compare_and_append_batch(
                     &mut [],
                     Antichain::from_elem(Timestamp::minimum()),
-                    new_upper,
+                    as_of.clone(),
                 )
                 .await
                 .expect("usage was valid");
