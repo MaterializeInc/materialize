@@ -1238,7 +1238,74 @@ Snapshot {
             ),
         },
     },
-    network_policies: {},
+    network_policies: {
+        NetworkPolicyKey {
+            id: Some(
+                NetworkPolicyId {
+                    value: Some(
+                        User(
+                            1,
+                        ),
+                    ),
+                },
+            ),
+        }: NetworkPolicyValue {
+            name: "default",
+            rules: [
+                NetworkPolicyRule {
+                    name: "open_ingress",
+                    address: "0.0.0.0/0",
+                    action: Some(
+                        Allow(
+                            Empty,
+                        ),
+                    ),
+                    direction: Some(
+                        Ingress(
+                            Empty,
+                        ),
+                    ),
+                },
+            ],
+            owner_id: Some(
+                RoleId {
+                    value: Some(
+                        System(
+                            1,
+                        ),
+                    ),
+                },
+            ),
+            privileges: [
+                MzAclItem {
+                    grantee: Some(
+                        RoleId {
+                            value: Some(
+                                System(
+                                    1,
+                                ),
+                            ),
+                        },
+                    ),
+                    grantor: Some(
+                        RoleId {
+                            value: Some(
+                                System(
+                                    1,
+                                ),
+                            ),
+                        },
+                    ),
+                    acl_mode: Some(
+                        AclMode {
+                            bitflags: 256,
+                        },
+                    ),
+                },
+            ],
+            oid: 17044,
+        },
+    },
     cluster_replicas: {
         ClusterReplicaKey {
             id: Some(
@@ -1304,7 +1371,7 @@ Snapshot {
         IdAllocKey {
             name: "auditlog",
         }: IdAllocValue {
-            next_id: 12,
+            next_id: 13,
         },
         IdAllocKey {
             name: "database",
@@ -1359,7 +1426,7 @@ Snapshot {
         IdAllocKey {
             name: "user_network_policy",
         }: IdAllocValue {
-            next_id: 1,
+            next_id: 2,
         },
         IdAllocKey {
             name: "user_role",

@@ -62,8 +62,8 @@ use crate::command::{
 };
 use crate::coord::appends::PendingWriteTxn;
 use crate::coord::{
-    ConnMeta, Coordinator, DeferredPlanStatement, Message, NetworkPolicy, PendingTxn,
-    PlanStatement, PlanValidity, PurifiedStatementReady,
+    validate_network_with_policy, ConnMeta, Coordinator, DeferredPlanStatement, Message,
+    PendingTxn, PlanStatement, PlanValidity, PurifiedStatementReady,
 };
 use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
@@ -355,9 +355,26 @@ impl Coordinator {
         // ensure these internal interfaces are well secured.
         let system_config = self.catalog().state().system_config();
         if !user.is_internal() {
-            let default_policy = NetworkPolicy::new(system_config.default_network_policy());
+            let Some(network_policy) = self
+                .catalog()
+                .get_network_policy_by_name(&system_config.default_network_policy_name())
+            else {
+                tracing::error!("Network_policy system var is not pointing to a existing network policy. All user traffic will be blocked");
+                match client_ip {
+                    Some(ip) => {
+                        return Err(AdapterError::NetworkPolicyDenied(
+                            super::NetworkPolicyError::AddressDenied(ip.clone()),
+                        ));
+                    }
+                    None => {
+                        return Err(AdapterError::NetworkPolicyDenied(
+                            super::NetworkPolicyError::MissingIp,
+                        ));
+                    }
+                }
+            };
             if let Some(ip) = client_ip {
-                match default_policy.validate(ip) {
+                match validate_network_with_policy(ip, network_policy) {
                     Ok(_) => {}
                     Err(e) => return Err(AdapterError::NetworkPolicyDenied(e)),
                 }

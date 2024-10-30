@@ -18,6 +18,9 @@ reset-server
 query TTT
 select * from (SHOW NETWORK POLICIES)
 ----
+default
+open_ingress
+(empty)
 
 
 
@@ -34,6 +37,9 @@ COMPLETE 0
 query TTT rowsort
 SELECT * FROM (SHOW NETWORK POLICIES)
 ----
+default
+open_ingress
+(empty)
 np
 r1,r2
 (empty)
@@ -41,8 +47,11 @@ r1,r2
 query TTT
 SELECT id, name, owner_id FROM mz_internal.mz_network_policies
 ----
-u1
+u2
 np
+s1
+u1
+default
 s1
 
 
@@ -51,14 +60,19 @@ SELECT * FROM mz_internal.mz_network_policy_rules
 ----
 name policy_id action address direction
 r1
-u1
+u2
 allow
 0.0.0.0/32
 ingress
 r2
-u1
+u2
 allow
 0.0.0.1/32
+ingress
+open_ingress
+u1
+allow
+0.0.0.0/0
 ingress
 
 
@@ -72,9 +86,14 @@ SELECT * FROM mz_internal.mz_network_policy_rules
 ----
 name policy_id action address direction
 r1
-u1
+u2
 allow
 1.1.1.1/32
+ingress
+open_ingress
+u1
+allow
+0.0.0.0/0
 ingress
 
 simple conn=mz_system,user=mz_system
@@ -82,6 +101,9 @@ DROP NETWORK POLICY np;
 ----
 COMPLETE 0
 
-query TT rowsort
+query TTT rowsort
 select * from (SHOW NETWORK POLICIES)
 ----
+default
+open_ingress
+(empty)

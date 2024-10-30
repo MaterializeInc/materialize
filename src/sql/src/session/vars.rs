@@ -75,7 +75,6 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use im::OrdMap;
-use ipnet::IpNet;
 use mz_build_info::BuildInfo;
 use mz_dyncfg::{ConfigSet, ConfigType, ConfigUpdates, ConfigVal};
 use mz_ore::cast::CastFrom;
@@ -1272,7 +1271,7 @@ impl SystemVars {
             &KAFKA_DEFAULT_METADATA_FETCH_INTERVAL,
             &ENABLE_LAUNCHDARKLY,
             &MAX_CONNECTIONS,
-            &DEFAULT_NETWORK_POLICY_ALLOW_LIST,
+            &NETWORK_POLICY,
             &SUPERUSER_RESERVED_CONNECTIONS,
             &KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES,
             &KEEP_N_SINK_STATUS_HISTORY_ENTRIES,
@@ -1451,7 +1450,9 @@ impl SystemVars {
 
     /// Returns whether or not this parameter can be modified by a superuser.
     pub fn user_modifiable(&self, name: &str) -> bool {
-        Self::SESSION_VARS.contains_key(UncasedStr::new(name)) || name == ENABLE_RBAC_CHECKS.name()
+        Self::SESSION_VARS.contains_key(UncasedStr::new(name))
+            || name == ENABLE_RBAC_CHECKS.name()
+            || name == NETWORK_POLICY.name()
     }
 
     /// Returns a [`Var`] representing the configuration parameter with the
@@ -2068,9 +2069,8 @@ impl SystemVars {
         *self.expect_value(&MAX_CONNECTIONS)
     }
 
-    pub fn default_network_policy(&self) -> Vec<IpNet> {
-        self.expect_value::<Vec<IpNet>>(&DEFAULT_NETWORK_POLICY_ALLOW_LIST)
-            .clone()
+    pub fn default_network_policy_name(&self) -> String {
+        self.expect_value::<String>(&NETWORK_POLICY).clone()
     }
 
     /// Returns the `superuser_reserved_connections` configuration parameter.
