@@ -1789,4 +1789,143 @@ mod tests {
             testcase(desc);
         });
     }
+
+    #[mz_ore::test]
+    fn test_relation_desc_diff() {
+        let og = RelationDesc::builder()
+            .with_column("a", ScalarType::String.nullable(false))
+            .with_column("b", ScalarType::Bool.nullable(true))
+            .finish();
+        let equal = og.clone();
+        assert_eq!(og.diff(&equal), TypeDiff::None);
+
+        let nullability = RelationDesc::builder()
+            // originally this column was not nullable.
+            .with_column("a", ScalarType::String.nullable(true))
+            .with_column("b", ScalarType::Bool.nullable(true))
+            .finish();
+        assert_eq!(og.diff(&nullability), TypeDiff::Nullability);
+
+        let typ = RelationDesc::builder()
+            .with_column("a", ScalarType::String.nullable(false))
+            // originally this column was a Bool.
+            .with_column("b", ScalarType::Int64.nullable(true))
+            .finish();
+        assert_eq!(og.diff(&typ), TypeDiff::Structural);
+
+        let name = RelationDesc::builder()
+            .with_column("a", ScalarType::String.nullable(false))
+            // originally this column used to be called 'b'.
+            .with_column("b_prime", ScalarType::Bool.nullable(true))
+            .finish();
+        assert_eq!(og.diff(&name), TypeDiff::Structural);
+
+        let num_cols = RelationDesc::builder()
+            .with_column("a", ScalarType::String.nullable(false))
+            .with_column("b", ScalarType::Bool.nullable(true))
+            // this column didn't exist originally.
+            .with_column("c", ScalarType::Int64.nullable(true))
+            .finish();
+        assert_eq!(og.diff(&num_cols), TypeDiff::Structural);
+
+        let empty = RelationDesc::empty();
+        assert_eq!(og.diff(&empty), TypeDiff::Structural);
+        assert_eq!(empty.diff(&RelationDesc::empty()), TypeDiff::None);
+
+        let nullability_and_typ = RelationDesc::builder()
+            .with_column("a", ScalarType::String.nullable(false))
+            // originally this column was a nullable bool.
+            .with_column("b", ScalarType::Int64.nullable(false))
+            .finish();
+        // Structural diff should "override" Nullability diff.
+        assert_eq!(og.diff(&nullability_and_typ), TypeDiff::Structural);
+    }
+
+    #[mz_ore::test]
+    fn test_relation_desc_nested_diff() {
+        let og = RelationDesc::builder()
+            .with_column(
+                "a",
+                ScalarType::Record {
+                    fields: Box::new([
+                        ("1".into(), ScalarType::String.nullable(true)),
+                        ("2".into(), ScalarType::Int64.nullable(false)),
+                    ]),
+                    custom_id: None,
+                }
+                .nullable(false),
+            )
+            .with_column("b", ScalarType::Bytes.nullable(true))
+            .finish();
+        let equal = og.clone();
+        assert_eq!(og.diff(&equal), TypeDiff::None);
+
+        let nested_nullability = RelationDesc::builder()
+            .with_column(
+                "a",
+                ScalarType::Record {
+                    fields: Box::new([
+                        ("1".into(), ScalarType::String.nullable(true)),
+                        // originally this column was non-nullable.
+                        ("2".into(), ScalarType::Int64.nullable(true)),
+                    ]),
+                    custom_id: None,
+                }
+                .nullable(false),
+            )
+            .with_column("b", ScalarType::Bytes.nullable(true))
+            .finish();
+        assert_eq!(og.diff(&nested_nullability), TypeDiff::Nullability);
+
+        let nested_names = RelationDesc::builder()
+            .with_column(
+                "a",
+                ScalarType::Record {
+                    fields: Box::new([
+                        ("1".into(), ScalarType::String.nullable(true)),
+                        // originally this column was named '2'.
+                        ("2_prime".into(), ScalarType::Int64.nullable(false)),
+                    ]),
+                    custom_id: None,
+                }
+                .nullable(false),
+            )
+            .with_column("b", ScalarType::Bytes.nullable(true))
+            .finish();
+        assert_eq!(og.diff(&nested_names), TypeDiff::Structural);
+
+        let nested_types = RelationDesc::builder()
+            .with_column(
+                "a",
+                ScalarType::Record {
+                    fields: Box::new([
+                        ("1".into(), ScalarType::String.nullable(true)),
+                        // originally this column was an Int64.
+                        ("2".into(), ScalarType::Int32.nullable(false)),
+                    ]),
+                    custom_id: None,
+                }
+                .nullable(false),
+            )
+            .with_column("b", ScalarType::Bytes.nullable(true))
+            .finish();
+        assert_eq!(og.diff(&nested_types), TypeDiff::Structural);
+
+        let nested_nullability_and_type = RelationDesc::builder()
+            .with_column(
+                "a",
+                ScalarType::Record {
+                    fields: Box::new([
+                        ("1".into(), ScalarType::String.nullable(true)),
+                        ("2".into(), ScalarType::Int32.nullable(true)),
+                    ]),
+                    custom_id: None,
+                }
+                .nullable(false),
+            )
+            .with_column("b", ScalarType::Bytes.nullable(true))
+            .finish();
+        // Structural diff should "override" Nullability diff.
+        assert_eq!(og.diff(&nested_nullability_and_type), TypeDiff::Structural);
+    }
 }

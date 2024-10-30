@@ -505,9 +505,10 @@ impl BatchBuilderConfig {
     }
 
     fn run_meta(&self, order: RunOrder, schema: Option<SchemaId>) -> RunMeta {
+        let schema = if self.record_schema_id { schema } else { None };
         RunMeta {
             order: Some(order),
-            schema: self.record_schema_id.then_some(schema).flatten(),
+            schema,
             deprecated_schema: None,
         }
     }
@@ -1114,10 +1115,11 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                     batch_metrics
                         .step_inline
                         .inc_by(start.elapsed().as_secs_f64());
+                    let schema_id = if record_schema_id { schema_id } else { None };
                     RunPart::Single(BatchPart::Inline {
                         updates,
                         ts_rewrite,
-                        schema_id: record_schema_id.then_some(schema_id).flatten(),
+                        schema_id,
                         deprecated_schema_id: None,
                     })
                 }
@@ -1293,6 +1295,11 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             }
             stats
         });
+        let schema_id = if cfg.record_schema_id {
+            schema_id
+        } else {
+            None
+        };
 
         BatchPart::Hollow(HollowBatchPart {
             key: partial_key,
@@ -1303,7 +1310,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             ts_rewrite,
             diffs_sum: cfg.write_diffs_sum.then_some(diffs_sum),
             format: Some(cfg.batch_columnar_format),
-            schema_id: cfg.record_schema_id.then_some(schema_id).flatten(),
+            schema_id,
             deprecated_schema_id: None,
         })
     }

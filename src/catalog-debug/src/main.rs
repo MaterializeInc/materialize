@@ -638,7 +638,14 @@ async fn upgrade_check(
             CatalogItem::Source(source) => &source.desc,
             CatalogItem::ContinualTask(ct) => &ct.desc,
             CatalogItem::MaterializedView(mv) => &mv.desc,
-            _ => return None,
+            CatalogItem::Log(_)
+            | CatalogItem::View(_)
+            | CatalogItem::Sink(_)
+            | CatalogItem::Index(_)
+            | CatalogItem::Type(_)
+            | CatalogItem::Func(_)
+            | CatalogItem::Secret(_)
+            | CatalogItem::Connection(_) => return None,
         };
         Some((id, desc))
     });
