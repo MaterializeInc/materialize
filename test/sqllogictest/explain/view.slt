@@ -125,7 +125,7 @@ Return
               Join on=(#2 = integer_to_bigint(#0))
                 Filter (#1 = 100) AND (#0) IS NOT NULL
                   Get materialize.public.accounts
-                Distinct project=[#2]
+                Distinct project=[integer_to_bigint(#0)]
                   Get l0
           Filter (#1 = 100)
             Get materialize.public.accounts
@@ -173,7 +173,7 @@ Return
               Join on=(#2 = integer_to_bigint(#0))
                 Filter (#1 = 100) AND (#0) IS NOT NULL
                   Get materialize.public.accounts
-                Distinct project=[#2]
+                Distinct project=[integer_to_bigint(#0)]
                   Get l0
           Filter (#1 = 100)
             Get materialize.public.accounts

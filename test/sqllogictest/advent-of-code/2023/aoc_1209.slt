@@ -91,7 +91,7 @@ Explained Query:
     With
       cte l5 =
         Reduce aggregates=[sum((power(-1, integer_to_double((#1 + 1))) * integer_to_double(#0)))]
-          Project (#0, #2)
+          Project (#0, #3)
             Filter (#2 = #3)
               Get l3
       cte l4 =
@@ -147,8 +147,8 @@ Explained Query:
       Map ((#2 + 1))
         Get l3
     cte l1 =
-      Distinct project=[#0..=#2]
-        Project (#1, #3, #5)
+      Distinct project=[#0, #2, (#1 + 1)]
+        Project (#1..=#3)
           Get l0
     cte l0 =
       Project (#0..=#4, #6)
