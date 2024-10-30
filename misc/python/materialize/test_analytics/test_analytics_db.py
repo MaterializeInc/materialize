@@ -12,6 +12,7 @@ from materialize import buildkite
 from materialize.test_analytics.config.mz_db_config import MzDbConfig
 from materialize.test_analytics.connector.test_analytics_connector import (
     DatabaseConnector,
+    DatabaseConnectorImpl,
 )
 from materialize.test_analytics.data.bounded_memory.bounded_memory_minimal_search_storage import (
     BoundedMemoryMinimalSearchStorage,
@@ -49,8 +50,7 @@ class TestAnalyticsDb:
     __test__ = False
 
     def __init__(self, config: MzDbConfig):
-        self.config = config
-        self.database_connector = DatabaseConnector(
+        self.database_connector: DatabaseConnector = DatabaseConnectorImpl(
             config, current_data_version=TEST_ANALYTICS_DATA_VERSION, log_sql=True
         )
 
