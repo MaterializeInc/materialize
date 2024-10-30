@@ -46,6 +46,24 @@ from materialize.util import all_subclasses
 
 TESTDRIVE_DEFAULT_TIMEOUT = os.environ.get("PLATFORM_CHECKS_TD_TIMEOUT", "300s")
 
+
+def create_mzs(
+    additional_system_parameter_defaults: dict[str, str] | None = None
+) -> list[Materialized]:
+    return [
+        Materialized(
+            name=mz_name,
+            external_metadata_store=True,
+            external_minio=True,
+            sanity_restart=False,
+            volumes_extra=["secrets:/share/secrets"],
+            metadata_store="cockroach",
+            additional_system_parameter_defaults=additional_system_parameter_defaults,
+        )
+        for mz_name in ["materialized", "mz_1", "mz_2", "mz_3", "mz_4", "mz_5"]
+    ]
+
+
 SERVICES = [
     TestCerts(),
     # TODO(def-): Switch to CockroachOrPostgres after we have 4 versions
@@ -99,58 +117,7 @@ SERVICES = [
     Clusterd(
         name="clusterd_compute_1"
     ),  # Started by some Scenarios, defined here only for the teardown
-    Materialized(
-        external_metadata_store=True,
-        external_minio=True,
-        sanity_restart=False,
-        volumes_extra=["secrets:/share/secrets"],
-        metadata_store="cockroach",
-    ),
-    Materialized(
-        name="mz_1",
-        external_metadata_store=True,
-        external_minio=True,
-        sanity_restart=False,
-        restart="on-failure",
-        volumes_extra=["secrets:/share/secrets"],
-        metadata_store="cockroach",
-    ),
-    Materialized(
-        name="mz_2",
-        external_metadata_store=True,
-        external_minio=True,
-        sanity_restart=False,
-        restart="on-failure",
-        volumes_extra=["secrets:/share/secrets"],
-        metadata_store="cockroach",
-    ),
-    Materialized(
-        name="mz_3",
-        external_metadata_store=True,
-        external_minio=True,
-        sanity_restart=False,
-        restart="on-failure",
-        volumes_extra=["secrets:/share/secrets"],
-        metadata_store="cockroach",
-    ),
-    Materialized(
-        name="mz_4",
-        external_metadata_store=True,
-        external_minio=True,
-        sanity_restart=False,
-        restart="on-failure",
-        volumes_extra=["secrets:/share/secrets"],
-        metadata_store="cockroach",
-    ),
-    Materialized(
-        name="mz_5",
-        external_metadata_store=True,
-        external_minio=True,
-        sanity_restart=False,
-        restart="on-failure",
-        volumes_extra=["secrets:/share/secrets"],
-        metadata_store="cockroach",
-    ),
+    *create_mzs(),
     TestdriveService(
         default_timeout=TESTDRIVE_DEFAULT_TIMEOUT,
         materialize_params={"statement_timeout": f"'{TESTDRIVE_DEFAULT_TIMEOUT}'"},
@@ -237,6 +204,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         help="Seed for shuffling checks in sequential run.",
     )
 
+    parser.add_argument(
+        "--system-param",
+        type=str,
+        action="append",
+        nargs="*",
+        help="System parameters to set in Materialize, i.e. what you would set with `ALTER SYSTEM SET`",
+    )
+
     args = parser.parse_args()
 
     if args.scenario:
@@ -261,39 +236,50 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             f"Checks in shard with index {buildkite.get_parallelism_index()}: {[c.__name__ for c in checks]}"
         )
 
-    executor = MzcomposeExecutor(composition=c)
-    for scenario_class in scenarios:
-        assert issubclass(
-            scenario_class, Scenario
-        ), f"{scenario_class} is not a Scenario. Maybe you meant to specify a Check via --check ?"
+    additional_system_parameter_defaults = {}
+    for val in args.system_param or []:
+        x = val[0].split("=", maxsplit=1)
+        assert len(x) == 2, f"--system-param '{val}' should be the format <key>=<val>"
+        additional_system_parameter_defaults[x[0]] = x[1]
 
-        print(f"Testing scenario {scenario_class}...")
+    with c.override(*create_mzs(additional_system_parameter_defaults)):
+        executor = MzcomposeExecutor(composition=c)
+        for scenario_class in scenarios:
+            assert issubclass(
+                scenario_class, Scenario
+            ), f"{scenario_class} is not a Scenario. Maybe you meant to specify a Check via --check ?"
 
-        executor_class = (
-            MzcomposeExecutorParallel
-            if args.execution_mode is ExecutionMode.PARALLEL
-            else MzcomposeExecutor
-        )
-        executor = executor_class(composition=c)
+            print(f"Testing scenario {scenario_class}...")
 
-        execution_mode = args.execution_mode
+            executor_class = (
+                MzcomposeExecutorParallel
+                if args.execution_mode is ExecutionMode.PARALLEL
+                else MzcomposeExecutor
+            )
+            executor = executor_class(composition=c)
 
-        if execution_mode in [ExecutionMode.SEQUENTIAL, ExecutionMode.PARALLEL]:
-            setup(c)
-            scenario = scenario_class(checks=checks, executor=executor, seed=args.seed)
-            scenario.run()
-            teardown(c)
-        elif execution_mode is ExecutionMode.ONEATATIME:
-            for check in checks:
-                print(f"Running individual check {check}, scenario {scenario_class}")
-                c.override_current_testcase_name(
-                    f"Check '{check}' with scenario '{scenario_class}'"
-                )
+            execution_mode = args.execution_mode
+
+            if execution_mode in [ExecutionMode.SEQUENTIAL, ExecutionMode.PARALLEL]:
                 setup(c)
                 scenario = scenario_class(
-                    checks=[check], executor=executor, seed=args.seed
+                    checks=checks, executor=executor, seed=args.seed
                 )
                 scenario.run()
                 teardown(c)
-        else:
-            raise RuntimeError(f"Unsupported execution mode: {execution_mode}")
+            elif execution_mode is ExecutionMode.ONEATATIME:
+                for check in checks:
+                    print(
+                        f"Running individual check {check}, scenario {scenario_class}"
+                    )
+                    c.override_current_testcase_name(
+                        f"Check '{check}' with scenario '{scenario_class}'"
+                    )
+                    setup(c)
+                    scenario = scenario_class(
+                        checks=[check], executor=executor, seed=args.seed
+                    )
+                    scenario.run()
+                    teardown(c)
+            else:
+                raise RuntimeError(f"Unsupported execution mode: {execution_mode}")

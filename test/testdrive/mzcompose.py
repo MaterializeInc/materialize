@@ -120,18 +120,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         entrypoint_extra=[f"--var=uses-redpanda={args.redpanda}"],
     )
 
-    sysparams = args.system_param
-    if not args.system_param:
-        sysparams = []
-
     additional_system_parameter_defaults = {}
-    for val in sysparams:
+    for val in args.system_param or []:
         x = val[0].split("=", maxsplit=1)
         assert len(x) == 2, f"--system-param '{val}' should be the format <key>=<val>"
-        key = x[0]
-        val = x[1]
-
-        additional_system_parameter_defaults[key] = val
+        additional_system_parameter_defaults[x[0]] = x[1]
 
     materialized = Materialized(
         default_size=args.default_size,

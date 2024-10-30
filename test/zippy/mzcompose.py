@@ -41,6 +41,23 @@ from materialize.zippy.framework import Test
 from materialize.zippy.mz_actions import Mz0dtDeploy
 from materialize.zippy.scenarios import *  # noqa: F401 F403
 
+
+def create_mzs(
+    additional_system_parameter_defaults: dict[str, str] | None = None
+) -> list[Materialized]:
+    return [
+        Materialized(
+            name=mz_name,
+            external_minio=True,
+            external_metadata_store=True,
+            sanity_restart=False,
+            metadata_store="cockroach",
+            additional_system_parameter_defaults=additional_system_parameter_defaults,
+        )
+        for mz_name in ["materialized", "materialized2"]
+    ]
+
+
 SERVICES = [
     Zookeeper(),
     Redpanda(auto_create_topics=True),
@@ -50,19 +67,7 @@ SERVICES = [
     Minio(setup_materialize=True, additional_directories=["copytos3"]),
     Mc(),
     Balancerd(),
-    Materialized(
-        external_minio=True,
-        external_metadata_store=True,
-        sanity_restart=False,
-        metadata_store="cockroach",
-    ),
-    Materialized(
-        name="materialized2",
-        external_minio=True,
-        external_metadata_store=True,
-        sanity_restart=False,
-        metadata_store="cockroach",
-    ),
+    *create_mzs(),
     Clusterd(name="storaged"),
     Testdrive(metadata_store="cockroach"),
     Grafana(),
@@ -144,6 +149,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         help="Start Prometheus and Grafana",
     )
 
+    parser.add_argument(
+        "--system-param",
+        type=str,
+        action="append",
+        nargs="*",
+        help="System parameters to set in Materialize, i.e. what you would set with `ALTER SYSTEM SET`",
+    )
+
     args = parser.parse_args()
     scenario_class = globals()[args.scenario]
 
@@ -154,6 +167,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         c.up("prometheus", "grafana")
 
     random.seed(args.seed)
+
+    additional_system_parameter_defaults = {}
+    for val in args.system_param or []:
+        x = val[0].split("=", maxsplit=1)
+        assert len(x) == 2, f"--system-param '{val}' should be the format <key>=<val>"
+        additional_system_parameter_defaults[x[0]] = x[1]
 
     with c.override(
         Cockroach(
@@ -174,6 +193,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             },
             metadata_store="cockroach",
         ),
+        *create_mzs(additional_system_parameter_defaults),
     ):
         c.up("materialized")
 
