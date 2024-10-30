@@ -21,7 +21,7 @@ granular permissions within the database must be handled separately using
 [role-based access control
 (RBAC)](/manage/access-control/#role-based-access-control-rbac).
 
-## Procedure
+## How to invite a new user
 
 1. [Log in to the Materialize console](https://console.materialize.com/).
 
