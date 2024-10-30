@@ -16,6 +16,8 @@ use std::sync::Arc;
 
 use differential_dataflow::consolidation::consolidate_updates;
 use mz_ore::collections::{AssociativeExt, HashSet};
+use mz_ore::soft_panic_or_log;
+use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::error::UpperMismatch;
 use mz_persist_client::read::{ListenEvent, Subscribe};
 use mz_persist_client::write::WriteHandle;
@@ -60,6 +62,7 @@ struct LocalVal<C: DurableCacheCodec> {
 
 #[derive(Debug)]
 pub struct DurableCache<C: DurableCacheCodec> {
+    since_handle: SinceHandle<C::KeyCodec, C::ValCodec, u64, i64, i64>,
     write: WriteHandle<C::KeyCodec, C::ValCodec, u64, i64>,
     subscribe: Subscribe<C::KeyCodec, C::ValCodec, u64, i64>,
 
@@ -71,6 +74,21 @@ impl<C: DurableCacheCodec> DurableCache<C> {
     /// Opens a [`DurableCache`] using shard `shard_id`.
     pub async fn new(persist: &PersistClient, shard_id: ShardId, purpose: &str) -> Self {
         let use_critical_since = true;
+        let shard_name = format!("{purpose}_cache");
+        let handle_purpose = format!("durable persist cache: {purpose}");
+        let since_handle = persist
+            .open_critical_since(
+                shard_id,
+                // TODO: We may need to use a different critical reader
+                // id for this if we want to be able to introspect it via SQL.
+                PersistClient::CONTROLLER_CRITICAL_SINCE,
+                Diagnostics {
+                    shard_name: shard_name.clone(),
+                    handle_purpose: handle_purpose.clone(),
+                },
+            )
+            .await
+            .expect("invalid usage");
         let (key_schema, val_schema) = C::schemas();
         let (mut write, read) = persist
             .open(
@@ -78,8 +96,8 @@ impl<C: DurableCacheCodec> DurableCache<C> {
                 Arc::new(key_schema),
                 Arc::new(val_schema),
                 Diagnostics {
-                    shard_name: format!("{purpose}_cache"),
-                    handle_purpose: format!("durable persist cache: {purpose}"),
+                    shard_name,
+                    handle_purpose,
                 },
                 use_critical_since,
             )
@@ -103,6 +121,7 @@ impl<C: DurableCacheCodec> DurableCache<C> {
             .await
             .expect("capability should be held at this since");
         let mut ret = DurableCache {
+            since_handle,
             write,
             subscribe,
             local: BTreeMap::new(),
@@ -186,14 +205,8 @@ impl<C: DurableCacheCodec> DurableCache<C> {
             let update = (C::encode(key, &val), expected_upper, 1);
             let new_upper = expected_upper + 1;
             let ret = self
-                .write
-                .compare_and_append(
-                    &[update],
-                    Antichain::from_elem(expected_upper),
-                    Antichain::from_elem(new_upper),
-                )
-                .await
-                .expect("usage should be valid");
+                .compare_and_append([update], expected_upper, new_upper)
+                .await;
             match ret {
                 Ok(()) => {
                     self.sync_to(Some(new_upper)).await;
@@ -274,14 +287,8 @@ impl<C: DurableCacheCodec> DurableCache<C> {
 
         let new_upper = expected_upper + 1;
         let ret = self
-            .write
-            .compare_and_append(
-                updates,
-                Antichain::from_elem(expected_upper),
-                Antichain::from_elem(new_upper),
-            )
-            .await
-            .expect("usage should be valid");
+            .compare_and_append(updates, expected_upper, new_upper)
+            .await;
         match ret {
             Ok(()) => {
                 self.sync_to(Some(new_upper)).await;
@@ -292,6 +299,43 @@ impl<C: DurableCacheCodec> DurableCache<C> {
                 Err(Error::WriteConflict(err))
             }
         }
+    }
+
+    async fn compare_and_append<I>(
+        &mut self,
+        updates: I,
+        expected_upper: u64,
+        new_upper: u64,
+    ) -> Result<(), UpperMismatch<u64>>
+    where
+        I: IntoIterator<Item = ((C::KeyCodec, C::ValCodec), u64, i64)>,
+    {
+        self.write
+            .compare_and_append(
+                updates,
+                Antichain::from_elem(expected_upper),
+                Antichain::from_elem(new_upper),
+            )
+            .await
+            .expect("usage should be valid")?;
+
+        // Lag the shard's upper by 1 to keep it readable.
+        let downgrade_to = Antichain::from_elem(new_upper.saturating_sub(1));
+
+        // The since handle gives us the ability to fence out other downgraders using an opaque token.
+        // (See the method documentation for details.)
+        // That's not needed here, so we use the since handle's opaque token to avoid any comparison
+        // failures.
+        let opaque = *self.since_handle.opaque();
+        let downgrade = self
+            .since_handle
+            .maybe_compare_and_downgrade_since(&opaque, (&opaque, &downgrade_to))
+            .await;
+        if let Some(Err(e)) = downgrade {
+            soft_panic_or_log!("found opaque value {e}, but expected {opaque}");
+        }
+
+        Ok(())
     }
 }
 
