@@ -270,15 +270,6 @@ debug = 2
 # merged), after which point it becomes impossible to build that historical
 # version of Materialize.
 [patch.crates-io]
-# Projects that do not reliably release to crates.io.
-timely = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
-timely_bytes = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
-timely_communication = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
-timely_container = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
-timely_logging = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
-differential-dataflow = { git = "https://github.com/MaterializeInc/differential-dataflow.git" }
-dogsdogsdogs = { git = "https://github.com/MaterializeInc/differential-dataflow.git" }
-
 # Waiting on https://github.com/sfackler/rust-postgres/pull/752.
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
@@ -321,10 +312,6 @@ openssh = { git = "https://github.com/MaterializeInc/openssh.git" }
 # Removes dependencies required for WASM support that create duplicated deps.
 reqwest-middleware = { git = "https://github.com/MaterializeInc/reqwest-middleware.git" }
 reqwest-retry = { git = "https://github.com/MaterializeInc/reqwest-middleware.git" }
-
-[patch."https://github.com/frankmcsherry/columnation"]
-# Projects that do not reliably release to crates.io.
-columnation = { git = "https://github.com/MaterializeInc/columnation.git" }
 
 [workspace.metadata.vet]
 store = { path = "misc/cargo-vet" }

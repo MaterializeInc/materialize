@@ -203,6 +203,13 @@ user-id = 6743
 user-login = "epage"
 user-name = "Ed Page"
 
+[[publisher.columnation]]
+version = "0.1.0"
+when = "2024-10-29"
+user-id = 704
+user-login = "frankmcsherry"
+user-name = "Frank McSherry"
+
 [[publisher.compact_bytes]]
 version = "0.1.2"
 when = "2024-05-31"
@@ -265,6 +272,20 @@ when = "2024-05-07"
 user-id = 3618
 user-login = "dtolnay"
 user-name = "David Tolnay"
+
+[[publisher.differential-dataflow]]
+version = "0.13.0"
+when = "2024-10-29"
+user-id = 704
+user-login = "frankmcsherry"
+user-name = "Frank McSherry"
+
+[[publisher.differential-dogs3]]
+version = "0.1.0"
+when = "2024-10-29"
+user-id = 704
+user-login = "frankmcsherry"
+user-name = "Frank McSherry"
 
 [[publisher.dyn-clone]]
 version = "1.0.9"
@@ -670,6 +691,41 @@ when = "2023-01-15"
 user-id = 189
 user-login = "BurntSushi"
 user-name = "Andrew Gallant"
+
+[[publisher.timely]]
+version = "0.13.0"
+when = "2024-10-29"
+user-id = 704
+user-login = "frankmcsherry"
+user-name = "Frank McSherry"
+
+[[publisher.timely_bytes]]
+version = "0.12.0"
+when = "2021-03-10"
+user-id = 704
+user-login = "frankmcsherry"
+user-name = "Frank McSherry"
+
+[[publisher.timely_communication]]
+version = "0.13.0"
+when = "2024-10-29"
+user-id = 704
+user-login = "frankmcsherry"
+user-name = "Frank McSherry"
+
+[[publisher.timely_container]]
+version = "0.12.0"
+when = "2024-10-29"
+user-id = 704
+user-login = "frankmcsherry"
+user-name = "Frank McSherry"
+
+[[publisher.timely_logging]]
+version = "0.12.1"
+when = "2024-10-29"
+user-id = 704
+user-login = "frankmcsherry"
+user-name = "Frank McSherry"
 
 [[publisher.tokio-test]]
 version = "0.4.2"

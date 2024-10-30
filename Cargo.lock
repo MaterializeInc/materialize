@@ -1473,7 +1473,8 @@ dependencies = [
 [[package]]
 name = "columnation"
 version = "0.1.0"
-source = "git+https://github.com/MaterializeInc/columnation.git#2cd6d86e5ffabf98aef5cbef09a57f515eae7c55"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "21ca68e419cae36821f2e1c9d62a25de900aad72e96b79c6f76eb47c65816d25"
 dependencies = [
  "paste",
 ]
@@ -2038,10 +2039,22 @@ dependencies = [
 
 [[package]]
 name = "differential-dataflow"
-version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/differential-dataflow.git#ea2e3e13bbd5cdd31f60f091a3625d954d7347f8"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4f5ad19c6ddddedba008bf9626348810ff5171de9cad62406cd4e9ea291fa8d1"
 dependencies = [
  "fnv",
+ "serde",
+ "timely",
+]
+
+[[package]]
+name = "differential-dogs3"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bd672f3f2167a08496c0ba47206e1c857b75abd14a7c560d1a7da2e07ee08cb1"
+dependencies = [
+ "differential-dataflow",
  "serde",
  "timely",
 ]
@@ -2089,17 +2102,6 @@ name = "doc-comment"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "923dea538cea0aa3025e8685b20d6ee21ef99c4f77e954a30febbaac5ec73a97"
-
-[[package]]
-name = "dogsdogsdogs"
-version = "0.1.0"
-source = "git+https://github.com/MaterializeInc/differential-dataflow.git#ea2e3e13bbd5cdd31f60f091a3625d954d7347f8"
-dependencies = [
- "differential-dataflow",
- "serde",
- "serde_derive",
- "timely",
-]
 
 [[package]]
 name = "domain"
@@ -4690,7 +4692,7 @@ dependencies = [
  "crossbeam-channel",
  "dec",
  "differential-dataflow",
- "dogsdogsdogs",
+ "differential-dogs3",
  "futures",
  "itertools 0.10.5",
  "lgalloc",
@@ -9785,8 +9787,9 @@ dependencies = [
 
 [[package]]
 name = "timely"
-version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#14e2e994b99905e18dca4852e57d153a81f9f02e"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "81b6f390cec7160992fd8502fe02064a0f52dcfd2978544f4999f18664b709aa"
 dependencies = [
  "bincode",
  "crossbeam-channel",
@@ -9802,12 +9805,14 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#14e2e994b99905e18dca4852e57d153a81f9f02e"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1f8a545b35b019b8b63afb913214695f542cbbf39032c7b7349e1a15b7f2a2cf"
 
 [[package]]
 name = "timely_communication"
-version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#14e2e994b99905e18dca4852e57d153a81f9f02e"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22d602b340fd8d5d4128660a577f7886070098b860dc9a9aa46512a2e0d683b4"
 dependencies = [
  "bincode",
  "byteorder",
@@ -9821,7 +9826,8 @@ dependencies = [
 [[package]]
 name = "timely_container"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#14e2e994b99905e18dca4852e57d153a81f9f02e"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2ddfa4639c9390c6fac4ff66e47aa1bcfbc5f5bba6d520d5a7c55978165e7b14"
 dependencies = [
  "columnation",
  "flatcontainer",
@@ -9830,8 +9836,9 @@ dependencies = [
 
 [[package]]
 name = "timely_logging"
-version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#14e2e994b99905e18dca4852e57d153a81f9f02e"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b73a034d62792b507397701ee660001c8ba3e9dbffce29bc7a25319a36ebaa86"
 
 [[package]]
 name = "tiny-keccak"
