@@ -11,7 +11,7 @@
 
 use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet};
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
 use differential_dataflow::Collection;
 use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc};
@@ -95,8 +95,19 @@ where
         // Ensure that the frontier does not advance past the expiration time, if set. Otherwise,
         // we might write down incorrect data.
         if let Some(&expiration) = self.dataflow_expiration.as_option() {
-            ok_collection = ok_collection.expire_collection_at(expiration);
-            err_collection = err_collection.expire_collection_at(expiration);
+            let token = Rc::new(());
+            let shutdown_token = Rc::downgrade(&token);
+            ok_collection = ok_collection.expire_collection_at(
+                &format!("{}_export_sink_oks", self.debug_name),
+                expiration,
+                Weak::clone(&shutdown_token),
+            );
+            err_collection = err_collection.expire_collection_at(
+                &format!("{}_export_sink_errs", self.debug_name),
+                expiration,
+                shutdown_token,
+            );
+            needed_tokens.push(token);
         }
 
         let non_null_assertions = sink.non_null_assertions.clone();

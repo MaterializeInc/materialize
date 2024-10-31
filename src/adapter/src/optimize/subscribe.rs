@@ -161,11 +161,6 @@ impl GlobalLirPlan {
         let sink_desc = sink_exports.values().next().expect("valid sink");
         sink_desc
     }
-
-    /// Get the plan's [`LirDataflowDescription`].
-    pub fn df_desc(&self) -> &LirDataflowDescription {
-        &self.df_desc
-    }
 }
 
 /// Marker type for [`GlobalMirPlan`] structs representing an optimization
@@ -299,11 +294,7 @@ impl GlobalMirPlan<Unresolved> {
     /// We need to resolve timestamps before the `GlobalMirPlan ⇒ GlobalLirPlan`
     /// optimization stage in order to profit from possible single-time
     /// optimizations in the `Plan::finalize_dataflow` call.
-    pub fn resolve(
-        mut self,
-        as_of: Antichain<Timestamp>,
-        is_timeline_epoch_ms: bool,
-    ) -> GlobalMirPlan<Resolved> {
+    pub fn resolve(mut self, as_of: Antichain<Timestamp>) -> GlobalMirPlan<Resolved> {
         // A dataflow description for a `SUBSCRIBE` statement should not have
         // index exports.
         soft_assert_or_log!(
@@ -313,9 +304,6 @@ impl GlobalMirPlan<Unresolved> {
 
         // Set the `as_of` timestamp for the dataflow.
         self.df_desc.set_as_of(as_of);
-
-        // Detect the timeline type.
-        self.df_desc.dataflow_expiration_desc.is_timeline_epoch_ms = is_timeline_epoch_ms;
 
         // The only outputs of the dataflow are sinks, so we might be able to
         // turn off the computation early, if they all have non-trivial

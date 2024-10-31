@@ -50,6 +50,7 @@ fn main() {
                 "compute-types/src/dataflows.proto",
                 "compute-types/src/sinks.proto",
                 "compute-types/src/sources.proto",
+                "compute-types/src/time_dependence.proto",
                 "compute-types/src/plan.proto",
                 "compute-types/src/plan/flat_plan.proto",
                 "compute-types/src/plan/join.proto",

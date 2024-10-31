@@ -324,7 +324,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                         debug_name: dataflow.debug_name.clone(),
                         initial_storage_as_of: dataflow.initial_storage_as_of.clone(),
                         refresh_schedule: dataflow.refresh_schedule.clone(),
-                        dataflow_expiration_desc: dataflow.dataflow_expiration_desc.clone(),
+                        time_dependence: dataflow.time_dependence.clone(),
                     })
                     .map(ComputeCommand::CreateDataflow)
                     .collect()
@@ -471,6 +471,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                     compute_state.report_frontiers();
                     compute_state.report_dropped_collections();
                     compute_state.report_metrics();
+                    compute_state.check_expiration();
                 }
 
                 self.metrics

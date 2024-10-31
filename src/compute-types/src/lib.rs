@@ -19,6 +19,7 @@ pub mod explain;
 pub mod plan;
 pub mod sinks;
 pub mod sources;
+pub mod time_dependence;
 
 /// The default logging interval for `ComputeReplicaLogging`.
 pub const DEFAULT_COMPUTE_REPLICA_LOGGING_INTERVAL: Duration = Duration::from_secs(1);

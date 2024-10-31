@@ -19,7 +19,7 @@ use crate::Timestamp;
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.refresh_schedule.rs"));
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct RefreshSchedule {
     // `REFRESH EVERY`s
     pub everies: Vec<RefreshEvery>,
@@ -70,7 +70,7 @@ impl RefreshSchedule {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct RefreshEvery {
     pub interval: Duration,
     pub aligned_to: Timestamp,

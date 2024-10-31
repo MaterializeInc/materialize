@@ -309,7 +309,7 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::sync::Arc;
 
-    use mz_compute_types::dataflows::{DataflowDescription, DataflowExpirationDesc};
+    use mz_compute_types::dataflows::DataflowDescription;
     use mz_durable_cache::DurableCacheCodec;
     use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
     use mz_persist_client::PersistClient;
@@ -351,7 +351,7 @@ mod tests {
                 initial_storage_as_of: None,
                 refresh_schedule: None,
                 debug_name: "pp".to_string(),
-                dataflow_expiration_desc: DataflowExpirationDesc::default(),
+                time_dependence: None,
             };
 
             let dataflow_metainfos = any::<DataflowMetainfo<Arc<OptimizerNotice>>>();

@@ -546,8 +546,19 @@ where
                 // Ensure that the frontier does not advance past the expiration time, if set.
                 // Otherwise, we might write down incorrect data.
                 if let Some(&expiration) = self.dataflow_expiration.as_option() {
-                    oks.expire_arrangement_at(expiration);
-                    errs.stream = errs.stream.expire_stream_at(expiration);
+                    let token = Rc::new(());
+                    let shutdown_token = Rc::downgrade(&token);
+                    oks.expire_arrangement_at(
+                        &format!("{}_export_index_oks", self.debug_name),
+                        expiration,
+                        Weak::clone(&shutdown_token),
+                    );
+                    errs.stream = errs.stream.expire_stream_at(
+                        &format!("{}_export_index_errs", self.debug_name),
+                        expiration,
+                        shutdown_token,
+                    );
+                    needed_tokens.push(token);
                 }
 
                 // Obtain a specialized handle matching the specialized arrangement.
@@ -626,8 +637,19 @@ where
                 // Ensure that the frontier does not advance past the expiration time, if set.
                 // Otherwise, we might write down incorrect data.
                 if let Some(&expiration) = self.dataflow_expiration.as_option() {
-                    oks.expire_arrangement_at(expiration);
-                    errs.stream = errs.stream.expire_stream_at(expiration);
+                    let token = Rc::new(());
+                    let shutdown_token = Rc::downgrade(&token);
+                    oks.expire_arrangement_at(
+                        &format!("{}_export_index_iterative_oks", self.debug_name),
+                        expiration,
+                        Weak::clone(&shutdown_token),
+                    );
+                    errs.stream = errs.stream.expire_stream_at(
+                        &format!("{}_export_index_iterative_err", self.debug_name),
+                        expiration,
+                        shutdown_token,
+                    );
+                    needed_tokens.push(token);
                 }
 
                 let oks_trace = oks.trace_handle();

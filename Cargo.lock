@@ -6903,6 +6903,7 @@ dependencies = [
  "serde",
  "timely",
  "tokio",
+ "tracing",
  "uuid",
  "workspace-hack",
 ]

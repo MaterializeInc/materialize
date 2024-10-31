@@ -10,20 +10,21 @@ publish = false
 workspace = true
 
 [dependencies]
+ahash = { version = "0.8.11", default-features = false }
+columnation = "0.1.0"
 differential-dataflow = "0.13.0"
 either = "1"
-lgalloc = "0.3"
-columnation = "0.1.0"
 futures-util = "0.3.25"
-proptest = { version = "1.0.0", default-features = false, features = ["std"] }
-timely = "0.13.0"
-serde = { version = "1.0.152", features = ["derive"] }
+lgalloc = "0.3"
 mz-ore = { path = "../ore", features = ["async", "process", "tracing_", "test"] }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
-tokio = { version = "1.38.0", features = ["macros", "rt-multi-thread", "time"] }
 num-traits = "0.2"
-ahash = { version = "0.8.11", default-features = false }
+proptest = { version = "1.0.0", default-features = false, features = ["std"] }
+serde = { version = "1.0.152", features = ["derive"] }
+timely = "0.13.0"
+tokio = { version = "1.38.0", features = ["macros", "rt-multi-thread", "time"] }
+tracing = "0.1.37"
 uuid = { version = "1.7.0", features = ["serde", "v4"] }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

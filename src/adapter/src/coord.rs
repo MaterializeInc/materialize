@@ -66,16 +66,6 @@
 //! ```
 //!
 
-use anyhow::Context;
-use chrono::{DateTime, Utc};
-use ipnet::IpNet;
-use mz_adapter_types::dyncfgs::WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL;
-use mz_compute_client::as_of_selection;
-use mz_ore::channel::trigger::Trigger;
-use mz_ore::url::SensitiveUrl;
-use mz_sql::names::{ResolvedIds, SchemaSpecifier};
-use mz_sql::session::user::User;
-use mz_storage_types::read_holds::ReadHold;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
@@ -87,17 +77,20 @@ use std::sync::LazyLock;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
-use thiserror::Error;
 
+use anyhow::Context;
+use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use fail::fail_point;
 use futures::future::{BoxFuture, FutureExt, LocalBoxFuture};
 use futures::StreamExt;
 use http::Uri;
+use ipnet::IpNet;
 use itertools::{Either, Itertools};
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
+use mz_adapter_types::dyncfgs::WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL;
 use mz_build_info::BuildInfo;
 use mz_catalog::builtin::{BUILTINS, BUILTINS_STATIC, MZ_STORAGE_USAGE_BY_SHARD};
 use mz_catalog::config::{AwsPrincipalContext, BuiltinItemMigrationConfig, ClusterReplicaSizeMap};
@@ -107,6 +100,7 @@ use mz_catalog::memory::objects::{
     DataSourceDesc, TableDataSource,
 };
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig, VpcEndpointEvent};
+use mz_compute_client::as_of_selection;
 use mz_compute_client::controller::error::InstanceMissing;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::Plan;
@@ -117,12 +111,14 @@ use mz_controller_types::{ClusterId, ReplicaId, WatchSetId};
 use mz_expr::{MapFilterProject, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_orchestrator::{OfflineReason, ServiceProcessMetrics};
 use mz_ore::cast::{CastFrom, CastLossy};
+use mz_ore::channel::trigger::Trigger;
 use mz_ore::future::TimeoutError;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::task::{spawn, JoinHandle};
 use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
+use mz_ore::url::SensitiveUrl;
 use mz_ore::vec::VecExt;
 use mz_ore::{assert_none, instrument, soft_assert_or_log, soft_panic_or_log, stack};
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
@@ -134,11 +130,13 @@ use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::{SecretsController, SecretsReader};
 use mz_sql::ast::{Raw, Statement};
 use mz_sql::catalog::{CatalogCluster, EnvironmentId};
+use mz_sql::names::{ResolvedIds, SchemaSpecifier};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::{
     self, AlterSinkPlan, ConnectionDetails, CreateConnectionPlan, OnTimeoutAction, Params,
     QueryWhen,
 };
+use mz_sql::session::user::User;
 use mz_sql::session::vars::{ConnectionCounter, SystemVars};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::ExplainStage;
@@ -147,6 +145,7 @@ use mz_storage_client::controller::{CollectionDescription, DataSource};
 use mz_storage_types::connections::inline::{IntoInlineConnection, ReferencedConnection};
 use mz_storage_types::connections::Connection as StorageConnection;
 use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::sinks::S3SinkFormat;
 use mz_storage_types::sources::Timeline;
 use mz_timestamp_oracle::postgres_oracle::{
@@ -156,6 +155,7 @@ use mz_timestamp_oracle::WriteTimestamp;
 use mz_transform::dataflow::DataflowMetainfo;
 use opentelemetry::trace::TraceContextExt;
 use serde::Serialize;
+use thiserror::Error;
 use timely::progress::{Antichain, Timestamp as _};
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
@@ -178,6 +178,7 @@ use crate::coord::cluster_scheduling::SchedulingDecision;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::introspection::IntrospectionSubscribe;
 use crate::coord::peek::PendingPeek;
+use crate::coord::statement_logging::{StatementLogging, StatementLoggingId};
 use crate::coord::timeline::{TimelineContext, TimelineState};
 use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination};
 use crate::coord::validity::PlanValidity;
@@ -185,6 +186,7 @@ use crate::error::AdapterError;
 use crate::explain::insights::PlanInsightsContext;
 use crate::explain::optimizer_trace::{DispatchGuard, OptimizerTrace};
 use crate::metrics::Metrics;
+use crate::optimize::dataflow_expiration::time_dependence;
 use crate::optimize::dataflows::{
     dataflow_import_id_bundle, ComputeInstanceSnapshot, DataflowBuilder,
 };
@@ -194,8 +196,6 @@ use crate::statement_logging::{StatementEndedExecutionReason, StatementLifecycle
 use crate::util::{ClientTransmitter, ResultExt};
 use crate::webhook::{WebhookAppenderInvalidator, WebhookConcurrencyLimiter};
 use crate::{flags, AdapterNotice, ReadHolds};
-
-use self::statement_logging::{StatementLogging, StatementLoggingId};
 
 pub(crate) mod id_bundle;
 pub(crate) mod in_memory_oracle;
@@ -743,10 +743,6 @@ pub struct CreateMaterializedViewOptimize {
     /// An optional context set iff the state machine is initiated from
     /// sequencing an EXPLAIN for this statement.
     explain_ctx: ExplainContext,
-    /// Whether the timeline is [`mz_storage_types::sources::Timeline::EpochMilliseconds`].
-    ///
-    /// Used to determine if it is safe to enable dataflow expiration.
-    is_timeline_epoch_ms: bool,
 }
 
 #[derive(Debug)]
@@ -2587,15 +2583,8 @@ impl Coordinator {
                 .catalog()
                 .resolve_full_name(entry.name(), None)
                 .to_string();
-            let is_timeline_epoch_ms = self.get_timeline_context(*id).is_timeline_epoch_ms();
             let (_optimized_plan, physical_plan, _metainfo) = self
-                .optimize_create_continual_task(
-                    &ct,
-                    *id,
-                    self.owned_catalog(),
-                    debug_name,
-                    is_timeline_epoch_ms,
-                )
+                .optimize_create_continual_task(&ct, *id, self.owned_catalog(), debug_name)
                 .expect("builtin CT should optimize successfully");
 
             // Determine an as of for the new continual task.
@@ -2638,7 +2627,6 @@ impl Coordinator {
 
         for entry in ordered_catalog_entries {
             let id = entry.id();
-            let is_timeline_epoch_ms = self.get_timeline_context(id).is_timeline_epoch_ms();
             match entry.item() {
                 CatalogItem::Index(idx) => {
                     // Collect optimizer parameters.
@@ -2669,7 +2657,6 @@ impl Coordinator {
                             entry.name().clone(),
                             idx.on,
                             idx.keys.to_vec(),
-                            is_timeline_epoch_ms,
                         );
                         let global_mir_plan = optimizer.optimize(index_plan)?;
                         let optimized_plan = global_mir_plan.df_desc().clone();
@@ -2680,7 +2667,9 @@ impl Coordinator {
                         (optimized_plan, global_lir_plan)
                     };
 
-                    let (physical_plan, metainfo) = global_lir_plan.unapply();
+                    let (mut physical_plan, metainfo) = global_lir_plan.unapply();
+                    physical_plan.time_dependence =
+                        time_dependence(self.catalog(), physical_plan.import_ids(), None);
                     let metainfo = {
                         // Pre-allocate a vector of transient GlobalIds for each notice.
                         let notice_ids = std::iter::repeat_with(|| self.allocate_transient_id())
@@ -2725,7 +2714,6 @@ impl Coordinator {
                             debug_name,
                             optimizer_config.clone(),
                             self.optimizer_metrics(),
-                            is_timeline_epoch_ms,
                             force_non_monotonic,
                         );
 
@@ -2740,7 +2728,12 @@ impl Coordinator {
                         (optimized_plan, global_lir_plan)
                     };
 
-                    let (physical_plan, metainfo) = global_lir_plan.unapply();
+                    let (mut physical_plan, metainfo) = global_lir_plan.unapply();
+                    physical_plan.time_dependence = time_dependence(
+                        self.catalog(),
+                        physical_plan.import_ids(),
+                        mv.refresh_schedule.clone(),
+                    );
                     let metainfo = {
                         // Pre-allocate a vector of transient GlobalIds for each notice.
                         let notice_ids = std::iter::repeat_with(|| self.allocate_transient_id())
@@ -2770,13 +2763,7 @@ impl Coordinator {
                         .resolve_full_name(entry.name(), None)
                         .to_string();
                     let (optimized_plan, physical_plan, metainfo) = self
-                        .optimize_create_continual_task(
-                            ct,
-                            id,
-                            self.owned_catalog(),
-                            debug_name,
-                            is_timeline_epoch_ms,
-                        )?;
+                        .optimize_create_continual_task(ct, id, self.owned_catalog(), debug_name)?;
 
                     let catalog = self.catalog_mut();
                     catalog.set_optimized_plan(id, optimized_plan);

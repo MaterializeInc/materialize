@@ -45,6 +45,7 @@ use crate::error::AdapterError;
 use crate::explain::explain_dataflow;
 use crate::explain::explain_plan;
 use crate::explain::optimizer_trace::OptimizerTrace;
+use crate::optimize::dataflow_expiration::time_dependence;
 use crate::optimize::dataflows::dataflow_import_id_bundle;
 use crate::optimize::{self, Optimize};
 use crate::session::Session;
@@ -340,7 +341,7 @@ impl Coordinator {
         // We want to reject queries that depend on log sources, for example,
         // even if we can *technically* optimize that reference away.
         let expr_depends_on = expr.depends_on();
-        let timeline_ctx = self.validate_timeline_context(expr_depends_on.iter().cloned())?;
+        self.validate_timeline_context(expr_depends_on.iter().cloned())?;
         self.validate_system_column_references(*ambiguous_columns, &expr_depends_on)?;
         // Materialized views are not allowed to depend on log sources, as replicas
         // are not producing the same definite collection for these.
@@ -398,7 +399,6 @@ impl Coordinator {
                 plan,
                 resolved_ids,
                 explain_ctx,
-                is_timeline_epoch_ms: timeline_ctx.is_timeline_epoch_ms(),
             },
         ))
     }
@@ -411,7 +411,6 @@ impl Coordinator {
             plan,
             resolved_ids,
             explain_ctx,
-            is_timeline_epoch_ms,
         }: CreateMaterializedViewOptimize,
     ) -> Result<StageResult<Box<CreateMaterializedViewStage>>, AdapterError> {
         let plan::CreateMaterializedViewPlan {
@@ -455,7 +454,6 @@ impl Coordinator {
             debug_name,
             optimizer_config,
             self.optimizer_metrics(),
-            is_timeline_epoch_ms,
             force_non_monotonic,
         );
 
@@ -575,14 +573,6 @@ impl Coordinator {
         // Timestamp selection
         let id_bundle = dataflow_import_id_bundle(global_lir_plan.df_desc(), cluster_id);
 
-        // Collect properties for `DataflowExpirationDesc`.
-        let transitive_upper = self.least_valid_write(&id_bundle);
-        let has_transitive_refresh_schedule = refresh_schedule.is_some()
-            || raw_expr
-                .depends_on()
-                .into_iter()
-                .any(|id| self.catalog.item_has_transitive_refresh_schedule(id));
-
         let read_holds_owned;
         let read_holds = if let Some(txn_reads) = self.txn_read_holds.get(session.conn_id()) {
             // In some cases, for example when REFRESH is used, the preparatory
@@ -643,7 +633,7 @@ impl Coordinator {
                     cluster_id,
                     non_null_assertions,
                     custom_logical_compaction_window: compaction_window,
-                    refresh_schedule,
+                    refresh_schedule: refresh_schedule.clone(),
                     initial_as_of: Some(initial_as_of.clone()),
                 }),
                 owner_id: *session.current_role_id(),
@@ -657,16 +647,19 @@ impl Coordinator {
 
         let transact_result = self
             .catalog_transact_with_side_effects(Some(session), ops, |coord| async {
+                let output_desc = global_lir_plan.desc().clone();
+                let (mut df_desc, df_meta) = global_lir_plan.unapply();
+
+                df_desc.time_dependence =
+                    time_dependence(coord.catalog(), df_desc.import_ids(), refresh_schedule);
+
                 // Save plan structures.
                 coord
                     .catalog_mut()
                     .set_optimized_plan(sink_id, global_mir_plan.df_desc().clone());
                 coord
                     .catalog_mut()
-                    .set_physical_plan(sink_id, global_lir_plan.df_desc().clone());
-
-                let output_desc = global_lir_plan.desc().clone();
-                let (mut df_desc, df_meta) = global_lir_plan.unapply();
+                    .set_physical_plan(sink_id, df_desc.clone());
 
                 let notice_builtin_updates_fut = coord
                     .process_dataflow_metainfo(df_meta, sink_id, session, notice_ids)
@@ -675,11 +668,6 @@ impl Coordinator {
                 df_desc.set_as_of(dataflow_as_of.clone());
                 df_desc.set_initial_as_of(initial_as_of);
                 df_desc.until = until;
-
-                df_desc.dataflow_expiration_desc.transitive_upper = Some(transitive_upper);
-                df_desc
-                    .dataflow_expiration_desc
-                    .has_transitive_refresh_schedule = has_transitive_refresh_schedule;
 
                 let storage_metadata = coord.catalog.state().storage_metadata();
 

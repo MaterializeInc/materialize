@@ -30,6 +30,7 @@ use crate::coord::{
 use crate::error::AdapterError;
 use crate::explain::explain_dataflow;
 use crate::explain::optimizer_trace::OptimizerTrace;
+use crate::optimize::dataflow_expiration::time_dependence;
 use crate::optimize::dataflows::dataflow_import_id_bundle;
 use crate::optimize::{self, Optimize};
 use crate::session::Session;
@@ -295,7 +296,7 @@ impl Coordinator {
         }: CreateIndexOptimize,
     ) -> Result<StageResult<Box<CreateIndexStage>>, AdapterError> {
         let plan::CreateIndexPlan {
-            index: plan::Index { cluster_id, on, .. },
+            index: plan::Index { cluster_id, .. },
             ..
         } = &plan;
 
@@ -321,7 +322,6 @@ impl Coordinator {
             self.optimizer_metrics(),
         );
         let span = Span::current();
-        let is_timeline_epoch_ms = self.get_timeline_context(*on).is_timeline_epoch_ms();
         Ok(StageResult::Handle(mz_ore::task::spawn_blocking(
             || "optimize create index",
             move || {
@@ -333,7 +333,7 @@ impl Coordinator {
                     let _dispatch_guard = explain_ctx.dispatch_guard();
 
                     let index_plan =
-                        optimize::index::Index::new(plan.name.clone(), plan.index.on, plan.index.keys.clone(), is_timeline_epoch_ms);
+                        optimize::index::Index::new(plan.name.clone(), plan.index.on, plan.index.keys.clone());
 
                     // MIR ⇒ MIR optimization (global)
                     let global_mir_plan = optimizer.catch_unwind_optimize(index_plan)?;
@@ -440,10 +440,6 @@ impl Coordinator {
             owner_id: *self.catalog().get_entry(&on).owner_id(),
         }];
 
-        // Collect properties for `DataflowExpirationDesc`.
-        let transitive_upper = self.least_valid_write(&id_bundle);
-        let has_transitive_refresh_schedule = self.catalog.item_has_transitive_refresh_schedule(on);
-
         // Pre-allocate a vector of transient GlobalIds for each notice.
         let notice_ids = std::iter::repeat_with(|| self.allocate_transient_id())
             .take(global_lir_plan.df_meta().optimizer_notices.len())
@@ -451,15 +447,17 @@ impl Coordinator {
 
         let transact_result = self
             .catalog_transact_with_side_effects(Some(session), ops, |coord| async {
+                let (mut df_desc, df_meta) = global_lir_plan.unapply();
+                df_desc.time_dependence =
+                    time_dependence(coord.catalog(), df_desc.import_ids(), None);
+
                 // Save plan structures.
                 coord
                     .catalog_mut()
                     .set_optimized_plan(exported_index_id, global_mir_plan.df_desc().clone());
                 coord
                     .catalog_mut()
-                    .set_physical_plan(exported_index_id, global_lir_plan.df_desc().clone());
-
-                let (mut df_desc, df_meta) = global_lir_plan.unapply();
+                    .set_physical_plan(exported_index_id, df_desc.clone());
 
                 let notice_builtin_updates_fut = coord
                     .process_dataflow_metainfo(df_meta, exported_index_id, session, notice_ids)
@@ -475,11 +473,6 @@ impl Coordinator {
                 let read_holds = coord.acquire_read_holds(&id_bundle);
                 let since = coord.least_valid_read(&read_holds);
                 df_desc.set_as_of(since);
-
-                df_desc.dataflow_expiration_desc.transitive_upper = Some(transitive_upper);
-                df_desc
-                    .dataflow_expiration_desc
-                    .has_transitive_refresh_schedule = has_transitive_refresh_schedule;
 
                 coord
                     .ship_dataflow_and_notice_builtin_table_updates(

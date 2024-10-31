@@ -27,9 +27,7 @@ use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as Operato
 use timely::dataflow::operators::generic::operator::{self, Operator};
 use timely::dataflow::operators::generic::{InputHandleCore, OperatorInfo, OutputHandleCore};
 use timely::dataflow::operators::Capability;
-use timely::dataflow::operators::InspectCore;
 use timely::dataflow::{Scope, StreamCore};
-use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, Timestamp};
 use timely::{Container, Data, ExchangeData, PartialOrder};
 
@@ -161,8 +159,13 @@ where
         I: IntoIterator<Item = Result<D2, E>>,
         L: for<'a> FnMut(C1::Item<'a>) -> I + 'static;
 
-    /// Panic if the frontier of a [`StreamCore`] exceeds `expiration` time.
-    fn expire_stream_at(&self, expiration: G::Timestamp) -> StreamCore<G, C1>;
+    /// Block progress of the frontier at `expiration` time, unless the token is dropped.
+    fn expire_stream_at(
+        &self,
+        name: &str,
+        expiration: G::Timestamp,
+        token: Weak<()>,
+    ) -> StreamCore<G, C1>;
 
     /// Take a Timely stream and convert it to a Differential stream, where each diff is "1"
     /// and each time is the current Timely timestamp.
@@ -235,8 +238,13 @@ where
         I: IntoIterator<Item = Result<D2, E>>,
         L: FnMut(D1) -> I + 'static;
 
-    /// Panic if the frontier of a [`Collection`] exceeds `expiration` time.
-    fn expire_collection_at(&self, expiration: G::Timestamp) -> Collection<G, D1, R>;
+    /// Block progress of the frontier at `expiration` time, unless the token is dropped.
+    fn expire_collection_at(
+        &self,
+        name: &str,
+        expiration: G::Timestamp,
+        token: Weak<()>,
+    ) -> Collection<G, D1, R>;
 
     /// Replaces each record with another, with a new difference type.
     ///
@@ -462,13 +470,41 @@ where
         })
     }
 
-    fn expire_stream_at(&self, expiration: G::Timestamp) -> StreamCore<G, C1> {
-        self.inspect_container(move |data_or_frontier| {
-            if let Err(frontier) = data_or_frontier {
-                assert!(
-                    frontier.is_empty() || AntichainRef::new(frontier).less_than(&expiration),
-                    "frontier {frontier:?} has exceeded expiration {expiration:?}!",
-                );
+    fn expire_stream_at(
+        &self,
+        name: &str,
+        expiration: G::Timestamp,
+        token: Weak<()>,
+    ) -> StreamCore<G, C1> {
+        let name = format!("expire_stream_at({name})");
+        self.unary_frontier(Pipeline, &name.clone(), move |cap, _| {
+            // Retain a capability for the expiration time, which we'll only drop if the token
+            // is dropped. Else, block progress at the expiration time to prevent downstream
+            // operators from making any statement about expiration time or any following time.
+            let mut cap = Some(cap.delayed(&expiration));
+            let mut buffer = Default::default();
+            let mut warned = false;
+            move |input, output| {
+                if token.upgrade().is_none() {
+                    // In shutdown, allow to propagate.
+                    drop(cap.take());
+                } else {
+                    let frontier = input.frontier().frontier();
+                    if !frontier.less_than(&expiration) && !warned {
+                        tracing::error!(
+                            name = name,
+                            frontier = ?frontier,
+                            expiration = ?expiration,
+                            "frontier not less than expiration"
+                        );
+                        warned = true;
+                    }
+                }
+                input.for_each(|time, data| {
+                    data.swap(&mut buffer);
+                    let mut session = output.session(&time);
+                    session.give_container(&mut buffer);
+                });
             }
         })
     }
@@ -561,8 +597,15 @@ where
         (ok_stream.as_collection(), err_stream.as_collection())
     }
 
-    fn expire_collection_at(&self, expiration: G::Timestamp) -> Collection<G, D1, R> {
-        self.inner.expire_stream_at(expiration).as_collection()
+    fn expire_collection_at(
+        &self,
+        name: &str,
+        expiration: G::Timestamp,
+        token: Weak<()>,
+    ) -> Collection<G, D1, R> {
+        self.inner
+            .expire_stream_at(name, expiration, token)
+            .as_collection()
     }
 
     fn explode_one<D2, R2, L>(&self, mut logic: L) -> Collection<G, D2, <R2 as Multiply<R>>::Output>
