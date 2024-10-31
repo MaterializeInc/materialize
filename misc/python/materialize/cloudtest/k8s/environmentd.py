@@ -301,6 +301,7 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
                     ]
                 ),
             ),
+            V1EnvVar(name="MZ_STARTUP_LOG_FILTER", value="info"),
             # Set the adapter stash URL for older environments that need it (versions before
             # v0.92.0).
             V1EnvVar(

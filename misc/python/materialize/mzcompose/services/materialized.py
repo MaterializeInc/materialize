@@ -86,6 +86,7 @@ class Materialized(Service):
             "MZ_AWS_EXTERNAL_ID_PREFIX=eb5cb59b-e2fe-41f3-87ca-d2176a495345",
             # Always use the persist catalog if the version has multiple implementations.
             "MZ_CATALOG_STORE=persist",
+            "MZ_STARTUP_LOG_FILTER=info",
             # Please think twice before forwarding additional environment
             # variables from the host, as it's easy to write tests that are
             # then accidentally dependent on the state of the host machine.
