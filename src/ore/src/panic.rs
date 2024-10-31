@@ -17,6 +17,7 @@
 
 use std::any::Any;
 use std::backtrace::Backtrace;
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::fs::File;
 use std::io::{self, Write as _};
@@ -195,4 +196,24 @@ where
         *catching_unwind.borrow_mut() = false;
         res
     })
+}
+
+/// Like [`crate::panic::catch_unwind`], but downcasts the returned `Box<dyn Any>` error to a
+/// string which is almost always is.
+///
+/// See: <https://doc.rust-lang.org/stable/std/panic/struct.PanicHookInfo.html#method.payload>
+pub fn catch_unwind_str<F, R>(f: F) -> Result<R, Cow<'static, str>>
+where
+    F: FnOnce() -> R + UnwindSafe,
+{
+    match crate::panic::catch_unwind(f) {
+        Ok(res) => Ok(res),
+        Err(opaque) => match opaque.downcast_ref::<&'static str>() {
+            Some(s) => Err(Cow::Borrowed(*s)),
+            None => match opaque.downcast_ref::<String>() {
+                Some(s) => Err(Cow::Owned(s.to_owned())),
+                None => Err(Cow::Borrowed("Box<Any>")),
+            },
+        },
+    }
 }
