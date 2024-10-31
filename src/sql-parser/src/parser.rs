@@ -3610,6 +3610,7 @@ impl<'a> Parser<'a> {
             false => None,
         };
         let in_cluster = self.parse_optional_in_cluster()?;
+        let with_options = self.parse_create_continual_task_with_options()?;
 
         // TODO(ct3): Multiple inputs.
         self.expect_keywords(&[ON, INPUT])?;
@@ -3617,13 +3618,20 @@ impl<'a> Parser<'a> {
         // TODO(ct3): Allow renaming the inserts/deletes so that we can use
         // something as both an "input" and a "reference".
 
-        let with_options = if self.parse_keyword(WITH) {
-            self.expect_token(&Token::LParen)?;
-            let options = self.parse_comma_separated(Parser::parse_continual_task_option)?;
-            self.expect_token(&Token::RParen)?;
-            options
-        } else {
-            vec![]
+        // Also try to parse WITH options in the old location. We never exposed
+        // this to users, so this can be removed once the CI upgrade tests have
+        // moved past these old versions.
+        let legacy_with_options = self.parse_create_continual_task_with_options()?;
+        let with_options = match (!with_options.is_empty(), !legacy_with_options.is_empty()) {
+            (_, false) => with_options,
+            (false, true) => legacy_with_options,
+            (true, true) => {
+                return parser_err!(
+                    self,
+                    self.peek_prev_pos(),
+                    "CREATE CONTINUAL TASK with options in both new and legacy locations"
+                )
+            }
         };
 
         self.expect_keyword(AS)?;
@@ -3681,15 +3689,7 @@ impl<'a> Parser<'a> {
         self.expect_keywords(&[CONTINUAL, TASK])?;
         let name = RawItemName::Name(self.parse_item_name()?);
         let in_cluster = self.parse_optional_in_cluster()?;
-
-        let with_options = if self.parse_keyword(WITH) {
-            self.expect_token(&Token::LParen)?;
-            let options = self.parse_comma_separated(Parser::parse_continual_task_option)?;
-            self.expect_token(&Token::RParen)?;
-            options
-        } else {
-            vec![]
-        };
+        let with_options = self.parse_create_continual_task_with_options()?;
 
         self.expect_keywords(&[FROM, TRANSFORM])?;
         let input = self.parse_raw_name()?;
@@ -3730,15 +3730,7 @@ impl<'a> Parser<'a> {
         self.expect_keywords(&[CONTINUAL, TASK])?;
         let name = RawItemName::Name(self.parse_item_name()?);
         let in_cluster = self.parse_optional_in_cluster()?;
-
-        let with_options = if self.parse_keyword(WITH) {
-            self.expect_token(&Token::LParen)?;
-            let options = self.parse_comma_separated(Parser::parse_continual_task_option)?;
-            self.expect_token(&Token::RParen)?;
-            options
-        } else {
-            vec![]
-        };
+        let with_options = self.parse_create_continual_task_with_options()?;
 
         self.expect_keywords(&[FROM, RETAIN])?;
         let input = self.parse_raw_name()?;
@@ -3886,6 +3878,19 @@ impl<'a> Parser<'a> {
                 )))
             }
             _ => unreachable!(),
+        }
+    }
+
+    fn parse_create_continual_task_with_options(
+        &mut self,
+    ) -> Result<Vec<ContinualTaskOption<Raw>>, ParserError> {
+        if self.parse_keyword(WITH) {
+            self.expect_token(&Token::LParen)?;
+            let options = self.parse_comma_separated(Parser::parse_continual_task_option)?;
+            self.expect_token(&Token::RParen)?;
+            Ok(options)
+        } else {
+            Ok(vec![])
         }
     }
 

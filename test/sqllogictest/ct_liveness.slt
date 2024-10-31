@@ -26,13 +26,13 @@ statement ok
 CREATE TABLE append_only (key INT, val STRING)
 
 statement ok
-CREATE CONTINUAL TASK upsert_snap ON INPUT append_only WITH (SNAPSHOT = true) AS (
+CREATE CONTINUAL TASK upsert_snap WITH (SNAPSHOT = true) ON INPUT append_only AS (
     DELETE FROM upsert_snap WHERE key IN (SELECT key FROM append_only);
     INSERT INTO upsert_snap SELECT key, max(val) FROM append_only GROUP BY key;
 )
 
 statement ok
-CREATE CONTINUAL TASK upsert_no_snap ON INPUT append_only WITH (SNAPSHOT = false) AS (
+CREATE CONTINUAL TASK upsert_no_snap WITH (SNAPSHOT = false) ON INPUT append_only AS (
     DELETE FROM upsert_no_snap WHERE key IN (SELECT key FROM append_only);
     INSERT INTO upsert_no_snap SELECT key, max(val) FROM append_only GROUP BY key;
 )
