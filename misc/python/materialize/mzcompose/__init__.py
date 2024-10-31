@@ -89,7 +89,7 @@ def get_default_system_parameters(
         "enable_comment": "true",
         "enable_compute_chunked_stack": "true",
         "enable_connection_validation_syntax": "true",
-        "enable_continual_task_builtins": "true",
+        "enable_continual_task_builtins": "false",  # TODO: Turn on when database-issues#8718 is fixed
         "enable_continual_task_create": "true",
         "enable_continual_task_transform": "true",
         "enable_copy_to_expr": "true",
