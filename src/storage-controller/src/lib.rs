@@ -47,7 +47,7 @@ use mz_persist_types::Codec64;
 use mz_proto::RustType;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::timestamp::CheckedTimestamp;
-use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, TimestampManipulation, TypeDiff};
+use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, TimestampManipulation};
 use mz_storage_client::client::{
     ProtoStorageCommand, ProtoStorageResponse, RunIngestionCommand, RunSinkCommand, Status,
     StatusUpdate, StorageCommand, StorageResponse, TimestamplessUpdate,
@@ -463,55 +463,45 @@ where
                 .latest_schema::<SourceData, (), T, Diff>(shard_id, diagnostics)
                 .await
                 .expect("invalid persist usage");
-            let Some((schema_id, existing_relation_desc, _)) = latest_schema else {
+            let Some((schema_id, _, _)) = latest_schema else {
                 continue;
             };
 
-            match relation_desc.diff(&existing_relation_desc) {
-                TypeDiff::None => (),
-                TypeDiff::Structural => {
-                    return Err(StorageError::Generic(anyhow::anyhow!(
-                        "programming error, tried to structurally evolve a schema, {global_id}"
-                    )));
+            let diagnostics = Diagnostics {
+                shard_name: global_id.to_string(),
+                handle_purpose: "evolve nullability for bootstrap".to_string(),
+            };
+            let evolve_result = persist_client
+                .compare_and_evolve_schema::<SourceData, (), T, Diff>(
+                    shard_id,
+                    schema_id,
+                    &relation_desc,
+                    &UnitSchema,
+                    diagnostics,
+                )
+                .await
+                .expect("invalid persist usage");
+            match evolve_result {
+                CaESchema::Ok(_) => (),
+                CaESchema::ExpectedMismatch {
+                    schema_id,
+                    key,
+                    val: _,
+                } => {
+                    return Err(StorageError::PersistSchemaEvolveRace {
+                        global_id,
+                        shard_id,
+                        schema_id,
+                        relation_desc: key,
+                    });
                 }
-                TypeDiff::Nullability => {
-                    let diagnostics = Diagnostics {
-                        shard_name: global_id.to_string(),
-                        handle_purpose: "evolve nullability for bootstrap".to_string(),
-                    };
-                    let evolve_result = persist_client
-                        .compare_and_evolve_schema::<SourceData, (), T, Diff>(
-                            shard_id,
-                            schema_id,
-                            &relation_desc,
-                            &UnitSchema,
-                            diagnostics,
-                        )
-                        .await
-                        .expect("invalid persist usage");
-                    match evolve_result {
-                        CaESchema::Ok(_) => (),
-                        CaESchema::ExpectedMismatch {
-                            schema_id,
-                            key,
-                            val: _,
-                        } => {
-                            return Err(StorageError::PersistSchemaEvolveRace {
-                                global_id,
-                                shard_id,
-                                schema_id,
-                                relation_desc: key,
-                            });
-                        }
-                        CaESchema::Incompatible => {
-                            return Err(StorageError::PersistInvalidSchemaEvolve {
-                                global_id,
-                                shard_id,
-                            });
-                        }
-                    };
+                CaESchema::Incompatible => {
+                    return Err(StorageError::PersistInvalidSchemaEvolve {
+                        global_id,
+                        shard_id,
+                    });
                 }
-            }
+            };
         }
 
         Ok(())

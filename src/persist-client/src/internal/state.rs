@@ -1463,16 +1463,25 @@ where
             }));
         }
 
+        let current_key = K::decode_schema(&current.key);
+        let current_key_dt = EncodedSchemas::decode_data_type(&current.key_data_type);
+        let current_val = V::decode_schema(&current.val);
+        let current_val_dt = EncodedSchemas::decode_data_type(&current.val_data_type);
+
         let key_dt = data_type(key_schema);
         let val_dt = data_type(val_schema);
-        let key_fn = backward_compatible(
-            &EncodedSchemas::decode_data_type(&current.key_data_type),
-            &key_dt,
-        );
-        let val_fn = backward_compatible(
-            &EncodedSchemas::decode_data_type(&current.val_data_type),
-            &val_dt,
-        );
+
+        // If the schema is exactly the same as the current one, no-op.
+        if current_key == *key_schema
+            && current_key_dt == key_dt
+            && current_val == *val_schema
+            && current_val_dt == val_dt
+        {
+            return Break(NoOpStateTransition(CaESchema::Ok(*current_id)));
+        }
+
+        let key_fn = backward_compatible(&current_key_dt, &key_dt);
+        let val_fn = backward_compatible(&current_val_dt, &val_dt);
         let (Some(key_fn), Some(val_fn)) = (key_fn, val_fn) else {
             return Break(NoOpStateTransition(CaESchema::Incompatible));
         };
