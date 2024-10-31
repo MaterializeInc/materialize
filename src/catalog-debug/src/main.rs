@@ -682,15 +682,8 @@ async fn upgrade_check(
             ),
         }
 
-        // And that Persist thinks the change is backwards compatible.
-        fn data_type(desc: &RelationDesc) -> Result<arrow::datatypes::DataType, anyhow::Error> {
-            let encoder = mz_persist_types::columnar::Schema2::<SourceData>::encoder(desc)
-                .context("upgrade check")?;
-            Ok(arrow::array::Array::data_type(&encoder.finish()).clone())
-        }
-
-        let persisted_data_type = data_type(&persisted_relation_desc)?;
-        let new_data_type = data_type(item_desc)?;
+        let persisted_data_type = mz_persist_types::columnar::data_type(&persisted_relation_desc)?;
+        let new_data_type = mz_persist_types::columnar::data_type(item_desc)?;
 
         let migration =
             mz_persist_types::schema::backward_compatible(&persisted_data_type, &new_data_type);

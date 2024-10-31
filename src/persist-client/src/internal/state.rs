@@ -1311,14 +1311,6 @@ where
         key_schema: &K::Schema,
         val_schema: &V::Schema,
     ) -> ControlFlow<NoOpStateTransition<Option<SchemaId>>, Option<SchemaId>> {
-        fn data_type<T>(schema: &impl Schema2<T>) -> DataType {
-            // To be defensive, create an empty batch and inspect the resulting
-            // data type (as opposed to something like allowing the `Schema2` to
-            // declare the DataType).
-            let array = Schema2::encoder(schema).expect("valid schema").finish();
-            Array::data_type(&array).clone()
-        }
-
         fn encoded_data_type(data_type: &DataType) -> Bytes {
             let proto = data_type.into_proto();
             prost::Message::encode_to_vec(&proto).into()
@@ -1347,8 +1339,8 @@ where
         match existing_id {
             Some((schema_id, encoded_schemas)) => {
                 let schema_id = *schema_id;
-                let new_k_datatype = data_type(key_schema);
-                let new_v_datatype = data_type(val_schema);
+                let new_k_datatype = mz_persist_types::columnar::data_type(key_schema);
+                let new_v_datatype = mz_persist_types::columnar::data_type(val_schema);
 
                 let new_k_encoded_datatype = encoded_data_type(&new_k_datatype);
                 let new_v_encoded_datatype = encoded_data_type(&new_v_datatype);
