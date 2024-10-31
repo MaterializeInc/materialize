@@ -259,7 +259,7 @@ RUN if [ $ARCH_GCC = x86_64 ]; then \
     && rm hugo.tar.gz; \
     fi
 
-# Install KinD and kubectl
+# Install KinD, kubectl & helm
 
 RUN curl -fsSL https://kind.sigs.k8s.io/dl/v0.14.0/kind-linux-$ARCH_GO > /usr/local/bin/kind \
     && chmod +x /usr/local/bin/kind
@@ -272,6 +272,12 @@ RUN curl -fsSL https://dl.k8s.io/release/v1.24.3/bin/linux/$ARCH_GO/kubectl > /u
 
 RUN if [ $ARCH_GO = amd64 ]; then echo '8a45348bdaf81d46caf1706c8bf95b3f431150554f47d444ffde89e8cdd712c1 /usr/local/bin/kubectl' | sha256sum --check; fi
 RUN if [ $ARCH_GO = arm64 ]; then echo 'bdad4d3063ddb7bfa5ecf17fb8b029d5d81d7d4ea1650e4369aafa13ed97149a /usr/local/bin/kubectl' | sha256sum --check; fi
+
+RUN curl -fsSL https://get.helm.sh/helm-v3.16.2-linux-$ARCH_GO.tar.gz > /usr/local/bin/helm \
+    && chmod +x /usr/local/bin/helm
+
+RUN if [ $ARCH_GO = amd64 ]; then echo '9318379b847e333460d33d291d4c088156299a26cd93d570a7f5d0c36e50b5bb /usr/local/bin/helm' | sha256sum --check; fi
+RUN if [ $ARCH_GO = arm64 ]; then echo '1888301aeb7d08a03b6d9f4d2b73dcd09b89c41577e80e3455c113629fc657a4 /usr/local/bin/helm' | sha256sum --check; fi
 
 # Install Bazel.
 #

@@ -25,7 +25,13 @@ if ! kind get clusters | grep -q "$K8S_CLUSTER_NAME"; then
     run kubectl --context="$K8S_CONTEXT" taint nodes --selector=environmentd=true "environmentd=true:NoSchedule"
 fi
 
-helm install materialize-operator-cloudtest ../../misc/helm-charts/operator
+run kubectl create namespace materialize
+run kubectl create namespace materialize-environment
+run kubectl apply -f misc/helm-charts/testing/minio.yaml
+run kubectl apply -f misc/helm-charts/testing/postgres.yaml
+run kubectl apply -f misc/helm-charts/testing/redpanda.yaml
+run helm install --wait materialize-operator misc/helm-charts/operator
+run helm install --wait staging-env misc/helm-charts/environmentd --set environment.name=12345678-1234-1234-1234-123456789012
 
 for f in misc/kind/configmaps/*; do
     run kubectl --context="$K8S_CONTEXT" apply -f "$f"
