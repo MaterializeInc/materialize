@@ -81,7 +81,7 @@ pub mod v1alpha1 {
 
     impl Materialize {
         pub fn backend_secret_name(&self) -> String {
-            format!("materialize-backend-{}", self.name_unchecked())
+            format!("{}-materialize-backend", self.name_unchecked())
         }
 
         pub fn namespace(&self) -> String {
@@ -101,27 +101,27 @@ pub mod v1alpha1 {
         }
 
         pub fn environmentd_statefulset_name(&self, generation: u64) -> String {
-            format!("environmentd-{}-{generation}", self.name_unchecked())
+            format!("{}-environmentd-{generation}", self.name_unchecked())
         }
 
         pub fn environmentd_service_name(&self) -> String {
-            format!("environmentd-{}", self.name_unchecked())
+            format!("{}-environmentd", self.name_unchecked())
         }
 
         pub fn environmentd_generation_service_name(&self, generation: u64) -> String {
-            format!("environmentd-{}-{generation}", self.name_unchecked())
+            format!("{}-environmentd-{generation}", self.name_unchecked())
         }
 
         pub fn balancerd_deployment_name(&self) -> String {
-            format!("balancerd-{}", self.name_unchecked())
+            format!("{}-balancerd", self.name_unchecked())
         }
 
         pub fn balancerd_service_name(&self) -> String {
-            format!("balancerd-{}", self.name_unchecked())
+            format!("{}-balancerd", self.name_unchecked())
         }
 
         pub fn persist_pubsub_service_name(&self, generation: u64) -> String {
-            format!("persist-pubsub-{}-{generation}", self.name_unchecked())
+            format!("{}-persist-pubsub-{generation}", self.name_unchecked())
         }
 
         pub fn name_prefixed(&self, suffix: &str) -> String {
