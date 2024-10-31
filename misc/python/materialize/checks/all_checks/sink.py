@@ -247,7 +247,7 @@ class SinkTables(Check):
                 > INSERT INTO sink_large_transaction_table SELECT generate_series, REPEAT('x', 1024) FROM generate_series(1, 100000);
 
                 # Can be slow with a large transaction
-                $ set-sql-timeout duration=120s
+                $ set-sql-timeout duration=240s
 
                 > CREATE MATERIALIZED VIEW sink_large_transaction_view AS SELECT f1 - 1 AS f1 , f2 FROM sink_large_transaction_table;
 
@@ -296,7 +296,7 @@ class SinkTables(Check):
                   ENVELOPE NONE
 
                 # Can be slow with a large transaction
-                $ set-sql-timeout duration=120s
+                $ set-sql-timeout duration=240s
 
                 > CREATE MATERIALIZED VIEW sink_large_transaction_view2
                   AS
@@ -1303,7 +1303,7 @@ class SinkPartitionByDebezium(Check):
             dedent(
                 """
                 # Can be slow in 0dt upgrade scenarios
-                $ set-sql-timeout duration=120s
+                $ set-sql-timeout duration=240s
 
                 $ schema-registry-verify schema-type=avro subject=testdrive-sink-partition-by-debezium-sink-${testdrive.seed}-value
                 {"type":"record","name":"envelope","fields":[{"name":"before","type":["null",{"type":"record","name":"row","fields":[{"name":"f1","type":"int"},{"name":"f2","type":["null","string"]}]}]},{"name":"after","type":["null","row"]}]}

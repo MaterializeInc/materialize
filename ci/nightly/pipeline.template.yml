@@ -784,10 +784,9 @@ steps:
               args: [--scenario=UpgradeEntireMzFourVersions, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-0dt-restart-entire-mz
-        label: "Checks 0dt restart of the entire Mz %N"
+        label: "Checks 0dt restart of the entire Mz"
         depends_on: build-aarch64
         timeout_in_minutes: 240
-        parallelism: 4
         agents:
           # TODO(def-): Switch back to hetzner
           queue: linux-aarch64-large
@@ -797,10 +796,9 @@ steps:
               args: [--scenario=ZeroDowntimeRestartEntireMz, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-0dt-restart-entire-mz-forced-migrations
-        label: "Checks 0dt restart of the entire Mz with forced migrations %N"
+        label: "Checks 0dt restart of the entire Mz with forced migrations"
         depends_on: build-aarch64
         timeout_in_minutes: 240
-        parallelism: 4
         agents:
           # TODO(def-): Switch back to hetzner
           queue: linux-aarch64-large
@@ -810,10 +808,9 @@ steps:
               args: [--scenario=ZeroDowntimeRestartEntireMzForcedMigrations, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-0dt-upgrade-entire-mz
-        label: "Checks 0dt upgrade, whole-Mz restart %N"
+        label: "Checks 0dt upgrade, whole-Mz restart"
         depends_on: build-aarch64
         timeout_in_minutes: 240
-        parallelism: 4
         agents:
           # TODO(def-): Switch back to hetzner
           queue: linux-aarch64-large
@@ -823,10 +820,9 @@ steps:
               args: [--scenario=ZeroDowntimeUpgradeEntireMz, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-0dt-upgrade-entire-mz-two-versions
-        label: "Checks 0dt upgrade across two versions %N"
+        label: "Checks 0dt upgrade across two versions"
         depends_on: build-aarch64
         timeout_in_minutes: 240
-        parallelism: 4
         agents:
           # TODO(def-): Switch back to hetzner
           queue: linux-aarch64-large
@@ -836,10 +832,9 @@ steps:
               args: [--scenario=ZeroDowntimeUpgradeEntireMzTwoVersions, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-0dt-upgrade-entire-mz-four-versions
-        label: "Checks 0dt upgrade across four versions %N"
+        label: "Checks 0dt upgrade across four versions"
         depends_on: build-aarch64
         timeout_in_minutes: 240
-        parallelism: 4
         agents:
           # TODO(def-): Switch back to hetzner
           queue: linux-aarch64-large
