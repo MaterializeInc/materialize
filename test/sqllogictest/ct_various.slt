@@ -106,3 +106,24 @@ query T
 SELECT COUNT(*) > 0 FROM input_not_monotonic;
 ----
 true
+
+# Regression test for a bug where the TRANSFORM USING sugar did not roundtrip
+# the cluster through the catalog's `create_sql`.
+statement ok
+CREATE CLUSTER c2 SIZE '1'
+
+statement ok
+SET CLUSTER TO c2
+
+statement ok
+CREATE CONTINUAL TASK ct_c2 FROM TRANSFORM input USING (SELECT * FROM input)
+
+query T
+SELECT * FROM ct_c2
+----
+1
+2
+
+# Confirm that the catalog knows the ct is in the right cluster.
+statement error cannot drop cluster "c2" because other objects depend on it
+DROP CLUSTER c2;

@@ -3674,6 +3674,7 @@ impl<'a> Parser<'a> {
     ) -> Result<Statement<Raw>, ParserError> {
         self.expect_keywords(&[CONTINUAL, TASK])?;
         let name = RawItemName::Name(self.parse_item_name()?);
+        let in_cluster = self.parse_optional_in_cluster()?;
 
         let with_options = if self.parse_keyword(WITH) {
             self.expect_token(&Token::LParen)?;
@@ -3706,7 +3707,7 @@ impl<'a> Parser<'a> {
             CreateContinualTaskStatement {
                 name,
                 columns: None,
-                in_cluster: None,
+                in_cluster,
                 with_options,
                 input,
                 stmts,
