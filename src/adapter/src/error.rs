@@ -136,6 +136,8 @@ pub enum AdapterError {
     ResultSize(String),
     /// The specified feature is not permitted in safe mode.
     SafeModeViolation(String),
+    /// The current transaction had the wrong set of write locks.
+    WrongSetOfLocks,
     /// Waiting on a query timed out.
     ///
     /// Note this differs slightly from PG's implementation/semantics.
@@ -478,6 +480,7 @@ impl AdapterError {
             AdapterError::ReadOnlyTransaction => SqlState::READ_ONLY_SQL_TRANSACTION,
             AdapterError::ReadWriteUnavailable => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::SingleStatementTransaction => SqlState::INVALID_TRANSACTION_STATE,
+            AdapterError::WrongSetOfLocks => SqlState::LOCK_NOT_AVAILABLE,
             AdapterError::StatementTimeout => SqlState::QUERY_CANCELED,
             AdapterError::Canceled => SqlState::QUERY_CANCELED,
             AdapterError::IdleInTransactionSessionTimeout => {
@@ -638,6 +641,9 @@ impl fmt::Display for AdapterError {
             }
             AdapterError::ReadWriteUnavailable => {
                 f.write_str("transaction read-write mode must be set before any query")
+            }
+            AdapterError::WrongSetOfLocks => {
+                write!(f, "internal error, wrong set of locks acquired")
             }
             AdapterError::StatementTimeout => {
                 write!(f, "canceling statement due to statement timeout")

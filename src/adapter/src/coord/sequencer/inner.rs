@@ -90,12 +90,12 @@ use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::{OptimizerNoticeApi, OptimizerNoticeKind, RawOptimizerNotice};
 use mz_transform::EmptyStatisticsOracle;
 use timely::progress::Antichain;
-use tokio::sync::{oneshot, watch, OwnedMutexGuard};
+use tokio::sync::{oneshot, watch};
 use tracing::{warn, Instrument, Span};
 
 use crate::catalog::{self, Catalog, ConnCatalog, DropObjectInfo, UpdatePrivilegeVariant};
 use crate::command::{ExecuteResponse, Response};
-use crate::coord::appends::{BuiltinTableAppendNotify, Deferred, DeferredPlan, PendingWriteTxn};
+use crate::coord::appends::{BuiltinTableAppendNotify, DeferredPlan, PendingWriteTxn};
 use crate::coord::{
     AlterConnectionValidationReady, AlterSinkReadyContext, Coordinator,
     CreateConnectionValidationReady, DeferredPlanStatement, ExecuteContext, ExplainContext,
@@ -107,10 +107,11 @@ use crate::notice::{AdapterNotice, DroppedInUseIndex};
 use crate::optimize::dataflows::{prep_scalar_expr, EvalTime, ExprPrepStyle};
 use crate::optimize::{self, Optimize};
 use crate::session::{
-    EndTransactionAction, RequireLinearization, Session, TransactionOps, TransactionStatus, WriteOp,
+    EndTransactionAction, RequireLinearization, Session, TransactionOps, TransactionStatus,
+    WriteLocks, WriteOp,
 };
 use crate::util::{viewable_variables, ClientTransmitter, ResultExt};
-use crate::{guard_write_critical_section, PeekResponseUnary, ReadHolds};
+use crate::{PeekResponseUnary, ReadHolds};
 
 mod cluster;
 mod create_continual_task;
@@ -2055,11 +2056,31 @@ impl Coordinator {
             Ok((Some(TransactionOps::Writes(writes)), _)) if writes.is_empty() => {
                 (response, action)
             }
-            Ok((Some(TransactionOps::Writes(writes)), write_lock_guard)) => {
+            Ok((Some(TransactionOps::Writes(writes)), write_lock_guards)) => {
+                // Make sure we have the correct set of write locks for this transaction.
+                // Aggressively dropping partial sets of locks to prevent deadlocking separate
+                // transactions.
+                let validated_locks = match write_lock_guards {
+                    None => None,
+                    Some(locks) => match locks.validate(writes.iter().map(|op| op.id)) {
+                        Ok(locks) => Some(locks),
+                        Err(missing) => {
+                            tracing::error!(?missing, "programming error, missing write locks");
+                            None
+                        }
+                    },
+                };
+
+                let mut collected_writes: BTreeMap<GlobalId, Vec<_>> = BTreeMap::new();
+                for WriteOp { id, rows } in writes {
+                    let total_rows = collected_writes.entry(id).or_default();
+                    total_rows.extend(rows);
+                }
+
                 self.submit_write(PendingWriteTxn::User {
                     span: Span::current(),
-                    writes,
-                    write_lock_guard,
+                    writes: collected_writes,
+                    write_locks: validated_locks,
                     pending_txn: PendingTxn {
                         ctx,
                         response,
@@ -2143,17 +2164,11 @@ impl Coordinator {
         &mut self,
         session: &mut Session,
         action: EndTransactionAction,
-    ) -> Result<
-        (
-            Option<TransactionOps<Timestamp>>,
-            Option<OwnedMutexGuard<()>>,
-        ),
-        AdapterError,
-    > {
+    ) -> Result<(Option<TransactionOps<Timestamp>>, Option<WriteLocks>), AdapterError> {
         let txn = self.clear_transaction(session).await;
 
         if let EndTransactionAction::Commit = action {
-            if let (Some(mut ops), write_lock_guard) = txn.into_ops_and_lock_guard() {
+            if let (Some(mut ops), write_lock_guards) = txn.into_ops_and_lock_guard() {
                 match &mut ops {
                     TransactionOps::Writes(writes) => {
                         for WriteOp { id, .. } in &mut writes.iter() {
@@ -2185,7 +2200,7 @@ impl Coordinator {
                     }
                     _ => (),
                 }
-                return Ok((Some(ops), write_lock_guard));
+                return Ok((Some(ops), write_lock_guards));
             }
         }
 
@@ -2580,7 +2595,49 @@ impl Coordinator {
     ) {
         let mut source_ids = plan.selection.depends_on();
         source_ids.insert(plan.id);
-        guard_write_critical_section!(self, ctx, Plan::ReadThenWrite(plan), source_ids);
+
+        // If the transaction doesn't already have write locks, acquire them.
+        if ctx.session().transaction().write_locks().is_none() {
+            // Pre-define all of the locks we need.
+            let mut write_locks = WriteLocks::builder(source_ids.iter().copied());
+
+            // Try acquiring all of our locks.
+            for id in &source_ids {
+                if let Some(lock) = self.try_grant_object_write_lock(*id) {
+                    write_locks.insert_lock(*id, lock);
+                }
+            }
+
+            // See if we acquired all of the neccessary locks.
+            let write_locks = match write_locks.all_or_nothing(ctx.session().conn_id()) {
+                Ok(locks) => locks,
+                Err(missing) => {
+                    tracing::info!("failed to acquire write locks for {missing:?}");
+
+                    // Defer our write if we couldn't acquire all of the locks.
+                    let role_metadata = ctx.session().role_metadata().clone();
+                    let plan = DeferredPlan {
+                        ctx,
+                        plan: Plan::ReadThenWrite(plan),
+                        validity: PlanValidity::new(
+                            self.catalog.transient_revision(),
+                            source_ids.clone(),
+                            None,
+                            None,
+                            role_metadata,
+                        ),
+                        requires_locks: source_ids,
+                    };
+                    self.defer_plan(plan, missing);
+
+                    return;
+                }
+            };
+
+            ctx.session_mut()
+                .try_grant_write_locks(write_locks)
+                .expect("session has already been granted write locks");
+        }
 
         let plan::ReadThenWritePlan {
             id,

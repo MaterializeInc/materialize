@@ -9,18 +9,20 @@
 
 //! Logic and types for all appends executed by the [`Coordinator`].
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
 use derivative::Derivative;
 use futures::future::{BoxFuture, FutureExt};
+use mz_adapter_types::connection::ConnectionId;
 use mz_ore::instrument;
 use mz_ore::metrics::MetricsFutureExt;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_ore::vec::VecExt;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
+use mz_sql::names::ResolvedIds;
 use mz_sql::plan::Plan;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_storage_client::client::TimestamplessUpdate;
@@ -30,26 +32,67 @@ use tracing::{debug_span, warn, Instrument, Span};
 
 use crate::catalog::BuiltinTableUpdate;
 use crate::coord::{Coordinator, Message, PendingTxn, PlanValidity};
-use crate::session::{Session, WriteOp};
+use crate::session::WriteLocks;
 use crate::util::{CompletedClientTransmitter, ResultExt};
-use crate::ExecuteContext;
+use crate::{AdapterError, ExecuteContext};
 
-/// An operation that is deferred while waiting for a lock.
+/// An operation that was deferred waiting for [`WriteLocks`].
 #[derive(Debug)]
-pub(crate) enum Deferred {
+pub enum DeferredWriteOp {
+    /// A plan, e.g. ReadThenWrite, that needs locks before sequencing.
     Plan(DeferredPlan),
-    GroupCommit,
+    /// Inserts into a collection.
+    Write(DeferredWrite),
 }
 
-/// This is the struct meant to be paired with [`Message::WriteLockGrant`], but
-/// could theoretically be used to queue any deferred plan.
+impl DeferredWriteOp {
+    /// Returns an Iterator of all the required locks for current operation.
+    pub fn required_locks(&self) -> impl Iterator<Item = GlobalId> + use<'_> {
+        match self {
+            DeferredWriteOp::Plan(plan) => {
+                let iter = plan.requires_locks.iter().copied();
+                itertools::Either::Left(iter)
+            }
+            DeferredWriteOp::Write(write) => {
+                let iter = write.writes.keys().copied();
+                itertools::Either::Right(iter)
+            }
+        }
+    }
+
+    /// Returns the [`ConnectionId`] associated with this deferred op.
+    pub fn conn_id(&self) -> &ConnectionId {
+        match self {
+            DeferredWriteOp::Plan(plan) => plan.ctx.session().conn_id(),
+            DeferredWriteOp::Write(write) => write.pending_txn.ctx.session().conn_id(),
+        }
+    }
+
+    /// Consumes the [`DeferredWriteOp`], returning the inner [`ExecuteContext`].
+    pub fn into_ctx(self) -> ExecuteContext {
+        match self {
+            DeferredWriteOp::Plan(plan) => plan.ctx,
+            DeferredWriteOp::Write(write) => write.pending_txn.ctx,
+        }
+    }
+}
+
+/// Describes a plan that is awaiting [`WriteLocks`].
 #[derive(Derivative)]
 #[derivative(Debug)]
-pub(crate) struct DeferredPlan {
+pub struct DeferredPlan {
     #[derivative(Debug = "ignore")]
     pub ctx: ExecuteContext,
     pub plan: Plan,
     pub validity: PlanValidity,
+    pub requires_locks: BTreeSet<GlobalId>,
+}
+
+#[derive(Debug)]
+pub struct DeferredWrite {
+    pub span: Span,
+    pub writes: BTreeMap<GlobalId, Vec<(Row, i64)>>,
+    pub pending_txn: PendingTxn,
 }
 
 /// Describes what action triggered an update to a builtin table.
@@ -68,9 +111,9 @@ pub(crate) enum PendingWriteTxn {
     User {
         span: Span,
         /// List of all write operations within the transaction.
-        writes: Vec<WriteOp>,
-        /// Holds the coordinator's write lock.
-        write_lock_guard: Option<OwnedMutexGuard<()>>,
+        writes: BTreeMap<GlobalId, Vec<(Row, Diff)>>,
+        /// If they exist, should contain locks for each [`GlobalId`] in `writes`.
+        write_locks: Option<WriteLocks>,
         /// Inner transaction.
         pending_txn: PendingTxn,
     },
@@ -82,15 +125,6 @@ pub(crate) enum PendingWriteTxn {
 }
 
 impl PendingWriteTxn {
-    fn take_write_lock(&mut self) -> Option<OwnedMutexGuard<()>> {
-        match self {
-            PendingWriteTxn::User {
-                write_lock_guard, ..
-            } => std::mem::take(write_lock_guard),
-            PendingWriteTxn::System { .. } => None,
-        }
-    }
-
     fn is_internal_system(&self) -> bool {
         match self {
             PendingWriteTxn::System {
@@ -102,49 +136,6 @@ impl PendingWriteTxn {
     }
 }
 
-/// Enforces critical section invariants for functions that perform writes to
-/// tables, e.g. `INSERT`, `UPDATE`.
-///
-/// If the provided session doesn't currently hold the write lock, attempts to
-/// grant it. If the coord cannot immediately grant the write lock, defers
-/// executing the provided plan until the write lock is available, and exits the
-/// function.
-///
-/// # Parameters
-/// - `$coord: &mut Coord`
-/// - `$tx: ClientTransmitter<ExecuteResponse>`
-/// - `mut $session: Session`
-/// - `$plan_to_defer: Plan`
-///
-/// Note that making this a macro rather than a function lets us avoid taking
-/// ownership of e.g. session and lets us unilaterally enforce the return when
-/// deferring work.
-#[macro_export]
-macro_rules! guard_write_critical_section {
-    ($coord:expr, $ctx:expr, $plan_to_defer:expr, $dependency_ids:expr) => {
-        if !$ctx.session().has_write_lock() {
-            if $coord
-                .try_grant_session_write_lock($ctx.session_mut())
-                .is_err()
-            {
-                let role_metadata = $ctx.session().role_metadata().clone();
-                $coord.defer_write(Deferred::Plan(DeferredPlan {
-                    ctx: $ctx,
-                    plan: $plan_to_defer,
-                    validity: PlanValidity::new(
-                        $coord.catalog().transient_revision(),
-                        $dependency_ids,
-                        None,
-                        None,
-                        role_metadata,
-                    ),
-                }));
-                return;
-            }
-        }
-    };
-}
-
 impl Coordinator {
     /// Send a message to the Coordinate to start a group commit.
     pub(crate) fn trigger_group_commit(&mut self) {
@@ -153,6 +144,95 @@ impl Coordinator {
         // advancement. The group commit triggered by the message above will already advance all
         // tables.
         self.advance_timelines_interval.reset();
+    }
+
+    /// Tries to execute a previously [`DeferredWriteOp`] that requires write locks.
+    ///
+    /// If we can't acquire all of the write locks then we'll defer the plan again and wait for
+    /// the necessary locks to become available.
+    pub(crate) async fn try_deferred(
+        &mut self,
+        conn_id: ConnectionId,
+        acquired_lock: Option<(GlobalId, tokio::sync::OwnedMutexGuard<()>)>,
+    ) {
+        // Try getting the deferred op, it may have already been canceled.
+        let Some(op) = self.deferred_write_ops.remove(&conn_id) else {
+            tracing::warn!(%conn_id, "no deferred op found, it must have been canceled?");
+            return;
+        };
+
+        // Try to collect all of the necessary locks.
+        let mut write_locks = WriteLocks::builder(op.required_locks());
+
+        // If we already have one acquired lock, insert into our builder.
+        let acquired_gid = match acquired_lock {
+            Some((gid, lock)) => {
+                write_locks.insert_lock(gid, lock);
+                Some(gid)
+            }
+            None => None,
+        };
+        // Acquire the rest of our locks, filtering out the one we already have.
+        for gid in op.required_locks().filter(|gid| Some(*gid) != acquired_gid) {
+            if let Some(lock) = self.try_grant_object_write_lock(gid) {
+                write_locks.insert_lock(gid, lock);
+            }
+        }
+
+        // If we failed to acquire any locks, spawn a task that waits for them to become available.
+        let locks = match write_locks.all_or_nothing(op.conn_id()) {
+            Ok(locks) => locks,
+            Err(failed_to_acquire) => {
+                let gid = *failed_to_acquire
+                    .iter()
+                    .next()
+                    .expect("at least one missing GlobalId");
+                let acquire_future = self.grant_object_write_lock(gid);
+                self.defer_op(Some(acquire_future), op);
+                return;
+            }
+        };
+
+        // We acquired all of our locks! Sequence our plans.
+        match op {
+            DeferredWriteOp::Plan(mut deferred) => {
+                if let Err(e) = deferred.validity.check(self.catalog()) {
+                    deferred.ctx.retire(Err(e))
+                } else {
+                    // Write statements never need to track resolved IDs (NOTE: This is not the
+                    // same thing as plan dependencies, which we do need to re-validate).
+                    let resolved_ids = ResolvedIds(BTreeSet::new());
+                    let conn_id = deferred.ctx.session().conn_id().clone();
+
+                    // If the session already has write locks they're incorrect.
+                    if let Err(existing) = deferred.ctx.session_mut().try_grant_write_locks(locks) {
+                        tracing::error!(
+                            %conn_id,
+                            ?existing,
+                            "session already write locks granted?",
+                        );
+                        deferred.ctx.retire(Err(AdapterError::WrongSetOfLocks));
+                        return;
+                    };
+
+                    // Note: This plan is not guaranteed to run, it may get deferred again.
+                    self.sequence_plan(deferred.ctx, deferred.plan, resolved_ids)
+                        .await;
+                }
+            }
+            DeferredWriteOp::Write(DeferredWrite {
+                span,
+                writes,
+                pending_txn,
+            }) => {
+                self.submit_write(PendingWriteTxn::User {
+                    span,
+                    writes,
+                    write_locks: Some(locks),
+                    pending_txn,
+                });
+            }
+        }
     }
 
     /// Attempts to commit all pending write transactions in a group commit. If the timestamp
@@ -196,7 +276,7 @@ impl Coordinator {
                 .instrument(Span::current()),
             );
         } else {
-            self.group_commit(None, permit).await;
+            self.group_commit(permit).await;
         }
     }
 
@@ -214,54 +294,71 @@ impl Coordinator {
     /// involved tables will be advanced to some timestamp larger than the timestamp of the write.
     ///
     /// Returns the timestamp of the write.
-    #[instrument(name = "coord::group_commit", fields(has_write_lock=write_lock_guard.is_some()))]
-    pub(crate) async fn group_commit(
-        &mut self,
-        write_lock_guard: Option<tokio::sync::OwnedMutexGuard<()>>,
-        permit: Option<GroupCommitPermit>,
-    ) -> Timestamp {
-        let (write_lock_guard, pending_writes): (_, Vec<_>) = if let Some(guard) = write_lock_guard
-        {
-            // If the caller passed in the write lock, then we can execute a group commit.
-            (Some(guard), self.pending_writes.drain(..).collect())
-        } else if self
-            .pending_writes
-            .iter()
-            .all(|write| matches!(write, PendingWriteTxn::System { .. }))
-            || self.pending_writes.is_empty()
-        {
-            // If none of the pending transactions are for user tables, then we don't need the
-            // write lock.
-            (None, self.pending_writes.drain(..).collect())
-        } else if let Some(guard) = self
-            .pending_writes
-            .iter_mut()
-            .find_map(|write| write.take_write_lock())
-        {
-            // If some pending transaction already holds the write lock, then we can execute a group
-            // commit.
-            (Some(guard), self.pending_writes.drain(..).collect())
-        } else if let Ok(guard) = self.write_lock_wait_group.try_lock_owned() {
-            // If no pending transaction holds the write lock, then we need to acquire it.
-            (Some(guard), self.pending_writes.drain(..).collect())
-        } else {
-            // If some running transaction already holds the write lock, then one of the
-            // following things will happen:
-            //   1. The transaction will submit a write which will transfer the
-            //      ownership of the lock to group commit and trigger another group
-            //      group commit.
-            //   2. The transaction will complete without submitting a write (abort,
-            //      empty writes, etc) which will drop the lock. The deferred group
-            //      commit will then acquire the lock and execute a group commit.
-            self.defer_write(Deferred::GroupCommit);
+    #[instrument(name = "coord::group_commit")]
+    pub(crate) async fn group_commit(&mut self, permit: Option<GroupCommitPermit>) -> Timestamp {
+        let mut pending_writes = Vec::new();
+        let mut deferred_writes = Vec::new();
 
-            // Without the write lock we can only apply writes to system tables.
-            let pending_writes = self
-                .pending_writes
-                .drain_filter_swapping(|w| matches!(w, PendingWriteTxn::System { .. }))
-                .collect();
-            (None, pending_writes)
-        };
+        for pending_write in self.pending_writes.drain(..) {
+            match pending_write {
+                // We always allow system writes to proceed.
+                PendingWriteTxn::System { .. } => pending_writes.push(pending_write),
+                // We have a set of locks! Validate they're correct (expected).
+                PendingWriteTxn::User {
+                    span,
+                    write_locks: Some(write_locks),
+                    writes,
+                    pending_txn,
+                } => match write_locks.validate(writes.keys().copied()) {
+                    Ok(validated_locks) => {
+                        let validated_write = PendingWriteTxn::User {
+                            span,
+                            writes,
+                            write_locks: Some(validated_locks),
+                            pending_txn,
+                        };
+                        pending_writes.push(validated_write);
+                    }
+                    // This is very unexpected since callers of this method should be validating.
+                    Err(missing) => {
+                        tracing::error!(?missing, "got to group commit with partial set of locks!");
+                        let write = DeferredWrite {
+                            span,
+                            writes,
+                            pending_txn,
+                        };
+                        deferred_writes.push(write);
+                    }
+                },
+                // If we don't have any locks then we need to defer the write.
+                PendingWriteTxn::User {
+                    span,
+                    writes,
+                    write_locks: None,
+                    pending_txn,
+                } => {
+                    let write = DeferredWrite {
+                        span,
+                        writes,
+                        pending_txn,
+                    };
+                    deferred_writes.push(write);
+                }
+            }
+        }
+
+        // Queue all of our deferred ops.
+        for write in deferred_writes {
+            // This is annoying but we need to name the generic Future that is optionally passed to
+            // `defer_op`. Since we're passing `None`, Rust can't infer the type.
+            type WriteLockFuturePlaceholderType = Box<
+                dyn Future<Output = (GlobalId, tokio::sync::OwnedMutexGuard<()>)>
+                    + Send
+                    + Unpin
+                    + 'static,
+            >;
+            self.defer_op::<WriteLockFuturePlaceholderType>(None, DeferredWriteOp::Write(write));
+        }
 
         // The value returned here still might be ahead of `now()` if `now()` has gone backwards at
         // any point during this method or if this was triggered from DDL. We will still commit the
@@ -291,13 +388,14 @@ impl Coordinator {
         let mut appends: BTreeMap<GlobalId, Vec<(Row, Diff)>> = BTreeMap::new();
         let mut responses = Vec::with_capacity(self.pending_writes.len());
         let mut notifies = Vec::new();
+        let mut locks = Vec::new();
 
         for pending_write_txn in pending_writes {
             match pending_write_txn {
                 PendingWriteTxn::User {
                     span: _,
                     writes,
-                    write_lock_guard: _,
+                    write_locks,
                     pending_txn:
                         PendingTxn {
                             ctx,
@@ -305,7 +403,7 @@ impl Coordinator {
                             action,
                         },
                 } => {
-                    for WriteOp { id, rows } in writes {
+                    for (id, rows) in writes {
                         // If the table that some write was targeting has been deleted while the
                         // write was waiting, then the write will be ignored and we respond to the
                         // client that the write was successful. This is only possible if the write
@@ -319,6 +417,8 @@ impl Coordinator {
                         self.set_statement_execution_timestamp(id, timestamp);
                     }
 
+                    // Don't drop the locks until the write is complete.
+                    locks.push(write_locks);
                     responses.push(CompletedClientTransmitter::new(ctx, response, action));
                 }
                 PendingWriteTxn::System { updates, source } => {
@@ -403,7 +503,7 @@ impl Coordinator {
                 // here, to prevent other writes from going through while we
                 // haven't yet applied the write at the timestamp oracle.
                 drop(permit);
-                drop(write_lock_guard);
+                drop(locks);
 
                 // Advance other timelines.
                 if let Err(e) = internal_cmd_tx.send(Message::AdvanceTimelines) {
@@ -438,38 +538,93 @@ impl Coordinator {
         BuiltinTableAppend { coord: self }
     }
 
-    /// Defers executing `deferred` until the write lock becomes available; waiting
-    /// occurs in a green-thread, so callers of this function likely want to
-    /// return after calling it.
-    pub(crate) fn defer_write(&mut self, deferred: Deferred) {
-        let id = match &deferred {
-            Deferred::Plan(plan) => plan.ctx.session().conn_id().to_string(),
-            Deferred::GroupCommit => "group_commit".to_string(),
-        };
-        self.write_lock_wait_group.push_back(deferred);
+    /// Defers executing `plan` until at least one of the locks in `missing` becomes available.
+    /// Waiting for the lock to become available occurs in a [`tokio::task`].
+    pub(crate) fn defer_plan(&mut self, plan: DeferredPlan, missing: BTreeSet<GlobalId>) {
+        // Get a future for the first missing lock, we'll try again once this lock is available.
+        let acquire_future = missing
+            .iter()
+            .next()
+            .map(|gid| self.grant_object_write_lock(*gid));
 
-        let internal_cmd_tx = self.internal_cmd_tx.clone();
-        let write_lock = self.write_lock_wait_group.mutex();
-        // TODO(guswynn): see if there is more relevant info to add to this name
-        task::spawn(|| format!("defer_write:{id}"), async move {
-            let guard = write_lock.lock_owned().await;
-            // It is not an error for this lock to be released after `internal_cmd_rx` to be dropped.
-            let result = internal_cmd_tx.send(Message::WriteLockGrant(guard));
-            if let Err(e) = result {
-                warn!("internal_cmd_rx dropped before we could send: {:?}", e);
-            }
-        });
+        if acquire_future.is_none() {
+            tracing::error!(
+                required_locks = ?plan.requires_locks,
+                missing_locks = ?missing,
+                "acquired all locks for write that should be deferred?"
+            );
+        }
+        self.defer_op(acquire_future, DeferredWriteOp::Plan(plan));
     }
 
-    /// Attempts to immediately grant `session` access to the write lock or
-    /// errors if the lock is currently held.
-    pub(crate) fn try_grant_session_write_lock(
-        &self,
-        session: &mut Session,
-    ) -> Result<(), tokio::sync::TryLockError> {
-        self.write_lock_wait_group.try_lock_owned().map(|p| {
-            session.grant_write_lock(p);
-        })
+    pub(crate) fn defer_op<F>(&mut self, acquire_future: Option<F>, op: DeferredWriteOp)
+    where
+        F: Future<Output = (GlobalId, tokio::sync::OwnedMutexGuard<()>)> + Send + 'static,
+    {
+        let conn_id = op.conn_id().clone();
+
+        // Track all of our deferred ops.
+        self.deferred_write_ops.insert(conn_id.clone(), op);
+
+        match acquire_future {
+            // Spawn a future that will notify us when the write locks become ready.
+            Some(acquire_future) => {
+                let internal_cmd_tx = self.internal_cmd_tx.clone();
+                let conn_id_ = conn_id.clone();
+                mz_ore::task::spawn(|| format!("defer op {conn_id_}"), async move {
+                    tracing::info!(%conn_id, "deferring plan");
+                    // Once we can acquire the first failed lock, try running the deferred plan.
+                    //
+                    // Note: This does not guarantee the plan will be able to run, there might be
+                    // other locks that we later fail to get.
+                    let acquired_lock = acquire_future.await;
+                    // If this send fails then the Coordinator is shutting down.
+                    let _ = internal_cmd_tx.send(Message::TryDeferred {
+                        conn_id,
+                        acquired_lock: Some(acquired_lock),
+                    });
+                });
+            }
+            // If there is no write lock to wait for, just immediately queue the op to try again.
+            None => {
+                // If this send fails then the Coordinator is shutting down.
+                let _ = self.internal_cmd_tx.send(Message::TryDeferred {
+                    conn_id,
+                    acquired_lock: None,
+                });
+            }
+        }
+    }
+
+    /// Returns a future that waits until it can get an exclusive lock on the specified collection.
+    pub(crate) fn grant_object_write_lock(
+        &mut self,
+        object_id: GlobalId,
+    ) -> impl Future<Output = (GlobalId, OwnedMutexGuard<()>)> + 'static {
+        let write_lock_handle = self
+            .write_locks
+            .entry(object_id)
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())));
+        let write_lock_handle = Arc::clone(write_lock_handle);
+
+        write_lock_handle
+            .lock_owned()
+            .map(move |guard| (object_id, guard))
+    }
+
+    /// Lazily creates the lock for the provided `object_id`, and grants it if possible, returns
+    /// `None` if the lock is already held.
+    pub(crate) fn try_grant_object_write_lock(
+        &mut self,
+        object_id: GlobalId,
+    ) -> Option<OwnedMutexGuard<()>> {
+        let write_lock_handle = self
+            .write_locks
+            .entry(object_id)
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())));
+        let write_lock_handle = Arc::clone(write_lock_handle);
+
+        write_lock_handle.try_lock_owned().ok()
     }
 }
 
@@ -577,7 +732,7 @@ impl<'a> BuiltinTableAppend<'a> {
             updates,
             source: BuiltinTableUpdateSource::Internal(tx),
         });
-        let write_ts = self.coord.group_commit(None, None).await;
+        let write_ts = self.coord.group_commit(None).await;
 
         // Avoid excessive group commits by resetting the periodic table advancement timer. The
         // group commit triggered by above will already advance all tables.

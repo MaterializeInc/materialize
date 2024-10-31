@@ -60,7 +60,7 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 use crate::command::{
     CatalogSnapshot, Command, ExecuteResponse, GetVariablesResponse, StartupResponse,
 };
-use crate::coord::appends::{Deferred, PendingWriteTxn};
+use crate::coord::appends::PendingWriteTxn;
 use crate::coord::{
     ConnMeta, Coordinator, DeferredPlanStatement, Message, NetworkPolicy, PendingTxn,
     PlanStatement, PlanValidity, PurifiedStatementReady,
@@ -1179,16 +1179,9 @@ impl Coordinator {
             }
         }
 
-        // Cancel deferred writes. There is at most one deferred write per session.
-        if let Some(idx) = self
-            .write_lock_wait_group
-            .iter()
-            .position(|ready| matches!(ready, Deferred::Plan(ready) if *ready.ctx.session().conn_id() == conn_id))
-        {
-            let ready = self.write_lock_wait_group.remove(idx).expect("known to exist from call to `position` above");
-            if let Deferred::Plan(ready) = ready {
-                maybe_ctx = Some(ready.ctx);
-            }
+        // Cancel deferred writes.
+        if let Some(write_op) = self.deferred_write_ops.remove(&conn_id) {
+            maybe_ctx = Some(write_op.into_ctx());
         }
 
         // Cancel deferred statements.
