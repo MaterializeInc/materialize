@@ -142,7 +142,7 @@ class Connections(Generator):
 class Tables(Generator):
     COUNT = 90  # https://github.com/MaterializeInc/database-issues/issues/3675 and https://github.com/MaterializeInc/database-issues/issues/7830
 
-    MAX_COUNT = 6500  # Too long-running with 11k tables
+    MAX_COUNT = 2880  # Too long-running with 5760 tables
 
     @classmethod
     def body(cls) -> None:
@@ -211,6 +211,8 @@ class Indexes(Generator):
 
 class KafkaTopics(Generator):
     COUNT = min(Generator.COUNT, 20)  # CREATE SOURCE is slow
+
+    MAX_COUNT = 640  # Too long-running with count=1280
 
     @classmethod
     def body(cls) -> None:
@@ -1312,6 +1314,8 @@ class FilterSubqueries(Generator):
 
     COUNT = 100
 
+    MAX_COUNT = 111  # Too long-running with count=200
+
     @classmethod
     def body(cls) -> None:
         print("> CREATE TABLE t1 (f1 INTEGER);")
@@ -1926,10 +1930,14 @@ def workflow_main(c: Composition, parser: WorkflowArgumentParser) -> None:
                             start_time = time.time()
                             cur.execute(scenario.EXPLAIN)
                             explain_wallclock = time.time() - start_time
+                            explain_wallclock_str = (
+                                f", explain took {explain_wallclock:.2f} s"
+                            )
                     else:
                         explain_wallclock = None
+                        explain_wallclock_str = ""
                     print(
-                        f"Scenario {scenario.__name__} with count {scenario.COUNT} took {wallclock:.2f} s"
+                        f"Scenario {scenario.__name__} with count {scenario.COUNT} took {wallclock:.2f} s{explain_wallclock_str}"
                     )
                     stats[(scenario, scenario.COUNT)] = Statistics(
                         wallclock, explain_wallclock
@@ -1940,7 +1948,7 @@ def workflow_main(c: Composition, parser: WorkflowArgumentParser) -> None:
                 else:
                     scenario.COUNT = (good_count + bad_count) // 2
                 if scenario.MAX_COUNT is not None:
-                    scenario.COUNT = max(scenario.COUNT, scenario.MAX_COUNT)
+                    scenario.COUNT = min(scenario.COUNT, scenario.MAX_COUNT)
                 if scenario.COUNT <= good_count:
                     break
             print(f"Final good count: {good_count}")
