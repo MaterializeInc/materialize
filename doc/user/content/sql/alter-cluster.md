@@ -21,51 +21,110 @@ TO`](/sql/alter-rename/).
 
 `ALTER CLUSTER` has the following syntax forms:
 
-- To set a cluster configuration:
+{{< tabs >}}
+{{< tab "Set a configuration" >}}
+
+To set a cluster configuration (you must specify at least one configuration):
 
   ```mzsql
   ALTER CLUSTER <cluster_name>
   SET (
-    <config1> = <config_value1> [, ... ]  -- equal sign ('=') is optional
+      [SIZE = <text> [,]]
+      [REPLICATION FACTOR= <int> [,]]
+      [INTROSPECTION INTERVAL = <interval>[,]]
+      [INTROSPECTION DEBUGGING = <bool>[,]]
+      [MANAGED = <bool>[,]]
+      [SCHEDULE = [MANUAL | ON REFRESH (...)]]
   )
-  WITH ( <command_options> )               -- Optional.
+  [WITH ( <options> )]
   ;
   ```
 
-- To reset a cluster configuration back to its default value:
+You must have ownership of the cluster. See also [Required
+privileges](#required-privileges).
+
+{{< /tab >}}
+{{< tab "Reset to default" >}}
+
+To reset a cluster configuration back to its default value:
 
   ```mzsql
   ALTER CLUSTER <cluster_name>
   RESET (
-    <config1>[,  <config2>, ...]
+      [REPLICATION FACTOR,]
+      [INTROSPECTION INTERVAL,]
+      [INTROSPECTION DEBUGGING,]
+      [MANAGED,]
+      [SCHEDULE = [MANUAL | ON REFRESH (...)]]
   )
-  WITH ( <command_options> )              -- Optional.
+  [WITH ( <options> )]
   ;
-
   ```
+
+You must have ownership of the cluster. See also [Required
+privileges](#required-privileges).
+
+{{< /tab >}}
+{{< tab "Rename to" >}}
+
+To rename a cluster:
+
+  ```mzsql
+  ALTER CLUSTER <cluster_name> RENAME TO <new_cluster_name>;
+  ```
+
+You must have ownership of the cluster. See also [Required
+privileges](#required-privileges).
+
+{{< /tab >}}
+{{< tab "Alter owner to" >}}
+
+To change the owner of a cluster:
+
+  ```mzsql
+  ALTER CLUSTER <cluster_name> OWNER TO <new_owner_role>;
+  ```
+
+To rename a cluster, you must have ownership of the cluster and membership in
+the `<new_owner_role>`. See also [Required privileges](#required-privileges).
+
+{{< /tab >}}
+{{< tab "Swap names with another cluster" >}}
+
+To swap the name of this cluster with another cluster:
+
+  ```mzsql
+  ALTER CLUSTER <cluster1> SWAP WITH <cluster2>;
+  ```
+
+To swap names with another cluster, you must have ownership of both clusters.
+See also [Required privileges](#required-privileges).
+
+{{< /tab >}}
+{{< /tabs >}}
 
 ### Cluster configuration
 
-The following cluster configurations can be modified with `ALTER CLUSTER`:
-
 {{% alter-cluster/alter-cluster-options %}}
 
-### Command options
-
-Optionally, you can include a `WITH (<command option>)` to the [`ALTER CLUSTER`
-statement](#syntax) to run with command options.
-
-The following command options are
-available:
+### `WITH` options
 
 | Command options (optional) | Value | Description |
 |----------------------------|-------|-----------------|
 | `WAIT UNTIL READY(...)`    |  | <em>Private preview for <a href="#graceful-cluster-resizing" >graceful cluster resizing.</a></em><br>{{< alter-cluster/alter-clusters-cmd-options >}} |
 | `WAIT FOR` | `duration` | <em>Private preview for <a href="#graceful-cluster-resizing" >graceful cluster resizing.</a></em><br>A fixed duration to wait for the new replicas to be ready. This option can lead to downtime. As such, we recommend using the `WAIT UNTIL READY` option instead.|
 
-## Best practices
+## Considerations
 
 ### Resizing
+
+{{< tip >}}
+
+To help size your clusters, **Materialize Console >** [**Monitoring**
+section](/console/monitoring/) provides an **Environment Overview** page that
+displays the cluster resource utilization.
+
+{{< /tip >}}
 
 #### Resource allocation
 
@@ -122,6 +181,9 @@ cause a rollback — no size change will take effect in that case.
 The `REPLICATION FACTOR` option determines the number of replicas provisioned
 for the cluster. Each replica of the cluster provisions a new pool of compute
 resources to perform exactly the same computations on exactly the same data.
+Each replica incurs cost, calculated (at one second granularity) as cluster
+[size](#resizing) * its replication factor. See [Usage &
+billing](/administration/billing/) for more details.
 
 #### Replication factor and fault tolerance
 
@@ -131,44 +193,53 @@ replica to become unreachable. As long as one replica of the cluster remains
 available, the cluster can continue to maintain dataflows and serve queries.
 
 {{< note >}}
-Increasing the replication factor does **not** increase the cluster's work
-capacity. Replicas are exact copies of one another: each replica must do
-exactly the same work (i.e., maintain the same dataflows and process the same
-queries) as all the other replicas of the cluster.
 
-To increase the capacity of a cluster, you must increase its [size](#resizing).
+- Each replica incurs cost, calculated (at one second granularity) as cluster
+  [size](#resizing) * its replication factor. See [Usage &
+  billing](/administration/billing/) for more details.
+
+- Increasing the replication factor does **not** increase the cluster's work
+  capacity. Replicas are exact copies of one another: each replica must do
+  exactly the same work (i.e., maintain the same dataflows and process the same
+  queries) as all the other replicas of the cluster.
+
+  To increase the capacity of a cluster, you must increase its
+  [size](#resizing).
+
 {{< /note >}}
-
-#### Availability guarantees
-
-When provisioning replicas, Materialize guarantees that all replicas in a
-cluster are spread across the underlying cloud provider's availability zones
-for clusters **under `3200cc` sizes**. For clusters sized at `3200cc` and
-above, even distribution of replicas across availability zones **cannot** be
-guaranteed.
 
 Materialize automatically assigns names to replicas (e.g., `r1`, `r2`). You can
 view information about individual replicas in the console and the system
-catalog, but you cannot directly modify individual replicas.
+catalog.
 
-#### Replication factor `0`
+#### Availability guarantees
 
-You can pause a cluster's work by specifying a replication factor of `0`. Doing
-so removes all replicas of the cluster. Any indexes, materialized views,
-sources, and sinks on the cluster **will cease** to make progress, and any
-queries directed to the cluster will block. You can later resume the cluster's
-work by using [`ALTER CLUSTER`] to set a nonzero replication factor.
+When provisioning replicas,
+
+- For clusters sized **under `3200cc`**, Materialize guarantees that all
+  provisioned replicas in a cluster are spread across the underlying cloud
+  provider's availability zones.
+
+- For clusters sized at **`3200cc` and above**, even distribution of replicas
+  across availability zones **cannot** be guaranteed.
 
 #### Clusters with sources and sinks
 
 Clusters containing sources and sinks can only have a replication factor of `0`
 or `1`.
 
-### Required privileges
+## Required privileges
 
-The privileges required to execute this statement are:
+To execute the `ALTER CLUSTER` command, you need:
 
 - Ownership of the cluster.
+
+In addition,
+
+- To rename a cluster, you must also have membership in the `<new_owner_role>`.
+
+- To swap names with another cluster, you must also have ownership of the other
+  cluster.
 
 See also:
 
@@ -199,7 +270,7 @@ or `1`.
 - For clusters **without any sources or sinks**, you can alter the cluster size
   with **no downtime** (i.e., [graceful cluster
   resizing](#graceful-cluster-resizing)) by running the `ALTER CLUSTER` command
-  with the `WAIT UNTIL READY` [command option](#command-options):
+  with the `WAIT UNTIL READY` [option](#with-options):
 
   ```mzsql
   ALTER CLUSTER c1
