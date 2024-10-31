@@ -9,14 +9,6 @@ menu:
 `ALTER CLUSTER` changes the configuration of a cluster, such as the `SIZE` or
 `REPLICATON FACTOR`.
 
-{{< admonition type="Disambiguation" >}}
-
-This page covers the usage of `ALTER CLUSTER` to change the cluster's
-*configuration*. To change the name of a cluster, see [`ALTER ... RENAME
-TO`](/sql/alter-rename/).
-
-{{</ admonition >}}
-
 ## Syntax
 
 `ALTER CLUSTER` has the following syntax forms:
