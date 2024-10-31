@@ -17,7 +17,7 @@ env:
 steps:
   - command: bin/ci-builder run nightly ci/deploy/devsite.sh
     branches: main
-    timeout_in_minutes: 30
+    timeout_in_minutes: 60
     agents:
       queue: linux-x86_64
     concurrency: 1
