@@ -28,6 +28,11 @@ $ kafka-create-topic topic=append_only partitions=1
 $ kafka-ingest topic=append_only format=bytes key-format=bytes key-terminator=:
 x:0
 
+# Wait for the ingestion to have completed before creating the CT, we want the x:0
+# value to be in the continual task, since it only starts after it is ingested already.
+> SELECT * FROM append_only_tbl
+x 0
+
 > CREATE CONTINUAL TASK ct_max FROM TRANSFORM append_only_tbl USING
     (SELECT max(text::int) FROM append_only_tbl)
 
@@ -35,12 +40,14 @@ $ kafka-ingest topic=append_only format=bytes key-format=bytes key-terminator=:
 a:1
 
 > SELECT * FROM ct_max
+0
 1
 
 $ kafka-ingest topic=append_only format=bytes key-format=bytes key-terminator=:
 b:2
 
 > SELECT * FROM ct_max
+0
 1
 2
 
@@ -48,6 +55,7 @@ $ kafka-ingest topic=append_only format=bytes key-format=bytes key-terminator=:
 c:3
 
 > SELECT * FROM ct_max
+0
 1
 2
 3
@@ -56,6 +64,7 @@ $ kafka-ingest topic=append_only format=bytes key-format=bytes key-terminator=:
 d:1
 
 > SELECT * FROM ct_max
+0
 1
 2
 3
