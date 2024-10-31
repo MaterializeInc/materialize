@@ -81,6 +81,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::rc::Rc;
 
+use differential_dataflow::lattice::Lattice;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::Plan;
 use mz_ore::collections::CollectionExt;
@@ -464,19 +465,10 @@ impl<'a, T: TimestampManipulation> Context<'a, T> {
                 continue;
             };
 
-            let collection_empty =
-                PartialOrder::less_equal(&frontiers.write_frontier, &frontiers.read_capabilities);
-            let upper = if collection_empty {
-                frontiers.read_capabilities
-            } else {
-                Antichain::from_iter(
-                    frontiers
-                        .write_frontier
-                        .iter()
-                        .map(|t| t.step_back().unwrap_or(T::minimum())),
-                )
-            };
+            let storage_since = frontiers.read_capabilities;
+            let storage_upper = frontiers.write_frontier;
 
+            let upper = storage_since.join(&storage_upper);
             let constraint = Constraint {
                 type_: ConstraintType::Hard,
                 bound_type: BoundType::Upper,
@@ -484,6 +476,28 @@ impl<'a, T: TimestampManipulation> Context<'a, T> {
                 reason: &format!("storage export {id} write frontier"),
             };
             self.apply_constraint(*id, constraint);
+
+            // Apply the stepping-back for non-empty storage outputs as a soft constraint, to allow
+            // upgrading from Mz versions that didn't hold input frontiers back sufficiently (see
+            // database-issues#8718). This technically permits violating correctness for CTs, but
+            // those haven't been publicly released yet.
+            //
+            // TODO(ct2): revert to a hard constraint in the next/a subsequent release
+            let collection_empty = PartialOrder::less_equal(&storage_upper, &storage_since);
+            if !collection_empty {
+                let upper = Antichain::from_iter(
+                    storage_upper
+                        .iter()
+                        .map(|t| t.step_back().unwrap_or(T::minimum())),
+                );
+                let constraint = Constraint {
+                    type_: ConstraintType::Soft,
+                    bound_type: BoundType::Upper,
+                    frontier: &upper,
+                    reason: &format!("storage export {id} write frontier"),
+                };
+                self.apply_constraint(*id, constraint);
+            }
         }
 
         // Propagate constraints upstream, restoring `AsOfBounds` invariant (2).
