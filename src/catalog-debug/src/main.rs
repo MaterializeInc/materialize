@@ -51,8 +51,7 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_client::{Diagnostics, PersistClient, PersistLocation};
-use mz_persist_types::columnar::ColumnEncoder;
-use mz_repr::{Diff, RelationDesc, Timestamp, TypeDiff};
+use mz_repr::{Diff, Timestamp};
 use mz_service::secrets::SecretsReaderCliArgs;
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::ConnectionCounter;
@@ -668,27 +667,9 @@ async fn upgrade_check(
             anyhow::bail!("no schema found for {item_id}, did their environment crash?");
         };
 
-        // Validate we think the `RelationDesc`s are compatible.
-        match item_desc.diff(&persisted_relation_desc) {
-            TypeDiff::None => (),
-            TypeDiff::Nullability => {
-                tracing::warn!(
-                    "found nullability change for {}\nold: {:?}\nnew: {:?}",
-                    item_id,
-                    persisted_relation_desc,
-                    item_desc,
-                )
-            }
-            TypeDiff::Structural => anyhow::bail!(
-                "found structural schema change for {}\nold: {:?}\nnew: {:?}",
-                item_id,
-                persisted_relation_desc,
-                item_desc,
-            ),
-        }
-
-        let persisted_data_type = mz_persist_types::columnar::data_type(&persisted_relation_desc)?;
-        let new_data_type = mz_persist_types::columnar::data_type(item_desc)?;
+        let persisted_data_type =
+            mz_persist_types::columnar::data_type::<SourceData>(&persisted_relation_desc)?;
+        let new_data_type = mz_persist_types::columnar::data_type::<SourceData>(item_desc)?;
 
         let migration =
             mz_persist_types::schema::backward_compatible(&persisted_data_type, &new_data_type);

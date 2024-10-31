@@ -56,7 +56,7 @@ pub use crate::relation::{
     arb_relation_desc_diff, arb_row_for_relation, ColumnName, ColumnType, NotNullViolation,
     PropRelationDescDiff, ProtoColumnName, ProtoColumnType, ProtoRelationDesc, ProtoRelationType,
     RelationDesc, RelationDescBuilder, RelationType, RelationVersion, RelationVersionSelector,
-    TypeDiff, VersionedRelationDesc,
+    VersionedRelationDesc,
 };
 pub use crate::row::collection::{ProtoRowCollection, RowCollection, SortedRowCollectionIter};
 pub use crate::row::encode::{preserves_order, RowColumnarDecoder, RowColumnarEncoder};
