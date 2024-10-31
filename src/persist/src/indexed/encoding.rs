@@ -19,7 +19,7 @@ use std::fmt::{self, Debug};
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use bytes::BufMut;
+use bytes::{BufMut, Bytes};
 use differential_dataflow::trace::Description;
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
@@ -29,6 +29,7 @@ use mz_persist_types::columnar::{codec_to_schema2, data_type};
 use mz_persist_types::parquet::EncodingConfig;
 use mz_persist_types::schema::backward_compatible;
 use mz_persist_types::{Codec, Codec64};
+use mz_proto::RustType;
 use proptest::arbitrary::Arbitrary;
 use proptest::prelude::*;
 use proptest::strategy::{BoxedStrategy, Just};
@@ -41,7 +42,8 @@ use tracing::error;
 use crate::error::Error;
 use crate::gen::persist::proto_batch_part_inline::FormatMetadata as ProtoFormatMetadata;
 use crate::gen::persist::{
-    ProtoBatchFormat, ProtoBatchPartInline, ProtoU64Antichain, ProtoU64Description,
+    ProtoBatchFormat, ProtoBatchPartInline, ProtoColumnarRecords, ProtoU64Antichain,
+    ProtoU64Description,
 };
 use crate::indexed::columnar::parquet::{decode_trace_parquet, encode_trace_parquet};
 use crate::indexed::columnar::{ColumnarRecords, ColumnarRecordsStructuredExt};
@@ -226,10 +228,7 @@ impl BlobTraceUpdates {
 
     /// Return the estimated memory usage of the raw data.
     pub fn goodbytes(&self) -> usize {
-        self.records().goodbytes()
-            + self.structured().map_or(0, |e| {
-                e.key.get_buffer_memory_size() + e.val.get_buffer_memory_size()
-            })
+        self.records().goodbytes() + self.structured().map_or(0, |e| e.goodbytes())
     }
 
     /// Return the [`ColumnarRecordsStructuredExt`] of the blob.
@@ -317,6 +316,27 @@ impl BlobTraceUpdates {
             .concat_bytes
             .inc_by(u64::cast_from(out.goodbytes()));
         Ok(out)
+    }
+
+    /// See [RustType::into_proto].
+    pub fn into_proto(&self) -> ProtoColumnarRecords {
+        let records = self.records();
+        let (k_struct, v_struct) = match self.structured().map(|x| x.into_proto()) {
+            None => (None, None),
+            Some((k, v)) => (Some(k), Some(v)),
+        };
+
+        ProtoColumnarRecords {
+            len: records.len().into_proto(),
+            key_offsets: records.keys().offsets().to_vec(),
+            key_data: Bytes::copy_from_slice(records.keys().value_data()),
+            val_offsets: records.vals().offsets().to_vec(),
+            val_data: Bytes::copy_from_slice(records.vals().value_data()),
+            timestamps: records.timestamps().values().to_vec(),
+            diffs: records.diffs().values().to_vec(),
+            key_structured: k_struct,
+            val_structured: v_struct,
+        }
     }
 }
 
