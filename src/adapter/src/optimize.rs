@@ -123,7 +123,7 @@ where
     /// [`OptimizerError::Internal`] error.
     #[mz_ore::instrument(target = "optimizer", level = "debug", name = "optimize")]
     fn catch_unwind_optimize(&mut self, plan: From) -> Result<Self::To, OptimizerError> {
-        match mz_ore::panic::catch_unwind(AssertUnwindSafe(|| self.optimize(plan))) {
+        match mz_ore::panic::catch_unwind_str(AssertUnwindSafe(|| self.optimize(plan))) {
             Ok(result) => {
                 match result.map_err(Into::into) {
                     Err(OptimizerError::TransformError(TransformError::CallerShouldPanic(msg))) => {
@@ -136,8 +136,8 @@ where
                     result => result,
                 }
             }
-            Err(_) => {
-                let msg = "unexpected panic during query optimization".to_string();
+            Err(panic) => {
+                let msg = format!("unexpected panic during query optimization: {panic}");
                 Err(OptimizerError::Internal(msg))
             }
         }

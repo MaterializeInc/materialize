@@ -15,7 +15,7 @@
 
 use std::panic;
 
-use mz_ore::panic::{catch_unwind, install_enhanced_handler};
+use mz_ore::panic::{catch_unwind_str, install_enhanced_handler};
 use scopeguard::defer;
 
 // IMPORTANT!!! Do not add any additional tests to this file. This test sets and
@@ -31,12 +31,10 @@ fn catch_panic() {
 
     install_enhanced_handler();
 
-    let result = catch_unwind(|| {
+    let result = catch_unwind_str(|| {
         panic!("panicked");
     })
-    .unwrap_err()
-    .downcast::<&str>()
-    .unwrap();
+    .unwrap_err();
 
-    assert_eq!(*result, "panicked");
+    assert_eq!(result, "panicked");
 }
