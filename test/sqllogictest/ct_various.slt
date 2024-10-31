@@ -127,3 +127,16 @@ SELECT * FROM ct_c2
 # Confirm that the catalog knows the ct is in the right cluster.
 statement error cannot drop cluster "c2" because other objects depend on it
 DROP CLUSTER c2;
+
+# Regression test for constant MV (upper of empty antichain). The dataflow
+# previously hung at runtime.
+statement ok
+CREATE MATERIALIZED VIEW mv_const AS SELECT 1 AS value
+
+statement ok
+CREATE CONTINUAL TASK ct_const_mv FROM TRANSFORM mv_const USING (SELECT MIN(value) FROM mv_const)
+
+query T
+SELECT * FROM ct_const_mv
+----
+1
