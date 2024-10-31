@@ -11,6 +11,9 @@
 //! [`upsert_inner`] for a description of how the operator works and why.
 
 use std::cmp::Reverse;
+// We don't care about the order, but we do want drain().
+#[allow(clippy::disallowed_types)]
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -201,8 +204,10 @@ where
             indexmap::IndexMap::new();
         let mut multi_get_scratch = Vec::new();
 
-        // For our source input, both of these.
-        let mut stash = vec![];
+        // For stashing source input while it's not eligible for processing.
+        // We don't care about the order, but we do want drain().
+        #[allow(clippy::disallowed_types)]
+        let mut stash = HashMap::new();
         let mut input_upper = Antichain::from_elem(Timestamp::minimum());
 
 
@@ -426,7 +431,6 @@ where
                                     &mut data,
                                     &input_upper,
                                     &resume_upper,
-                                    upsert_config.shrink_upsert_unused_buffers_by_ratio,
                                 );
 
                                 // For the very first snapshot from the source,
@@ -501,28 +505,55 @@ where
             // when the source-input frontier advances or when the persist
             // frontier advances.
 
-            drain_staged_input::<_, G, _, _, _>(
-                &mut stash,
-                &mut commands_state,
-                &mut output_updates,
-                &mut multi_get_scratch,
-                DrainStyle::ToUpper{input_upper: &input_upper, persist_upper: &persist_upper},
-                &mut error_emitter,
-                &mut state,
-                &source_config,
-            )
-            .await;
+            // We can't easily iterate through the cap -> updates mappings and
+            // downgrade the cap at the same time, so we drain them out and
+            // re-insert them into the map at their (possibly downgraded) cap.
+            let stashed_work = stash.drain().collect_vec();
 
-            tracing::trace!(
-                worker_id = %source_config.worker_id,
-                source_id = %source_config.id,
-                output_updates = %output_updates.len(),
-                "output updates for complete timestamp");
+            for (mut cap, mut updates) in stashed_work.into_iter() {
+                tracing::trace!(
+                    worker_id = %source_config.worker_id,
+                    source_id = %source_config.id,
+                    ?cap,
+                    ?stash,
+                    "input stash");
 
-            for (update, cap, diff) in output_updates.drain(..) {
-                let ts = cap.time().clone();
-                output_handle.give(&cap, (update, ts, diff));
+                let mut min_remaining_time = drain_staged_input::<_, G, _, _, _>(
+                    &mut updates,
+                    &mut commands_state,
+                    &mut output_updates,
+                    &mut multi_get_scratch,
+                    DrainStyle::ToUpper{input_upper: &input_upper, persist_upper: &persist_upper},
+                    &mut error_emitter,
+                    &mut state,
+                    &source_config,
+                )
+                .await;
+
+                tracing::trace!(
+                    worker_id = %source_config.worker_id,
+                    source_id = %source_config.id,
+                    output_updates = %output_updates.len(),
+                    "output updates for complete timestamp");
+
+                for (update, ts, diff) in output_updates.drain(..) {
+                    output_handle.give(&cap, (update, ts, diff));
+                }
+
+                if !updates.is_empty() {
+                    let min_remaining_time = min_remaining_time.take().expect("we still have updates left");
+                    cap.downgrade(&min_remaining_time);
+
+                    // Stash them back in, being careful because we might have
+                    // to merge them with other updates that we already have for
+                    // that timestamp.
+                    stash.entry(cap)
+                        .and_modify(|existing_updates| existing_updates.append(&mut updates))
+                        .or_insert_with(|| updates);
+
+                }
             }
+
 
             if input_upper.is_empty() {
                 tracing::debug!(
@@ -548,18 +579,13 @@ where
 
 /// Helper method for `upsert_inner` used to stage `data` updates
 /// from the input timely edge.
+#[allow(clippy::disallowed_types)]
 fn stage_input<T, FromTime>(
-    stash: &mut Vec<(
-        Capability<T>,
-        UpsertKey,
-        Reverse<FromTime>,
-        Option<UpsertValue>,
-    )>,
+    stash: &mut HashMap<Capability<T>, Vec<(T, UpsertKey, Reverse<FromTime>, Option<UpsertValue>)>>,
     cap: Capability<T>,
     data: &mut Vec<((UpsertKey, Option<UpsertValue>, FromTime), T, Diff)>,
     input_upper: &Antichain<T>,
     resume_upper: &Antichain<T>,
-    storage_shrink_upsert_unused_buffers_by_ratio: usize,
 ) where
     T: PartialOrder + timely::progress::Timestamp,
     FromTime: Ord,
@@ -568,19 +594,12 @@ fn stage_input<T, FromTime>(
         data.retain(|(_, ts, _)| resume_upper.less_equal(ts));
     }
 
-    stash.extend(data.drain(..).map(|((key, value, order), time, diff)| {
-        assert!(diff > 0, "invalid upsert input");
-        // TODO: Don't retain a cap per update but instead bunch them up.
-        let cap = cap.delayed(&time);
-        (cap, key, Reverse(order), value)
-    }));
+    let stash_for_timestamp = stash.entry(cap).or_default();
 
-    if storage_shrink_upsert_unused_buffers_by_ratio > 0 {
-        let reduced_capacity = stash.capacity() / storage_shrink_upsert_unused_buffers_by_ratio;
-        if reduced_capacity > stash.len() {
-            stash.shrink_to(reduced_capacity);
-        }
-    }
+    stash_for_timestamp.extend(data.drain(..).map(|((key, value, order), time, diff)| {
+        assert!(diff > 0, "invalid upsert input");
+        (time, key, Reverse(order), value)
+    }));
 }
 
 /// The style of drain we are performing on the stash. `AtTime`-drains cannot
@@ -598,67 +617,75 @@ enum DrainStyle<'a, T> {
 
 /// Helper method for `upsert_inner` used to stage `data` updates
 /// from the input timely edge.
+///
+/// Returns the minimum observed time across the updates that remain in the
+/// stash or `None` if none are left.
 async fn drain_staged_input<S, G, T, FromTime, E>(
-    stash: &mut Vec<(
-        Capability<T>,
-        UpsertKey,
-        Reverse<FromTime>,
-        Option<UpsertValue>,
-    )>,
+    stash: &mut Vec<(T, UpsertKey, Reverse<FromTime>, Option<UpsertValue>)>,
     commands_state: &mut indexmap::IndexMap<UpsertKey, UpsertValueAndSize<Option<FromTime>>>,
-    output_updates: &mut Vec<(Result<Row, UpsertError>, Capability<T>, Diff)>,
+    output_updates: &mut Vec<(Result<Row, UpsertError>, T, Diff)>,
     multi_get_scratch: &mut Vec<UpsertKey>,
     drain_style: DrainStyle<'_, T>,
     error_emitter: &mut E,
     state: &mut UpsertState<'_, S, Option<FromTime>>,
     source_config: &crate::source::RawSourceCreationConfig,
-) where
+) -> Option<T>
+where
     S: UpsertStateBackend<Option<FromTime>>,
     G: Scope,
-    T: PartialOrder + Ord + Clone + Debug + timely::progress::Timestamp,
+    T: TotalOrder + Ord + Clone + Debug + timely::progress::Timestamp,
     FromTime: timely::ExchangeData + Ord,
     E: UpsertErrorEmitter<G>,
 {
-    // Sort by (key, time, Reverse(from_time)) so that deduping by (key, time) gives
-    // the latest change for that key.
-    stash.sort_unstable_by(|a, b| {
-        let (ts1, key1, from_ts1, val1) = a;
-        let (ts2, key2, from_ts2, val2) = b;
-        Ord::cmp(
-            &(ts1.time(), key1, from_ts1, val1),
-            &(ts2.time(), key2, from_ts2, val2),
-        )
-    });
+    let mut min_remaining_time = Antichain::new();
 
-    // Find the prefix that we can emit
-    let idx = stash.partition_point(|(ts, _, _, _)| match &drain_style {
-        DrainStyle::ToUpper {
-            input_upper,
-            persist_upper,
-        } => {
-            // We make sure that a) we only process updates when we know their
-            // timestamp is complete, that is there will be no more updates for
-            // that timestamp, and b) that "previous" times in the persist
-            // output are complete. The latter makes sure that we emit updates
-            // for the next timestamp that are consistent with the global state
-            // in the output persist shard, which also serves as a persistent
-            // copy of our in-memory/on-disk upsert state.
-            !input_upper.less_equal(ts.time()) && !persist_upper.less_than(ts.time())
-        }
-        DrainStyle::AtTime(time) => ts.time() <= time,
-    });
+    let mut eligible_updates = stash
+        .drain_filter_swapping(|(ts, _, _, _)| {
+            let eligible = match &drain_style {
+                DrainStyle::ToUpper {
+                    input_upper,
+                    persist_upper,
+                } => {
+                    // We make sure that a) we only process updates when we know their
+                    // timestamp is complete, that is there will be no more updates for
+                    // that timestamp, and b) that "previous" times in the persist
+                    // output are complete. The latter makes sure that we emit updates
+                    // for the next timestamp that are consistent with the global state
+                    // in the output persist shard, which also serves as a persistent
+                    // copy of our in-memory/on-disk upsert state.
+                    !input_upper.less_equal(ts) && !persist_upper.less_than(ts)
+                }
+                DrainStyle::AtTime(time) => *ts <= *time,
+            };
+
+            if !eligible {
+                min_remaining_time.insert(ts.clone());
+            }
+
+            eligible
+        })
+        .collect_vec();
 
     tracing::debug!(
         worker_id = %source_config.worker_id,
         source_id = %source_config.id,
         ?drain_style,
-        updates = idx,
+        remaining = %stash.len(),
+        eligible = eligible_updates.len(),
         "draining stash");
+
+    // Sort the eligible updates by (key, time, Reverse(from_time)) so that
+    // deduping by (key, time) gives the latest change for that key.
+    eligible_updates.sort_unstable_by(|a, b| {
+        let (ts1, key1, from_ts1, val1) = a;
+        let (ts2, key2, from_ts2, val2) = b;
+        Ord::cmp(&(ts1, key1, from_ts1, val1), &(ts2, key2, from_ts2, val2))
+    });
 
     // Read the previous values _per key_ out of `state`, recording it
     // along with the value with the _latest timestamp for that key_.
     commands_state.clear();
-    for (_, key, _, _) in stash.iter().take(idx) {
+    for (_, key, _, _) in eligible_updates.iter() {
         commands_state.entry(*key).or_default();
     }
 
@@ -681,7 +708,7 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
     // From the prefix that can be emitted we can deduplicate based on (ts, key) in
     // order to only process the command with the maximum order within the (ts,
     // key) group. This is achieved by wrapping order in `Reverse(FromTime)` above.;
-    let mut commands = stash.drain(..idx).dedup_by(|a, b| {
+    let mut commands = eligible_updates.into_iter().dedup_by(|a, b| {
         let ((a_ts, a_key, _, _), (b_ts, b_key, _, _)) = (a, b);
         a_ts == b_ts && a_key == b_key
     });
@@ -747,6 +774,8 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
             }
         }
     }
+
+    min_remaining_time.into_option()
 }
 
 /// Helper method for `upsert_inner` used to ingest state updates from the
