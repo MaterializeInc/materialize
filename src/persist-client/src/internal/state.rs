@@ -1339,8 +1339,10 @@ where
         match existing_id {
             Some((schema_id, encoded_schemas)) => {
                 let schema_id = *schema_id;
-                let new_k_datatype = mz_persist_types::columnar::data_type(key_schema);
-                let new_v_datatype = mz_persist_types::columnar::data_type(val_schema);
+                let new_k_datatype = mz_persist_types::columnar::data_type::<K>(key_schema)
+                    .expect("valid key schema");
+                let new_v_datatype = mz_persist_types::columnar::data_type::<V>(val_schema)
+                    .expect("valid val schema");
 
                 let new_k_encoded_datatype = encoded_data_type(&new_k_datatype);
                 let new_v_encoded_datatype = encoded_data_type(&new_v_datatype);
@@ -1403,13 +1405,17 @@ where
                 // generate the next id if/when we start supporting the removal
                 // of schemas.
                 let id = SchemaId(self.schemas.len());
+                let key_data_type = mz_persist_types::columnar::data_type::<K>(key_schema)
+                    .expect("valid key schema");
+                let val_data_type = mz_persist_types::columnar::data_type::<V>(val_schema)
+                    .expect("valid val schema");
                 let prev = self.schemas.insert(
                     id,
                     EncodedSchemas {
                         key: K::encode_schema(key_schema),
-                        key_data_type: encoded_data_type(&data_type(key_schema)),
+                        key_data_type: encoded_data_type(&key_data_type),
                         val: V::encode_schema(val_schema),
-                        val_data_type: encoded_data_type(&data_type(val_schema)),
+                        val_data_type: encoded_data_type(&val_data_type),
                     },
                 );
                 assert_eq!(prev, None);
