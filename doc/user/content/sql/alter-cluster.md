@@ -16,19 +16,19 @@ menu:
 {{< tabs >}}
 {{< tab "Set a configuration" >}}
 
-To set a cluster configuration (you must specify at least one configuration):
+To set a cluster configuration:
 
   ```mzsql
   ALTER CLUSTER <cluster_name>
   SET (
-      [SIZE = <text> [,]]
-      [REPLICATION FACTOR= <int> [,]]
-      [INTROSPECTION INTERVAL = <interval>[,]]
-      [INTROSPECTION DEBUGGING = <bool>[,]]
-      [MANAGED = <bool>[,]]
-      [SCHEDULE = [MANUAL | ON REFRESH (...)]]
+      SIZE = <text>,
+      REPLICATION FACTOR = <int>,
+      INTROSPECTION INTERVAL = <interval>,
+      INTROSPECTION DEBUGGING = <bool>,
+      MANAGED = <bool>,
+      SCHEDULE = { MANUAL | ON REFRESH (...) }
   )
-  [WITH ( <options> )]
+  [WITH ({ WAIT UNTIL READY({TIMEOUT | ON TIMEOUT {COMMIT|ROLLBACK}}) | WAIT FOR <duration> })]
   ;
   ```
 
@@ -43,13 +43,12 @@ To reset a cluster configuration back to its default value:
   ```mzsql
   ALTER CLUSTER <cluster_name>
   RESET (
-      [REPLICATION FACTOR,]
-      [INTROSPECTION INTERVAL,]
-      [INTROSPECTION DEBUGGING,]
-      [MANAGED,]
-      [SCHEDULE = [MANUAL | ON REFRESH (...)]]
+      REPLICATION FACTOR,
+      INTROSPECTION INTERVAL,
+      INTROSPECTION DEBUGGING,
+      MANAGED,
+      SCHEDULE
   )
-  [WITH ( <options> )]
   ;
   ```
 
@@ -101,10 +100,14 @@ See also [Required privileges](#required-privileges).
 
 ### `WITH` options
 
+{{< note >}}
+*Private preview* for [graceful cluster resizing](#graceful-cluster-resizing).
+{{< /note >}}
+
 | Command options (optional) | Value | Description |
 |----------------------------|-------|-----------------|
-| `WAIT UNTIL READY(...)`    |  | <em>Private preview for <a href="#graceful-cluster-resizing" >graceful cluster resizing.</a></em><br>{{< alter-cluster/alter-clusters-cmd-options >}} |
-| `WAIT FOR` | `duration` | <em>Private preview for <a href="#graceful-cluster-resizing" >graceful cluster resizing.</a></em><br>A fixed duration to wait for the new replicas to be ready. This option can lead to downtime. As such, we recommend using the `WAIT UNTIL READY` option instead.|
+| `WAIT UNTIL READY(...)`    |  | {{< alter-cluster/alter-clusters-cmd-options >}} |
+| `WAIT FOR` | `duration` | A fixed duration to wait for the new replicas to be ready. This option can lead to downtime. As such, we recommend using the `WAIT UNTIL READY` option instead.|
 
 ## Considerations
 
