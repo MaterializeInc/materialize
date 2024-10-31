@@ -23,6 +23,7 @@ alter_connection ::=
     ( 'WITH'? '(' field val ( ',' field val )* ')' )?
 alter_default_privileges ::=
   'ALTER' 'DEFAULT' 'PRIVILEGES' 'FOR' (( 'ROLE' | 'USER' ) target_role (',' target_role)* | 'ALL' 'ROLES' ) ( 'IN' 'SCHEMA' schema_name (',' schema_name)* | 'IN' 'DATABASE' database_name (',' database_name)* )? ( abbreviated_grant | abbreviated_revoke )
+alter_network_policy::='ALTER' 'NETWORK' 'POLICY' network_policy_name '('  'RULES' ( '(' network_policy_rule (',' network_policy_rule)* ')' )? ')'
 abbreviated_grant ::=
   'GRANT' ((privilege (',' privilege)*) | 'ALL' 'PRIVILEGES'? ) 'ON' ('TABLES' | 'TYPES' | 'SECRETS' | 'CONNECTIONS' | 'DATABASES' | 'SCHEMAS' | 'CLUSTERS') 'TO' 'GROUP'? grantee (',' grantee)*
 abbreviated_revoke ::=
@@ -215,6 +216,7 @@ load_generator_option ::=
     | 'SEED' seed
     | 'PARTITIONS' partitions
     | 'BATCH SIZE' batch_size
+create_network_policy::='CREATE' 'NETWORK' 'POLICY' network_policy_name '('  'RULES' ( '(' network_policy_rule (',' network_policy_rule)* ')' )? ')'
 create_source_postgres ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   ('IN CLUSTER' cluster_name)?
@@ -297,6 +299,8 @@ drop_index ::=
     'DROP' 'INDEX' ('IF EXISTS')? index_name ('CASCADE' | 'RESTRICT')?
 drop_materialized_view ::=
   'DROP' 'MATERIALIZED VIEW' 'IF EXISTS'? view_name ('RESTRICT' | 'CASCADE')?
+drop_network_policy ::=
+  'DROP' 'NETWORK POLICY' 'IF EXISTS'? network_policy_name
 drop_owned ::=
   'DROP' 'OWNED' 'BY' role_name ( ',' role_name )* ('RESTRICT' | 'CASCADE')?
 drop_role ::=
@@ -635,3 +639,4 @@ with_options_aws ::= 'WITH' '('
 with_options_aws_static ::=
   'access_key_id' '=' val ',' 'secret_access_key' '=' val ( ',' 'token' '=' val )?
 with_options_retain_history ::= ('WITH' '(' ('RETAIN HISTORY' '='? 'FOR' retention_period) ')')
+network_policy_rule::= network_policy_rule_name ( '(' network_policy_rule_option (',' network_policy_rule_option)* ')' )?
