@@ -44,7 +44,7 @@ from materialize.mzcompose.services.testdrive import Testdrive as TestdriveServi
 from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.util import all_subclasses
 
-TESTDRIVE_DEFAULT_TIMEOUT = os.environ.get("PLATFORM_CHECKS_TD_TIMEOUT", "300s")
+TESTDRIVE_DEFAULT_TIMEOUT = os.environ.get("PLATFORM_CHECKS_TD_TIMEOUT", "5s")
 
 SERVICES = [
     TestCerts(),
