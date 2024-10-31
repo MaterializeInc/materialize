@@ -19,8 +19,8 @@ metadata:
   name: materialize-backend
   namespace: materialize-environment
 stringData:
-  metadata_backend_url: "postgres://materialize_user:materialize_pass@postgres.materialize.svc.cluster.local:5432/materialize_db?sslmode=disable"
-  persist_backend_url: "s3://minio:minio123@bucket/12345678-1234-1234-1234-123456789012?endpoint=http%3A%2F%2Fminio.materialize.svc.cluster.local%3A9000&region=minio"
+  metadata_backend_url: "postgres://root@cockroach.default.svc.cluster.local:26257"
+  persist_backend_url: "s3://minio:minio123@persist?endpoint=http%3A%2F%2Fminio-service.default.svc.cluster.local%3A9000&region=minio"
 ---
 apiVersion: materialize.cloud/v1alpha1
 kind: Materialize
@@ -46,3 +46,6 @@ spec:
   #  issuerRef:
   #    name: intermediate-ca
   #    kind: Issuer
+  environmentdExtraArgs:
+    - "--orchestrator-kubernetes-ephemeral-volume-class=standard"
+    - "--system-parameter-default=enable_managed_clusters=true;enable_unsafe_functions=true;enable_dangerous_functions=true;enable_0dt_deployment=true;enable_0dt_deployment_panic_after_timeout=true;enable_alter_swap=true;enable_assert_not_null=true;enable_columnation_lgalloc=true;enable_comment=true;enable_compute_chunked_stack=true;enable_connection_validation_syntax=true;enable_continual_task_builtins=true;enable_continual_task_create=true;enable_continual_task_retain=true;enable_continual_task_transform=true;enable_copy_to_expr=true;enable_create_continual_task=true;enable_create_table_from_source=true;enable_disk_cluster_replicas=true;enable_eager_delta_joins=true;enable_envelope_debezium_in_subscribe=true;enable_expressions_in_limit_syntax=true;enable_introspection_subscribes=true;enable_kafka_sink_partition_by=true;enable_logical_compaction_window=true;enable_multi_worker_storage_persist_sink=true;enable_mysql_source=true;enable_rbac_checks=true;enable_reduce_mfp_fusion=true;enable_refresh_every_mvs=true;enable_cluster_schedule_refresh=true;enable_sink_doc_on_option=true;enable_statement_lifecycle_logging=true;enable_table_keys=true;enable_variadic_left_join_lowering=true;enable_worker_core_affinity=true;storage_use_reclock_v2=true"

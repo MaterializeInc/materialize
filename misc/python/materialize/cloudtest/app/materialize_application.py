@@ -10,12 +10,6 @@
 import logging
 import os
 import subprocess
-import time
-from datetime import datetime, timedelta
-from typing import Any
-
-from pg8000 import Connection, Cursor
-from pg8000.exceptions import InterfaceError
 
 from materialize.cloudtest.app.cloudtest_application_base import (
     CloudtestApplicationBase,
@@ -69,27 +63,6 @@ class MaterializeApplication(CloudtestApplicationBase):
 
         self.create_resources_and_wait()
 
-    def sql(
-        self,
-        sql: str,
-        port: str | None = None,
-        user: str = "materialize",
-    ) -> None:
-        self.environmentd.sql(sql=sql, port=port, user=user)
-
-    def sql_query(self, sql: str) -> Any:
-        return self.environmentd.sql_query(sql=sql)
-
-    def sql_conn(
-        self,
-        port: str | None = None,
-        user: str = "materialize",
-    ) -> Connection:
-        return self.environmentd.sql_conn(port=port, user=user)
-
-    def sql_cursor(self, autocommit: bool = True) -> Cursor:
-        return self.environmentd.sql_cursor(autocommit=autocommit)
-
     def get_resources(self, log_filter: str | None) -> list[K8sResource]:
         return [
             # Run first so it's available for Debezium, which gives up too quickly otherwise
@@ -102,21 +75,21 @@ class MaterializeApplication(CloudtestApplicationBase):
             Minio(apply_node_selectors=self.apply_node_selectors),
             VpcEndpointsClusterRole(),
             AdminRoleBinding(),
-            EnvironmentdStatefulSet(
-                release_mode=self.release_mode,
-                tag=self.tag,
-                log_filter=log_filter,
-                coverage_mode=self.coverage_mode(),
-                apply_node_selectors=self.apply_node_selectors,
-            ),
+            # EnvironmentdStatefulSet(
+            #    release_mode=self.release_mode,
+            #    tag=self.tag,
+            #    log_filter=log_filter,
+            #    coverage_mode=self.coverage_mode(),
+            #    apply_node_selectors=self.apply_node_selectors,
+            # ),
             PersistPubSubService(),
-            self.environmentd,
-            self.materialized_alias,
+            # self.environmentd,
+            # self.materialized_alias,
             self.testdrive,
         ]
 
     def get_images(self) -> list[str]:
-        return ["environmentd", "clusterd", "testdrive", "postgres"]
+        return ["testdrive", "postgres"]
 
     def register_vpc_endpoint(self) -> None:
         self.kubectl(
@@ -149,8 +122,7 @@ class MaterializeApplication(CloudtestApplicationBase):
     def wait_resource_creation_completed(self) -> None:
         wait(
             condition="condition=Ready",
-            resource="pod",
-            label="cluster.environmentd.materialize.cloud/cluster-id=u1",
+            resource="pod/testdrive",
         )
 
     def wait_replicas(self) -> None:
@@ -163,17 +135,18 @@ class MaterializeApplication(CloudtestApplicationBase):
 
     def wait_for_sql(self) -> None:
         """Wait until environmentd pod is ready and can accept SQL connections"""
-        wait(condition="condition=Ready", resource="pod/environmentd-0")
+        return
+        wait(condition="condition=Ready", resource="pod/testdrive")
 
-        start = datetime.now()
-        while datetime.now() - start < timedelta(seconds=300):
-            try:
-                self.environmentd.sql("SELECT 1")
-                break
-            except InterfaceError as e:
-                # Since we crash environmentd, we expect some errors that we swallow.
-                LOGGER.info(f"SQL interface not ready, {e} while SELECT 1. Waiting...")
-                time.sleep(2)
+        # start = datetime.now()
+        # while datetime.now() - start < timedelta(seconds=300):
+        #    try:
+        #        self.environmentd.sql("SELECT 1")
+        #        break
+        #    except InterfaceError as e:
+        #        # Since we crash environmentd, we expect some errors that we swallow.
+        #        LOGGER.info(f"SQL interface not ready, {e} while SELECT 1. Waiting...")
+        #        time.sleep(2)
 
     def set_environmentd_failpoints(self, failpoints: str) -> None:
         """Set the FAILPOINTS environmentd variable in the stateful set. This
