@@ -198,7 +198,7 @@ where
     })
 }
 
-/// Like [`crate::panic::crate_unwind`], but downcasts the returned `Box<dyn Any>` error to a
+/// Like [`crate::panic::catch_unwind`], but downcasts the returned `Box<dyn Any>` error to a
 /// string which is almost always is.
 ///
 /// See: <https://doc.rust-lang.org/stable/std/panic/struct.PanicHookInfo.html#method.payload>
