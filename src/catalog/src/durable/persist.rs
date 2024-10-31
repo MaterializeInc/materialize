@@ -16,7 +16,7 @@ use std::fmt::Debug;
 use std::str::FromStr;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
@@ -44,7 +44,7 @@ use mz_storage_types::sources::SourceData;
 use sha2::Digest;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use timely::Container;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::durable::debug::{Collection, DebugCatalogState, Trace};
@@ -991,6 +991,8 @@ impl UnopenedPersistCatalogState {
             }
         }
 
+        let open_handles_start = Instant::now();
+        info!("startup: envd serve: catalog init: open handles beginning");
         let since_handle = persist_client
             .open_critical_since(
                 catalog_shard_id,
@@ -1017,6 +1019,10 @@ impl UnopenedPersistCatalogState {
             )
             .await
             .expect("invalid usage");
+        info!(
+            "startup: envd serve: catalog init: open handles complete in {:?}",
+            open_handles_start.elapsed()
+        );
 
         // Commit an empty write at the minimum timestamp so the catalog is always readable.
         let upper = {
@@ -1033,6 +1039,8 @@ impl UnopenedPersistCatalogState {
             }
         };
 
+        let snapshot_start = Instant::now();
+        info!("startup: envd serve: catalog init: snapshot beginning");
         let as_of = as_of(&read_handle, upper);
         let snapshot: Vec<_> = snapshot_binary(&mut read_handle, as_of, &metrics)
             .await
@@ -1042,6 +1050,10 @@ impl UnopenedPersistCatalogState {
             .listen(Antichain::from_elem(as_of))
             .await
             .expect("invalid usage");
+        info!(
+            "startup: envd serve: catalog init: snapshot complete in {:?}",
+            snapshot_start.elapsed()
+        );
 
         let mut handle = UnopenedPersistCatalogState {
             // Unopened catalogs are always writeable until they're opened in an explicit mode.
@@ -1065,10 +1077,17 @@ impl UnopenedPersistCatalogState {
             snapshot.iter().all(|(_, _, diff)| *diff == 1),
             "snapshot should be consolidated: {snapshot:#?}"
         );
+
+        let apply_start = Instant::now();
+        info!("startup: envd serve: catalog init: apply updates beginning");
         let updates = snapshot
             .into_iter()
             .map(|(kind, ts, diff)| StateUpdate { kind, ts, diff });
         handle.apply_updates(updates)?;
+        info!(
+            "startup: envd serve: catalog init: apply updates complete in {:?}",
+            apply_start.elapsed()
+        );
 
         // Validate that the binary version of the current process is not less than any binary
         // version that has written to the catalog.
