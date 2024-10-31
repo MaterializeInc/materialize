@@ -812,7 +812,7 @@ impl<'a> Runner<'a> {
             let name: &str = row.get("name");
             inner
                 .system_client
-                .batch_execute(&format!("DROP DATABASE {name}"))
+                .batch_execute(&format!("DROP DATABASE \"{name}\""))
                 .await?;
         }
         inner

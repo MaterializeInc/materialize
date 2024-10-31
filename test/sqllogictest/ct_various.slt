@@ -64,6 +64,29 @@ SELECT * FROM y.z.ct;
 ----
 1
 
+# Crazy names
+statement ok
+CREATE DATABASE "--";
+
+statement ok
+CREATE SCHEMA "--"."</script><script>alert(123)</script>";
+
+statement ok
+CREATE TABLE "--"."</script><script>alert(123)</script>"."1;DROP TABLE users" (count int);
+
+statement ok
+INSERT INTO "--"."</script><script>alert(123)</script>"."1;DROP TABLE users" VALUES (1);
+
+statement ok
+CREATE CONTINUAL TASK "--"."</script><script>alert(123)</script>"."┬─┬ノ( º _ ºノ)"
+FROM TRANSFORM "--"."</script><script>alert(123)</script>"."1;DROP TABLE users"
+USING (SELECT MAX(COUNT) FROM "--"."</script><script>alert(123)</script>"."1;DROP TABLE users");
+
+query T
+SELECT * FROM "--"."</script><script>alert(123)</script>"."┬─┬ノ( º _ ºノ)";
+----
+1
+
 # Regression test for a bug where we'd panic if no CT inputs were referenced.
 statement ok
 CREATE CONTINUAL TASK no_input_refs (key INT) ON INPUT input AS (

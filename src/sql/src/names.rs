@@ -495,7 +495,17 @@ impl AstDisplay for ResolvedItemName {
             }
             ResolvedItemName::Cte { name, .. } => f.write_node(&Ident::new_unchecked(name)),
             ResolvedItemName::ContinualTask { name, .. } => {
-                f.write_str(&name);
+                // TODO: Remove this once PartialItemName uses Ident instead of
+                // String.
+                if let Some(database) = name.database.as_ref() {
+                    f.write_node(&Ident::new_unchecked(database));
+                    f.write_str(".");
+                }
+                if let Some(schema) = name.schema.as_ref() {
+                    f.write_node(&Ident::new_unchecked(schema));
+                    f.write_str(".");
+                }
+                f.write_node(&Ident::new_unchecked(&name.item));
             }
             ResolvedItemName::Error => {}
         }
