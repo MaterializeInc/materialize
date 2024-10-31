@@ -2806,6 +2806,9 @@ pub fn plan_create_continual_task(
         Some(ast::CreateContinualTaskSugar::Transform { .. }) => {
             scx.require_feature_flag(&vars::ENABLE_CONTINUAL_TASK_TRANSFORM)?
         }
+        Some(ast::CreateContinualTaskSugar::Retain { .. }) => {
+            scx.require_feature_flag(&vars::ENABLE_CONTINUAL_TASK_RETAIN)?
+        }
     };
     let cluster_id = match &stmt.in_cluster {
         None => scx.catalog.resolve_cluster(None)?.id(),

@@ -1893,6 +1893,9 @@ impl<'a> Parser<'a> {
             if self.peek_keywords_lookahead(&[FROM, TRANSFORM]) {
                 self.parse_create_continual_task_from_transform()
                     .map_parser_err(StatementKind::CreateContinualTask)
+            } else if self.peek_keywords_lookahead(&[FROM, RETAIN]) {
+                self.parse_create_continual_task_from_retain()
+                    .map_parser_err(StatementKind::CreateContinualTask)
             } else {
                 self.parse_create_continual_task()
                     .map_parser_err(StatementKind::CreateContinualTask)
@@ -3695,13 +3698,16 @@ impl<'a> Parser<'a> {
 
         let as_of = self.parse_optional_internal_as_of()?;
 
-        // Desugar into a normal CT body.
-        let stmts = vec![ContinualTaskStmt::Insert(InsertStatement {
+        // `INSERT INTO name SELECT * FROM <transform>`
+        let insert = InsertStatement {
             table_name: name.clone(),
             columns: Vec::new(),
             source: InsertSource::Query(transform.clone()),
             returning: Vec::new(),
-        })];
+        };
+
+        // Desugar into a normal CT body.
+        let stmts = vec![ContinualTaskStmt::Insert(insert)];
 
         Ok(Statement::CreateContinualTask(
             CreateContinualTaskStatement {
@@ -3713,6 +3719,86 @@ impl<'a> Parser<'a> {
                 stmts,
                 as_of,
                 sugar: Some(CreateContinualTaskSugar::Transform { transform }),
+            },
+        ))
+    }
+
+    fn parse_create_continual_task_from_retain(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keywords(&[CONTINUAL, TASK])?;
+        let name = RawItemName::Name(self.parse_item_name()?);
+        let in_cluster = self.parse_optional_in_cluster()?;
+
+        let with_options = if self.parse_keyword(WITH) {
+            self.expect_token(&Token::LParen)?;
+            let options = self.parse_comma_separated(Parser::parse_continual_task_option)?;
+            self.expect_token(&Token::RParen)?;
+            options
+        } else {
+            vec![]
+        };
+
+        self.expect_keywords(&[FROM, RETAIN])?;
+        let input = self.parse_raw_name()?;
+
+        self.expect_keyword(WHILE)?;
+        self.expect_token(&Token::LParen)?;
+        let retain = self.parse_expr()?;
+        self.expect_token(&Token::RParen)?;
+
+        let as_of = self.parse_optional_internal_as_of()?;
+
+        // `INSERT INTO name SELECT * FROM input WHERE <retain>`
+        let insert = InsertStatement {
+            table_name: name.clone(),
+            columns: Vec::new(),
+            source: InsertSource::Query(Query {
+                ctes: CteBlock::Simple(Vec::new()),
+                body: SetExpr::Select(Box::new(Select {
+                    from: vec![TableWithJoins {
+                        relation: TableFactor::Table {
+                            name: input.clone(),
+                            alias: None,
+                        },
+                        joins: Vec::new(),
+                    }],
+                    selection: Some(retain.clone()),
+                    distinct: None,
+                    projection: vec![SelectItem::Wildcard],
+                    group_by: Vec::new(),
+                    having: None,
+                    options: Vec::new(),
+                })),
+                order_by: Vec::new(),
+                limit: None,
+                offset: None,
+            }),
+            returning: Vec::new(),
+        };
+
+        // `DELETE FROM name WHERE NOT <retain>`
+        let delete = DeleteStatement {
+            table_name: name.clone(),
+            alias: None,
+            using: Vec::new(),
+            selection: Some(retain.clone().negate()),
+        };
+
+        // Desugar into a normal CT body.
+        let stmts = vec![
+            ContinualTaskStmt::Insert(insert),
+            ContinualTaskStmt::Delete(delete),
+        ];
+
+        Ok(Statement::CreateContinualTask(
+            CreateContinualTaskStatement {
+                name,
+                columns: None,
+                in_cluster,
+                with_options,
+                input,
+                stmts,
+                as_of,
+                sugar: Some(CreateContinualTaskSugar::Retain { retain }),
             },
         ))
     }

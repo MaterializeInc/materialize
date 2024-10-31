@@ -2171,6 +2171,12 @@ feature_flags!(
         default: false,
         enable_for_item_parsing: true,
     },
+    {
+        name: enable_continual_task_retain,
+        desc: "CREATE CONTINUAL TASK .. FROM RETAIN .. WHILE",
+        default: false,
+        enable_for_item_parsing: true,
+    },
 );
 
 impl From<&super::SystemVars> for OptimizerFeatures {
