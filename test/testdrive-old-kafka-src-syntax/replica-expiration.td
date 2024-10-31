@@ -30,7 +30,33 @@ ALTER SYSTEM SET compute_replica_expiration_offset = '30d'
 > DROP TABLE events CASCADE;
 > DROP CLUSTER test;
 
-## Does retractions: expiration=20d, temporal filter width=30d
+## Does no retractions: expiration=20d, temporal filter width=30d, master switch off
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_compute_replica_expiration = 'false'
+ALTER SYSTEM SET compute_replica_expiration_offset = '20d'
+
+> CREATE CLUSTER test (SIZE = '1')
+> SET CLUSTER TO test
+> CREATE TABLE events (
+    content TEXT,
+    event_ts TIMESTAMP
+  );
+> CREATE VIEW events_view AS
+  SELECT event_ts, content
+  FROM events
+  WHERE mz_now() <= event_ts + INTERVAL '30 days';
+> CREATE DEFAULT INDEX ON events_view;
+> INSERT INTO events SELECT x::text, now() FROM generate_series(1, 1000) AS x;
+> SELECT records FROM mz_introspection.mz_dataflow_arrangement_sizes
+  WHERE name LIKE '%events_view_primary_idx';
+2000
+> DROP TABLE events CASCADE;
+> DROP CLUSTER test;
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM RESET enable_compute_replica_expiration
+
+## Does no retractions: expiration=20d, temporal filter width=30d
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET compute_replica_expiration_offset = '20d'
 > CREATE CLUSTER test (SIZE = '1')

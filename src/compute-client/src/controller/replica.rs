@@ -15,6 +15,7 @@ use std::time::Duration;
 use anyhow::bail;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::{ClusterReplicaLocation, ClusterStartupEpoch, TimelyConfig};
+use mz_compute_types::dyncfgs::ENABLE_COMPUTE_REPLICA_EXPIRATION;
 use mz_dyncfg::ConfigSet;
 use mz_ore::channel::InstrumentedUnboundedSender;
 use mz_ore::retry::Retry;
@@ -274,7 +275,9 @@ where
                 expiration_offset,
             }) => {
                 *logging = self.config.logging.clone();
-                *expiration_offset = self.config.expiration_offset;
+                if ENABLE_COMPUTE_REPLICA_EXPIRATION.get(&self.dyncfg) {
+                    *expiration_offset = self.config.expiration_offset;
+                }
             }
             _ => {}
         }
