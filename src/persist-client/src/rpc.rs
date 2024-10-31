@@ -575,14 +575,8 @@ impl PubSubSender for MetricsSameProcessPubSubSender {
     }
 
     fn subscribe(self: Arc<Self>, shard_id: &ShardId) -> Arc<ShardSubscriptionToken> {
-        // Create a no-op token that does not subscribe nor unsubscribe.
-        // For clients running in the same process as the server, this is
-        // safe because the StateCached is shared between them, and the
-        // server necessarily always receives and applies all diffs.
-        Arc::new(ShardSubscriptionToken {
-            shard_id: *shard_id,
-            sender: Arc::new(NoopPubSubSender),
-        })
+        let delegate = Arc::clone(&self.delegate);
+        delegate.subscribe(shard_id)
     }
 }
 
