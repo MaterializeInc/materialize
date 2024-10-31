@@ -22,7 +22,7 @@
 //! pruned. Additionally, transitive dependencies can depend on indexes that do not exist anymore,
 //! which makes combining run-time information with catalog-based information inconclusive.
 
-use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, TableDataSource};
+use mz_catalog::memory::objects::{CatalogEntry, CatalogItem, DataSourceDesc, TableDataSource};
 use mz_compute_types::time_dependence::TimeDependence;
 use mz_ore::soft_panic_or_log;
 use mz_repr::refresh_schedule::RefreshSchedule;
@@ -66,6 +66,66 @@ pub(crate) fn time_dependence(
     TimeDependence::normalize(time_dependence)
 }
 
+/// Determine the time dependence for a single global ID.
+fn time_dependence_for_id(catalog: &Catalog, id: GlobalId) -> Option<TimeDependence> {
+    let entry = catalog.get_entry(&id);
+    match entry.item() {
+        // Introspection sources follow wall-clock.
+        CatalogItem::Log(_) => Some(TimeDependence::default()),
+        CatalogItem::Table(table) => {
+            match &table.data_source {
+                // Tables follow wall clock.
+                TableDataSource::TableWrites { .. } => Some(TimeDependence::default()),
+                TableDataSource::DataSource { desc, timeline } => {
+                    time_dependence_for_source_desc(catalog, desc, timeline)
+                }
+            }
+        }
+        CatalogItem::Source(source) => {
+            time_dependence_for_source_desc(catalog, &source.data_source, &source.timeline)
+        }
+        CatalogItem::Index(index) => {
+            // Indexes on logs are special because they are not backed by a regular physical plan.
+            let on = catalog.get_entry(&index.on);
+            if let CatalogItem::Log(_) = on.item() {
+                Some(TimeDependence::default())
+            } else {
+                retrieve_cached(catalog, entry)
+            }
+        }
+        CatalogItem::MaterializedView(_) | CatalogItem::ContinualTask(_) => {
+            retrieve_cached(catalog, entry)
+        }
+        // All others are indeterminate.
+        CatalogItem::Connection(_)
+        | CatalogItem::Func(_)
+        | CatalogItem::Secret(_)
+        | CatalogItem::Sink(_)
+        | CatalogItem::Type(_)
+        | CatalogItem::View(_) => None,
+    }
+}
+
+/// Retrieve the stored time dependence for an index, materialized view, or continual task.
+///
+/// Panics (or logs) when the entry is not associated with a physical plan.
+fn retrieve_cached(catalog: &Catalog, entry: &CatalogEntry) -> Option<TimeDependence> {
+    // Return cached information
+    if let Some(time_dependence) = catalog
+        .try_get_physical_plan(&entry.id)
+        .map(|plan| plan.time_dependence.clone())
+    {
+        time_dependence
+    } else {
+        soft_panic_or_log!(
+            "Physical plan alarmingly absent for {} {:?}",
+            entry.item_type(),
+            entry.id
+        );
+        None
+    }
+}
+
 /// Determine the time dependence for a [`DataSourceDesc`].
 ///
 /// Non-epoch timelines are indeterminate, and load generators.
@@ -96,51 +156,5 @@ fn time_dependence_for_source_desc(
         DataSourceDesc::Introspection(_)
         | DataSourceDesc::Progress
         | DataSourceDesc::Webhook { .. } => Some(TimeDependence::default()),
-    }
-}
-
-/// Determine the time dependence for a single global ID.
-fn time_dependence_for_id(catalog: &Catalog, id: GlobalId) -> Option<TimeDependence> {
-    let entry = catalog.get_entry(&id);
-    match entry.item() {
-        // Introspection sources follow wall-clock.
-        CatalogItem::Log(_) => Some(TimeDependence::default()),
-        CatalogItem::Table(table) => {
-            match &table.data_source {
-                // Tables follow wall clock.
-                TableDataSource::TableWrites { .. } => Some(TimeDependence::default()),
-                TableDataSource::DataSource { desc, timeline } => {
-                    time_dependence_for_source_desc(catalog, desc, timeline)
-                }
-            }
-        }
-        CatalogItem::Source(source) => {
-            time_dependence_for_source_desc(catalog, &source.data_source, &source.timeline)
-        }
-        CatalogItem::MaterializedView(_)
-        | CatalogItem::Index(_)
-        | CatalogItem::ContinualTask(_) => {
-            // Return cached information
-            if let Some(time_dependence) = catalog
-                .try_get_physical_plan(&id)
-                .map(|plan| plan.time_dependence.clone())
-            {
-                time_dependence
-            } else {
-                soft_panic_or_log!(
-                    "Physical plan alarmingly absent for {} {:?}",
-                    entry.item_type(),
-                    entry.id
-                );
-                None
-            }
-        }
-        // All others are indeterminate.
-        CatalogItem::Connection(_)
-        | CatalogItem::Func(_)
-        | CatalogItem::Secret(_)
-        | CatalogItem::Sink(_)
-        | CatalogItem::Type(_)
-        | CatalogItem::View(_) => None,
     }
 }
