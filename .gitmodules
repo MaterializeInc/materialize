@@ -4,3 +4,6 @@
 [submodule "fivetran-sdk"]
 	path = misc/fivetran-sdk
 	url = https://github.com/fivetran/fivetran_sdk.git
+[submodule "test/sqllogictest/advent-of-code"]
+	path = test/sqllogictest/advent-of-code
+	url = git@github.com:MaterializeInc/advent-of-code.git
