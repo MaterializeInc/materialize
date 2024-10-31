@@ -72,7 +72,7 @@ standard_conforming_strings         on                      "Causes '...' string
 statement_logging_default_sample_rate 0.01                  "The default value of `statement_logging_sample_rate` for new sessions (Materialize)."
 statement_logging_max_sample_rate   0.01                    "The maximum rate at which statements may be logged. If this value is less than that of `statement_logging_sample_rate`, the latter is ignored (Materialize)."
 statement_logging_sample_rate       0.01                    "User-facing session variable indicating how many statement executions should be logged, subject to constraint by the system variable `statement_logging_max_sample_rate` (Materialize)."
-statement_timeout                   "10 s"                  "Sets the maximum allowed duration of INSERT...SELECT, UPDATE, and DELETE operations. If this value is specified without units, it is taken as milliseconds."
+statement_timeout                   "1 min"                  "Sets the maximum allowed duration of INSERT...SELECT, UPDATE, and DELETE operations. If this value is specified without units, it is taken as milliseconds."
 superuser_reserved_connections      3                       "The number of connections that are reserved for superusers (PostgreSQL)."
 TimeZone                            UTC                     "Sets the time zone for displaying and interpreting time stamps (PostgreSQL)."
 transaction_isolation               "strict serializable"   "Sets the current transaction's isolation level (PostgreSQL)."

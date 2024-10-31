@@ -393,7 +393,7 @@ impl AdapterError {
             AdapterError::StatementTimeout => Some(
                 "Consider increasing the maximum allowed statement duration for this session by \
                  setting the statement_timeout session variable. For example, `SET \
-                 statement_timeout = '60s'`."
+                 statement_timeout = '120s'`."
                     .into(),
             ),
             AdapterError::PlanError(e) => e.hint(),
