@@ -37,6 +37,8 @@ pub struct Args {
     local_development: bool,
     #[clap(long)]
     create_balancers: bool,
+    #[clap(long)]
+    enable_tls: bool,
 
     #[clap(flatten)]
     aws_info: AwsInfo,
@@ -215,6 +217,8 @@ impl Context {
                 "--environmentd-iam-role-arn is required when using --cloud-provider=aws"
             );
         }
+
+        assert!(!config.enable_tls, "--enable-tls is not yet implemented");
 
         Self {
             config,

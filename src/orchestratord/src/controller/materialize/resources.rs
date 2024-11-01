@@ -839,20 +839,18 @@ fn create_environmentd_statefulset_object(
 
     if config.local_development {
         args.extend([
-            "--tls-mode=disable".into(),
             "--secrets-controller=kubernetes".into(),
             "--system-parameter-default=cluster_enable_topology_spread=false".into(),
             "--system-parameter-default=log_filter=mz_pgwire[{conn_uuid}]=debug,mz_server_core[{conn_uuid}]=debug,info".into(),
         ]);
     } else {
-        // Note(evan): environmentd must have a cert for teleport
-        // connectivity over psql.
-        args.extend([
-            "--tls-mode=require".into(),
-            "--tls-cert=/etc/materialized/tls.crt".into(),
-            "--tls-key=/etc/materialized/tls.key".into(),
-            "--secrets-controller=aws-secrets-manager".into(),
-        ]);
+        args.push("--secrets-controller=aws-secrets-manager".into());
+    }
+
+    if config.enable_tls {
+        unimplemented!();
+    } else {
+        args.push("--tls-mode=disable".to_string());
     }
 
     // Add persist arguments.
@@ -1254,7 +1252,7 @@ fn create_balancerd_deployment_object(config: &super::Args, mz: &Materialize) ->
         },
     ];
 
-    let args = vec![
+    let mut args = vec![
         "service".to_string(),
         format!("--pgwire-listen-addr=0.0.0.0:{}", config.balancerd_sql_port),
         format!("--https-listen-addr=0.0.0.0:{}", config.balancerd_http_port),
@@ -1274,8 +1272,13 @@ fn create_balancerd_deployment_object(config: &super::Args, mz: &Materialize) ->
             mz.namespace(),
             config.environmentd_balancer_sql_port
         ),
-        "--tls-mode=disable".to_string(),
     ];
+
+    if config.enable_tls {
+        unimplemented!();
+    } else {
+        args.push("--tls-mode=disable".to_string());
+    }
 
     let startup_probe = Probe {
         http_get: Some(HTTPGetAction {
