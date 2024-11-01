@@ -20,7 +20,7 @@ To install the chart for a production environment:
 
 ```shell
 helm install prod-env materialize/misc/helm-charts/environmentd \
-  --set environment.name=prod-environment
+  --set environment.name=12345678-1234-1234-1234-123456789013
 ```
 
 For a staging environment:

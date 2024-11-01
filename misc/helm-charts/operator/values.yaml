@@ -27,6 +27,10 @@ operator:
     localDevelopment: true
     # Flag to indicate whether to create balancerd pods for the environments
     createBalancers: true
+    # ARN of the IAM role for environmentd
+    environmentdIAMRoleARN: ""
+    # awsAccountID is required when cloudProvider is "aws"
+    awsAccountID: ""
   # Node selector to use for the operator pod
   nodeSelector: {}
   resources:
