@@ -486,9 +486,15 @@ fn create_network_policies(
 
 fn create_service_account_object(config: &super::Args, mz: &Materialize) -> ServiceAccount {
     let annotations = if config.cloud_provider == CloudProvider::Aws {
+        let role_arn = mz
+            .spec
+            .environmentd_iam_role_arn
+            .as_deref()
+            .or(config.aws_info.environmentd_iam_role_arn.as_deref())
+            .unwrap()
+            .to_string();
         Some(btreemap! {
-            "eks.amazonaws.com/role-arn".to_string()
-                => config.aws_info.environmentd_iam_role_arn.as_ref().unwrap().to_string()
+            "eks.amazonaws.com/role-arn".to_string() => role_arn
         })
     } else {
         None

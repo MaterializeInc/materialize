@@ -47,6 +47,9 @@ pub mod v1alpha1 {
         pub environmentd_image_ref: String,
         // Extra args to pass to the environmentd binary
         pub environmentd_extra_args: Option<Vec<String>>,
+        // If running in AWS, override the IAM role to use to give
+        // environmentd access to the persist S3 bucket
+        pub environmentd_iam_role_arn: Option<String>,
         // Resource requirements for the environmentd pod
         pub environmentd_resource_requirements: Option<ResourceRequirements>,
         // Resource requirements for the balancerd pod
