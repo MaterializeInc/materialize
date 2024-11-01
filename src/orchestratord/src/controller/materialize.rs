@@ -143,6 +143,8 @@ pub struct AwsInfo {
     #[clap(long)]
     environmentd_iam_role_arn: Option<String>,
     #[clap(long)]
+    environmentd_connection_role_arn: Option<String>,
+    #[clap(long)]
     aws_secrets_controller_tags: Vec<String>,
     #[clap(long)]
     environmentd_availability_zones: Option<Vec<String>>,

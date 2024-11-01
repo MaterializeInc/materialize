@@ -868,7 +868,9 @@ fn create_environmentd_statefulset_object(
             }
         }
 
-        if let Some(environmentd_connection_role_arn) = &config.aws_info.environmentd_iam_role_arn {
+        if let Some(environmentd_connection_role_arn) =
+            &config.aws_info.environmentd_connection_role_arn
+        {
             args.push(format!(
                 "--aws-connection-role-arn={}",
                 environmentd_connection_role_arn
