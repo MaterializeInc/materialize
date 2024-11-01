@@ -270,6 +270,7 @@ pub enum PlanError {
     UntilReadyTimeoutRequired,
     SubsourceResolutionError(ExternalReferenceResolutionError),
     Replan(String),
+    NetworkPolicyLockoutError,
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -765,6 +766,7 @@ impl fmt::Display for PlanError {
             },
             Self::SubsourceResolutionError(e) => write!(f, "{}", e),
             Self::Replan(msg) => write!(f, "internal error while replanning, please contact support: {msg}"),
+            Self::NetworkPolicyLockoutError => write!(f, "policy would block current session IP"),
             Self::UntilReadyTimeoutRequired => {
                 write!(f, "TIMEOUT=<duration> option is required for ALTER CLUSTER ... WITH (WAIT UNTIL READY ( ... ))")
             },

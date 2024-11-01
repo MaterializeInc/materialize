@@ -5309,12 +5309,14 @@ fn plan_drop_network_policy(
 ) -> Result<Option<NetworkPolicyId>, PlanError> {
     match scx.catalog.resolve_network_policy(name.as_str()) {
         Ok(policy) => {
-            // TODO @jubrad don't let this be dropped if it's the default policy or
-            // is being used by other objects.
-            // if scx.catalog.system_vars().default_network_policy().id() == policy.id() {
-            //     return Err(PlanError::Unstructured("Cannot drop default network policy.")
-            // }
-            Ok(Some(policy.id()))
+            if scx.catalog.system_vars().default_network_policy_name() == policy.name() {
+                Err(PlanError::Unstructured(
+                    "Cannot drop the network polic referenced by system variable network_policy."
+                        .into(),
+                ))
+            } else {
+                Ok(Some(policy.id()))
+            }
         }
         Err(_) if if_exists => Ok(None),
         Err(e) => Err(e.into()),

@@ -135,8 +135,8 @@ use mz_sql::catalog::{CatalogCluster, EnvironmentId};
 use mz_sql::names::{QualifiedItemName, ResolvedIds, SchemaSpecifier};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::{
-    self, AlterSinkPlan, ConnectionDetails, CreateConnectionPlan, OnTimeoutAction, Params,
-    QueryWhen,
+    self, AlterSinkPlan, ConnectionDetails, CreateConnectionPlan, NetworkPolicyRule,
+    OnTimeoutAction, Params, QueryWhen,
 };
 use mz_sql::session::user::User;
 use mz_sql::session::vars::{ConnectionCounter, SystemVars};
@@ -4203,13 +4203,13 @@ pub enum NetworkPolicyError {
     MissingIp,
 }
 
-pub(crate) fn validate_network_with_policy(
+pub(crate) fn validate_ip_with_policy_rules(
     ip: &IpAddr,
-    policy: &NetworkPolicy,
+    rules: &Vec<NetworkPolicyRule>,
 ) -> Result<(), NetworkPolicyError> {
     // At the moment we're not handling action or direction
     // as those are only able to be "allow" and "ingress" respectively
-    if policy.rules.iter().any(|r| r.address.0.contains(ip)) {
+    if rules.iter().any(|r| r.address.0.contains(ip)) {
         Ok(())
     } else {
         Err(NetworkPolicyError::AddressDenied(ip.clone()))

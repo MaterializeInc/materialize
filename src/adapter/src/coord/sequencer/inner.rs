@@ -49,7 +49,7 @@ use mz_sql::names::{
     Aug, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds, ResolvedItemName,
     SchemaSpecifier, SystemObjectId,
 };
-use mz_sql::plan::{ConnectionDetails, StatementContext};
+use mz_sql::plan::{ConnectionDetails, NetworkPolicyRule, StatementContext};
 use mz_sql::pure::{generate_subsource_statements, PurifiedSourceExport};
 use mz_storage_types::sinks::StorageSinkDesc;
 use timely::progress::Timestamp as TimelyTimestamp;
@@ -99,10 +99,11 @@ use crate::coord::appends::{
     BuiltinTableAppendNotify, DeferredPlan, DeferredWriteOp, PendingWriteTxn,
 };
 use crate::coord::{
-    AlterConnectionValidationReady, AlterSinkReadyContext, Coordinator,
-    CreateConnectionValidationReady, DeferredPlanStatement, ExecuteContext, ExplainContext,
-    Message, PendingRead, PendingReadTxn, PendingTxn, PendingTxnResponse, PlanValidity,
-    StageResult, Staged, StagedContext, TargetCluster, WatchSetResponse,
+    validate_ip_with_policy_rules, AlterConnectionValidationReady, AlterSinkReadyContext,
+    Coordinator, CreateConnectionValidationReady, DeferredPlanStatement, ExecuteContext,
+    ExplainContext, Message, NetworkPolicyError, PendingRead, PendingReadTxn, PendingTxn,
+    PendingTxnResponse, PlanValidity, StageResult, Staged, StagedContext, TargetCluster,
+    WatchSetResponse,
 };
 use crate::error::AdapterError;
 use crate::notice::{AdapterNotice, DroppedInUseIndex};
@@ -972,6 +973,14 @@ impl Coordinator {
         session: &Session,
         plan::AlterNetworkPolicyPlan { id, name, rules }: plan::AlterNetworkPolicyPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
+        if self
+            .owned_catalog()
+            .system_config()
+            .default_network_policy_name()
+            == name.as_str()
+        {
+            self.validate_alter_network_policy(session, &rules)?;
+        }
         let op = catalog::Op::AlterNetworkPolicy {
             id,
             rules,
@@ -4154,36 +4163,9 @@ impl Coordinator {
         plan::AlterSystemSetPlan { name, value }: plan::AlterSystemSetPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         self.is_user_allowed_to_alter_system(session, Some(&name))?;
-
-        // Make sure the network policy we're trying to set actually exists.
-        //
-        // TODO(parkmycar): It would be great if we could impose this as a constraint on
-        // `VarDefinition`, but the current API doesn't support that.
+        // We want to ensure that the network policy we're switching too actually exists.
         if NETWORK_POLICY.name.to_string().to_lowercase() == name.clone().to_lowercase() {
-            let policy_name = match &value {
-                // Make sure the compiled in default still exists.
-                plan::VariableValue::Default => Some(NETWORK_POLICY.default_value().format()),
-                plan::VariableValue::Values(values) if values.len() == 1 => {
-                    values.iter().next().cloned()
-                }
-                plan::VariableValue::Values(values) => {
-                    tracing::warn!(?values, "can't set multiple network policies at once");
-                    None
-                }
-            };
-            let network_policy_exists = policy_name
-                .as_ref()
-                .and_then(|name| self.catalog.get_network_policy_by_name(name))
-                .is_some();
-            if !network_policy_exists {
-                return Err(AdapterError::PlanError(plan::PlanError::VarError(
-                    VarError::InvalidParameterValue {
-                        name: NETWORK_POLICY.name(),
-                        invalid_values: vec![policy_name.unwrap_or("<none>".to_string())],
-                        reason: "no network policy with such name exists".to_string(),
-                    },
-                )));
-            }
+            self.validate_alter_system_network_policy(session, &value)?;
         }
 
         let op = match value {
@@ -4273,6 +4255,60 @@ impl Coordinator {
                 },
             )),
         }
+    }
+
+    fn validate_alter_system_network_policy(
+        &self,
+        session: &Session,
+        policy_value: &plan::VariableValue,
+    ) -> Result<(), AdapterError> {
+        let policy_name = match &policy_value {
+            // Make sure the compiled in default still exists.
+            plan::VariableValue::Default => Some(NETWORK_POLICY.default_value().format()),
+            plan::VariableValue::Values(values) if values.len() == 1 => {
+                values.iter().next().cloned()
+            }
+            plan::VariableValue::Values(values) => {
+                tracing::warn!(?values, "can't set multiple network policies at once");
+                None
+            }
+        };
+        let maybe_network_policy = policy_name
+            .as_ref()
+            .and_then(|name| self.catalog.get_network_policy_by_name(&name));
+        let Some(network_policy) = maybe_network_policy else {
+            return Err(AdapterError::PlanError(plan::PlanError::VarError(
+                VarError::InvalidParameterValue {
+                    name: NETWORK_POLICY.name(),
+                    invalid_values: vec![policy_name.unwrap_or("<none>".to_string())],
+                    reason: "no network policy with such name exists".to_string(),
+                },
+            )));
+        };
+        self.validate_alter_network_policy(session, &network_policy.rules)
+    }
+
+    fn validate_alter_network_policy(
+        &self,
+        session: &Session,
+        policy_rules: &Vec<NetworkPolicyRule>,
+    ) -> Result<(), AdapterError> {
+        // If the user is not an internal user attempt to protect them from
+        // blocking themselves.
+        if session.user().is_internal() {
+            return Ok(());
+        }
+        if let Some(ip) = session.meta().client_ip() {
+            validate_ip_with_policy_rules(ip, policy_rules)
+                .map_err(|_| AdapterError::PlanError(plan::PlanError::NetworkPolicyLockoutError))?;
+        } else {
+            // Sessions without IPs are only temporarily constructed for default values
+            // they should not be permitted here.
+            return Err(AdapterError::NetworkPolicyDenied(
+                NetworkPolicyError::MissingIp,
+            ));
+        }
+        Ok(())
     }
 
     // Returns the name of the portal to execute.
