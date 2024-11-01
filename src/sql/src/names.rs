@@ -2289,7 +2289,7 @@ impl Extend<(CatalogItemId, GlobalId)> for ResolvedIds {
     }
 }
 
-/// A set of IDs references by the [`HirRelationExpr`] of an object.
+/// A set of IDs references by the `HirRelationExpr` of an object.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct DependencyIds(pub BTreeSet<CatalogItemId>);
 

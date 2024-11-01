@@ -809,7 +809,7 @@ impl Coordinator {
                             role_metadata,
                         ),
                         otel_ctx,
-                        dependency_ids: resolved_ids.clone(),
+                        resolved_ids: resolved_ids.clone(),
                     },
                 ));
                 if let Err(e) = result {
@@ -3674,7 +3674,7 @@ impl Coordinator {
                                 role_metadata,
                             ),
                             otel_ctx,
-                            dependency_ids: resolved_ids,
+                            resolved_ids,
                         },
                     ));
                     if let Err(e) = result {

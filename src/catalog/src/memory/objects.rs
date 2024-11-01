@@ -863,6 +863,15 @@ impl Table {
             .1
             .clone()
     }
+
+    /// Returns all of the collections and their [`RelationDesc`]s associated with this [`Table`].
+    pub fn collection_descs(&self) -> impl Iterator<Item = (GlobalId, RelationDesc)> + use<'_> {
+        // TODO(alter_table): Support multiple versions of the table.
+        assert_eq!(self.collections.len(), 1);
+        self.collections
+            .values()
+            .map(|gid| (*gid, self.desc.clone()))
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1553,13 +1562,7 @@ impl CatalogItem {
             CatalogItem::Type(ty) => ty.global_id,
             CatalogItem::Secret(secret) => secret.global_id,
             CatalogItem::Connection(conn) => conn.global_id,
-            CatalogItem::Table(table) => {
-                let (_version, gid) = table
-                    .collections
-                    .last_key_value()
-                    .expect("at least one version");
-                *gid
-            }
+            CatalogItem::Table(table) => table.global_id_writes(),
         }
     }
 

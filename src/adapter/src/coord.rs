@@ -120,7 +120,9 @@ use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
 use mz_ore::url::SensitiveUrl;
 use mz_ore::vec::VecExt;
-use mz_ore::{assert_none, instrument, soft_assert_or_log, soft_panic_or_log, stack};
+use mz_ore::{
+    assert_none, instrument, soft_assert_eq_or_log, soft_assert_or_log, soft_panic_or_log, stack,
+};
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::global_id::TransientIdGen;
@@ -396,7 +398,7 @@ pub struct ValidationReady<T> {
     #[derivative(Debug = "ignore")]
     pub ctx: ExecuteContext,
     pub result: Result<T, AdapterError>,
-    pub dependency_ids: ResolvedIds,
+    pub resolved_ids: ResolvedIds,
     pub connection_id: CatalogItemId,
     pub connection_gid: GlobalId,
     pub plan_validity: PlanValidity,
@@ -2553,17 +2555,25 @@ impl Coordinator {
                     ));
                 }
                 CatalogItem::Table(table) => {
-                    let collection_desc = match &table.data_source {
+                    match &table.data_source {
                         TableDataSource::TableWrites { defaults: _ } => {
-                            CollectionDescription::for_table(table.desc.clone())
+                            let collections_descs = table.collection_descs().map(|(gid, desc)| {
+                                (gid, CollectionDescription::for_table(desc.clone()))
+                            });
+                            collections.extend(collections_descs);
                         }
                         TableDataSource::DataSource {
                             desc: data_source_desc,
                             timeline,
-                        } => source_desc(data_source_desc, &table.desc, timeline),
+                        } => {
+                            // TODO(alter_table): Support versioning tables that read from sources.
+                            soft_assert_eq_or_log!(table.collections.len(), 1);
+                            let collection_descs = table.collection_descs().map(|(gid, desc)| {
+                                (gid, source_desc(data_source_desc, &desc, timeline))
+                            });
+                            collections.extend(collection_descs);
+                        }
                     };
-                    collections
-                        .extend(table.global_ids().map(|gid| (gid, collection_desc.clone())));
                 }
                 CatalogItem::MaterializedView(mv) => {
                     let collection_desc = CollectionDescription {

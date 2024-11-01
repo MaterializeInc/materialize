@@ -1319,27 +1319,8 @@ impl Catalog {
                 for item_id in delta.items {
                     let entry = state.get_entry(&item_id);
 
-                    match entry.item() {
-                        CatalogItem::Table(table) => {
-                            storage_collections_to_drop.extend(table.global_ids());
-                        }
-                        CatalogItem::Source(source) => {
-                            storage_collections_to_drop.insert(source.global_id());
-                        }
-                        CatalogItem::MaterializedView(mv) => {
-                            storage_collections_to_drop.insert(mv.global_id());
-                        }
-                        CatalogItem::ContinualTask(ct) => {
-                            storage_collections_to_drop.insert(ct.global_id());
-                        }
-                        CatalogItem::Log(_)
-                        | CatalogItem::Sink(_)
-                        | CatalogItem::View(_)
-                        | CatalogItem::Index(_)
-                        | CatalogItem::Type(_)
-                        | CatalogItem::Func(_)
-                        | CatalogItem::Secret(_)
-                        | CatalogItem::Connection(_) => (),
+                    if entry.item().is_storage_collection() {
+                        storage_collections_to_drop.extend(entry.global_ids());
                     }
 
                     if state.source_references.contains_key(&item_id) {

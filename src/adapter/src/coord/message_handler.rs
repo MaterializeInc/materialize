@@ -582,7 +582,7 @@ impl Coordinator {
             connection_gid,
             mut plan_validity,
             otel_ctx,
-            dependency_ids,
+            resolved_ids,
         }: CreateConnectionValidationReady,
     ) {
         otel_ctx.attach_as_parent();
@@ -611,7 +611,7 @@ impl Coordinator {
                 connection_id,
                 connection_gid,
                 plan,
-                dependency_ids,
+                resolved_ids,
             )
             .await;
         ctx.retire(result);
@@ -627,7 +627,7 @@ impl Coordinator {
             connection_gid: _,
             mut plan_validity,
             otel_ctx,
-            dependency_ids: _,
+            resolved_ids: _,
         }: AlterConnectionValidationReady,
     ) {
         otel_ctx.attach_as_parent();
