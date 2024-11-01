@@ -24,7 +24,7 @@ use mz_repr::adt::pg_legacy_name::NAME_MAX_BYTES;
 use mz_repr::adt::range::{Range, RangeInner};
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::strconv::{self, Nestable};
-use mz_repr::{Datum, RelationType, RowArena, RowRef, ScalarType};
+use mz_repr::{Datum, RelationType, RowArena, RowPacker, RowRef, ScalarType};
 use postgres_types::{FromSql, IsNull, ToSql, Type as PgType};
 use uuid::Uuid;
 
@@ -675,6 +675,121 @@ impl Value {
             })?),
             Type::MzAclItem => Value::MzAclItem(strconv::parse_mz_acl_item(s)?),
             Type::AclItem => Value::AclItem(strconv::parse_acl_item(s)?),
+        })
+    }
+
+    /// Deserializes a value of type `ty` from `raw` using the [text encoding
+    /// format](Format::Text).
+    pub fn decode_text_into_row<'a>(
+        ty: &'a Type,
+        s: &'a str,
+        packer: &mut RowPacker,
+    ) -> Result<(), Box<dyn Error + Sync + Send>> {
+        Ok(match ty {
+            Type::Array(elem_type) => {
+                let (elements, dims) =
+                    strconv::parse_array(s, || None, |elem_text| Ok::<_, String>(Some(elem_text)))?;
+                packer
+                    .push_array_with(&dims, |packer| {
+                        let mut nelements = 0;
+                        for element in elements {
+                            match element {
+                                Some(elem_text) => {
+                                    Value::decode_text_into_row(elem_type, &elem_text, packer)
+                                        .unwrap()
+                                } // TODO!
+                                None => packer.push(Datum::Null),
+                            }
+                            nelements += 1;
+                        }
+                        nelements
+                    })
+                    .unwrap()
+            }
+            Type::Int2Vector { .. } => {
+                return Err("input of Int2Vector types is not implemented".into())
+            }
+            Type::Bool => packer.push(Datum::from(strconv::parse_bool(s)?)),
+            Type::Bytea => packer.push(Datum::Bytes(&strconv::parse_bytes(s)?)),
+            Type::Char => packer.push(Datum::UInt8(s.as_bytes().get(0).copied().unwrap_or(0))),
+            Type::Date => packer.push(Datum::Date(strconv::parse_date(s)?)),
+            Type::Float4 => packer.push(Datum::Float32(strconv::parse_float32(s)?.into())),
+            Type::Float8 => packer.push(Datum::Float64(strconv::parse_float64(s)?.into())),
+            Type::Int2 => packer.push(Datum::Int16(strconv::parse_int16(s)?)),
+            Type::Int4 => packer.push(Datum::Int32(strconv::parse_int32(s)?)),
+            Type::Int8 => packer.push(Datum::Int64(strconv::parse_int64(s)?)),
+            Type::UInt2 => packer.push(Datum::UInt16(strconv::parse_uint16(s)?)),
+            Type::UInt4 => packer.push(Datum::UInt32(strconv::parse_uint32(s)?)),
+            Type::UInt8 => packer.push(Datum::UInt64(strconv::parse_uint64(s)?)),
+            Type::Interval { .. } => packer.push(Datum::Interval(strconv::parse_interval(s)?)),
+            Type::Json => return Err("input of json types is not implemented".into()),
+            Type::Jsonb => packer.push(strconv::parse_jsonb(s)?.into_row().unpack_first()),
+            Type::List(elem_type) => {
+                let elems = strconv::parse_list(
+                    s,
+                    matches!(**elem_type, Type::List(..)),
+                    || None,
+                    |elem_text| Ok::<_, String>(Some(elem_text)),
+                )?;
+                packer.push_list_with(|packer| {
+                    for elem in elems {
+                        match elem {
+                            Some(elem) => {
+                                Value::decode_text_into_row(elem_type, &elem, packer).unwrap()
+                            }
+                            None => packer.push(Datum::Null),
+                        }
+                    }
+                });
+            }
+            Type::Map { value_type } => {
+                let map =
+                    strconv::parse_map(s, matches!(**value_type, Type::Map { .. }), |elem_text| {
+                        elem_text.map(|t| Ok::<_, String>(t)).transpose()
+                    })?;
+                packer.push_dict_with(|row| {
+                    for (k, v) in map {
+                        row.push(Datum::String(&k));
+                        match v {
+                            Some(elem) => {
+                                Value::decode_text_into_row(value_type, &elem, row).unwrap()
+                            }
+                            None => row.push(Datum::Null),
+                        }
+                    }
+                });
+            }
+            Type::Name => packer.push(Datum::String(&strconv::parse_pg_legacy_name(s))),
+            Type::Numeric { .. } => packer.push(Datum::Numeric(strconv::parse_numeric(s)?)),
+            Type::Oid | Type::RegClass | Type::RegProc | Type::RegType => {
+                packer.push(Datum::UInt32(strconv::parse_oid(s)?))
+            }
+            Type::Record(_) => {
+                return Err("input of anonymous composite types is not implemented".into())
+            }
+            Type::Text => packer.push(Datum::String(s)),
+            Type::BpChar { .. } => packer.push(Datum::String(s.trim_end())),
+            Type::VarChar { .. } => packer.push(Datum::String(s)),
+            Type::Time { .. } => packer.push(Datum::Time(strconv::parse_time(s)?)),
+            Type::TimeTz { .. } => return Err("input of timetz types is not implemented".into()),
+            Type::Timestamp { .. } => packer.push(Datum::Timestamp(strconv::parse_timestamp(s)?)),
+            Type::TimestampTz { .. } => {
+                packer.push(Datum::TimestampTz(strconv::parse_timestamptz(s)?))
+            }
+            Type::Uuid => packer.push(Datum::Uuid(Uuid::parse_str(s)?)),
+            Type::MzTimestamp => packer.push(Datum::MzTimestamp(strconv::parse_mz_timestamp(s)?)),
+            Type::Range { element_type } => {
+                let range = strconv::parse_range(s, |elem_text| {
+                    Value::decode_text(element_type, elem_text.as_bytes()).map(Box::new)
+                })?;
+                // TODO: bad!
+                let buf = RowArena::new();
+                let range = range.into_bounds(|elem| elem.into_datum(&buf, element_type));
+
+                packer.push_range(range).unwrap()
+            }
+            Type::MzAclItem => packer.push(Datum::MzAclItem(strconv::parse_mz_acl_item(s)?)),
+            Type::AclItem => packer.push(Datum::AclItem(strconv::parse_acl_item(s)?)),
         })
     }
 

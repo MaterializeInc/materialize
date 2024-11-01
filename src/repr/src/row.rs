@@ -2159,7 +2159,6 @@ impl RowPacker<'_> {
 
         res
     }
-
     /// Convenience function to construct an array from an iter of `Datum`s.
     ///
     /// Returns an error if the number of elements in `iter` does not match
@@ -2174,6 +2173,30 @@ impl RowPacker<'_> {
     where
         I: IntoIterator<Item = D>,
         D: Borrow<Datum<'a>>,
+    {
+        self.push_array_with(dims, |packer| {
+            let mut nelements = 0;
+            for datum in iter {
+                packer.push(datum);
+                nelements += 1;
+            }
+            nelements
+        })
+    }
+
+    /// Convenience function to construct an array from an iter of `Datum`s.
+    ///
+    /// Returns an error if the number of elements in `iter` does not match
+    /// the cardinality of the array as described by `dims`, or if the
+    /// number of dimensions exceeds [`MAX_ARRAY_DIMENSIONS`]. If an error
+    /// occurs, the packer's state will be unchanged.
+    pub fn push_array_with<F>(
+        &mut self,
+        dims: &[ArrayDimension],
+        f: F,
+    ) -> Result<(), InvalidArrayError>
+    where
+        F: FnOnce(&mut RowPacker) -> usize,
     {
         // Arrays are encoded as follows.
         //
@@ -2209,11 +2232,7 @@ impl RowPacker<'_> {
         // Write elements.
         let off = self.row.data.len();
         self.row.data.extend_from_slice(&[0; size_of::<u64>()]);
-        let mut nelements = 0;
-        for datum in iter {
-            self.push(*datum.borrow());
-            nelements += 1;
-        }
+        let nelements = f(self);
         let len = u64::cast_from(self.row.data.len() - off - size_of::<u64>());
         self.row.data[off..off + size_of::<u64>()].copy_from_slice(&len.to_le_bytes());
 
@@ -2789,6 +2808,10 @@ impl RowArena {
         let mut row = Row::default();
         f(&mut row.packer())?;
         Ok(self.push_unary_row(row))
+    }
+
+    pub fn clear(&self) {
+        self.inner.borrow_mut().clear();
     }
 }
 
