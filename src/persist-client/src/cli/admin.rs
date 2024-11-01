@@ -682,6 +682,20 @@ pub const CATALOG_FORCE_COMPACTION_WAIT: Config<Duration> = Config::new(
     "wait to use in catalog dangerous_force_compaction task",
 );
 
+/// Exposed for `mz-catalog`.
+pub const EXPRESSION_CACHE_FORCE_COMPACTION_FUEL: Config<usize> = Config::new(
+    "persist_expression_cache_force_compaction_fuel",
+    131_072,
+    "fuel to use in expression cache dangerous_force_compaction",
+);
+
+/// Exposed for `mz-catalog`.
+pub const EXPRESSION_CACHE_FORCE_COMPACTION_WAIT: Config<Duration> = Config::new(
+    "persist_expression_cache_force_compaction_wait",
+    Duration::from_secs(0),
+    "wait to use in expression cache dangerous_force_compaction",
+);
+
 /// Attempts to compact all batches in a shard into a minimal number.
 ///
 /// This destroys most hope of filter pushdown doing anything useful. If you

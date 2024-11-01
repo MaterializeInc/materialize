@@ -330,6 +330,8 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::cfg::USE_GLOBAL_TXN_CACHE_SOURCE)
         .add(&crate::cli::admin::CATALOG_FORCE_COMPACTION_FUEL)
         .add(&crate::cli::admin::CATALOG_FORCE_COMPACTION_WAIT)
+        .add(&crate::cli::admin::EXPRESSION_CACHE_FORCE_COMPACTION_FUEL)
+        .add(&crate::cli::admin::EXPRESSION_CACHE_FORCE_COMPACTION_WAIT)
         .add(&crate::fetch::FETCH_SEMAPHORE_COST_ADJUSTMENT)
         .add(&crate::fetch::FETCH_SEMAPHORE_PERMIT_ADJUSTMENT)
         .add(&crate::internal::cache::BLOB_CACHE_MEM_LIMIT_BYTES)

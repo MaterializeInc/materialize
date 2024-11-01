@@ -21,7 +21,9 @@ use mz_dyncfg::ConfigSet;
 use mz_expr::OptimizedMirRelationExpr;
 use mz_ore::channel::trigger;
 use mz_ore::task::spawn;
-use mz_persist_client::cli::admin::{CATALOG_FORCE_COMPACTION_FUEL, CATALOG_FORCE_COMPACTION_WAIT};
+use mz_persist_client::cli::admin::{
+    EXPRESSION_CACHE_FORCE_COMPACTION_FUEL, EXPRESSION_CACHE_FORCE_COMPACTION_WAIT,
+};
 use mz_persist_client::PersistClient;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::Codec;
@@ -166,7 +168,6 @@ impl ExpressionCache {
         for _ in 0..RETRIES {
             match cache
                 .try_open(
-                    persist,
                     current_ids,
                     optimizer_features,
                     remove_prior_gens,
@@ -185,7 +186,6 @@ impl ExpressionCache {
 
     async fn try_open(
         &mut self,
-        persist: &PersistClient,
         current_ids: &BTreeSet<GlobalId>,
         optimizer_features: &OptimizerFeatures,
         remove_prior_gens: bool,
@@ -222,15 +222,11 @@ impl ExpressionCache {
         self.durable_cache.try_set_many(&keys_to_remove).await?;
 
         if compact_shard {
-            // The expression cache re-uses the catalog compaction dyncfgs because they are tightly
-            // related.
-            let fuel = CATALOG_FORCE_COMPACTION_FUEL.handle(dyncfgs);
-            let wait = CATALOG_FORCE_COMPACTION_WAIT.handle(dyncfgs);
-            let _handle = self.durable_cache.dangerous_compact_shard(
-                persist.clone(),
-                move || fuel.get(),
-                move || wait.get(),
-            );
+            let fuel = EXPRESSION_CACHE_FORCE_COMPACTION_FUEL.handle(dyncfgs);
+            let wait = EXPRESSION_CACHE_FORCE_COMPACTION_WAIT.handle(dyncfgs);
+            self.durable_cache
+                .dangerous_compact_shard(move || fuel.get(), move || wait.get())
+                .await;
         }
 
         Ok(current_contents)
