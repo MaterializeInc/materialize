@@ -38,7 +38,7 @@ use mz_ore::str::{separated, StrExt};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::explain::text::DisplayText;
 use mz_repr::explain::{CompactScalars, IndexUsageType, PlanRenderingContext, UsedIndexes};
-use mz_repr::{Diff, GlobalId, IntoRowIterator, RelationType, Row, RowIterator};
+use mz_repr::{preserves_order, Diff, GlobalId, IntoRowIterator, RelationType, Row, RowIterator};
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp;
 use uuid::Uuid;
@@ -362,6 +362,7 @@ pub fn create_fast_path_plan<T: Timestamp>(
             match mir {
                 MirRelationExpr::Get {
                     id: Id::Global(get_id),
+                    typ: relation_typ,
                     ..
                 } => {
                     // Just grab any arrangement if an arrangement exists
@@ -375,10 +376,12 @@ pub fn create_fast_path_plan<T: Timestamp>(
                             )));
                         }
                     }
-                    // If there is no arrangement, consider peeking the persist shard directly
+                    // If there is no arrangement, consider peeking the persist shard directly.
+                    // Generally, we consider a persist peek when the query can definitely be satisfied
+                    // by scanning through a small, constant number of Persist key-values.
                     let safe_mfp = mfp_to_safe_plan(mfp)?;
-                    let (_m, filters, _p) = safe_mfp.as_map_filter_project();
-                    let small_finish = match &finishing {
+                    let (_maps, filters, projection) = safe_mfp.as_map_filter_project();
+                    let finish_ok = match &finishing {
                         None => false,
                         Some(RowSetFinishing {
                             order_by,
@@ -386,13 +389,27 @@ pub fn create_fast_path_plan<T: Timestamp>(
                             offset,
                             ..
                         }) => {
-                            order_by.is_empty()
-                                && limit.iter().any(|l| {
-                                    usize::cast_from(*l) + *offset < persist_fast_path_limit
-                                })
+                            let order_ok = order_by.iter().enumerate().all(|(idx, order)| {
+                                // Map the ordering column back to the column in the source data.
+                                // (If it's not one of the input columns, we can't make any guarantees.)
+                                let column_idx = projection[order.column];
+                                if column_idx >= safe_mfp.input_arity {
+                                    return false;
+                                }
+                                let column_type = &relation_typ.column_types[column_idx];
+                                let index_ok = idx == column_idx;
+                                let nulls_ok = !column_type.nullable || order.nulls_last;
+                                let asc_ok = !order.desc;
+                                let type_ok = preserves_order(&column_type.scalar_type);
+                                index_ok && nulls_ok && asc_ok && type_ok
+                            });
+                            let limit_ok = limit.map_or(false, |l| {
+                                usize::cast_from(l) + *offset < persist_fast_path_limit
+                            });
+                            order_ok && limit_ok
                         }
                     };
-                    if filters.is_empty() && small_finish {
+                    if filters.is_empty() && finish_ok {
                         return Ok(Some(FastPathPlan::PeekPersist(*get_id, safe_mfp)));
                     }
                 }
