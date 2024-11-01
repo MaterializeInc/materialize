@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
 use std::hash::Hash;
 use std::sync::Arc;
+use std::time::Duration;
 
 use differential_dataflow::consolidation::consolidate;
 use mz_ore::collections::{AssociativeExt, HashSet};
@@ -70,22 +71,22 @@ pub struct DurableCache<C: DurableCacheCodec> {
     local_progress: u64,
 }
 
+const USE_CRITICAL_SINCE: bool = true;
+
 impl<C: DurableCacheCodec> DurableCache<C> {
     /// Opens a [`DurableCache`] using shard `shard_id`.
     pub async fn new(persist: &PersistClient, shard_id: ShardId, purpose: &str) -> Self {
-        let use_critical_since = true;
-        let shard_name = format!("{purpose}_cache");
-        let handle_purpose = format!("durable persist cache: {purpose}");
+        let diagnostics = Diagnostics {
+            shard_name: format!("{purpose}_cache"),
+            handle_purpose: format!("durable persist cache: {purpose}"),
+        };
         let since_handle = persist
             .open_critical_since(
                 shard_id,
                 // TODO: We may need to use a different critical reader
                 // id for this if we want to be able to introspect it via SQL.
                 PersistClient::CONTROLLER_CRITICAL_SINCE,
-                Diagnostics {
-                    shard_name: shard_name.clone(),
-                    handle_purpose: handle_purpose.clone(),
-                },
+                diagnostics.clone(),
             )
             .await
             .expect("invalid usage");
@@ -95,11 +96,8 @@ impl<C: DurableCacheCodec> DurableCache<C> {
                 shard_id,
                 Arc::new(key_schema),
                 Arc::new(val_schema),
-                Diagnostics {
-                    shard_name,
-                    handle_purpose,
-                },
-                use_critical_since,
+                diagnostics,
+                USE_CRITICAL_SINCE,
             )
             .await
             .expect("shard codecs should not change");
@@ -340,6 +338,21 @@ impl<C: DurableCacheCodec> DurableCache<C> {
 
         Ok(new_upper)
     }
+
+    /// Forcibly compacts the shard backing this cache. See
+    /// [`mz_persist_client::cli::admin::dangerous_force_compaction_and_break_pushdown`].
+    pub async fn dangerous_compact_shard(
+        &self,
+        fuel: impl Fn() -> usize,
+        wait: impl Fn() -> Duration,
+    ) {
+        mz_persist_client::cli::admin::dangerous_force_compaction_and_break_pushdown(
+            &self.write,
+            fuel,
+            wait,
+        )
+        .await
+    }
 }
 
 #[cfg(test)]
@@ -470,5 +483,10 @@ mod tests {
                 (&"k5".into(), &"v50".into()),
             ]
         );
+
+        // Test that compaction actually completes.
+        let fuel = || 131_072;
+        let wait = || Duration::from_millis(0);
+        cache1.dangerous_compact_shard(fuel, wait).await
     }
 }
