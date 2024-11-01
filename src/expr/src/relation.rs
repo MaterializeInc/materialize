@@ -574,24 +574,29 @@ impl MirRelationExpr {
                 rows: Ok(rows),
                 typ,
             } => {
-                let n_cols = typ.arity();
-                // If the `i`th entry is `Some`, then we have not yet observed non-uniqueness in the `i`th column.
-                let mut unique_values_per_col = vec![Some(BTreeSet::<Datum>::default()); n_cols];
-                for (row, diff) in rows {
-                    for (i, datum) in row.iter().enumerate() {
-                        if datum != Datum::Dummy {
-                            if let Some(unique_vals) = &mut unique_values_per_col[i] {
-                                let is_dupe = *diff != 1 || !unique_vals.insert(datum);
-                                if is_dupe {
-                                    unique_values_per_col[i] = None;
+                if rows.is_empty() || (rows.len() == 1 && rows[0].1 == 1) {
+                    vec![vec![]]
+                } else {
+                    let n_cols = typ.arity();
+                    let unique_values_per_col = if rows.iter().any(|(_, diff)| *diff != 1) {
+                        vec![]
+                    } else {
+                        // If the `i`th entry is `Some`, then we have not yet observed non-uniqueness in the `i`th column.
+                        let mut unique_values_per_col = vec![Some(BTreeSet::default()); n_cols];
+                        for (row, diff) in rows {
+                            for (i, datum) in row.iter().enumerate() {
+                                if datum != Datum::Dummy {
+                                    if let Some(unique_vals) = &mut unique_values_per_col[i] {
+                                        let is_dupe = *diff != 1 || !unique_vals.insert(datum);
+                                        if is_dupe {
+                                            unique_values_per_col[i] = None;
+                                        }
+                                    }
                                 }
                             }
                         }
-                    }
-                }
-                if rows.len() == 0 || (rows.len() == 1 && rows[0].1 == 1) {
-                    vec![vec![]]
-                } else {
+                        unique_values_per_col
+                    };
                     // XXX - Multi-column keys are not detected.
                     typ.keys
                         .iter()
