@@ -1455,14 +1455,14 @@ impl<T: AstInfo> AstDisplay for CreateContinualTaskStatement<T> {
             f.write_node(cluster);
         }
 
+        if !self.with_options.is_empty() {
+            f.write_str(" WITH (");
+            f.write_node(&display::comma_separated(&self.with_options));
+            f.write_str(")");
+        }
+
         match &self.sugar {
             Some(CreateContinualTaskSugar::Transform { transform }) => {
-                if !self.with_options.is_empty() {
-                    f.write_str(" WITH (");
-                    f.write_node(&display::comma_separated(&self.with_options));
-                    f.write_str(")");
-                }
-
                 f.write_str(" FROM TRANSFORM ");
                 f.write_node(&self.input);
                 f.write_str(" USING ");
@@ -1471,11 +1471,6 @@ impl<T: AstInfo> AstDisplay for CreateContinualTaskStatement<T> {
                 f.write_str(")");
             }
             Some(CreateContinualTaskSugar::Retain { retain }) => {
-                if !self.with_options.is_empty() {
-                    f.write_str(" WITH (");
-                    f.write_node(&display::comma_separated(&self.with_options));
-                    f.write_str(")");
-                }
                 f.write_str(" FROM RETAIN ");
                 f.write_node(&self.input);
                 f.write_str(" WHILE ");
@@ -1486,15 +1481,6 @@ impl<T: AstInfo> AstDisplay for CreateContinualTaskStatement<T> {
             None => {
                 f.write_str(" ON INPUT ");
                 f.write_node(&self.input);
-
-                // TODO(ct3): Move these WITH options to be after the IN CLUSTER
-                // clause, so we can pull it out into common code.
-                if !self.with_options.is_empty() {
-                    f.write_str(" WITH (");
-                    f.write_node(&display::comma_separated(&self.with_options));
-                    f.write_str(")");
-                }
-
                 f.write_str(" AS (");
                 for (idx, stmt) in self.stmts.iter().enumerate() {
                     if idx > 0 {
