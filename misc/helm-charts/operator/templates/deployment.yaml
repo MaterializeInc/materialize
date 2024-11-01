@@ -38,6 +38,12 @@ spec:
         - "--startup-log-filter={{ .Values.operator.args.startupLogFilter }}"
         - "--cloud-provider={{ .Values.operator.args.cloudProvider }}"
         - "--region={{ .Values.operator.args.region }}"
+        {{- if .Values.operator.args.awsAccountID }}
+        - "--aws-account-id={{ .Values.operator.args.awsAccountID }}"
+        {{- end }}
+        {{- if .Values.operator.args.environmentdIAMRoleARN }}
+        - "--environmentd-iam-role-arn={{ .Values.operator.args.environmentdIAMRoleARN }}"
+        {{- end }}
         {{- if .Values.operator.args.localDevelopment }}
         - "--local-development"
         {{- end }}

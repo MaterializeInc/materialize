@@ -49,8 +49,10 @@ The following table lists the configurable parameters of the Materialize operato
 | `networkPolicies.internal.enabled` |  | ``true`` |
 | `observability.enabled` |  | ``false`` |
 | `observability.prometheus.enabled` |  | ``false`` |
+| `operator.args.awsAccountID` |  | ``""`` |
 | `operator.args.cloudProvider` |  | ``"local"`` |
 | `operator.args.createBalancers` |  | ``true`` |
+| `operator.args.environmentdIAMRoleARN` |  | ``""`` |
 | `operator.args.localDevelopment` |  | ``true`` |
 | `operator.args.region` |  | ``"kind"`` |
 | `operator.args.startupLogFilter` |  | ``"INFO,mz_orchestratord=TRACE"`` |
