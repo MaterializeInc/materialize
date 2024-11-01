@@ -233,7 +233,7 @@ impl Bindings {
                                     id: Id::Local(i), ..
                                 } = e
                                 {
-                                    if let Some(next) = remap.get(&i) {
+                                    if let Some(next) = remap.get(i) {
                                         i.clone_from(next);
                                     }
                                 }
@@ -242,7 +242,7 @@ impl Bindings {
                         }
 
                         let (new_ids, new_values): (Vec<_>, Vec<_>) = bindings.into_iter().unzip();
-                        *ids = new_ids.into_iter().map(|n| LocalId::new(n)).collect();
+                        *ids = new_ids.into_iter().map(LocalId::new).collect();
                         *values = new_values;
                         limits.resize(values.len(), limits.get(0).cloned().unwrap_or(None));
                     } else {

@@ -1590,26 +1590,27 @@ Explained Query:
       Filter (#0 > 7) // { arity: 2 }
         Get l0 // { arity: 2 }
       Filter (#0 > 7) // { arity: 2 }
-        Get l1 // { arity: 2 }
-      Filter (#0 > 7) // { arity: 2 }
         Get l2 // { arity: 2 }
+      Filter (#0 > 7) // { arity: 2 }
+        Get l3 // { arity: 2 }
   With Mutually Recursive
+    cte l3 =
+      Union // { arity: 2 }
+        Get l1 // { arity: 2 }
+        Get l2 // { arity: 2 }
+        Get l2 // { arity: 2 }
+        Get l3 // { arity: 2 }
+        Get l3 // { arity: 2 }
     cte l2 =
       Union // { arity: 2 }
-        Filter (#1 > 7) // { arity: 2 }
-          Get l0 // { arity: 2 }
-        Get l1 // { arity: 2 }
         Get l1 // { arity: 2 }
         Get l2 // { arity: 2 }
         Get l2 // { arity: 2 }
+        Get l3 // { arity: 2 }
+        Get l3 // { arity: 2 }
     cte l1 =
-      Union // { arity: 2 }
-        Filter (#1 > 7) // { arity: 2 }
-          Get l0 // { arity: 2 }
-        Get l1 // { arity: 2 }
-        Get l1 // { arity: 2 }
-        Get l2 // { arity: 2 }
-        Get l2 // { arity: 2 }
+      Filter (#1 > 7) // { arity: 2 }
+        Get l0 // { arity: 2 }
     cte l0 =
       Union // { arity: 2 }
         ReadIndex on=t1 i1=[*** full scan ***] // { arity: 2 }

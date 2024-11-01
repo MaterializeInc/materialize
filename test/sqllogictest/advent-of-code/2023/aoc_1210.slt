@@ -377,26 +377,26 @@ Explained Query:
           Project (#1)
             Map ((#0 / 2))
               Union
-                Get l5
+                Get l7
                 Map (0)
                   Union
                     Negate
                       Project ()
-                        Get l5
+                        Get l7
                     Constant
                       - ()
         ArrangeBy keys=[[]]
           Union
-            Get l15
+            Get l19
             Map (0)
               Union
                 Negate
                   Project ()
-                    Get l15
+                    Get l19
                 Constant
                   - ()
     With
-      cte l15 =
+      cte l19 =
         Reduce aggregates=[count(*)]
           Project ()
             Union
@@ -404,18 +404,18 @@ Explained Query:
                 Project (#0, #1)
                   Join on=(#0 = #2 AND #1 = #3) type=differential
                     ArrangeBy keys=[[#0, #1]]
-                      Get l14
+                      Get l18
                     ArrangeBy keys=[[#0, #1]]
                       Distinct project=[#0, #1]
                         Project (#0, #1)
-                          Get l6
-              Get l14
-      cte l14 =
+                          Get l8
+              Get l18
+      cte l18 =
         Project (#0, #1)
           Filter (#2 = true)
-            Get l13
+            Get l17
   With Mutually Recursive
-    cte l13 =
+    cte l17 =
       Distinct project=[#0..=#2]
         Union
           Project (#0, #1, #3)
@@ -426,10 +426,10 @@ Explained Query:
             Map (case when #5 then NOT(#0) else #0 end)
               Join on=(#1 = #4) type=differential
                 ArrangeBy keys=[[#1]]
-                  Get l8
+                  Get l11
                 ArrangeBy keys=[[#0]]
                   Union
-                    Get l12
+                    Get l16
                     Project (#0, #2)
                       Map (null)
                         Join on=(#0 = #1) type=differential
@@ -438,22 +438,21 @@ Explained Query:
                               Negate
                                 Distinct project=[#0]
                                   Project (#0)
-                                    Get l12
-                              Get l9
-                          ArrangeBy keys=[[#0]]
-                            Get l9
-    cte l12 =
+                                    Get l16
+                              Get l12
+                          Get l14
+    cte l16 =
       Union
-        Get l11
+        Get l15
         Map (error("more than one record produced in subquery"))
           Project (#0)
             Filter (#1 > 1)
               Reduce group_by=[#0] aggregates=[count(*)]
                 Project (#0)
-                  Get l11
-    cte l11 =
+                  Get l15
+    cte l15 =
       Union
-        Get l10
+        Get l13
         Project (#0, #2)
           Map (false)
             Join on=(#0 = #1) type=differential
@@ -461,19 +460,21 @@ Explained Query:
                 Union
                   Negate
                     Project (#0)
-                      Get l10
-                  Get l9
-              ArrangeBy keys=[[#0]]
-                Get l9
-    cte l10 =
+                      Get l13
+                  Get l12
+              Get l14
+    cte l14 =
+      ArrangeBy keys=[[#0]]
+        Get l12
+    cte l13 =
       Reduce group_by=[#0] aggregates=[any((#0 = #1))]
         FlatMap wrap1("J", "-", "|", "F")
-          Get l9
-    cte l9 =
+          Get l12
+    cte l12 =
       Distinct project=[#0]
         Project (#1)
-          Get l8
-    cte l8 =
+          Get l11
+    cte l11 =
       Project (#2, #3, #6, #7)
         Map ((#0 + 1), (#1 + 1))
           Join on=(#0 = #4 AND #1 = #5) type=differential
@@ -484,32 +485,33 @@ Explained Query:
                     Negate
                       Project (#0..=#2)
                         Join on=(#0 = #3 AND #1 = #4) type=differential
-                          ArrangeBy keys=[[#0, #1]]
-                            Get l13
+                          Get l9
                           ArrangeBy keys=[[#0, #1]]
                             Distinct project=[#0, #1]
                               Project (#0, #1)
-                                Get l7
-                    Get l13
-                Get l7
+                                Get l10
+                    Get l17
+                Get l10
             ArrangeBy keys=[[#0, #1]]
               Project (#0, #1)
                 Get l0
-    cte l7 =
+    cte l10 =
       Project (#0..=#2, #5)
         Join on=(#0 = #3 AND #1 = #4) type=differential
+          Get l9
           ArrangeBy keys=[[#0, #1]]
-            Get l13
-          ArrangeBy keys=[[#0, #1]]
-            Get l6
-    cte l6 =
+            Get l8
+    cte l9 =
+      ArrangeBy keys=[[#0, #1]]
+        Get l17
+    cte l8 =
       Distinct project=[#0..=#2]
         Union
           Project (#0, #1, #4)
             Join on=(#0 = #2 AND #1 = #3) type=differential
               ArrangeBy keys=[[#0, #1]]
                 Filter (#0) IS NOT NULL AND (#1) IS NOT NULL
-                  Get l4
+                  Get l6
               ArrangeBy keys=[[#0, #1]]
                 Filter (#2 != "S")
                   Get l0
@@ -517,31 +519,32 @@ Explained Query:
             Map (case when ((#0 = #0) AND (#0 = (#6 + 1)) AND (#1 = #7) AND (#1 = (#1 + 1))) then "J" else case when ((#0 = #0) AND (#0 = #6) AND (#1 = (#1 + 1)) AND (#1 = (#7 - 1))) then "-" else case when ((#0 = #0) AND (#0 = (#6 - 1)) AND (#1 = #7) AND (#1 = (#1 + 1))) then "7" else case when ((#0 = #6) AND (#0 = (#0 + 1)) AND (#1 = #1) AND (#1 = (#7 - 1))) then "L" else case when ((#0 = (#0 + 1)) AND (#0 = (#6 - 1)) AND (#1 = #1) AND (#1 = #7)) then "|" else case when ((#0 = #0) AND (#0 = #6) AND (#1 = (#1 - 1)) AND (#1 = (#7 - 1))) then "F" else "???" end end end end end end)
               Join on=(#0 = #2 = #4 AND #1 = #3 = #5) type=delta
                 ArrangeBy keys=[[#0, #1]]
-                  Project (#0, #1)
-                    Filter (#2 = "S")
-                      Get l0
+                  Get l4
                 ArrangeBy keys=[[#0, #1]]
                   Project (#0, #1)
                     Get l3
-                ArrangeBy keys=[[#0, #1]]
-                  Get l3
-    cte l5 =
+                Get l5
+    cte l7 =
       Reduce aggregates=[count(*)]
         Project ()
-          Get l4
-    cte l4 =
+          Get l6
+    cte l6 =
       Distinct project=[#0, #1]
         Union
-          Project (#0, #1)
-            Filter (#2 = "S")
-              Get l0
+          Get l4
           Project (#4, #5)
             Join on=(#0 = #2 AND #1 = #3) type=differential
               ArrangeBy keys=[[#0, #1]]
                 Filter (#0) IS NOT NULL AND (#1) IS NOT NULL
-                  Get l4
-              ArrangeBy keys=[[#0, #1]]
-                Get l3
+                  Get l6
+              Get l5
+    cte l5 =
+      ArrangeBy keys=[[#0, #1]]
+        Get l3
+    cte l4 =
+      Project (#0, #1)
+        Filter (#2 = "S")
+          Get l0
     cte l3 =
       Project (#0..=#3)
         Filter (#4 = 2)

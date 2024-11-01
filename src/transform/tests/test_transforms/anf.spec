@@ -159,76 +159,66 @@ With
         Get t0
 ----
 Return
-  Get l20
+  Get l21
 With
-  cte l20 =
+  cte l21 =
     Return
       Return
-        Get l19
+        Get l20
       With
-        cte l19 =
+        cte l20 =
           Union
-            Get l16
             Get l17
             Get l18
+            Get l19
+        cte l19 =
+          Filter (#1 > 7)
+            Get l11
         cte l18 =
           Filter (#1 > 7)
-            Get l3
+            Get l15
         cte l17 =
           Filter (#1 > 7)
-            Get l4
+            Get l16
         cte l16 =
-          Filter (#1 > 7)
-            Get l15
-        cte l15 =
           Get t0
     With Mutually Recursive
-      cte l4 =
-        Return
-          Get l14
-        With
-          cte l14 =
-            Distinct project=[#0, #1]
-              Get l13
-          cte l13 =
-            Union
-              Get l10
-              Get l11
-              Get l11
-              Get l12
-              Get l12
-          cte l12 =
-            Filter (#1 > 7)
-              Get l4
-          cte l11 =
-            Filter (#1 > 7)
-              Get l3
-          cte l10 =
-            Filter (#1 > 7)
-              Get l2
-      cte l3 =
-        Return
+      cte l15 =
+        Get l14
+      cte l14 =
+        Distinct project=[#0, #1]
+          Get l13
+      cte l13 =
+        Union
+          Get l6
+          Get l12
+          Get l12
+          Get l8
+          Get l8
+      cte l12 =
+        Filter (#1 > 7)
+          Get l11
+      cte l11 =
+        Get l10
+      cte l10 =
+        Distinct project=[#0, #1]
           Get l9
-        With
-          cte l9 =
-            Distinct project=[#0, #1]
-              Get l8
-          cte l8 =
-            Union
-              Get l5
-              Get l6
-              Get l6
-              Get l7
-              Get l7
-          cte l7 =
-            Filter (#1 > 7)
-              Get l4
-          cte l6 =
-            Filter (#1 > 7)
-              Get l3
-          cte l5 =
-            Filter (#1 > 7)
-              Get l2
+      cte l9 =
+        Union
+          Get l6
+          Get l7
+          Get l7
+          Get l8
+          Get l8
+      cte l8 =
+        Filter (#1 > 7)
+          Get l15
+      cte l7 =
+        Filter (#1 > 7)
+          Get l11
+      cte l6 =
+        Filter (#1 > 7)
+          Get l2
   cte l2 =
     Union
       Get l1
@@ -266,51 +256,47 @@ With Mutually Recursive
       Get l1
 ----
 Return
-  Get l12
+  Get l15
 With
-  cte l12 =
+  cte l15 =
     Return
       Return
-        Get l11
+        Get l14
       With
-        cte l11 =
+        cte l14 =
           Project (#1)
-            Get l10
-        cte l10 =
+            Get l13
+        cte l13 =
           Filter (#1 > 7)
-            Get l9
-        cte l9 =
+            Get l12
+        cte l12 =
           Map ((#0 + #0))
-            Get l0
+            Get l6
     With Mutually Recursive
-      cte l1 =
-        Return
+      cte l11 =
+        Get l10
+      cte l10 =
+        Union
+          Get l6
+          Get l9
+          Get l9
+      cte l9 =
+        Project (#1)
           Get l8
-        With
-          cte l8 =
-            Union
-              Get l0
-              Get l7
-              Get l7
-          cte l7 =
-            Project (#1)
-              Get l6
-          cte l6 =
-            Filter (#1 > 7)
-              Get l5
-          cte l5 =
-            Map ((#0 + #0))
-              Get l0
-      cte l0 =
-        Return
+      cte l8 =
+        Filter (#1 > 7)
+          Get l7
+      cte l7 =
+        Map ((#0 + #0))
+          Get l6
+      cte l6 =
+        Get l5
+      cte l5 =
+        Union
           Get l4
-        With
-          cte l4 =
-            Union
-              Get l3
-              Get l1
-          cte l3 =
-            Project (#0)
-              Get l2
-          cte l2 =
-            Get t0
+          Get l11
+      cte l4 =
+        Project (#0)
+          Get l3
+      cte l3 =
+        Get t0
