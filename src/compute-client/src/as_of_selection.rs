@@ -481,7 +481,7 @@ impl<'a, T: TimestampManipulation> Context<'a, T> {
             // upgrading from Mz versions that didn't hold input frontiers back sufficiently (see
             // database-issues#8718). This technically permits violating correctness for CTs, but
             // those haven't been publicly released yet.
-            //
+
             // TODO(ct2): revert to a hard constraint in the next/a subsequent release
             let collection_empty = PartialOrder::less_equal(&storage_upper, &storage_since);
             if !collection_empty {

@@ -354,7 +354,7 @@ steps:
       queue: hetzner-aarch64-4cpu-8gb
 
   - id: legacy-upgrade
-    label: "Legacy upgrade tests (last version from docs)"
+    label: "Legacy upgrade tests (last version from docs) %N"
     parallelism: 2
     depends_on: build-aarch64
     timeout_in_minutes: 60
