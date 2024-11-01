@@ -42,6 +42,7 @@ use mz_ore::now::{self, NOW_ZERO};
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
+use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::role_id::RoleId;
@@ -140,6 +141,7 @@ pub enum Plan {
     CreateView(CreateViewPlan),
     CreateMaterializedView(CreateMaterializedViewPlan),
     CreateContinualTask(CreateContinualTaskPlan),
+    CreateNetworkPolicy(CreateNetworkPolicyPlan),
     CreateIndex(CreateIndexPlan),
     CreateType(CreateTypePlan),
     Comment(CommentPlan),
@@ -187,6 +189,7 @@ pub enum Plan {
     AlterRole(AlterRolePlan),
     AlterOwner(AlterOwnerPlan),
     AlterTableAddColumn(AlterTablePlan),
+    AlterNetworkPolicy(AlterNetworkPolicyPlan),
     Declare(DeclarePlan),
     Fetch(FetchPlan),
     Close(ClosePlan),
@@ -228,6 +231,7 @@ impl Plan {
                 PlanKind::AlterNoop,
             ],
             StatementKind::AlterRole => &[PlanKind::AlterRole],
+            StatementKind::AlterNetworkPolicy => &[PlanKind::AlterNetworkPolicy],
             StatementKind::AlterSecret => &[PlanKind::AlterNoop, PlanKind::AlterSecret],
             StatementKind::AlterSetCluster => &[PlanKind::AlterNoop, PlanKind::AlterSetCluster],
             StatementKind::AlterSink => &[PlanKind::AlterNoop, PlanKind::AlterSink],
@@ -259,6 +263,7 @@ impl Plan {
             StatementKind::CreateConnection => &[PlanKind::CreateConnection],
             StatementKind::CreateDatabase => &[PlanKind::CreateDatabase],
             StatementKind::CreateIndex => &[PlanKind::CreateIndex],
+            StatementKind::CreateNetworkPolicy => &[PlanKind::CreateNetworkPolicy],
             StatementKind::CreateMaterializedView => &[PlanKind::CreateMaterializedView],
             StatementKind::CreateContinualTask => &[PlanKind::CreateContinualTask],
             StatementKind::CreateRole => &[PlanKind::CreateRole],
@@ -332,6 +337,7 @@ impl Plan {
             Plan::CreateContinualTask(_) => "create continual task",
             Plan::CreateIndex(_) => "create index",
             Plan::CreateType(_) => "create type",
+            Plan::CreateNetworkPolicy(_) => "create network policy",
             Plan::Comment(_) => "comment",
             Plan::DiscardTemp => "discard temp",
             Plan::DiscardAll => "discard all",
@@ -411,6 +417,7 @@ impl Plan {
             Plan::AlterSystemReset(_) => "alter system",
             Plan::AlterSystemResetAll(_) => "alter system",
             Plan::AlterRole(_) => "alter role",
+            Plan::AlterNetworkPolicy(_) => "alter network policy",
             Plan::AlterOwner(plan) => match plan.object_type {
                 ObjectType::Table => "alter table owner",
                 ObjectType::View => "alter view owner",
@@ -740,6 +747,19 @@ pub struct CreateContinualTaskPlan {
     pub input_id: GlobalId,
     pub with_snapshot: bool,
     pub continual_task: MaterializedView,
+}
+
+#[derive(Debug, Clone)]
+pub struct CreateNetworkPolicyPlan {
+    pub name: String,
+    pub rules: Vec<NetworkPolicyRule>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AlterNetworkPolicyPlan {
+    pub id: NetworkPolicyId,
+    pub name: String,
+    pub rules: Vec<NetworkPolicyRule>,
 }
 
 #[derive(Debug, Clone)]
@@ -1580,12 +1600,22 @@ impl std::fmt::Display for NetworkPolicyRuleAction {
         }
     }
 }
+impl TryFrom<&str> for NetworkPolicyRuleAction {
+    type Error = PlanError;
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value.to_uppercase().as_str() {
+            "ALLOW" => Ok(Self::Allow),
+            _ => Err(PlanError::Unstructured(
+                "Allow is the only valid option".into(),
+            )),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq, Ord, PartialOrd, Hash)]
 pub enum NetworkPolicyRuleDirection {
     Ingress,
 }
-
 impl std::fmt::Display for NetworkPolicyRuleDirection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -1593,17 +1623,36 @@ impl std::fmt::Display for NetworkPolicyRuleDirection {
         }
     }
 }
+impl TryFrom<&str> for NetworkPolicyRuleDirection {
+    type Error = PlanError;
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value.to_uppercase().as_str() {
+            "INGRESS" => Ok(Self::Ingress),
+            _ => Err(PlanError::Unstructured(
+                "Ingress is the only valid option".into(),
+            )),
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd, Hash)]
 pub struct PolicyAddress(pub IpNet);
-impl PolicyAddress {
-    pub fn to_string(&self) -> String {
-        self.0.to_string()
+impl std::fmt::Display for PolicyAddress {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", &self.0.to_string())
     }
 }
 impl From<String> for PolicyAddress {
     fn from(value: String) -> Self {
-        Self(IpNet::from_str(&value).expect("expected"))
+        Self(IpNet::from_str(&value).expect("expected value to be IpNet"))
+    }
+}
+impl TryFrom<&str> for PolicyAddress {
+    type Error = PlanError;
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        let net = IpNet::from_str(value)
+            .map_err(|_| PlanError::Unstructured("Value must be valid IPV4 or IPV6 CIDR".into()))?;
+        Ok(Self(net))
     }
 }
 
@@ -1612,7 +1661,7 @@ impl Serialize for PolicyAddress {
     where
         S: serde::Serializer,
     {
-        serializer.serialize_str(&self.0.to_string())
+        serializer.serialize_str(&format!("{}", &self.0))
     }
 }
 

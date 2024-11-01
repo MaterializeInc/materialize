@@ -438,6 +438,15 @@ fn generate_rbac_requirements(
             item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
+        Plan::CreateNetworkPolicy(plan::CreateNetworkPolicyPlan { .. }) => RbacRequirements {
+            privileges: vec![(
+                SystemObjectId::System,
+                AclMode::CREATE_NETWORK_POLICY,
+                role_id,
+            )],
+            item_usage: &CREATE_ITEM_USAGE,
+            ..Default::default()
+        },
         Plan::CreateCluster(plan::CreateClusterPlan {
             name: _,
             variant: _,
@@ -1201,6 +1210,11 @@ fn generate_rbac_requirements(
             item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
+        Plan::AlterNetworkPolicy(plan::AlterNetworkPolicyPlan { id, .. }) => RbacRequirements {
+            ownership: vec![ObjectId::NetworkPolicy(*id)],
+            item_usage: &CREATE_ITEM_USAGE,
+            ..Default::default()
+        },
         Plan::ReadThenWrite(plan::ReadThenWritePlan {
             id,
             selection,
@@ -1702,7 +1716,9 @@ pub const fn all_object_privileges(object_type: SystemObjectType) -> AclMode {
     const USAGE_CREATE_ACL_MODE: AclMode = AclMode::USAGE.union(AclMode::CREATE);
     const ALL_SYSTEM_PRIVILEGES: AclMode = AclMode::CREATE_ROLE
         .union(AclMode::CREATE_DB)
-        .union(AclMode::CREATE_CLUSTER);
+        .union(AclMode::CREATE_CLUSTER)
+        .union(AclMode::CREATE_NETWORK_POLICY);
+
     const EMPTY_ACL_MODE: AclMode = AclMode::empty();
     match object_type {
         SystemObjectType::Object(ObjectType::Table) => TABLE_ACL_MODE,

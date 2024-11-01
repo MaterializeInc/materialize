@@ -51,6 +51,8 @@ const CREATE_ROLE_CHAR: char = 'R';
 const CREATE_DB_CHAR: char = 'B';
 // compute Node
 const CREATE_CLUSTER_CHAR: char = 'N';
+// compute network Policy
+const CREATE_NETWORK_POLICY_CHAR: char = 'P';
 
 const INSERT_STR: &str = "INSERT";
 const SELECT_STR: &str = "SELECT";
@@ -61,6 +63,7 @@ const CREATE_STR: &str = "CREATE";
 const CREATE_ROLE_STR: &str = "CREATEROLE";
 const CREATE_DB_STR: &str = "CREATEDB";
 const CREATE_CLUSTER_STR: &str = "CREATECLUSTER";
+const CREATE_NETWORK_POLICY_STR: &str = "CREATENETWORKPOLICY";
 
 /// The OID used to represent the PUBLIC role. See:
 /// <https://github.com/postgres/postgres/blob/29a0ccbce97978e5d65b8f96c85a00611bb403c4/src/include/utils/acl.h#L46>
@@ -94,6 +97,7 @@ bitflags! {
         const CREATE_CLUSTER = 1 << 29;
         const CREATE_DB = 1 << 30;
         const CREATE_ROLE = 1 << 31;
+        const CREATE_NETWORK_POLICY = 1 << 32;
 
         // No additional privileges should be defined at a bit larger than 1 << 31. Those bits are
         // reserved for grant options.
@@ -112,6 +116,7 @@ impl AclMode {
             CREATE_ROLE_STR => Ok(AclMode::CREATE_ROLE),
             CREATE_DB_STR => Ok(AclMode::CREATE_DB),
             CREATE_CLUSTER_STR => Ok(AclMode::CREATE_CLUSTER),
+            CREATE_NETWORK_POLICY_STR => Ok(AclMode::CREATE_NETWORK_POLICY),
             _ => Err(anyhow!("{}", s.quoted())),
         }
     }
@@ -158,6 +163,9 @@ impl AclMode {
         if self.contains(AclMode::CREATE_CLUSTER) {
             privileges.push(CREATE_CLUSTER_STR);
         }
+        if self.contains(AclMode::CREATE_NETWORK_POLICY) {
+            privileges.push(CREATE_NETWORK_POLICY_STR);
+        }
         privileges
     }
 }
@@ -178,6 +186,7 @@ impl FromStr for AclMode {
                 CREATE_ROLE_CHAR => acl_mode.bitor_assign(AclMode::CREATE_ROLE),
                 CREATE_DB_CHAR => acl_mode.bitor_assign(AclMode::CREATE_DB),
                 CREATE_CLUSTER_CHAR => acl_mode.bitor_assign(AclMode::CREATE_CLUSTER),
+                CREATE_NETWORK_POLICY_CHAR => acl_mode.bitor_assign(AclMode::CREATE_NETWORK_POLICY),
                 _ => return Err(anyhow!("invalid privilege '{c}' in acl mode '{s}'")),
             }
         }
@@ -215,6 +224,9 @@ impl fmt::Display for AclMode {
         }
         if self.contains(AclMode::CREATE_CLUSTER) {
             write!(f, "{CREATE_CLUSTER_CHAR}")?;
+        }
+        if self.contains(AclMode::CREATE_NETWORK_POLICY) {
+            write!(f, "{CREATE_NETWORK_POLICY_CHAR}")?;
         }
         Ok(())
     }
@@ -845,6 +857,7 @@ fn test_mz_acl_parsing() {
     assert!(!mz_acl.acl_mode.contains(AclMode::CREATE_ROLE));
     assert!(!mz_acl.acl_mode.contains(AclMode::CREATE_DB));
     assert!(!mz_acl.acl_mode.contains(AclMode::CREATE_CLUSTER));
+    assert!(!mz_acl.acl_mode.contains(AclMode::CREATE_NETWORK_POLICY));
     assert_eq!(s, mz_acl.to_string());
 
     let s = "=UC/u4";
@@ -860,6 +873,7 @@ fn test_mz_acl_parsing() {
     assert!(!mz_acl.acl_mode.contains(AclMode::CREATE_ROLE));
     assert!(!mz_acl.acl_mode.contains(AclMode::CREATE_DB));
     assert!(!mz_acl.acl_mode.contains(AclMode::CREATE_CLUSTER));
+    assert!(!mz_acl.acl_mode.contains(AclMode::CREATE_NETWORK_POLICY));
     assert_eq!(s, mz_acl.to_string());
 
     let s = "s7=/s12";
@@ -875,6 +889,7 @@ fn test_mz_acl_parsing() {
     assert!(!mz_acl.acl_mode.contains(AclMode::CREATE_ROLE));
     assert!(!mz_acl.acl_mode.contains(AclMode::CREATE_DB));
     assert!(!mz_acl.acl_mode.contains(AclMode::CREATE_CLUSTER));
+    assert!(!mz_acl.acl_mode.contains(AclMode::CREATE_NETWORK_POLICY));
     assert_eq!(s, mz_acl.to_string());
 
     let s = "=/u100";
@@ -890,9 +905,10 @@ fn test_mz_acl_parsing() {
     assert!(!mz_acl.acl_mode.contains(AclMode::CREATE_ROLE));
     assert!(!mz_acl.acl_mode.contains(AclMode::CREATE_DB));
     assert!(!mz_acl.acl_mode.contains(AclMode::CREATE_CLUSTER));
+    assert!(!mz_acl.acl_mode.contains(AclMode::CREATE_NETWORK_POLICY));
     assert_eq!(s, mz_acl.to_string());
 
-    let s = "u1=RBN/u2";
+    let s = "u1=RBNP/u2";
     let mz_acl: MzAclItem = s.parse().unwrap();
     assert_eq!(RoleId::User(1), mz_acl.grantee);
     assert_eq!(RoleId::User(2), mz_acl.grantor);
@@ -905,6 +921,7 @@ fn test_mz_acl_parsing() {
     assert!(mz_acl.acl_mode.contains(AclMode::CREATE_ROLE));
     assert!(mz_acl.acl_mode.contains(AclMode::CREATE_DB));
     assert!(mz_acl.acl_mode.contains(AclMode::CREATE_CLUSTER));
+    assert!(mz_acl.acl_mode.contains(AclMode::CREATE_NETWORK_POLICY));
     assert_eq!(s, mz_acl.to_string());
 
     mz_ore::assert_err!("u42/rw=u666".parse::<MzAclItem>());
@@ -985,6 +1002,7 @@ fn test_acl_parsing() {
     assert!(!acl.acl_mode.contains(AclMode::CREATE_ROLE));
     assert!(!acl.acl_mode.contains(AclMode::CREATE_DB));
     assert!(!acl.acl_mode.contains(AclMode::CREATE_CLUSTER));
+    assert!(!acl.acl_mode.contains(AclMode::CREATE_NETWORK_POLICY));
     assert_eq!(s, acl.to_string());
 
     let s = "=UC/4";
@@ -1000,6 +1018,7 @@ fn test_acl_parsing() {
     assert!(!acl.acl_mode.contains(AclMode::CREATE_ROLE));
     assert!(!acl.acl_mode.contains(AclMode::CREATE_DB));
     assert!(!acl.acl_mode.contains(AclMode::CREATE_CLUSTER));
+    assert!(!acl.acl_mode.contains(AclMode::CREATE_NETWORK_POLICY));
     assert_eq!(s, acl.to_string());
 
     let s = "7=/12";
@@ -1015,6 +1034,7 @@ fn test_acl_parsing() {
     assert!(!acl.acl_mode.contains(AclMode::CREATE_ROLE));
     assert!(!acl.acl_mode.contains(AclMode::CREATE_DB));
     assert!(!acl.acl_mode.contains(AclMode::CREATE_CLUSTER));
+    assert!(!acl.acl_mode.contains(AclMode::CREATE_NETWORK_POLICY));
     assert_eq!(s, acl.to_string());
 
     let s = "=/100";
@@ -1030,9 +1050,10 @@ fn test_acl_parsing() {
     assert!(!acl.acl_mode.contains(AclMode::CREATE_ROLE));
     assert!(!acl.acl_mode.contains(AclMode::CREATE_DB));
     assert!(!acl.acl_mode.contains(AclMode::CREATE_CLUSTER));
+    assert!(!acl.acl_mode.contains(AclMode::CREATE_NETWORK_POLICY));
     assert_eq!(s, acl.to_string());
 
-    let s = "1=RBN/2";
+    let s = "1=RBNP/2";
     let acl: AclItem = s.parse().unwrap();
     assert_eq!(1, acl.grantee.0);
     assert_eq!(2, acl.grantor.0);
@@ -1045,6 +1066,7 @@ fn test_acl_parsing() {
     assert!(acl.acl_mode.contains(AclMode::CREATE_ROLE));
     assert!(acl.acl_mode.contains(AclMode::CREATE_DB));
     assert!(acl.acl_mode.contains(AclMode::CREATE_CLUSTER));
+    assert!(acl.acl_mode.contains(AclMode::CREATE_NETWORK_POLICY));
     assert_eq!(s, acl.to_string());
 
     mz_ore::assert_err!("42/rw=666".parse::<AclItem>());

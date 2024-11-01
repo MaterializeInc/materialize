@@ -99,6 +99,7 @@ mz_system  PUBLIC       CREATECLUSTER
 mz_system  materialize  CREATEDB
 mz_system  materialize  CREATEROLE
 mz_system  materialize  CREATECLUSTER
+mz_system  materialize  CREATENETWORKPOLICY
 mz_system  r1           CREATEDB
 mz_system  r1           CREATECLUSTER
 mz_system  r2           CREATEROLE
@@ -320,6 +321,7 @@ mz_system    PUBLIC       NULL         NULL    NULL         system    CREATECLUS
 mz_system    materialize  NULL         NULL    NULL         system    CREATEDB
 mz_system    materialize  NULL         NULL    NULL         system    CREATEROLE
 mz_system    materialize  NULL         NULL    NULL         system    CREATECLUSTER
+mz_system    materialize  NULL         NULL    NULL         system    CREATENETWORKPOLICY
 mz_system    r1           NULL         NULL    NULL         system    CREATEDB
 mz_system    r1           NULL         NULL    NULL         system    CREATECLUSTER
 mz_system    r2           NULL         NULL    NULL         system    CREATEROLE
@@ -402,6 +404,7 @@ mz_system    PUBLIC       NULL         NULL    NULL         system    CREATECLUS
 mz_system    materialize  NULL         NULL    NULL         system    CREATEDB
 mz_system    materialize  NULL         NULL    NULL         system    CREATEROLE
 mz_system    materialize  NULL         NULL    NULL         system    CREATECLUSTER
+mz_system    materialize  NULL         NULL    NULL         system    CREATENETWORKPOLICY
 mz_system    r1           NULL         NULL    NULL         system    CREATEDB
 mz_system    r1           NULL         NULL    NULL         system    CREATECLUSTER
 mz_system    r2           NULL         NULL    NULL         system    CREATEROLE

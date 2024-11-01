@@ -129,7 +129,7 @@ mz_system=U/mz_system
 query T
 SELECT privileges::text FROM mz_system_privileges
 ----
-mz_system=RBN/mz_system
+mz_system=RBNP/mz_system
 
 ## Test user created objects
 
@@ -2216,7 +2216,7 @@ query T
 SELECT privileges::text FROM mz_system_privileges
 ----
 joe=B/mz_system
-mz_system=RBN/mz_system
+mz_system=RBNP/mz_system
 
 query B
 SELECT has_system_privilege('joe', 'CREATEDB')
@@ -2243,7 +2243,7 @@ query T
 SELECT privileges::text FROM mz_system_privileges
 ----
 joe=B/mz_system
-mz_system=RBN/mz_system
+mz_system=RBNP/mz_system
 
 simple conn=mz_system,user=mz_system
 GRANT CREATEROLE, CREATECLUSTER ON SYSTEM TO PUBLIC
@@ -2255,7 +2255,7 @@ SELECT privileges::text FROM mz_system_privileges
 ----
 =RN/mz_system
 joe=B/mz_system
-mz_system=RBN/mz_system
+mz_system=RBNP/mz_system
 
 statement error role "joe" cannot be dropped because some objects depend on it
 DROP ROLE joe
@@ -2269,7 +2269,7 @@ query T
 SELECT privileges::text FROM mz_system_privileges
 ----
 =RN/mz_system
-mz_system=RBN/mz_system
+mz_system=RBNP/mz_system
 
 query B
 SELECT has_system_privilege('joe', 'CREATEDB')
@@ -2296,7 +2296,7 @@ query T
 SELECT privileges::text FROM mz_system_privileges
 ----
 =RN/mz_system
-mz_system=RBN/mz_system
+mz_system=RBNP/mz_system
 
 statement ok
 DROP ROLE joe
@@ -2315,7 +2315,7 @@ COMPLETE 0
 query T
 SELECT privileges::text FROM mz_system_privileges
 ----
-mz_system=RBN/mz_system
+mz_system=RBNP/mz_system
 
 query B
 SELECT has_system_privilege('joe', 'CREATEDB')
@@ -2542,8 +2542,8 @@ COMPLETE 0
 query T
 SELECT privileges::text FROM mz_system_privileges
 ----
-joe=RBN/mz_system
-mz_system=RBN/mz_system
+joe=RBNP/mz_system
+mz_system=RBNP/mz_system
 
 simple conn=mz_system,user=mz_system
 REVOKE ALL ON SYSTEM FROM joe
@@ -2553,7 +2553,7 @@ COMPLETE 0
 query T
 SELECT privileges::text FROM mz_system_privileges
 ----
-mz_system=RBN/mz_system
+mz_system=RBNP/mz_system
 
 ## Test system objects
 

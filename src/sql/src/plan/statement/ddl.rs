@@ -34,6 +34,7 @@ use mz_postgres_util::tunnel::PostgresFlavor;
 use mz_proto::RustType;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
+use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::refresh_schedule::{RefreshEvery, RefreshSchedule};
 use mz_repr::role_id::RoleId;
@@ -44,20 +45,21 @@ use mz_sql_parser::ast::display::comma_separated;
 use mz_sql_parser::ast::{
     self, AlterClusterAction, AlterClusterStatement, AlterConnectionAction, AlterConnectionOption,
     AlterConnectionOptionName, AlterConnectionStatement, AlterIndexAction, AlterIndexStatement,
-    AlterObjectRenameStatement, AlterObjectSwapStatement, AlterRetainHistoryStatement,
-    AlterRoleOption, AlterRoleStatement, AlterSecretStatement, AlterSetClusterStatement,
-    AlterSinkAction, AlterSinkStatement, AlterSourceAction, AlterSourceAddSubsourceOption,
-    AlterSourceAddSubsourceOptionName, AlterSourceStatement, AlterSystemResetAllStatement,
-    AlterSystemResetStatement, AlterSystemSetStatement, AlterTableAddColumnStatement, AvroSchema,
-    AvroSchemaOption, AvroSchemaOptionName, ClusterAlterOption, ClusterAlterOptionName,
-    ClusterAlterOptionValue, ClusterAlterUntilReadyOption, ClusterAlterUntilReadyOptionName,
-    ClusterFeature, ClusterFeatureName, ClusterOption, ClusterOptionName,
-    ClusterScheduleOptionValue, ColumnDef, ColumnOption, CommentObjectType, CommentStatement,
-    ConnectionOption, ConnectionOptionName, ContinualTaskOption, ContinualTaskOptionName,
-    CreateClusterReplicaStatement, CreateClusterStatement, CreateConnectionOption,
-    CreateConnectionOptionName, CreateConnectionStatement, CreateConnectionType,
-    CreateContinualTaskStatement, CreateDatabaseStatement, CreateIndexStatement,
-    CreateMaterializedViewStatement, CreateRoleStatement, CreateSchemaStatement,
+    AlterNetworkPolicyStatement, AlterObjectRenameStatement, AlterObjectSwapStatement,
+    AlterRetainHistoryStatement, AlterRoleOption, AlterRoleStatement, AlterSecretStatement,
+    AlterSetClusterStatement, AlterSinkAction, AlterSinkStatement, AlterSourceAction,
+    AlterSourceAddSubsourceOption, AlterSourceAddSubsourceOptionName, AlterSourceStatement,
+    AlterSystemResetAllStatement, AlterSystemResetStatement, AlterSystemSetStatement,
+    AlterTableAddColumnStatement, AvroSchema, AvroSchemaOption, AvroSchemaOptionName,
+    ClusterAlterOption, ClusterAlterOptionName, ClusterAlterOptionValue,
+    ClusterAlterUntilReadyOption, ClusterAlterUntilReadyOptionName, ClusterFeature,
+    ClusterFeatureName, ClusterOption, ClusterOptionName, ClusterScheduleOptionValue, ColumnDef,
+    ColumnOption, CommentObjectType, CommentStatement, ConnectionOption, ConnectionOptionName,
+    ContinualTaskOption, ContinualTaskOptionName, CreateClusterReplicaStatement,
+    CreateClusterStatement, CreateConnectionOption, CreateConnectionOptionName,
+    CreateConnectionStatement, CreateConnectionType, CreateContinualTaskStatement,
+    CreateDatabaseStatement, CreateIndexStatement, CreateMaterializedViewStatement,
+    CreateNetworkPolicyStatement, CreateRoleStatement, CreateSchemaStatement,
     CreateSecretStatement, CreateSinkConnection, CreateSinkOption, CreateSinkOptionName,
     CreateSinkStatement, CreateSourceConnection, CreateSourceOption, CreateSourceOptionName,
     CreateSourceStatement, CreateSubsourceOption, CreateSubsourceOptionName,
@@ -69,13 +71,15 @@ use mz_sql_parser::ast::{
     DropOwnedStatement, Expr, Format, FormatSpecifier, Ident, IfExistsBehavior, IndexOption,
     IndexOptionName, KafkaSinkConfigOption, KeyConstraint, LoadGeneratorOption,
     LoadGeneratorOptionName, MaterializedViewOption, MaterializedViewOptionName, MySqlConfigOption,
-    MySqlConfigOptionName, PgConfigOption, PgConfigOptionName, ProtobufSchema, QualifiedReplica,
-    RefreshAtOptionValue, RefreshEveryOptionValue, RefreshOptionValue, ReplicaDefinition,
-    ReplicaOption, ReplicaOptionName, RoleAttribute, SetRoleVar, SourceErrorPolicy,
-    SourceIncludeMetadata, Statement, TableConstraint, TableFromSourceColumns,
-    TableFromSourceOption, TableFromSourceOptionName, TableOption, TableOptionName,
-    UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value,
-    ViewDefinition, WithOptionValue,
+    MySqlConfigOptionName, NetworkPolicyOption, NetworkPolicyOptionName,
+    NetworkPolicyRuleDefinition, NetworkPolicyRuleOption, NetworkPolicyRuleOptionName,
+    PgConfigOption, PgConfigOptionName, ProtobufSchema, QualifiedReplica, RefreshAtOptionValue,
+    RefreshEveryOptionValue, RefreshOptionValue, ReplicaDefinition, ReplicaOption,
+    ReplicaOptionName, RoleAttribute, SetRoleVar, SourceErrorPolicy, SourceIncludeMetadata,
+    Statement, TableConstraint, TableFromSourceColumns, TableFromSourceOption,
+    TableFromSourceOptionName, TableOption, TableOptionName, UnresolvedDatabaseName,
+    UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value, ViewDefinition,
+    WithOptionValue,
 };
 use mz_sql_parser::ident;
 use mz_sql_parser::parser::StatementParseResult;
@@ -122,7 +126,7 @@ use crate::kafka_util::{KafkaSinkConfigOptionExtracted, KafkaSourceConfigOptionE
 use crate::names::{
     Aug, CommentObjectId, DatabaseId, ObjectId, PartialItemName, QualifiedItemName,
     ResolvedClusterName, ResolvedColumnReference, ResolvedDataType, ResolvedDatabaseSpecifier,
-    ResolvedItemName, SchemaSpecifier, SystemObjectId,
+    ResolvedItemName, ResolvedNetworkPolicyName, SchemaSpecifier, SystemObjectId,
 };
 use crate::normalize::{self, ident};
 use crate::plan::error::PlanError;
@@ -138,19 +142,21 @@ use crate::plan::with_options::{OptionalDuration, OptionalString, TryFromValue};
 use crate::plan::{
     literal, plan_utils, query, transform_ast, AlterClusterPlan, AlterClusterPlanStrategy,
     AlterClusterRenamePlan, AlterClusterReplicaRenamePlan, AlterClusterSwapPlan,
-    AlterConnectionPlan, AlterItemRenamePlan, AlterNoopPlan, AlterOptionParameter,
-    AlterRetainHistoryPlan, AlterRolePlan, AlterSchemaRenamePlan, AlterSchemaSwapPlan,
-    AlterSecretPlan, AlterSetClusterPlan, AlterSinkPlan, AlterSystemResetAllPlan,
-    AlterSystemResetPlan, AlterSystemSetPlan, AlterTablePlan, ClusterSchedule, CommentPlan,
-    ComputeReplicaConfig, ComputeReplicaIntrospectionConfig, ConnectionDetails,
-    CreateClusterManagedPlan, CreateClusterPlan, CreateClusterReplicaPlan,
+    AlterConnectionPlan, AlterItemRenamePlan, AlterNetworkPolicyPlan, AlterNoopPlan,
+    AlterOptionParameter, AlterRetainHistoryPlan, AlterRolePlan, AlterSchemaRenamePlan,
+    AlterSchemaSwapPlan, AlterSecretPlan, AlterSetClusterPlan, AlterSinkPlan,
+    AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan, AlterTablePlan,
+    ClusterSchedule, CommentPlan, ComputeReplicaConfig, ComputeReplicaIntrospectionConfig,
+    ConnectionDetails, CreateClusterManagedPlan, CreateClusterPlan, CreateClusterReplicaPlan,
     CreateClusterUnmanagedPlan, CreateClusterVariant, CreateConnectionPlan,
     CreateContinualTaskPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
-    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc, DropObjectsPlan,
-    DropOwnedPlan, Index, Ingestion, MaterializedView, Params, Plan, PlanClusterOption, PlanNotice,
-    QueryContext, ReplicaConfig, Secret, Sink, Source, Table, TableDataSource, Type, VariableValue,
-    View, WebhookBodyFormat, WebhookHeaderFilters, WebhookHeaders, WebhookValidation,
+    CreateNetworkPolicyPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
+    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc,
+    DropObjectsPlan, DropOwnedPlan, Index, Ingestion, MaterializedView, NetworkPolicyRule,
+    NetworkPolicyRuleAction, NetworkPolicyRuleDirection, Params, Plan, PlanClusterOption,
+    PlanNotice, PolicyAddress, QueryContext, ReplicaConfig, Secret, Sink, Source, Table,
+    TableDataSource, Type, VariableValue, View, WebhookBodyFormat, WebhookHeaderFilters,
+    WebhookHeaders, WebhookValidation,
 };
 use crate::session::vars::{
     self, ENABLE_CLUSTER_SCHEDULE_REFRESH, ENABLE_KAFKA_SINK_HEADERS,
@@ -2524,6 +2530,20 @@ pub fn describe_create_continual_task(
     Ok(StatementDesc::new(None))
 }
 
+pub fn describe_create_network_policy(
+    _: &StatementContext,
+    _: CreateNetworkPolicyStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn describe_alter_network_policy(
+    _: &StatementContext,
+    _: AlterNetworkPolicyStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
 pub fn plan_create_materialized_view(
     scx: &StatementContext,
     mut stmt: CreateMaterializedViewStatement<Aug>,
@@ -4168,6 +4188,115 @@ pub fn plan_create_role(
     }))
 }
 
+pub fn plan_create_network_policy(
+    ctx: &StatementContext,
+    CreateNetworkPolicyStatement { name, options }: CreateNetworkPolicyStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    ctx.require_feature_flag(&vars::ENABLE_NETWORK_POLICIES)?;
+    let policy_options: NetworkPolicyOptionExtracted = options.try_into()?;
+
+    let Some(rule_defs) = policy_options.rules else {
+        sql_bail!("RULES must be specified when creating network policies.");
+    };
+
+    let mut rules = vec![];
+    for NetworkPolicyRuleDefinition { name, options } in rule_defs {
+        let NetworkPolicyRuleOptionExtracted {
+            seen: _,
+            direction,
+            action,
+            address,
+        } = options.try_into()?;
+        let (direction, action, address) = match (direction, action, address) {
+            (Some(direction), Some(action), Some(address)) => (
+                NetworkPolicyRuleDirection::try_from(direction.as_str())?,
+                NetworkPolicyRuleAction::try_from(action.as_str())?,
+                PolicyAddress::try_from(address.as_str())?,
+            ),
+            (_, _, _) => {
+                sql_bail!("Direction, Address, and Action must specified when creating a rule")
+            }
+        };
+        rules.push(NetworkPolicyRule {
+            name: normalize::ident(name),
+            direction,
+            action,
+            address,
+        });
+    }
+
+    if rules.len()
+        > ctx
+            .catalog
+            .system_vars()
+            .max_rules_per_network_policy()
+            .try_into()?
+    {
+        sql_bail!("RULES count exceeds max_rules_per_network_policy.")
+    }
+
+    Ok(Plan::CreateNetworkPolicy(CreateNetworkPolicyPlan {
+        name: normalize::ident(name),
+        rules,
+    }))
+}
+
+pub fn plan_alter_network_policy(
+    ctx: &StatementContext,
+    AlterNetworkPolicyStatement { name, options }: AlterNetworkPolicyStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    ctx.require_feature_flag(&vars::ENABLE_NETWORK_POLICIES)?;
+
+    let policy_options: NetworkPolicyOptionExtracted = options.try_into()?;
+    let policy = ctx.catalog.resolve_network_policy(&name.to_string())?;
+
+    let Some(rule_defs) = policy_options.rules else {
+        sql_bail!("RULES must be specified when creating network policies.");
+    };
+
+    let mut rules = vec![];
+    for NetworkPolicyRuleDefinition { name, options } in rule_defs {
+        let NetworkPolicyRuleOptionExtracted {
+            seen: _,
+            direction,
+            action,
+            address,
+        } = options.try_into()?;
+
+        let (direction, action, address) = match (direction, action, address) {
+            (Some(direction), Some(action), Some(address)) => (
+                NetworkPolicyRuleDirection::try_from(direction.as_str())?,
+                NetworkPolicyRuleAction::try_from(action.as_str())?,
+                PolicyAddress::try_from(address.as_str())?,
+            ),
+            (_, _, _) => {
+                sql_bail!("Direction, Address, and Action must specified when creating a rule")
+            }
+        };
+        rules.push(NetworkPolicyRule {
+            name: normalize::ident(name),
+            direction,
+            action,
+            address,
+        });
+    }
+    if rules.len()
+        > ctx
+            .catalog
+            .system_vars()
+            .max_rules_per_network_policy()
+            .try_into()?
+    {
+        sql_bail!("RULES count exceeds max_rules_per_network_policy.")
+    }
+
+    Ok(Plan::AlterNetworkPolicy(AlterNetworkPolicyPlan {
+        id: policy.id(),
+        name: normalize::ident(name),
+        rules,
+    }))
+}
+
 pub fn describe_create_cluster(
     _: &StatementContext,
     _: CreateClusterStatement<Aug>,
@@ -4192,6 +4321,18 @@ generate_extracted_config!(
     (Size, String),
     (Schedule, ClusterScheduleOptionValue),
     (WorkloadClass, OptionalString)
+);
+
+generate_extracted_config!(
+    NetworkPolicyOption,
+    (Rules, Vec<NetworkPolicyRuleDefinition<Aug>>)
+);
+
+generate_extracted_config!(
+    NetworkPolicyRuleOption,
+    (Direction, String),
+    (Action, String),
+    (Address, String)
 );
 
 generate_extracted_config!(ClusterAlterOption, (Wait, ClusterAlterOptionValue<Aug>));
@@ -5002,6 +5143,9 @@ pub fn plan_drop_objects(
                 plan_drop_item(scx, object_type, if_exists, name.clone(), cascade)?
                     .map(ObjectId::Item)
             }
+            UnresolvedObjectName::NetworkPolicy(name) => {
+                plan_drop_network_policy(scx, if_exists, name)?.map(ObjectId::NetworkPolicy)
+            }
         };
         match id {
             Some(id) => referenced_ids.push(id),
@@ -5098,6 +5242,25 @@ fn plan_drop_cluster(
         }
         None => None,
     })
+}
+
+fn plan_drop_network_policy(
+    scx: &StatementContext,
+    if_exists: bool,
+    name: &Ident,
+) -> Result<Option<NetworkPolicyId>, PlanError> {
+    match scx.catalog.resolve_network_policy(name.as_str()) {
+        Ok(policy) => {
+            // TODO @jubrad don't let this be dropped if it's the default policy or
+            // is being used by other objects.
+            // if scx.catalog.system_vars().default_network_policy().id() == policy.id() {
+            //     return Err(PlanError::Unstructured("Cannot drop default network policy.")
+            // }
+            Ok(Some(policy.id()))
+        }
+        Err(_) if if_exists => Ok(None),
+        Err(e) => Err(e.into()),
+    }
 }
 
 /// Returns `true` if the cluster has any storage object. Return `false` if the cluster has no
@@ -7017,6 +7180,9 @@ pub fn plan_comment(
                 None,
             )
         }
+        CommentObjectType::NetworkPolicy { name } => {
+            (CommentObjectId::NetworkPolicy(name.id), None)
+        }
     };
 
     // Note: the `mz_comments` table uses an `Int4` for the column position, but in the catalog storage we
@@ -7091,6 +7257,21 @@ pub(crate) fn resolve_schema<'a>(
         Ok(schema) => Ok(Some((schema.database().clone(), schema.id().clone()))),
         Err(_) if if_exists => Ok(None),
         Err(e) => Err(e),
+    }
+}
+
+pub(crate) fn resolve_network_policy<'a>(
+    scx: &'a StatementContext,
+    name: Ident,
+    if_exists: bool,
+) -> Result<Option<ResolvedNetworkPolicyName>, PlanError> {
+    match scx.catalog.resolve_network_policy(&name.to_string()) {
+        Ok(policy) => Ok(Some(ResolvedNetworkPolicyName {
+            id: policy.id(),
+            name: policy.name().to_string(),
+        })),
+        Err(_) if if_exists => Ok(None),
+        Err(e) => Err(e.into()),
     }
 }
 

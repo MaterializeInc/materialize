@@ -2543,8 +2543,8 @@ v  materialize=r/mz_system
 query T
 SELECT privileges::text FROM mz_system_privileges
 ----
-mz_system=RBN/mz_system
 materialize=BN/mz_system
+mz_system=RBNP/mz_system
 
 simple conn=mz_system,user=mz_system
 DROP OWNED BY materialize;
@@ -2579,7 +2579,7 @@ v  mz_system=r/mz_system
 query T
 SELECT privileges::text FROM mz_system_privileges
 ----
-mz_system=RBN/mz_system
+mz_system=RBNP/mz_system
 
 simple conn=mz_system,user=mz_system
 DROP VIEW v;

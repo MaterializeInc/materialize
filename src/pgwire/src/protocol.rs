@@ -1746,6 +1746,7 @@ where
             | ExecuteResponse::CreatedType
             | ExecuteResponse::CreatedView { .. }
             | ExecuteResponse::CreatedViews { .. }
+            | ExecuteResponse::CreatedNetworkPolicy
             | ExecuteResponse::Comment
             | ExecuteResponse::Deallocate { .. }
             | ExecuteResponse::Deleted(..)

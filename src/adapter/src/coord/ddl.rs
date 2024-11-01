@@ -1376,6 +1376,9 @@ impl Coordinator {
                 Op::CreateRole { .. } => {
                     new_roles += 1;
                 }
+                Op::CreateNetworkPolicy { .. } => {
+                    new_network_policies += 1;
+                }
                 Op::CreateCluster { .. } => {
                     // TODO(benesch): having deprecated linked clusters, remove
                     // the `max_sources` and `max_sinks` limit, and set a higher
@@ -1548,6 +1551,7 @@ impl Coordinator {
                 },
                 Op::AlterRole { .. }
                 | Op::AlterRetainHistory { .. }
+                | Op::AlterNetworkPolicy { .. }
                 | Op::UpdatePrivilege { .. }
                 | Op::UpdateDefaultPrivilege { .. }
                 | Op::GrantRole { .. }
@@ -1565,8 +1569,7 @@ impl Coordinator {
                 | Op::ResetAllSystemConfiguration { .. }
                 | Op::Comment { .. }
                 | Op::WeirdStorageUsageUpdates { .. }
-                | Op::TransactionDryRun
-                | Op::CreateNetworkPolicy { .. } => {}
+                | Op::TransactionDryRun => {}
             }
         }
 

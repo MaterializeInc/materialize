@@ -745,6 +745,10 @@ The `mz_network_policy_rules` table contains a row for each network policy rule.
 | `address`        | [`text`]   | The address the rule will take action on.                                                              |
 | `direction`      | [`text`]   | The direction of traffic the rule applies to. `ingress` is the only supported direction.               |
 
+## `mz_show_network_policies`
+
+The `mz_show_show_network_policies` view contains a row for each network policy in the system.
+
 ## `mz_show_all_privileges`
 
 The `mz_show_all_privileges` view contains a row for each privilege granted
@@ -1266,6 +1270,7 @@ The `mz_webhook_sources` table contains a row for each webhook source in the sys
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_databases -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_indexes -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_materialized_views -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_network_policies -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_roles -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_schemas -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_secrets -->

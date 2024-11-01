@@ -727,6 +727,7 @@ mz_show_my_object_privileges
 mz_show_my_role_members
 mz_show_my_schema_privileges
 mz_show_my_system_privileges
+mz_show_network_policies
 mz_show_object_privileges
 mz_show_role_members
 mz_show_roles

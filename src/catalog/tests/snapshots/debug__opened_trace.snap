@@ -387,7 +387,7 @@ Trace {
                                                 object_id: "SYSTEM",
                                                 grantee_id: "s1",
                                                 grantor_id: "s1",
-                                                privileges: "RBN",
+                                                privileges: "RBNP",
                                             },
                                         ),
                                     ),
@@ -1027,6 +1027,18 @@ Trace {
                     },
                     IdAllocValue {
                         next_id: 2,
+                    },
+                ),
+                2,
+                1,
+            ),
+            (
+                (
+                    IdAllocKey {
+                        name: "user_network_policy",
+                    },
+                    IdAllocValue {
+                        next_id: 1,
                     },
                 ),
                 2,
@@ -2200,7 +2212,7 @@ Trace {
                     SystemPrivilegesValue {
                         acl_mode: Some(
                             AclMode {
-                                bitflags: 3758096384,
+                                bitflags: 8053063680,
                             },
                         ),
                     },

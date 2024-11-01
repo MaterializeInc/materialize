@@ -24,7 +24,7 @@ use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
 use mz_repr::{CatalogItemId, GlobalId};
 use mz_repr::{ColumnName, RelationVersionSelector};
-use mz_sql_parser::ast::{CreateContinualTaskStatement, Expr, Version};
+use mz_sql_parser::ast::{CreateContinualTaskStatement, Expr, RawNetworkPolicyName, Version};
 use mz_sql_parser::ident;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -791,12 +791,25 @@ impl AstDisplay for ResolvedRoleName {
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ResolvedNetworkPolicyName {
+    pub id: NetworkPolicyId,
+    pub name: String,
+}
+
+impl AstDisplay for ResolvedNetworkPolicyName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(format!("[{} AS {}]", self.id, self.name));
+    }
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ResolvedObjectName {
     Cluster(ResolvedClusterName),
     ClusterReplica(ResolvedClusterReplicaName),
     Database(ResolvedDatabaseName),
     Schema(ResolvedSchemaName),
     Role(ResolvedRoleName),
+    NetworkPolicy(ResolvedNetworkPolicyName),
     Item(ResolvedItemName),
 }
 
@@ -809,6 +822,7 @@ impl AstDisplay for ResolvedObjectName {
             ResolvedObjectName::Schema(n) => f.write_node(n),
             ResolvedObjectName::Role(n) => f.write_node(n),
             ResolvedObjectName::Item(n) => f.write_node(n),
+            ResolvedObjectName::NetworkPolicy(n) => f.write_node(n),
         }
     }
 }
@@ -824,6 +838,7 @@ impl AstInfo for Aug {
     type CteId = LocalId;
     type RoleName = ResolvedRoleName;
     type ObjectName = ResolvedObjectName;
+    type NetworkPolicyName = ResolvedNetworkPolicyName;
 }
 
 /// The identifier for a schema.
@@ -1051,6 +1066,7 @@ impl TryFrom<ResolvedObjectName> for ObjectId {
                 }
                 ResolvedItemName::Error => Err(anyhow!("error in name resolution")),
             },
+            ResolvedObjectName::NetworkPolicy(name) => Ok(ObjectId::NetworkPolicy(name.id)),
         }
     }
 }
@@ -1910,6 +1926,12 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
             ClusterAlterStrategy(value) => {
                 ClusterAlterStrategy(self.fold_cluster_alter_option_value(value))
             }
+            NetworkPolicyRules(rules) => NetworkPolicyRules(
+                rules
+                    .into_iter()
+                    .map(|r| self.fold_network_policy_rule_definition(r))
+                    .collect(),
+            ),
         }
     }
 
@@ -1931,6 +1953,29 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
             }
         }
     }
+
+    fn fold_network_policy_name(
+        &mut self,
+        name: <Raw as AstInfo>::NetworkPolicyName,
+    ) -> <Aug as AstInfo>::NetworkPolicyName {
+        match self.catalog.resolve_network_policy(&name.to_string()) {
+            Ok(policy) => ResolvedNetworkPolicyName {
+                id: policy.id(),
+                name: policy.name().to_string(),
+            },
+            Err(e) => {
+                if self.status.is_ok() {
+                    self.status = Err(e.into());
+                }
+                // garbage value that will be ignored since there's an error.
+                ResolvedNetworkPolicyName {
+                    id: NetworkPolicyId::User(0),
+                    name: "".to_string(),
+                }
+            }
+        }
+    }
+
     fn fold_object_name(
         &mut self,
         name: <Raw as AstInfo>::ObjectName,
@@ -1968,6 +2013,9 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
             UnresolvedObjectName::Item(name) => {
                 ResolvedObjectName::Item(self.fold_item_name(RawItemName::Name(name)))
             }
+            UnresolvedObjectName::NetworkPolicy(name) => ResolvedObjectName::NetworkPolicy(
+                self.fold_network_policy_name(RawNetworkPolicyName::Unresolved(name)),
+            ),
         }
     }
 
