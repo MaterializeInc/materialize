@@ -58,7 +58,7 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.args.startupLogFilter` |  | ``"INFO,mz_orchestratord=TRACE"`` |
 | `operator.image.pullPolicy` |  | ``"IfNotPresent"`` |
 | `operator.image.repository` |  | ``"materialize/orchestratord"`` |
-| `operator.image.tag` |  | ``"v0.122.0-dev.0--pr.g47923ddb1bb4f3fb38d152b8aa86a77514599b29"`` |
+| `operator.image.tag` |  | ``"v0.124.0-dev.0--pr.g4247871d2e585967e793272004cac37180e83778"`` |
 | `operator.nodeSelector` |  | ``{}`` |
 | `operator.resources.limits.memory` |  | ``"512Mi"`` |
 | `operator.resources.requests.cpu` |  | ``"100m"`` |
