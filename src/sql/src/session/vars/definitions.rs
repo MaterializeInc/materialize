@@ -669,6 +669,12 @@ pub static PG_TIMESTAMP_ORACLE_CONNECTION_POOL_TTL_STAGGER: VarDefinition = VarD
     false,
 );
 
+pub static UNSAFE_IS_SUPERUSER: VarDefinition = VarDefinition::new(
+    "unsafe_is_superuser",
+    value!(bool; false),
+    "If true, the user will be treated as a superuser for RBAC checks.",
+    true,
+);
 /// The default for the `DISK` option when creating managed clusters and cluster replicas.
 pub static DISK_CLUSTER_REPLICAS_DEFAULT: VarDefinition = VarDefinition::new(
     "disk_cluster_replicas_default",

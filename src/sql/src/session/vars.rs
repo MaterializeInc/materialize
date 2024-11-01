@@ -392,6 +392,7 @@ impl SessionVars {
             &STATEMENT_LOGGING_SAMPLE_RATE,
             &EMIT_INTROSPECTION_QUERY_NOTICE,
             &UNSAFE_NEW_TRANSACTION_WALL_TIME,
+            &UNSAFE_IS_SUPERUSER,
             &WELCOME_MESSAGE,
         ]
         .into_iter()
@@ -797,7 +798,11 @@ impl SessionVars {
 
     /// Returns the value of `is_superuser` configuration parameter.
     pub fn is_superuser(&self) -> bool {
-        self.user.is_superuser()
+        self.user.is_superuser() || self.unsafe_is_superuser()
+    }
+
+    pub fn unsafe_is_superuser(&self) -> bool {
+        self.expect_value::<bool>(&UNSAFE_IS_SUPERUSER).clone()
     }
 
     /// Returns the user associated with this `SessionVars` instance.

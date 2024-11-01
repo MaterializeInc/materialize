@@ -144,6 +144,10 @@ where
     fn vars(&self) -> &SessionVars {
         &self.vars
     }
+
+    fn is_superuser(&self) -> bool {
+        self.vars.is_superuser()
+    }
 }
 
 /// Data structure suitable for passing to other threads that need access to some common Session
