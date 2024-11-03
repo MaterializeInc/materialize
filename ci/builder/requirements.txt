@@ -47,7 +47,7 @@ pytest==8.3.3
 pytest-split==0.9.0
 pyyaml==6.0.1
 requests==2.32.3
-ruff==0.0.292
+ruff==0.7.2
 scipy==1.11.2
 semver==3.0.0
 shtab==1.5.8
