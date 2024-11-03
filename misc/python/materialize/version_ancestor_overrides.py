@@ -28,6 +28,12 @@ def get_ancestor_overrides_for_performance_regressions(
 
     min_ancestor_mz_version_per_commit = dict()
 
+    if scenario_class_name == "KafkaUpsertUnique":
+        # PR#29718 (storage: continual feedback upsert operator) increases CPU and memory
+        min_ancestor_mz_version_per_commit[
+            "62f1ef27222be4ff1e9a3e55334c14e074c1be17"
+        ] = MzVersion.parse_mz("v0.122.0")
+
     if scenario_class_name in (
         "SmallClusters",
         "AccumulateReductions",
