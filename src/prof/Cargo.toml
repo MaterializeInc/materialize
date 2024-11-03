@@ -18,7 +18,7 @@ jemalloc_pprof = { version = "0.6", optional = true }
 pprof_util = "0.6"
 libc = "0.2.138"
 mz-ore = { path = "../ore", default-features = false }
-pprof = "0.11.1"
+pprof = "0.13.0"
 prost = { version = "0.13.2", features = ["no-recursion-limit"] }
 tempfile = "3.8.1"
 tikv-jemalloc-ctl = { version = "0.6", features = ["use_std", "stats"], optional = true }
