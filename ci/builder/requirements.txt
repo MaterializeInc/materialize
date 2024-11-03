@@ -25,7 +25,7 @@ kubernetes-stubs==22.6.0.post1
 launchdarkly-api==11.0.0
 matplotlib==3.9.0
 matplotlib-stubs==0.2.0
-networkx==3.0
+networkx==3.4.2
 networkx-stubs==0.0.1
 numpy==1.26.1
 pandas==2.1.2
