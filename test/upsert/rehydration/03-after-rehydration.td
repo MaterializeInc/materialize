@@ -56,17 +56,17 @@ SELECT
 
 # Ensure we process updates correctly.
 $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} schema=${schema}
-{"key": "fish"} {"f1": "longerfish", "f2": 9000}
+{"key": "fish"} {"f1": "muchlongerfish", "f2": 9000}
 
 > SELECT * from upsert_tbl
 key           f1                  f2
 --------------------------------------
-fish          longerfish          9000
+fish          muchlongerfish      9000
 birdmore      geese               56
 mammalmore    moose               2
 
 # Wait for the value's new stats to propagate. We can't
-# just check that the `longerfish` value is larger here,
+# just check that the `muchlongerfish` value is larger here,
 # because the rehydrated value may be more costly. This
 # means we have to do this in 2 steps, like this.
 #
