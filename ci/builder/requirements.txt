@@ -39,7 +39,7 @@ prettytable==3.11.0
 psutil==5.9.4
 psycopg==3.2.3
 psycopg-binary==3.2.3
-pydantic==2.7.1
+pydantic==2.9.2
 pyelftools==0.29
 pyjwt==2.8.0
 PyMySQL==1.1.1
