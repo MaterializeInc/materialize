@@ -49,7 +49,7 @@ impl SystemParameterFrontend {
     pub async fn from(sync_config: &SystemParameterSyncConfig) -> Result<Self, anyhow::Error> {
         Ok(Self {
             ld_client: ld_client(sync_config).await?,
-            ld_ctx: ld_ctx(&sync_config.env_id, sync_config.build_info)?,
+            ld_ctx: ld_ctx(&sync_config.env_id, sync_config.build_info.clone())?,
             ld_key_map: sync_config.ld_key_map.clone(),
             ld_metrics: sync_config.metrics.clone(),
             now_fn: sync_config.now_fn.clone(),
@@ -144,7 +144,7 @@ async fn ld_client(sync_config: &SystemParameterSyncConfig) -> Result<ld::Client
 
 fn ld_ctx(
     env_id: &EnvironmentId,
-    build_info: &'static BuildInfo,
+    build_info: BuildInfo,
 ) -> Result<ld::Context, anyhow::Error> {
     // Register multiple contexts for this client.
     //

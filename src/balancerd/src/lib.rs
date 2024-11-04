@@ -77,7 +77,7 @@ use crate::dyncfgs::{
 };
 
 /// Balancer build information.
-pub const BUILD_INFO: BuildInfo = build_info!();
+pub const BUILD_INFO: BuildInfo = build_info!(None);
 
 pub struct BalancerConfig {
     /// Info about which version of the code is running.

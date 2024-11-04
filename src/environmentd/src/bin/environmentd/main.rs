@@ -377,6 +377,16 @@ pub struct Args {
     )]
     metadata_backend_url: Option<SensitiveUrl>,
 
+    /// Version for Self-Hosted Materialize (in Kubernetes) set by the Helm chart only. This
+    /// version does not correspond to the Materialize (core) version (v0.125.0), but is time-based
+    /// for our twice-a-year self-hosted releases: v25.1.Z, v25.2.Z in 2025, then v26.1.Z, v26.2.Z
+    /// in 2026, and so on. This version is displayed in addition in `SELECT mz_version()` if set.
+    #[clap(
+        long,
+        env = "SELF_HOSTED_VERSION",
+    )]
+    self_hosted_version: Option<String>,
+
     // === Storage options. ===
     /// Where the persist library should store its blob data.
     #[clap(long, env = "PERSIST_BLOB_URL")]

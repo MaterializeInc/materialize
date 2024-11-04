@@ -106,7 +106,7 @@ impl UpgradeChecker {
     /// Returns true if the installed version of `mz`
     /// is older than the version sent by parameter.
     fn is_installed_version_older_than(&self, version: Version) -> bool {
-        let installed_version = build_info!().semver_version();
+        let installed_version = build_info!(None).semver_version();
 
         version > installed_version
     }

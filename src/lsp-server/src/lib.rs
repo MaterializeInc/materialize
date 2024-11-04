@@ -14,7 +14,7 @@ use mz_build_info::{build_info, BuildInfo};
 use std::sync::LazyLock;
 
 /// Build information about the LSP server.
-pub const BUILD_INFO: BuildInfo = build_info!();
+pub const BUILD_INFO: BuildInfo = build_info!(None);
 /// Variable holding the version of LSP server.
 pub static PKG_VERSION: LazyLock<String> =
     LazyLock::new(|| BUILD_INFO.semver_version().to_string());

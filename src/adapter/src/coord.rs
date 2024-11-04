@@ -954,7 +954,7 @@ pub struct Config {
     pub timestamp_oracle_url: Option<SensitiveUrl>,
     pub unsafe_mode: bool,
     pub all_features: bool,
-    pub build_info: &'static BuildInfo,
+    pub build_info: BuildInfo,
     pub environment_id: EnvironmentId,
     pub metrics_registry: MetricsRegistry,
     pub now: NowFn,

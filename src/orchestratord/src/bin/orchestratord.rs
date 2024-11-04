@@ -30,7 +30,7 @@ use mz_ore::{
     metrics::MetricsRegistry,
 };
 
-const BUILD_INFO: BuildInfo = build_info!();
+const BUILD_INFO: BuildInfo = build_info!(None);
 static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version());
 
 #[derive(clap::Parser)]

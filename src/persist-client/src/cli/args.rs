@@ -101,6 +101,7 @@ pub(crate) const READ_ALL_BUILD_INFO: BuildInfo = BuildInfo {
     version: "99.999.99+test",
     sha: "0000000000000000000000000000000000000000",
     time: "",
+    self_hosted_version: None,
 };
 
 // All `inspect` command are read-only.

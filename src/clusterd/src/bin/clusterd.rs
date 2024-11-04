@@ -41,7 +41,7 @@ use mz_txn_wal::operator::TxnsContext;
 use tower::Service;
 use tracing::{error, info};
 
-const BUILD_INFO: BuildInfo = build_info!();
+const BUILD_INFO: BuildInfo = build_info!(None);
 
 pub static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version());
 

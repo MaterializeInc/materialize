@@ -58,7 +58,7 @@ use mz_storage_types::connections::ConnectionContext;
 use serde::{Deserialize, Serialize};
 use tracing::{error, Instrument};
 
-pub const BUILD_INFO: BuildInfo = build_info!();
+pub const BUILD_INFO: BuildInfo = build_info!(None);
 pub static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version());
 
 #[derive(Parser, Debug)]

@@ -116,7 +116,7 @@ mod internal {
 }
 
 /// Persist build information.
-pub const BUILD_INFO: BuildInfo = build_info!();
+pub const BUILD_INFO: BuildInfo = build_info!(None);
 
 pub(crate) const DANGEROUS_ENABLE_SCHEMA_EVOLUTION: Config<bool> = Config::new(
     "persist_dangerous_enable_schema_evolution",

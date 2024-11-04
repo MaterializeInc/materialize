@@ -39,7 +39,7 @@ macro_rules! die {
     }}
 }
 
-pub const BUILD_INFO: BuildInfo = build_info!();
+pub const BUILD_INFO: BuildInfo = build_info!(None);
 
 /// Integration test driver for Materialize.
 #[derive(clap::Parser)]

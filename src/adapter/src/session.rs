@@ -203,7 +203,7 @@ pub struct SessionConfig {
 impl<T: TimestampManipulation> Session<T> {
     /// Creates a new session for the specified connection ID.
     pub(crate) fn new(
-        build_info: &'static BuildInfo,
+        build_info: BuildInfo,
         config: SessionConfig,
         metrics: SessionMetrics,
     ) -> Session<T> {
@@ -287,7 +287,7 @@ impl<T: TimestampManipulation> Session<T> {
     }
 
     fn new_internal(
-        build_info: &'static BuildInfo,
+        build_info: BuildInfo,
         SessionConfig {
             conn_id,
             uuid,

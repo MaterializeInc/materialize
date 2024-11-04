@@ -66,7 +66,7 @@ mod telemetry;
 #[cfg(feature = "test")]
 pub mod test_util;
 
-pub const BUILD_INFO: BuildInfo = build_info!();
+pub const BUILD_INFO: BuildInfo = build_info!(None);
 
 /// Configuration for an `environmentd` server.
 #[derive(Derivative)]
@@ -164,6 +164,8 @@ pub struct Config {
     /// Values to set for system parameters, if those system parameters have not
     /// already been set by the system user.
     pub system_parameter_defaults: BTreeMap<String, String>,
+    /// Self-hosted Version
+    pub self_hosted_version: Option<String>,
 
     // === AWS options. ===
     /// The AWS account ID, which will be used to generate ARNs for
@@ -373,7 +375,7 @@ impl Listeners {
         let system_parameter_sync_config = if let Some(ld_sdk_key) = config.launchdarkly_sdk_key {
             Some(SystemParameterSyncConfig::new(
                 config.environment_id.clone(),
-                &BUILD_INFO,
+                BUILD_INFO,
                 &config.metrics_registry,
                 config.now.clone(),
                 ld_sdk_key,
@@ -622,7 +624,7 @@ impl Listeners {
             timestamp_oracle_url: config.timestamp_oracle_url,
             unsafe_mode: config.unsafe_mode,
             all_features: config.all_features,
-            build_info: &BUILD_INFO,
+            build_info: build_info!(config.self_hosted_version),
             environment_id: config.environment_id.clone(),
             metrics_registry: config.metrics_registry.clone(),
             now: config.now,

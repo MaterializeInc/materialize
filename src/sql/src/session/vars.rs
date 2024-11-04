@@ -366,14 +366,14 @@ pub struct SessionVars {
     /// The set of all session variables.
     vars: OrdMap<&'static UncasedStr, SessionVar>,
     /// Inputs to computed variables.
-    build_info: &'static BuildInfo,
+    build_info: BuildInfo,
     /// Information about the user associated with this Session.
     user: User,
 }
 
 impl SessionVars {
     /// Creates a new [`SessionVars`] without considering the System or Role defaults.
-    pub fn new_unchecked(build_info: &'static BuildInfo, user: User) -> SessionVars {
+    pub fn new_unchecked(build_info: BuildInfo, user: User) -> SessionVars {
         use definitions::*;
 
         let vars = [
@@ -647,8 +647,8 @@ impl SessionVars {
     }
 
     /// Returns the build info.
-    pub fn build_info(&self) -> &'static BuildInfo {
-        self.build_info
+    pub fn build_info(&self) -> BuildInfo {
+        self.build_info.clone()
     }
 
     /// Returns the value of the `client_encoding` configuration parameter.

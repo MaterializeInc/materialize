@@ -12,7 +12,7 @@ use mz_build_info::build_info;
 use mz_prof_http::FlamegraphTemplate;
 
 fn main() {
-    let bi = build_info!();
+    let bi = build_info!(None);
     let mzfg = std::env::args()
         .nth(1)
         .map(|path| {

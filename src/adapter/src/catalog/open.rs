@@ -1186,7 +1186,7 @@ fn add_new_builtin_cluster_replicas_migration(
 fn remove_invalid_config_param_role_defaults_migration(
     txn: &mut Transaction<'_>,
 ) -> Result<(), AdapterError> {
-    static BUILD_INFO: mz_build_info::BuildInfo = mz_build_info::build_info!();
+    static BUILD_INFO: mz_build_info::BuildInfo = mz_build_info::build_info!(None);
 
     let roles_to_migrate: BTreeMap<_, _> = txn
         .get_roles()

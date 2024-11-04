@@ -98,7 +98,7 @@ impl Handle {
 /// outstanding clients have dropped.
 #[derive(Debug, Clone)]
 pub struct Client {
-    build_info: &'static BuildInfo,
+    build_info: BuildInfo,
     inner_cmd_tx: mpsc::UnboundedSender<(OpenTelemetryContext, Command)>,
     id_alloc: IdAllocator<IdAllocatorInnerBitSet>,
     now: NowFn,
@@ -109,7 +109,7 @@ pub struct Client {
 
 impl Client {
     pub(crate) fn new(
-        build_info: &'static BuildInfo,
+        build_info: BuildInfo,
         cmd_tx: mpsc::UnboundedSender<(OpenTelemetryContext, Command)>,
         metrics: Metrics,
         now: NowFn,
@@ -147,7 +147,7 @@ impl Client {
         // We use the system clock to determine when a session connected to Materialize. This is not
         // intended to be 100% accurate and correct, so we don't burden the timestamp oracle with
         // generating a more correct timestamp.
-        Session::new(self.build_info, config, self.metrics().session_metrics())
+        Session::new(self.build_info.clone(), config, self.metrics().session_metrics())
     }
 
     /// Upgrades this client to a session client.

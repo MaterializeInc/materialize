@@ -133,7 +133,7 @@ use tracing::{debug, error, info, info_span, trace, warn, Instrument};
 #[path = "upsert_open_loop/workload.rs"]
 mod workload;
 
-const BUILD_INFO: BuildInfo = build_info!();
+const BUILD_INFO: BuildInfo = build_info!(None);
 
 const MIB: u64 = 1024 * 1024;
 

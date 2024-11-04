@@ -21,6 +21,8 @@ pub struct BuildInfo {
     pub sha: &'static str,
     /// The time of the build in UTC as an ISO 8601-compliant string.
     pub time: &'static str,
+    /// Version of Self-Hosted Materialize.
+    pub self_hosted_version: Option<String>,
 }
 
 /// Dummy build information.
@@ -31,6 +33,7 @@ pub const DUMMY_BUILD_INFO: BuildInfo = BuildInfo {
     version: "0.0.0+dummy",
     sha: "0000000000000000000000000000000000000000",
     time: "",
+    self_hosted_version: None,
 };
 
 /// The target triple of the platform.
@@ -39,7 +42,11 @@ pub const TARGET_TRIPLE: &str = env!("TARGET_TRIPLE");
 impl BuildInfo {
     /// Constructs a human-readable version string.
     pub fn human_version(&self) -> String {
-        format!("v{} ({})", self.version, &self.sha[..9])
+        if let Some(ref self_hosted_version) = self.self_hosted_version {
+            format!("v{} ({}, self-hosted: {})", self.version, &self.sha[..9], self_hosted_version)
+        } else {
+            format!("v{} ({})", self.version, &self.sha[..9])
+        }
     }
 
     /// Returns the version as a rich [semantic version][semver].
@@ -81,11 +88,12 @@ impl BuildInfo {
 /// in a build info with stale, cached values for the build SHA and time.
 #[macro_export]
 macro_rules! build_info {
-    () => {
+    ($self_hosted_version:expr) => {
         $crate::BuildInfo {
             version: env!("CARGO_PKG_VERSION"),
             sha: $crate::__git_sha_internal!(),
             time: $crate::__build_time_internal!(),
+            self_hosted_version: $self_hosted_version,
         }
     };
 }
@@ -170,7 +178,7 @@ pub mod private {
 mod test {
     #[test] // allow(test-attribute)
     fn smoketest_build_info() {
-        let build_info = crate::build_info!();
+        let build_info = crate::build_info!(None);
 
         assert_eq!(build_info.sha.len(), 40);
         assert_eq!(build_info.time.len(), 20);
