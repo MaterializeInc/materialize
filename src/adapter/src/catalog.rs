@@ -586,6 +586,7 @@ impl Catalog {
                 connection_context: ConnectionContext::for_tests(secrets_reader),
                 active_connection_count,
                 builtin_item_migration_config: BuiltinItemMigrationConfig::Legacy,
+                helm_chart_version: None,
             },
         })
         .await?;

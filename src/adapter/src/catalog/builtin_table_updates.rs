@@ -204,6 +204,7 @@ impl CatalogState {
                 let session_vars_reference = SessionVars::new_unchecked(
                     &mz_build_info::DUMMY_BUILD_INFO,
                     SYSTEM_USER.clone(),
+                    None,
                 );
 
                 for (name, val) in role.vars() {

@@ -73,9 +73,9 @@ use url::Url;
 
 mod sys;
 
-static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version());
+static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version(None));
 static LONG_VERSION: LazyLock<String> = LazyLock::new(|| {
-    iter::once(BUILD_INFO.human_version())
+    iter::once(BUILD_INFO.human_version(None))
         .chain(build_info())
         .join("\n")
 });
@@ -379,6 +379,13 @@ pub struct Args {
         ],
     )]
     metadata_backend_url: Option<SensitiveUrl>,
+
+    /// Helm chart version for self-hosted Materialize. This version does not correspond to the
+    /// Materialize (core) version (v0.125.0), but is time-based for our twice-a-year helm chart
+    /// releases: v25.1.Z, v25.2.Z in 2025, then v26.1.Z, v26.2.Z in 2026, and so on. This version
+    /// is displayed in addition in `SELECT mz_version()` if set.
+    #[clap(long, env = "HELM_CHART_VERSION")]
+    helm_chart_version: Option<String>,
 
     // === Storage options. ===
     /// Where the persist library should store its blob data.
@@ -1057,6 +1064,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                     .into_iter()
                     .map(|kv| (kv.key, kv.value))
                     .collect(),
+                helm_chart_version: args.helm_chart_version.clone(),
                 // AWS options.
                 aws_account_id: args.aws_account_id,
                 aws_privatelink_availability_zones: args.aws_privatelink_availability_zones,
@@ -1087,7 +1095,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
 
     println!(
         "environmentd {} listening...",
-        mz_environmentd::BUILD_INFO.human_version()
+        mz_environmentd::BUILD_INFO.human_version(args.helm_chart_version)
     );
     println!(" SQL address: {}", server.sql_local_addr());
     println!(" HTTP address: {}", server.http_local_addr());

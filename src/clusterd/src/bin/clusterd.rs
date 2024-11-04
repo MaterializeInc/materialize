@@ -43,7 +43,7 @@ use tracing::{error, info};
 
 const BUILD_INFO: BuildInfo = build_info!();
 
-pub static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version());
+pub static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version(None));
 
 /// Independent cluster server for Materialize.
 #[derive(clap::Parser)]

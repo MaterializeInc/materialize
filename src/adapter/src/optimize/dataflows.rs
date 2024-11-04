@@ -659,9 +659,12 @@ fn eval_unmaterializable_func(
             let uptime = chrono::Duration::from_std(uptime).map_or(Datum::Null, Datum::from);
             pack(uptime)
         }
-        UnmaterializableFunc::MzVersion => {
-            pack(Datum::from(&*state.config().build_info.human_version()))
-        }
+        UnmaterializableFunc::MzVersion => pack(Datum::from(
+            &*state
+                .config()
+                .build_info
+                .human_version(state.config().helm_chart_version.clone()),
+        )),
         UnmaterializableFunc::MzVersionNum => {
             pack(Datum::Int32(state.config().build_info.version_num()))
         }

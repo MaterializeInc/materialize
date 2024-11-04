@@ -259,6 +259,7 @@ impl Catalog {
                         &ENABLE_CONTINUAL_TASK_BUILTINS,
                     ),
                 },
+                helm_chart_version: config.helm_chart_version,
             },
             cluster_replica_sizes: config.cluster_replica_sizes,
             availability_zones: config.availability_zones,
@@ -1195,7 +1196,7 @@ fn remove_invalid_config_param_role_defaults_migration(
             //
             // TODO(parkmycar): This is a bit hacky, instead we should have a static list of all
             // session variables.
-            let session_vars = SessionVars::new_unchecked(&BUILD_INFO, SYSTEM_USER.clone());
+            let session_vars = SessionVars::new_unchecked(&BUILD_INFO, SYSTEM_USER.clone(), None);
 
             // Iterate over all of the variable defaults for this role.
             let mut invalid_roles_vars = BTreeMap::new();

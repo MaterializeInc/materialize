@@ -34,6 +34,7 @@ impl SystemParameterBackend {
             user: SYSTEM_USER.name.clone(),
             client_ip: None,
             external_metadata_rx: None,
+            helm_chart_version: None,
         });
         let session_client = client.startup(session).await?;
         Ok(Self { session_client })

@@ -97,6 +97,8 @@ pub struct RunParams<'a, A> {
     pub internal: bool,
     /// Global connection limit and count
     pub active_connection_count: Arc<Mutex<ConnectionCounter>>,
+    /// Helm chart version
+    pub helm_chart_version: Option<String>,
 }
 
 /// Runs a pgwire connection to completion.
@@ -120,6 +122,7 @@ pub async fn run<'a, A>(
         frontegg,
         internal,
         active_connection_count,
+        helm_chart_version,
     }: RunParams<'a, A>,
 ) -> Result<(), io::Error>
 where
@@ -190,6 +193,7 @@ where
                     user: auth_session.user().into(),
                     client_ip: conn.peer_addr().clone(),
                     external_metadata_rx: Some(auth_session.external_metadata_rx()),
+                    helm_chart_version,
                 });
                 let expired = async move { auth_session.expired().await };
                 (session, expired.left_future())
@@ -211,6 +215,7 @@ where
             user,
             client_ip: conn.peer_addr().clone(),
             external_metadata_rx: None,
+            helm_chart_version,
         });
         // No frontegg check, so auth session lasts indefinitely.
         let auth_session = pending().right_future();

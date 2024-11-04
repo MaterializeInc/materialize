@@ -31,7 +31,7 @@ use mz_ore::{
 };
 
 const BUILD_INFO: BuildInfo = build_info!();
-static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version());
+static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version(None));
 
 #[derive(clap::Parser)]
 #[clap(name = "orchestratord", version = VERSION.as_str())]

@@ -994,6 +994,8 @@ pub struct Config {
     /// previous deployment. Only used during 0dt deployment, while in read-only
     /// mode.
     pub caught_up_trigger: Option<Trigger>,
+
+    pub helm_chart_version: Option<String>,
 }
 
 /// Soft-state metadata about a compute replica
@@ -3503,6 +3505,7 @@ pub fn serve(
         read_only_controllers,
         enable_0dt_deployment,
         caught_up_trigger: clusters_caught_up_trigger,
+        helm_chart_version,
     }: Config,
 ) -> BoxFuture<'static, Result<(Handle, Client), AdapterError>> {
     async move {
@@ -3642,6 +3645,7 @@ pub fn serve(
                 active_connection_count,
                 http_host_name,
                 builtin_item_migration_config,
+                helm_chart_version,
             },
         })
         .await?;

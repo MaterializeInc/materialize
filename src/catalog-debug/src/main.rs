@@ -59,7 +59,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{error, Instrument};
 
 pub const BUILD_INFO: BuildInfo = build_info!();
-pub static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version());
+pub static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version(None));
 
 #[derive(Parser, Debug)]
 #[clap(name = "catalog", next_line_help = true, version = VERSION.as_str())]
@@ -598,6 +598,7 @@ async fn upgrade_check(
             ),
             active_connection_count: Arc::new(Mutex::new(ConnectionCounter::new(0, 0))),
             builtin_item_migration_config: BuiltinItemMigrationConfig::Legacy,
+            helm_chart_version: None,
         },
         &mut storage,
     )
@@ -609,7 +610,7 @@ async fn upgrade_check(
     let msg = format!(
         "catalog upgrade from {} to {} would succeed in about {} ms",
         last_seen_version,
-        &BUILD_INFO.human_version(),
+        &BUILD_INFO.human_version(None),
         dur.as_millis(),
     );
     println!("{msg}");

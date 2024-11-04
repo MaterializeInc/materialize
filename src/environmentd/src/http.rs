@@ -93,6 +93,7 @@ pub struct HttpConfig {
     pub adapter_client: mz_adapter::Client,
     pub allowed_origin: AllowOrigin,
     pub active_connection_count: Arc<Mutex<ConnectionCounter>>,
+    pub helm_chart_version: Option<String>,
     pub concurrent_webhook_req: Arc<tokio::sync::Semaphore>,
     pub metrics: Metrics,
 }
@@ -114,6 +115,7 @@ pub struct WsState {
     frontegg: Arc<Option<FronteggAuthentication>>,
     adapter_client_rx: Delayed<mz_adapter::Client>,
     active_connection_count: SharedConnectionCounter,
+    helm_chart_version: Option<String>,
 }
 
 #[derive(Clone)]
@@ -137,6 +139,7 @@ impl HttpServer {
             adapter_client,
             allowed_origin,
             active_connection_count,
+            helm_chart_version,
             concurrent_webhook_req,
             metrics,
         }: HttpConfig,
@@ -177,6 +180,7 @@ impl HttpServer {
                 frontegg,
                 adapter_client_rx,
                 active_connection_count,
+                helm_chart_version,
             });
 
         let webhook_router = Router::new()
@@ -259,6 +263,7 @@ pub struct InternalHttpConfig {
     pub metrics_registry: MetricsRegistry,
     pub adapter_client_rx: oneshot::Receiver<mz_adapter::Client>,
     pub active_connection_count: Arc<Mutex<ConnectionCounter>>,
+    pub helm_chart_version: Option<String>,
     pub deployment_state_handle: DeploymentStateHandle,
     pub internal_console_redirect_url: Option<String>,
 }
@@ -320,6 +325,7 @@ impl InternalHttpServer {
             metrics_registry,
             adapter_client_rx,
             active_connection_count,
+            helm_chart_version,
             deployment_state_handle,
             internal_console_redirect_url,
         }: InternalHttpConfig,
@@ -414,6 +420,7 @@ impl InternalHttpServer {
                 frontegg: Arc::new(None),
                 adapter_client_rx,
                 active_connection_count,
+                helm_chart_version: helm_chart_version.clone(),
             });
 
         let leader_router = Router::new()
@@ -508,6 +515,7 @@ impl AuthedClient {
         user: AuthedUser,
         peer_addr: IpAddr,
         active_connection_count: SharedConnectionCounter,
+        helm_chart_version: Option<String>,
         session_config: F,
         options: BTreeMap<String, String>,
     ) -> Result<Self, AdapterError>
@@ -521,6 +529,7 @@ impl AuthedClient {
             user: user.name,
             client_ip: Some(peer_addr),
             external_metadata_rx: user.external_metadata_rx,
+            helm_chart_version,
         });
         let drop_connection =
             DropConnection::new_connection(session.user(), active_connection_count)?;
@@ -582,6 +591,7 @@ where
             (StatusCode::INTERNAL_SERVER_ERROR, "adapter client missing").into_response()
         })?;
         let active_connection_count = req.extensions.get::<SharedConnectionCounter>().unwrap();
+        let helm_chart_version = None;
 
         let options = if params.options.is_empty() {
             // It's possible 'options' simply wasn't provided, we don't want that to
@@ -604,6 +614,7 @@ where
             user.clone(),
             peer_addr,
             Arc::clone(active_connection_count),
+            helm_chart_version,
             |session| {
                 session
                     .vars_mut()
@@ -710,6 +721,7 @@ async fn init_ws(
         frontegg,
         adapter_client_rx,
         active_connection_count,
+        helm_chart_version,
     }: &WsState,
     existing_user: Option<AuthedUser>,
     peer_addr: IpAddr,
@@ -790,6 +802,7 @@ async fn init_ws(
         user,
         peer_addr,
         Arc::clone(active_connection_count),
+        helm_chart_version.clone(),
         |_session| (),
         options,
     )
