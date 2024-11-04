@@ -193,7 +193,7 @@ impl Coordinator {
         match op {
             DeferredWriteOp::Plan(mut deferred) => {
                 if let Err(e) = deferred.validity.check(self.catalog()) {
-                    return deferred.ctx.retire(Err(e));
+                    deferred.ctx.retire(Err(e))
                 } else {
                     // Write statements never need to track resolved IDs (NOTE: This is not the
                     // same thing as plan dependencies, which we do need to re-validate).
