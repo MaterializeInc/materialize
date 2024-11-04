@@ -38,13 +38,12 @@ np
 r1,r2
 (empty)
 
-query TTTT
-SELECT id, name, owner_id, oid FROM mz_internal.mz_network_policies
+query TTT
+SELECT id, name, owner_id FROM mz_internal.mz_network_policies
 ----
 u1
 np
 s1
-20177
 
 
 query TTTTT colnames
