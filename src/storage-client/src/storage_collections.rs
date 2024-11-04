@@ -50,6 +50,7 @@ use mz_storage_types::sources::{
     GenericSourceConnection, IngestionDescription, SourceData, SourceDesc, SourceExport,
     SourceExportDataConfig,
 };
+use mz_storage_types::time_dependence::{TimeDependence, TimeDependenceError};
 use mz_txn_wal::metrics::Metrics as TxnMetrics;
 use mz_txn_wal::txn_read::{DataSnapshot, TxnsRead};
 use mz_txn_wal::txns::TxnsHandle;
@@ -302,6 +303,13 @@ pub trait StorageCollections: Debug {
         &self,
         desired_holds: Vec<GlobalId>,
     ) -> Result<Vec<ReadHold<Self::Timestamp>>, ReadHoldError>;
+
+    /// Get the time dependence for a storage collection. Returns no value if unknown or if
+    /// the object isn't managed by storage.
+    fn determine_time_dependence(
+        &self,
+        id: GlobalId,
+    ) -> Result<Option<TimeDependence>, TimeDependenceError>;
 }
 
 /// Frontiers of the collection identified by `id`.
@@ -1979,6 +1987,48 @@ where
         trace!(?desired_holds, ?acquired_holds, "acquire_read_holds");
 
         Ok(acquired_holds)
+    }
+
+    /// Determine time dependence information for the object.
+    fn determine_time_dependence(
+        &self,
+        id: GlobalId,
+    ) -> Result<Option<TimeDependence>, TimeDependenceError> {
+        use TimeDependenceError::CollectionMissing;
+        let collections = self.collections.lock().expect("lock poisoned");
+        let mut collection = Some(collections.get(&id).ok_or(CollectionMissing(id))?);
+
+        let mut result = None;
+
+        while let Some(c) = collection.take() {
+            use DataSource::*;
+            match &c.description.data_source {
+                Ingestion(ingestion) => {
+                    use GenericSourceConnection::*;
+                    match ingestion.desc.connection {
+                        // Kafka, Postgres, MySql sources follow wall clock.
+                        Kafka(_) | Postgres(_) | MySql(_) => {
+                            result = Some(TimeDependence::default())
+                        }
+                        // Load generators not further specified.
+                        LoadGenerator(_) => {}
+                    }
+                }
+                IngestionExport { ingestion_id, .. } => {
+                    let c = collections
+                        .get(ingestion_id)
+                        .ok_or(CollectionMissing(*ingestion_id))?;
+                    collection = Some(c);
+                }
+                // Introspection, other, progress, table, and webhook sources follow wall clock.
+                Introspection(_) | Progress | Table | Webhook { .. } => {
+                    result = Some(TimeDependence::default())
+                }
+                // Materialized views, continual tasks, etc, aren't managed by storage.
+                Other => {}
+            };
+        }
+        Ok(result)
     }
 }
 

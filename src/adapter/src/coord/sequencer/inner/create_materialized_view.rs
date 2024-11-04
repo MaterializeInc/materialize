@@ -650,9 +650,6 @@ impl Coordinator {
                 let output_desc = global_lir_plan.desc().clone();
                 let (mut df_desc, df_meta) = global_lir_plan.unapply();
 
-                df_desc.time_dependence =
-                    time_dependence(coord.catalog(), df_desc.import_ids(), refresh_schedule);
-
                 // Save plan structures.
                 coord
                     .catalog_mut()

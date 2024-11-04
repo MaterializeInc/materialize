@@ -19,6 +19,7 @@
 
 use mz_repr::GlobalId;
 use mz_storage_types::read_holds::ReadHoldError;
+use mz_storage_types::time_dependence::TimeDependenceError;
 use thiserror::Error;
 
 use crate::controller::{ComputeInstanceId, ReplicaId};
@@ -150,6 +151,15 @@ impl From<ReadHoldError> for DataflowCreationError {
         match error {
             ReadHoldError::CollectionMissing(id) => Self::CollectionMissing(id),
             ReadHoldError::SinceViolation(id) => Self::SinceViolation(id),
+        }
+    }
+}
+
+impl From<TimeDependenceError> for DataflowCreationError {
+    fn from(error: TimeDependenceError) -> Self {
+        match error {
+            TimeDependenceError::CollectionMissing(id) => Self::CollectionMissing(id),
+            TimeDependenceError::InstanceMissing(id) => Self::InstanceMissing(id),
         }
     }
 }

@@ -148,6 +148,7 @@ use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::sinks::S3SinkFormat;
 use mz_storage_types::sources::Timeline;
+use mz_storage_types::time_dependence::TimeDependence;
 use mz_timestamp_oracle::postgres_oracle::{
     PostgresTimestampOracle, PostgresTimestampOracleConfig,
 };
@@ -2674,9 +2675,7 @@ impl Coordinator {
                         (optimized_plan, global_lir_plan)
                     };
 
-                    let (mut physical_plan, metainfo) = global_lir_plan.unapply();
-                    physical_plan.time_dependence =
-                        time_dependence(self.catalog(), physical_plan.import_ids(), None);
+                    let (physical_plan, metainfo) = global_lir_plan.unapply();
                     let metainfo = {
                         // Pre-allocate a vector of transient GlobalIds for each notice.
                         let notice_ids = std::iter::repeat_with(|| self.allocate_transient_id())
@@ -2735,12 +2734,7 @@ impl Coordinator {
                         (optimized_plan, global_lir_plan)
                     };
 
-                    let (mut physical_plan, metainfo) = global_lir_plan.unapply();
-                    physical_plan.time_dependence = time_dependence(
-                        self.catalog(),
-                        physical_plan.import_ids(),
-                        mv.refresh_schedule.clone(),
-                    );
+                    let (physical_plan, metainfo) = global_lir_plan.unapply();
                     let metainfo = {
                         // Pre-allocate a vector of transient GlobalIds for each notice.
                         let notice_ids = std::iter::repeat_with(|| self.allocate_transient_id())

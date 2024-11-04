@@ -354,6 +354,16 @@ impl<P, S, T> DataflowDescription<P, S, T> {
             })
     }
 
+    /// Identifiers of exported continual tasks.
+    pub fn continual_task_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
+        self.sink_exports
+            .iter()
+            .filter_map(|(id, desc)| match desc.connection {
+                ComputeSinkConnection::ContinualTask(_) => Some(*id),
+                _ => None,
+            })
+    }
+
     /// Identifiers of exported copy to sinks.
     pub fn copy_to_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
         self.sink_exports
