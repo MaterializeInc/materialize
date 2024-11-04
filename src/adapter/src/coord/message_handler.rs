@@ -91,10 +91,7 @@ impl Coordinator {
                     .boxed_local()
                     .await
             }
-            Message::TryDeferred {
-                conn_id,
-                acquired_lock,
-            } => self.try_deferred(conn_id, acquired_lock).await,
+            Message::TryDeferred { conn_id } => self.try_deferred(conn_id).await,
             Message::GroupCommitInitiate(span, permit) => {
                 // Add an OpenTelemetry link to our current span.
                 tracing::Span::current().add_link(span.context().span().span_context().clone());

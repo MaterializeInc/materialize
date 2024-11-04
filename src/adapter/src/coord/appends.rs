@@ -34,7 +34,7 @@ use crate::catalog::BuiltinTableUpdate;
 use crate::coord::{Coordinator, Message, PendingTxn, PlanValidity};
 use crate::session::{GroupCommitWriteLocks, WriteLocks};
 use crate::util::{CompletedClientTransmitter, ResultExt};
-use crate::{AdapterError, ExecuteContext};
+use crate::ExecuteContext;
 
 /// An operation that was deferred waiting for [`WriteLocks`].
 #[derive(Debug)]
@@ -46,20 +46,6 @@ pub enum DeferredWriteOp {
 }
 
 impl DeferredWriteOp {
-    /// Returns an Iterator of all the required locks for current operation.
-    pub fn required_locks(&self) -> impl Iterator<Item = GlobalId> + use<'_> {
-        match self {
-            DeferredWriteOp::Plan(plan) => {
-                let iter = plan.requires_locks.iter().copied();
-                itertools::Either::Left(iter)
-            }
-            DeferredWriteOp::Write(write) => {
-                let iter = write.writes.keys().copied();
-                itertools::Either::Right(iter)
-            }
-        }
-    }
-
     /// Returns the [`ConnectionId`] associated with this deferred op.
     pub fn conn_id(&self) -> &ConnectionId {
         match self {
@@ -150,46 +136,13 @@ impl Coordinator {
     ///
     /// If we can't acquire all of the write locks then we'll defer the plan again and wait for
     /// the necessary locks to become available.
-    pub(crate) async fn try_deferred(
-        &mut self,
-        conn_id: ConnectionId,
-        acquired_lock: Option<(GlobalId, tokio::sync::OwnedMutexGuard<()>)>,
-    ) {
+    pub(crate) async fn try_deferred(&mut self, conn_id: ConnectionId) {
         // Try getting the deferred op, it may have already been canceled.
         let Some(op) = self.deferred_write_ops.remove(&conn_id) else {
             tracing::warn!(%conn_id, "no deferred op found, it must have been canceled?");
             return;
         };
 
-        // Try to collect all of the necessary locks.
-        let mut write_locks = WriteLocks::builder(op.required_locks());
-
-        // If we already have one acquired lock, insert into our builder.
-        let acquired_gid = match acquired_lock {
-            Some((gid, lock)) => {
-                write_locks.insert_lock(gid, lock);
-                Some(gid)
-            }
-            None => None,
-        };
-        // Acquire the rest of our locks, filtering out the one we already have.
-        for gid in op.required_locks().filter(|gid| Some(*gid) != acquired_gid) {
-            if let Some(lock) = self.try_grant_object_write_lock(gid) {
-                write_locks.insert_lock(gid, lock);
-            }
-        }
-
-        // If we failed to acquire any locks, spawn a task that waits for them to become available.
-        let locks = match write_locks.all_or_nothing(op.conn_id()) {
-            Ok(locks) => locks,
-            Err(failed_to_acquire) => {
-                let acquire_future = self.grant_object_write_lock(failed_to_acquire);
-                self.defer_op(acquire_future, op);
-                return;
-            }
-        };
-
-        // We acquired all of our locks! Sequence our plans.
         match op {
             DeferredWriteOp::Plan(mut deferred) => {
                 if let Err(e) = deferred.validity.check(self.catalog()) {
@@ -198,18 +151,6 @@ impl Coordinator {
                     // Write statements never need to track resolved IDs (NOTE: This is not the
                     // same thing as plan dependencies, which we do need to re-validate).
                     let resolved_ids = ResolvedIds(BTreeSet::new());
-                    let conn_id = deferred.ctx.session().conn_id().clone();
-
-                    // If the session already has write locks they're incorrect.
-                    if let Err(existing) = deferred.ctx.session_mut().try_grant_write_locks(locks) {
-                        tracing::error!(
-                            %conn_id,
-                            ?existing,
-                            "session already write locks granted?",
-                        );
-                        return deferred.ctx.retire(Err(AdapterError::WrongSetOfLocks));
-                    };
-
                     // Note: This plan is not guaranteed to run, it may get deferred again.
                     self.sequence_plan(deferred.ctx, deferred.plan, resolved_ids)
                         .await;
@@ -223,7 +164,7 @@ impl Coordinator {
                 self.submit_write(PendingWriteTxn::User {
                     span,
                     writes,
-                    write_locks: Some(locks),
+                    write_locks: None,
                     pending_txn,
                 });
             }
@@ -592,12 +533,9 @@ impl Coordinator {
             //
             // Note: This does not guarantee the plan will be able to run, there might be
             // other locks that we later fail to get.
-            let acquired_lock = acquire_future.await;
+            let _ = acquire_future.await;
             // If this send fails then the Coordinator is shutting down.
-            let _ = internal_cmd_tx.send(Message::TryDeferred {
-                conn_id,
-                acquired_lock: Some(acquired_lock),
-            });
+            let _ = internal_cmd_tx.send(Message::TryDeferred { conn_id });
         });
     }
 
