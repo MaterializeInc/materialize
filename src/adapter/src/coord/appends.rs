@@ -17,10 +17,10 @@ use std::time::Duration;
 use derivative::Derivative;
 use futures::future::{BoxFuture, FutureExt};
 use mz_adapter_types::connection::ConnectionId;
-use mz_ore::instrument;
 use mz_ore::metrics::MetricsFutureExt;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
+use mz_ore::{assert_none, instrument};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan::Plan;
@@ -32,7 +32,7 @@ use tracing::{debug_span, warn, Instrument, Span};
 
 use crate::catalog::BuiltinTableUpdate;
 use crate::coord::{Coordinator, Message, PendingTxn, PlanValidity};
-use crate::session::WriteLocks;
+use crate::session::{GroupCommitWriteLocks, WriteLocks};
 use crate::util::{CompletedClientTransmitter, ResultExt};
 use crate::{AdapterError, ExecuteContext};
 
@@ -296,13 +296,19 @@ impl Coordinator {
     /// Returns the timestamp of the write.
     #[instrument(name = "coord::group_commit")]
     pub(crate) async fn group_commit(&mut self, permit: Option<GroupCommitPermit>) -> Timestamp {
-        let mut pending_writes = Vec::new();
+        let mut validated_writes = Vec::new();
         let mut deferred_writes = Vec::new();
+        let mut group_write_locks = GroupCommitWriteLocks::default();
 
-        for pending_write in self.pending_writes.drain(..) {
+        // TODO(parkmycar): Refactor away this allocation. Currently `drain(..)` requires holding
+        // a mutable borrow on the Coordinator and so does trying to grant a write lock.
+        let pending_writes: Vec<_> = self.pending_writes.drain(..).collect();
+
+        // Validate, merge, and possibly acquire write locks for as many pending writes as possible.
+        for pending_write in pending_writes {
             match pending_write {
                 // We always allow system writes to proceed.
-                PendingWriteTxn::System { .. } => pending_writes.push(pending_write),
+                PendingWriteTxn::System { .. } => validated_writes.push(pending_write),
                 // We have a set of locks! Validate they're correct (expected).
                 PendingWriteTxn::User {
                     span,
@@ -311,38 +317,83 @@ impl Coordinator {
                     pending_txn,
                 } => match write_locks.validate(writes.keys().copied()) {
                     Ok(validated_locks) => {
+                        // Merge all of our write locks together since we can allow concurrent
+                        // writes at the same timestamp.
+                        group_write_locks.merge(validated_locks);
+
                         let validated_write = PendingWriteTxn::User {
                             span,
                             writes,
-                            write_locks: Some(validated_locks),
+                            write_locks: None,
                             pending_txn,
                         };
-                        pending_writes.push(validated_write);
+                        validated_writes.push(validated_write);
                     }
                     // This is very unexpected since callers of this method should be validating.
+                    //
+                    // We cannot allow these write to occur since if the correct set of locks was
+                    // not taken we could violate serializability.
                     Err(missing) => {
-                        tracing::error!(?missing, "got to group commit with partial set of locks!");
-                        let write = DeferredWrite {
-                            span,
+                        let writes: Vec<_> = writes.keys().collect();
+                        panic!(
+                            "got to group commit with partial set of locks!\nmissing: {:?}, writes: {:?}, txn: {:?}",
+                            missing,
                             writes,
                             pending_txn,
-                        };
-                        deferred_writes.push(write);
+                        );
                     }
                 },
-                // If we don't have any locks then we need to defer the write.
+                // If we don't have any locks, try to acquire them, otherwise defer the write.
                 PendingWriteTxn::User {
                     span,
                     writes,
                     write_locks: None,
                     pending_txn,
                 } => {
-                    let write = DeferredWrite {
-                        span,
-                        writes,
-                        pending_txn,
-                    };
-                    deferred_writes.push(write);
+                    let missing = group_write_locks.contains_all(writes.keys().copied());
+
+                    if missing.is_empty() {
+                        // We have all the locks! Queue the pending write.
+                        let validated_write = PendingWriteTxn::User {
+                            span,
+                            writes,
+                            write_locks: None,
+                            pending_txn,
+                        };
+                        validated_writes.push(validated_write);
+                    } else {
+                        // Try to acquire the locks we're missing.
+                        let mut just_in_time_locks = WriteLocks::builder(missing.clone());
+                        for collection in missing {
+                            if let Some(lock) = self.try_grant_object_write_lock(collection) {
+                                just_in_time_locks.insert_lock(collection, lock);
+                            }
+                        }
+
+                        match just_in_time_locks.all_or_nothing(pending_txn.ctx.session().conn_id())
+                        {
+                            // We acquired all of the locks! Proceed with the write.
+                            Ok(locks) => {
+                                group_write_locks.merge(locks);
+                                let validated_write = PendingWriteTxn::User {
+                                    span,
+                                    writes,
+                                    write_locks: None,
+                                    pending_txn,
+                                };
+                                validated_writes.push(validated_write);
+                            }
+                            // Darn. We couldn't acquire the locks, defer the write.
+                            Err(_missing) => {
+                                let write = DeferredWrite {
+                                    span,
+                                    writes,
+                                    pending_txn,
+                                };
+                                deferred_writes.push(write);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -386,12 +437,11 @@ impl Coordinator {
             .unwrap_or_terminate("unable to confirm leadership");
 
         let mut appends: BTreeMap<GlobalId, Vec<(Row, Diff)>> = BTreeMap::new();
-        let mut responses = Vec::with_capacity(self.pending_writes.len());
+        let mut responses = Vec::with_capacity(validated_writes.len());
         let mut notifies = Vec::new();
-        let mut locks = Vec::new();
 
-        for pending_write_txn in pending_writes {
-            match pending_write_txn {
+        for validated_write_txn in validated_writes {
+            match validated_write_txn {
                 PendingWriteTxn::User {
                     span: _,
                     writes,
@@ -403,6 +453,7 @@ impl Coordinator {
                             action,
                         },
                 } => {
+                    assert_none!(write_locks, "should have merged together all locks above");
                     for (id, rows) in writes {
                         // If the table that some write was targeting has been deleted while the
                         // write was waiting, then the write will be ignored and we respond to the
@@ -417,8 +468,6 @@ impl Coordinator {
                         self.set_statement_execution_timestamp(id, timestamp);
                     }
 
-                    // Don't drop the locks until the write is complete.
-                    locks.push(write_locks);
                     responses.push(CompletedClientTransmitter::new(ctx, response, action));
                 }
                 PendingWriteTxn::System { updates, source } => {
@@ -499,11 +548,11 @@ impl Coordinator {
                     ctx.retire(result);
                 }
 
-                // IMPORTANT: Make sure we hold the permit and write lock until
-                // here, to prevent other writes from going through while we
-                // haven't yet applied the write at the timestamp oracle.
+                // IMPORTANT: Make sure we hold the permit and write locks
+                // until here, to prevent other writes from going through while
+                // we haven't yet applied the write at the timestamp oracle.
                 drop(permit);
-                drop(locks);
+                drop(group_write_locks);
 
                 // Advance other timelines.
                 if let Err(e) = internal_cmd_tx.send(Message::AdvanceTimelines) {

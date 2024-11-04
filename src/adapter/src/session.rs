@@ -1512,11 +1512,14 @@ impl WriteLocks {
 
 impl Drop for WriteLocks {
     fn drop(&mut self) {
-        tracing::info!(
-            conn_id = %self.conn_id,
-            locks = ?self.locks,
-            "dropping write locks",
-        );
+        // We may have merged the locks into GroupCommitWriteLocks, thus it could be empty.
+        if !self.locks.is_empty() {
+            tracing::info!(
+                conn_id = %self.conn_id,
+                locks = ?self.locks,
+                "dropping write locks",
+            );
+        }
     }
 }
 
@@ -1554,6 +1557,90 @@ impl WriteLocksBuilder {
             // Explicitly drop the already acquired locks.
             drop(locks);
             Err(missing)
+        }
+    }
+}
+
+/// Collection of [`WriteLocks`] gathered during [`group_commit`].
+///
+/// Note: This struct should __never__ be used outside of group commit because it attempts to merge
+/// together several collections of [`WriteLocks`] which if not done carefully can cause deadlocks
+/// or consistency violations.
+///
+/// We must prevent writes from occurring to tables during read then write plans (e.g. `UPDATE`)
+/// but we can allow blind writes (e.g. `INSERT`) to get committed concurrently at the same
+/// timestamp when submitting the updates from a read then write plan.
+///
+/// Naively it would seem as though we could allow blind writes to occur whenever as blind writes
+/// could never cause invalid retractions, but it could cause us to violate serializability because
+/// there is no total order we could define for the transactions. Consider the following scenario:
+///
+/// ```text
+/// table: foo
+///
+///  a | b
+/// --------
+///  x   2
+///  y   3
+///  z   4
+///
+/// -- Session(A)
+/// -- read then write plan, reads at t0, writes at t3, transaction Ta
+/// DELETE FROM foo WHERE b % 2 = 0;
+///
+///
+/// -- Session(B)
+/// -- blind write into foo, writes at t1, transaction Tb
+/// INSERT INTO foo VALUES ('q', 6);
+/// -- select from foo, reads at t2, transaction Tc
+/// SELECT * FROM foo;
+///
+///
+/// The times these operations occur at are ordered:
+/// t0 < t1 < t2 < t3
+///
+/// The initial read for the `DELETE` occurs at t0, so it won't observe ('q', 6) which was inserted
+/// at time t1, thus Ta must be ordered before Tb. But the read at t2 won't observe the deletion of
+/// ('x', 2) and ('z', 4) since the retractions won't get submitted until t3, but it will observe
+/// the insertion of ('q', 6), thus Tc must be ordered before Ta and after Tb. This ordering isn't
+/// possible though, thus no total order exists for these transactions.
+/// ```
+///
+/// [`group_commit`]: super::coord::Coordinator::group_commit
+#[derive(Debug, Default)]
+pub struct GroupCommitWriteLocks {
+    locks: BTreeMap<GlobalId, tokio::sync::OwnedMutexGuard<()>>,
+}
+
+impl GroupCommitWriteLocks {
+    /// Merge a set of [`WriteLocks`] into this collection for group commit.
+    pub fn merge(&mut self, mut locks: WriteLocks) {
+        // Note: Ideally we would use `.drain`, but that method doesn't exist for BTreeMap.
+        //
+        // See: <https://github.com/rust-lang/rust/issues/81074>
+        let existing = std::mem::take(&mut locks.locks);
+        self.locks.extend(existing);
+    }
+
+    /// Returns what locks we're missing for the specified writes, if any.
+    pub fn contains_all(&self, writes: impl Iterator<Item = GlobalId>) -> BTreeSet<GlobalId> {
+        let mut missing = BTreeSet::new();
+        for write in writes {
+            if !self.locks.contains_key(&write) {
+                missing.insert(write);
+            }
+        }
+        missing
+    }
+}
+
+impl Drop for GroupCommitWriteLocks {
+    fn drop(&mut self) {
+        if !self.locks.is_empty() {
+            tracing::info!(
+                locks = ?self.locks,
+                "dropping group commit write locks",
+            );
         }
     }
 }
