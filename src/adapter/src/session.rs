@@ -1608,7 +1608,7 @@ impl WriteLocksBuilder {
 ///
 /// [`group_commit`]: super::coord::Coordinator::group_commit
 #[derive(Debug, Default)]
-pub struct GroupCommitWriteLocks {
+pub(crate) struct GroupCommitWriteLocks {
     locks: BTreeMap<GlobalId, tokio::sync::OwnedMutexGuard<()>>,
 }
 
