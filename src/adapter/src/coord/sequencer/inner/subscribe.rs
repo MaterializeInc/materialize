@@ -23,7 +23,6 @@ use crate::coord::{
     SubscribeStage, SubscribeTimestampOptimizeLir, TargetCluster,
 };
 use crate::error::AdapterError;
-use crate::optimize::dataflow_expiration::time_dependence;
 use crate::optimize::Optimize;
 use crate::session::{Session, TransactionOps};
 use crate::{optimize, AdapterNotice, ExecuteContext, TimelineContext};

@@ -53,7 +53,6 @@
 //! repository.
 
 pub mod copy_to;
-pub mod dataflow_expiration;
 pub mod dataflows;
 pub mod index;
 pub mod materialized_view;

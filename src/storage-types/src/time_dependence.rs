@@ -49,17 +49,6 @@ impl TimeDependence {
         }
     }
 
-    /// Normalizes by removing unnecessary nesting.
-    pub fn normalize(this: Option<Self>) -> Option<Self> {
-        match this {
-            Some(TimeDependence {
-                schedule: None,
-                mut dependence,
-            }) if dependence.len() == 1 => Some(dependence.remove(0)),
-            other => other,
-        }
-    }
-
     /// Merge any number of dependencies into one, using the supplied refresh schedule.
     ///
     /// It applies the following rules under the assumption that the frontier of an object ticks
@@ -200,32 +189,6 @@ mod tests {
                 vec![default.clone(), scheduled.clone()],
                 schedule(10.into()).as_ref()
             )
-        );
-    }
-
-    #[mz_ore::test]
-    fn test_time_dependence_normalize() {
-        let i = TimeDependence::default();
-        let i = TimeDependence::normalize(Some(i));
-        assert_eq!(i, Some(TimeDependence::default()),);
-
-        let i = TimeDependence::new(
-            Some(RefreshSchedule {
-                everies: vec![],
-                ats: vec![Timestamp::from(1000)],
-            }),
-            vec![],
-        );
-        let i = TimeDependence::normalize(Some(i));
-        assert_eq!(
-            i,
-            Some(TimeDependence {
-                schedule: Some(RefreshSchedule {
-                    everies: vec![],
-                    ats: vec![Timestamp::from(1000)],
-                }),
-                dependence: vec![],
-            })
         );
     }
 

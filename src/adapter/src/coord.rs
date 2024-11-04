@@ -148,7 +148,6 @@ use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::sinks::S3SinkFormat;
 use mz_storage_types::sources::Timeline;
-use mz_storage_types::time_dependence::TimeDependence;
 use mz_timestamp_oracle::postgres_oracle::{
     PostgresTimestampOracle, PostgresTimestampOracleConfig,
 };
@@ -187,7 +186,6 @@ use crate::error::AdapterError;
 use crate::explain::insights::PlanInsightsContext;
 use crate::explain::optimizer_trace::{DispatchGuard, OptimizerTrace};
 use crate::metrics::Metrics;
-use crate::optimize::dataflow_expiration::time_dependence;
 use crate::optimize::dataflows::{
     dataflow_import_id_bundle, ComputeInstanceSnapshot, DataflowBuilder,
 };
