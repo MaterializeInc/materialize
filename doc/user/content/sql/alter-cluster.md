@@ -11,7 +11,7 @@ menu:
 
 ## Syntax
 
-`ALTER CLUSTER` has the following syntax forms:
+`ALTER CLUSTER` has the following syntax variations:
 
 {{< tabs >}}
 {{< tab "Set a configuration" >}}
@@ -56,7 +56,7 @@ You must have ownership of the cluster. See also [Required
 privileges](#required-privileges).
 
 {{< /tab >}}
-{{< tab "Rename to" >}}
+{{< tab "Rename" >}}
 
 To rename a cluster:
 
@@ -100,14 +100,11 @@ See also [Required privileges](#required-privileges).
 
 ### `WITH` options
 
-{{< note >}}
-*Private preview* for [graceful cluster resizing](#graceful-cluster-resizing).
-{{< /note >}}
 
 | Command options (optional) | Value | Description |
 |----------------------------|-------|-----------------|
-| `WAIT UNTIL READY(...)`    |  | {{< alter-cluster/alter-clusters-cmd-options >}} |
-| `WAIT FOR` | `duration` | A fixed duration to wait for the new replicas to be ready. This option can lead to downtime. As such, we recommend using the `WAIT UNTIL READY` option instead.|
+| `WAIT UNTIL READY(...)`    |  | ***Private preview.** This option has known performance or stability issues and is under active development.* {{< alter-cluster/alter-clusters-cmd-options >}} |
+| `WAIT FOR` | [`interval`](/sql/types/interval/) | ***Private preview.** This option has known performance or stability issues and is under active development.* A fixed duration to wait for the new replicas to be ready. This option can lead to downtime. As such, we recommend using the `WAIT UNTIL READY` option instead.|
 
 ## Considerations
 
@@ -115,9 +112,9 @@ See also [Required privileges](#required-privileges).
 
 {{< tip >}}
 
-To help size your clusters, **Materialize Console >** [**Monitoring**
-section](/console/monitoring/) provides an **Environment Overview** page that
-displays the cluster resource utilization.
+For help sizing your clusters, navigate to **Materialize Console >**
+[**Monitoring**](/console/monitoring/)>**Environment Overview**. This page
+displays cluster resource utilization and sizing advice.
 
 {{< /tip >}}
 
@@ -176,8 +173,8 @@ cause a rollback — no size change will take effect in that case.
 The `REPLICATION FACTOR` option determines the number of replicas provisioned
 for the cluster. Each replica of the cluster provisions a new pool of compute
 resources to perform exactly the same computations on exactly the same data.
-Each replica incurs cost, calculated (at one second granularity) as cluster
-[size](#resizing) * its replication factor. See [Usage &
+Each replica incurs cost, calculated as `cluster
+[size](#resizing) * replication factor` per second. See [Usage &
 billing](/administration/billing/) for more details.
 
 #### Replication factor and fault tolerance
@@ -189,9 +186,9 @@ available, the cluster can continue to maintain dataflows and serve queries.
 
 {{< note >}}
 
-- Each replica incurs cost, calculated (at one second granularity) as cluster
-  [size](#resizing) * its replication factor. See [Usage &
-  billing](/administration/billing/) for more details.
+- Each replica incurs cost, calculated as `cluster [size](#resizing)
+  * replication factor` per second. See [Usage & billing](/administration/billing/)
+  for more details.
 
 - Increasing the replication factor does **not** increase the cluster's work
   capacity. Replicas are exact copies of one another: each replica must do
@@ -204,7 +201,7 @@ available, the cluster can continue to maintain dataflows and serve queries.
 {{< /note >}}
 
 Materialize automatically assigns names to replicas (e.g., `r1`, `r2`). You can
-view information about individual replicas in the console and the system
+view information about individual replicas in the Materialize console and the system
 catalog.
 
 #### Availability guarantees

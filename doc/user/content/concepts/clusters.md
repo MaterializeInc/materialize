@@ -59,21 +59,21 @@ and serve queries.
 
 {{< note >}}
 
-- Each replica incurs cost, calculated (at one second granularity) as cluster
-  [size](#sizing-your-clusters) * its replication factor. See [Usage &
-  billing](/administration/billing/) for more details.
+- Each replica incurs cost, calculated as `cluster [size](#sizing-your-clusters)
+  * replication factor` per second. See [Usage & billing](/administration/billing/)
+  for more details.
 
 - Increasing the replication factor does **not** increase the cluster's work
   capacity. Replicas are exact copies of one another: each replica must do
-  exactly the same work (i.e., maintain the same dataflows and process the same
-  queries) as all the other replicas of the cluster.
+  exactly the same work as all the other replicas of the cluster(i.e., maintain
+  the same dataflows and process the same queries).
 
   To increase the capacity of a cluster, you must increase its [size](#sizing-your-clusters).
 
 {{< /note >}}
 
-Materialize automatically assigns names to replicas like `r1`, `r2`. You
-can view information about individual replicas in the console and the system
+Materialize automatically assigns names to replicas (e.g., `r1`, `r2`). You
+can view information about individual replicas in the Materialize console and the system
 catalog.
 
 ### Availability guarantees
@@ -87,11 +87,13 @@ When provisioning replicas,
 - For clusters sized at **`3200cc` and above**, even distribution of replicas
   across availability zones **cannot** be guaranteed.
 
-## Sizing your clusters
+## Cluster sizing
 
-When creating your cluster, choose the [size of your
-cluster](/sql/create-cluster/#size) (e.g., `25cc`, `50cc`, `100cc`) based on the
-resource requirements of your workload. Larger clusters have more compute
+When creating a cluster, you must choose its [size](/sql/create-cluster/#size)
+(e.g., `25cc`, `50cc`, `100cc`), which determines its resource allocation
+(CPU, memory, and scratch disk space) and [cost](/administration/billing/#compute).
+The appropriate size for a cluster depends on the resource requirements of your
+workload. Larger clusters have more compute
 resources available and can therefore process data faster and handle larger data
 volumes.
 
@@ -101,9 +103,8 @@ downtime. See [Resizing downtime](/sql/alter-cluster/#downtime) for more details
 
 {{< tip >}}
 
-To help resize your clusters, **Materialize Console >** [**Monitoring**
-section](/console/monitoring/) provides an **Environment Overview** page that
-displays the cluster resource utilization.
+To gauge the performance and utilization of your clusters, use the
+[**Environment Overview** page in the Materialize Console](/console/monitoring/).
 
 {{< /tip >}}
 
