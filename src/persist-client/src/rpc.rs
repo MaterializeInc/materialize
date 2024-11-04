@@ -70,6 +70,15 @@ pub(crate) const PUBSUB_PUSH_DIFF_ENABLED: Config<bool> = Config::new(
     "Whether to push state diffs to Persist PubSub.",
 );
 
+/// For connected clients, determines whether to push state diffs to the PubSub
+/// server. For the server, determines whether to broadcast state diffs to
+/// subscribed clients.
+pub(crate) const PUBSUB_SAME_PROCESS_DELEGATE_ENABLED: Config<bool> = Config::new(
+    "persist_pubsub_same_process_delegate_enabled",
+    true,
+    "Whether to push state diffs to Persist PubSub on the same process.",
+);
+
 /// Top-level Trait to create a PubSubClient.
 ///
 /// Returns a [PubSubClientConnection] with a [PubSubSender] for issuing RPCs to the PubSub
@@ -553,6 +562,7 @@ impl PubSubSender for SubscriptionTrackingSender {
 /// by [PersistGrpcPubSubServer::new_same_process_connection].
 #[derive(Debug)]
 pub struct MetricsSameProcessPubSubSender {
+    delegate_subscribe: bool,
     metrics: Arc<Metrics>,
     delegate: Arc<dyn PubSubSender>,
 }
@@ -560,8 +570,13 @@ pub struct MetricsSameProcessPubSubSender {
 impl MetricsSameProcessPubSubSender {
     /// Returns a new [MetricsSameProcessPubSubSender], wrapping the given
     /// `Arc<dyn PubSubSender>`'s calls to provide client-side metrics.
-    pub fn new(pubsub_sender: Arc<dyn PubSubSender>, metrics: Arc<Metrics>) -> Self {
+    pub fn new(
+        cfg: &PersistConfig,
+        pubsub_sender: Arc<dyn PubSubSender>,
+        metrics: Arc<Metrics>,
+    ) -> Self {
         Self {
+            delegate_subscribe: PUBSUB_SAME_PROCESS_DELEGATE_ENABLED.get(cfg),
             delegate: pubsub_sender,
             metrics,
         }
@@ -575,8 +590,20 @@ impl PubSubSender for MetricsSameProcessPubSubSender {
     }
 
     fn subscribe(self: Arc<Self>, shard_id: &ShardId) -> Arc<ShardSubscriptionToken> {
-        let delegate = Arc::clone(&self.delegate);
-        delegate.subscribe(shard_id)
+        if self.delegate_subscribe {
+            let delegate = Arc::clone(&self.delegate);
+            delegate.subscribe(shard_id)
+        } else {
+            // Create a no-op token that does not subscribe nor unsubscribe.
+            // This is ideal for single-process persist setups, since the sender and
+            // receiver should already share a state cache... but if the diffs are
+            // generated remotely but applied on the server, this may cause us to fall
+            // back to polling consensus.
+            Arc::new(ShardSubscriptionToken {
+                shard_id: *shard_id,
+                sender: Arc::new(NoopPubSubSender),
+            })
+        }
     }
 }
 
