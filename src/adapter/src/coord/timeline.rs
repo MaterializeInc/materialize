@@ -26,7 +26,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::instrument;
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_ore::vec::VecExt;
-use mz_repr::{GlobalId, Timestamp};
+use mz_repr::{CatalogItemId, GlobalId, Timestamp};
 use mz_sql::names::{ResolvedDatabaseSpecifier, SchemaSpecifier};
 use mz_storage_types::sources::Timeline;
 use mz_timestamp_oracle::batching_oracle::BatchingTimestampOracle;
@@ -327,7 +327,7 @@ impl Coordinator {
         let mut id_bundle = CollectionIdBundle::default();
         for entry in self.catalog().entries() {
             if let TimelineContext::TimelineDependent(entry_timeline) =
-                self.get_timeline_context(entry.latest_global_id())
+                self.get_timeline_context(entry.id())
             {
                 if timeline == &entry_timeline {
                     match entry.item() {
@@ -374,7 +374,7 @@ impl Coordinator {
         ids: I,
     ) -> Result<TimelineContext, AdapterError>
     where
-        I: IntoIterator<Item = GlobalId>,
+        I: IntoIterator<Item = CatalogItemId>,
     {
         let mut timeline_contexts: Vec<_> = self.get_timeline_contexts(ids).into_iter().collect();
         // If there's more than one timeline, we will not produce meaningful
@@ -415,8 +415,8 @@ impl Coordinator {
         }
     }
 
-    /// Return the [`TimelineContext`] belonging to a GlobalId, if one exists.
-    pub(crate) fn get_timeline_context(&self, id: GlobalId) -> TimelineContext {
+    /// Return the [`TimelineContext`] belonging to a [`CatalogItemId`], if one exists.
+    pub(crate) fn get_timeline_context(&self, id: CatalogItemId) -> TimelineContext {
         self.validate_timeline_context(vec![id])
             .expect("impossible for a single object to belong to incompatible timeline contexts")
     }
@@ -424,9 +424,9 @@ impl Coordinator {
     /// Return the [`TimelineContext`]s belonging to a list of GlobalIds, if any exist.
     fn get_timeline_contexts<I>(&self, ids: I) -> BTreeSet<TimelineContext>
     where
-        I: IntoIterator<Item = GlobalId>,
+        I: IntoIterator<Item = CatalogItemId>,
     {
-        let mut seen: BTreeSet<GlobalId> = BTreeSet::new();
+        let mut seen: BTreeSet<CatalogItemId> = BTreeSet::new();
         let mut timelines: BTreeSet<TimelineContext> = BTreeSet::new();
 
         // Recurse through IDs to find all sources and tables, adding new ones to
@@ -438,14 +438,15 @@ impl Coordinator {
             if !seen.insert(id) {
                 continue;
             }
-            if let Some(entry) = self.catalog().try_get_entry_by_global_id(&id) {
+            if let Some(entry) = self.catalog().try_get_entry(&id) {
                 match entry.item() {
                     CatalogItem::Source(source) => {
                         timelines
                             .insert(TimelineContext::TimelineDependent(source.timeline.clone()));
                     }
                     CatalogItem::Index(index) => {
-                        ids.push(index.on);
+                        let on_id = self.catalog().resolve_item_id(&index.on);
+                        ids.push(on_id);
                     }
                     CatalogItem::View(View { optimized_expr, .. }) => {
                         // If the definition contains a temporal function, the timeline must
@@ -455,7 +456,11 @@ impl Coordinator {
                         } else {
                             timelines.insert(TimelineContext::TimestampIndependent);
                         }
-                        ids.extend(optimized_expr.depends_on());
+                        let item_ids = optimized_expr
+                            .depends_on()
+                            .into_iter()
+                            .map(|gid| self.catalog().resolve_item_id(&gid));
+                        ids.extend(item_ids);
                     }
                     CatalogItem::MaterializedView(MaterializedView { optimized_expr, .. }) => {
                         // In some cases the timestamp selected may not affect the answer to a
@@ -465,12 +470,20 @@ impl Coordinator {
                         // which represents the current progress of the view, then the query will
                         // need to block and wait for the materialized view to advance.
                         timelines.insert(TimelineContext::TimestampDependent);
-                        ids.extend(optimized_expr.depends_on());
+                        let item_ids = optimized_expr
+                            .depends_on()
+                            .into_iter()
+                            .map(|gid| self.catalog().resolve_item_id(&gid));
+                        ids.extend(item_ids);
                     }
                     CatalogItem::ContinualTask(ContinualTask { raw_expr, .. }) => {
                         // See comment in MaterializedView
                         timelines.insert(TimelineContext::TimestampDependent);
-                        ids.extend(raw_expr.depends_on());
+                        let item_ids = raw_expr
+                            .depends_on()
+                            .into_iter()
+                            .map(|gid| self.catalog().resolve_item_id(&gid));
+                        ids.extend(item_ids);
                     }
                     CatalogItem::Table(table) => {
                         timelines.insert(TimelineContext::TimelineDependent(table.timeline()));
@@ -500,23 +513,25 @@ impl Coordinator {
     ) -> impl Iterator<Item = (TimelineContext, CollectionIdBundle)> {
         let mut res: BTreeMap<TimelineContext, CollectionIdBundle> = BTreeMap::new();
 
-        for id in &id_bundle.storage_ids {
-            let timeline_context = self.get_timeline_context(*id);
+        for gid in &id_bundle.storage_ids {
+            let item_id = self.catalog().resolve_item_id(gid);
+            let timeline_context = self.get_timeline_context(item_id);
             res.entry(timeline_context)
                 .or_default()
                 .storage_ids
-                .insert(*id);
+                .insert(*gid);
         }
 
         for (compute_instance, ids) in &id_bundle.compute_ids {
-            for id in ids {
-                let timeline_context = self.get_timeline_context(*id);
+            for gid in ids {
+                let item_id = self.catalog().resolve_item_id(gid);
+                let timeline_context = self.get_timeline_context(item_id);
                 res.entry(timeline_context)
                     .or_default()
                     .compute_ids
                     .entry(*compute_instance)
                     .or_default()
-                    .insert(*id);
+                    .insert(*gid);
             }
         }
 
@@ -590,9 +605,10 @@ impl Coordinator {
             &mut id_bundle.storage_ids,
             &mut id_bundle.compute_ids.entry(compute_instance).or_default(),
         ] {
-            ids.retain(|&id| {
+            ids.retain(|gid| {
+                let item_id = self.catalog().resolve_item_id(gid);
                 let id_timeline_context = self
-                    .validate_timeline_context(vec![id])
+                    .validate_timeline_context(vec![item_id])
                     .expect("single id should never fail");
                 match (&id_timeline_context, &timeline_context) {
                     // If this id doesn't have a timeline, we can keep it.

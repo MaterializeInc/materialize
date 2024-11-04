@@ -137,7 +137,10 @@ impl Coordinator {
         session.add_notices(notices);
 
         // Determine timeline.
-        let mut timeline = self.validate_timeline_context(depends_on.clone())?;
+        let depends_on_items = depends_on
+            .iter()
+            .map(|gid| self.catalog().resolve_item_id(gid));
+        let mut timeline = self.validate_timeline_context(depends_on_items)?;
         if matches!(timeline, TimelineContext::TimestampIndependent) && from.contains_temporal() {
             // If the from IDs are timestamp independent but the query contains temporal functions
             // then the timeline context needs to be upgraded to timestamp dependent.

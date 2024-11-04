@@ -865,7 +865,7 @@ impl Table {
     }
 
     /// Returns all of the collections and their [`RelationDesc`]s associated with this [`Table`].
-    pub fn collection_descs(&self) -> impl Iterator<Item = (GlobalId, RelationDesc)> + use<'_> {
+    pub fn collection_descs(&self) -> impl Iterator<Item = (GlobalId, RelationDesc)> + '_ {
         // TODO(alter_table): Support multiple versions of the table.
         assert_eq!(self.collections.len(), 1);
         self.collections

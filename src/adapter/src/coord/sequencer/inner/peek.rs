@@ -353,7 +353,10 @@ impl Coordinator {
             .transpose()?;
 
         let source_ids = plan.source.depends_on();
-        let mut timeline_context = self.validate_timeline_context(source_ids.clone())?;
+        let source_items = source_ids
+            .iter()
+            .map(|gid| self.catalog().resolve_item_id(gid));
+        let mut timeline_context = self.validate_timeline_context(source_items)?;
         if matches!(timeline_context, TimelineContext::TimestampIndependent)
             && plan.source.contains_temporal()?
         {
@@ -882,10 +885,10 @@ impl Coordinator {
             {
                 let entry = self.catalog.state().get_entry(&item_id);
                 match entry.item() {
-                    // TODO(parkmycar): Adding all of the GlobalIds an object depends on is
-                    // probably incorrect, but it's okay for now since the only thing that can have
-                    // multiple GlobalIds are Tables. In the future we should track dependencies
-                    // based on `GlobalId` or (`CatalogItemId`, `Version`).
+                    // TODO(alter_table): Adding all of the GlobalIds for an object is incorrect.
+                    // For example, this peek may depend on just a single version of a table, but
+                    // we would add dependencies on all versions of said table. Doing this is okay
+                    // for now since we can't yet version tables, but should get fixed.
                     CatalogItem::Table(_) | CatalogItem::Source(_) => {
                         transitive_storage_deps.extend(entry.global_ids());
                     }
