@@ -1535,36 +1535,8 @@ impl MirRelationExpr {
         *self = logic(expr);
     }
 
-    /// Store `self` in a `Let` and pass the corresponding `Get` to `body`
-    pub fn let_in<Body>(self, id_gen: &mut IdGen, body: Body) -> MirRelationExpr
-    where
-        Body: FnOnce(&mut IdGen, MirRelationExpr) -> MirRelationExpr,
-    {
-        if let MirRelationExpr::Get { .. } = self {
-            // already done
-            body(id_gen, self)
-        } else {
-            let id = LocalId::new(id_gen.allocate_id());
-            let get = MirRelationExpr::Get {
-                id: Id::Local(id),
-                typ: self.typ(),
-                access_strategy: AccessStrategy::UnknownOrLocal,
-            };
-            let body = (body)(id_gen, get);
-            MirRelationExpr::Let {
-                id,
-                value: Box::new(self),
-                body: Box::new(body),
-            }
-        }
-    }
-
-    /// Like [MirRelationExpr::let_in], but with a fallible return type.
-    pub fn let_in_fallible<Body, E>(
-        self,
-        id_gen: &mut IdGen,
-        body: Body,
-    ) -> Result<MirRelationExpr, E>
+    /// Store `self` in a `Let` and pass the corresponding `Get` to `body`.
+    pub fn let_in<Body, E>(self, id_gen: &mut IdGen, body: Body) -> Result<MirRelationExpr, E>
     where
         Body: FnOnce(&mut IdGen, MirRelationExpr) -> Result<MirRelationExpr, E>,
     {
@@ -1589,19 +1561,19 @@ impl MirRelationExpr {
 
     /// Return every row in `self` that does not have a matching row in the first columns of `keys_and_values`, using `default` to fill in the remaining columns
     /// (If `default` is a row of nulls, this is the 'outer' part of LEFT OUTER JOIN)
-    pub fn anti_lookup(
+    pub fn anti_lookup<E>(
         self,
         id_gen: &mut IdGen,
         keys_and_values: MirRelationExpr,
         default: Vec<(Datum, ScalarType)>,
-    ) -> MirRelationExpr {
+    ) -> Result<MirRelationExpr, E> {
         let (data, column_types): (Vec<_>, Vec<_>) = default
             .into_iter()
             .map(|(datum, scalar_type)| (datum, scalar_type.nullable(datum.is_null())))
             .unzip();
         assert_eq!(keys_and_values.arity() - self.arity(), data.len());
         self.let_in(id_gen, |_id_gen, get_keys| {
-            MirRelationExpr::join(
+            Ok(MirRelationExpr::join(
                 vec![
                     // all the missing keys (with count 1)
                     keys_and_values
@@ -1624,7 +1596,7 @@ impl MirRelationExpr {
             .product(MirRelationExpr::constant(
                 vec![data],
                 RelationType::new(column_types),
-            ))
+            )))
         })
     }
 
@@ -1635,18 +1607,18 @@ impl MirRelationExpr {
     /// (This is LEFT OUTER JOIN if:
     /// 1) `default` is a row of null
     /// 2) matching rows in `keys_and_values` and `self` have the same multiplicity.)
-    pub fn lookup(
+    pub fn lookup<E>(
         self,
         id_gen: &mut IdGen,
         keys_and_values: MirRelationExpr,
         default: Vec<(Datum<'static>, ScalarType)>,
-    ) -> MirRelationExpr {
+    ) -> Result<MirRelationExpr, E> {
         keys_and_values.let_in(id_gen, |id_gen, get_keys_and_values| {
-            get_keys_and_values.clone().union(self.anti_lookup(
+            Ok(get_keys_and_values.clone().union(self.anti_lookup(
                 id_gen,
                 get_keys_and_values,
                 default,
-            ))
+            )?))
         })
     }
 

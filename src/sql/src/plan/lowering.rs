@@ -178,37 +178,38 @@ impl HirRelationExpr {
             config: &config.into(),
             metrics,
         };
-        let result =
-            match self {
-                // We directly rewrite a Constant into the corresponding `MirRelationExpr::Constant`
-                // to ensure that the downstream optimizer can easily bypass most
-                // irrelevant optimizations (e.g. reduce folding) for this expression
-                // without having to re-learn the fact that it is just a constant,
-                // as it would if the constant were wrapped in a Let-Get pair.
-                HirRelationExpr::Constant { rows, typ } => {
-                    let rows: Vec<_> = rows.into_iter().map(|row| (row, 1)).collect();
-                    MirRelationExpr::Constant {
-                        rows: Ok(rows),
-                        typ,
-                    }
+        let result = match self {
+            // We directly rewrite a Constant into the corresponding `MirRelationExpr::Constant`
+            // to ensure that the downstream optimizer can easily bypass most
+            // irrelevant optimizations (e.g. reduce folding) for this expression
+            // without having to re-learn the fact that it is just a constant,
+            // as it would if the constant were wrapped in a Let-Get pair.
+            HirRelationExpr::Constant { rows, typ } => {
+                let rows: Vec<_> = rows.into_iter().map(|row| (row, 1)).collect();
+                MirRelationExpr::Constant {
+                    rows: Ok(rows),
+                    typ,
                 }
-                mut other => {
-                    let mut id_gen = mz_ore::id_gen::IdGen::default();
-                    transform_expr::split_subquery_predicates(&mut other);
-                    transform_expr::try_simplify_quantified_comparisons(&mut other);
-                    transform_expr::fuse_window_functions(&mut other, &context)?;
-                    MirRelationExpr::constant(vec![vec![]], RelationType::new(vec![]))
-                        .let_in_fallible(&mut id_gen, |id_gen, get_outer| {
-                            other.applied_to(
-                                id_gen,
-                                get_outer,
-                                &ColumnMap::empty(),
-                                &mut CteMap::new(),
-                                &context,
-                            )
-                        })?
-                }
-            };
+            }
+            mut other => {
+                let mut id_gen = mz_ore::id_gen::IdGen::default();
+                transform_expr::split_subquery_predicates(&mut other);
+                transform_expr::try_simplify_quantified_comparisons(&mut other);
+                transform_expr::fuse_window_functions(&mut other, &context)?;
+                MirRelationExpr::constant(vec![vec![]], RelationType::new(vec![])).let_in(
+                    &mut id_gen,
+                    |id_gen, get_outer| {
+                        other.applied_to(
+                            id_gen,
+                            get_outer,
+                            &ColumnMap::empty(),
+                            &mut CteMap::new(),
+                            &context,
+                        )
+                    },
+                )?
+            }
+        };
 
         mz_repr::explain::trace_plan(&result);
 
@@ -327,7 +328,7 @@ impl HirRelationExpr {
                 } => {
                     let value =
                         value.applied_to(id_gen, get_outer.clone(), col_map, cte_map, context)?;
-                    value.let_in_fallible(id_gen, |id_gen, get_value| {
+                    value.let_in(id_gen, |id_gen, get_value| {
                         let (new_id, typ) = if let MirRelationExpr::Get {
                             id: mz_expr::Id::Local(id),
                             typ,
@@ -565,7 +566,7 @@ impl HirRelationExpr {
                     assert!(kind.can_be_correlated());
 
                     let left = left.applied_to(id_gen, get_outer, col_map, cte_map, context)?;
-                    left.let_in_fallible(id_gen, |id_gen, get_left| {
+                    left.let_in(id_gen, |id_gen, get_left| {
                         let apply_requires_distinct_outer = false;
                         let mut join = branch(
                             id_gen,
@@ -602,7 +603,7 @@ impl HirRelationExpr {
                                 .skip(get_left.arity())
                                 .map(|typ| (Datum::Null, typ.scalar_type))
                                 .collect();
-                            Ok::<_, PlanError>(get_left.lookup(id_gen, join, default))
+                            get_left.lookup(id_gen, join, default)
                         } else {
                             Ok::<_, PlanError>(join)
                         }
@@ -663,7 +664,7 @@ impl HirRelationExpr {
                         left.applied_to(id_gen, get_outer.clone(), col_map, cte_map, context)?;
                     let lt = left.typ().column_types.into_iter().skip(oa).collect_vec();
                     let la = lt.len();
-                    left.let_in_fallible(id_gen, |id_gen, get_left| {
+                    left.let_in(id_gen, |id_gen, get_left| {
                         let right_col_map = col_map.enter_scope(0);
                         let right = right.applied_to(
                             id_gen,
@@ -674,7 +675,7 @@ impl HirRelationExpr {
                         )?;
                         let rt = right.typ().column_types.into_iter().skip(oa).collect_vec();
                         let ra = rt.len();
-                        right.let_in_fallible(id_gen, |id_gen, get_right| {
+                        right.let_in(id_gen, |id_gen, get_right| {
                             let mut product = SR::join(
                                 vec![get_left.clone(), get_right.clone()],
                                 (0..oa).map(|i| vec![(0, i), (1, i)]).collect(),
@@ -740,24 +741,24 @@ impl HirRelationExpr {
                                 // need to get rid of them.
                                 join = join.project((0..oa + la + ra).collect());
                             }
-                            join.let_in_fallible(id_gen, |id_gen, get_join| {
+                            join.let_in(id_gen, |id_gen, get_join| {
                                 let mut result = get_join.clone();
                                 if let JoinKind::LeftOuter { .. } | JoinKind::FullOuter { .. } =
                                     kind
                                 {
-                                    let left_outer = get_left.clone().anti_lookup(
+                                    let left_outer = get_left.clone().anti_lookup::<PlanError>(
                                         id_gen,
                                         get_join.clone(),
                                         rt.into_iter()
                                             .map(|typ| (Datum::Null, typ.scalar_type))
                                             .collect(),
-                                    );
+                                    )?;
                                     result = result.union(left_outer);
                                 }
                                 if let JoinKind::RightOuter | JoinKind::FullOuter = kind {
                                     let right_outer = get_right
                                         .clone()
-                                        .anti_lookup(
+                                        .anti_lookup::<PlanError>(
                                             id_gen,
                                             get_join
                                                 // need to swap left and right to make the anti_lookup work
@@ -770,7 +771,7 @@ impl HirRelationExpr {
                                             lt.into_iter()
                                                 .map(|typ| (Datum::Null, typ.scalar_type))
                                                 .collect(),
-                                        )
+                                        )?
                                         // swap left and right back again
                                         .project(
                                             (0..oa)
@@ -845,7 +846,7 @@ impl HirRelationExpr {
 
                     // Introduce default values in the case the group key is empty.
                     if group_key.is_empty() {
-                        reduced = get_outer.lookup(id_gen, reduced, default);
+                        reduced = get_outer.lookup::<PlanError>(id_gen, reduced, default)?;
                     }
                     reduced
                 }
@@ -1050,7 +1051,7 @@ impl HirScalarExpr {
                         // the two expressions independently, and apply their cases
                         // as `MirRelationExpr::Map` operations.
 
-                        *inner = inner_clone.let_in_fallible(id_gen, |id_gen, get_inner| {
+                        *inner = inner_clone.let_in(id_gen, |id_gen, get_inner| {
                             // Restrict to records satisfying `cond_expr` and apply `then` as a map.
                             let mut then_inner = get_inner.clone().filter(vec![cond_expr.clone()]);
                             let then_expr = then_clone.applied_to(
@@ -1390,7 +1391,7 @@ impl HirScalarExpr {
 
         *inner = inner
             .take_dangerous()
-            .let_in_fallible(id_gen, |id_gen, mut get_inner| {
+            .let_in(id_gen, |id_gen, mut get_inner| {
                 let order_by_mir = order_by
                     .into_iter()
                     .map(|o| {
@@ -1435,7 +1436,7 @@ impl HirScalarExpr {
                     }
                 }
 
-                get_inner.let_in_fallible(id_gen, |id_gen, mut get_inner| {
+                get_inner.let_in(id_gen, |id_gen, mut get_inner| {
                     let input_type = get_inner.typ();
 
                     // Original columns of the relation
@@ -1530,7 +1531,7 @@ impl HirScalarExpr {
         context: &Context,
     ) -> Result<(MirRelationExpr, BTreeMap<HirScalarExpr, usize>), PlanError> {
         let mut subquery_map = BTreeMap::new();
-        let output = inner.let_in_fallible(id_gen, |id_gen, get_inner| {
+        let output = inner.let_in(id_gen, |id_gen, get_inner| {
             let mut subqueries = Vec::new();
             let distinct_inner = get_inner.clone().distinct();
             for expr in exprs.iter() {
@@ -1751,7 +1752,7 @@ where
     });
     if is_simple && !apply_requires_distinct_outer {
         let new_col_map = col_map.enter_scope(outer.arity() - col_map.len());
-        return outer.let_in_fallible(id_gen, |id_gen, get_outer| {
+        return outer.let_in(id_gen, |id_gen, get_outer| {
             apply(id_gen, inner, get_outer, &new_col_map, cte_map, context)
         });
     }
@@ -1828,7 +1829,7 @@ where
         }));
     }
     let new_col_map = ColumnMap::new(new_col_map);
-    outer.let_in_fallible(id_gen, |id_gen, get_outer| {
+    outer.let_in(id_gen, |id_gen, get_outer| {
         let keyed_outer = if key.is_empty() {
             // Don't depend on outer at all if the branch is not correlated,
             // which yields vastly better query plans. Note that this is a bit
@@ -1840,7 +1841,7 @@ where
         } else {
             get_outer.clone().distinct_by(key.clone())
         };
-        keyed_outer.let_in_fallible(id_gen, |id_gen, get_keyed_outer| {
+        keyed_outer.let_in(id_gen, |id_gen, get_keyed_outer| {
             let oa = get_outer.arity();
             let branch = apply(
                 id_gen,
@@ -1890,7 +1891,7 @@ fn apply_scalar_subquery(
             let inner_arity = get_inner.arity();
             // We must determine a count for each `get_inner` prefix,
             // and report an error if that count exceeds one.
-            let guarded = select.let_in_fallible(id_gen, |_id_gen, get_select| {
+            let guarded = select.let_in(id_gen, |_id_gen, get_select| {
                 // Count for each `get_inner` prefix.
                 let counts = get_select.clone().reduce(
                     (0..inner_arity).collect::<Vec<_>>(),
@@ -1917,7 +1918,7 @@ fn apply_scalar_subquery(
             })?;
             // append Null to anything that didn't return any rows
             let default = vec![(Datum::Null, col_type.scalar_type)];
-            Ok(get_inner.lookup(id_gen, guarded, default))
+            get_inner.lookup(id_gen, guarded, default)
         },
     )
 }
@@ -1949,7 +1950,7 @@ fn apply_existential_subquery(
                 .map(vec![MirScalarExpr::literal_true()]);
 
             // append False to anything that didn't return any rows
-            Ok(get_inner.lookup(id_gen, exists, vec![(Datum::False, ScalarType::Bool)]))
+            get_inner.lookup(id_gen, exists, vec![(Datum::False, ScalarType::Bool)])
         },
     )
 }
@@ -2049,8 +2050,8 @@ fn attempt_outer_equijoin(
 
     // If we've gotten this far, we can do the clever thing.
     // We'll want to use left and right multiple times
-    let result = left.let_in_fallible(id_gen, |id_gen, get_left| {
-        right.let_in_fallible(id_gen, |id_gen, get_right| {
+    let result = left.let_in(id_gen, |id_gen, get_left| {
+        right.let_in(id_gen, |id_gen, get_right| {
             // TODO: we know that we can re-use the arrangements of left and right
             // needed for the inner join with each of the conditional outer joins.
             // It is not clear whether we should hint that, or just let the planner
@@ -2071,7 +2072,7 @@ fn attempt_outer_equijoin(
             .filter(on);
 
             // We'll want to re-use the results of the join multiple times.
-            join.let_in_fallible(id_gen, |id_gen, get_join| {
+            join.let_in(id_gen, |id_gen, get_join| {
                 let mut result = get_join.clone();
 
                 // A collection of keys present in both left and right collections.
@@ -2083,7 +2084,7 @@ fn attempt_outer_equijoin(
                 // inner join, subtract them from left and right respectively, pad what
                 // remains with nulls, and fold them in to `result`.
 
-                both_keys.let_in_fallible(id_gen, |_id_gen, get_both| {
+                both_keys.let_in(id_gen, |_id_gen, get_both| {
                     if let JoinKind::LeftOuter { .. } | JoinKind::FullOuter = kind {
                         // Rows in `left` matched in the inner equijoin. This is
                         // a semi-join between `left` and `both_keys`.
