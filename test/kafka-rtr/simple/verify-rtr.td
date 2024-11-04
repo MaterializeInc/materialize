@@ -81,7 +81,7 @@ A,B,0
 > SELECT sum FROM sum;
 5000207
 
-$ set-regex match=(s\d+|\d{13}|u\d{1,3}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d\.\d\d\d\)|true|false) replacement=<>
+$ set-regex match=(s\d+|\d{13}|u\d+|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d\.\d\d\d\)|true|false) replacement=<>
 
 # RTR timestamp should be present.
 > EXPLAIN TIMESTAMP FOR SELECT sum FROM sum

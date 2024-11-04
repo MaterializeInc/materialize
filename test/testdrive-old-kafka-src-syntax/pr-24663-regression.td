@@ -125,7 +125,7 @@ $ kafka-ingest format=avro topic=dbz-no-before key-format=avro key-schema=${keys
   WHERE s.name IN ('dbz_no_before')
   GROUP BY s.name
   ORDER BY s.name
-true false 0
+true ${arg.leaves-tombstones} 0
 
 $ kafka-ingest format=avro topic=dbz-no-before key-format=avro key-schema=${keyschema} schema=${schema} timestamp=1
 {"id": 1} {"after": {"row": {"id": 1, "creature": "mudskipper"}}, "op": "c", "source": {"file": "binlog1", "pos": 1, "row": 1, "snapshot": {"boolean": false}}}
@@ -163,4 +163,4 @@ $ kafka-ingest format=avro topic=dbz-no-before key-format=avro key-schema=${keys
   WHERE s.name IN ('dbz_no_before')
   GROUP BY s.name
   ORDER BY s.name
-true false 0
+true ${arg.leaves-tombstones} 0

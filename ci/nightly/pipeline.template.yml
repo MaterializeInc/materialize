@@ -700,7 +700,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=RestartEntireMz, --system-param=storage_use_continual_feedback_upsert=false "--seed=$BUILDKITE_JOB_ID"]
+              args: [--scenario=RestartEntireMz, --system-param=storage_use_continual_feedback_upsert=false, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-backup-rollback
         label: "Checks + backup + rollback to previous %N"

@@ -16,6 +16,7 @@ retried until it produces the desired result.
 from pathlib import Path
 
 from materialize import ci_util
+from materialize.mzcompose import get_default_system_parameters
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.fivetran_destination import FivetranDestination
 from materialize.mzcompose.services.kafka import Kafka
@@ -107,6 +108,30 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     else:
         dependencies += ["zookeeper", "kafka", "schema-registry"]
 
+    additional_system_parameter_defaults = {}
+    for val in args.system_param or []:
+        x = val[0].split("=", maxsplit=1)
+        assert len(x) == 2, f"--system-param '{val}' should be the format <key>=<val>"
+        additional_system_parameter_defaults[x[0]] = x[1]
+
+    leaves_tombstones = (
+        "true"
+        if additional_system_parameter_defaults.get(
+            "storage_use_continual_feedback_upsert",
+            get_default_system_parameters()["storage_use_continual_feedback_upsert"],
+        )
+        == "false"
+        else "false"
+    )
+    print(additional_system_parameter_defaults)
+    print(leaves_tombstones)
+
+    materialized = Materialized(
+        default_size=args.default_size,
+        external_minio=True,
+        additional_system_parameter_defaults=additional_system_parameter_defaults,
+    )
+
     testdrive = Testdrive(
         forward_buildkite_shard=True,
         kafka_default_partitions=args.kafka_default_partitions,
@@ -117,19 +142,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         external_minio=True,
         fivetran_destination=True,
         fivetran_destination_files_path="/share/tmp",
-        entrypoint_extra=[f"--var=uses-redpanda={args.redpanda}"],
-    )
-
-    additional_system_parameter_defaults = {}
-    for val in args.system_param or []:
-        x = val[0].split("=", maxsplit=1)
-        assert len(x) == 2, f"--system-param '{val}' should be the format <key>=<val>"
-        additional_system_parameter_defaults[x[0]] = x[1]
-
-    materialized = Materialized(
-        default_size=args.default_size,
-        external_minio=True,
-        additional_system_parameter_defaults=additional_system_parameter_defaults,
+        entrypoint_extra=[
+            f"--var=uses-redpanda={args.redpanda}",
+            f"--var=leaves-tombstones={leaves_tombstones}",
+        ],
     )
 
     with c.override(testdrive, materialized):
