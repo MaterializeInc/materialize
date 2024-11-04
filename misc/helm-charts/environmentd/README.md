@@ -52,7 +52,7 @@ The following table lists the configurable parameters of the Materialize environ
 | `environment.balancerdResourceRequirements.requests.cpu` |  | ``"100m"`` |
 | `environment.balancerdResourceRequirements.requests.memory` |  | ``"256Mi"`` |
 | `environment.environmentdExtraArgs[0]` |  | ``"--orchestrator-kubernetes-ephemeral-volume-class=hostpath"`` |
-| `environment.environmentdImageRef` |  | ``"materialize/environmentd:v0.122.0-dev.0--pr.g47923ddb1bb4f3fb38d152b8aa86a77514599b29"`` |
+| `environment.environmentdImageRef` |  | ``"materialize/environmentd:v0.124.0-dev.0--pr.g88ffd14ea8c194bc76d53f22ef10d08bf36b0a08"`` |
 | `environment.environmentdResourceRequirements.limits.memory` |  | ``"512Mi"`` |
 | `environment.environmentdResourceRequirements.requests.cpu` |  | ``"250m"`` |
 | `environment.environmentdResourceRequirements.requests.memory` |  | ``"512Mi"`` |
@@ -108,7 +108,7 @@ Control environment updates using the rollout parameters:
 
 ### Secret Configuration
 
-The chart automatically creates a secret named `materialize-backend-{environment.name}` containing:
+The chart automatically creates a secret named `materialize-backend` containing:
 - `metadata_backend_url`: Database connection URL
 - `persist_backend_url`: Storage backend URL
 

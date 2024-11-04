@@ -340,7 +340,7 @@ fn create_network_policies(
         network_policies.extend([
             // Allow all clusterd/environmentd traffic (within the namespace)
             NetworkPolicy {
-                metadata: mz.managed_resource_meta(mz.name_prefixed("allow-all-within-namespace")),
+                metadata: mz.managed_resource_meta("allow-all-within-namespace".to_owned()),
                 spec: Some(NetworkPolicySpec {
                     egress: Some(vec![NetworkPolicyEgressRule {
                         to: Some(vec![NetworkPolicyPeer {
@@ -369,7 +369,7 @@ fn create_network_policies(
             // Allow traffic from orchestratord to environmentd in order to hit
             // the promotion endpoints during upgrades
             NetworkPolicy {
-                metadata: mz.managed_resource_meta(mz.name_prefixed("allow-orchestratord")),
+                metadata: mz.managed_resource_meta("allow-orchestratord".to_owned()),
                 spec: Some(NetworkPolicySpec {
                     ingress: Some(vec![NetworkPolicyIngressRule {
                         from: Some(vec![NetworkPolicyPeer {
@@ -411,7 +411,7 @@ fn create_network_policies(
             mz.balancerd_service_name(),
         );
         network_policies.extend([NetworkPolicy {
-            metadata: mz.managed_resource_meta(mz.name_prefixed("sql-and-http-ingress")),
+            metadata: mz.managed_resource_meta("sql-and-http-ingress".to_owned()),
             spec: Some(NetworkPolicySpec {
                 ingress: Some(vec![NetworkPolicyIngressRule {
                     from: Some(
@@ -453,7 +453,7 @@ fn create_network_policies(
     }
     if config.network_policies.egress_enabled {
         network_policies.extend([NetworkPolicy {
-            metadata: mz.managed_resource_meta(mz.name_prefixed("sources-and-sinks-egress")),
+            metadata: mz.managed_resource_meta("sources-and-sinks-egress".to_owned()),
             spec: Some(NetworkPolicySpec {
                 egress: Some(vec![NetworkPolicyEgressRule {
                     to: Some(
