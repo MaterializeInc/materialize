@@ -147,7 +147,7 @@ use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
 use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
-use crate::logging::compute::{ComputeEvent, LogDataflowErrors};
+use crate::logging::compute::{ComputeEvent, LirMetadata, LogDataflowErrors};
 use crate::render::context::{
     ArrangementFlavor, Context, MzArrangement, MzArrangementImport, ShutdownToken,
 };
@@ -881,30 +881,54 @@ where
         // Rendered collections by their `LirId`.
         let mut collections = BTreeMap::new();
 
+        // Mappings to send along.
+        // To save overhead, we'll only compute mappings when we need to,
+        // which means things get gated behind options. Unfortuantely, that means we
+        // have several `Option<...>` types that are _all_ `Some` or `None` together,
+        // but there's no convenient way to express the invariant.
+        let should_compute_lir_metadata = self.compute_logger.is_some();
+        let mut lir_mapping_metadata = if should_compute_lir_metadata {
+            Some(Vec::with_capacity(steps.len()))
+        } else {
+            None
+        };
+
         for lir_id in topological_order {
             let step = steps.remove(&lir_id).unwrap();
 
             // TODO(mgree) need ExprHumanizer in DataflowDescription to get nice column names
             // ActiveComputeState can't have a catalog reference, so we'll need to capture the names
             // in some other structure and have that structure impl ExprHumanizer
-            let operator = step.node.humanize(&DummyHumanizer);
+            let metadata = if should_compute_lir_metadata {
+                let operator: Box<str> = step.node.humanize(&DummyHumanizer).into();
+                let operator_id_start = self.scope.peek_identifier();
+                Some((operator, operator_id_start))
+            } else {
+                None
+            };
 
-            let operator_id_start = self.scope.peek_identifier();
             let mut bundle = self.render_plan_node(step.node, &collections);
-            let operator_id_end = self.scope.peek_identifier();
-            let operator_span = (operator_id_start, operator_id_end);
 
-            self.log_lir_mapping(
-                object_id,
-                lir_id,
-                operator,
-                step.parent,
-                step.nesting,
-                operator_span,
-            );
+            if let Some((operator, operator_id_start)) = metadata {
+                let operator_id_end = self.scope.peek_identifier();
+                let operator_span = (operator_id_start, operator_id_end);
+
+                if let Some(lir_mapping_metadata) = &mut lir_mapping_metadata {
+                    lir_mapping_metadata.push((
+                        lir_id,
+                        LirMetadata::new(operator, step.parent, step.nesting, operator_span),
+                    ))
+                }
+            }
+
             self.log_operator_hydration(&mut bundle, lir_id);
 
             collections.insert(lir_id, bundle);
+        }
+
+        if let Some(lir_mapping_metadata) = lir_mapping_metadata {
+            let mapping: Box<[(LirId, LirMetadata)]> = lir_mapping_metadata.into();
+            self.log_lir_mapping(object_id, mapping);
         }
 
         collections
@@ -1116,25 +1140,9 @@ where
         }
     }
 
-    fn log_lir_mapping(
-        &self,
-        global_id: GlobalId,
-        lir_id: LirId,
-        operator: String,
-        parent_lir_id: Option<LirId>,
-        nesting: u8,
-        operator_span: (usize, usize),
-    ) {
+    fn log_lir_mapping(&self, global_id: GlobalId, mapping: Box<[(LirId, LirMetadata)]>) {
         if let Some(logger) = &self.compute_logger {
-            let operator = operator.into();
-            logger.log(ComputeEvent::LirMapping {
-                global_id,
-                lir_id,
-                operator,
-                parent_lir_id,
-                nesting,
-                operator_span,
-            });
+            logger.log(ComputeEvent::LirMapping { global_id, mapping });
         }
     }
 

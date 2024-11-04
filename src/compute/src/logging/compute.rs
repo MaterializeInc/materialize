@@ -142,20 +142,9 @@ pub enum ComputeEvent {
         /// tracks the many-to-one relationship between `GlobalId`s and
         /// dataflows.
         global_id: GlobalId,
-        /// The LIR identifier (local to `export_id`).
-        lir_id: LirId,
-        /// The LIR operator, as a string (see `FlatPlanNode::humanize`).
-        /// We use `Box<str>` to reduce the size of the `ComputeEvent` representation.
-        operator: Box<str>,
-        /// The LIR identifier of the parent (if any).
-        /// Since `LirId`s are strictly positive, Rust can steal the low bit.
-        /// TODO(mgree) write a test to ensure that low bit is stolen
-        parent_lir_id: Option<LirId>,
-        /// How nested this operator is.
-        nesting: u8,
-        /// Operator id span start (inclusive) and end (exclusive).
-        /// If the two numbers are equal, then no operators were used.
-        operator_span: (usize, usize),
+        /// The actual mapping.
+        /// Represented this way to reduce the size of `ComputeEvent`.
+        mapping: Box<[(LirId, LirMetadata)]>,
     },
     DataflowGlobal {
         /// The identifier of the dataflow.
@@ -195,6 +184,38 @@ impl Peek {
     /// Create a new peek from its arguments.
     pub fn new(id: GlobalId, time: Timestamp, uuid: Uuid) -> Self {
         Self { id, time, uuid }
+    }
+}
+
+/// Metadata for LIR operators.
+#[derive(Clone, Debug, PartialEq, PartialOrd)]
+pub struct LirMetadata {
+    /// The LIR operator, as a string (see `FlatPlanNode::humanize`).
+    operator: Box<str>,
+    /// The LIR identifier of the parent (if any).
+    /// Since `LirId`s are strictly positive, Rust can steal the low bit.
+    /// (See `test_option_lirid_fits_in_usize`.)
+    parent_lir_id: Option<LirId>,
+    /// How nested the operator is (for nice indentation).
+    nesting: u8,
+    /// The dataflow operator ids, given as start (inclusive) and end (exclusive).
+    /// If `start == end`, then no operators were used.
+    operator_span: (usize, usize),
+}
+
+impl LirMetadata {
+    pub fn new(
+        operator: Box<str>,
+        parent_lir_id: Option<LirId>,
+        nesting: u8,
+        operator_span: (usize, usize),
+    ) -> Self {
+        Self {
+            operator,
+            parent_lir_id,
+            nesting,
+            operator_span,
+        }
     }
 }
 
@@ -528,19 +549,6 @@ struct DemuxState<A: Allocate> {
     dataflow_global_ids: BTreeMap<usize, BTreeSet<GlobalId>>,
 }
 
-/// Metadata for LIR operators.
-#[derive(Debug)]
-struct LirMetadata {
-    /// The operator rendered as a string.
-    operator: Box<str>,
-    parent_lir_id: Option<LirId>,
-    /// How nested the operator is (for nice indentation).
-    nesting: u8,
-    /// The dataflow operator ids, given as start (inclusive) and end (exclusive).
-    /// If `start == end`, then no operators were used.
-    operator_span: (usize, usize),
-}
-
 impl<A: Allocate> DemuxState<A> {
     fn new(worker: Worker<A>) -> Self {
         Self {
@@ -749,21 +757,7 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
             DataflowShutdown { dataflow_index } => self.handle_dataflow_shutdown(dataflow_index),
             ErrorCount { export_id, diff } => self.handle_error_count(export_id, diff),
             Hydration { export_id } => self.handle_hydration(export_id),
-            LirMapping {
-                global_id,
-                lir_id,
-                operator,
-                parent_lir_id,
-                nesting,
-                operator_span,
-            } => self.handle_lir_mapping(
-                global_id,
-                lir_id,
-                operator,
-                parent_lir_id,
-                nesting,
-                operator_span,
-            ),
+            LirMapping { global_id, mapping } => self.handle_lir_mapping(global_id, mapping),
             DataflowGlobal { id, global_id } => self.handle_dataflow_global(id, global_id),
         }
     }
@@ -1112,48 +1106,36 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
     }
 
     /// Indicate that a new LIR operator exists; record the dataflow address it maps to.
-    fn handle_lir_mapping(
-        &mut self,
-        global_id: GlobalId,
-        lir_id: LirId,
-        operator: Box<str>,
-        parent_lir_id: Option<LirId>,
-        nesting: u8,
-        operator_span: (usize, usize),
-    ) {
+    fn handle_lir_mapping(&mut self, global_id: GlobalId, mapping: Box<[(LirId, LirMetadata)]>) {
         // record the state (for the later drop)
         self.state
             .lir_mapping
             .entry(global_id)
-            .and_modify(|id_mapping| {
-                let existing = id_mapping.insert(lir_id, LirMetadata {
-                    operator: operator.clone(),
-                    parent_lir_id: parent_lir_id.clone(),
-                    nesting,
-                    operator_span: operator_span.clone(),
-                });
-                if let Some(old_operator_span) = existing {
-                    error!(%global_id, %lir_id, "lir mapping to operator span {operator_span:?} already registered as {old_operator_span:?}");
-                }
-            })
-            .or_insert_with(|| BTreeMap::from([(lir_id, LirMetadata {
-                operator: operator.clone(),
-                parent_lir_id: parent_lir_id.clone(),
-                nesting,
-                operator_span: operator_span.clone(),
-            })]));
+            .and_modify(|existing_mapping| existing_mapping.extend(mapping.iter().cloned()))
+            .or_insert_with(|| mapping.iter().cloned().collect::<BTreeMap<_, _>>());
 
         // send the datum out
         let ts = self.ts();
-        let datum = LirMappingDatum {
-            global_id,
+        for (
             lir_id,
-            operator,
-            parent_lir_id,
-            nesting,
-            operator_span,
-        };
-        self.output.lir_mapping.give((datum, ts, 1));
+            LirMetadata {
+                operator,
+                parent_lir_id,
+                nesting,
+                operator_span,
+            },
+        ) in mapping
+        {
+            let datum = LirMappingDatum {
+                global_id,
+                lir_id,
+                operator,
+                parent_lir_id,
+                nesting,
+                operator_span,
+            };
+            self.output.lir_mapping.give((datum, ts, 1));
+        }
     }
 
     fn handle_dataflow_global(&mut self, id: usize, global_id: GlobalId) {
@@ -1356,6 +1338,6 @@ mod tests {
     #[mz_ore::test]
     fn test_compute_event_size() {
         // This could be a static assertion, but we don't use those yet in this crate.
-        assert_eq!(72, std::mem::size_of::<ComputeEvent>())
+        assert_eq!(48, std::mem::size_of::<ComputeEvent>())
     }
 }
