@@ -1644,7 +1644,7 @@ pub struct Coordinator {
     /// Active introspection subscribes.
     introspection_subscribes: BTreeMap<GlobalId, IntrospectionSubscribe>,
 
-    /// Locks that grant access to a specific object.
+    /// Locks that grant access to a specific object, populated lazily as objects are written to.
     write_locks: BTreeMap<GlobalId, Arc<tokio::sync::Mutex<()>>>,
     /// Plans that are currently deferred and waiting on a write lock.
     deferred_write_ops: BTreeMap<ConnectionId, DeferredWriteOp>,

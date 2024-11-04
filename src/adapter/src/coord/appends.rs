@@ -183,12 +183,8 @@ impl Coordinator {
         let locks = match write_locks.all_or_nothing(op.conn_id()) {
             Ok(locks) => locks,
             Err(failed_to_acquire) => {
-                let gid = *failed_to_acquire
-                    .iter()
-                    .next()
-                    .expect("at least one missing GlobalId");
-                let acquire_future = self.grant_object_write_lock(gid);
-                self.defer_op(Some(acquire_future), op);
+                let acquire_future = self.grant_object_write_lock(failed_to_acquire);
+                self.defer_op(acquire_future, op);
                 return;
             }
         };
@@ -197,7 +193,7 @@ impl Coordinator {
         match op {
             DeferredWriteOp::Plan(mut deferred) => {
                 if let Err(e) = deferred.validity.check(self.catalog()) {
-                    deferred.ctx.retire(Err(e))
+                    return deferred.ctx.retire(Err(e));
                 } else {
                     // Write statements never need to track resolved IDs (NOTE: This is not the
                     // same thing as plan dependencies, which we do need to re-validate).
@@ -211,8 +207,7 @@ impl Coordinator {
                             ?existing,
                             "session already write locks granted?",
                         );
-                        deferred.ctx.retire(Err(AdapterError::WrongSetOfLocks));
-                        return;
+                        return deferred.ctx.retire(Err(AdapterError::WrongSetOfLocks));
                     };
 
                     // Note: This plan is not guaranteed to run, it may get deferred again.
@@ -350,7 +345,7 @@ impl Coordinator {
                     write_locks: None,
                     pending_txn,
                 } => {
-                    let missing = group_write_locks.contains_all(writes.keys().copied());
+                    let missing = group_write_locks.missing_locks(writes.keys().copied());
 
                     if missing.is_empty() {
                         // We have all the locks! Queue the pending write.
@@ -384,13 +379,14 @@ impl Coordinator {
                                 validated_writes.push(validated_write);
                             }
                             // Darn. We couldn't acquire the locks, defer the write.
-                            Err(_missing) => {
+                            Err(missing) => {
+                                let acquire_future = self.grant_object_write_lock(missing);
                                 let write = DeferredWrite {
                                     span,
                                     writes,
                                     pending_txn,
                                 };
-                                deferred_writes.push(write);
+                                deferred_writes.push((acquire_future, write));
                             }
                         }
                     }
@@ -399,16 +395,8 @@ impl Coordinator {
         }
 
         // Queue all of our deferred ops.
-        for write in deferred_writes {
-            // This is annoying but we need to name the generic Future that is optionally passed to
-            // `defer_op`. Since we're passing `None`, Rust can't infer the type.
-            type WriteLockFuturePlaceholderType = Box<
-                dyn Future<Output = (GlobalId, tokio::sync::OwnedMutexGuard<()>)>
-                    + Send
-                    + Unpin
-                    + 'static,
-            >;
-            self.defer_op::<WriteLockFuturePlaceholderType>(None, DeferredWriteOp::Write(write));
+        for (acquire_future, write) in deferred_writes {
+            self.defer_op(acquire_future, DeferredWriteOp::Write(write));
         }
 
         // The value returned here still might be ahead of `now()` if `now()` has gone backwards at
@@ -587,26 +575,7 @@ impl Coordinator {
         BuiltinTableAppend { coord: self }
     }
 
-    /// Defers executing `plan` until at least one of the locks in `missing` becomes available.
-    /// Waiting for the lock to become available occurs in a [`tokio::task`].
-    pub(crate) fn defer_plan(&mut self, plan: DeferredPlan, missing: BTreeSet<GlobalId>) {
-        // Get a future for the first missing lock, we'll try again once this lock is available.
-        let acquire_future = missing
-            .iter()
-            .next()
-            .map(|gid| self.grant_object_write_lock(*gid));
-
-        if acquire_future.is_none() {
-            tracing::error!(
-                required_locks = ?plan.requires_locks,
-                missing_locks = ?missing,
-                "acquired all locks for write that should be deferred?"
-            );
-        }
-        self.defer_op(acquire_future, DeferredWriteOp::Plan(plan));
-    }
-
-    pub(crate) fn defer_op<F>(&mut self, acquire_future: Option<F>, op: DeferredWriteOp)
+    pub(crate) fn defer_op<F>(&mut self, acquire_future: F, op: DeferredWriteOp)
     where
         F: Future<Output = (GlobalId, tokio::sync::OwnedMutexGuard<()>)> + Send + 'static,
     {
@@ -615,34 +584,21 @@ impl Coordinator {
         // Track all of our deferred ops.
         self.deferred_write_ops.insert(conn_id.clone(), op);
 
-        match acquire_future {
-            // Spawn a future that will notify us when the write locks become ready.
-            Some(acquire_future) => {
-                let internal_cmd_tx = self.internal_cmd_tx.clone();
-                let conn_id_ = conn_id.clone();
-                mz_ore::task::spawn(|| format!("defer op {conn_id_}"), async move {
-                    tracing::info!(%conn_id, "deferring plan");
-                    // Once we can acquire the first failed lock, try running the deferred plan.
-                    //
-                    // Note: This does not guarantee the plan will be able to run, there might be
-                    // other locks that we later fail to get.
-                    let acquired_lock = acquire_future.await;
-                    // If this send fails then the Coordinator is shutting down.
-                    let _ = internal_cmd_tx.send(Message::TryDeferred {
-                        conn_id,
-                        acquired_lock: Some(acquired_lock),
-                    });
-                });
-            }
-            // If there is no write lock to wait for, just immediately queue the op to try again.
-            None => {
-                // If this send fails then the Coordinator is shutting down.
-                let _ = self.internal_cmd_tx.send(Message::TryDeferred {
-                    conn_id,
-                    acquired_lock: None,
-                });
-            }
-        }
+        let internal_cmd_tx = self.internal_cmd_tx.clone();
+        let conn_id_ = conn_id.clone();
+        mz_ore::task::spawn(|| format!("defer op {conn_id_}"), async move {
+            tracing::info!(%conn_id, "deferring plan");
+            // Once we can acquire the first failed lock, try running the deferred plan.
+            //
+            // Note: This does not guarantee the plan will be able to run, there might be
+            // other locks that we later fail to get.
+            let acquired_lock = acquire_future.await;
+            // If this send fails then the Coordinator is shutting down.
+            let _ = internal_cmd_tx.send(Message::TryDeferred {
+                conn_id,
+                acquired_lock: Some(acquired_lock),
+            });
+        });
     }
 
     /// Returns a future that waits until it can get an exclusive lock on the specified collection.

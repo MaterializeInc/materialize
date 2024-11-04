@@ -1487,8 +1487,8 @@ impl WriteLocks {
         WriteLocksBuilder { locks }
     }
 
-    /// Validate this set of [`WriteLocks`] is sufficient for the provided collections.Dropping the
-    /// currently held locks if it's not.
+    /// Validate this set of [`WriteLocks`] is sufficient for the provided collections.
+    /// Dropping the currently held locks if it's not.
     pub fn validate(
         self,
         collections: impl Iterator<Item = GlobalId>,
@@ -1538,7 +1538,10 @@ impl WriteLocksBuilder {
     }
 
     /// Finish this builder by returning either all of the necessary locks, or none of them.
-    pub fn all_or_nothing(self, conn_id: &ConnectionId) -> Result<WriteLocks, BTreeSet<GlobalId>> {
+    ///
+    /// If we fail to acquire all of the locks, returns one of the [`GlobalId`]s that we failed to
+    /// acquire a lock for, that should be awaited so we know when to run again.
+    pub fn all_or_nothing(self, conn_id: &ConnectionId) -> Result<WriteLocks, GlobalId> {
         let (locks, missing): (BTreeMap<_, _>, BTreeSet<_>) =
             self.locks
                 .into_iter()
@@ -1547,16 +1550,20 @@ impl WriteLocksBuilder {
                     None => itertools::Either::Right(gid),
                 });
 
-        if missing.is_empty() {
-            tracing::info!(%conn_id, ?locks, "acquired write locks");
-            Ok(WriteLocks {
-                locks,
-                conn_id: conn_id.clone(),
-            })
-        } else {
-            // Explicitly drop the already acquired locks.
-            drop(locks);
-            Err(missing)
+        match missing.iter().next() {
+            None => {
+                tracing::info!(%conn_id, ?locks, "acquired write locks");
+                Ok(WriteLocks {
+                    locks,
+                    conn_id: conn_id.clone(),
+                })
+            }
+            Some(gid) => {
+                tracing::info!(?missing, "failed to acquire write locks");
+                // Explicitly drop the already acquired locks.
+                drop(locks);
+                Err(*gid)
+            }
         }
     }
 }
@@ -1599,11 +1606,13 @@ impl WriteLocksBuilder {
 /// The times these operations occur at are ordered:
 /// t0 < t1 < t2 < t3
 ///
-/// The initial read for the `DELETE` occurs at t0, so it won't observe ('q', 6) which was inserted
-/// at time t1, thus Ta must be ordered before Tb. But the read at t2 won't observe the deletion of
-/// ('x', 2) and ('z', 4) since the retractions won't get submitted until t3, but it will observe
-/// the insertion of ('q', 6), thus Tc must be ordered before Ta and after Tb. This ordering isn't
-/// possible though, thus no total order exists for these transactions.
+/// Given the timing of the operations, the transactions must have the following order:
+///
+/// * Ta does not observe ('q', 6), so Ta < Tb
+/// * Tc does observe ('q', 6), so Tb < Tc
+/// * Tc does not observe the retractions from Ta, so Tc < Ta
+///
+/// For total order to exist, Ta < Tb < Tc < Ta, which is impossible.
 /// ```
 ///
 /// [`group_commit`]: super::coord::Coordinator::group_commit
@@ -1622,8 +1631,8 @@ impl GroupCommitWriteLocks {
         self.locks.extend(existing);
     }
 
-    /// Returns what locks we're missing for the specified writes, if any.
-    pub fn contains_all(&self, writes: impl Iterator<Item = GlobalId>) -> BTreeSet<GlobalId> {
+    /// Returns the collections we're missing locks for, if any.
+    pub fn missing_locks(&self, writes: impl Iterator<Item = GlobalId>) -> BTreeSet<GlobalId> {
         let mut missing = BTreeSet::new();
         for write in writes {
             if !self.locks.contains_key(&write) {

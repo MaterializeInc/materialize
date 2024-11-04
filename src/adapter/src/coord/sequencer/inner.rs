@@ -95,7 +95,9 @@ use tracing::{warn, Instrument, Span};
 
 use crate::catalog::{self, Catalog, ConnCatalog, DropObjectInfo, UpdatePrivilegeVariant};
 use crate::command::{ExecuteResponse, Response};
-use crate::coord::appends::{BuiltinTableAppendNotify, DeferredPlan, PendingWriteTxn};
+use crate::coord::appends::{
+    BuiltinTableAppendNotify, DeferredPlan, DeferredWriteOp, PendingWriteTxn,
+};
 use crate::coord::{
     AlterConnectionValidationReady, AlterSinkReadyContext, Coordinator,
     CreateConnectionValidationReady, DeferredPlanStatement, ExecuteContext, ExplainContext,
@@ -2066,7 +2068,7 @@ impl Coordinator {
                         Ok(locks) => Some(locks),
                         Err(missing) => {
                             tracing::error!(?missing, "programming error, missing write locks");
-                            None
+                            return ctx.retire(Err(AdapterError::WrongSetOfLocks));
                         }
                     },
                 };
@@ -2612,10 +2614,9 @@ impl Coordinator {
             let write_locks = match write_locks.all_or_nothing(ctx.session().conn_id()) {
                 Ok(locks) => locks,
                 Err(missing) => {
-                    tracing::info!("failed to acquire write locks for {missing:?}");
-
                     // Defer our write if we couldn't acquire all of the locks.
                     let role_metadata = ctx.session().role_metadata().clone();
+                    let acquire_future = self.grant_object_write_lock(missing);
                     let plan = DeferredPlan {
                         ctx,
                         plan: Plan::ReadThenWrite(plan),
@@ -2628,9 +2629,7 @@ impl Coordinator {
                         ),
                         requires_locks: source_ids,
                     };
-                    self.defer_plan(plan, missing);
-
-                    return;
+                    return self.defer_op(acquire_future, DeferredWriteOp::Plan(plan));
                 }
             };
 
