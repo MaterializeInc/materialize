@@ -31,6 +31,13 @@ operator:
     environmentdIAMRoleARN: ""
     # awsAccountID is required when cloudProvider is "aws"
     awsAccountID: ""
+    # To provide additional disk to clusterd pods, configure a CSI plugin in
+    # your kubernetes cluster, and put its storage class here. Note that
+    # networked storage (EBS volumes, for instance) is unlikely to work well
+    # here - we recommend using something like
+    # https://github.com/openebs/lvm-localpv targeting local instance store
+    # NVME drives.
+    ephemeralVolumeClass: null
   # Node selector to use for the operator pod
   nodeSelector: {}
   resources:

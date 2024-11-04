@@ -44,6 +44,8 @@ pub struct Args {
     aws_info: AwsInfo,
 
     #[clap(long)]
+    ephemeral_volume_class: Option<String>,
+    #[clap(long)]
     scheduler_name: Option<String>,
     #[clap(long)]
     enable_security_context: bool,

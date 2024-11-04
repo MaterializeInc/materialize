@@ -17,10 +17,11 @@ use k8s_openapi::{
             StatefulSetSpec, StatefulSetUpdateStrategy,
         },
         core::v1::{
-            Capabilities, Container, ContainerPort, EnvVar, EnvVarSource, HTTPGetAction, Pod,
+            Capabilities, Container, ContainerPort, EnvVar, EnvVarSource, EphemeralVolumeSource,
+            HTTPGetAction, PersistentVolumeClaimSpec, PersistentVolumeClaimTemplate, Pod,
             PodSecurityContext, PodSpec, PodTemplateSpec, Probe, SeccompProfile, SecretKeySelector,
             SecurityContext, Service, ServiceAccount, ServicePort, ServiceSpec, TCPSocketAction,
-            Toleration,
+            Toleration, Volume, VolumeMount, VolumeResourceRequirements,
         },
         networking::v1::{
             IPBlock, NetworkPolicy, NetworkPolicyEgressRule, NetworkPolicyIngressRule,
@@ -936,12 +937,46 @@ fn create_environmentd_statefulset_object(
         ]);
     }
 
-    args.extend([
-        "--orchestrator-kubernetes-ephemeral-volume-class=openebs-lvm-instance-store-ext4"
-            .to_string(),
-        // The `materialize` user used by clusterd always has gid 999.
-        "--orchestrator-kubernetes-service-fs-group=999".to_string(),
-    ]);
+    let mut volumes = None;
+    let mut volume_mounts = None;
+    if let Some(ephemeral_volume_class) = &config.ephemeral_volume_class {
+        args.extend([
+            format!(
+                "--orchestrator-kubernetes-ephemeral-volume-class={}",
+                ephemeral_volume_class
+            ),
+            "--scratch-directory=/scratch".to_string(),
+        ]);
+        volumes = Some(vec![Volume {
+            name: "scratch".to_string(),
+            ephemeral: Some(EphemeralVolumeSource {
+                volume_claim_template: Some(PersistentVolumeClaimTemplate {
+                    spec: PersistentVolumeClaimSpec {
+                        access_modes: Some(vec!["ReadWriteOnce".to_string()]),
+                        storage_class_name: Some(ephemeral_volume_class.to_string()),
+                        resources: Some(VolumeResourceRequirements {
+                            requests: Some(BTreeMap::from([(
+                                "storage".to_string(),
+                                mz.environmentd_scratch_volume_storage_requirement(),
+                            )])),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }]);
+        volume_mounts = Some(vec![VolumeMount {
+            name: "scratch".to_string(),
+            mount_path: "/scratch".to_string(),
+            ..Default::default()
+        }]);
+    }
+    // The `materialize` user used by clusterd always has gid 999.
+    args.push("--orchestrator-kubernetes-service-fs-group=999".to_string());
 
     // Add Sentry arguments.
     if let Some(sentry_dsn) = &tracing.sentry_dsn {
@@ -1075,6 +1110,7 @@ fn create_environmentd_statefulset_object(
         ports: Some(ports),
         args: Some(args),
         env: Some(env),
+        volume_mounts,
         liveness_probe: Some(probe.clone()),
         readiness_probe: Some(probe),
         resources: mz.spec.environmentd_resource_requirements.clone(),
@@ -1142,7 +1178,7 @@ fn create_environmentd_statefulset_object(
             ),
             scheduler_name: config.scheduler_name.clone(),
             service_account_name: Some(mz.service_account_name()),
-            volumes: None,
+            volumes,
             security_context: Some(PodSecurityContext {
                 fs_group: Some(999),
                 run_as_user: Some(999),
