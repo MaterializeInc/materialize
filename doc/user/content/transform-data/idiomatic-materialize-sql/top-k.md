@@ -115,7 +115,7 @@ For more information on setting `LIMIT INPUT GROUP SIZE`, see
 **Idiomatic Materialize SQL**: For K = 1, use a [SELECT DISTINCT
 ON()](/sql/select/#select-distinct-on) on the grouping key (e.g., `fieldA`) and
 order the results first by the `DISTINCT ON` key and then the Top-K ordering
-key the (e.g., `fieldA, fieldZ [ASC|DESC]`).
+key (e.g., `fieldA, fieldZ [ASC|DESC]`).
 
 Alternatively, you can also use the more general [Top-K where K >= 1](#for-k--1)
 pattern, specifying 1 as the limit.
