@@ -14,6 +14,8 @@
 // making your Proto changes in a release before you populate non-default values,
 // or guard the code changes behind a feature flag.
 
+// buf breaking: check (durably written in Consensus)
+
 syntax = "proto3";
 
 package mz_persist.gen.persist;

@@ -10,6 +10,8 @@
 // Unlike other Persist proto definitions, these messages are not sent between
 // versions and do not have special compatibility requirements.
 
+// buf breaking: ignore (does currently not require backward-compatibility)
+
 syntax = "proto3";
 
 package mz_persist_client.internal.service;

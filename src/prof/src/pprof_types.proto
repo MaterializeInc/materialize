@@ -42,6 +42,8 @@
 //   mappings. For every nonzero Location.mapping_id there must be a
 //   unique Mapping with that id.
 
+// buf breaking: ignore (does currently not require backward-compatibility)
+
 syntax = "proto3";
 
 package perftools.profiles;

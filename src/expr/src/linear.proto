@@ -9,6 +9,8 @@
 
 // See https://developers.google.com/protocol-buffers for what's going on here.
 
+// buf breaking: ignore (does currently not require backward-compatibility)
+
 syntax = "proto3";
 
 package mz_expr.linear;
