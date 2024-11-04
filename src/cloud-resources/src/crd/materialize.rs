@@ -11,7 +11,10 @@ use std::collections::BTreeMap;
 
 use k8s_openapi::{
     api::core::v1::ResourceRequirements,
-    apimachinery::pkg::apis::meta::v1::{Condition, OwnerReference, Time},
+    apimachinery::pkg::{
+        api::resource::Quantity,
+        apis::meta::v1::{Condition, OwnerReference, Time},
+    },
 };
 use kube::{api::ObjectMeta, CustomResource, Resource, ResourceExt};
 
@@ -55,6 +58,8 @@ pub mod v1alpha1 {
         pub environmentd_connection_role_arn: Option<String>,
         // Resource requirements for the environmentd pod
         pub environmentd_resource_requirements: Option<ResourceRequirements>,
+        // Amount of disk to allocate, if a storage class is provided
+        pub environmentd_scratch_volume_storage_requirement: Option<Quantity>,
         // Resource requirements for the balancerd pod
         pub balancerd_resource_requirements: Option<ResourceRequirements>,
 
@@ -132,6 +137,30 @@ pub mod v1alpha1 {
 
         pub fn name_prefixed(&self, suffix: &str) -> String {
             format!("{}-{}", self.name_unchecked(), suffix)
+        }
+
+        pub fn environmentd_scratch_volume_storage_requirement(&self) -> Quantity {
+            self.spec
+                .environmentd_scratch_volume_storage_requirement
+                .clone()
+                .unwrap_or_else(|| {
+                    self.spec
+                        .environmentd_resource_requirements
+                        .as_ref()
+                        .and_then(|requirements| {
+                            requirements
+                                .requests
+                                .as_ref()
+                                .or(requirements.limits.as_ref())
+                        })
+                        // TODO: in cloud, we've been defaulting to twice the
+                        // memory limit, but k8s-openapi doesn't seem to
+                        // provide any way to parse Quantity values, so there
+                        // isn't an easy way to do arithmetic on it
+                        .and_then(|requirements| requirements.get("memory").cloned())
+                        // TODO: is there a better default to use here?
+                        .unwrap_or(Quantity("4096Mi".to_string()))
+                })
         }
 
         pub fn default_labels(&self) -> BTreeMap<String, String> {

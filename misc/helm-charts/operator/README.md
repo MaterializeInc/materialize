@@ -53,6 +53,7 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.args.cloudProvider` |  | ``"local"`` |
 | `operator.args.createBalancers` |  | ``true`` |
 | `operator.args.environmentdIAMRoleARN` |  | ``""`` |
+| `operator.args.ephemeralVolumeClass` |  | ``nil`` |
 | `operator.args.localDevelopment` |  | ``true`` |
 | `operator.args.region` |  | ``"kind"`` |
 | `operator.args.startupLogFilter` |  | ``"INFO,mz_orchestratord=TRACE"`` |
