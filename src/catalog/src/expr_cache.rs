@@ -35,7 +35,6 @@ use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::OptimizerNotice;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
-use smallvec::SmallVec;
 use timely::Container;
 use tokio::sync::mpsc;
 use tracing::debug;
@@ -43,14 +42,25 @@ use uuid::Uuid;
 
 use crate::durable::expression_cache_shard_id;
 
-/// The data that is cached per catalog object.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Arbitrary)]
+enum ExpressionType {
+    Local,
+    Global,
+}
+
+/// The data that is cached per catalog object as a result of local optimizations.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Expressions {
+pub struct LocalExpressions {
     local_mir: OptimizedMirRelationExpr,
+    optimizer_features: OptimizerFeatures,
+}
+
+/// The data that is cached per catalog object as a result of global optimizations.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GlobalExpressions {
     global_mir: DataflowDescription<OptimizedMirRelationExpr>,
     physical_plan: DataflowDescription<mz_compute_types::plan::Plan>,
     dataflow_metainfos: DataflowMetainfo<Arc<OptimizerNotice>>,
-    notices: SmallVec<[Arc<OptimizerNotice>; 4]>,
     optimizer_features: OptimizerFeatures,
 }
 
@@ -58,6 +68,7 @@ pub struct Expressions {
 struct CacheKey {
     deploy_generation: u64,
     id: GlobalId,
+    expr_type: ExpressionType,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -159,7 +170,11 @@ impl ExpressionCache {
             compact_shard,
             dyncfgs,
         }: ExpressionCacheConfig<'_>,
-    ) -> (Self, BTreeMap<GlobalId, Expressions>) {
+    ) -> (
+        Self,
+        BTreeMap<GlobalId, LocalExpressions>,
+        BTreeMap<GlobalId, GlobalExpressions>,
+    ) {
         let shard_id = expression_cache_shard_id(organization_id);
         let durable_cache = DurableCache::new(persist, shard_id, "expressions").await;
         let mut cache = Self {
@@ -179,7 +194,9 @@ impl ExpressionCache {
                 )
                 .await
             {
-                Ok(contents) => return (cache, contents),
+                Ok((local_expressions, global_expressions)) => {
+                    return (cache, local_expressions, global_expressions)
+                }
                 Err(err) => debug!("failed to open cache: {err} ... retrying"),
             }
         }
@@ -194,23 +211,47 @@ impl ExpressionCache {
         remove_prior_gens: bool,
         compact_shard: bool,
         dyncfgs: &ConfigSet,
-    ) -> Result<BTreeMap<GlobalId, Expressions>, mz_durable_cache::Error> {
+    ) -> Result<
+        (
+            BTreeMap<GlobalId, LocalExpressions>,
+            BTreeMap<GlobalId, GlobalExpressions>,
+        ),
+        mz_durable_cache::Error,
+    > {
         let mut keys_to_remove = Vec::new();
-        let mut current_contents = BTreeMap::new();
+        let mut local_expressions = BTreeMap::new();
+        let mut global_expressions = BTreeMap::new();
 
         for (key, expressions) in self.durable_cache.entries_local() {
             if key.deploy_generation == self.deploy_generation {
                 // Only deserialize the current generation.
-                let expressions: Expressions =
-                    serde_json::from_str(expressions).expect("expressions should roundtrip");
-
-                // Remove dropped IDs and expressions that were cached with different features.
-                if !current_ids.contains(&key.id)
-                    || expressions.optimizer_features != *optimizer_features
-                {
-                    keys_to_remove.push((key.clone(), None));
-                } else {
-                    current_contents.insert(key.id, expressions);
+                match key.expr_type {
+                    ExpressionType::Local => {
+                        let expressions: LocalExpressions = serde_json::from_str(expressions)
+                            .expect("local expressions should roundtrip");
+                        // Remove dropped IDs and local expressions that were cached with different
+                        // features.
+                        if !current_ids.contains(&key.id)
+                            || expressions.optimizer_features != *optimizer_features
+                        {
+                            keys_to_remove.push((key.clone(), None));
+                        } else {
+                            local_expressions.insert(key.id, expressions);
+                        }
+                    }
+                    ExpressionType::Global => {
+                        let expressions: GlobalExpressions = serde_json::from_str(expressions)
+                            .expect("global expressions should roundtrip");
+                        // Remove dropped IDs and global expressions that were cached with different
+                        // features.
+                        if !current_ids.contains(&key.id)
+                            || expressions.optimizer_features != *optimizer_features
+                        {
+                            keys_to_remove.push((key.clone(), None));
+                        } else {
+                            global_expressions.insert(key.id, expressions);
+                        }
+                    }
                 }
             } else if remove_prior_gens {
                 // Remove expressions from previous generations.
@@ -232,36 +273,59 @@ impl ExpressionCache {
                 .await;
         }
 
-        Ok(current_contents)
+        Ok((local_expressions, global_expressions))
     }
 
-    /// Durably removes all entries given by `invalidate_ids` and inserts `new_entries` into
-    /// current deploy generation.
+    /// Durably removes all entries given by `invalidate_ids` and inserts `new_local_expressions`
+    /// and `new_global_expressions` into current deploy generation.
     ///
-    /// If there is a duplicate ID in both `invalidate_ids` and `new_entries`, then the final value
-    /// will be taken from `new_entries`.
-    async fn insert_expressions(
+    /// If there is a duplicate ID in both `invalidate_ids` and one of the new expressions vector,
+    /// then the final value will be taken from the new expressions vector.
+    async fn update(
         &mut self,
-        new_entries: Vec<(GlobalId, Expressions)>,
+        new_local_expressions: Vec<(GlobalId, LocalExpressions)>,
+        new_global_expressions: Vec<(GlobalId, GlobalExpressions)>,
         invalidate_ids: BTreeSet<GlobalId>,
     ) {
         let mut entries = BTreeMap::new();
-        // Important to do `invalidate_ids` first, so that `new_entries` overwrites duplicate keys.
+        // Important to do `invalidate_ids` first, so that `new_X_expressions` overwrites duplicate
+        // keys.
         for id in invalidate_ids {
             entries.insert(
                 CacheKey {
                     id,
                     deploy_generation: self.deploy_generation,
+                    expr_type: ExpressionType::Local,
+                },
+                None,
+            );
+            entries.insert(
+                CacheKey {
+                    id,
+                    deploy_generation: self.deploy_generation,
+                    expr_type: ExpressionType::Global,
                 },
                 None,
             );
         }
-        for (id, expressions) in new_entries {
+        for (id, expressions) in new_local_expressions {
             let expressions = serde_json::to_string(&expressions).expect("valid json");
             entries.insert(
                 CacheKey {
                     id,
                     deploy_generation: self.deploy_generation,
+                    expr_type: ExpressionType::Local,
+                },
+                Some(expressions),
+            );
+        }
+        for (id, expressions) in new_global_expressions {
+            let expressions = serde_json::to_string(&expressions).expect("valid json");
+            entries.insert(
+                CacheKey {
+                    id,
+                    deploy_generation: self.deploy_generation,
+                    expr_type: ExpressionType::Global,
                 },
                 Some(expressions),
             );
@@ -276,9 +340,10 @@ impl ExpressionCache {
 
 /// Operations to perform on the cache.
 enum CacheOperation {
-    /// See [`ExpressionCache::insert_expressions`].
-    Insert {
-        new_entries: Vec<(GlobalId, Expressions)>,
+    /// See [`ExpressionCache::update`].
+    Update {
+        new_local_expressions: Vec<(GlobalId, LocalExpressions)>,
+        new_global_expressions: Vec<(GlobalId, GlobalExpressions)>,
         invalidate_ids: BTreeSet<GlobalId>,
         trigger: trigger::Trigger,
     },
@@ -294,34 +359,50 @@ impl ExpressionCacheHandle {
     /// Returns a handle to interact with the cache and the initial contents of the cache.
     async fn spawn_expression_cache(
         config: ExpressionCacheConfig<'_>,
-    ) -> (Self, BTreeMap<GlobalId, Expressions>) {
-        let (mut cache, entries) = ExpressionCache::open(config).await;
+    ) -> (
+        Self,
+        BTreeMap<GlobalId, LocalExpressions>,
+        BTreeMap<GlobalId, GlobalExpressions>,
+    ) {
+        let (mut cache, local_expressions, global_expressions) =
+            ExpressionCache::open(config).await;
         let (tx, mut rx) = mpsc::unbounded_channel();
         spawn(|| "expression-cache-task", async move {
             loop {
                 while let Some(op) = rx.recv().await {
                     match op {
-                        CacheOperation::Insert {
-                            new_entries,
+                        CacheOperation::Update {
+                            new_local_expressions,
+                            new_global_expressions,
                             invalidate_ids,
                             trigger: _trigger,
-                        } => cache.insert_expressions(new_entries, invalidate_ids).await,
+                        } => {
+                            cache
+                                .update(
+                                    new_local_expressions,
+                                    new_global_expressions,
+                                    invalidate_ids,
+                                )
+                                .await
+                        }
                     }
                 }
             }
         });
 
-        (Self { tx }, entries)
+        (Self { tx }, local_expressions, global_expressions)
     }
 
-    fn insert_expressions(
+    fn update(
         &self,
-        new_entries: Vec<(GlobalId, Expressions)>,
+        new_local_expressions: Vec<(GlobalId, LocalExpressions)>,
+        new_global_expressions: Vec<(GlobalId, GlobalExpressions)>,
         invalidate_ids: BTreeSet<GlobalId>,
     ) -> impl Future<Output = ()> {
         let (trigger, trigger_rx) = trigger::channel();
-        let op = CacheOperation::Insert {
-            new_entries,
+        let op = CacheOperation::Update {
+            new_local_expressions,
+            new_global_expressions,
             invalidate_ids,
             trigger,
         };
@@ -350,23 +431,45 @@ mod tests {
     use proptest::proptest;
     use proptest::strategy::Strategy;
     use proptest::test_runner::TestRunner;
-    use smallvec::SmallVec;
     use timely::progress::Antichain;
     use uuid::Uuid;
 
     use crate::expr_cache::{
-        CacheKey, ExpressionCacheConfig, ExpressionCacheHandle, ExpressionCodec, Expressions,
+        CacheKey, ExpressionCacheConfig, ExpressionCacheHandle, ExpressionCodec, GlobalExpressions,
+        LocalExpressions,
     };
 
-    impl Arbitrary for Expressions {
+    impl Arbitrary for LocalExpressions {
         type Parameters = ();
+
         fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
-            // It would be better to implement `Arbitrary for these types, but that would be extremely
-            // painful, so we just manually construct very simple instances.
+            // It would be better to implement `Arbitrary for this type, but that would be extremely
+            // painful, so we just manually construct a very simple instance.
             let local_mir = OptimizedMirRelationExpr(MirRelationExpr::Constant {
                 rows: Ok(Vec::new()),
                 typ: RelationType::empty(),
             });
+            let optimizer_features = any::<OptimizerFeatures>();
+            optimizer_features
+                .prop_map(move |optimizer_features| {
+                    let local_mir = local_mir.clone();
+
+                    LocalExpressions {
+                        local_mir,
+                        optimizer_features,
+                    }
+                })
+                .boxed()
+        }
+
+        type Strategy = BoxedStrategy<Self>;
+    }
+
+    impl Arbitrary for GlobalExpressions {
+        type Parameters = ();
+        fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
+            // It would be better to implement `Arbitrary for these types, but that would be extremely
+            // painful, so we just manually construct very simple instances.
             let global_mir = DataflowDescription::new("gmir".to_string());
             let physical_plan = DataflowDescription {
                 source_imports: Default::default(),
@@ -383,22 +486,17 @@ mod tests {
             };
 
             let dataflow_metainfos = any::<DataflowMetainfo<Arc<OptimizerNotice>>>();
-            let notices = any::<[Arc<OptimizerNotice>; 4]>();
-            let optimizer_feature = any::<OptimizerFeatures>();
+            let optimizer_features = any::<OptimizerFeatures>();
 
-            (dataflow_metainfos, notices, optimizer_feature)
-                .prop_map(move |(dataflow_metainfos, notices, optimizer_feature)| {
-                    let local_mir = local_mir.clone();
+            (dataflow_metainfos, optimizer_features)
+                .prop_map(move |(dataflow_metainfos, optimizer_features)| {
                     let global_mir = global_mir.clone();
                     let physical_plan = physical_plan.clone();
-                    let notices = SmallVec::from_const(notices);
-                    Expressions {
-                        local_mir,
+                    GlobalExpressions {
                         global_mir,
                         physical_plan,
                         dataflow_metainfos,
-                        notices,
-                        optimizer_features: optimizer_feature,
+                        optimizer_features,
                     }
                 })
                 .boxed()
@@ -407,8 +505,15 @@ mod tests {
         type Strategy = BoxedStrategy<Self>;
     }
 
-    fn generate_expressions() -> Expressions {
-        Expressions::arbitrary()
+    fn generate_local_expressions() -> LocalExpressions {
+        LocalExpressions::arbitrary()
+            .new_tree(&mut TestRunner::default())
+            .expect("valid expression")
+            .current()
+    }
+
+    fn generate_global_expressions() -> GlobalExpressions {
+        GlobalExpressions::arbitrary()
             .new_tree(&mut TestRunner::default())
             .expect("valid expression")
             .current()
@@ -430,9 +535,9 @@ mod tests {
 
         let mut next_id = 0;
 
-        let mut exps = {
+        let (mut local_exps, mut global_exps) = {
             // Open a new empty cache.
-            let (cache, entries) =
+            let (cache, local_exprs, global_exprs) =
                 ExpressionCacheHandle::spawn_expression_cache(ExpressionCacheConfig {
                     deploy_generation: first_deploy_generation,
                     persist,
@@ -444,26 +549,39 @@ mod tests {
                     dyncfgs,
                 })
                 .await;
-            assert_eq!(entries, BTreeMap::new(), "new cache should be empty");
+            assert_eq!(local_exprs, BTreeMap::new(), "new cache should be empty");
+            assert_eq!(global_exprs, BTreeMap::new(), "new cache should be empty");
 
             // Insert some expressions into the cache.
-            let mut exps = BTreeMap::new();
+            let mut local_exps = BTreeMap::new();
+            let mut global_exps = BTreeMap::new();
             for _ in 0..5 {
-                let mut exp = (GlobalId::User(next_id), generate_expressions());
-                next_id += 1;
-                exp.1.optimizer_features = optimizer_features.clone();
+                let id = GlobalId::User(next_id);
+                let mut local_exp = generate_local_expressions();
+                local_exp.optimizer_features = optimizer_features.clone();
+                let mut global_exp = generate_global_expressions();
+                global_exp.optimizer_features = optimizer_features.clone();
+
                 cache
-                    .insert_expressions(vec![exp.clone()], BTreeSet::new())
+                    .update(
+                        vec![(id, local_exp.clone())],
+                        vec![(id, global_exp.clone())],
+                        BTreeSet::new(),
+                    )
                     .await;
-                current_ids.insert(exp.0);
-                exps.insert(exp.0, exp.1);
+
+                current_ids.insert(id);
+                local_exps.insert(id, local_exp);
+                global_exps.insert(id, global_exp);
+
+                next_id += 1;
             }
-            exps
+            (local_exps, global_exps)
         };
 
         {
             // Re-open the cache.
-            let (cache, entries) =
+            let (cache, local_entries, global_entries) =
                 ExpressionCacheHandle::spawn_expression_cache(ExpressionCacheConfig {
                     deploy_generation: first_deploy_generation,
                     persist,
@@ -476,26 +594,37 @@ mod tests {
                 })
                 .await;
             assert_eq!(
-                entries, exps,
-                "re-opening the cache should recover the expressions"
+                local_entries, local_exps,
+                "re-opening the cache should recover the local expressions"
+            );
+            assert_eq!(
+                global_entries, global_exps,
+                "re-opening the cache should recover the global expressions"
             );
 
             // Insert an expression with non-matching optimizer features.
-            let mut exp = (GlobalId::User(next_id), generate_expressions());
+            let id = GlobalId::User(next_id);
+            let mut local_exp = generate_local_expressions();
+            let mut global_exp = generate_global_expressions();
             next_id += 1;
             let mut optimizer_features = optimizer_features.clone();
             optimizer_features.enable_eager_delta_joins =
                 !optimizer_features.enable_eager_delta_joins;
-            exp.1.optimizer_features = optimizer_features.clone();
+            local_exp.optimizer_features = optimizer_features.clone();
+            global_exp.optimizer_features = optimizer_features.clone();
             cache
-                .insert_expressions(vec![exp.clone()], BTreeSet::new())
+                .update(
+                    vec![(id, local_exp.clone())],
+                    vec![(id, global_exp.clone())],
+                    BTreeSet::new(),
+                )
                 .await;
-            current_ids.insert(exp.0);
+            current_ids.insert(id);
         }
 
         {
             // Re-open the cache.
-            let (_cache, entries) =
+            let (_cache, local_entries, global_entries) =
                 ExpressionCacheHandle::spawn_expression_cache(ExpressionCacheConfig {
                     deploy_generation: first_deploy_generation,
                     persist,
@@ -508,19 +637,24 @@ mod tests {
                 })
                 .await;
             assert_eq!(
-                entries, exps,
-                "expression with non-matching optimizer features should be removed during reconciliation"
+                local_entries, local_exps,
+                "local expression with non-matching optimizer features should be removed during reconciliation"
+            );
+            assert_eq!(
+                global_entries, global_exps,
+                "global expression with non-matching optimizer features should be removed during reconciliation"
             );
         }
 
         {
             // Simulate dropping an object.
-            let id_to_remove = exps.keys().next().expect("not empty").clone();
+            let id_to_remove = local_exps.keys().next().expect("not empty").clone();
             current_ids.remove(&id_to_remove);
-            let _removed_exp = exps.remove(&id_to_remove);
+            let _removed_local_exp = local_exps.remove(&id_to_remove);
+            let _removed_global_exp = global_exps.remove(&id_to_remove);
 
             // Re-open the cache.
-            let (_cache, entries) =
+            let (_cache, local_entries, global_entries) =
                 ExpressionCacheHandle::spawn_expression_cache(ExpressionCacheConfig {
                     deploy_generation: first_deploy_generation,
                     persist,
@@ -533,14 +667,18 @@ mod tests {
                 })
                 .await;
             assert_eq!(
-                entries, exps,
-                "dropped objects should be removed during reconciliation"
+                local_entries, local_exps,
+                "dropped local objects should be removed during reconciliation"
+            );
+            assert_eq!(
+                global_entries, global_exps,
+                "dropped global objects should be removed during reconciliation"
             );
         }
 
-        let new_gen_exps = {
+        let (new_gen_local_exps, new_gen_global_exps) = {
             // Open the cache at a new generation.
-            let (cache, entries) =
+            let (cache, local_entries, global_entries) =
                 ExpressionCacheHandle::spawn_expression_cache(ExpressionCacheConfig {
                     deploy_generation: second_deploy_generation,
                     persist,
@@ -552,26 +690,47 @@ mod tests {
                     dyncfgs,
                 })
                 .await;
-            assert_eq!(entries, BTreeMap::new(), "new generation should be empty");
+            assert_eq!(
+                local_entries,
+                BTreeMap::new(),
+                "new generation should be empty"
+            );
+            assert_eq!(
+                global_entries,
+                BTreeMap::new(),
+                "new generation should be empty"
+            );
 
             // Insert some expressions at the new generation.
-            let mut exps = BTreeMap::new();
+            let mut local_exps = BTreeMap::new();
+            let mut global_exps = BTreeMap::new();
             for _ in 0..5 {
-                let mut exp = (GlobalId::User(next_id), generate_expressions());
-                next_id += 1;
-                exp.1.optimizer_features = optimizer_features.clone();
+                let id = GlobalId::User(next_id);
+                let mut local_exp = generate_local_expressions();
+                local_exp.optimizer_features = optimizer_features.clone();
+                let mut global_exp = generate_global_expressions();
+                global_exp.optimizer_features = optimizer_features.clone();
+
                 cache
-                    .insert_expressions(vec![exp.clone()], BTreeSet::new())
+                    .update(
+                        vec![(id, local_exp.clone())],
+                        vec![(id, global_exp.clone())],
+                        BTreeSet::new(),
+                    )
                     .await;
-                current_ids.insert(exp.0);
-                exps.insert(exp.0, exp.1);
+
+                current_ids.insert(id);
+                local_exps.insert(id, local_exp);
+                global_exps.insert(id, global_exp);
+
+                next_id += 1;
             }
-            exps
+            (local_exps, global_exps)
         };
 
         {
             // Re-open the cache at the first generation.
-            let (_cache, entries) =
+            let (_cache, local_entries, global_entries) =
                 ExpressionCacheHandle::spawn_expression_cache(ExpressionCacheConfig {
                     deploy_generation: first_deploy_generation,
                     persist,
@@ -584,15 +743,19 @@ mod tests {
                 })
                 .await;
             assert_eq!(
-                entries, exps,
-                "Previous generation expressions should still exist"
+                local_entries, local_exps,
+                "Previous generation local expressions should still exist"
+            );
+            assert_eq!(
+                global_entries, global_exps,
+                "Previous generation global expressions should still exist"
             );
         }
 
         {
             // Open the cache at a new generation and clear previous generations.
             remove_prior_gens = true;
-            let (_cache, entries) =
+            let (_cache, local_entries, global_entries) =
                 ExpressionCacheHandle::spawn_expression_cache(ExpressionCacheConfig {
                     deploy_generation: second_deploy_generation,
                     persist,
@@ -605,14 +768,18 @@ mod tests {
                 })
                 .await;
             assert_eq!(
-                entries, new_gen_exps,
-                "new generation expressions should be persisted"
+                local_entries, new_gen_local_exps,
+                "new generation local expressions should be persisted"
+            );
+            assert_eq!(
+                global_entries, new_gen_global_exps,
+                "new generation global expressions should be persisted"
             );
         }
 
         {
             // Re-open the cache at the first generation.
-            let (_cache, entries) =
+            let (_cache, local_entries, global_entries) =
                 ExpressionCacheHandle::spawn_expression_cache(ExpressionCacheConfig {
                     deploy_generation: first_deploy_generation,
                     persist,
@@ -625,16 +792,21 @@ mod tests {
                 })
                 .await;
             assert_eq!(
-                entries,
+                local_entries,
                 BTreeMap::new(),
-                "Previous generation expressions should be cleared"
+                "Previous generation local expressions should be cleared"
+            );
+            assert_eq!(
+                global_entries,
+                BTreeMap::new(),
+                "Previous generation global expressions should be cleared"
             );
         }
 
         {
             // Re-open the cache and compact the shard.
             compact_shard = true;
-            let (_cache, _entries) =
+            let (_cache, _local_entries, _global_entries) =
                 ExpressionCacheHandle::spawn_expression_cache(ExpressionCacheConfig {
                     deploy_generation: first_deploy_generation,
                     persist,
@@ -654,11 +826,23 @@ mod tests {
 
         #[mz_ore::test]
         #[cfg_attr(miri, ignore)]
-        fn expr_cache_roundtrip((key, val) in any::<(CacheKey, Expressions)>()) {
+        fn local_expr_cache_roundtrip((key, val) in any::<(CacheKey, LocalExpressions)>()) {
             let serde_val = serde_json::to_string(&val).expect("valid json");
             let (encoded_key, encoded_val) = ExpressionCodec::encode(&key, &serde_val);
             let (decoded_key, decoded_val) = ExpressionCodec::decode(&encoded_key, &encoded_val);
-            let decoded_val: Expressions = serde_json::from_str(&decoded_val).expect("expressions should roundtrip");
+            let decoded_val: LocalExpressions = serde_json::from_str(&decoded_val).expect("local expressions should roundtrip");
+
+            assert_eq!(key, decoded_key);
+            assert_eq!(val, decoded_val);
+        }
+
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)]
+        fn global_expr_cache_roundtrip((key, val) in any::<(CacheKey, GlobalExpressions)>()) {
+            let serde_val = serde_json::to_string(&val).expect("valid json");
+            let (encoded_key, encoded_val) = ExpressionCodec::encode(&key, &serde_val);
+            let (decoded_key, decoded_val) = ExpressionCodec::decode(&encoded_key, &encoded_val);
+            let decoded_val: GlobalExpressions = serde_json::from_str(&decoded_val).expect("global expressions should roundtrip");
 
             assert_eq!(key, decoded_key);
             assert_eq!(val, decoded_val);
