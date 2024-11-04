@@ -188,6 +188,8 @@ impl AvailableCollections {
 }
 
 /// An identifier for an LIR node.
+///
+/// LirIds start at 1, not 0, which let's us get a better struct packing in `ComputeEvent::LirMapping`.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct LirId(NonZeroU64);
 
@@ -1146,6 +1148,16 @@ mod tests {
     use mz_proto::protobuf_roundtrip;
 
     use super::*;
+
+    #[mz_ore::test]
+    fn test_option_lirid_fits_in_usize() {
+        let option_lirid_size = std::mem::size_of::<Option<LirId>>();
+        let usize_size = std::mem::size_of::<usize>();
+        assert!(
+            option_lirid_size <= usize_size,
+            "Option<LirId> (size {option_lirid_size}) should fit in usize (size {usize_size})"
+        );
+    }
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(10))]

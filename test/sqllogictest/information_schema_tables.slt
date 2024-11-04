@@ -825,7 +825,7 @@ mz_arrangement_sizes_per_worker
 VIEW
 materialize
 mz_introspection
-mz_compute_dataflow_globalids_per_worker
+mz_compute_dataflow_global_ids_per_worker
 SOURCE
 materialize
 mz_introspection
@@ -913,7 +913,7 @@ mz_dataflow_channels_per_worker
 SOURCE
 materialize
 mz_introspection
-mz_dataflow_globalids
+mz_dataflow_global_ids
 VIEW
 materialize
 mz_introspection

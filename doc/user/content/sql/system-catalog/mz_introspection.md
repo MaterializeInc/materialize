@@ -222,6 +222,19 @@ The `mz_dataflow_channel_operators` view associates [dataflow] channels with the
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_dataflow_channel_operators_per_worker -->
 
+## `mz_dataflow_global_ids`
+
+The `mz_dataflow_global_ids` view associates [dataflow] ids with global ids (ids of the form `u8` or `t5`).
+
+<!-- RELATION_SPEC mz_introspection.mz_dataflow_global_ids -->
+
+| Field        | Type      | Meaning                                    |
+|------------- | -------   | --------                                   |
+| `id`         | [`uint8`] | The dataflow ID.                           |
+| `global_id`  | [`text`]  | A global ID associated with that dataflow. |
+
+<!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_compute_dataflow_global_ids_per_worker -->
+
 ## `mz_dataflow_operators`
 
 The `mz_dataflow_operators` view describes the [dataflow] operators in the system.
@@ -291,6 +304,29 @@ through a hierarchical scheme for either aggregation or Top K computations.
 | `to_cut`        | [`bigint`]           | The number of levels that can be eliminated (cut) from the region's hierarchy.                            |
 | `savings`       | [`numeric`]          | A conservative estimate of the amount of memory in bytes to be saved by applying the hint.                |
 | `hint`          | [`double precision`] | The hint value that will eliminate `to_cut` levels from the region's hierarchy.                           |
+
+## `mz_lir_mapping`
+
+The `mz_lir_mapping` view describes the low-level internal representation (LIR) plan that corresponds to global ids.
+LIR is a higher-level representation than dataflows; this view is used for profiling and debugging indices and materialized views.
+Note that LIR is not a stable interface and may change at any time.
+In particular, you should not attempt to parse `operator` descriptions.
+LIR nodes are implemented by zero or more dataflow operators with sequential ids.
+We use the range `[operator_id_start, operator_id_end)` to record this information.
+If an LIR node was implemented without any dataflow operators, `operator_id_start` will be equal to `operator_id_end`.
+
+<!-- RELATION_SPEC mz_introspection.mz_lir_mapping -->
+| Field             | Type      | Meaning
+| ---------         | --------  | -----------
+| global_id         | [`text`]  | The global ID.
+| lir_id            | [`uint8`] | The LIR node ID.
+| operator          | [`text`]  | The LIR operator, in the format `OperatorName INPUTS [OPTIONS]`.
+| parent_lir_id     | [`uint8`] | The parent of this LIR node. May be `NULL`.
+| nesting           | [`uint2`] | The nesting level of this LIR node.
+| operator_id_start | [`uint8`] | The first dataflow operator ID implementing this LIR operator (inclusive).
+| operator_id_end   | [`uint8`] | The first dataflow operator ID _after_ this LIR operator (exclusive).
+
+<!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_compute_lir_mapping_per_worker -->
 
 ## `mz_message_counts`
 
@@ -395,6 +431,7 @@ The `mz_scheduling_parks_histogram` view describes a histogram of [dataflow] wor
 [`numeric`]: /sql/types/numeric
 [`text`]: /sql/types/text
 [`uuid`]: /sql/types/uuid
+[`uint2`]: /sql/types/uint2
 [`uint8`]: /sql/types/uint8
 [`uint8 list`]: /sql/types/list
 [arrangement]: /get-started/arrangements/#arrangements
@@ -408,7 +445,3 @@ The `mz_scheduling_parks_histogram` view describes a histogram of [dataflow] wor
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_dataflow_operator_reachability -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_dataflow_operator_reachability_per_worker -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_dataflow_operator_reachability_raw -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_compute_lir_mapping_per_worker -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_compute_dataflow_globalids_per_worker -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_lir_mapping -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_dataflow_globalids -->

@@ -808,57 +808,87 @@ impl<T> FlatPlanNode<T> {
     /// Renders a single `FlatPlanNode` as a string.
     ///
     /// Typically of the format "{NodeName}::{Detail} {input LirID} ({options})"
+    ///
+    /// See `FlatPlanNodeHumanizer` and its `std::fmt::Display` instance for implementation details.
     pub fn humanize(&self, humanizer: &dyn ExprHumanizer) -> String {
-        let explainer = HumanizedExplain::new(false);
+        FlatPlanNodeHumanizer::new(self, humanizer).to_string()
+    }
+}
 
-        match self {
+/// Packages a `FlatPlanNode` with an `ExprHumanizer` to render human readable strings.
+///
+/// Invariant: the `std::fmt::Display` instance should produce a single line for a given node.
+#[derive(Debug)]
+pub struct FlatPlanNodeHumanizer<'a, T> {
+    node: &'a FlatPlanNode<T>,
+    humanizer: &'a dyn ExprHumanizer,
+}
+
+impl<'a, T> FlatPlanNodeHumanizer<'a, T> {
+    /// Creates a `FlatPlanNodeHumanizer` (which simply holds the references).
+    ///
+    /// Use the `std::fmt::Display` instance.
+    pub fn new(node: &'a FlatPlanNode<T>, humanizer: &'a dyn ExprHumanizer) -> Self {
+        Self { node, humanizer }
+    }
+}
+
+impl<'a, T> std::fmt::Display for FlatPlanNodeHumanizer<'a, T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.node {
             FlatPlanNode::Constant { rows } => {
-                let summary = match rows {
-                    Ok(rows) => format!("{} rows", rows.len()),
-                    Err(err) => format!("error ({err})"),
-                };
-                format!("Constant {summary}")
+                write!(f, "Constant ")?;
+
+                match rows {
+                    Ok(rows) => write!(f, "{} rows", rows.len()),
+                    Err(err) => write!(f, "error ({err})"),
+                }
             }
             FlatPlanNode::Get { id, keys: _, plan } => {
-                let id = match id {
-                    Id::Local(id) => id.to_string(),
-                    Id::Global(id) => humanizer.humanize_id(*id).unwrap_or_else(|| id.to_string()),
-                };
-                let plan = match plan {
-                    GetPlan::PassArrangements => "PassArrangements".to_string(),
-                    GetPlan::Arrangement(_key, Some(val), _mfp) => {
-                        format!("Arrangement (val={})", explainer.expr(val, None))
-                    }
-                    GetPlan::Arrangement(_key, None, _mfp) => "Arrangement".to_string(),
-                    GetPlan::Collection(_mfp) => "Collection".to_string(),
+                write!(f, "Get::")?;
+
+                match plan {
+                    GetPlan::PassArrangements => write!(f, "PassArrangements")?,
+                    GetPlan::Arrangement(_key, Some(val), _mfp) => write!(
+                        f,
+                        "Arrangement (val={})",
+                        HumanizedExplain::new(false).expr(val, None)
+                    )?,
+                    GetPlan::Arrangement(_key, None, _mfp) => write!(f, "Arrangement")?,
+                    GetPlan::Collection(_mfp) => write!(f, "Collection")?,
                 };
 
-                format!("Get::{plan} {id}")
+                write!(f, " ")?;
+
+                match id {
+                    Id::Local(id) => write!(f, "{id}"),
+                    Id::Global(id) => {
+                        if let Some(id) = self.humanizer.humanize_id(*id) {
+                            write!(f, "{id}")
+                        } else {
+                            write!(f, "{id}")
+                        }
+                    }
+                }
             }
-            FlatPlanNode::Let { id, value, body } => format!("Let {id}={value} in {body}"),
+            FlatPlanNode::Let { id, value, body } => write!(f, "Let {id}={value} Returning {body}"),
             FlatPlanNode::LetRec {
                 ids,
                 values,
                 limits,
                 body,
             } => {
-                let bindings = mz_ore::str::separated(
-                    "; ",
-                    ids.iter()
-                        .zip_eq(values)
-                        .zip_eq(limits)
-                        .map(|((id, value), limit)| {
-                            let mut binding = format!("{id} = {value}");
+                write!(f, "LetRec ")?;
 
-                            if let Some(limit) = limit {
-                                binding.push_str(&format!(" ({limit})"));
-                            }
+                for ((id, value), limit) in ids.iter().zip_eq(values).zip_eq(limits) {
+                    write!(f, "{id} = {value} ")?;
 
-                            binding
-                        }),
-                );
+                    if let Some(limit) = limit {
+                        write!(f, "({limit}) ")?;
+                    }
+                }
 
-                format!("LetRec {bindings} Returning {body}")
+                write!(f, "Returning {body}")
             }
             FlatPlanNode::Mfp {
                 input,
@@ -866,7 +896,7 @@ impl<T> FlatPlanNode<T> {
                 input_key_val: _,
             } => {
                 // TODO(mgree) show MFP detail
-                format!("MapFilterProject {input}")
+                write!(f, "MapFilterProject {input}")
             }
             FlatPlanNode::FlatMap {
                 input,
@@ -876,7 +906,7 @@ impl<T> FlatPlanNode<T> {
                 input_key: _,
             } => {
                 // TODO(mgree) show FlatMap detail
-                format!("FlatMap {input} ({func})")
+                write!(f, "FlatMap {input} ({func})")
             }
             FlatPlanNode::Join { inputs, plan } => match plan {
                 JoinPlan::Linear(LinearJoinPlan {
@@ -884,30 +914,28 @@ impl<T> FlatPlanNode<T> {
                     stage_plans,
                     ..
                 }) => {
-                    let stages = mz_ore::str::separated(
-                        " » ",
-                        std::iter::once(inputs[*source_relation])
-                            .chain(stage_plans.iter().map(|dsp| inputs[dsp.lookup_relation])),
-                    );
+                    write!(f, "Join::Differential ")?;
 
-                    format!("Join::Differential {stages}")
+                    write!(f, "{}", inputs[*source_relation])?;
+                    for dsp in stage_plans {
+                        write!(f, "» {}", inputs[dsp.lookup_relation])?;
+                    }
+
+                    Ok(())
                 }
                 JoinPlan::Delta(DeltaJoinPlan { path_plans }) => {
-                    let stages = mz_ore::str::separated(
-                        "; ",
-                        path_plans.iter().map(|dpp| {
-                            mz_ore::str::separated(
-                                " » ",
-                                std::iter::once(inputs[dpp.source_relation]).chain(
-                                    dpp.stage_plans
-                                        .iter()
-                                        .map(|dsp| inputs[dsp.lookup_relation]),
-                                ),
-                            )
-                        }),
-                    );
+                    write!(f, "Join::Delta")?;
 
-                    format!("Join::Delta {stages}")
+                    for dpp in path_plans {
+                        write!(f, "[{}", inputs[dpp.source_relation])?;
+
+                        for dsp in &dpp.stage_plans {
+                            write!(f, "» {}", inputs[dsp.lookup_relation])?;
+                        }
+                        write!(f, "] ")?;
+                    }
+
+                    Ok(())
                 }
             },
             FlatPlanNode::Reduce {
@@ -917,67 +945,74 @@ impl<T> FlatPlanNode<T> {
                 input_key: _input_key,
                 mfp_after: _mfp_after,
             } => {
-                let mut options = String::new();
-                let plan = match plan {
-                    ReducePlan::Distinct => "Distinct",
-                    ReducePlan::Accumulable(..) => "Accumulable",
+                write!(f, "Reduce::")?;
+
+                match plan {
+                    ReducePlan::Distinct => write!(f, "Distinct {input}"),
+                    ReducePlan::Accumulable(..) => write!(f, "Accumulable {input}"),
                     ReducePlan::Hierarchical(HierarchicalPlan::Monotonic(..)) => {
-                        options.push_str(" (monotonic)");
-                        "Hierarchical"
+                        write!(f, "Hierarchical {input} (monotonic)")
                     }
                     ReducePlan::Hierarchical(HierarchicalPlan::Bucketed(BucketedPlan {
                         buckets,
                         ..
                     })) => {
-                        options.push_str(&format!(
-                            " (buckets: {})",
-                            mz_ore::str::separated(", ", buckets)
-                        ));
-                        "Hierarchical"
-                    }
-                    ReducePlan::Basic(..) => "Basic",
-                    ReducePlan::Collation(..) => "Collation",
-                };
+                        write!(f, "Hierarchical {input} (buckets:")?;
 
-                format!("Reduce::{plan} {input}{options}")
+                        for bucket in buckets {
+                            write!(f, " {bucket}")?;
+                        }
+                        write!(f, ")")
+                    }
+                    ReducePlan::Basic(..) => write!(f, "Basic"),
+                    ReducePlan::Collation(..) => write!(f, "Collation"),
+                }
             }
             FlatPlanNode::TopK { input, top_k_plan } => {
-                let plan = match top_k_plan {
-                    TopKPlan::MonotonicTop1(..) => "MonotonicTop1",
+                write!(f, "TopK::")?;
+                match top_k_plan {
+                    TopKPlan::MonotonicTop1(..) => write!(f, "MonotonicTop1")?,
                     TopKPlan::MonotonicTopK(MonotonicTopKPlan {
                         limit: Some(limit), ..
-                    }) => &format!("MonotonicTopK({})", explainer.expr(limit, None)),
-                    TopKPlan::MonotonicTopK(MonotonicTopKPlan { .. }) => "MonotonicTopK",
-                    TopKPlan::Basic(..) => "Basic",
+                    }) => write!(
+                        f,
+                        "MonotonicTopK({})",
+                        HumanizedExplain::new(false).expr(limit, None)
+                    )?,
+                    TopKPlan::MonotonicTopK(MonotonicTopKPlan { .. }) => {
+                        write!(f, "MonotonicTopK")?
+                    }
+                    TopKPlan::Basic(..) => write!(f, "Basic")?,
                 };
-                format!("TopK::{plan} {input}")
+                write!(f, " {input}")
             }
-            FlatPlanNode::Negate { input } => format!("Negate {input}"),
+            FlatPlanNode::Negate { input } => write!(f, "Negate {input}"),
             FlatPlanNode::Threshold {
                 input,
                 threshold_plan: _,
-            } => format!("Threshold {input}"),
+            } => write!(f, "Threshold {input}"),
             FlatPlanNode::Union {
                 inputs,
                 consolidate_output,
             } => {
-                let consolidate = if *consolidate_output {
-                    " (consolidates output)"
-                } else {
-                    ""
-                };
+                write!(f, "Union")?;
 
-                format!(
-                    "Union {}{consolidate}",
-                    mz_ore::str::separated(", ", inputs)
-                )
+                for input in inputs {
+                    write!(f, " {input}")?;
+                }
+
+                if *consolidate_output {
+                    write!(f, " (consolidates output)")?;
+                }
+
+                Ok(())
             }
             FlatPlanNode::ArrangeBy {
                 input,
                 forms: _,
                 input_key: _,
                 input_mfp: _,
-            } => format!("Arrange {input}"),
+            } => write!(f, "Arrange {input}"),
         }
     }
 }

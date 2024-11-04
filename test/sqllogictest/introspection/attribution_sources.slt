@@ -30,21 +30,21 @@ statement ok
 SELECT mz_unsafe.mz_sleep(2)
 
 query IT
-SELECT id, global_id FROM mz_internal.mz_dataflow_globalids ORDER BY id, global_id;
+SELECT id, global_id FROM mz_internal.mz_dataflow_global_ids ORDER BY id, global_id;
 ----
-8 u2
-8 u3
+9  u8
+9  u9
 
 query TI
 SELECT global_id, lir_id FROM mz_internal.mz_lir_mapping ORDER BY global_id, lir_id DESC;
 ----
-u2 4
-u2 3
-u2 2
-u2 1
-u2 0
-u3 6
-u3 5
+u8  5
+u8  4
+u8  3
+u8  2
+u8  1
+u9  7
+u9  6
 
 statement ok
 DROP TABLE t CASCADE;
@@ -54,7 +54,7 @@ statement ok
 SELECT mz_unsafe.mz_sleep(2)
 
 query I
-SELECT COUNT(*) FROM mz_internal.mz_dataflow_globalids;
+SELECT COUNT(*) FROM mz_internal.mz_dataflow_global_ids;
 ----
 0
 
@@ -79,19 +79,19 @@ statement ok
 SELECT mz_unsafe.mz_sleep(2)
 
 query IT
-SELECT id, global_id FROM mz_internal.mz_dataflow_globalids ORDER BY id, global_id;
+SELECT id, global_id FROM mz_internal.mz_dataflow_global_ids ORDER BY id, global_id;
 ----
-11  t53
+12  t57
 
 
 query TI
 SELECT global_id, lir_id FROM mz_internal.mz_lir_mapping ORDER BY global_id, lir_id DESC;
 ----
-t53  4
-t53  3
-t53  2
-t53  1
-t53  0
+t57  5
+t57  4
+t57  3
+t57  2
+t57  1
 
 
 statement ok
@@ -102,7 +102,7 @@ statement ok
 SELECT mz_unsafe.mz_sleep(2)
 
 query I
-SELECT COUNT(*) FROM mz_internal.mz_dataflow_globalids;
+SELECT COUNT(*) FROM mz_internal.mz_dataflow_global_ids;
 ----
 0
 

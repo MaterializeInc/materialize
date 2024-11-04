@@ -210,7 +210,8 @@ bar  mz_arrangement_records_raw  mz_arrangement_records_raw_u7_primary_idx  1  o
 bar  mz_arrangement_records_raw  mz_arrangement_records_raw_u7_primary_idx  2  worker_id  NULL  false
 bar  mz_arrangement_sharing_raw  mz_arrangement_sharing_raw_u7_primary_idx  1  operator_id  NULL  false
 bar  mz_arrangement_sharing_raw  mz_arrangement_sharing_raw_u7_primary_idx  2  worker_id  NULL  false
-bar  mz_compute_dataflow_globalids_per_worker  mz_compute_dataflow_globalids_per_worker_u7_primary_idx  1  id  NULL  false
+bar  mz_compute_dataflow_global_ids_per_worker  mz_compute_dataflow_global_ids_per_worker_u7_primary_idx  1  id  NULL  false
+bar  mz_compute_dataflow_global_ids_per_worker  mz_compute_dataflow_global_ids_per_worker_u7_primary_idx  2  worker_id  NULL  false
 bar  mz_compute_error_counts_raw  mz_compute_error_counts_raw_u7_primary_idx  1  export_id  NULL  false
 bar  mz_compute_error_counts_raw  mz_compute_error_counts_raw_u7_primary_idx  2  worker_id  NULL  false
 bar  mz_compute_exports_per_worker  mz_compute_exports_per_worker_u7_primary_idx  1  export_id  NULL  false
@@ -224,6 +225,7 @@ bar  mz_compute_import_frontiers_per_worker  mz_compute_import_frontiers_per_wor
 bar  mz_compute_import_frontiers_per_worker  mz_compute_import_frontiers_per_worker_u7_primary_idx  3  worker_id  NULL  false
 bar  mz_compute_lir_mapping_per_worker  mz_compute_lir_mapping_per_worker_u7_primary_idx  1  global_id  NULL  false
 bar  mz_compute_lir_mapping_per_worker  mz_compute_lir_mapping_per_worker_u7_primary_idx  2  lir_id  NULL  false
+bar  mz_compute_lir_mapping_per_worker  mz_compute_lir_mapping_per_worker_u7_primary_idx  3  worker_id  NULL  false
 bar  mz_compute_operator_durations_histogram_raw  mz_compute_operator_durations_histogram_raw_u7_primary_idx  1  id  NULL  false
 bar  mz_compute_operator_durations_histogram_raw  mz_compute_operator_durations_histogram_raw_u7_primary_idx  2  worker_id  NULL  false
 bar  mz_compute_operator_durations_histogram_raw  mz_compute_operator_durations_histogram_raw_u7_primary_idx  3  duration_ns  NULL  false

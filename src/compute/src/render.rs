@@ -885,7 +885,8 @@ where
             let step = steps.remove(&lir_id).unwrap();
 
             // TODO(mgree) need ExprHumanizer in DataflowDescription to get nice column names
-            // (ActiveComputeState doesn't have a catalog reference)
+            // ActiveComputeState can't have a catalog reference, so we'll need to capture the names
+            // in some other structure and have that structure impl ExprHumanizer
             let operator = step.node.humanize(&DummyHumanizer);
 
             let operator_id_start = self.scope.peek_identifier();

@@ -1911,11 +1911,11 @@ pub static MZ_COMPUTE_EXPORTS_PER_WORKER: LazyLock<BuiltinLog> = LazyLock::new(|
     access: vec![PUBLIC_SELECT],
 });
 
-pub static MZ_COMPUTE_DATAFLOW_GLOBALIDS_PER_WORKER: LazyLock<BuiltinLog> =
+pub static MZ_COMPUTE_DATAFLOW_GLOBAL_IDS_PER_WORKER: LazyLock<BuiltinLog> =
     LazyLock::new(|| BuiltinLog {
-        name: "mz_compute_dataflow_globalids_per_worker",
+        name: "mz_compute_dataflow_global_ids_per_worker",
         schema: MZ_INTROSPECTION_SCHEMA,
-        oid: oid::LOG_MZ_COMPUTE_DATAFLOW_GLOBALIDS_PER_WORKER_OID,
+        oid: oid::LOG_MZ_COMPUTE_DATAFLOW_GLOBAL_IDS_PER_WORKER_OID,
         variant: LogVariant::Compute(ComputeLog::DataflowGlobal),
         access: vec![PUBLIC_SELECT],
     });
@@ -4072,13 +4072,13 @@ WHERE worker_id = 0",
 });
 
 pub static MZ_DATAFLOW_GLOBAL_IDS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
-    name: "mz_dataflow_globalids",
+    name: "mz_dataflow_global_ids",
     schema: MZ_INTROSPECTION_SCHEMA,
-    oid: oid::VIEW_MZ_DATAFLOW_GLOBALIDS_OID,
+    oid: oid::VIEW_MZ_DATAFLOW_GLOBAL_IDS_OID,
     column_defs: None,
     sql: "
 SELECT id, global_id
-FROM mz_introspection.mz_compute_dataflow_globalids_per_worker
+FROM mz_introspection.mz_compute_dataflow_global_ids_per_worker
 WHERE worker_id = 0",
     access: vec![PUBLIC_SELECT],
 });
@@ -9136,7 +9136,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Log(&MZ_DATAFLOW_ADDRESSES_PER_WORKER),
         Builtin::Log(&MZ_DATAFLOW_OPERATOR_REACHABILITY_RAW),
         Builtin::Log(&MZ_COMPUTE_EXPORTS_PER_WORKER),
-        Builtin::Log(&MZ_COMPUTE_DATAFLOW_GLOBALIDS_PER_WORKER),
+        Builtin::Log(&MZ_COMPUTE_DATAFLOW_GLOBAL_IDS_PER_WORKER),
         Builtin::Log(&MZ_MESSAGE_COUNTS_RECEIVED_RAW),
         Builtin::Log(&MZ_MESSAGE_COUNTS_SENT_RAW),
         Builtin::Log(&MZ_MESSAGE_BATCH_COUNTS_RECEIVED_RAW),

@@ -1150,6 +1150,6 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 17042  mz_index_advice
 17043  mz_show_network_policies
 17044  mz_compute_lir_mapping_per_worker
-17045  mz_compute_dataflow_globalids_per_worker
+17045  mz_compute_dataflow_global_ids_per_worker
 17046  mz_lir_mapping
-17047  mz_dataflow_globalids
+17047  mz_dataflow_global_ids
