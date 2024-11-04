@@ -139,6 +139,11 @@ impl Jsonb {
     pub fn into_row(self) -> Row {
         self.row
     }
+
+    /// Returns a reference to the underlying [`Row`].
+    pub fn row(&self) -> &Row {
+        &self.row
+    }
 }
 
 impl FromStr for Jsonb {

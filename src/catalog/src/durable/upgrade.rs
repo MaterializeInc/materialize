@@ -19,7 +19,6 @@
 //!
 //!   - Config
 //!   - Setting
-//!   - Epoch
 //!   - FenceToken
 //!
 //! When you want to make a change to the `Catalog` you need to follow these steps:
