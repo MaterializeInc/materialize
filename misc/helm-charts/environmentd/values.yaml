@@ -19,7 +19,7 @@ environment:
   # The name of the environment to be deployed, this should be a UUID
   name: "12345678-1234-1234-1234-123456789012"
   # Docker image reference for the Materialize `environmentd` service
-  environmentdImageRef: "materialize/environmentd:v0.124.0-dev.0--pr.g4247871d2e585967e793272004cac37180e83778"
+  environmentdImageRef: "materialize/environmentd:v0.124.0-dev.0--pr.g993af7c1c493f8ca20389c7cc64769208867d3c9"
   # Optional additional arguments to be passed to `environmentd`
   environmentdExtraArgs:
     - "--orchestrator-kubernetes-ephemeral-volume-class=hostpath" # Use hostpath for ephemeral storage in testing

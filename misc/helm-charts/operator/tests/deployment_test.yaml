@@ -17,7 +17,7 @@ tests:
           of: Deployment
       - equal:
           path: spec.template.spec.containers[0].image
-          value: materialize/orchestratord:v0.124.0-dev.0--pr.g4247871d2e585967e793272004cac37180e83778
+          value: materialize/orchestratord:v0.124.0-dev.0--pr.g993af7c1c493f8ca20389c7cc64769208867d3c9
       - equal:
           path: spec.template.spec.containers[0].imagePullPolicy
           value: IfNotPresent
