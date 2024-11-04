@@ -102,7 +102,6 @@ filegroup(
         "src/plan/top_k.proto",
         "src/sinks.proto",
         "src/sources.proto",
-        "src/time_dependence.proto",
         "//src/expr:all_protos",
         "//src/proto:all_protos",
         "//src/repr:all_protos",

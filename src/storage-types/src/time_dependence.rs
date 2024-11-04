@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 
 include!(concat!(
     env!("OUT_DIR"),
-    "/mz_compute_types.time_dependence.rs"
+    "/mz_storage_types.time_dependence.rs"
 ));
 
 /// Description of how a dataflow follows time.

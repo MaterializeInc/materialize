@@ -16,13 +16,13 @@ package mz_compute_types.dataflows;
 import "compute-types/src/plan/flat_plan.proto";
 import "compute-types/src/sinks.proto";
 import "compute-types/src/sources.proto";
-import "compute-types/src/time_dependence.proto";
 import "expr/src/scalar.proto";
 import "proto/src/proto.proto";
 import "repr/src/antichain.proto";
 import "repr/src/global_id.proto";
 import "repr/src/refresh_schedule.proto";
 import "repr/src/relation_and_scalar.proto";
+import "storage-types/src/time_dependence.proto";
 
 message ProtoDataflowDescription {
   message ProtoSourceImport {
@@ -58,7 +58,7 @@ message ProtoDataflowDescription {
   mz_repr.antichain.ProtoU64Antichain until = 7;
   optional mz_repr.antichain.ProtoU64Antichain initial_storage_as_of = 9;
   optional mz_repr.refresh_schedule.ProtoRefreshSchedule refresh_schedule = 10;
-  optional time_dependence.ProtoTimeDependence time_dependence = 11;
+  optional mz_storage_types.time_dependence.ProtoTimeDependence time_dependence = 11;
 
   string debug_name = 8;
 }

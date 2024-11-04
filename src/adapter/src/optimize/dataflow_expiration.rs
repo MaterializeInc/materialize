@@ -23,12 +23,12 @@
 //! which makes combining run-time information with catalog-based information inconclusive.
 
 use mz_catalog::memory::objects::{CatalogEntry, CatalogItem, DataSourceDesc, TableDataSource};
-use mz_compute_types::time_dependence::TimeDependence;
 use mz_ore::soft_panic_or_log;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::GlobalId;
 use mz_sql::catalog::CatalogItem as _;
 use mz_storage_types::sources::{GenericSourceConnection, Timeline};
+use mz_storage_types::time_dependence::TimeDependence;
 
 use crate::catalog::Catalog;
 

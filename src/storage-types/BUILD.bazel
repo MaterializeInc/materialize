@@ -160,6 +160,7 @@ filegroup(
         "src/sources/load_generator.proto",
         "src/sources/mysql.proto",
         "src/sources/postgres.proto",
+        "src/time_dependence.proto",
         "//src/dyncfg:all_protos",
         "//src/expr:all_protos",
         "//src/mysql-util:all_protos",
