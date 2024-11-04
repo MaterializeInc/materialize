@@ -980,8 +980,7 @@ impl PersistGrpcPubSubServer {
         PubSubClientConnection {
             sender,
             receiver: Box::new(
-                ReceiverStream::new(rx)
-                    .filter_map(|x| Some(x.expect("cannot receive grpc errors locally"))),
+                ReceiverStream::new(rx).map(|x| x.expect("cannot receive grpc errors locally")),
             ),
         }
     }
