@@ -18,6 +18,12 @@ from pathlib import Path
 from prompt_toolkit import PromptSession
 from prompt_toolkit.lexers import PygmentsLexer
 from pygments.lexers.sql import SqlLexer
+from prompt_toolkit import PromptSession
+from prompt_toolkit.completion import Completer, WordCompleter, Completion
+from prompt_toolkit.document import Document
+from prompt_toolkit.lexers import PygmentsLexer
+from pygments.lexers.sql import SqlLexer
+from prompt_toolkit.shortcuts import CompleteStyle
 
 from materialize import ci_util
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
@@ -221,6 +227,58 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 "testdrive", Path(__file__).parent / junit_report
             )
 
+class TdCompleter(Completer):
+    def get_completions(self, document: Document, complete_event):
+        text = document.text_before_cursor
+        words = text.split()
+
+        # Define available commands and parameters
+        commands = {
+            ">": {"description": "Run a SQL query"},
+            "$ kafka-ingest": {
+                "description": "Sends the data provided to a kafka topic",
+                "params": {
+                    "topic=": "The topic to publish the data to",
+                    "schema=": "The schema to use",
+                    "format=": "The format in which the data is provided (avro|bytes)",
+                    "key-format=": "For data that includes a key, the format of the key (avro|bytes)",
+                    "key-schema=": "For data that contains a key, the schema of the key",
+                    "key-terminator=": "Separator between key and data (bytes format)",
+                    "repeat=": "Send the same data N times to Kafka",
+                    "start-iteration=": "Set starting value of the ${kafka-ingest.iteration}",
+                    "partition=": "Send the data to a specified partition",
+                },
+                "param_values": {
+                    "format=": ["avro", "bytes"],
+                    "key-format=": ["avro", "bytes"]
+                }
+            },
+            "$ kafka-add-partitions": {"description": "Add partitions to an existing topic"},
+        }
+
+        # Determine the current context
+        if not words or text.startswith("$"):
+            # We're at the root level (no command or starting with "$"), suggest commands
+            for command in commands.keys():
+                if command.startswith(text):
+                    yield Completion(command, start_position=-len(text), display_meta=commands[command]["description"])
+        elif words[0] == "$" and len(words) > 1 and words[1] in commands:
+            # The first command is entered, suggest parameters
+            command = commands[words[1]]
+            params = command["params"]
+
+            # Suggest parameters if we are typing a new one
+            if len(words) == 2 or (len(words) > 2 and "=" not in words[-1]):
+                for param, description in params.items():
+                    if param.startswith(words[-1]):
+                        yield Completion(param, start_position=-len(words[-1]), display_meta=description)
+            else:
+                # Suggest values for specific parameters
+                param = words[-2]
+                if param in command["param_values"]:
+                    for value in command["param_values"][param]:
+                        if value.startswith(words[-1]):
+                            yield Completion(value, start_position=-len(words[-1]), display_meta="Value")
 
 def workflow_interactive(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Interactively write a new testdrive file"""
@@ -261,37 +319,40 @@ def workflow_interactive(c: Composition, parser: WorkflowArgumentParser) -> None
 
         session = PromptSession(lexer=PygmentsLexer(SqlLexer))
 
-        try:
-            while True:
-                if not text:
-                    text = prompt("td| ")
-                if text.startswith(">"):
-                    result = c.sql_query(text[1:])
-                    for row in result:
-                        print(" ".join(row))
-                    action = button_dialog(
-                        title="Query Action",
-                        text="Choices",
-                        buttons=[
-                            ("Rerun query", "rerun"),
-                            ("Edit query", "edit"),
-                            ("Store result", "store"),
-                            ("Exit", "exit"),
-                        ],
-                    ).run()
+        while True:
+            try:
+                session = PromptSession(completer=TdCompleter())
+                return session.prompt("td# ")
+                #text = session.prompt(f"{first_char} ")
+                #if not text:
+                #    text = prompt("td| ")
+                #if text.startswith(">"):
+                #    result = c.sql_query(text[1:])
+                #    for row in result:
+                #        print(" ".join(row))
+                #    action = button_dialog(
+                #        title="Query Action",
+                #        text="Choices",
+                #        buttons=[
+                #            ("Rerun query", "rerun"),
+                #            ("Edit query", "edit"),
+                #            ("Store result", "store"),
+                #            ("Exit", "exit"),
+                #        ],
+                #    ).run()
 
-                    if action == "rerun":
-                        continue
-                    elif action == "edit":
-                        text = prompt("Edit query: ", default=text)
-                    elif action == "store":
-                        pass
-                    elif action == "exit":
-                        break
-                    else:
-                        raise RuntimeError(f"Unknown action {action}")
+                #    if action == "rerun":
+                #        continue
+                #    elif action == "edit":
+                #        text = prompt("Edit query: ", default=text)
+                #    elif action == "store":
+                #        pass
+                #    elif action == "exit":
+                #        break
+                #    else:
+                #        raise RuntimeError(f"Unknown action {action}")
 
-                print("Result:")
-                print(result)
-        except KeyboardInterrupt:
-            pass # TODO: save file
+                #print("Result:")
+                #print(result)
+            except (KeyboardInterrupt, EOFError):
+                return
