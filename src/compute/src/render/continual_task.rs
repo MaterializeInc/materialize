@@ -578,12 +578,25 @@ fn continual_task_sink<G: Scope<Timestamp = Timestamp>>(
 
         let mut state = SinkState::new();
         loop {
-            if PartialOrder::less_than(&*output_frontier.borrow(), &state.output_progress) {
-                output_frontier.borrow_mut().clear();
-                output_frontier
-                    .borrow_mut()
-                    .extend(state.output_progress.iter().cloned());
+            // Loop until we've processed all the work we can.
+            loop {
+                if PartialOrder::less_than(&*output_frontier.borrow(), &state.output_progress) {
+                    output_frontier.borrow_mut().clear();
+                    output_frontier
+                        .borrow_mut()
+                        .extend(state.output_progress.iter().cloned());
+                }
+
+                debug!("ct_sink about to process {:?}", state);
+                let Some((new_upper, to_append)) = state.process() else {
+                    break;
+                };
+                debug!("ct_sink got write {:?}: {:?}", new_upper, to_append);
+                state.output_progress =
+                    truncating_compare_and_append(&mut write_handle, to_append, new_upper).await;
             }
+
+            // Then try to generate some more work by reading inputs.
             let Some(event) = op_inputs.next().await else {
                 // Inputs exhausted, shutting down.
                 output_frontier.borrow_mut().clear();
@@ -594,44 +607,44 @@ fn continual_task_sink<G: Scope<Timestamp = Timestamp>>(
             while let Some(Some(event)) = op_inputs.next().now_or_never() {
                 event.apply(&mut state);
             }
-            debug!("ct_sink about to process {:?}", state);
-            let Some((new_upper, to_append)) = state.process() else {
-                continue;
-            };
-            debug!("ct_sink got write {:?}: {:?}", new_upper, to_append);
-
-            let mut expected_upper = write_handle.shared_upper();
-            loop {
-                if !PartialOrder::less_than(&expected_upper, &new_upper) {
-                    state.output_progress = expected_upper.clone();
-                    debug!("ct_sink skipping {:?}", new_upper.elements());
-                    break;
-                }
-                let res = write_handle
-                    .compare_and_append(&to_append, expected_upper.clone(), new_upper.clone())
-                    .await
-                    .expect("usage was valid");
-                debug!(
-                    "ct_sink write res {:?}-{:?}: {:?}",
-                    expected_upper.elements(),
-                    new_upper.elements(),
-                    res
-                );
-                match res {
-                    Ok(()) => {
-                        state.output_progress = new_upper;
-                        break;
-                    }
-                    Err(err) => {
-                        expected_upper = err.current;
-                        continue;
-                    }
-                }
-            }
         }
     });
 
     button
+}
+
+/// Writes the given data to the shard, truncating it as necessary.
+///
+/// Returns the latest known upper for the shard.
+async fn truncating_compare_and_append(
+    write_handle: &mut WriteHandle<SourceData, (), Timestamp, Diff>,
+    to_append: Vec<((&SourceData, &()), &Timestamp, &Diff)>,
+    new_upper: Antichain<Timestamp>,
+) -> Antichain<Timestamp> {
+    let mut expected_upper = write_handle.shared_upper();
+    loop {
+        if !PartialOrder::less_than(&expected_upper, &new_upper) {
+            debug!("ct_sink skipping {:?}", new_upper.elements());
+            return expected_upper;
+        }
+        let res = write_handle
+            .compare_and_append(&to_append, expected_upper.clone(), new_upper.clone())
+            .await
+            .expect("usage was valid");
+        debug!(
+            "ct_sink write res {:?}-{:?}: {:?}",
+            expected_upper.elements(),
+            new_upper.elements(),
+            res
+        );
+        match res {
+            Ok(()) => return new_upper,
+            Err(err) => {
+                expected_upper = err.current;
+                continue;
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
