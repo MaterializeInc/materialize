@@ -136,8 +136,6 @@ pub struct Config {
     pub enable_new_outer_join_lowering: bool,
     /// Enable outer join lowering implemented in database-issues#7561.
     pub enable_variadic_left_join_lowering: bool,
-    /// Enable the extra null filter implemented in materialize#28018.
-    pub enable_outer_join_null_filter: bool,
     /// See the feature flag of the same name.
     pub enable_value_window_function_fusion: bool,
     /// See the feature flag of the same name.
@@ -149,7 +147,6 @@ impl From<&SystemVars> for Config {
         Self {
             enable_new_outer_join_lowering: vars.enable_new_outer_join_lowering(),
             enable_variadic_left_join_lowering: vars.enable_variadic_left_join_lowering(),
-            enable_outer_join_null_filter: vars.enable_outer_join_null_filter(),
             enable_value_window_function_fusion: vars.enable_value_window_function_fusion(),
             enable_window_aggregation_fusion: vars.enable_window_aggregation_fusion(),
         }
@@ -2210,7 +2207,7 @@ impl OnPredicates {
         ra: usize,
         sa: usize,
         on: Vec<MirScalarExpr>,
-        context: &Context,
+        _context: &Context,
     ) -> Self {
         use mz_expr::BinaryFunc::Eq;
 
@@ -2269,10 +2266,8 @@ impl OnPredicates {
                         let mut rhs = expr2.take();
                         rhs.permute(&rhs_permutation);
                         predicates.push(OnPredicate::Eq(lhs.clone(), rhs.clone()));
-                        if context.config.enable_outer_join_null_filter {
-                            predicates.push(OnPredicate::LhsConsequence(lhs.call_is_null().not()));
-                            predicates.push(OnPredicate::RhsConsequence(rhs.call_is_null().not()));
-                        }
+                        predicates.push(OnPredicate::LhsConsequence(lhs.call_is_null().not()));
+                        predicates.push(OnPredicate::RhsConsequence(rhs.call_is_null().not()));
                     }
                     // Both sides reference different inputs (swapped).
                     ([I_RHS], [I_LHS]) => {
@@ -2280,10 +2275,8 @@ impl OnPredicates {
                         let mut rhs = expr1.take();
                         rhs.permute(&rhs_permutation);
                         predicates.push(OnPredicate::Eq(lhs.clone(), rhs.clone()));
-                        if context.config.enable_outer_join_null_filter {
-                            predicates.push(OnPredicate::LhsConsequence(lhs.call_is_null().not()));
-                            predicates.push(OnPredicate::RhsConsequence(rhs.call_is_null().not()));
-                        }
+                        predicates.push(OnPredicate::LhsConsequence(lhs.call_is_null().not()));
+                        predicates.push(OnPredicate::RhsConsequence(rhs.call_is_null().not()));
                     }
                     // Both sides reference the left input or no input.
                     ([I_LHS], [I_LHS]) | ([I_LHS], []) | ([], [I_LHS]) => {

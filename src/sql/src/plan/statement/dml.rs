@@ -369,7 +369,6 @@ generate_extracted_config!(
     (EnableEagerDeltaJoins, Option<bool>, Default(None)),
     (EnableVariadicLeftJoinLowering, Option<bool>, Default(None)),
     (EnableLetrecFixpointAnalysis, Option<bool>, Default(None)),
-    (EnableOuterJoinNullFilter, Option<bool>, Default(None)),
     (EnableValueWindowFunctionFusion, Option<bool>, Default(None)),
     (EnableReduceUnnestListFusion, Option<bool>, Default(None)),
     (EnableWindowAggregationFusion, Option<bool>, Default(None))
@@ -420,7 +419,6 @@ impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
                 enable_letrec_fixpoint_analysis: v.enable_letrec_fixpoint_analysis,
                 enable_consolidate_after_union_negate: Default::default(),
                 enable_reduce_mfp_fusion: Default::default(),
-                enable_outer_join_null_filter: v.enable_outer_join_null_filter,
                 enable_cardinality_estimates: Default::default(),
                 persist_fast_path_limit: Default::default(),
                 reoptimize_imported_views: v.reoptimize_imported_views,

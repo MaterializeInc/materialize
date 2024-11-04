@@ -2113,12 +2113,6 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
-        name: enable_outer_join_null_filter,
-        desc: "Add an extra null filter to the semi-join part of outer join lowering",
-        default: true,
-        enable_for_item_parsing: false,
-    },
-    {
         name: enable_alter_table_add_column,
         desc: "Enable ALTER TABLE ... ADD COLUMN ...",
         default: false,
@@ -2202,7 +2196,6 @@ impl From<&super::SystemVars> for OptimizerFeatures {
             enable_variadic_left_join_lowering: vars.enable_variadic_left_join_lowering(),
             enable_letrec_fixpoint_analysis: vars.enable_letrec_fixpoint_analysis(),
             enable_cardinality_estimates: vars.enable_cardinality_estimates(),
-            enable_outer_join_null_filter: vars.enable_outer_join_null_filter(),
             enable_value_window_function_fusion: vars.enable_value_window_function_fusion(),
             enable_reduce_unnest_list_fusion: vars.enable_reduce_unnest_list_fusion(),
             enable_window_aggregation_fusion: vars.enable_window_aggregation_fusion(),
