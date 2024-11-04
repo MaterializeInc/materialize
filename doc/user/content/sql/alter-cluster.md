@@ -32,9 +32,6 @@ To set a cluster configuration:
   ;
   ```
 
-You must have ownership of the cluster. See also [Required
-privileges](#required-privileges).
-
 {{< /tab >}}
 {{< tab "Reset to default" >}}
 
@@ -52,11 +49,8 @@ To reset a cluster configuration back to its default value:
   ;
   ```
 
-You must have ownership of the cluster. See also [Required
-privileges](#required-privileges).
-
 {{< /tab >}}
-{{< tab "Rename" >}}
+{{< tab "Rename cluster" >}}
 
 To rename a cluster:
 
@@ -64,11 +58,8 @@ To rename a cluster:
   ALTER CLUSTER <cluster_name> RENAME TO <new_cluster_name>;
   ```
 
-You must have ownership of the cluster. See also [Required
-privileges](#required-privileges).
-
 {{< /tab >}}
-{{< tab "Alter owner to" >}}
+{{< tab "Change owner to" >}}
 
 To change the owner of a cluster:
 
@@ -80,16 +71,21 @@ To rename a cluster, you must have ownership of the cluster and membership in
 the `<new_owner_role>`. See also [Required privileges](#required-privileges).
 
 {{< /tab >}}
-{{< tab "Swap names with another cluster" >}}
+{{< tab "Swap names with" >}}
+
+{{< important >}}
+
+Information about the `SWAP WITH` operation is provided for completeness.  The
+`SWAP WITH` operation is used for blue/green deployments. In general, you will
+not need to manually perform this operation.
+
+{{< /important >}}
 
 To swap the name of this cluster with another cluster:
 
   ```mzsql
   ALTER CLUSTER <cluster1> SWAP WITH <cluster2>;
   ```
-
-To swap names with another cluster, you must have ownership of both clusters.
-See also [Required privileges](#required-privileges).
 
 {{< /tab >}}
 {{< /tabs >}}

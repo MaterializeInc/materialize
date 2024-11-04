@@ -144,7 +144,7 @@ p+p {
     pre,
     .warning,
     .note,
-    .admonition,
+    .annotation,
     .tip,
     .important {
         font-size: rem(1.5);
@@ -541,8 +541,8 @@ p+p {
         }
     }
 
-    .admonition {
-        border: 1px solid var(--admonition-border);
+    .annotation {
+        border: 1px solid var(--annotation-border);
 
         a {
             &:hover,
@@ -575,7 +575,7 @@ p+p {
         }
     }
 
-    .admonition {
+    .annotation {
         box-sizing: border-box;
         margin: rem(1.6) 0;
         padding: rem(1) rem(1) rem(1) rem(2);
@@ -1215,7 +1215,7 @@ body.dark .content {
         }
     }
 
-    .admonition {
+    .annotation {
         a {
             color: var(--link);
         }
