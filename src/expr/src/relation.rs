@@ -1589,19 +1589,19 @@ impl MirRelationExpr {
 
     /// Return every row in `self` that does not have a matching row in the first columns of `keys_and_values`, using `default` to fill in the remaining columns
     /// (If `default` is a row of nulls, this is the 'outer' part of LEFT OUTER JOIN)
-    pub fn anti_lookup(
+    pub fn anti_lookup<E>(
         self,
         id_gen: &mut IdGen,
         keys_and_values: MirRelationExpr,
         default: Vec<(Datum, ScalarType)>,
-    ) -> MirRelationExpr {
+    ) -> Result<MirRelationExpr, E> {
         let (data, column_types): (Vec<_>, Vec<_>) = default
             .into_iter()
             .map(|(datum, scalar_type)| (datum, scalar_type.nullable(datum.is_null())))
             .unzip();
         assert_eq!(keys_and_values.arity() - self.arity(), data.len());
-        self.let_in(id_gen, |_id_gen, get_keys| {
-            MirRelationExpr::join(
+        self.let_in_fallible(id_gen, |_id_gen, get_keys| {
+            Ok(MirRelationExpr::join(
                 vec![
                     // all the missing keys (with count 1)
                     keys_and_values
@@ -1624,7 +1624,7 @@ impl MirRelationExpr {
             .product(MirRelationExpr::constant(
                 vec![data],
                 RelationType::new(column_types),
-            ))
+            )))
         })
     }
 
@@ -1641,13 +1641,13 @@ impl MirRelationExpr {
         keys_and_values: MirRelationExpr,
         default: Vec<(Datum<'static>, ScalarType)>,
     ) -> Result<MirRelationExpr, E> {
-        Ok(keys_and_values.let_in(id_gen, |id_gen, get_keys_and_values| {
-            get_keys_and_values.clone().union(self.anti_lookup(
+        keys_and_values.let_in_fallible(id_gen, |id_gen, get_keys_and_values| {
+            Ok(get_keys_and_values.clone().union(self.anti_lookup(
                 id_gen,
                 get_keys_and_values,
                 default,
-            ))
-        }))
+            )?))
+        })
     }
 
     /// True iff the expression contains a `NullaryFunc::MzLogicalTimestamp`.

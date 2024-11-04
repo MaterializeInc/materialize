@@ -745,19 +745,19 @@ impl HirRelationExpr {
                                 if let JoinKind::LeftOuter { .. } | JoinKind::FullOuter { .. } =
                                     kind
                                 {
-                                    let left_outer = get_left.clone().anti_lookup(
+                                    let left_outer = get_left.clone().anti_lookup::<PlanError>(
                                         id_gen,
                                         get_join.clone(),
                                         rt.into_iter()
                                             .map(|typ| (Datum::Null, typ.scalar_type))
                                             .collect(),
-                                    );
+                                    )?;
                                     result = result.union(left_outer);
                                 }
                                 if let JoinKind::RightOuter | JoinKind::FullOuter = kind {
                                     let right_outer = get_right
                                         .clone()
-                                        .anti_lookup(
+                                        .anti_lookup::<PlanError>(
                                             id_gen,
                                             get_join
                                                 // need to swap left and right to make the anti_lookup work
@@ -770,7 +770,7 @@ impl HirRelationExpr {
                                             lt.into_iter()
                                                 .map(|typ| (Datum::Null, typ.scalar_type))
                                                 .collect(),
-                                        )
+                                        )?
                                         // swap left and right back again
                                         .project(
                                             (0..oa)
