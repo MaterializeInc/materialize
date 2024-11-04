@@ -1635,19 +1635,19 @@ impl MirRelationExpr {
     /// (This is LEFT OUTER JOIN if:
     /// 1) `default` is a row of null
     /// 2) matching rows in `keys_and_values` and `self` have the same multiplicity.)
-    pub fn lookup(
+    pub fn lookup<E>(
         self,
         id_gen: &mut IdGen,
         keys_and_values: MirRelationExpr,
         default: Vec<(Datum<'static>, ScalarType)>,
-    ) -> MirRelationExpr {
-        keys_and_values.let_in(id_gen, |id_gen, get_keys_and_values| {
+    ) -> Result<MirRelationExpr, E> {
+        Ok(keys_and_values.let_in(id_gen, |id_gen, get_keys_and_values| {
             get_keys_and_values.clone().union(self.anti_lookup(
                 id_gen,
                 get_keys_and_values,
                 default,
             ))
-        })
+        }))
     }
 
     /// True iff the expression contains a `NullaryFunc::MzLogicalTimestamp`.

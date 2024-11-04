@@ -602,7 +602,7 @@ impl HirRelationExpr {
                                 .skip(get_left.arity())
                                 .map(|typ| (Datum::Null, typ.scalar_type))
                                 .collect();
-                            Ok::<_, PlanError>(get_left.lookup(id_gen, join, default))
+                            get_left.lookup(id_gen, join, default)
                         } else {
                             Ok::<_, PlanError>(join)
                         }
@@ -845,7 +845,7 @@ impl HirRelationExpr {
 
                     // Introduce default values in the case the group key is empty.
                     if group_key.is_empty() {
-                        reduced = get_outer.lookup(id_gen, reduced, default);
+                        reduced = get_outer.lookup::<PlanError>(id_gen, reduced, default)?;
                     }
                     reduced
                 }
@@ -1917,7 +1917,7 @@ fn apply_scalar_subquery(
             })?;
             // append Null to anything that didn't return any rows
             let default = vec![(Datum::Null, col_type.scalar_type)];
-            Ok(get_inner.lookup(id_gen, guarded, default))
+            get_inner.lookup(id_gen, guarded, default)
         },
     )
 }
@@ -1949,7 +1949,7 @@ fn apply_existential_subquery(
                 .map(vec![MirScalarExpr::literal_true()]);
 
             // append False to anything that didn't return any rows
-            Ok(get_inner.lookup(id_gen, exists, vec![(Datum::False, ScalarType::Bool)]))
+            get_inner.lookup(id_gen, exists, vec![(Datum::False, ScalarType::Bool)])
         },
     )
 }
