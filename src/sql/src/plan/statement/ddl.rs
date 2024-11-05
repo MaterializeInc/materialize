@@ -39,7 +39,8 @@ use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::refresh_schedule::{RefreshEvery, RefreshSchedule};
 use mz_repr::role_id::RoleId;
 use mz_repr::{
-    strconv, ColumnName, ColumnType, GlobalId, RelationDesc, RelationType, ScalarType, Timestamp,
+    preserves_order, strconv, ColumnName, ColumnType, GlobalId, RelationDesc, RelationType,
+    ScalarType, Timestamp,
 };
 use mz_sql_parser::ast::display::comma_separated;
 use mz_sql_parser::ast::{
@@ -174,6 +175,23 @@ const MAX_NUM_COLUMNS: usize = 256;
 
 const MANAGED_REPLICA_PATTERN: std::sync::LazyLock<regex::Regex> =
     std::sync::LazyLock::new(|| regex::Regex::new(r"^r(\d)+$").unwrap());
+
+/// Given a relation desc and a column list, checks that:
+/// - the column list is a prefix of the desc;
+/// - all the listed columns are types that have meaningful Persist-level ordering.
+fn check_partition_by(desc: &RelationDesc, partition_by: &[ColumnName]) -> Result<(), PlanError> {
+    for (idx, ((desc_name, desc_type), partition_name)) in
+        desc.iter().zip(partition_by.iter()).enumerate()
+    {
+        if desc_name != partition_name {
+            sql_bail!("PARTITION BY columns should be a prefix of the relation's columns (expected {desc_name} at index {idx}, got {partition_name})");
+        }
+        if !preserves_order(&desc_type.scalar_type) {
+            sql_bail!("PARTITION BY column {partition_name} has unsupported type");
+        }
+    }
+    Ok(())
+}
 
 pub fn describe_create_database(
     _: &StatementContext,
@@ -2587,6 +2605,14 @@ pub fn plan_create_materialized_view(
         refresh,
         seen: _,
     }: MaterializedViewOptionExtracted = stmt.with_options.try_into()?;
+
+    if let Some(partition_by) = partition_by {
+        let partition_by: Vec<_> = partition_by
+            .into_iter()
+            .map(normalize::column_name)
+            .collect();
+        check_partition_by(&desc, &partition_by)?;
+    }
 
     let refresh_schedule = {
         let mut refresh_schedule = RefreshSchedule::default();
