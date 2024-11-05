@@ -1060,20 +1060,35 @@ impl CatalogState {
         cluster: ClusterId,
     ) -> impl Iterator<Item = (GlobalId, &Index)> {
         let index_matches = move |idx: &Index| idx.on == id && idx.cluster_id == cluster;
+        let log = id == GlobalId::System(573);
 
-        self.try_get_entry(&id)
+        let iter = self
+            .try_get_entry(&id)
             .into_iter()
             .map(move |e| {
-                e.used_by()
-                    .iter()
-                    .filter_map(move |uses_id| match self.get_entry(uses_id).item() {
+                if log {
+                    tracing::info!("get_indexes_on (1): entry={e:?}");
+                }
+                e.used_by().iter().filter_map(move |uses_id| {
+                    let item = self.get_entry(uses_id).item();
+                    if log {
+                        tracing::info!("get_indexes_on (2): used_by={uses_id}, item={item:?}");
+                    }
+                    match self.get_entry(uses_id).item() {
                         CatalogItem::Index(index) if index_matches(index) => {
                             Some((*uses_id, index))
                         }
                         _ => None,
-                    })
+                    }
+                })
             })
-            .flatten()
+            .flatten();
+
+        let v: Vec<_> = iter.collect();
+        if log {
+            tracing::info!("get_indexes_on (3): id={id}, cluster={cluster}, result={v:?}");
+        }
+        v.into_iter()
     }
 
     pub(super) fn get_database(&self, database_id: &DatabaseId) -> &Database {

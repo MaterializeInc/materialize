@@ -1356,6 +1356,11 @@ impl CatalogState {
 
     /// Associates a name, `GlobalId`, and entry.
     fn insert_entry(&mut self, entry: CatalogEntry) {
+        let log = entry.id() == GlobalId::System(738) || entry.id() == GlobalId::System(573);
+        if log {
+            tracing::info!("insert_entry (1): id={}", entry.id());
+        }
+
         if !entry.id.is_system() {
             if let Some(cluster_id) = entry.item.cluster_id() {
                 self.clusters_by_id
@@ -1381,6 +1386,9 @@ impl CatalogState {
             // present.
             if u == entry.id() {
                 continue;
+            }
+            if log {
+                tracing::info!("insert_entry (2): use={u}");
             }
             match self.entry_by_id.get_mut(&u) {
                 Some(metadata) => metadata.used_by.push(entry.id()),
