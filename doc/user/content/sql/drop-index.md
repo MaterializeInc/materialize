@@ -6,50 +6,40 @@ menu:
     parent: 'commands'
 ---
 
-`DROP INDEX` removes an index from a materialized view. (Non-materialized views do not have any indexes.)
+`DROP INDEX` removes the specified index.
 
 ## Syntax
 
-{{< diagram "drop-index.svg" >}}
+```mzsql
+DROP INDEX [IF EXISTS] <index_name> [ 'CASCADE' | 'RESTRICT' ];
+```
 
-Field | Use
+Options | Description
 ------|-----
-**IF EXISTS** | Do not return an error if the named index doesn't exist.
-_index&lowbar;name_ | The name of the index you want to remove.
+**IF EXISTS** | Do not return an error if the specified index does not exist.
 **CASCADE** | Remove the index and its dependent objects.
 **RESTRICT** |  Remove the index. _(Default.)_
 
-**Note:** Since indexes cannot currently have dependent objects, `DROP INDEX`, `DROP INDEX RESTRICT`, and `DROP INDEX CASCADE` all do the same thing.
+{{< note >}}
+
+Since indexes do not have dependent objects, `DROP INDEX`, `DROP INDEX
+RESTRICT`, and `DROP INDEX CASCADE` are equivalent.
+
+{{< /note >}}
+
+## Privileges
+
+To execute the `DROP INDEX` statement, you need:
+
+- Ownership of the dropped index.
+- `USAGE` privileges on the containing schema.
 
 ## Examples
 
 ### Remove an index
 
-```mzsql
-SHOW VIEWS;
-```
-```nofmt
-+-----------------------------------+
-| VIEWS                             |
-|-----------------------------------|
-| ...                               |
-| q01                               |
-+-----------------------------------+
-```
-```mzsql
-SHOW INDEXES ON q01;
-```
-```nofmt
-+--------------------------------+------------------------+-----
-| name                           | on                     | ...
-|--------------------------------+------------------------+----
-| materialize.public.q01_geo_idx | materialize.public.q01 | ...
-+--------------------------------+------------------------+-----
-```
-
-You can use the unqualified index name (`q01_geo_idx`) rather the fully qualified name (`materialize.public.q01_geo_idx`).
-
-You can remove an index with any of the following commands:
+Assume you want to drop an index named `q01_geo_idx`. You can remove an index
+with any of the following `DROP INDEX` commands:
 
 - ```mzsql
   DROP INDEX q01_geo_idx;
@@ -61,21 +51,28 @@ You can remove an index with any of the following commands:
   DROP INDEX q01_geo_idx CASCADE;
   ```
 
-### Do not issue an error if attempting to remove a nonexistent index
+If the index `q01_geo_idx` does not exist, the above operations return an error.
+
+{{< tip >}}
+
+In the **Materialize Console**, you can view existing indexes in the [**Database
+object explorer**](/console/data/). Alternatively, you can use the
+[`SHOW INDEXES`](/sql/show-indexes) command.
+
+{{< /tip >}}
+
+### Remove an index without erroring if the index does not exist
+
+You can specify the `IF EXISTS` option so that the `DROP INDEX` command does
+not return an error if the index to drop does not exist.
 
 ```mzsql
 DROP INDEX IF EXISTS q01_geo_idx;
 ```
 
-## Privileges
-
-The privileges required to execute this statement are:
-
-- Ownership of the dropped index.
-- `USAGE` privileges on the containing schema.
-
 ## Related pages
 
-- [`SHOW VIEWS`](../show-views)
-- [`SHOW INDEXES`](../show-indexes)
-- [DROP OWNED](../drop-owned)
+- [`CREATE INDEX`](/sql/create-index)
+- [`SHOW VIEWS`](/sql/show-views)
+- [`SHOW INDEXES`](/sql/show-indexes)
+- [`DROP OWNED`](/sql/drop-owned)
