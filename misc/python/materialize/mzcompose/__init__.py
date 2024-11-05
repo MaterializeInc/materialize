@@ -150,6 +150,7 @@ def get_default_system_parameters(
         "statement_logging_default_sample_rate": "0.01",
         "statement_logging_max_sample_rate": "0.01",
         "storage_source_decode_fuel": "100000",
+        "storage_use_continual_feedback_upsert": "true",
         "storage_use_reclock_v2": "true",
         "timestamp_oracle": "postgres",
         "wait_catalog_consolidation_on_startup": "true",

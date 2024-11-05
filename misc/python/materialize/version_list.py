@@ -179,7 +179,19 @@ class AncestorImageResolutionBase:
         context_when_image_of_commit_exists: str,
         context_when_falling_back_to_latest: str,
     ) -> tuple[str, str]:
+        # If the current PR has a known and accepted regression, don't compare
+        # against merge base of it
+        override_commit = self._get_override_commit_instead_of_version(
+            MzVersion.parse_cargo()
+        )
         common_ancestor_commit = buildkite.get_merge_base()
+
+        if override_commit is not None:
+            return (
+                commit_to_image_tag(override_commit),
+                f"commit override instead of merge base ({common_ancestor_commit})",
+            )
+
         if image_of_commit_exists(common_ancestor_commit):
             return (
                 commit_to_image_tag(common_ancestor_commit),

@@ -16,6 +16,7 @@ from kubernetes.client import V1Container, V1EnvVar, V1ObjectMeta, V1Pod, V1PodS
 
 from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
 from materialize.cloudtest.k8s.api.k8s_pod import K8sPod
+from materialize.mzcompose import get_default_system_parameters
 from materialize.mzcompose.test_result import (
     extract_error_chunks_from_output,
 )
@@ -56,6 +57,13 @@ class TestdriveBase:
         log_filter: str = "off",
         suppress_command_error_output: bool = False,
     ) -> None:
+        leaves_tombstones = (
+            "true"
+            if get_default_system_parameters()["storage_use_continual_feedback_upsert"]
+            == "false"
+            else "false"
+        )
+
         command: list[str] = [
             "testdrive",
             f"--materialize-url={self.materialize_url}",
@@ -65,6 +73,7 @@ class TestdriveBase:
             f"--default-timeout={default_timeout}",
             f"--log-filter={log_filter}",
             "--var=replicas=1",
+            f"--var=leaves-tombstones={leaves_tombstones}",
             "--var=single-replica-cluster=quickstart",
             "--var=default-storage-size=1",
             "--var=default-replica-size=1",
