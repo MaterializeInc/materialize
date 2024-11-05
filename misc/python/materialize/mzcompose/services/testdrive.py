@@ -55,6 +55,7 @@ class Testdrive(Service):
         fivetran_destination_files_path: str = "/share/tmp",
         mz_service: str = "materialized",
         metadata_store: str = METADATA_STORE,
+        stop_grace_period: str = "120s",
     ) -> None:
         depends_graph: dict[str, ServiceDependency] = {}
 
@@ -173,5 +174,6 @@ class Testdrive(Service):
                 "volumes": volumes,
                 "propagate_uid_gid": propagate_uid_gid,
                 "init": True,
+                "stop_grace_period": stop_grace_period,
             },
         )

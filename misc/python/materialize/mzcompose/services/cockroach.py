@@ -34,6 +34,7 @@ class Cockroach(Service):
         healthcheck: ServiceHealthcheck | None = None,
         # Workaround for database-issues#5898, should be "no" otherwise
         restart: str = "on-failure:5",
+        stop_grace_period: str = "120s",
     ):
         volumes = []
 
@@ -73,5 +74,6 @@ class Cockroach(Service):
                 "healthcheck": healthcheck,
                 "restart": restart,
                 "environment": DEFAULT_CRDB_ENVIRONMENT,
+                "stop_grace_period": stop_grace_period,
             },
         )
