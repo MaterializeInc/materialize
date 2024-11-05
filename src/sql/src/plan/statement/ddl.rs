@@ -2582,6 +2582,7 @@ pub fn plan_create_materialized_view(
 
     let MaterializedViewOptionExtracted {
         assert_not_null,
+        partition_by,
         retain_history,
         refresh,
         seen: _,
@@ -2812,6 +2813,7 @@ pub fn plan_create_materialized_view(
 generate_extracted_config!(
     MaterializedViewOption,
     (AssertNotNull, Ident, AllowMultiple),
+    (PartitionBy, Vec<Ident>),
     (RetainHistory, OptionalDuration),
     (Refresh, RefreshOptionValue<Aug>, AllowMultiple)
 );

@@ -32,6 +32,7 @@ use crate::ast::{
 pub enum MaterializedViewOptionName {
     /// The `ASSERT NOT NULL [=] <ident>` option.
     AssertNotNull,
+    PartitionBy,
     RetainHistory,
     /// The `REFRESH [=] ...` option.
     Refresh,
@@ -41,6 +42,7 @@ impl AstDisplay for MaterializedViewOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             MaterializedViewOptionName::AssertNotNull => f.write_str("ASSERT NOT NULL"),
+            MaterializedViewOptionName::PartitionBy => f.write_str("PARTITION BY"),
             MaterializedViewOptionName::RetainHistory => f.write_str("RETAIN HISTORY"),
             MaterializedViewOptionName::Refresh => f.write_str("REFRESH"),
         }
@@ -56,6 +58,7 @@ impl WithOptionName for MaterializedViewOptionName {
     fn redact_value(&self) -> bool {
         match self {
             MaterializedViewOptionName::AssertNotNull
+            | MaterializedViewOptionName::PartitionBy
             | MaterializedViewOptionName::RetainHistory
             | MaterializedViewOptionName::Refresh => false,
         }
