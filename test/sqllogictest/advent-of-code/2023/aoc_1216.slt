@@ -266,40 +266,38 @@ Explained Query:
     cte l13 =
       Distinct project=[#0..=#3]
         Union
-          Distinct project=[#0, #1, #3, #2]
-            Union
-              Map (("r" || integer_to_text(#0)), "r")
-                CrossJoin type=differential
-                  Get l11
-                  ArrangeBy keys=[[]]
-                    Union
-                      Get l4
-                      Map (null)
-                        Union
-                          Negate
-                            Project ()
-                              Get l4
-                          Constant
-                            - ()
-              Map (("l" || integer_to_text(#0)), "l")
-                CrossJoin type=differential
-                  Get l11
-                  ArrangeBy keys=[[]]
-                    Union
-                      Get l6
-                      Map (null)
-                        Union
-                          Negate
-                            Project ()
-                              Get l6
-                          Constant
-                            - ()
-          Project (#2, #0, #3, #1)
-            Map ("d")
+          Project (#0, #1, #3, #2)
+            Map (("r" || integer_to_text(#0)), "r")
               CrossJoin type=differential
+                Get l11
                 ArrangeBy keys=[[]]
-                  Distinct project=[#0, ("d" || integer_to_text(#0))]
-                    Get l12
+                  Union
+                    Get l4
+                    Map (null)
+                      Union
+                        Negate
+                          Project ()
+                            Get l4
+                        Constant
+                          - ()
+          Project (#0, #1, #3, #2)
+            Map (("l" || integer_to_text(#0)), "l")
+              CrossJoin type=differential
+                Get l11
+                ArrangeBy keys=[[]]
+                  Union
+                    Get l6
+                    Map (null)
+                      Union
+                        Negate
+                          Project ()
+                            Get l6
+                        Constant
+                          - ()
+          Project (#1, #0, #3, #2)
+            Map (("d" || integer_to_text(#0)), "d")
+              CrossJoin type=differential
+                Get l12
                 ArrangeBy keys=[[]]
                   Union
                     Get l8
@@ -313,8 +311,7 @@ Explained Query:
           Project (#1, #0, #3, #2)
             Map (("u" || integer_to_text(#0)), "u")
               CrossJoin type=differential
-                ArrangeBy keys=[[]]
-                  Get l12
+                Get l12
                 ArrangeBy keys=[[]]
                   Union
                     Get l10
@@ -359,8 +356,9 @@ Explained Query:
                       - ("r", "-", 0, 1, "r")
                       - ("r", ".", 0, 1, "r")
     cte l12 =
-      Project (#1)
-        Get l0
+      ArrangeBy keys=[[]]
+        Project (#1)
+          Get l0
     cte l11 =
       ArrangeBy keys=[[]]
         Project (#0)

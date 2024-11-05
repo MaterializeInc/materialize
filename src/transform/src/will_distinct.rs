@@ -53,7 +53,10 @@ impl crate::Transform for WillDistinct {
 
 impl WillDistinct {
     fn apply(&self, expr: &mut MirRelationExpr, derived: DerivedView) {
-        // Record a list of expressions paired with optional "will distinct by" columns.
+        // Maintain a todo list of triples of 1. expression, 2. child analysis results, and 3. a "will distinct" bit.
+        // The "will distinct" bit says that a subsequent operator will make the specific multiplicities of each record
+        // irrelevant, and the expression only needs to present the correct *multiset* of record, with any non-negative
+        // cardinality allowed.
         let mut todo = vec![(expr, derived, false)];
         while let Some((expr, derived, distinct_by)) = todo.pop() {
             // If we find a `Distinct` expression in the shadow of another `Distinct` that will apply to its key columns,
@@ -69,13 +72,31 @@ impl WillDistinct {
             ) = (&mut *expr, distinct_by)
             {
                 if aggregates.is_empty() {
+                    // We can remove the `Distinct`, but we must install a `Map` and a `Project` to implement that
+                    // aspect of the operator. We do this by hand so that we can still descend down `input` and
+                    // continue to remove shadowed `Distinct` operators.
                     let arity = input.arity();
-                    *expr = input
-                        .take_dangerous()
-                        .map(group_key.clone())
-                        .project((arity..arity + group_key.len()).collect::<Vec<_>>());
-
-                    // Bail out of traversal at this point, on account of we've lost track of the shape of the expression.
+                    *expr = MirRelationExpr::Project {
+                        outputs: (arity..arity + group_key.len()).collect::<Vec<_>>(),
+                        input: Box::new(MirRelationExpr::Map {
+                            scalars: group_key.clone(),
+                            input: Box::new(input.take_dangerous()),
+                        }),
+                    };
+                    // We are certain to have a specific pattern of AST nodes, which we need to push through so that
+                    // we can continue recursively.
+                    if let MirRelationExpr::Project { input, .. } = expr {
+                        // `input` is a `Map` node, but it has a single input like the `Distinct` it came from.
+                        // Although it reads a bit weird, this lines up the child of the distinct with its derived
+                        // analysis results.
+                        todo.extend(
+                            input
+                                .children_mut()
+                                .rev()
+                                .zip(derived.children_rev())
+                                .map(|(x, y)| (x, y, true)),
+                        );
+                    }
                 } else {
                     todo.extend(
                         expr.children_mut()
