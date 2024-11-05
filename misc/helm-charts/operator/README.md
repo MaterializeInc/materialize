@@ -11,6 +11,36 @@ This Helm chart deploys the Materialize operator on a Kubernetes cluster. The op
 - Kubernetes 1.19+
 - Helm 3.2.0+
 
+### Kubernetes Storage Configuration
+
+If you want to use disk-backed clusters, you'll need to configure a storage provider.
+
+We recommend using OpenEBS with LVM for local persistent volumes:
+
+```bash
+# Install OpenEBS operator (required only for disk-backed clusters)
+helm repo add openebs https://openebs.github.io/openebs
+helm repo update
+helm install openebs --namespace openebs openebs/openebs --create-namespace
+```
+
+Then verify that the OpenEBS operator is running:
+
+```bash
+kubectl get pods -n openebs -l role=openebs-lvm
+```
+
+Your nodes must have available disks for LVM to use. For AWS EC2, this means using instance types with instance store volumes (e.g., i3.xlarge, i4i.xlarge, r5d.xlarge).
+
+To create the storage class for OpenEBS, add the following configuration to your `values.yaml`:
+
+```yaml
+storage:
+  openebs:
+    storageClass:
+      create: true
+```
+
 ## Installing the Chart
 
 To install the chart with the release name `my-materialize-operator`:
@@ -68,6 +98,15 @@ The following table lists the configurable parameters of the Materialize operato
 | `rbac.create` |  | ``true`` |
 | `serviceAccount.create` |  | ``true`` |
 | `serviceAccount.name` |  | ``"orchestratord"`` |
+| `storage.openebs.storageClass.allowVolumeExpansion` |  | ``false`` |
+| `storage.openebs.storageClass.create` |  | ``false`` |
+| `storage.openebs.storageClass.name` |  | ``"openebs-lvm-instance-store-ext4"`` |
+| `storage.openebs.storageClass.parameters.fsType` |  | ``"ext4"`` |
+| `storage.openebs.storageClass.parameters.storage` |  | ``"lvm"`` |
+| `storage.openebs.storageClass.parameters.volgroup` |  | ``"instance-store-vg"`` |
+| `storage.openebs.storageClass.provisioner` |  | ``"local.csi.openebs.io"`` |
+| `storage.openebs.storageClass.reclaimPolicy` |  | ``"Delete"`` |
+| `storage.openebs.storageClass.volumeBindingMode` |  | ``"WaitForFirstConsumer"`` |
 
 Specify each parameter using the `--set key=value[,key=value]` argument to `helm install`. For example:
 

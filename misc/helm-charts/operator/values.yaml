@@ -103,3 +103,27 @@ namespace:
   create: false
   # Name of the namespace where the operator and environment will be deployed
   name: "materialize"
+
+# Storage configuration
+storage:
+  # Storage class configuration for OpenEBS
+  # Requires the OpenEBS operator to be installed in the cluster
+  # https://github.com/openebs/lvm-localpv?tab=readme-ov-file#installation
+  # To install OpenEBS, you can use Helm:
+  # helm repo add openebs https://openebs.github.io/openebs
+  # helm repo update
+  # helm install openebs --namespace openebs openebs/openebs --create-namespace
+  openebs:
+    # Storage class configuration for OpenEBS
+    storageClass:
+      # Whether to create the storage class
+      create: false
+      name: "openebs-lvm-instance-store-ext4"
+      allowVolumeExpansion: false
+      provisioner: "local.csi.openebs.io"
+      parameters:
+        storage: "lvm"
+        fsType: "ext4"
+        volgroup: "instance-store-vg"
+      reclaimPolicy: Delete
+      volumeBindingMode: WaitForFirstConsumer

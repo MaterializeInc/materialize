@@ -21,8 +21,7 @@ environment:
   # Docker image reference for the Materialize `environmentd` service
   environmentdImageRef: "materialize/environmentd:v0.124.0-dev.0--pr.g993af7c1c493f8ca20389c7cc64769208867d3c9"
   # Optional additional arguments to be passed to `environmentd`
-  environmentdExtraArgs:
-    - "--orchestrator-kubernetes-ephemeral-volume-class=hostpath" # Use hostpath for ephemeral storage in testing
+  environmentdExtraArgs: []
   # Resource requirements for the environmentd pod
   environmentdResourceRequirements:
     requests:
