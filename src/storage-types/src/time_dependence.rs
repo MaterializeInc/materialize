@@ -97,6 +97,9 @@ impl TimeDependence {
 
     /// Applies the indefiniteness to a wall clock time.
     pub fn apply(&self, wall_clock: Timestamp) -> Option<Timestamp> {
+        // We take the minimum of our dependencies applied to the wall-clock time, or just
+        // wall-clock itself if we don't have any dependence. The minimum corresponds to the time
+        // that we can expect as the output time at the passed wall-clock time.
         let result = self
             .dependence
             .iter()
@@ -104,6 +107,7 @@ impl TimeDependence {
             .min()
             .unwrap_or(Some(wall_clock))?;
 
+        // Round the result according to our refresh schedule, if there is any.
         if let Some(schedule) = &self.schedule {
             schedule.round_up_timestamp(result)
         } else {
