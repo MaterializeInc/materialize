@@ -49,24 +49,32 @@ impl TimeDependence {
         }
     }
 
-    /// Merge any number of dependencies into one, using the supplied refresh schedule.
+    /// Merge any number of optional dependencies into one, using the supplied refresh schedule.
     ///
     /// It applies the following rules under the assumption that the frontier of an object ticks
-    /// at the rate of the slowest dependency. For objects depending on wall-clock time, this is
-    /// firstly wall-clock time, followed by refresh schedule. At the moment, we cannot express
-    /// other behavior. This means:
+    /// at the rate of the slowest immediate dependency. For objects depending on wall-clock time,
+    /// this is firstly wall-clock time, followed by refresh schedule. At the moment, we cannot
+    /// express other behavior. This means:
     /// * A merge of anything with wall-clock time results in wall-clock time.
-    /// * A merge of anything but wall-clock time and a refresh schedule results in a refresh schedule
-    ///   that depends on the deduplicated collection of dependencies.
+    /// * A merge of anything but wall-clock time or a refresh schedule results in a dependence
+    ///   on the deduplicated collection of dependencies.
     /// * Otherwise, a dataflow is indeterminate, which expresses that we either don't know how it
     ///   follows wall-clock time, or is a constant collection.
-    pub fn merge(mut dependencies: Vec<Self>, schedule: Option<&RefreshSchedule>) -> Option<Self> {
+    ///
+    /// If the result is a dependence without refresh schedule on a single nested dependence, the
+    /// function instead returns the inner value.
+    pub fn merge(
+        mut dependencies: Vec<Option<Self>>,
+        schedule: Option<&RefreshSchedule>,
+    ) -> Option<Self> {
+        // Any `Some` value dominates the `None` values.
+        dependencies.retain(Option::is_some);
         dependencies.sort();
         dependencies.dedup();
 
         if dependencies
             .iter()
-            .any(|dep| *dep == TimeDependence::default())
+            .any(|dep| *dep == Some(TimeDependence::default()))
         {
             // Wall-clock dependency is dominant.
             Some(TimeDependence::new(schedule.cloned(), vec![]))
@@ -74,13 +82,17 @@ impl TimeDependence {
             // No immediate wall-clock dependency, but some other dependency.
             if schedule.is_none() && dependencies.len() == 1 {
                 // We don't have a refresh schedule, and one dependency, so just return that.
-                Some(dependencies.remove(0))
+                dependencies.remove(0)
             } else {
                 // Insert our refresh schedule.
+                let dependencies = dependencies
+                    .into_iter()
+                    .filter_map(std::convert::identity)
+                    .collect();
                 Some(TimeDependence::new(schedule.cloned(), dependencies))
             }
         } else {
-            // Not related to wall-clock time.
+            // Not related to wall-clock time; or unknown relation.
             None
         }
     }
@@ -161,9 +173,9 @@ mod tests {
         };
 
         assert_eq!(None, TimeDependence::merge(vec![], None));
-        let default = TimeDependence::default();
+        let default = Some(TimeDependence::default());
         assert_eq!(
-            Some(default.clone()),
+            default.clone(),
             TimeDependence::merge(vec![default.clone()], None)
         );
         assert_eq!(
@@ -171,15 +183,15 @@ mod tests {
             TimeDependence::merge(vec![default.clone()], schedule(10.into()).as_ref())
         );
 
-        let scheduled = TimeDependence::new(schedule(10.into()), vec![]);
+        let scheduled = Some(TimeDependence::new(schedule(10.into()), vec![]));
         assert_eq!(
-            Some(scheduled.clone()),
+            scheduled.clone(),
             TimeDependence::merge(vec![scheduled.clone()], None)
         );
         assert_eq!(
             Some(TimeDependence::new(
                 schedule(10.into()),
-                vec![scheduled.clone()]
+                vec![scheduled.clone().unwrap()]
             )),
             TimeDependence::merge(vec![scheduled.clone()], schedule(10.into()).as_ref())
         );

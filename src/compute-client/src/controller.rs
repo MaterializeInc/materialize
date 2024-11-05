@@ -779,7 +779,7 @@ where
     pub fn create_dataflow(
         &mut self,
         instance_id: ComputeInstanceId,
-        dataflow: DataflowDescription<mz_compute_types::plan::Plan<T>, (), T>,
+        mut dataflow: DataflowDescription<mz_compute_types::plan::Plan<T>, (), T>,
         subscribe_target_replica: Option<ReplicaId>,
     ) -> Result<(), DataflowCreationError> {
         use DataflowCreationError::*;
@@ -821,7 +821,9 @@ where
                 return Err(CollectionMissing(id));
             }
         }
-        let time_dependence = self.determine_time_dependence(instance_id, &dataflow)?;
+        let time_dependence = self
+            .determine_time_dependence(instance_id, &dataflow)
+            .expect("must exist");
 
         let instance = self.instance_mut(instance_id).expect("validated");
 
@@ -838,7 +840,6 @@ where
             shared_collection_state.insert(id, shared);
         }
 
-        let mut dataflow = dataflow;
         dataflow.time_dependence = time_dependence;
 
         instance.call(move |i| {
@@ -1003,7 +1004,7 @@ where
         instance_id: ComputeInstanceId,
         dataflow: &DataflowDescription<mz_compute_types::plan::Plan<T>, (), T>,
     ) -> Result<Option<TimeDependence>, TimeDependenceError> {
-        // Continual tasks don't support replica expiration
+        // TODO(ct3): Continual tasks don't support replica expiration
         let is_continual_task = dataflow.continual_task_ids().next().is_some();
         if is_continual_task {
             return Ok(None);
@@ -1015,25 +1016,25 @@ where
         let mut time_dependencies = Vec::new();
 
         for id in dataflow.imported_index_ids() {
-            if let Some(dependence) = instance
+            let dependence = instance
                 .get_time_dependence(id)
-                .map_err(|err| TimeDependenceError::CollectionMissing(err.0))?
-            {
-                time_dependencies.push(dependence);
-            }
+                .map_err(|err| TimeDependenceError::CollectionMissing(err.0))?;
+            time_dependencies.push(dependence);
         }
 
-        'outer: for id in dataflow.imported_source_ids() {
+        'source: for id in dataflow.imported_source_ids() {
+            // We first check whether the id is backed by a compute object, in which case we use
+            // the time dependence we know. This is true for materialized views, continual tasks,
+            // etc.
             for instance in self.instances.values() {
-                if let Ok(Some(dependence)) = instance.get_time_dependence(id) {
+                if let Ok(dependence) = instance.get_time_dependence(id) {
                     time_dependencies.push(dependence);
-                    continue 'outer;
+                    continue 'source;
                 }
             }
 
-            if let Some(dependence) = self.storage_collections.determine_time_dependence(id)? {
-                time_dependencies.push(dependence);
-            }
+            // Not a compute object: Consult the storage collections controller.
+            time_dependencies.push(self.storage_collections.determine_time_dependence(id)?);
         }
 
         Ok(TimeDependence::merge(
