@@ -43,11 +43,18 @@ pub struct CatalogInconsistencies {
 
 impl CatalogInconsistencies {
     pub fn is_empty(&self) -> bool {
-        self.internal_fields.is_empty()
-            && self.roles.is_empty()
-            && self.comments.is_empty()
-            && self.object_dependencies.is_empty()
-            && self.items.is_empty()
+        let CatalogInconsistencies {
+            internal_fields,
+            roles,
+            comments,
+            object_dependencies,
+            items,
+        } = self;
+        internal_fields.is_empty()
+            && roles.is_empty()
+            && comments.is_empty()
+            && object_dependencies.is_empty()
+            && items.is_empty()
     }
 }
 
