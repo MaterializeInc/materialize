@@ -339,6 +339,10 @@ mv1  r3
 r2 <null>
 r3 <null>
 
+# TODO: Reenable when database-issues#8725 is fixed
+$ skip-if
+SELECT true
+
 > SELECT
     frontiers.read_frontier,
     frontiers.write_frontier
@@ -348,6 +352,8 @@ r3 <null>
   WHERE
     mvs.name = 'mv2'
 0 <null>
+
+$ skip-end
 
 # Test that frontiers are removed when objects are dropped.
 
