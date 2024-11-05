@@ -84,6 +84,52 @@ mod fixed_binary_sizes {
 }
 use fixed_binary_sizes::*;
 
+/// Returns true iff the ordering of the "raw" and Persist-encoded versions of this columm would match:
+/// ie. `sort(encode(column)) == encode(sort(column))`. This encoding has been designed so that this
+/// is true for many types.
+pub fn preserves_order(scalar_type: &ScalarType) -> bool {
+    match scalar_type {
+        ScalarType::Bool
+        | ScalarType::Int16
+        | ScalarType::Int32
+        | ScalarType::Int64
+        | ScalarType::UInt16
+        | ScalarType::UInt32
+        | ScalarType::UInt64
+        | ScalarType::Float32
+        | ScalarType::Float64
+        | ScalarType::Numeric { .. }
+        | ScalarType::Date
+        | ScalarType::Time
+        | ScalarType::Timestamp { .. }
+        | ScalarType::TimestampTz { .. }
+        | ScalarType::Interval
+        | ScalarType::Bytes
+        | ScalarType::String
+        | ScalarType::Uuid
+        | ScalarType::MzTimestamp
+        | ScalarType::MzAclItem
+        | ScalarType::AclItem => true,
+        ScalarType::Record { fields, .. } => fields
+            .iter()
+            .all(|(_, field_type)| preserves_order(&field_type.scalar_type)),
+        ScalarType::PgLegacyChar
+        | ScalarType::PgLegacyName
+        | ScalarType::Char { .. }
+        | ScalarType::VarChar { .. }
+        | ScalarType::Jsonb
+        | ScalarType::Array(_)
+        | ScalarType::List { .. }
+        | ScalarType::Oid
+        | ScalarType::Map { .. }
+        | ScalarType::RegProc
+        | ScalarType::RegType
+        | ScalarType::RegClass
+        | ScalarType::Int2Vector
+        | ScalarType::Range { .. } => false,
+    }
+}
+
 /// An encoder for a column of [`Datum`]s.
 #[derive(Debug)]
 struct DatumEncoder {
