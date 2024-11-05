@@ -18,6 +18,7 @@ use k8s_openapi::{
 };
 use kube::{api::ObjectMeta, CustomResource, Resource, ResourceExt};
 
+use rand::distributions::Uniform;
 use rand::Rng;
 use schemars::JsonSchema;
 use semver::Version;
@@ -28,8 +29,6 @@ pub const LAST_KNOWN_ACTIVE_GENERATION_ANNOTATION: &str =
     "materialize.cloud/last-known-active-generation";
 
 pub mod v1alpha1 {
-    use rand::distributions::Uniform;
-
     use super::*;
 
     #[derive(
