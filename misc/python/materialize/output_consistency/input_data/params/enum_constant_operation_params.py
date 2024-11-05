@@ -19,6 +19,17 @@ TIME_ZONE_PARAM = EnumConstantOperationParam(
     ["UTC", "CET", "+8", "America/New_York"], add_quotes=True
 )
 
+TIME_COMPONENT_PARAM = EnumConstantOperationParam(
+    [
+        "microseconds",
+        "milliseconds",
+        "second",
+        "minute",
+        "hour",
+    ],
+    add_quotes=True,
+)
+
 DATE_TIME_COMPONENT_PARAM = EnumConstantOperationParam(
     [
         "microseconds",
