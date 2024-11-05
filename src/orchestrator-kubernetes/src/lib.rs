@@ -93,6 +93,8 @@ pub struct KubernetesOrchestratorConfig {
     pub ephemeral_volume_storage_class: Option<String>,
     /// The optional fs group for service's pods' `securityContext`.
     pub service_fs_group: Option<i64>,
+    /// The prefix to prepend to all object names
+    pub name_prefix: Option<String>,
 }
 
 /// Specifies whether Kubernetes should pull Docker images when creating pods.
@@ -176,6 +178,7 @@ impl Orchestrator for KubernetesOrchestrator {
                 pod_api: Api::default_namespaced(self.client.clone()),
                 owner_references: vec![],
                 command_rx,
+                name_prefix: self.config.name_prefix.clone().unwrap_or_default(),
             }
             .spawn(format!("kubernetes-orchestrator-worker:{namespace}"));
 
@@ -274,6 +277,7 @@ struct OrchestratorWorker {
     pod_api: Api<Pod>,
     owner_references: Vec<OwnerReference>,
     command_rx: mpsc::UnboundedReceiver<WorkerCommand>,
+    name_prefix: String,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -374,7 +378,11 @@ impl k8s_openapi::Metadata for MetricValueList {
 
 impl NamespacedKubernetesOrchestrator {
     fn service_name(&self, id: &str) -> String {
-        format!("{}-{id}", self.namespace)
+        format!(
+            "{}{}-{id}",
+            self.config.name_prefix.as_deref().unwrap_or(""),
+            self.namespace
+        )
     }
 
     /// Return a `watcher::Config` instance that limits results to the namespace
@@ -1690,7 +1698,7 @@ impl OrchestratorWorker {
 
     async fn list_services(&self, namespace: &str) -> Result<Vec<String>, K8sError> {
         let stateful_sets = self.stateful_set_api.list(&Default::default()).await?;
-        let name_prefix = format!("{namespace}-");
+        let name_prefix = format!("{}{namespace}-", self.name_prefix);
         Ok(stateful_sets
             .into_iter()
             .filter_map(|ss| {

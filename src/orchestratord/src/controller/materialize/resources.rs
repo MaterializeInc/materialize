@@ -924,6 +924,12 @@ fn create_environmentd_statefulset_object(
             "--orchestrator-kubernetes-service-label={key}={val}"
         ));
     }
+    if let Some(status) = &mz.status {
+        args.push(format!(
+            "--orchestrator-kubernetes-name-prefix=mz{}-",
+            status.resource_id
+        ));
+    }
 
     // Add logging and tracing arguments.
     args.extend(["--log-format=json".into()]);
