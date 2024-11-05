@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+// buf breaking: check (used far and wide so good to check)
+
 syntax = "proto3";
 
 package mz_repr.global_id;

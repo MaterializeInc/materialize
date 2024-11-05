@@ -38,19 +38,121 @@ breaking:
     # reason: does currently not require backward-compatibility
     - compute-types/src/plan.proto
     # reason: does currently not require backward-compatibility
+    - compute-types/src/plan/flat_plan.proto
+    # reason: does currently not require backward-compatibility
+    - compute-types/src/plan/join.proto
+    # reason: does currently not require backward-compatibility
     - compute-types/src/plan/reduce.proto
+    # reason: does currently not require backward-compatibility
+    - compute-types/src/plan/threshold.proto
+    # reason: does currently not require backward-compatibility
+    - compute-types/src/plan/top_k.proto
     # reason: does not currently require backward-compatibility
     - compute-types/src/sinks.proto
+    # reason: does currently not require backward-compatibility
+    - compute-types/src/sources.proto
+    # reason: does currently not require backward-compatibility
+    - compute-types/src/time_dependence.proto
+    # reason: does currently not require backward-compatibility
+    - dyncfg/src/dyncfg.proto
+    # reason: does currently not require backward-compatibility
+    - expr/src/id.proto
+    # reason: does currently not require backward-compatibility
+    - expr/src/linear.proto
     # reason: Ignore because plans are currently not persisted.
     - expr/src/relation.proto
+    # reason: does currently not require backward-compatibility
+    - expr/src/relation/func.proto
+    # reason: does currently not require backward-compatibility
+    - expr/src/scalar.proto
+    # reason: does currently not require backward-compatibility
+    - expr/src/scalar/func/format.proto
+    # reason: does currently not require backward-compatibility
+    - expr/src/scalar/like_pattern.proto
+    # reason: does currently not require backward-compatibility
+    - interchange/testdata/benchmark.proto
+    # reason: does currently not require backward-compatibility
+    - mysql-util/src/desc.proto
+    # reason: does currently not require backward-compatibility
+    - persist-client/src/batch.proto
+    # reason: does currently not require backward-compatibility
+    - persist-client/src/internal/service.proto
+    # reason: durably persisted but we're careful with how we modify this file
+    - persist-client/src/internal/state.proto
+    # reason: does currently not require backward-compatibility
+    - pgcopy/src/copy.proto
+    # reason: does currently not require backward-compatibility
+    - pgtz/src/timezone.proto
+    # reason: does currently not require backward-compatibility
+    - postgres-util/src/desc.proto
+    # reason: does currently not require backward-compatibility
+    - postgres-util/src/tunnel.proto
+    # reason: does currently not require backward-compatibility
+    - prof/src/pprof_types.proto
+    # reason: does currently not require backward-compatibility
+    - proto/src/proto.proto
+    # reason: does currently not require backward-compatibility
+    - proto/src/tokio_postgres.proto
+    # reason: does currently not require backward-compatibility
+    - repr/src/adt/datetime.proto
+    # reason: does currently not require backward-compatibility
+    - repr/src/adt/range.proto
+    # reason: does currently not require backward-compatibility
+    - repr/src/adt/regex.proto
+    # reason: does currently not require backward-compatibility
+    - repr/src/refresh_schedule.proto
+    # reason: does currently not require backward-compatibility
+    - repr/src/row/collection.proto
+    # reason: does currently not require backward-compatibility
+    - repr/src/strconv.proto
+    # reason: does currently not require backward-compatibility
+    - repr/src/url.proto
+    # reason: does currently not require backward-compatibility
+    - rocksdb-types/src/config.proto
+    # reason: does currently not require backward-compatibility
+    - service/src/params.proto
     # reason: does currently not require backward-compatibility
     - storage-client/src/client.proto
     # reason: does currently not require backward-compatibility
     - storage-client/src/statistics.proto
+    # reason: does currently not require backward-compatibility
+    - storage-types/src/collections.proto
+    # reason: does currently not require backward-compatibility
+    - storage-types/src/connections.proto
     # reason: currently does not require backward-compatibility
     - storage-types/src/connections/aws.proto
     # reason: currently does not require backward-compatibility
     - storage-types/src/connections/string_or_secret.proto
+    # reason: does currently not require backward-compatibility
+    - storage-types/src/controller.proto
+    # reason: does currently not require backward-compatibility
+    - storage-types/src/errors.proto
+    # reason: does currently not require backward-compatibility
+    - storage-types/src/instances.proto
+    # reason: does currently not require backward-compatibility
+    - storage-types/src/parameters.proto
+    # reason: does currently not require backward-compatibility
+    - storage-types/src/shim.proto
+    # reason: does currently not require backward-compatibility
+    - storage-types/src/sinks.proto
+    # reason: does currently not require backward-compatibility
+    - storage-types/src/sources.proto
+    # reason: does currently not require backward-compatibility
+    - storage-types/src/sources/encoding.proto
+    # reason: does currently not require backward-compatibility
+    - storage-types/src/sources/envelope.proto
+    # reason: does currently not require backward-compatibility
+    - storage-types/src/sources/kafka.proto
+    # reason: does currently not require backward-compatibility
+    - storage-types/src/sources/load_generator.proto
+    # reason: does currently not require backward-compatibility
+    - storage-types/src/sources/mysql.proto
+    # reason: does currently not require backward-compatibility
+    - storage-types/src/sources/postgres.proto
+    # reason: does currently not require backward-compatibility
+    - testdrive/src/format/protobuf/well_known_imports.proto
+    # reason: does currently not require backward-compatibility
+    - tracing/src/params.proto
 lint:
   use:
     - DEFAULT
