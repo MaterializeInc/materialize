@@ -100,20 +100,14 @@ Explained Query:
     cte l0 =
       Distinct project=[#0, #1] monotonic // { arity: 2 }
         Union // { arity: 2 }
-          Distinct project=[#0, #1] monotonic // { arity: 2 }
-            Union // { arity: 2 }
-              Distinct project=[#0, #1] monotonic // { arity: 2 }
-                Union // { arity: 2 }
-                  Get l0 // { arity: 2 }
-                  Constant // { arity: 2 }
-                    - (62, 64)
-                    - (66, 68)
-              Constant // { arity: 2 }
-                - (42, 43)
-                - (44, 45)
+          Get l0 // { arity: 2 }
           Constant // { arity: 2 }
+            - (42, 43)
+            - (44, 45)
             - (51, 53)
             - (52, 54)
+            - (62, 64)
+            - (66, 68)
 
 Target cluster: quickstart
 

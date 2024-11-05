@@ -738,6 +738,8 @@ mod non_negative {
                 MirRelationExpr::Negate { .. } => false,
                 // Threshold ensures non-negativity.
                 MirRelationExpr::Threshold { .. } => true,
+                // Reduce errors on negative input.
+                MirRelationExpr::Reduce { .. } => true,
                 MirRelationExpr::Join { .. } => {
                     // If all inputs are non-negative, the join is non-negative.
                     depends
