@@ -18,6 +18,7 @@ use k8s_openapi::{
 };
 use kube::{api::ObjectMeta, CustomResource, Resource, ResourceExt};
 
+use rand::Rng;
 use schemars::JsonSchema;
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -27,6 +28,8 @@ pub const LAST_KNOWN_ACTIVE_GENERATION_ANNOTATION: &str =
     "materialize.cloud/last-known-active-generation";
 
 pub mod v1alpha1 {
+    use rand::distributions::Uniform;
+
     use super::*;
 
     #[derive(
@@ -88,11 +91,13 @@ pub mod v1alpha1 {
         // it will just kill the environmentd pod directly.
         #[serde(default)]
         pub in_place_rollout: bool,
+        // The name of a secret containing metadata_backend_url and persist_backend_url.
+        pub backend_secret_name: String,
     }
 
     impl Materialize {
         pub fn backend_secret_name(&self) -> String {
-            format!("materialize-backend-{}", self.name_unchecked())
+            self.spec.backend_secret_name.clone()
         }
 
         pub fn namespace(&self) -> String {
@@ -112,31 +117,35 @@ pub mod v1alpha1 {
         }
 
         pub fn environmentd_statefulset_name(&self, generation: u64) -> String {
-            format!("environmentd-{}-{generation}", self.name_unchecked())
+            self.name_prefixed(&format!("environmentd-{generation}"))
         }
 
         pub fn environmentd_service_name(&self) -> String {
-            format!("environmentd-{}", self.name_unchecked())
+            self.name_prefixed("environmentd")
         }
 
         pub fn environmentd_generation_service_name(&self, generation: u64) -> String {
-            format!("environmentd-{}-{generation}", self.name_unchecked())
+            self.name_prefixed(&format!("environmentd-{generation}"))
         }
 
         pub fn balancerd_deployment_name(&self) -> String {
-            format!("balancerd-{}", self.name_unchecked())
+            self.name_prefixed("balancerd")
         }
 
         pub fn balancerd_service_name(&self) -> String {
-            format!("balancerd-{}", self.name_unchecked())
+            self.name_prefixed("balancerd")
         }
 
         pub fn persist_pubsub_service_name(&self, generation: u64) -> String {
-            format!("persist-pubsub-{}-{generation}", self.name_unchecked())
+            self.name_prefixed(&format!("persist-pubsub-{generation}"))
         }
 
         pub fn name_prefixed(&self, suffix: &str) -> String {
-            format!("{}-{}", self.name_unchecked(), suffix)
+            format!("mz{}-{}", self.resource_id(), suffix)
+        }
+
+        pub fn resource_id(&self) -> &str {
+            &self.status.as_ref().unwrap().resource_id
         }
 
         pub fn environmentd_scratch_volume_storage_requirement(&self) -> Quantity {
@@ -172,6 +181,10 @@ pub mod v1alpha1 {
                 (
                     "materialize.cloud/organization-namespace".to_owned(),
                     self.namespace(),
+                ),
+                (
+                    "materialize.cloud/mz-resource-id".to_owned(),
+                    self.resource_id().to_owned(),
                 ),
             ])
         }
@@ -255,6 +268,16 @@ pub mod v1alpha1 {
         pub fn status(&self) -> MaterializeStatus {
             self.status.clone().unwrap_or_else(|| {
                 let mut status = MaterializeStatus::default();
+                // DNS-1035 names are supposed to be case insensitive,
+                // so we define our own character set, rather than use the
+                // built-in Alphanumeric distribution from rand, which
+                // includes both upper and lowercase letters.
+                const CHARSET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
+                status.resource_id = rand::thread_rng()
+                    .sample_iter(Uniform::new(0, CHARSET.len()))
+                    .take(10)
+                    .map(|i| char::from(CHARSET[i]))
+                    .collect();
 
                 // If we're creating the initial status on an un-soft-deleted
                 // Environment we need to ensure that the last active generation
@@ -277,6 +300,7 @@ pub mod v1alpha1 {
     #[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq)]
     #[serde(rename_all = "camelCase")]
     pub struct MaterializeStatus {
+        pub resource_id: String,
         pub active_generation: u64,
         pub last_completed_rollout_request: Uuid,
         pub resources_hash: String,

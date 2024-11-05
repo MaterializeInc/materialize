@@ -4568,6 +4568,7 @@ dependencies = [
  "kube",
  "mz-ore",
  "mz-repr",
+ "rand",
  "schemars",
  "semver",
  "serde",

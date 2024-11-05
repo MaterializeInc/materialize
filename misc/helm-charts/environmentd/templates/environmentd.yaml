@@ -33,3 +33,4 @@ spec:
   forceRollout: {{ .Values.environment.forceRollout }}
   {{- end }}
   inPlaceRollout: {{ .Values.environment.inPlaceRollout }}
+  backendSecretName: {{ .Values.environment.backendSecretName }}

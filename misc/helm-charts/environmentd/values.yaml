@@ -19,7 +19,7 @@ environment:
   # The name of the environment to be deployed, this should be a UUID
   name: "12345678-1234-1234-1234-123456789012"
   # Docker image reference for the Materialize `environmentd` service
-  environmentdImageRef: "materialize/environmentd:v0.124.0-dev.0--pr.g993af7c1c493f8ca20389c7cc64769208867d3c9"
+  environmentdImageRef: "materialize/environmentd:v0.124.0-dev.0--pr.gd5e227d7d07dc4878d2a065c7c10a48c2555385a"
   # Optional additional arguments to be passed to `environmentd`
   environmentdExtraArgs:
     - "--orchestrator-kubernetes-ephemeral-volume-class=hostpath" # Use hostpath for ephemeral storage in testing
@@ -43,6 +43,7 @@ environment:
   forceRollout: 33333333-3333-3333-3333-333333333333
   # Whether rollouts should be done in place or with restarts
   inPlaceRollout: false
+  backendSecretName: materialize-backend
 
   # Secret configuration for database and persistence backends
   secret:

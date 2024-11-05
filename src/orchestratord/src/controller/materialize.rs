@@ -290,6 +290,12 @@ impl k8s_controller::Context for Context {
         let mz_api: Api<Materialize> = Api::namespaced(client.clone(), &mz.namespace());
 
         let status = mz.status();
+        if mz.status.is_none() {
+            self.update_status(&mz_api, mz, status, true).await?;
+            // Updating the status should trigger a reconciliation
+            // which will include a status this time.
+            return Ok(None);
+        }
 
         // we compare the hash against the environment resources generated
         // for the current active generation, since that's what we expect to
@@ -348,6 +354,7 @@ impl k8s_controller::Context for Context {
                             // we fail later on, we want to ensure that the
                             // rollout gets retried.
                             last_completed_rollout_request: status.last_completed_rollout_request,
+                            resource_id: status.resource_id,
                             resources_hash: String::new(),
                             conditions: vec![Condition {
                                 type_: "UpToDate".into(),
@@ -391,6 +398,7 @@ impl k8s_controller::Context for Context {
                             MaterializeStatus {
                                 active_generation: desired_generation,
                                 last_completed_rollout_request: mz.requested_reconciliation_id(),
+                                resource_id: status.resource_id,
                                 resources_hash,
                                 conditions: vec![Condition {
                                     type_: "UpToDate".into(),
@@ -422,6 +430,7 @@ impl k8s_controller::Context for Context {
                                 // the rollout and we want to ensure it gets
                                 // retried.
                                 last_completed_rollout_request: status.last_completed_rollout_request,
+                                resource_id: status.resource_id,
                                 resources_hash: status.resources_hash,
                                 conditions: vec![Condition {
                                     type_: "UpToDate".into(),
@@ -455,6 +464,7 @@ impl k8s_controller::Context for Context {
                         MaterializeStatus {
                             active_generation,
                             last_completed_rollout_request: mz.requested_reconciliation_id(),
+                            resource_id: status.resource_id,
                             resources_hash: status.resources_hash,
                             conditions: vec![Condition {
                                 type_: "UpToDate".into(),
@@ -493,6 +503,7 @@ impl k8s_controller::Context for Context {
                     MaterializeStatus {
                         active_generation,
                         last_completed_rollout_request: mz.requested_reconciliation_id(),
+                        resource_id: status.resource_id,
                         resources_hash: status.resources_hash,
                         conditions: vec![Condition {
                             type_: "UpToDate".into(),

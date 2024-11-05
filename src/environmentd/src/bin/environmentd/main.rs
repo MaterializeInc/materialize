@@ -273,6 +273,9 @@ pub struct Args {
     /// The optional fs group for service's pods' `securityContext`.
     #[clap(long, env = "ORCHESTRATOR_KUBERNETES_SERVICE_FS_GROUP")]
     orchestrator_kubernetes_service_fs_group: Option<i64>,
+    /// The prefix to prepend to all kubernetes object names.
+    #[clap(long, env = "ORCHESTRATOR_KUBERNETES_NAME_PREFIX")]
+    orchestrator_kubernetes_name_prefix: Option<String>,
     #[clap(long, env = "ORCHESTRATOR_PROCESS_WRAPPER")]
     orchestrator_process_wrapper: Option<String>,
     /// Where the process orchestrator should store secrets.
@@ -750,6 +753,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                             .orchestrator_kubernetes_ephemeral_volume_class
                             .clone(),
                         service_fs_group: args.orchestrator_kubernetes_service_fs_group.clone(),
+                        name_prefix: args.orchestrator_kubernetes_name_prefix.clone(),
                     }))
                     .context("creating kubernetes orchestrator")?,
             );
