@@ -897,12 +897,8 @@ impl ApplyUpdate<StateUpdateKindJson> for UnopenedCatalogStateInner {
         current_fence_token: &mut FenceableToken,
         _metrics: &Arc<Metrics>,
     ) -> Result<Option<StateUpdate<StateUpdateKindJson>>, FenceError> {
-        // TODO(jkosh44) It's a bit unfortunate that we have to clone all updates to attempt to
-        // convert them into a `StateUpdateKind` and cache a very small subset of them. It would
-        // be better if we could figure out a way not to clone everything.
-        if let Ok(kind) =
-            <StateUpdateKindJson as TryIntoStateUpdateKind>::try_into(update.kind.clone())
-        {
+        if update.kind.is_always_deserializable() {
+            let kind = TryInto::try_into(&update.kind).expect("kind is known to be deserializable");
             match (kind, update.diff) {
                 (StateUpdateKind::Config(key, value), 1) => {
                     let prev = self.configs.insert(key.key, value.value);
