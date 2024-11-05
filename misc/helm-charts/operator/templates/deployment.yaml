@@ -44,6 +44,9 @@ spec:
         {{- if .Values.operator.args.environmentdIAMRoleARN }}
         - "--environmentd-iam-role-arn={{ .Values.operator.args.environmentdIAMRoleARN }}"
         {{- end }}
+        {{- if .Values.operator.args.environmentdConnectionRoleARN }}
+        - "--environmentd-connection-role-arn={{ .Values.operator.args.environmentdConnectionRoleARN }}"
+        {{- end }}
         {{- if .Values.operator.args.localDevelopment }}
         - "--local-development"
         {{- end }}

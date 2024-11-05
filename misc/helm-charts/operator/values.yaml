@@ -13,7 +13,7 @@ operator:
     # The Docker repository for the operator image
     repository: materialize/orchestratord
     # The tag/version of the operator image to be used
-    tag: v0.122.0-dev.0--pr.g47923ddb1bb4f3fb38d152b8aa86a77514599b29
+    tag: v0.124.0-dev.0--pr.g993af7c1c493f8ca20389c7cc64769208867d3c9
     # Policy for pulling the image: "IfNotPresent" avoids unnecessary re-pulling of images
     pullPolicy: IfNotPresent
   args:
@@ -29,6 +29,8 @@ operator:
     createBalancers: true
     # ARN of the IAM role for environmentd
     environmentdIAMRoleARN: ""
+    # ARN of the IAM role for the CREATE CONNECTION feature
+    environmentdConnectionRoleARN: ""
     # awsAccountID is required when cloudProvider is "aws"
     awsAccountID: ""
     # To provide additional disk to clusterd pods, configure a CSI plugin in

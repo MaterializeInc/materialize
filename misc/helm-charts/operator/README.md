@@ -52,6 +52,7 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.args.awsAccountID` |  | ``""`` |
 | `operator.args.cloudProvider` |  | ``"local"`` |
 | `operator.args.createBalancers` |  | ``true`` |
+| `operator.args.environmentdConnectionRoleARN` |  | ``""`` |
 | `operator.args.environmentdIAMRoleARN` |  | ``""`` |
 | `operator.args.ephemeralVolumeClass` |  | ``nil`` |
 | `operator.args.localDevelopment` |  | ``true`` |
@@ -59,7 +60,7 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.args.startupLogFilter` |  | ``"INFO,mz_orchestratord=TRACE"`` |
 | `operator.image.pullPolicy` |  | ``"IfNotPresent"`` |
 | `operator.image.repository` |  | ``"materialize/orchestratord"`` |
-| `operator.image.tag` |  | ``"v0.122.0-dev.0--pr.g47923ddb1bb4f3fb38d152b8aa86a77514599b29"`` |
+| `operator.image.tag` |  | ``"v0.124.0-dev.0--pr.g993af7c1c493f8ca20389c7cc64769208867d3c9"`` |
 | `operator.nodeSelector` |  | ``{}`` |
 | `operator.resources.limits.memory` |  | ``"512Mi"`` |
 | `operator.resources.requests.cpu` |  | ``"100m"`` |
