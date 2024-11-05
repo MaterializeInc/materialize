@@ -17,7 +17,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use futures::future;
-use itertools::Itertools;
+use itertools::{Either, Itertools};
 use mz_adapter_types::connection::ConnectionId;
 use mz_catalog::builtin::{
     Builtin, BuiltinLog, BuiltinTable, BuiltinView, BUILTIN_LOG_LOOKUP, BUILTIN_LOOKUP,
@@ -1237,7 +1237,24 @@ impl CatalogState {
     async fn parse_builtin_views(
         state: &mut CatalogState,
         builtin_views: Vec<(&Builtin<NameReference>, GlobalId)>,
+        retractions: &mut InProgressRetractions,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
+        let (updates, additions): (Vec<_>, Vec<_>) =
+            builtin_views.into_iter().partition_map(|(view, id)| {
+                match retractions.system_object_mappings.remove(&id) {
+                    Some(entry) => Either::Left(entry),
+                    None => Either::Right((view, id)),
+                }
+            });
+
+        for entry in updates {
+            // This implies that we updated the fingerprint for some builtin view. The retraction
+            // was parsed, planned, and optimized using the compiled in definition, not the
+            // definition from a previous version. So we can just stick the old entry back into the
+            // catalog.
+            state.insert_entry(entry);
+        }
+
         let mut handles = Vec::new();
         let mut awaiting_id_dependencies: BTreeMap<GlobalId, Vec<GlobalId>> = BTreeMap::new();
         let mut awaiting_name_dependencies: BTreeMap<String, Vec<GlobalId>> = BTreeMap::new();
@@ -1249,7 +1266,7 @@ impl CatalogState {
         let mut completed_names: BTreeSet<String> = BTreeSet::new();
         // Avoid some reference lifetime issues by not passing `builtin` into the spawned task.
         let mut views: BTreeMap<GlobalId, &BuiltinView> =
-            BTreeMap::from_iter(builtin_views.into_iter().map(|(builtin, id)| {
+            BTreeMap::from_iter(additions.into_iter().map(|(builtin, id)| {
                 let Builtin::View(view) = builtin else {
                     unreachable!("handled elsewhere");
                 };
@@ -1921,7 +1938,8 @@ impl BootstrapApplyState {
                 let restore = state.system_configuration.clone();
                 state.system_configuration.enable_for_item_parsing();
                 let builtin_table_updates =
-                    CatalogState::parse_builtin_views(state, builtin_view_additions).await;
+                    CatalogState::parse_builtin_views(state, builtin_view_additions, retractions)
+                        .await;
                 state.system_configuration = restore;
                 builtin_table_updates
             }
