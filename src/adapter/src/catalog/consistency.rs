@@ -46,6 +46,7 @@ impl CatalogInconsistencies {
         self.internal_fields.is_empty()
             && self.roles.is_empty()
             && self.comments.is_empty()
+            && self.object_dependencies.is_empty()
             && self.items.is_empty()
     }
 }
