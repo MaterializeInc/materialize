@@ -1008,8 +1008,9 @@ impl<'a> RunnerInner<'a> {
                 .expect("success")
         });
         let persist_clients =
-            PersistClientCache::new(persist_config, &metrics_registry, |_, metrics| {
+            PersistClientCache::new(persist_config, &metrics_registry, |cfg, metrics| {
                 let sender: Arc<dyn PubSubSender> = Arc::new(MetricsSameProcessPubSubSender::new(
+                    cfg,
                     persist_pubsub_client.sender,
                     metrics,
                 ));
