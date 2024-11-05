@@ -829,7 +829,12 @@ impl DatumColumnEncoder {
                     .into_iter()
                     .enumerate()
                     .map(|(tag, encoder)| {
-                        let nullable = encoder.nullable;
+                        // Note: We mark all columns as nullable at the Arrow/Parquet level because
+                        // it has a negligible performance difference, but it protects us from
+                        // unintended nullability changes in the columns of SQL objects.
+                        //
+                        // See: <https://github.com/MaterializeInc/database-issues/issues/2488>
+                        let nullable = true;
                         let array = encoder.finish();
                         let field =
                             Field::new(tag.to_string(), array.data_type().clone(), nullable);
