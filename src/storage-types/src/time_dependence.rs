@@ -29,8 +29,9 @@ include!(concat!(
 ///
 /// The default value indicates the dataflow follows wall-clock without modifications.
 ///
-/// Note: This is different from `Timeline` or `TimelineContext`, which meaning a timestamp
-/// has.
+/// Note: This is different from `Timeline` or `TimelineContext`, which describe in what timeline
+/// an object exists. `TimeDependence` explains how an object in an epoch-based timeline
+/// relates to wall-clock time.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct TimeDependence {
     /// Optional refresh schedule. None indicates no rounding.
@@ -51,10 +52,10 @@ impl TimeDependence {
 
     /// Merge any number of optional dependencies into one, using the supplied refresh schedule.
     ///
-    /// It applies the following rules under the assumption that the frontier of an object ticks
-    /// at the rate of the slowest immediate dependency. For objects depending on wall-clock time,
-    /// this is firstly wall-clock time, followed by refresh schedule. At the moment, we cannot
-    /// express other behavior. This means:
+    /// It applies the following rules under the assumption that, ignoring the refresh schedule, the
+    /// frontier of an object ticks at the rate of the slowest immediate dependency. For objects
+    /// depending on wall-clock time, this is firstly wall-clock time, followed by refresh schedule.
+    /// At the moment, we cannot express other behavior. This means:
     /// * A merge of anything with wall-clock time results in wall-clock time.
     /// * A merge of anything but wall-clock time or a refresh schedule results in a dependence
     ///   on the deduplicated collection of dependencies.
@@ -85,10 +86,7 @@ impl TimeDependence {
                 dependencies.remove(0)
             } else {
                 // Insert our refresh schedule.
-                let dependencies = dependencies
-                    .into_iter()
-                    .filter_map(std::convert::identity)
-                    .collect();
+                let dependencies = dependencies.into_iter().flatten().collect();
                 Some(TimeDependence::new(schedule.cloned(), dependencies))
             }
         } else {
