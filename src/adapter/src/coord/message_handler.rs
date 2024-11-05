@@ -39,7 +39,6 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReason};
 use crate::catalog::{BuiltinTableUpdate, Op};
 use crate::command::Command;
-use crate::coord::appends::Deferred;
 use crate::coord::{
     AlterConnectionValidationReady, ClusterReplicaStatuses, Coordinator,
     CreateConnectionValidationReady, Message, PurifiedStatementReady, WatchSetResponse,
@@ -92,11 +91,7 @@ impl Coordinator {
                     .boxed_local()
                     .await
             }
-            Message::WriteLockGrant(write_lock_guard) => {
-                self.message_write_lock_grant(write_lock_guard)
-                    .boxed_local()
-                    .await;
-            }
+            Message::TryDeferred { conn_id } => self.try_deferred(conn_id).await,
             Message::GroupCommitInitiate(span, permit) => {
                 // Add an OpenTelemetry link to our current span.
                 tracing::Span::current().add_link(span.context().span().span_context().clone());
@@ -650,36 +645,6 @@ impl Coordinator {
             .sequence_alter_connection_stage_finish(ctx.session_mut(), connection_gid, conn)
             .await;
         ctx.retire(result);
-    }
-
-    #[mz_ore::instrument(level = "debug")]
-    async fn message_write_lock_grant(
-        &mut self,
-        write_lock_guard: tokio::sync::OwnedMutexGuard<()>,
-    ) {
-        // It's possible to have more incoming write lock grants
-        // than pending writes because of cancellations.
-        if let Some(ready) = self.write_lock_wait_group.pop_front() {
-            match ready {
-                Deferred::Plan(mut ready) => {
-                    ready.ctx.session_mut().grant_write_lock(write_lock_guard);
-                    if let Err(e) = ready.validity.check(self.catalog()) {
-                        ready.ctx.retire(Err(e))
-                    } else {
-                        // Write statements never need to track resolved IDs (NOTE: This is not the
-                        // same thing as plan dependencies, which we do need to re-validate).
-                        let resolved_ids = ResolvedIds(BTreeSet::new());
-                        self.sequence_plan(ready.ctx, ready.plan, resolved_ids)
-                            .await;
-                    }
-                }
-                Deferred::GroupCommit => {
-                    self.group_commit(Some(write_lock_guard), None).await;
-                }
-            }
-        }
-        // N.B. if no deferred plans, write lock is released by drop
-        // here.
     }
 
     #[mz_ore::instrument(level = "debug")]

@@ -171,7 +171,7 @@ use crate::client::{Client, Handle};
 use crate::command::{Command, ExecuteResponse};
 use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncConfig};
 use crate::coord::appends::{
-    BuiltinTableAppendNotify, Deferred, GroupCommitPermit, PendingWriteTxn,
+    BuiltinTableAppendNotify, DeferredWriteOp, GroupCommitPermit, PendingWriteTxn,
 };
 use crate::coord::caught_up::CaughtUpCheckContext;
 use crate::coord::cluster_scheduling::SchedulingDecision;
@@ -227,7 +227,10 @@ pub enum Message {
     PurifiedStatementReady(PurifiedStatementReady),
     CreateConnectionValidationReady(CreateConnectionValidationReady),
     AlterConnectionValidationReady(AlterConnectionValidationReady),
-    WriteLockGrant(tokio::sync::OwnedMutexGuard<()>),
+    TryDeferred {
+        /// The connection that created this op.
+        conn_id: ConnectionId,
+    },
     /// Initiates a group commit.
     GroupCommitInitiate(Span, Option<GroupCommitPermit>),
     DeferredStatementReady,
@@ -331,7 +334,7 @@ impl Message {
             Message::ControllerReady => "controller_ready",
             Message::PurifiedStatementReady(_) => "purified_statement_ready",
             Message::CreateConnectionValidationReady(_) => "create_connection_validation_ready",
-            Message::WriteLockGrant(_) => "write_lock_grant",
+            Message::TryDeferred { .. } => "try_deferred",
             Message::GroupCommitInitiate(..) => "group_commit_initiate",
             Message::AdvanceTimelines => "advance_timelines",
             Message::ClusterEvent(_) => "cluster_event",
@@ -1633,10 +1636,14 @@ pub struct Coordinator {
     /// Active introspection subscribes.
     introspection_subscribes: BTreeMap<GlobalId, IntrospectionSubscribe>,
 
-    /// Holds plans deferred due to write lock.
-    write_lock_wait_group: LockedVecDeque<Deferred>,
+    /// Locks that grant access to a specific object, populated lazily as objects are written to.
+    write_locks: BTreeMap<GlobalId, Arc<tokio::sync::Mutex<()>>>,
+    /// Plans that are currently deferred and waiting on a write lock.
+    deferred_write_ops: BTreeMap<ConnectionId, DeferredWriteOp>,
+
     /// Pending writes waiting for a group commit.
     pending_writes: Vec<PendingWriteTxn>,
+
     /// For the realtime timeline, an explicit SELECT or INSERT on a table will bump the
     /// table's timestamps, but there are cases where timestamps are not bumped but
     /// we expect the closed timestamps to advance (`AS OF X`, SUBSCRIBing views over
@@ -3750,7 +3757,8 @@ pub fn serve(
                     active_webhooks: BTreeMap::new(),
                     staged_cancellation: BTreeMap::new(),
                     introspection_subscribes: BTreeMap::new(),
-                    write_lock_wait_group: LockedVecDeque::new(),
+                    write_locks: BTreeMap::new(),
+                    deferred_write_ops: BTreeMap::new(),
                     pending_writes: Vec::new(),
                     advance_timelines_interval,
                     secrets_controller,
@@ -4040,10 +4048,6 @@ impl<T> LockedVecDeque<T> {
             items: VecDeque::new(),
             lock: Arc::new(tokio::sync::Mutex::new(())),
         }
-    }
-
-    pub fn mutex(&self) -> Arc<tokio::sync::Mutex<()>> {
-        Arc::clone(&self.lock)
     }
 
     pub fn try_lock_owned(&self) -> Result<OwnedMutexGuard<()>, tokio::sync::TryLockError> {

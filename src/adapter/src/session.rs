@@ -12,7 +12,7 @@
 #![warn(missing_docs)]
 
 use std::collections::btree_map::Entry;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::mem;
 use std::net::IpAddr;
@@ -20,6 +20,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
+use itertools::Itertools;
 use mz_adapter_types::connection::ConnectionId;
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_controller_types::ClusterId;
@@ -46,7 +47,6 @@ use qcell::{QCell, QCellOwner};
 use rand::Rng;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::sync::watch;
-use tokio::sync::OwnedMutexGuard;
 use uuid::Uuid;
 
 use crate::catalog::CatalogState;
@@ -377,7 +377,7 @@ impl<T: TimestampManipulation> Session<T> {
                 self.transaction = TransactionStatus::InTransaction(Transaction {
                     pcx: self.new_pcx(wall_time),
                     ops: TransactionOps::None,
-                    write_lock_guard: None,
+                    write_lock_guards: None,
                     access,
                     id,
                 });
@@ -411,7 +411,7 @@ impl<T: TimestampManipulation> Session<T> {
             let txn = Transaction {
                 pcx: self.new_pcx(wall_time),
                 ops: TransactionOps::None,
-                write_lock_guard: None,
+                write_lock_guards: None,
                 access: None,
                 id,
             };
@@ -581,7 +581,7 @@ impl<T: TimestampManipulation> Session<T> {
             Some(Transaction {
                 pcx: _,
                 ops: TransactionOps::Peeks { determination, .. },
-                write_lock_guard: _,
+                write_lock_guards: _,
                 access: _,
                 id: _,
             }) => Some(determination.clone()),
@@ -602,7 +602,7 @@ impl<T: TimestampManipulation> Session<T> {
                     },
                     ..
                 },
-                write_lock_guard: _,
+                write_lock_guards: _,
                 access: _,
                 id: _,
             })
@@ -793,22 +793,13 @@ impl<T: TimestampManipulation> Session<T> {
         &mut self.vars
     }
 
-    /// Grants the coordinator's write lock guard to this session's inner
-    /// transaction.
+    /// Grants a set of write locks to this session's inner [`Transaction`].
     ///
     /// # Panics
-    /// If the inner transaction is idle. See
-    /// [`TransactionStatus::grant_write_lock`].
-    pub fn grant_write_lock(&mut self, guard: OwnedMutexGuard<()>) {
-        self.transaction.grant_write_lock(guard);
-    }
-
-    /// Returns whether or not this session currently holds the write lock.
-    pub fn has_write_lock(&self) -> bool {
-        match self.transaction.inner() {
-            None => false,
-            Some(txn) => txn.write_lock_guard.is_some(),
-        }
+    /// If the inner transaction is idle. See [`TransactionStatus::try_grant_write_locks`].
+    ///
+    pub fn try_grant_write_locks(&mut self, guards: WriteLocks) -> Result<(), &WriteLocks> {
+        self.transaction.try_grant_write_locks(guards)
     }
 
     /// Drains any external metadata updates and applies the changes from the latest update.
@@ -987,15 +978,13 @@ pub enum TransactionStatus<T> {
 
 impl<T: TimestampManipulation> TransactionStatus<T> {
     /// Extracts the inner transaction ops and write lock guard if not failed.
-    pub fn into_ops_and_lock_guard(
-        self,
-    ) -> (Option<TransactionOps<T>>, Option<OwnedMutexGuard<()>>) {
+    pub fn into_ops_and_lock_guard(self) -> (Option<TransactionOps<T>>, Option<WriteLocks>) {
         match self {
             TransactionStatus::Default | TransactionStatus::Failed(_) => (None, None),
             TransactionStatus::Started(txn)
             | TransactionStatus::InTransaction(txn)
             | TransactionStatus::InTransactionImplicit(txn) => {
-                (Some(txn.ops), txn.write_lock_guard)
+                (Some(txn.ops), txn.write_lock_guards)
             }
         }
     }
@@ -1063,19 +1052,32 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
         self.is_in_multi_statement_transaction() && when == &QueryWhen::Immediately
     }
 
-    /// Grants the write lock to the inner transaction.
+    /// Grants the writes lock to the inner transaction, returning an error if the transaction
+    /// has already been granted write locks.
     ///
     /// # Panics
     /// If `self` is `TransactionStatus::Default`, which indicates that the
     /// transaction is idle, which is not appropriate to assign the
     /// coordinator's write lock to.
-    pub fn grant_write_lock(&mut self, guard: OwnedMutexGuard<()>) {
+    ///
+    pub fn try_grant_write_locks(&mut self, guards: WriteLocks) -> Result<(), &WriteLocks> {
         match self {
             TransactionStatus::Default => panic!("cannot grant write lock to txn not yet started"),
             TransactionStatus::Started(txn)
             | TransactionStatus::InTransaction(txn)
             | TransactionStatus::InTransactionImplicit(txn)
-            | TransactionStatus::Failed(txn) => txn.grant_write_lock(guard),
+            | TransactionStatus::Failed(txn) => txn.try_grant_write_locks(guards),
+        }
+    }
+
+    /// Returns the currently held [`WriteLocks`], if this transaction holds any.
+    pub fn write_locks(&self) -> Option<&WriteLocks> {
+        match self {
+            TransactionStatus::Default => None,
+            TransactionStatus::Started(txn)
+            | TransactionStatus::InTransaction(txn)
+            | TransactionStatus::InTransactionImplicit(txn)
+            | TransactionStatus::Failed(txn) => txn.write_lock_guards.as_ref(),
         }
     }
 
@@ -1273,16 +1275,23 @@ pub struct Transaction<T> {
     /// same ID.
     /// If all IDs have been exhausted, this will wrap around back to 0.
     pub id: TransactionId,
-    /// Holds the coordinator's write lock.
-    write_lock_guard: Option<OwnedMutexGuard<()>>,
+    /// Locks for objects this transaction will operate on.
+    write_lock_guards: Option<WriteLocks>,
     /// Access mode (read only, read write).
     access: Option<TransactionAccessMode>,
 }
 
 impl<T> Transaction<T> {
-    /// Grants the write lock to this transaction for the remainder of its lifetime.
-    fn grant_write_lock(&mut self, guard: OwnedMutexGuard<()>) {
-        self.write_lock_guard = Some(guard);
+    /// Tries to grant the write lock to this transaction for the remainder of its lifetime. Errors
+    /// if this [`Transaction`] has already been granted write locks.
+    fn try_grant_write_locks(&mut self, guards: WriteLocks) -> Result<(), &WriteLocks> {
+        match &mut self.write_lock_guards {
+            Some(existing) => Err(existing),
+            locks @ None => {
+                *locks = Some(guards);
+                Ok(())
+            }
+        }
     }
 
     /// The timeline of the transaction, if one exists.
@@ -1454,6 +1463,193 @@ impl From<&ExplainContext> for RequireLinearization {
                 RequireLinearization::Required
             }
             _ => RequireLinearization::NotRequired,
+        }
+    }
+}
+
+/// A complete set of exclusive locks for writing to collections identified by [`GlobalId`]s.
+///
+/// To prevent deadlocks between two sessions, we do not allow acquiring a partial set of locks.
+#[derive(Debug)]
+pub struct WriteLocks {
+    locks: BTreeMap<GlobalId, tokio::sync::OwnedMutexGuard<()>>,
+    /// Connection that currently holds these locks, used for tracing purposes only.
+    conn_id: ConnectionId,
+}
+
+impl WriteLocks {
+    /// Create a [`WriteLocksBuilder`] pre-defining all of the locks we need.
+    ///
+    /// When "finishing" the builder with [`WriteLocksBuilder::all_or_nothing`], if we haven't
+    /// acquired all of the necessary locks we drop any partially acquired ones.
+    pub fn builder(sources: impl IntoIterator<Item = GlobalId>) -> WriteLocksBuilder {
+        let locks = sources.into_iter().map(|gid| (gid, None)).collect();
+        WriteLocksBuilder { locks }
+    }
+
+    /// Validate this set of [`WriteLocks`] is sufficient for the provided collections.
+    /// Dropping the currently held locks if it's not.
+    pub fn validate(
+        self,
+        collections: impl Iterator<Item = GlobalId>,
+    ) -> Result<Self, BTreeSet<GlobalId>> {
+        let mut missing = BTreeSet::new();
+        for collection in collections {
+            if !self.locks.contains_key(&collection) {
+                missing.insert(collection);
+            }
+        }
+
+        if missing.is_empty() {
+            Ok(self)
+        } else {
+            // Explicitly drop the already acquired locks.
+            drop(self);
+            Err(missing)
+        }
+    }
+}
+
+impl Drop for WriteLocks {
+    fn drop(&mut self) {
+        // We may have merged the locks into GroupCommitWriteLocks, thus it could be empty.
+        if !self.locks.is_empty() {
+            tracing::info!(
+                conn_id = %self.conn_id,
+                locks = ?self.locks,
+                "dropping write locks",
+            );
+        }
+    }
+}
+
+/// A builder struct that helps us acquire all of the locks we need, or none of them.
+///
+/// See [`WriteLocks::builder`].
+#[derive(Debug)]
+pub struct WriteLocksBuilder {
+    locks: BTreeMap<GlobalId, Option<tokio::sync::OwnedMutexGuard<()>>>,
+}
+
+impl WriteLocksBuilder {
+    /// Adds a lock to this builder.
+    pub fn insert_lock(&mut self, id: GlobalId, lock: tokio::sync::OwnedMutexGuard<()>) {
+        self.locks.insert(id, Some(lock));
+    }
+
+    /// Finish this builder by returning either all of the necessary locks, or none of them.
+    ///
+    /// If we fail to acquire all of the locks, returns one of the [`GlobalId`]s that we failed to
+    /// acquire a lock for, that should be awaited so we know when to run again.
+    pub fn all_or_nothing(self, conn_id: &ConnectionId) -> Result<WriteLocks, GlobalId> {
+        let (locks, missing): (BTreeMap<_, _>, BTreeSet<_>) =
+            self.locks
+                .into_iter()
+                .partition_map(|(gid, lock)| match lock {
+                    Some(lock) => itertools::Either::Left((gid, lock)),
+                    None => itertools::Either::Right(gid),
+                });
+
+        match missing.iter().next() {
+            None => {
+                tracing::info!(%conn_id, ?locks, "acquired write locks");
+                Ok(WriteLocks {
+                    locks,
+                    conn_id: conn_id.clone(),
+                })
+            }
+            Some(gid) => {
+                tracing::info!(?missing, "failed to acquire write locks");
+                // Explicitly drop the already acquired locks.
+                drop(locks);
+                Err(*gid)
+            }
+        }
+    }
+}
+
+/// Collection of [`WriteLocks`] gathered during [`group_commit`].
+///
+/// Note: This struct should __never__ be used outside of group commit because it attempts to merge
+/// together several collections of [`WriteLocks`] which if not done carefully can cause deadlocks
+/// or consistency violations.
+///
+/// We must prevent writes from occurring to tables during read then write plans (e.g. `UPDATE`)
+/// but we can allow blind writes (e.g. `INSERT`) to get committed concurrently at the same
+/// timestamp when submitting the updates from a read then write plan.
+///
+/// Naively it would seem as though we could allow blind writes to occur whenever as blind writes
+/// could never cause invalid retractions, but it could cause us to violate serializability because
+/// there is no total order we could define for the transactions. Consider the following scenario:
+///
+/// ```text
+/// table: foo
+///
+///  a | b
+/// --------
+///  x   2
+///  y   3
+///  z   4
+///
+/// -- Session(A)
+/// -- read then write plan, reads at t0, writes at t3, transaction Ta
+/// DELETE FROM foo WHERE b % 2 = 0;
+///
+///
+/// -- Session(B)
+/// -- blind write into foo, writes at t1, transaction Tb
+/// INSERT INTO foo VALUES ('q', 6);
+/// -- select from foo, reads at t2, transaction Tc
+/// SELECT * FROM foo;
+///
+///
+/// The times these operations occur at are ordered:
+/// t0 < t1 < t2 < t3
+///
+/// Given the timing of the operations, the transactions must have the following order:
+///
+/// * Ta does not observe ('q', 6), so Ta < Tb
+/// * Tc does observe ('q', 6), so Tb < Tc
+/// * Tc does not observe the retractions from Ta, so Tc < Ta
+///
+/// For total order to exist, Ta < Tb < Tc < Ta, which is impossible.
+/// ```
+///
+/// [`group_commit`]: super::coord::Coordinator::group_commit
+#[derive(Debug, Default)]
+pub(crate) struct GroupCommitWriteLocks {
+    locks: BTreeMap<GlobalId, tokio::sync::OwnedMutexGuard<()>>,
+}
+
+impl GroupCommitWriteLocks {
+    /// Merge a set of [`WriteLocks`] into this collection for group commit.
+    pub fn merge(&mut self, mut locks: WriteLocks) {
+        // Note: Ideally we would use `.drain`, but that method doesn't exist for BTreeMap.
+        //
+        // See: <https://github.com/rust-lang/rust/issues/81074>
+        let existing = std::mem::take(&mut locks.locks);
+        self.locks.extend(existing);
+    }
+
+    /// Returns the collections we're missing locks for, if any.
+    pub fn missing_locks(&self, writes: impl Iterator<Item = GlobalId>) -> BTreeSet<GlobalId> {
+        let mut missing = BTreeSet::new();
+        for write in writes {
+            if !self.locks.contains_key(&write) {
+                missing.insert(write);
+            }
+        }
+        missing
+    }
+}
+
+impl Drop for GroupCommitWriteLocks {
+    fn drop(&mut self) {
+        if !self.locks.is_empty() {
+            tracing::info!(
+                locks = ?self.locks,
+                "dropping group commit write locks",
+            );
         }
     }
 }

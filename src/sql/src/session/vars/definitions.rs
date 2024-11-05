@@ -364,7 +364,7 @@ pub static SEARCH_PATH: VarDefinition = VarDefinition::new_lazy(
 
 pub static STATEMENT_TIMEOUT: VarDefinition = VarDefinition::new(
     "statement_timeout",
-    value!(Duration; Duration::from_secs(10)),
+    value!(Duration; Duration::from_secs(60)),
     "Sets the maximum allowed duration of INSERT...SELECT, UPDATE, and DELETE operations. \
     If this value is specified without units, it is taken as milliseconds.",
     true,
