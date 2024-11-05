@@ -13,7 +13,9 @@ This Helm chart deploys the Materialize operator on a Kubernetes cluster. The op
 
 ### Kubernetes Storage Configuration
 
-If you want to use disk-backed clusters, you'll need to configure a storage provider.
+To provide additional disk to clusterd pods, configure a CSI plugin in your kubernetes cluster.
+
+Note that networked storage (such as EBS volumes) may not perform well in this setup; for best results, we recommend targeting local instance store NVMe drives.
 
 We recommend using OpenEBS with LVM for local persistent volumes:
 
@@ -84,7 +86,6 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.args.createBalancers` |  | ``true`` |
 | `operator.args.environmentdConnectionRoleARN` |  | ``""`` |
 | `operator.args.environmentdIAMRoleARN` |  | ``""`` |
-| `operator.args.ephemeralVolumeClass` |  | ``nil`` |
 | `operator.args.localDevelopment` |  | ``true`` |
 | `operator.args.region` |  | ``"kind"`` |
 | `operator.args.startupLogFilter` |  | ``"INFO,mz_orchestratord=TRACE"`` |
@@ -98,15 +99,15 @@ The following table lists the configurable parameters of the Materialize operato
 | `rbac.create` |  | ``true`` |
 | `serviceAccount.create` |  | ``true`` |
 | `serviceAccount.name` |  | ``"orchestratord"`` |
-| `storage.openebs.storageClass.allowVolumeExpansion` |  | ``false`` |
-| `storage.openebs.storageClass.create` |  | ``false`` |
-| `storage.openebs.storageClass.name` |  | ``"openebs-lvm-instance-store-ext4"`` |
-| `storage.openebs.storageClass.parameters.fsType` |  | ``"ext4"`` |
-| `storage.openebs.storageClass.parameters.storage` |  | ``"lvm"`` |
-| `storage.openebs.storageClass.parameters.volgroup` |  | ``"instance-store-vg"`` |
-| `storage.openebs.storageClass.provisioner` |  | ``"local.csi.openebs.io"`` |
-| `storage.openebs.storageClass.reclaimPolicy` |  | ``"Delete"`` |
-| `storage.openebs.storageClass.volumeBindingMode` |  | ``"WaitForFirstConsumer"`` |
+| `storage.storageClass.allowVolumeExpansion` |  | ``false`` |
+| `storage.storageClass.create` |  | ``"fasle"`` |
+| `storage.storageClass.name` |  | ``""`` |
+| `storage.storageClass.parameters.fsType` |  | ``"ext4"`` |
+| `storage.storageClass.parameters.storage` |  | ``"lvm"`` |
+| `storage.storageClass.parameters.volgroup` |  | ``"instance-store-vg"`` |
+| `storage.storageClass.provisioner` |  | ``"local.csi.openebs.io"`` |
+| `storage.storageClass.reclaimPolicy` |  | ``"Delete"`` |
+| `storage.storageClass.volumeBindingMode` |  | ``"WaitForFirstConsumer"`` |
 
 Specify each parameter using the `--set key=value[,key=value]` argument to `helm install`. For example:
 

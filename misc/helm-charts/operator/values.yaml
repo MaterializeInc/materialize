@@ -33,13 +33,6 @@ operator:
     environmentdConnectionRoleARN: ""
     # awsAccountID is required when cloudProvider is "aws"
     awsAccountID: ""
-    # To provide additional disk to clusterd pods, configure a CSI plugin in
-    # your kubernetes cluster, and put its storage class here. Note that
-    # networked storage (EBS volumes, for instance) is unlikely to work well
-    # here - we recommend using something like
-    # https://github.com/openebs/lvm-localpv targeting local instance store
-    # NVME drives.
-    ephemeralVolumeClass: null
   # Node selector to use for the operator pod
   nodeSelector: {}
   resources:
@@ -106,24 +99,23 @@ namespace:
 
 # Storage configuration
 storage:
-  # Storage class configuration for OpenEBS
-  # Requires the OpenEBS operator to be installed in the cluster
-  # https://github.com/openebs/lvm-localpv?tab=readme-ov-file#installation
-  # To install OpenEBS, you can use Helm:
-  # helm repo add openebs https://openebs.github.io/openebs
-  # helm repo update
-  # helm install openebs --namespace openebs openebs/openebs --create-namespace
-  openebs:
-    # Storage class configuration for OpenEBS
-    storageClass:
-      # Whether to create the storage class
-      create: false
-      name: "openebs-lvm-instance-store-ext4"
-      allowVolumeExpansion: false
-      provisioner: "local.csi.openebs.io"
-      parameters:
-        storage: "lvm"
-        fsType: "ext4"
-        volgroup: "instance-store-vg"
-      reclaimPolicy: Delete
-      volumeBindingMode: WaitForFirstConsumer
+  storageClass:
+    # Set to false to use an existing StorageClass instead
+    create: fasle
+
+    # Name of the StorageClass to create/use: eg "openebs-lvm-instance-store-ext4"
+    name: ""
+
+    # CSI driver to use
+    # Default is OpenEBS, but can be changed (e.g., ebs.csi.aws.com, pd.csi.storage.gke.io)
+    provisioner: "local.csi.openebs.io"
+
+    # Parameters for the CSI driver
+    parameters:
+      storage: "lvm"
+      fsType: "ext4"
+      volgroup: "instance-store-vg"
+
+    allowVolumeExpansion: false
+    reclaimPolicy: Delete
+    volumeBindingMode: WaitForFirstConsumer

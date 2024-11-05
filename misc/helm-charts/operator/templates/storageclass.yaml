@@ -1,4 +1,4 @@
-{{- if .Values.storage.openebs.storageClass.create }}
+{{- if and .Values.storage.storageClass.create .Values.storage.storageClass.name }}
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -11,12 +11,12 @@
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
-  name: {{ .Values.storage.openebs.storageClass.name }}
-allowVolumeExpansion: {{ .Values.storage.openebs.storageClass.allowVolumeExpansion }}
-provisioner: {{ .Values.storage.openebs.storageClass.provisioner }}
+  name: {{ .Values.storage.storageClass.name }}
+allowVolumeExpansion: {{ .Values.storage.storageClass.allowVolumeExpansion }}
+provisioner: {{ .Values.storage.storageClass.provisioner }}
 parameters:
-  {{- toYaml .Values.storage.openebs.storageClass.parameters | nindent 2 }}
-reclaimPolicy: {{ .Values.storage.openebs.storageClass.reclaimPolicy }}
-volumeBindingMode: {{ .Values.storage.openebs.storageClass.volumeBindingMode }}
+  {{- toYaml .Values.storage.storageClass.parameters | nindent 2 }}
+reclaimPolicy: {{ .Values.storage.storageClass.reclaimPolicy }}
+volumeBindingMode: {{ .Values.storage.storageClass.volumeBindingMode }}
 
 {{- end }}

@@ -24,7 +24,9 @@ This Helm chart deploys the Materialize operator on a Kubernetes cluster. The op
 
 ### Kubernetes Storage Configuration
 
-If you want to use disk-backed clusters, you'll need to configure a storage provider.
+To provide additional disk to clusterd pods, configure a CSI plugin in your kubernetes cluster.
+
+Note that networked storage (such as EBS volumes) may not perform well in this setup; for best results, we recommend targeting local instance store NVMe drives.
 
 We recommend using OpenEBS with LVM for local persistent volumes:
 

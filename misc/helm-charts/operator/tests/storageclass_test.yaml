@@ -13,15 +13,15 @@ templates:
 tests:
   - it: should render storage class with correct values
     set:
-      storage.openebs.storageClass.create: true
-      storage.openebs.storageClass.name: openebs-lvm-instance-store-ext4
-      storage.openebs.storageClass.allowVolumeExpansion: false
-      storage.openebs.storageClass.provisioner: local.csi.openebs.io
-      storage.openebs.storageClass.parameters.storage: lvm
-      storage.openebs.storageClass.parameters.fsType: ext4
-      storage.openebs.storageClass.parameters.volgroup: instance-store-vg
-      storage.openebs.storageClass.reclaimPolicy: Delete
-      storage.openebs.storageClass.volumeBindingMode: WaitForFirstConsumer
+      storage.storageClass.create: true
+      storage.storageClass.name: openebs-lvm-instance-store-ext4
+      storage.storageClass.allowVolumeExpansion: false
+      storage.storageClass.provisioner: local.csi.openebs.io
+      storage.storageClass.parameters.storage: lvm
+      storage.storageClass.parameters.fsType: ext4
+      storage.storageClass.parameters.volgroup: instance-store-vg
+      storage.storageClass.reclaimPolicy: Delete
+      storage.storageClass.volumeBindingMode: WaitForFirstConsumer
     asserts:
       - hasDocuments:
           count: 1
@@ -54,14 +54,14 @@ tests:
 
   - it: should not render when storage class creation is disabled
     set:
-      storage.openebs.storageClass.create: false
+      storage.storageClass.create: false
     asserts:
       - hasDocuments:
           count: 0
 
   - it: should render if storage class creation is enabled
     set:
-      storage.openebs.storageClass.create: true
+      storage.storageClass.create: true
     asserts:
       - hasDocuments:
           count: 1
