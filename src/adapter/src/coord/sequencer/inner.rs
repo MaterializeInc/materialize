@@ -632,6 +632,7 @@ impl Coordinator {
                         CollectionDescription::<Timestamp> {
                             desc: source.desc.clone(),
                             data_source,
+                            timeline: Some(source.timeline),
                             since: None,
                             status_collection_id,
                         },
@@ -1056,7 +1057,7 @@ impl Coordinator {
                     }
                     TableDataSource::DataSource {
                         desc: data_source,
-                        timeline: _,
+                        timeline,
                     } => {
                         match data_source {
                             DataSourceDesc::IngestionExport {
@@ -1082,6 +1083,7 @@ impl Coordinator {
                                     },
                                     since: None,
                                     status_collection_id,
+                                    timeline: Some(timeline.clone()),
                                 };
                                 let storage_metadata = coord.catalog.state().storage_metadata();
                                 coord
@@ -4015,6 +4017,7 @@ impl Coordinator {
                             data_source,
                             since: None,
                             status_collection_id,
+                            timeline: Some(source.timeline.clone()),
                         },
                     ));
 

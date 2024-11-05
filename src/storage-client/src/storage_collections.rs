@@ -48,7 +48,7 @@ use mz_storage_types::read_holds::{ReadHold, ReadHoldError};
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sources::{
     GenericSourceConnection, IngestionDescription, SourceData, SourceDesc, SourceExport,
-    SourceExportDataConfig,
+    SourceExportDataConfig, Timeline,
 };
 use mz_storage_types::time_dependence::{TimeDependence, TimeDependenceError};
 use mz_txn_wal::metrics::Metrics as TxnMetrics;
@@ -2002,6 +2002,12 @@ where
 
         while let Some(c) = collection.take() {
             use DataSource::*;
+            if let Some(timeline) = &c.description.timeline {
+                // Only the epoch timeline follows wall-clock.
+                if *timeline != Timeline::EpochMilliseconds {
+                    break;
+                }
+            }
             match &c.description.data_source {
                 Ingestion(ingestion) => {
                     use GenericSourceConnection::*;

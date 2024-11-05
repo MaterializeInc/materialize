@@ -143,6 +143,7 @@ impl Coordinator {
                                 data_source: DataSource::Other,
                                 since: Some(as_of),
                                 status_collection_id: None,
+                                timeline: None,
                             },
                         )],
                     )
