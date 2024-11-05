@@ -2217,8 +2217,13 @@ class SwapSchema(Scenario):
 
 
 class ReplicaExpiration(Scenario):
+    # Causes "tried to kill container, but did not receive an exit event" errors when killing container afterwards
+    SCALE = 5
     # Too slow with larger scale
     FIXED_SCALE = True
+
+    def version(self) -> ScenarioVersion:
+        return ScenarioVersion.create(1, 1, 0)
 
     def init(self) -> list[Action]:
         return [
