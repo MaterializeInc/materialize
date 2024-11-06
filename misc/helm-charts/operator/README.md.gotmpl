@@ -24,50 +24,72 @@ This Helm chart deploys the Materialize operator on a Kubernetes cluster. The op
 
 ### Kubernetes Storage Configuration
 
-To provide additional disk to clusterd pods, configure a CSI plugin in your Kubernetes cluster.
+Materialize requires fast storage for optimal performance. Network-attached storage (like EBS volumes) can significantly impact performance, so we strongly recommend using locally-attached NVMe drives.
 
-**Note:** Networked storage (such as EBS volumes) may not perform well in this setup; for best results, we recommend targeting local instance store NVMe drives.
+We recommend using OpenEBS with LVM Local PV for managing local volumes. While other storage solutions may work, we have tested and recommend OpenEBS for optimal performance.
 
-For local volumes, we recommend using OpenEBS with LVM. The following instructions will guide you through installing OpenEBS. However, **you'll need to set up LVM on your nodes** based on your specific environment:
-
-#### Installing OpenEBS Operator
+#### Installing OpenEBS
 
 ```bash
-# Install OpenEBS operator (required only for disk-backed clusters)
+# Install OpenEBS operator
 helm repo add openebs https://openebs.github.io/openebs
 helm repo update
 
-# To install just the OpenEBS Local PV Storage Engines, use the following command:
-helm install openebs --namespace openebs openebs/openebs --set engines.replicated.mayastor.enabled=false --create-namespace
+# Install only the Local PV Storage Engines
+helm install openebs --namespace openebs openebs/openebs \
+  --set engines.replicated.mayastor.enabled=false \
+  --create-namespace
 ```
 
-Verify that the OpenEBS operator is running:
-
+Verify the installation:
 ```bash
 kubectl get pods -n openebs -l role=openebs-lvm
 ```
 
-#### Setting Up LVM on AWS EC2 Bottlerocket Instances
+#### LVM Configuration
 
-In environments such as AWS, where instance types with instance store volumes are available (e.g., `i3.xlarge`, `i4i.xlarge`, `r5d.xlarge`), you can configure LVM. We recommend setting up LVM specifically on AWS EC2 instances running **Bottlerocket AMI on instance types like `m6g` or `m7g`**.
+LVM setup varies by environment. Below is our tested and recommended configuration:
 
-> **Note:** Paths and device names for instance store volumes can vary significantly across cloud providers, hardware configurations, and kernel versions. Setting up LVM on other configurations may work but has not been tested by us.
+##### AWS EC2 with Bottlerocket AMI
+Tested configurations:
+- Instance types: m6g, m7g families
+- AMI: AWS Bottlerocket
+- Instance store volumes required
 
-If you're using a different environment or instance type, refer to specific documentation or use a custom setup. Here's an example configuration you might need to adjust for Bottlerocket:
+Setup process:
+1. Use Bottlerocket bootstrap container for LVM configuration
+2. Configure volume group name as `instance-store-vg`
 
-- Use a Bottlerocket bootstrap container to set up LVM.
-- Ensure device paths and volume groups align with your instance configuration.
+**Note:** While LVM setup may work on other instance types with local storage (like i3.xlarge, i4i.xlarge, r5d.xlarge), we have not extensively tested these configurations.
 
-#### Example Configuration for `values.yaml`
+#### Storage Configuration
 
-Once you have OpenEBS installed and LVM set up on your nodes, create a storage class by adding the following configuration to your `values.yaml`:
+Once LVM is configured, set up the storage class:
 
 ```yaml
 storage:
   storageClass:
     create: true
-    name: openebs-lvm-instance-store-ext4
-    provisioner: local.csi.openebs.io
+    name: "openebs-lvm-instance-store-ext4"
+    provisioner: "local.csi.openebs.io"
+    parameters:
+      storage: "lvm"
+      fsType: "ext4"
+      volgroup: "instance-store-vg"
+```
+
+While OpenEBS is our recommended solution, you can use any storage provisioner that meets your performance requirements by overriding the provisioner and parameters values.
+
+For example, to use a different storage provider:
+
+```yaml
+storage:
+  storageClass:
+    create: true
+    name: "your-storage-class"
+    provisioner: "your.storage.provisioner"
+    parameters:
+      # Parameters specific to your chosen storage provisioner
 ```
 
 ## Installing the Chart
