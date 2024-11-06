@@ -98,7 +98,7 @@ ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;
         LEFT JOIN mz_internal.mz_materialization_lag l ON (l.object_id = d.id)
         WHERE
             h.hydrated AND
-            (l.local_lag <= '1s' OR l.local_lag IS NULL)
+            (l.local_lag <= '2s' OR l.local_lag IS NULL)
     ),
     -- Collect dataflows that are not yet ready.
     pending_dataflows AS (
