@@ -101,14 +101,13 @@ namespace:
 storage:
   storageClass:
     # Set to false to use an existing StorageClass instead
-    create: fasle
+    create: false
 
     # Name of the StorageClass to create/use: eg "openebs-lvm-instance-store-ext4"
     name: ""
 
-    # CSI driver to use
-    # Default is OpenEBS, but can be changed (e.g., ebs.csi.aws.com, pd.csi.storage.gke.io)
-    provisioner: "local.csi.openebs.io"
+    # CSI driver to use, eg "local.csi.openebs.io"
+    provisioner: ""
 
     # Parameters for the CSI driver
     parameters:

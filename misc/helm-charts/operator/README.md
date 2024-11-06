@@ -13,34 +13,50 @@ This Helm chart deploys the Materialize operator on a Kubernetes cluster. The op
 
 ### Kubernetes Storage Configuration
 
-To provide additional disk to clusterd pods, configure a CSI plugin in your kubernetes cluster.
+To provide additional disk to clusterd pods, configure a CSI plugin in your Kubernetes cluster.
 
-Note that networked storage (such as EBS volumes) may not perform well in this setup; for best results, we recommend targeting local instance store NVMe drives.
+**Note:** Networked storage (such as EBS volumes) may not perform well in this setup; for best results, we recommend targeting local instance store NVMe drives.
 
-We recommend using OpenEBS with LVM for local persistent volumes:
+For local volumes, we recommend using OpenEBS with LVM. The following instructions will guide you through installing OpenEBS. However, **you'll need to set up LVM on your nodes** based on your specific environment:
+
+#### Installing OpenEBS Operator
 
 ```bash
 # Install OpenEBS operator (required only for disk-backed clusters)
 helm repo add openebs https://openebs.github.io/openebs
 helm repo update
-helm install openebs --namespace openebs openebs/openebs --create-namespace
+
+# To install just the OpenEBS Local PV Storage Engines, use the following command:
+helm install openebs --namespace openebs openebs/openebs --set engines.replicated.mayastor.enabled=false --create-namespace
 ```
 
-Then verify that the OpenEBS operator is running:
+Verify that the OpenEBS operator is running:
 
 ```bash
 kubectl get pods -n openebs -l role=openebs-lvm
 ```
 
-Your nodes must have available disks for LVM to use. For AWS EC2, this means using instance types with instance store volumes (e.g., i3.xlarge, i4i.xlarge, r5d.xlarge).
+#### Setting Up LVM on AWS EC2 Bottlerocket Instances
 
-To create the storage class for OpenEBS, add the following configuration to your `values.yaml`:
+In environments such as AWS, where instance types with instance store volumes are available (e.g., `i3.xlarge`, `i4i.xlarge`, `r5d.xlarge`), you can configure LVM. We recommend setting up LVM specifically on AWS EC2 instances running **Bottlerocket AMI on instance types like `m6g` or `m7g`**.
+
+> **Note:** Paths and device names for instance store volumes can vary significantly across cloud providers, hardware configurations, and kernel versions. Setting up LVM on other configurations may work but has not been tested by us.
+
+If you're using a different environment or instance type, refer to specific documentation or use a custom setup. Here's an example configuration you might need to adjust for Bottlerocket:
+
+- Use a Bottlerocket bootstrap container to set up LVM.
+- Ensure device paths and volume groups align with your instance configuration.
+
+#### Example Configuration for `values.yaml`
+
+Once you have OpenEBS installed and LVM set up on your nodes, create a storage class by adding the following configuration to your `values.yaml`:
 
 ```yaml
 storage:
-  openebs:
-    storageClass:
-      create: true
+  storageClass:
+    create: true
+    name: openebs-lvm-instance-store-ext4
+    provisioner: local.csi.openebs.io
 ```
 
 ## Installing the Chart
@@ -100,12 +116,12 @@ The following table lists the configurable parameters of the Materialize operato
 | `serviceAccount.create` |  | ``true`` |
 | `serviceAccount.name` |  | ``"orchestratord"`` |
 | `storage.storageClass.allowVolumeExpansion` |  | ``false`` |
-| `storage.storageClass.create` |  | ``"fasle"`` |
+| `storage.storageClass.create` |  | ``false`` |
 | `storage.storageClass.name` |  | ``""`` |
 | `storage.storageClass.parameters.fsType` |  | ``"ext4"`` |
 | `storage.storageClass.parameters.storage` |  | ``"lvm"`` |
 | `storage.storageClass.parameters.volgroup` |  | ``"instance-store-vg"`` |
-| `storage.storageClass.provisioner` |  | ``"local.csi.openebs.io"`` |
+| `storage.storageClass.provisioner` |  | ``""`` |
 | `storage.storageClass.reclaimPolicy` |  | ``"Delete"`` |
 | `storage.storageClass.volumeBindingMode` |  | ``"WaitForFirstConsumer"`` |
 

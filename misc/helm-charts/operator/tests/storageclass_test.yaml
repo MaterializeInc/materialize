@@ -59,9 +59,10 @@ tests:
       - hasDocuments:
           count: 0
 
-  - it: should render if storage class creation is enabled
+  - it: should render if storage class creation is enabled and name is set
     set:
       storage.storageClass.create: true
+      storage.storageClass.name: openebs-lvm-instance-store-ext4
     asserts:
       - hasDocuments:
           count: 1
