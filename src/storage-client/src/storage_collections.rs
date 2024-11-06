@@ -2230,10 +2230,9 @@ where
             >,
         > = FuturesUnordered::new();
 
-        let gen_upper_future = |id: GlobalId, mut handle: WriteHandle<SourceData, (), T, i64>| {
+        let gen_upper_future = |id, mut handle: WriteHandle<_, _, _, _>, prev_upper| {
             let fut = async move {
-                let current_upper = handle.shared_upper();
-                handle.wait_for_upper_past(&current_upper).await;
+                handle.wait_for_upper_past(&prev_upper).await;
                 let new_upper = handle.shared_upper();
                 (id, handle, new_upper)
             };
@@ -2243,7 +2242,9 @@ where
 
         let mut txns_upper_future = match self.txns_handle.take() {
             Some(txns_handle) => {
-                let txns_upper_future = gen_upper_future(GlobalId::Transient(1), txns_handle);
+                let upper = txns_handle.upper().clone();
+                let txns_upper_future =
+                    gen_upper_future(GlobalId::Transient(1), txns_handle, upper);
                 txns_upper_future.boxed()
             }
             None => async { std::future::pending().await }.boxed(),
@@ -2259,7 +2260,7 @@ where
                     }
                     self.update_write_frontiers(&uppers).await;
 
-                    let fut = gen_upper_future(id, handle);
+                    let fut = gen_upper_future(id, handle, upper);
                     txns_upper_future = fut.boxed();
                 }
                 Some((id, handle, upper)) = upper_futures.next() => {
@@ -2271,9 +2272,9 @@ where
                         if shard_id == &handle.shard_id() {
                             // Still current, so process the update and enqueue
                             // again!
-                            let uppers = vec![(id, upper)];
+                            let uppers = vec![(id, upper.clone())];
                             self.update_write_frontiers(&uppers).await;
-                            let fut = gen_upper_future(id, handle);
+                            let fut = gen_upper_future(id, handle, upper);
                             upper_futures.push(fut.boxed());
                         } else {
                             // Be polite and expire the write handle. This can
@@ -2307,7 +2308,8 @@ where
                             if is_in_txns {
                                 self.txns_shards.insert(id);
                             } else {
-                                let fut = gen_upper_future(id, write_handle);
+                                let upper = write_handle.upper().clone();
+                                let fut = gen_upper_future(id, write_handle, upper);
                                 upper_futures.push(fut.boxed());
                             }
 
