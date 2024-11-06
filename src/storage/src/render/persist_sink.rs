@@ -103,6 +103,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashMap;
 use mz_persist_client::batch::{Batch, BatchBuilder, ProtoBatch};
 use mz_persist_client::cache::PersistClientCache;
+use mz_persist_client::error::UpperMismatch;
 use mz_persist_client::Diagnostics;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::{Codec, Codec64};
@@ -919,11 +920,14 @@ where
         .get(storage_state.storage_configuration.config_set());
     let bail_on_concurrent_modification = !use_continual_feedback_upsert;
 
+    let read_only_rx = storage_state.read_only_rx.clone();
+
     let operator_name = format!("{} append_batches", operator_name);
     let mut append_op = AsyncOperatorBuilder::new(operator_name, scope.clone());
 
     let hashed_id = collection_id.hashed();
     let active_worker = usize::cast_from(hashed_id) % scope.peers() == scope.index();
+    let worker_id = scope.index();
 
     // Both of these inputs are disconnected from the output capabilities of this operator, as
     // any output of this operator is entirely driven by the `compare_and_append`s. Currently
@@ -1183,13 +1187,48 @@ where
 
                 let result = {
                     let _permit = busy_signal.acquire().await;
-                    write.compare_and_append_batch(
-                        &mut to_append[..],
-                        batch_lower.clone(),
-                        batch_upper.clone(),
-                    )
-                    .await
-                    .expect("Invalid usage")
+
+                    if *read_only_rx.borrow() {
+                        // We synthesize an `UpperMismatch` so that we can go
+                        // through the same logic below for trimming down our
+                        // batches.
+                        //
+                        // Notably, we are not trying to be smart, and teach the
+                        // write operator about read-only mode. Writing down
+                        // those batches does not append anything to the persist
+                        // shard, and it would be a hassle to figure out in the
+                        // write workers how to trim down batches in read-only
+                        // mode, when the shard upper advances.
+                        //
+                        // Right here, in the logic below, we have all we need
+                        // for figuring out how to trim our batches.
+                        let current_upper = write.fetch_recent_upper().await.clone();
+
+                        if collection_id.is_user() {
+                            tracing::debug!(
+                                %worker_id,
+                                %collection_id,
+                                %shard_id,
+                                ?batch_lower,
+                                ?batch_upper,
+                                ?current_upper,
+                                "persist_sink not appending in read-only mode"
+                            );
+                        }
+
+                        Err(UpperMismatch {
+                            current: current_upper,
+                            expected: batch_lower.clone()}
+                        )
+                    } else {
+                        write.compare_and_append_batch(
+                            &mut to_append[..],
+                            batch_lower.clone(),
+                            batch_upper.clone(),
+                        )
+                        .await
+                        .expect("Invalid usage")
+                    }
                 };
 
                 source_statistics
