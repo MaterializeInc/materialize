@@ -11,6 +11,76 @@ This Helm chart deploys the Materialize operator on a Kubernetes cluster. The op
 - Kubernetes 1.19+
 - Helm 3.2.0+
 
+### Kubernetes Storage Configuration
+
+Materialize requires fast storage for optimal performance. Network-attached storage (like EBS volumes) can significantly impact performance, so we strongly recommend using locally-attached NVMe drives.
+
+We recommend using OpenEBS with LVM Local PV for managing local volumes. While other storage solutions may work, we have tested and recommend OpenEBS for optimal performance.
+
+#### Installing OpenEBS
+
+```bash
+# Install OpenEBS operator
+helm repo add openebs https://openebs.github.io/openebs
+helm repo update
+
+# Install only the Local PV Storage Engines
+helm install openebs --namespace openebs openebs/openebs \
+  --set engines.replicated.mayastor.enabled=false \
+  --create-namespace
+```
+
+Verify the installation:
+```bash
+kubectl get pods -n openebs -l role=openebs-lvm
+```
+
+#### LVM Configuration
+
+LVM setup varies by environment. Below is our tested and recommended configuration:
+
+##### AWS EC2 with Bottlerocket AMI
+Tested configurations:
+- Instance types: m6g, m7g families
+- AMI: AWS Bottlerocket
+- Instance store volumes required
+
+Setup process:
+1. Use Bottlerocket bootstrap container for LVM configuration
+2. Configure volume group name as `instance-store-vg`
+
+**Note:** While LVM setup may work on other instance types with local storage (like i3.xlarge, i4i.xlarge, r5d.xlarge), we have not extensively tested these configurations.
+
+#### Storage Configuration
+
+Once LVM is configured, set up the storage class:
+
+```yaml
+storage:
+  storageClass:
+    create: true
+    name: "openebs-lvm-instance-store-ext4"
+    provisioner: "local.csi.openebs.io"
+    parameters:
+      storage: "lvm"
+      fsType: "ext4"
+      volgroup: "instance-store-vg"
+```
+
+While OpenEBS is our recommended solution, you can use any storage provisioner that meets your performance requirements by overriding the provisioner and parameters values.
+
+For example, to use a different storage provider:
+
+```yaml
+storage:
+  storageClass:
+    create: true
+    name: "your-storage-class"
+    provisioner: "your.storage.provisioner"
+    parameters:
+      # Parameters specific to your chosen storage provisioner
+```
+
 ## Installing the Chart
 
 To install the chart with the release name `my-materialize-operator`:
@@ -54,7 +124,6 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.args.createBalancers` |  | ``true`` |
 | `operator.args.environmentdConnectionRoleARN` |  | ``""`` |
 | `operator.args.environmentdIAMRoleARN` |  | ``""`` |
-| `operator.args.ephemeralVolumeClass` |  | ``nil`` |
 | `operator.args.localDevelopment` |  | ``true`` |
 | `operator.args.region` |  | ``"kind"`` |
 | `operator.args.startupLogFilter` |  | ``"INFO,mz_orchestratord=TRACE"`` |
@@ -68,6 +137,15 @@ The following table lists the configurable parameters of the Materialize operato
 | `rbac.create` |  | ``true`` |
 | `serviceAccount.create` |  | ``true`` |
 | `serviceAccount.name` |  | ``"orchestratord"`` |
+| `storage.storageClass.allowVolumeExpansion` |  | ``false`` |
+| `storage.storageClass.create` |  | ``false`` |
+| `storage.storageClass.name` |  | ``""`` |
+| `storage.storageClass.parameters.fsType` |  | ``"ext4"`` |
+| `storage.storageClass.parameters.storage` |  | ``"lvm"`` |
+| `storage.storageClass.parameters.volgroup` |  | ``"instance-store-vg"`` |
+| `storage.storageClass.provisioner` |  | ``""`` |
+| `storage.storageClass.reclaimPolicy` |  | ``"Delete"`` |
+| `storage.storageClass.volumeBindingMode` |  | ``"WaitForFirstConsumer"`` |
 
 Specify each parameter using the `--set key=value[,key=value]` argument to `helm install`. For example:
 

@@ -33,13 +33,6 @@ operator:
     environmentdConnectionRoleARN: ""
     # awsAccountID is required when cloudProvider is "aws"
     awsAccountID: ""
-    # To provide additional disk to clusterd pods, configure a CSI plugin in
-    # your kubernetes cluster, and put its storage class here. Note that
-    # networked storage (EBS volumes, for instance) is unlikely to work well
-    # here - we recommend using something like
-    # https://github.com/openebs/lvm-localpv targeting local instance store
-    # NVME drives.
-    ephemeralVolumeClass: null
   # Node selector to use for the operator pod
   nodeSelector: {}
   resources:
@@ -103,3 +96,25 @@ namespace:
   create: false
   # Name of the namespace where the operator and environment will be deployed
   name: "materialize"
+
+# Storage configuration
+storage:
+  storageClass:
+    # Set to false to use an existing StorageClass instead
+    create: false
+
+    # Name of the StorageClass to create/use: eg "openebs-lvm-instance-store-ext4"
+    name: ""
+
+    # CSI driver to use, eg "local.csi.openebs.io"
+    provisioner: ""
+
+    # Parameters for the CSI driver
+    parameters:
+      storage: "lvm"
+      fsType: "ext4"
+      volgroup: "instance-store-vg"
+
+    allowVolumeExpansion: false
+    reclaimPolicy: Delete
+    volumeBindingMode: WaitForFirstConsumer
