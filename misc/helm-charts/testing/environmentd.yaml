@@ -30,18 +30,6 @@ metadata:
   namespace: materialize-environment
 spec:
   environmentdImageRef: materialize/environmentd:v0.124.0-dev.0--pr.gd5e227d7d07dc4878d2a065c7c10a48c2555385a
-  environmentdResourceRequirements:
-    limits:
-      memory: 512Mi
-    requests:
-      cpu: 250m
-      memory: 512Mi
-  balancerdResourceRequirements:
-    limits:
-      memory: 256Mi
-    requests:
-      cpu: 100m
-      memory: 256Mi
   requestRollout: 22222222-2222-2222-2222-222222222222
   forceRollout: 33333333-3333-3333-3333-333333333333
   inPlaceRollout: false

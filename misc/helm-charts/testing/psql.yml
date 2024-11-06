@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: psql-test
+spec:
+  containers:
+    - name: psql
+      image: postgres:latest
+      command: ["sleep", "infinity"]
+      stdin: true
+      tty: true
