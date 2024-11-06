@@ -361,7 +361,10 @@ impl CatalogState {
                     });
                     continue;
                 };
-                if !referenced_entry.referenced_by().contains(id) {
+                if !referenced_entry.referenced_by().contains(id)
+                    // Continual Tasks are self referential.
+                    && (referenced_entry.id() != *id && !referenced_entry.is_continual_task())
+                {
                     dependency_inconsistencies.push(
                         ObjectDependencyInconsistency::InconsistentUsedBy {
                             object_a: *id,
@@ -378,7 +381,10 @@ impl CatalogState {
                     });
                     continue;
                 };
-                if !used_entry.used_by().contains(id) {
+                if !used_entry.used_by().contains(id) 
+                    // Continual Tasks are self referential.
+                    && (used_entry.id() != *id && !used_entry.is_continual_task())
+                {
                     dependency_inconsistencies.push(
                         ObjectDependencyInconsistency::InconsistentUsedBy {
                             object_a: *id,
