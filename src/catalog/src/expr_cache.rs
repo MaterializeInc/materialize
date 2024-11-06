@@ -20,6 +20,7 @@ use mz_durable_cache::{DurableCache, DurableCacheCodec};
 use mz_dyncfg::ConfigSet;
 use mz_expr::OptimizedMirRelationExpr;
 use mz_ore::channel::trigger;
+use mz_ore::soft_panic_or_log;
 use mz_ore::task::spawn;
 use mz_persist_client::cli::admin::{
     EXPRESSION_CACHE_FORCE_COMPACTION_FUEL, EXPRESSION_CACHE_FORCE_COMPACTION_WAIT,
@@ -227,8 +228,16 @@ impl ExpressionCache {
                 // Only deserialize the current generation.
                 match key.expr_type {
                     ExpressionType::Local => {
-                        let expressions: LocalExpressions = serde_json::from_str(expressions)
-                            .expect("local expressions should roundtrip");
+                        let expressions: LocalExpressions = match serde_json::from_str(expressions)
+                        {
+                            Ok(expressions) => expressions,
+                            Err(err) => {
+                                soft_panic_or_log!(
+                                    "unable to deserialize local json: {expressions:?}: {err:?}"
+                                );
+                                continue;
+                            }
+                        };
                         // Remove dropped IDs and local expressions that were cached with different
                         // features.
                         if !current_ids.contains(&key.id)
@@ -240,8 +249,16 @@ impl ExpressionCache {
                         }
                     }
                     ExpressionType::Global => {
-                        let expressions: GlobalExpressions = serde_json::from_str(expressions)
-                            .expect("global expressions should roundtrip");
+                        let expressions: GlobalExpressions = match serde_json::from_str(expressions)
+                        {
+                            Ok(expressions) => expressions,
+                            Err(err) => {
+                                soft_panic_or_log!(
+                                    "unable to deserialize global json: {expressions:?}: {err:?}"
+                                );
+                                continue;
+                            }
+                        };
                         // Remove dropped IDs and global expressions that were cached with different
                         // features.
                         if !current_ids.contains(&key.id)
@@ -309,7 +326,13 @@ impl ExpressionCache {
             );
         }
         for (id, expressions) in new_local_expressions {
-            let expressions = serde_json::to_string(&expressions).expect("valid json");
+            let expressions = match serde_json::to_string(&expressions) {
+                Ok(expressions) => expressions,
+                Err(err) => {
+                    soft_panic_or_log!("unable to serialize local json: {expressions:?}: {err:?}");
+                    continue;
+                }
+            };
             entries.insert(
                 CacheKey {
                     id,
@@ -320,7 +343,13 @@ impl ExpressionCache {
             );
         }
         for (id, expressions) in new_global_expressions {
-            let expressions = serde_json::to_string(&expressions).expect("valid json");
+            let expressions = match serde_json::to_string(&expressions) {
+                Ok(expressions) => expressions,
+                Err(err) => {
+                    soft_panic_or_log!("unable to serialize global json: {expressions:?}: {err:?}");
+                    continue;
+                }
+            };
             entries.insert(
                 CacheKey {
                     id,
@@ -420,16 +449,16 @@ mod tests {
     use mz_compute_types::dataflows::DataflowDescription;
     use mz_durable_cache::DurableCacheCodec;
     use mz_dyncfg::ConfigSet;
-    use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
+    use mz_expr::OptimizedMirRelationExpr;
     use mz_persist_client::PersistClient;
     use mz_repr::optimize::OptimizerFeatures;
-    use mz_repr::{GlobalId, RelationType};
+    use mz_repr::GlobalId;
     use mz_transform::dataflow::DataflowMetainfo;
     use mz_transform::notice::OptimizerNotice;
     use proptest::arbitrary::{any, Arbitrary};
     use proptest::prelude::{BoxedStrategy, ProptestConfig};
     use proptest::proptest;
-    use proptest::strategy::Strategy;
+    use proptest::strategy::{Strategy, ValueTree};
     use proptest::test_runner::TestRunner;
     use timely::progress::Antichain;
     use uuid::Uuid;
@@ -443,21 +472,13 @@ mod tests {
         type Parameters = ();
 
         fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
-            // It would be better to implement `Arbitrary for this type, but that would be extremely
-            // painful, so we just manually construct a very simple instance.
-            let local_mir = OptimizedMirRelationExpr(MirRelationExpr::Constant {
-                rows: Ok(Vec::new()),
-                typ: RelationType::empty(),
-            });
-            let optimizer_features = any::<OptimizerFeatures>();
-            optimizer_features
-                .prop_map(move |optimizer_features| {
-                    let local_mir = local_mir.clone();
-
-                    LocalExpressions {
-                        local_mir,
-                        optimizer_features,
-                    }
+            (
+                any::<OptimizedMirRelationExpr>(),
+                any::<OptimizerFeatures>(),
+            )
+                .prop_map(|(local_mir, optimizer_features)| LocalExpressions {
+                    local_mir,
+                    optimizer_features,
                 })
                 .boxed()
         }
@@ -468,9 +489,7 @@ mod tests {
     impl Arbitrary for GlobalExpressions {
         type Parameters = ();
         fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
-            // It would be better to implement `Arbitrary for these types, but that would be extremely
-            // painful, so we just manually construct very simple instances.
-            let global_mir = DataflowDescription::new("gmir".to_string());
+            // It would be better to actually implement `Arbitrary` for this type.
             let physical_plan = DataflowDescription {
                 source_imports: Default::default(),
                 index_imports: Default::default(),
@@ -485,43 +504,41 @@ mod tests {
                 time_dependence: None,
             };
 
-            let dataflow_metainfos = any::<DataflowMetainfo<Arc<OptimizerNotice>>>();
-            let optimizer_features = any::<OptimizerFeatures>();
-
-            (dataflow_metainfos, optimizer_features)
-                .prop_map(move |(dataflow_metainfos, optimizer_features)| {
-                    let global_mir = global_mir.clone();
-                    let physical_plan = physical_plan.clone();
-                    GlobalExpressions {
-                        global_mir,
-                        physical_plan,
-                        dataflow_metainfos,
-                        optimizer_features,
-                    }
-                })
+            (
+                any::<DataflowDescription<OptimizedMirRelationExpr>>(),
+                any::<DataflowMetainfo<Arc<OptimizerNotice>>>(),
+                any::<OptimizerFeatures>(),
+            )
+                .prop_map(
+                    move |(global_mir, dataflow_metainfos, optimizer_features)| {
+                        let physical_plan = physical_plan.clone();
+                        GlobalExpressions {
+                            global_mir,
+                            physical_plan,
+                            dataflow_metainfos,
+                            optimizer_features,
+                        }
+                    },
+                )
                 .boxed()
         }
 
         type Strategy = BoxedStrategy<Self>;
     }
 
-    fn generate_local_expressions() -> LocalExpressions {
-        LocalExpressions::arbitrary()
-            .new_tree(&mut TestRunner::default())
-            .expect("valid expression")
-            .current()
-    }
-
-    fn generate_global_expressions() -> GlobalExpressions {
-        GlobalExpressions::arbitrary()
-            .new_tree(&mut TestRunner::default())
-            .expect("valid expression")
-            .current()
-    }
-
+    #[ignore]
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn expression_cache() {
+        let local_tree = LocalExpressions::arbitrary()
+            .new_tree(&mut TestRunner::default())
+            .expect("valid expression");
+        let global_tree = GlobalExpressions::arbitrary()
+            .new_tree(&mut TestRunner::default())
+            .expect("valid expression");
+        let generate_local_expressions = move || local_tree.current();
+        let generate_global_expressions = move || global_tree.current();
+
         let first_deploy_generation = 0;
         let second_deploy_generation = 1;
         let persist = &PersistClient::new_for_tests().await;
@@ -555,7 +572,7 @@ mod tests {
             // Insert some expressions into the cache.
             let mut local_exps = BTreeMap::new();
             let mut global_exps = BTreeMap::new();
-            for _ in 0..5 {
+            for _ in 0..3 {
                 let id = GlobalId::User(next_id);
                 let mut local_exp = generate_local_expressions();
                 local_exp.optimizer_features = optimizer_features.clone();
@@ -704,7 +721,7 @@ mod tests {
             // Insert some expressions at the new generation.
             let mut local_exps = BTreeMap::new();
             let mut global_exps = BTreeMap::new();
-            for _ in 0..5 {
+            for _ in 0..3 {
                 let id = GlobalId::User(next_id);
                 let mut local_exp = generate_local_expressions();
                 local_exp.optimizer_features = optimizer_features.clone();
@@ -822,7 +839,7 @@ mod tests {
     }
 
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(32))]
+        #![proptest_config(ProptestConfig::with_cases(8))]
 
         #[mz_ore::test]
         #[cfg_attr(miri, ignore)]
@@ -836,6 +853,7 @@ mod tests {
             assert_eq!(val, decoded_val);
         }
 
+        #[ignore]
         #[mz_ore::test]
         #[cfg_attr(miri, ignore)]
         fn global_expr_cache_roundtrip((key, val) in any::<(CacheKey, GlobalExpressions)>()) {

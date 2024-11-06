@@ -717,13 +717,22 @@ impl Arbitrary for DataflowDescription<FlatPlan, CollectionMetadata, mz_repr::Ti
     type Parameters = ();
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        any_dataflow_description().boxed()
+        any_dataflow_description_flat_plan().boxed()
+    }
+}
+
+impl Arbitrary for DataflowDescription<OptimizedMirRelationExpr, (), mz_repr::Timestamp> {
+    type Strategy = BoxedStrategy<Self>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        any_dataflow_description_opt_mir().boxed()
     }
 }
 
 proptest::prop_compose! {
-    fn any_dataflow_description()(
-        source_imports in proptest::collection::vec(any_source_import(), 1..3),
+    fn any_dataflow_description_flat_plan()(
+        source_imports in proptest::collection::vec(any_source_import_collection_metadata(), 1..3),
         index_imports in proptest::collection::vec(any_dataflow_index_import(), 1..3),
         objects_to_build in proptest::collection::vec(any::<BuildDesc<FlatPlan>>(), 1..3),
         index_exports in proptest::collection::vec(any_dataflow_index_export(), 1..3),
@@ -770,12 +779,65 @@ proptest::prop_compose! {
     }
 }
 
-fn any_source_import(
+proptest::prop_compose! {
+    fn any_dataflow_description_opt_mir()(
+        source_imports in proptest::collection::vec(any_source_import(), 1..3),
+        index_imports in proptest::collection::vec(any_dataflow_index_import(), 1..3),
+        objects_to_build in proptest::collection::vec(any::<BuildDesc<OptimizedMirRelationExpr>>(), 1..2),
+        index_exports in proptest::collection::vec(any_dataflow_index_export(), 1..3),
+        sink_descs in proptest::collection::vec(
+            any::<(GlobalId, ComputeSinkDesc<(), mz_repr::Timestamp>)>(),
+            1..3,
+        ),
+        as_of_some in any::<bool>(),
+        as_of in proptest::collection::vec(any::<mz_repr::Timestamp>(), 1..5),
+        debug_name in ".*",
+        initial_storage_as_of_some in any::<bool>(),
+        initial_as_of in proptest::collection::vec(any::<mz_repr::Timestamp>(), 1..5),
+        refresh_schedule_some in any::<bool>(),
+        refresh_schedule in any::<RefreshSchedule>(),
+        time_dependence in any::<Option<TimeDependence >>(),
+    ) -> DataflowDescription<OptimizedMirRelationExpr, (), mz_repr::Timestamp> {
+        DataflowDescription {
+            source_imports: BTreeMap::from_iter(source_imports.into_iter()),
+            index_imports: BTreeMap::from_iter(index_imports.into_iter()),
+            objects_to_build,
+            index_exports: BTreeMap::from_iter(index_exports.into_iter()),
+            sink_exports: BTreeMap::from_iter(
+                sink_descs.into_iter(),
+            ),
+            as_of: if as_of_some {
+                Some(Antichain::from(as_of))
+            } else {
+                None
+            },
+            until: Antichain::new(),
+            initial_storage_as_of: if initial_storage_as_of_some {
+                Some(Antichain::from(initial_as_of))
+            } else {
+                None
+            },
+            refresh_schedule: if refresh_schedule_some {
+                Some(refresh_schedule)
+            } else {
+                None
+            },
+            debug_name,
+            time_dependence,
+        }
+    }
+}
+
+fn any_source_import_collection_metadata(
 ) -> impl Strategy<Value = (GlobalId, (SourceInstanceDesc<CollectionMetadata>, bool))> {
     (
         any::<GlobalId>(),
         any::<(SourceInstanceDesc<CollectionMetadata>, bool)>(),
     )
+}
+
+fn any_source_import() -> impl Strategy<Value = (GlobalId, (SourceInstanceDesc<()>, bool))> {
+    (any::<GlobalId>(), any::<(SourceInstanceDesc<()>, bool)>())
 }
 
 proptest::prop_compose! {
@@ -830,7 +892,7 @@ impl RustType<ProtoIndexDesc> for IndexDesc {
 }
 
 /// Information about an imported index, and how it will be used by the dataflow.
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Arbitrary)]
 pub struct IndexImport {
     /// Description of index.
     pub desc: IndexDesc,

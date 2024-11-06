@@ -80,6 +80,45 @@ impl Arbitrary for ComputeSinkDesc<CollectionMetadata, Timestamp> {
     }
 }
 
+impl Arbitrary for ComputeSinkDesc<(), Timestamp> {
+    type Strategy = BoxedStrategy<Self>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        (
+            any::<GlobalId>(),
+            any::<RelationDesc>(),
+            any::<ComputeSinkConnection<()>>(),
+            any::<bool>(),
+            proptest::collection::vec(any::<Timestamp>(), 1..4),
+            proptest::collection::vec(any::<usize>(), 0..4),
+            proptest::option::of(any::<RefreshSchedule>()),
+        )
+            .prop_map(
+                |(
+                    from,
+                    from_desc,
+                    connection,
+                    with_snapshot,
+                    up_to_frontier,
+                    non_null_assertions,
+                    refresh_schedule,
+                )| {
+                    ComputeSinkDesc {
+                        from,
+                        from_desc,
+                        connection,
+                        with_snapshot,
+                        up_to: Antichain::from(up_to_frontier),
+                        non_null_assertions,
+                        refresh_schedule,
+                    }
+                },
+            )
+            .boxed()
+    }
+}
+
 impl RustType<ProtoComputeSinkDesc> for ComputeSinkDesc<CollectionMetadata, Timestamp> {
     fn into_proto(&self) -> ProtoComputeSinkDesc {
         ProtoComputeSinkDesc {

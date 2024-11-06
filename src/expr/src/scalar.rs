@@ -2189,7 +2189,9 @@ impl MirScalarExpr {
 /// The fields are ordered based on heuristic assumptions about their typical selectivity, so that
 /// Ord gives the right ordering for join inputs. Bigger is better, i.e., will tend to come earlier
 /// than other inputs.
-#[derive(Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Serialize, Deserialize, Hash, MzReflect, Arbitrary,
+)]
 pub struct FilterCharacteristics {
     // `<expr> = <literal>` appears in the filter.
     // Excludes cases where NOT appears anywhere above the literal equality.
