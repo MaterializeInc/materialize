@@ -6,7 +6,7 @@ menu:
     parent: 'commands'
 ---
 
-`DROP INDEX` removes the specified index.
+`DROP INDEX` removes an index from Materialize.
 
 ## Syntax
 
