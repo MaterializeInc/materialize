@@ -303,6 +303,10 @@ pub enum ComputeLog {
     ErrorCount,
     /// Hydration times of exported collections.
     HydrationTime,
+    /// Mappings from `GlobalId`/`LirId`` pairs to dataflow addresses.
+    LirMapping,
+    /// Mappings from dataflows to `GlobalId`s.
+    DataflowGlobal,
 }
 
 impl RustType<ProtoComputeLog> for ComputeLog {
@@ -321,6 +325,8 @@ impl RustType<ProtoComputeLog> for ComputeLog {
                 ComputeLog::ShutdownDuration => ShutdownDuration(()),
                 ComputeLog::ErrorCount => ErrorCount(()),
                 ComputeLog::HydrationTime => HydrationTime(()),
+                ComputeLog::LirMapping => LirMapping(()),
+                ComputeLog::DataflowGlobal => DataflowGlobal(()),
             }),
         }
     }
@@ -339,6 +345,8 @@ impl RustType<ProtoComputeLog> for ComputeLog {
             Some(ShutdownDuration(())) => Ok(ComputeLog::ShutdownDuration),
             Some(ErrorCount(())) => Ok(ComputeLog::ErrorCount),
             Some(HydrationTime(())) => Ok(ComputeLog::HydrationTime),
+            Some(LirMapping(())) => Ok(ComputeLog::LirMapping),
+            Some(DataflowGlobal(())) => Ok(ComputeLog::DataflowGlobal),
             None => Err(TryFromProtoError::missing_field("ProtoComputeLog::kind")),
         }
     }
@@ -360,7 +368,11 @@ impl LogVariant {
             .unwrap_or_else(|| (0..arity).collect())
     }
 
-    /// TODO(database-issues#7533): Add documentation.
+    /// Relation schemas for the logs.
+    ///
+    /// This types need to agree with the values that are produced
+    /// in `logging::compute::construct` and with the description in
+    /// `catalog/src/builtin.rs`.
     pub fn desc(&self) -> RelationDesc {
         match self {
             LogVariant::Timely(TimelyLog::Operates) => RelationDesc::builder()
@@ -519,6 +531,25 @@ impl LogVariant {
                 .with_column("export_id", ScalarType::String.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
                 .with_column("time_ns", ScalarType::UInt64.nullable(true))
+                .with_key(vec![0, 1])
+                .finish(),
+
+            LogVariant::Compute(ComputeLog::LirMapping) => RelationDesc::builder()
+                .with_column("global_id", ScalarType::String.nullable(false))
+                .with_column("lir_id", ScalarType::UInt64.nullable(false))
+                .with_column("worker_id", ScalarType::UInt64.nullable(false))
+                .with_column("operator", ScalarType::String.nullable(false))
+                .with_column("parent_lir_id", ScalarType::UInt64.nullable(true))
+                .with_column("nesting", ScalarType::UInt16.nullable(false))
+                .with_column("operator_id_start", ScalarType::UInt64.nullable(true))
+                .with_column("operator_id_end", ScalarType::UInt64.nullable(true))
+                .with_key(vec![0, 1, 2])
+                .finish(),
+
+            LogVariant::Compute(ComputeLog::DataflowGlobal) => RelationDesc::builder()
+                .with_column("id", ScalarType::UInt64.nullable(false))
+                .with_column("worker_id", ScalarType::UInt64.nullable(false))
+                .with_column("global_id", ScalarType::String.nullable(false))
                 .with_key(vec![0, 1])
                 .finish(),
         }

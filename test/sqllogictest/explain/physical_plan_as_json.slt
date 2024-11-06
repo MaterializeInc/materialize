@@ -109,7 +109,7 @@ SELECT 1 / 0
     {
       "id": "Explained Query",
       "plan": {
-        "lir_id": 0,
+        "lir_id": 1,
         "node": {
           "Constant": {
             "rows": {
@@ -134,7 +134,7 @@ EXPLAIN PHYSICAL PLAN WITH(no fast path) AS JSON FOR
     {
       "id": "Explained Query",
       "plan": {
-        "lir_id": 0,
+        "lir_id": 1,
         "node": {
           "Constant": {
             "rows": {
@@ -187,7 +187,7 @@ SELECT * FROM t
     {
       "id": "Explained Query",
       "plan": {
-        "lir_id": 0,
+        "lir_id": 1,
         "node": {
           "Get": {
             "id": {
@@ -244,7 +244,7 @@ SELECT * FROM u
     {
       "id": "Explained Query",
       "plan": {
-        "lir_id": 0,
+        "lir_id": 1,
         "node": {
           "Get": {
             "id": {
@@ -284,7 +284,7 @@ SELECT a + b, 1 FROM t
     {
       "id": "Explained Query",
       "plan": {
-        "lir_id": 0,
+        "lir_id": 1,
         "node": {
           "Get": {
             "id": {
@@ -387,7 +387,7 @@ SELECT c + d, 1 FROM u
     {
       "id": "Explained Query",
       "plan": {
-        "lir_id": 0,
+        "lir_id": 1,
         "node": {
           "Get": {
             "id": {
@@ -473,15 +473,15 @@ SELECT * FROM ov
     {
       "id": "Explained Query",
       "plan": {
-        "lir_id": 2,
+        "lir_id": 3,
         "node": {
           "TopK": {
             "input": {
-              "lir_id": 1,
+              "lir_id": 2,
               "node": {
                 "ArrangeBy": {
                   "input": {
-                    "lir_id": 0,
+                    "lir_id": 1,
                     "node": {
                       "Get": {
                         "id": {
@@ -598,20 +598,20 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
     {
       "id": "Explained Query",
       "plan": {
-        "lir_id": 5,
+        "lir_id": 6,
         "node": {
           "Threshold": {
             "input": {
-              "lir_id": 4,
+              "lir_id": 5,
               "node": {
                 "ArrangeBy": {
                   "input": {
-                    "lir_id": 3,
+                    "lir_id": 4,
                     "node": {
                       "Union": {
                         "inputs": [
                           {
-                            "lir_id": 0,
+                            "lir_id": 1,
                             "node": {
                               "Get": {
                                 "id": {
@@ -670,11 +670,11 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
                             }
                           },
                           {
-                            "lir_id": 2,
+                            "lir_id": 3,
                             "node": {
                               "Negate": {
                                 "input": {
-                                  "lir_id": 1,
+                                  "lir_id": 2,
                                   "node": {
                                     "Get": {
                                       "id": {
@@ -789,15 +789,15 @@ SELECT * FROM ov
     {
       "id": "Explained Query",
       "plan": {
-        "lir_id": 2,
+        "lir_id": 3,
         "node": {
           "TopK": {
             "input": {
-              "lir_id": 1,
+              "lir_id": 2,
               "node": {
                 "ArrangeBy": {
                   "input": {
-                    "lir_id": 0,
+                    "lir_id": 1,
                     "node": {
                       "Get": {
                         "id": {
@@ -915,25 +915,25 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
     {
       "id": "Explained Query",
       "plan": {
-        "lir_id": 9,
+        "lir_id": 10,
         "node": {
           "Let": {
             "id": 0,
             "value": {
-              "lir_id": 5,
+              "lir_id": 6,
               "node": {
                 "Threshold": {
                   "input": {
-                    "lir_id": 4,
+                    "lir_id": 5,
                     "node": {
                       "ArrangeBy": {
                         "input": {
-                          "lir_id": 3,
+                          "lir_id": 4,
                           "node": {
                             "Union": {
                               "inputs": [
                                 {
-                                  "lir_id": 0,
+                                  "lir_id": 1,
                                   "node": {
                                     "Get": {
                                       "id": {
@@ -992,11 +992,11 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                                   }
                                 },
                                 {
-                                  "lir_id": 2,
+                                  "lir_id": 3,
                                   "node": {
                                     "Negate": {
                                       "input": {
-                                        "lir_id": 1,
+                                        "lir_id": 2,
                                         "node": {
                                           "Get": {
                                             "id": {
@@ -1083,12 +1083,12 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
               }
             },
             "body": {
-              "lir_id": 8,
+              "lir_id": 9,
               "node": {
                 "Union": {
                   "inputs": [
                     {
-                      "lir_id": 6,
+                      "lir_id": 7,
                       "node": {
                         "Get": {
                           "id": {
@@ -1163,7 +1163,7 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                       }
                     },
                     {
-                      "lir_id": 7,
+                      "lir_id": 8,
                       "node": {
                         "Get": {
                           "id": {
@@ -1276,29 +1276,29 @@ SELECT x * 5 FROM cte WHERE x = 5
     {
       "id": "Explained Query",
       "plan": {
-        "lir_id": 9,
+        "lir_id": 10,
         "node": {
           "Mfp": {
             "input": {
-              "lir_id": 8,
+              "lir_id": 9,
               "node": {
                 "Threshold": {
                   "input": {
-                    "lir_id": 7,
+                    "lir_id": 8,
                     "node": {
                       "ArrangeBy": {
                         "input": {
-                          "lir_id": 6,
+                          "lir_id": 7,
                           "node": {
                             "Union": {
                               "inputs": [
                                 {
-                                  "lir_id": 3,
+                                  "lir_id": 4,
                                   "node": {
                                     "Join": {
                                       "inputs": [
                                         {
-                                          "lir_id": 0,
+                                          "lir_id": 1,
                                           "node": {
                                             "Get": {
                                               "id": {
@@ -1340,11 +1340,11 @@ SELECT x * 5 FROM cte WHERE x = 5
                                           }
                                         },
                                         {
-                                          "lir_id": 2,
+                                          "lir_id": 3,
                                           "node": {
                                             "ArrangeBy": {
                                               "input": {
-                                                "lir_id": 1,
+                                                "lir_id": 2,
                                                 "node": {
                                                   "Constant": {
                                                     "rows": {
@@ -1444,11 +1444,11 @@ SELECT x * 5 FROM cte WHERE x = 5
                                   }
                                 },
                                 {
-                                  "lir_id": 5,
+                                  "lir_id": 6,
                                   "node": {
                                     "Negate": {
                                       "input": {
-                                        "lir_id": 4,
+                                        "lir_id": 5,
                                         "node": {
                                           "Get": {
                                             "id": {
@@ -1628,11 +1628,11 @@ SELECT generate_series(a, b) from t
     {
       "id": "Explained Query",
       "plan": {
-        "lir_id": 1,
+        "lir_id": 2,
         "node": {
           "FlatMap": {
             "input": {
-              "lir_id": 0,
+              "lir_id": 1,
               "node": {
                 "Get": {
                   "id": {
@@ -1730,11 +1730,11 @@ SELECT DISTINCT a, b FROM t
     {
       "id": "Explained Query",
       "plan": {
-        "lir_id": 1,
+        "lir_id": 2,
         "node": {
           "Reduce": {
             "input": {
-              "lir_id": 0,
+              "lir_id": 1,
               "node": {
                 "Get": {
                   "id": {
@@ -1835,11 +1835,11 @@ GROUP BY a
     {
       "id": "Explained Query",
       "plan": {
-        "lir_id": 1,
+        "lir_id": 2,
         "node": {
           "Reduce": {
             "input": {
-              "lir_id": 0,
+              "lir_id": 1,
               "node": {
                 "Get": {
                   "id": {
@@ -1986,16 +1986,16 @@ FROM t
     {
       "id": "Explained Query",
       "plan": {
-        "lir_id": 10,
+        "lir_id": 11,
         "node": {
           "Let": {
             "id": 0,
             "value": {
-              "lir_id": 1,
+              "lir_id": 2,
               "node": {
                 "Reduce": {
                   "input": {
-                    "lir_id": 0,
+                    "lir_id": 1,
                     "node": {
                       "Get": {
                         "id": {
@@ -2134,16 +2134,16 @@ FROM t
               }
             },
             "body": {
-              "lir_id": 9,
+              "lir_id": 10,
               "node": {
                 "Union": {
                   "inputs": [
                     {
-                      "lir_id": 8,
+                      "lir_id": 9,
                       "node": {
                         "ArrangeBy": {
                           "input": {
-                            "lir_id": 2,
+                            "lir_id": 3,
                             "node": {
                               "Get": {
                                 "id": {
@@ -2189,20 +2189,20 @@ FROM t
                       }
                     },
                     {
-                      "lir_id": 7,
+                      "lir_id": 8,
                       "node": {
                         "Mfp": {
                           "input": {
-                            "lir_id": 6,
+                            "lir_id": 7,
                             "node": {
                               "Union": {
                                 "inputs": [
                                   {
-                                    "lir_id": 4,
+                                    "lir_id": 5,
                                     "node": {
                                       "Negate": {
                                         "input": {
-                                          "lir_id": 3,
+                                          "lir_id": 4,
                                           "node": {
                                             "Get": {
                                               "id": {
@@ -2244,7 +2244,7 @@ FROM t
                                     }
                                   },
                                   {
-                                    "lir_id": 5,
+                                    "lir_id": 6,
                                     "node": {
                                       "Constant": {
                                         "rows": {
@@ -2334,11 +2334,11 @@ SELECT * FROM hierarchical_group_by
     {
       "id": "Explained Query",
       "plan": {
-        "lir_id": 1,
+        "lir_id": 2,
         "node": {
           "Reduce": {
             "input": {
-              "lir_id": 0,
+              "lir_id": 1,
               "node": {
                 "Get": {
                   "id": {
@@ -2451,16 +2451,16 @@ MATERIALIZED VIEW hierarchical_global_mv
     {
       "id": "materialize.public.hierarchical_global_mv",
       "plan": {
-        "lir_id": 10,
+        "lir_id": 11,
         "node": {
           "Let": {
             "id": 0,
             "value": {
-              "lir_id": 1,
+              "lir_id": 2,
               "node": {
                 "Reduce": {
                   "input": {
-                    "lir_id": 0,
+                    "lir_id": 1,
                     "node": {
                       "Get": {
                         "id": {
@@ -2576,16 +2576,16 @@ MATERIALIZED VIEW hierarchical_global_mv
               }
             },
             "body": {
-              "lir_id": 9,
+              "lir_id": 10,
               "node": {
                 "Union": {
                   "inputs": [
                     {
-                      "lir_id": 8,
+                      "lir_id": 9,
                       "node": {
                         "ArrangeBy": {
                           "input": {
-                            "lir_id": 2,
+                            "lir_id": 3,
                             "node": {
                               "Get": {
                                 "id": {
@@ -2631,20 +2631,20 @@ MATERIALIZED VIEW hierarchical_global_mv
                       }
                     },
                     {
-                      "lir_id": 7,
+                      "lir_id": 8,
                       "node": {
                         "Mfp": {
                           "input": {
-                            "lir_id": 6,
+                            "lir_id": 7,
                             "node": {
                               "Union": {
                                 "inputs": [
                                   {
-                                    "lir_id": 4,
+                                    "lir_id": 5,
                                     "node": {
                                       "Negate": {
                                         "input": {
-                                          "lir_id": 3,
+                                          "lir_id": 4,
                                           "node": {
                                             "Get": {
                                               "id": {
@@ -2686,7 +2686,7 @@ MATERIALIZED VIEW hierarchical_global_mv
                                     }
                                   },
                                   {
-                                    "lir_id": 5,
+                                    "lir_id": 6,
                                     "node": {
                                       "Constant": {
                                         "rows": {
@@ -2776,16 +2776,16 @@ SELECT * FROM hierarchical_global
     {
       "id": "Explained Query",
       "plan": {
-        "lir_id": 10,
+        "lir_id": 11,
         "node": {
           "Let": {
             "id": 0,
             "value": {
-              "lir_id": 1,
+              "lir_id": 2,
               "node": {
                 "Reduce": {
                   "input": {
-                    "lir_id": 0,
+                    "lir_id": 1,
                     "node": {
                       "Get": {
                         "id": {
@@ -2893,16 +2893,16 @@ SELECT * FROM hierarchical_global
               }
             },
             "body": {
-              "lir_id": 9,
+              "lir_id": 10,
               "node": {
                 "Union": {
                   "inputs": [
                     {
-                      "lir_id": 8,
+                      "lir_id": 9,
                       "node": {
                         "ArrangeBy": {
                           "input": {
-                            "lir_id": 2,
+                            "lir_id": 3,
                             "node": {
                               "Get": {
                                 "id": {
@@ -2948,20 +2948,20 @@ SELECT * FROM hierarchical_global
                       }
                     },
                     {
-                      "lir_id": 7,
+                      "lir_id": 8,
                       "node": {
                         "Mfp": {
                           "input": {
-                            "lir_id": 6,
+                            "lir_id": 7,
                             "node": {
                               "Union": {
                                 "inputs": [
                                   {
-                                    "lir_id": 4,
+                                    "lir_id": 5,
                                     "node": {
                                       "Negate": {
                                         "input": {
-                                          "lir_id": 3,
+                                          "lir_id": 4,
                                           "node": {
                                             "Get": {
                                               "id": {
@@ -3003,7 +3003,7 @@ SELECT * FROM hierarchical_global
                                     }
                                   },
                                   {
-                                    "lir_id": 5,
+                                    "lir_id": 6,
                                     "node": {
                                       "Constant": {
                                         "rows": {
@@ -3098,11 +3098,11 @@ GROUP BY a
     {
       "id": "Explained Query",
       "plan": {
-        "lir_id": 1,
+        "lir_id": 2,
         "node": {
           "Reduce": {
             "input": {
-              "lir_id": 0,
+              "lir_id": 1,
               "node": {
                 "Get": {
                   "id": {
@@ -3532,16 +3532,16 @@ FROM t
     {
       "id": "Explained Query",
       "plan": {
-        "lir_id": 10,
+        "lir_id": 11,
         "node": {
           "Let": {
             "id": 0,
             "value": {
-              "lir_id": 1,
+              "lir_id": 2,
               "node": {
                 "Reduce": {
                   "input": {
-                    "lir_id": 0,
+                    "lir_id": 1,
                     "node": {
                       "Get": {
                         "id": {
@@ -3963,16 +3963,16 @@ FROM t
               }
             },
             "body": {
-              "lir_id": 9,
+              "lir_id": 10,
               "node": {
                 "Union": {
                   "inputs": [
                     {
-                      "lir_id": 8,
+                      "lir_id": 9,
                       "node": {
                         "ArrangeBy": {
                           "input": {
-                            "lir_id": 2,
+                            "lir_id": 3,
                             "node": {
                               "Get": {
                                 "id": {
@@ -4018,20 +4018,20 @@ FROM t
                       }
                     },
                     {
-                      "lir_id": 7,
+                      "lir_id": 8,
                       "node": {
                         "Mfp": {
                           "input": {
-                            "lir_id": 6,
+                            "lir_id": 7,
                             "node": {
                               "Union": {
                                 "inputs": [
                                   {
-                                    "lir_id": 4,
+                                    "lir_id": 5,
                                     "node": {
                                       "Negate": {
                                         "input": {
-                                          "lir_id": 3,
+                                          "lir_id": 4,
                                           "node": {
                                             "Get": {
                                               "id": {
@@ -4073,7 +4073,7 @@ FROM t
                                     }
                                   },
                                   {
-                                    "lir_id": 5,
+                                    "lir_id": 6,
                                     "node": {
                                       "Constant": {
                                         "rows": {
@@ -4163,11 +4163,11 @@ MATERIALIZED VIEW collated_group_by_mv
     {
       "id": "materialize.public.collated_group_by_mv",
       "plan": {
-        "lir_id": 1,
+        "lir_id": 2,
         "node": {
           "Reduce": {
             "input": {
-              "lir_id": 0,
+              "lir_id": 1,
               "node": {
                 "Get": {
                   "id": {
@@ -4677,11 +4677,11 @@ SELECT * FROM collated_group_by
     {
       "id": "Explained Query",
       "plan": {
-        "lir_id": 1,
+        "lir_id": 2,
         "node": {
           "Reduce": {
             "input": {
-              "lir_id": 0,
+              "lir_id": 1,
               "node": {
                 "Get": {
                   "id": {
@@ -5183,16 +5183,16 @@ MATERIALIZED VIEW collated_global_mv
     {
       "id": "materialize.public.collated_global_mv",
       "plan": {
-        "lir_id": 10,
+        "lir_id": 11,
         "node": {
           "Let": {
             "id": 0,
             "value": {
-              "lir_id": 1,
+              "lir_id": 2,
               "node": {
                 "Reduce": {
                   "input": {
-                    "lir_id": 0,
+                    "lir_id": 1,
                     "node": {
                       "Get": {
                         "id": {
@@ -5697,16 +5697,16 @@ MATERIALIZED VIEW collated_global_mv
               }
             },
             "body": {
-              "lir_id": 9,
+              "lir_id": 10,
               "node": {
                 "Union": {
                   "inputs": [
                     {
-                      "lir_id": 8,
+                      "lir_id": 9,
                       "node": {
                         "ArrangeBy": {
                           "input": {
-                            "lir_id": 2,
+                            "lir_id": 3,
                             "node": {
                               "Get": {
                                 "id": {
@@ -5764,20 +5764,20 @@ MATERIALIZED VIEW collated_global_mv
                       }
                     },
                     {
-                      "lir_id": 7,
+                      "lir_id": 8,
                       "node": {
                         "Mfp": {
                           "input": {
-                            "lir_id": 6,
+                            "lir_id": 7,
                             "node": {
                               "Union": {
                                 "inputs": [
                                   {
-                                    "lir_id": 4,
+                                    "lir_id": 5,
                                     "node": {
                                       "Negate": {
                                         "input": {
-                                          "lir_id": 3,
+                                          "lir_id": 4,
                                           "node": {
                                             "Get": {
                                               "id": {
@@ -5827,7 +5827,7 @@ MATERIALIZED VIEW collated_global_mv
                                     }
                                   },
                                   {
-                                    "lir_id": 5,
+                                    "lir_id": 6,
                                     "node": {
                                       "Constant": {
                                         "rows": {
@@ -5981,16 +5981,16 @@ SELECT * FROM collated_global
     {
       "id": "Explained Query",
       "plan": {
-        "lir_id": 10,
+        "lir_id": 11,
         "node": {
           "Let": {
             "id": 0,
             "value": {
-              "lir_id": 1,
+              "lir_id": 2,
               "node": {
                 "Reduce": {
                   "input": {
-                    "lir_id": 0,
+                    "lir_id": 1,
                     "node": {
                       "Get": {
                         "id": {
@@ -6487,16 +6487,16 @@ SELECT * FROM collated_global
               }
             },
             "body": {
-              "lir_id": 9,
+              "lir_id": 10,
               "node": {
                 "Union": {
                   "inputs": [
                     {
-                      "lir_id": 8,
+                      "lir_id": 9,
                       "node": {
                         "ArrangeBy": {
                           "input": {
-                            "lir_id": 2,
+                            "lir_id": 3,
                             "node": {
                               "Get": {
                                 "id": {
@@ -6554,20 +6554,20 @@ SELECT * FROM collated_global
                       }
                     },
                     {
-                      "lir_id": 7,
+                      "lir_id": 8,
                       "node": {
                         "Mfp": {
                           "input": {
-                            "lir_id": 6,
+                            "lir_id": 7,
                             "node": {
                               "Union": {
                                 "inputs": [
                                   {
-                                    "lir_id": 4,
+                                    "lir_id": 5,
                                     "node": {
                                       "Negate": {
                                         "input": {
-                                          "lir_id": 3,
+                                          "lir_id": 4,
                                           "node": {
                                             "Get": {
                                               "id": {
@@ -6617,7 +6617,7 @@ SELECT * FROM collated_global
                                     }
                                   },
                                   {
-                                    "lir_id": 5,
+                                    "lir_id": 6,
                                     "node": {
                                       "Constant": {
                                         "rows": {
@@ -6773,12 +6773,12 @@ WHERE a = c AND d = e AND b + d > 42
     {
       "id": "Explained Query",
       "plan": {
-        "lir_id": 5,
+        "lir_id": 6,
         "node": {
           "Join": {
             "inputs": [
               {
-                "lir_id": 0,
+                "lir_id": 1,
                 "node": {
                   "Get": {
                     "id": {
@@ -6820,11 +6820,11 @@ WHERE a = c AND d = e AND b + d > 42
                 }
               },
               {
-                "lir_id": 2,
+                "lir_id": 3,
                 "node": {
                   "ArrangeBy": {
                     "input": {
-                      "lir_id": 1,
+                      "lir_id": 2,
                       "node": {
                         "Get": {
                           "id": {
@@ -6908,11 +6908,11 @@ WHERE a = c AND d = e AND b + d > 42
                 }
               },
               {
-                "lir_id": 4,
+                "lir_id": 5,
                 "node": {
                   "ArrangeBy": {
                     "input": {
-                      "lir_id": 3,
+                      "lir_id": 4,
                       "node": {
                         "Get": {
                           "id": {
@@ -7552,12 +7552,12 @@ WHERE a = c AND d = e AND f = a
     {
       "id": "Explained Query",
       "plan": {
-        "lir_id": 5,
+        "lir_id": 6,
         "node": {
           "Join": {
             "inputs": [
               {
-                "lir_id": 0,
+                "lir_id": 1,
                 "node": {
                   "Get": {
                     "id": {
@@ -7599,11 +7599,11 @@ WHERE a = c AND d = e AND f = a
                 }
               },
               {
-                "lir_id": 2,
+                "lir_id": 3,
                 "node": {
                   "ArrangeBy": {
                     "input": {
-                      "lir_id": 1,
+                      "lir_id": 2,
                       "node": {
                         "Get": {
                           "id": {
@@ -7761,11 +7761,11 @@ WHERE a = c AND d = e AND f = a
                 }
               },
               {
-                "lir_id": 4,
+                "lir_id": 5,
                 "node": {
                   "ArrangeBy": {
                     "input": {
-                      "lir_id": 3,
+                      "lir_id": 4,
                       "node": {
                         "Get": {
                           "id": {
@@ -8263,12 +8263,12 @@ WHERE a = c and a = e
     {
       "id": "Explained Query",
       "plan": {
-        "lir_id": 3,
+        "lir_id": 4,
         "node": {
           "Join": {
             "inputs": [
               {
-                "lir_id": 0,
+                "lir_id": 1,
                 "node": {
                   "Get": {
                     "id": {
@@ -8310,7 +8310,7 @@ WHERE a = c and a = e
                 }
               },
               {
-                "lir_id": 1,
+                "lir_id": 2,
                 "node": {
                   "Get": {
                     "id": {
@@ -8352,7 +8352,7 @@ WHERE a = c and a = e
                 }
               },
               {
-                "lir_id": 2,
+                "lir_id": 3,
                 "node": {
                   "Get": {
                     "id": {

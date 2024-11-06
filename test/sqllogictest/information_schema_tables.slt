@@ -825,6 +825,10 @@ mz_arrangement_sizes_per_worker
 VIEW
 materialize
 mz_introspection
+mz_compute_dataflow_global_ids_per_worker
+SOURCE
+materialize
+mz_introspection
 mz_compute_error_counts
 VIEW
 materialize
@@ -862,6 +866,10 @@ VIEW
 materialize
 mz_introspection
 mz_compute_import_frontiers_per_worker
+SOURCE
+materialize
+mz_introspection
+mz_compute_lir_mapping_per_worker
 SOURCE
 materialize
 mz_introspection
@@ -903,6 +911,10 @@ materialize
 mz_introspection
 mz_dataflow_channels_per_worker
 SOURCE
+materialize
+mz_introspection
+mz_dataflow_global_ids
+VIEW
 materialize
 mz_introspection
 mz_dataflow_operator_dataflows
@@ -962,6 +974,10 @@ VIEW
 materialize
 mz_introspection
 mz_expected_group_size_advice
+VIEW
+materialize
+mz_introspection
+mz_lir_mapping
 VIEW
 materialize
 mz_introspection
