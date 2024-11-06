@@ -381,7 +381,7 @@ impl CatalogState {
                     });
                     continue;
                 };
-                if !used_entry.used_by().contains(id) 
+                if !used_entry.used_by().contains(id)
                     // Continual Tasks are self referential.
                     && (used_entry.id() != *id && !used_entry.is_continual_task())
                 {
