@@ -1103,6 +1103,7 @@ impl<'a> RunnerInner<'a> {
             http_host_name: Some(host_name),
             internal_console_redirect_url: None,
             tls_reload_certs: mz_server_core::cert_reload_never_reload(),
+            helm_chart_version: None,
         };
         // We need to run the server on its own Tokio runtime, which in turn
         // requires its own thread, so that we can wait for any tasks spawned

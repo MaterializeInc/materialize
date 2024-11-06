@@ -383,7 +383,7 @@ impl BalancerService {
             });
         }
 
-        println!("balancerd {} listening...", BUILD_INFO.human_version());
+        println!("balancerd {} listening...", BUILD_INFO.human_version(None));
         println!(" TLS enabled: {}", self.cfg.tls.is_some());
         println!(" pgwire address: {}", pgwire_addr);
         println!(" HTTPS address: {}", https_addr);

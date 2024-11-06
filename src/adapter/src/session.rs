@@ -198,6 +198,8 @@ pub struct SessionConfig {
     /// An optional receiver that the session will periodically check for
     /// updates to a user's external metadata.
     pub external_metadata_rx: Option<watch::Receiver<ExternalUserMetadata>>,
+    /// Helm chart version
+    pub helm_chart_version: Option<String>,
 }
 
 impl<T: TimestampManipulation> Session<T> {
@@ -279,6 +281,7 @@ impl<T: TimestampManipulation> Session<T> {
                 user: SYSTEM_USER.name.clone(),
                 client_ip: None,
                 external_metadata_rx: None,
+                helm_chart_version: None,
             },
             metrics,
         );
@@ -294,6 +297,7 @@ impl<T: TimestampManipulation> Session<T> {
             user,
             client_ip,
             mut external_metadata_rx,
+            helm_chart_version,
         }: SessionConfig,
         metrics: SessionMetrics,
     ) -> Session<T> {
@@ -305,7 +309,7 @@ impl<T: TimestampManipulation> Session<T> {
                 .as_mut()
                 .map(|rx| rx.borrow_and_update().clone()),
         };
-        let mut vars = SessionVars::new_unchecked(build_info, user);
+        let mut vars = SessionVars::new_unchecked(build_info, user, helm_chart_version);
         if let Some(default_cluster) = default_cluster {
             vars.set_cluster(default_cluster.clone());
         }

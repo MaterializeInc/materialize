@@ -394,6 +394,8 @@ pub struct CatalogConfig {
     pub connection_context: ConnectionContext,
     /// Which system builtins to include. Not allowed to change dynamically.
     pub builtins_cfg: BuiltinsConfig,
+    /// Helm chart version
+    pub helm_chart_version: Option<String>,
 }
 
 /// A database in a [`SessionCatalog`].

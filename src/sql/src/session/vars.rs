@@ -357,6 +357,23 @@ impl Var for SessionVar {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MzVersion {
+    /// Inputs to computed variables.
+    build_info: &'static BuildInfo,
+    /// Helm chart version
+    helm_chart_version: Option<String>,
+}
+
+impl MzVersion {
+    pub fn new(build_info: &'static BuildInfo, helm_chart_version: Option<String>) -> Self {
+        MzVersion {
+            build_info,
+            helm_chart_version,
+        }
+    }
+}
+
 /// Session variables.
 ///
 /// See the [`crate::session::vars`] module documentation for more details on the
@@ -366,14 +383,18 @@ pub struct SessionVars {
     /// The set of all session variables.
     vars: OrdMap<&'static UncasedStr, SessionVar>,
     /// Inputs to computed variables.
-    build_info: &'static BuildInfo,
+    mz_version: MzVersion,
     /// Information about the user associated with this Session.
     user: User,
 }
 
 impl SessionVars {
     /// Creates a new [`SessionVars`] without considering the System or Role defaults.
-    pub fn new_unchecked(build_info: &'static BuildInfo, user: User) -> SessionVars {
+    pub fn new_unchecked(
+        build_info: &'static BuildInfo,
+        user: User,
+        helm_chart_version: Option<String>,
+    ) -> SessionVars {
         use definitions::*;
 
         let vars = [
@@ -401,7 +422,7 @@ impl SessionVars {
 
         SessionVars {
             vars,
-            build_info,
+            mz_version: MzVersion::new(build_info, helm_chart_version),
             user,
         }
     }
@@ -426,7 +447,7 @@ impl SessionVars {
         self.vars
             .values()
             .map(|v| v.as_var())
-            .chain([self.build_info as &dyn Var, &self.user])
+            .chain([&self.mz_version as &dyn Var, &self.user])
     }
 
     /// Returns an iterator over configuration parameters (and their current
@@ -459,7 +480,7 @@ impl SessionVars {
         // network roundtrip. This is known to be safe because CockroachDB
         // has an analogous extension [0].
         // [0]: https://github.com/cockroachdb/cockroach/blob/369c4057a/pkg/sql/pgwire/conn.go#L1840
-        .chain(std::iter::once(self.build_info.as_var()))
+        .chain(std::iter::once(self.mz_version.as_var()))
     }
 
     /// Resets all variables to their default value.
@@ -485,7 +506,7 @@ impl SessionVars {
 
         let name = UncasedStr::new(name);
         if name == MZ_VERSION_NAME {
-            Ok(self.build_info)
+            Ok(&self.mz_version)
         } else if name == IS_SUPERUSER_NAME {
             Ok(&self.user)
         } else {
@@ -648,7 +669,7 @@ impl SessionVars {
 
     /// Returns the build info.
     pub fn build_info(&self) -> &'static BuildInfo {
-        self.build_info
+        self.mz_version.build_info
     }
 
     /// Returns the value of the `client_encoding` configuration parameter.
@@ -705,7 +726,7 @@ impl SessionVars {
 
     /// Returns the value of the `mz_version` configuration parameter.
     pub fn mz_version(&self) -> String {
-        self.build_info.value()
+        self.mz_version.value()
     }
 
     /// Returns the value of the `search_path` configuration parameter.
@@ -2435,13 +2456,14 @@ impl FeatureFlag {
     }
 }
 
-impl Var for BuildInfo {
+impl Var for MzVersion {
     fn name(&self) -> &'static str {
         MZ_VERSION_NAME.as_str()
     }
 
     fn value(&self) -> String {
-        self.human_version()
+        self.build_info
+            .human_version(self.helm_chart_version.clone())
     }
 
     fn description(&self) -> &'static str {

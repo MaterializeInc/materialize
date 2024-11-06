@@ -84,6 +84,8 @@ pub struct StateConfig {
     /// Global connection limit and count
     pub active_connection_count: Arc<std::sync::Mutex<ConnectionCounter>>,
     pub builtin_item_migration_config: BuiltinItemMigrationConfig,
+    /// Helm chart version
+    pub helm_chart_version: Option<String>,
 }
 
 #[derive(Debug)]

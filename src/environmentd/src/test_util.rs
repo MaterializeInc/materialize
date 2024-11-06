@@ -538,6 +538,7 @@ impl Listeners {
                 http_host_name: Some(host_name),
                 internal_console_redirect_url: config.internal_console_redirect_url,
                 tls_reload_certs,
+                helm_chart_version: None,
             })
             .await?;
 

@@ -222,6 +222,7 @@ mod tests {
                     user,
                     client_ip: None,
                     external_metadata_rx: None,
+                    helm_chart_version: None,
                 },
                 metrics.session_metrics(),
             );

@@ -195,6 +195,7 @@ impl CatalogState {
                 builtins_cfg: BuiltinsConfig {
                     include_continual_tasks: true,
                 },
+                helm_chart_version: None,
             },
             cluster_replica_sizes: Default::default(),
             availability_zones: Default::default(),
