@@ -925,33 +925,105 @@ impl<T: timely::progress::Timestamp> Plan<T> {
         mz_repr::explain::trace_plan(dataflow);
     }
 
-    /// Changes the `consolidate_output` flag of such Unions that have at least one Negated input.
+    /// Considers setting the `consolidate_output` flag of such Unions that have at least one
+    /// Negated input.
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "refine_union_negate_consolidation")
     )]
     fn refine_union_negate_consolidation(dataflow: &mut DataflowDescription<Self>) {
+        struct Work<'a, T> {
+            /// The LIR expression that we need to analyze.
+            expr: &'a mut Plan<T>,
+            /// Whether it's ok if `expr` emits unconsolidated data. This is true when:
+            /// - the node directly above us will consolidate (e.g., by forming an arrangement), and
+            /// - there isn't any expensive or potentially erroring scalar expression before that
+            ///   consolidation.
+            ok_to_not_consolidate: bool,
+        }
+
         for build_desc in dataflow.objects_to_build.iter_mut() {
-            let mut todo = vec![&mut build_desc.plan];
-            while let Some(expression) = todo.pop() {
-                let node = &mut expression.node;
+            let mut todo = vec![Work {
+                expr: &mut build_desc.plan,
+                // Actually, the root often (always?) consolidates, so this could be true,
+                // but let's not risk it, because this sounds like a brittle invariant.
+                ok_to_not_consolidate: false,
+            }];
+            while let Some(Work {
+                expr,
+                ok_to_not_consolidate,
+            }) = todo.pop()
+            {
+                let node = &mut expr.node;
+                let mut child_ok_to_not_consolidate = false;
                 match node {
+                    // We might tweak a Union.
                     PlanNode::Union {
                         inputs,
                         consolidate_output,
-                        ..
                     } => {
-                        if inputs
-                            .iter()
-                            .any(|input| matches!(input.node, PlanNode::Negate { .. }))
+                        if !ok_to_not_consolidate
+                            && inputs
+                                .iter()
+                                .any(|input| matches!(input.node, PlanNode::Negate { .. }))
                         {
                             *consolidate_output = true;
+                            // We make the decision to not set `child_ok_to_not_consolidate` here
+                            // for now. Even though we will consolidate, the concern is that there
+                            // is more data here than at a potential `Union` below us, and if we
+                            // omit consolidation at the below Union, that would increase memory
+                            // spikes. (This situation occurs for the equi outer join lowering
+                            // pattern (with an extra MFP between the two Unions).)
                         }
                     }
+                    // For various other nodes we just note that they will consolidate, so that we
+                    // pass down this information to a potential `Union` below us.
+                    //
+                    // ArrangeBy above a Union-Negate occurs, e.g.:
+                    // - general outer join lowering pattern
+                    // - outer join with a correlated subquery lowering pattern
+                    // - EXISTS / NOT EXISTS subqueries
+                    PlanNode::ArrangeBy {
+                        forms: AvailableCollections { arranged, .. },
+                        ..
+                    } if !arranged.is_empty()
+                        && arranged.iter().all(|(key, _, _)| {
+                            key.iter().all(|k| k.cheap() && !k.could_error())
+                        }) =>
+                    {
+                        child_ok_to_not_consolidate = true;
+                    }
+                    // Threshold above a Union-Negate occurs for, e.g.:
+                    // - VOJ lowering
+                    // - EXCEPT / EXCEPT ALL
+                    // - INTERSECT / INTERSECT ALL
+                    PlanNode::Threshold { .. } => {
+                        child_ok_to_not_consolidate = true;
+                    }
+                    PlanNode::Reduce {
+                        input: _,
+                        key_val_plan,
+                        plan: _,
+                        input_key: _,
+                        mfp_after: _,
+                    } if key_val_plan.key_plan.cheap()
+                        && !key_val_plan.key_plan.could_error()
+                        && key_val_plan.val_plan.cheap()
+                        && !key_val_plan.val_plan.could_error() =>
+                    {
+                        child_ok_to_not_consolidate = true;
+                    }
+                    PlanNode::TopK { .. } => {
+                        child_ok_to_not_consolidate = true;
+                    }
+                    // For other nodes, we don't assume consolidation.
                     _ => {}
                 }
-                todo.extend(node.children_mut());
+                todo.extend(node.children_mut().map(|c| Work {
+                    expr: c,
+                    ok_to_not_consolidate: child_ok_to_not_consolidate,
+                }));
             }
         }
         mz_repr::explain::trace_plan(dataflow);

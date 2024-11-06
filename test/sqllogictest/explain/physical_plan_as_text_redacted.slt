@@ -265,7 +265,7 @@ Explained Query:
       raw=false
       arrangements[0]={ key=[#0], permutation=id, thinning=() }
       types=[integer?]
-      Union consolidate_output=true
+      Union
         Get::Arrangement materialize.public.t
           project=(#0)
           key=#0
@@ -316,7 +316,7 @@ Explained Query:
           raw=false
           arrangements[0]={ key=[#0], permutation=id, thinning=() }
           types=[integer?]
-          Union consolidate_output=true
+          Union
             Get::Arrangement materialize.public.t
               project=(#0)
               key=#0
@@ -353,7 +353,7 @@ Explained Query:
         raw=false
         arrangements[0]={ key=[#0], permutation=id, thinning=() }
         types=[integer]
-        Union consolidate_output=true
+        Union
           Join::Linear
             linear_stage[0]
               closure

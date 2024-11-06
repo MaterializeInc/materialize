@@ -96,7 +96,164 @@ insert into left values (0,0);
 statement ok
 insert into right2 values (0,0);
 
-# `consolidate_output` should be true when there is a negated input to a Union.
+## Look at physical plans to test `consolidate_output` on `Union`.
+
+# Currently, it's present for the equi lowering.
+query T multiline
+explain physical plan for
+select *
+from
+  left
+  LEFT JOIN right1 ON left.x = right1.x
+----
+Explained Query:
+  Return
+    Union
+      Mfp
+        project=(#0..=#3)
+        map=(null, null)
+        Union consolidate_output=true
+          Negate
+            Join::Linear
+              linear_stage[0]
+                lookup={ relation=0, key=[#0] }
+                stream={ key=[#0], thinning=() }
+              source={ relation=1, key=[#0] }
+              Get::PassArrangements l0
+                raw=true
+                arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+                types=[integer, integer?]
+              Reduce::Distinct
+                val_plan
+                  project=()
+                key_plan=id
+                Get::Collection l1
+                  project=(#0)
+                  raw=true
+          Get::PassArrangements materialize.public.left
+            raw=true
+      Get::Collection l1
+        project=(#0, #1, #0, #2)
+        raw=true
+  With
+    cte l1 =
+      Join::Linear
+        linear_stage[0]
+          lookup={ relation=1, key=[#0] }
+          stream={ key=[#0], thinning=(#1) }
+        source={ relation=0, key=[#0] }
+        Get::PassArrangements l0
+          raw=true
+          arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+          types=[integer, integer?]
+        ArrangeBy
+          raw=true
+          arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+          types=[integer, integer?]
+          Get::Collection materialize.public.right1
+            raw=true
+    cte l0 =
+      ArrangeBy
+        raw=true
+        arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+        types=[integer, integer?]
+        Get::Collection materialize.public.left
+          filter=((#0) IS NOT NULL)
+          raw=true
+
+Source materialize.public.left
+Source materialize.public.right1
+  filter=((#0) IS NOT NULL)
+
+Target cluster: quickstart
+
+EOF
+
+# Should not be present for the general lowering, because an ArrangeBy follows the Union-Negate.
+query T multiline
+explain physical plan for
+select *
+from
+  left
+  LEFT JOIN right1 ON left.x = right1.x AND left.y < right1.y
+----
+Explained Query:
+  Return
+    Union
+      Get::Collection l0
+        project=(#0, #1, #0, #2)
+        raw=true
+      Join::Linear
+        final_closure
+          project=(#0..=#3)
+          map=(null, null)
+        linear_stage[0]
+          lookup={ relation=1, key=[#0, #1] }
+          stream={ key=[#0, #1], thinning=() }
+        source={ relation=0, key=[#0, #1] }
+        ArrangeBy
+          raw=true
+          arrangements[0]={ key=[#0, #1], permutation=id, thinning=() }
+          types=[integer?, integer?]
+          Union
+            Negate
+              ArrangeBy
+                input_key=[#0, #1]
+                raw=true
+                Reduce::Distinct
+                  val_plan
+                    project=()
+                  key_plan=id
+                  Get::Collection l0
+                    project=(#0, #1)
+                    raw=true
+            ArrangeBy
+              input_key=[#0, #1]
+              raw=true
+              Reduce::Distinct
+                val_plan
+                  project=()
+                key_plan=id
+                Get::PassArrangements materialize.public.left
+                  raw=true
+        ArrangeBy
+          raw=true
+          arrangements[0]={ key=[#0, #1], permutation=id, thinning=() }
+          types=[integer?, integer?]
+          Get::PassArrangements materialize.public.left
+            raw=true
+  With
+    cte l0 =
+      Join::Linear
+        linear_stage[0]
+          closure
+            filter=((#1 < #2))
+          lookup={ relation=1, key=[#0] }
+          stream={ key=[#0], thinning=(#1) }
+        source={ relation=0, key=[#0] }
+        ArrangeBy
+          raw=true
+          arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+          types=[integer, integer?]
+          Get::Collection materialize.public.left
+            filter=((#0) IS NOT NULL)
+            raw=true
+        ArrangeBy
+          raw=true
+          arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+          types=[integer, integer?]
+          Get::Collection materialize.public.right1
+            raw=true
+
+Source materialize.public.left
+Source materialize.public.right1
+  filter=((#0) IS NOT NULL)
+
+Target cluster: quickstart
+
+EOF
+
+# Should not be present for the VOJ lowering, because a Threshold follows the Union-Negate.
 query T multiline
 explain physical plan for
 select *
@@ -180,7 +337,7 @@ Explained Query:
                 raw=false
                 arrangements[0]={ key=[#0], permutation=id, thinning=() }
                 types=[integer?]
-                Union consolidate_output=true
+                Union
                   Negate
                     Get::Collection l0
                       project=(#0)
@@ -210,7 +367,7 @@ Explained Query:
                 raw=false
                 arrangements[0]={ key=[#0], permutation=id, thinning=() }
                 types=[integer?]
-                Union consolidate_output=true
+                Union
                   Negate
                     Get::Collection materialize.public.right2
                       project=(#0)

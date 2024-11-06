@@ -704,7 +704,7 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
                             }
                           }
                         ],
-                        "consolidate_output": true
+                        "consolidate_output": false
                       }
                     }
                   },
@@ -1026,7 +1026,7 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                                   }
                                 }
                               ],
-                              "consolidate_output": true
+                              "consolidate_output": false
                             }
                           }
                         },
@@ -1478,7 +1478,7 @@ SELECT x * 5 FROM cte WHERE x = 5
                                   }
                                 }
                               ],
-                              "consolidate_output": true
+                              "consolidate_output": false
                             }
                           }
                         },

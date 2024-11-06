@@ -1976,6 +1976,20 @@ impl MirScalarExpr {
             }
         }
     }
+
+    /// Whether the `MirScalarExpr` is considered cheap.
+    /// TODO: add some simple functions, e.g., UnaryFunc::IsNull
+    pub fn cheap(&self) -> bool {
+        match self {
+            MirScalarExpr::Column(_col) => true,
+            MirScalarExpr::Literal(..) => true,
+            MirScalarExpr::CallUnmaterializable(_)
+            | MirScalarExpr::CallUnary { .. }
+            | MirScalarExpr::CallBinary { .. }
+            | MirScalarExpr::CallVariadic { .. }
+            | MirScalarExpr::If { .. } => false,
+        }
+    }
 }
 
 impl VisitChildren<Self> for MirScalarExpr {

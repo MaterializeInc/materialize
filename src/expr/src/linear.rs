@@ -566,6 +566,18 @@ impl MapFilterProject {
     pub fn into_plan(self) -> Result<plan::MfpPlan, String> {
         plan::MfpPlan::create_from(self)
     }
+
+    /// Returns true if evaluation could introduce an error on non-error inputs.
+    pub fn could_error(&self) -> bool {
+        self.predicates.iter().any(|(_pos, e)| e.could_error())
+            || self.expressions.iter().any(|e| e.could_error())
+    }
+
+    /// Whether the MFP is considered cheap to evaluate.
+    pub fn cheap(&self) -> bool {
+        self.predicates.iter().all(|(_pos, p)| p.cheap())
+            && self.expressions.iter().all(|e| e.cheap())
+    }
 }
 
 impl MapFilterProject {
@@ -1611,8 +1623,12 @@ pub mod plan {
 
         /// Returns true if evaluation could introduce an error on non-error inputs.
         pub fn could_error(&self) -> bool {
-            self.mfp.predicates.iter().any(|(_pos, e)| e.could_error())
-                || self.mfp.expressions.iter().any(|e| e.could_error())
+            self.mfp.could_error()
+        }
+
+        /// Whether the MFP is considered cheap to evaluate.
+        pub fn cheap(&self) -> bool {
+            self.mfp.cheap()
         }
 
         /// Returns true when `Self` is the identity.
