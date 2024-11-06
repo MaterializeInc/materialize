@@ -43,10 +43,18 @@ pub struct CatalogInconsistencies {
 
 impl CatalogInconsistencies {
     pub fn is_empty(&self) -> bool {
-        self.internal_fields.is_empty()
-            && self.roles.is_empty()
-            && self.comments.is_empty()
-            && self.items.is_empty()
+        let CatalogInconsistencies {
+            internal_fields,
+            roles,
+            comments,
+            object_dependencies,
+            items,
+        } = self;
+        internal_fields.is_empty()
+            && roles.is_empty()
+            && comments.is_empty()
+            && object_dependencies.is_empty()
+            && items.is_empty()
     }
 }
 
@@ -353,7 +361,10 @@ impl CatalogState {
                     });
                     continue;
                 };
-                if !referenced_entry.referenced_by().contains(id) {
+                if !referenced_entry.referenced_by().contains(id)
+                    // Continual Tasks are self referential.
+                    && (referenced_entry.id() != *id && !referenced_entry.is_continual_task())
+                {
                     dependency_inconsistencies.push(
                         ObjectDependencyInconsistency::InconsistentUsedBy {
                             object_a: *id,
@@ -370,7 +381,10 @@ impl CatalogState {
                     });
                     continue;
                 };
-                if !used_entry.used_by().contains(id) {
+                if !used_entry.used_by().contains(id)
+                    // Continual Tasks are self referential.
+                    && (used_entry.id() != *id && !used_entry.is_continual_task())
+                {
                     dependency_inconsistencies.push(
                         ObjectDependencyInconsistency::InconsistentUsedBy {
                             object_a: *id,
