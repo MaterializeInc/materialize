@@ -299,7 +299,7 @@ impl ComputeState {
             }
         } else {
             info!("disabling lgalloc");
-            lgalloc::lgalloc_set_config(&lgalloc::LgAlloc::new())
+            lgalloc::lgalloc_set_config(lgalloc::LgAlloc::new().disable());
         }
 
         let chunked_stack = ENABLE_CHUNKED_STACK.get(config);
