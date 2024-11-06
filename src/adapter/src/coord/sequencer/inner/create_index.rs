@@ -30,7 +30,6 @@ use crate::coord::{
 use crate::error::AdapterError;
 use crate::explain::explain_dataflow;
 use crate::explain::optimizer_trace::OptimizerTrace;
-use crate::optimize::dataflow_expiration::time_dependence;
 use crate::optimize::dataflows::dataflow_import_id_bundle;
 use crate::optimize::{self, Optimize};
 use crate::session::Session;
@@ -448,8 +447,6 @@ impl Coordinator {
         let transact_result = self
             .catalog_transact_with_side_effects(Some(session), ops, |coord| async {
                 let (mut df_desc, df_meta) = global_lir_plan.unapply();
-                df_desc.time_dependence =
-                    time_dependence(coord.catalog(), df_desc.import_ids(), None);
 
                 // Save plan structures.
                 coord

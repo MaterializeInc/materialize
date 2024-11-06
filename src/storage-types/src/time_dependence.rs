@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Description of how a dataflow follows time, independent of time.
+//! Description of how a dataflow follows wall-clock time, independent of a specific point in time.
 
 use mz_proto::{RustType, TryFromProtoError};
 use mz_repr::refresh_schedule::RefreshSchedule;
@@ -16,15 +16,22 @@ use proptest::arbitrary::{any, Arbitrary};
 use proptest::prelude::BoxedStrategy;
 use proptest::strategy::Strategy;
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
+
+use crate::instances::StorageInstanceId;
 
 include!(concat!(
     env!("OUT_DIR"),
-    "/mz_compute_types.time_dependence.rs"
+    "/mz_storage_types.time_dependence.rs"
 ));
 
 /// Description of how a dataflow follows time.
 ///
 /// The default value indicates the dataflow follows wall-clock without modifications.
+///
+/// Note: This is different from `Timeline` or `TimelineContext`, which describe in what timeline
+/// an object exists. `TimeDependence` explains how an object in an epoch-based timeline
+/// relates to wall-clock time.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct TimeDependence {
     /// Optional refresh schedule. None indicates no rounding.
@@ -43,19 +50,56 @@ impl TimeDependence {
         }
     }
 
-    /// Normalizes by removing unnecessary nesting.
-    pub fn normalize(this: Option<Self>) -> Option<Self> {
-        match this {
-            Some(TimeDependence {
-                schedule: None,
-                mut dependence,
-            }) if dependence.len() == 1 => Some(dependence.remove(0)),
-            other => other,
+    /// Merge any number of optional dependencies into one, using the supplied refresh schedule.
+    ///
+    /// It applies the following rules under the assumption that, ignoring the refresh schedule, the
+    /// frontier of an object ticks at the rate of the slowest immediate dependency. For objects
+    /// depending on wall-clock time, this is firstly wall-clock time, followed by refresh schedule.
+    /// At the moment, we cannot express other behavior. This means:
+    /// * A merge of anything with wall-clock time results in wall-clock time.
+    /// * A merge of anything but wall-clock time or a refresh schedule results in a dependence
+    ///   on the deduplicated collection of dependencies.
+    /// * Otherwise, a dataflow is indeterminate, which expresses that we either don't know how it
+    ///   follows wall-clock time, or is a constant collection.
+    ///
+    /// If the result is a dependence without refresh schedule on a single nested dependence, the
+    /// function instead returns the inner value.
+    pub fn merge(
+        mut dependencies: Vec<Option<Self>>,
+        schedule: Option<&RefreshSchedule>,
+    ) -> Option<Self> {
+        // Any `Some` value dominates the `None` values.
+        dependencies.retain(Option::is_some);
+        dependencies.sort();
+        dependencies.dedup();
+
+        if dependencies
+            .iter()
+            .any(|dep| *dep == Some(TimeDependence::default()))
+        {
+            // Wall-clock dependency is dominant.
+            Some(TimeDependence::new(schedule.cloned(), vec![]))
+        } else if !dependencies.is_empty() {
+            // No immediate wall-clock dependency, but some other dependency.
+            if schedule.is_none() && dependencies.len() == 1 {
+                // We don't have a refresh schedule, and one dependency, so just return that.
+                dependencies.remove(0)
+            } else {
+                // Insert our refresh schedule.
+                let dependencies = dependencies.into_iter().flatten().collect();
+                Some(TimeDependence::new(schedule.cloned(), dependencies))
+            }
+        } else {
+            // Not related to wall-clock time; or unknown relation.
+            None
         }
     }
 
     /// Applies the indefiniteness to a wall clock time.
     pub fn apply(&self, wall_clock: Timestamp) -> Option<Timestamp> {
+        // We take the minimum of our dependencies applied to the wall-clock time, or just
+        // wall-clock itself if we don't have any dependence. The minimum corresponds to the time
+        // that we can expect as the output time at the passed wall-clock time.
         let result = self
             .dependence
             .iter()
@@ -63,12 +107,24 @@ impl TimeDependence {
             .min()
             .unwrap_or(Some(wall_clock))?;
 
+        // Round the result according to our refresh schedule, if there is any.
         if let Some(schedule) = &self.schedule {
             schedule.round_up_timestamp(result)
         } else {
             Some(result)
         }
     }
+}
+
+/// Errors arising when reading time dependence information.
+#[derive(Error, Debug)]
+pub enum TimeDependenceError {
+    /// The given instance does not exist.
+    #[error("instance does not exist: {0}")]
+    InstanceMissing(StorageInstanceId),
+    /// One of the imported collections does not exist.
+    #[error("collection does not exist: {0}")]
+    CollectionMissing(mz_repr::GlobalId),
 }
 
 impl RustType<ProtoTimeDependence> for TimeDependence {
@@ -110,28 +166,43 @@ mod tests {
     use super::*;
 
     #[mz_ore::test]
-    fn test_time_dependence_normalize() {
-        let i = TimeDependence::default();
-        let i = TimeDependence::normalize(Some(i));
-        assert_eq!(i, Some(TimeDependence::default()),);
-
-        let i = TimeDependence::new(
+    fn test_time_dependence_merge() {
+        let schedule = |at| {
             Some(RefreshSchedule {
                 everies: vec![],
-                ats: vec![Timestamp::from(1000)],
-            }),
-            vec![],
-        );
-        let i = TimeDependence::normalize(Some(i));
-        assert_eq!(
-            i,
-            Some(TimeDependence {
-                schedule: Some(RefreshSchedule {
-                    everies: vec![],
-                    ats: vec![Timestamp::from(1000)],
-                }),
-                dependence: vec![],
+                ats: vec![at],
             })
+        };
+
+        assert_eq!(None, TimeDependence::merge(vec![], None));
+        let default = Some(TimeDependence::default());
+        assert_eq!(
+            default.clone(),
+            TimeDependence::merge(vec![default.clone()], None)
+        );
+        assert_eq!(
+            Some(TimeDependence::new(schedule(10.into()), vec![])),
+            TimeDependence::merge(vec![default.clone()], schedule(10.into()).as_ref())
+        );
+
+        let scheduled = Some(TimeDependence::new(schedule(10.into()), vec![]));
+        assert_eq!(
+            scheduled.clone(),
+            TimeDependence::merge(vec![scheduled.clone()], None)
+        );
+        assert_eq!(
+            Some(TimeDependence::new(
+                schedule(10.into()),
+                vec![scheduled.clone().unwrap()]
+            )),
+            TimeDependence::merge(vec![scheduled.clone()], schedule(10.into()).as_ref())
+        );
+        assert_eq!(
+            Some(TimeDependence::new(schedule(10.into()), vec![])),
+            TimeDependence::merge(
+                vec![default.clone(), scheduled.clone()],
+                schedule(10.into()).as_ref()
+            )
         );
     }
 

@@ -799,6 +799,7 @@ mod tests {
     use mz_storage_types::read_holds::ReadHoldError;
     use mz_storage_types::sources::SourceExportDataConfig;
     use mz_storage_types::sources::{GenericSourceConnection, SourceDesc};
+    use mz_storage_types::time_dependence::{TimeDependence, TimeDependenceError};
 
     use super::*;
 
@@ -960,6 +961,13 @@ mod tests {
                 holds.push(ReadHold::new(id, read.clone(), tx));
             }
             Ok(holds)
+        }
+
+        fn determine_time_dependence(
+            &self,
+            _id: GlobalId,
+        ) -> Result<Option<TimeDependence>, TimeDependenceError> {
+            unimplemented!()
         }
     }
 

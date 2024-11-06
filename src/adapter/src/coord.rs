@@ -186,7 +186,6 @@ use crate::error::AdapterError;
 use crate::explain::insights::PlanInsightsContext;
 use crate::explain::optimizer_trace::{DispatchGuard, OptimizerTrace};
 use crate::metrics::Metrics;
-use crate::optimize::dataflow_expiration::time_dependence;
 use crate::optimize::dataflows::{
     dataflow_import_id_bundle, ComputeInstanceSnapshot, DataflowBuilder,
 };
@@ -2440,57 +2439,59 @@ impl Coordinator {
         let source_status_collection_id = catalog
             .resolve_builtin_storage_collection(&mz_catalog::builtin::MZ_SOURCE_STATUS_HISTORY);
 
-        let source_desc = |data_source: &DataSourceDesc, desc: &RelationDesc| {
-            let (data_source, status_collection_id) = match data_source.clone() {
-                // Re-announce the source description.
-                DataSourceDesc::Ingestion {
-                    ingestion_desc:
-                        mz_sql::plan::Ingestion {
-                            desc,
-                            progress_subsource,
-                        },
-                    cluster_id,
-                } => {
-                    let desc = desc.into_inline_connection(catalog.state());
-                    let ingestion = mz_storage_types::sources::IngestionDescription::new(
-                        desc,
+        let source_desc =
+            |data_source: &DataSourceDesc, desc: &RelationDesc, timeline: &Timeline| {
+                let (data_source, status_collection_id) = match data_source.clone() {
+                    // Re-announce the source description.
+                    DataSourceDesc::Ingestion {
+                        ingestion_desc:
+                            mz_sql::plan::Ingestion {
+                                desc,
+                                progress_subsource,
+                            },
                         cluster_id,
-                        progress_subsource,
-                    );
+                    } => {
+                        let desc = desc.into_inline_connection(catalog.state());
+                        let ingestion = mz_storage_types::sources::IngestionDescription::new(
+                            desc,
+                            cluster_id,
+                            progress_subsource,
+                        );
 
-                    (
-                        DataSource::Ingestion(ingestion.clone()),
-                        Some(source_status_collection_id),
-                    )
-                }
-                DataSourceDesc::IngestionExport {
-                    ingestion_id,
-                    external_reference: _,
-                    details,
-                    data_config,
-                } => (
-                    DataSource::IngestionExport {
+                        (
+                            DataSource::Ingestion(ingestion.clone()),
+                            Some(source_status_collection_id),
+                        )
+                    }
+                    DataSourceDesc::IngestionExport {
                         ingestion_id,
+                        external_reference: _,
                         details,
-                        data_config: data_config.into_inline_connection(catalog.state()),
-                    },
-                    Some(source_status_collection_id),
-                ),
-                DataSourceDesc::Webhook { .. } => {
-                    (DataSource::Webhook, Some(source_status_collection_id))
-                }
-                DataSourceDesc::Progress => (DataSource::Progress, None),
-                DataSourceDesc::Introspection(introspection) => {
-                    (DataSource::Introspection(introspection), None)
+                        data_config,
+                    } => (
+                        DataSource::IngestionExport {
+                            ingestion_id,
+                            details,
+                            data_config: data_config.into_inline_connection(catalog.state()),
+                        },
+                        Some(source_status_collection_id),
+                    ),
+                    DataSourceDesc::Webhook { .. } => {
+                        (DataSource::Webhook, Some(source_status_collection_id))
+                    }
+                    DataSourceDesc::Progress => (DataSource::Progress, None),
+                    DataSourceDesc::Introspection(introspection) => {
+                        (DataSource::Introspection(introspection), None)
+                    }
+                };
+                CollectionDescription {
+                    desc: desc.clone(),
+                    data_source,
+                    since: None,
+                    status_collection_id,
+                    timeline: Some(timeline.clone()),
                 }
             };
-            CollectionDescription {
-                desc: desc.clone(),
-                data_source,
-                since: None,
-                status_collection_id,
-            }
-        };
 
         let mut collections = vec![];
         let mut new_builtin_continual_tasks = vec![];
@@ -2498,7 +2499,10 @@ impl Coordinator {
             let id = entry.id();
             match entry.item() {
                 CatalogItem::Source(source) => {
-                    collections.push((id, source_desc(&source.data_source, &source.desc)));
+                    collections.push((
+                        id,
+                        source_desc(&source.data_source, &source.desc, &source.timeline),
+                    ));
                 }
                 CatalogItem::Table(table) => {
                     let collection_desc = match &table.data_source {
@@ -2507,8 +2511,8 @@ impl Coordinator {
                         }
                         TableDataSource::DataSource {
                             desc: data_source_desc,
-                            timeline: _,
-                        } => source_desc(data_source_desc, &table.desc),
+                            timeline,
+                        } => source_desc(data_source_desc, &table.desc, timeline),
                     };
                     collections.push((id, collection_desc));
                 }
@@ -2518,6 +2522,7 @@ impl Coordinator {
                         data_source: DataSource::Other,
                         since: mv.initial_as_of.clone(),
                         status_collection_id: None,
+                        timeline: None,
                     };
                     collections.push((id, collection_desc));
                 }
@@ -2527,6 +2532,7 @@ impl Coordinator {
                         data_source: DataSource::Other,
                         since: ct.initial_as_of.clone(),
                         status_collection_id: None,
+                        timeline: None,
                     };
                     if id.is_system() && collection_desc.since.is_none() {
                         // We need a non-0 since to make as_of selection work. Fill it in below with
@@ -2674,9 +2680,7 @@ impl Coordinator {
                         (optimized_plan, global_lir_plan)
                     };
 
-                    let (mut physical_plan, metainfo) = global_lir_plan.unapply();
-                    physical_plan.time_dependence =
-                        time_dependence(self.catalog(), physical_plan.import_ids(), None);
+                    let (physical_plan, metainfo) = global_lir_plan.unapply();
                     let metainfo = {
                         // Pre-allocate a vector of transient GlobalIds for each notice.
                         let notice_ids = std::iter::repeat_with(|| self.allocate_transient_id())
@@ -2735,12 +2739,7 @@ impl Coordinator {
                         (optimized_plan, global_lir_plan)
                     };
 
-                    let (mut physical_plan, metainfo) = global_lir_plan.unapply();
-                    physical_plan.time_dependence = time_dependence(
-                        self.catalog(),
-                        physical_plan.import_ids(),
-                        mv.refresh_schedule.clone(),
-                    );
+                    let (physical_plan, metainfo) = global_lir_plan.unapply();
                     let metainfo = {
                         // Pre-allocate a vector of transient GlobalIds for each notice.
                         let notice_ids = std::iter::repeat_with(|| self.allocate_transient_id())

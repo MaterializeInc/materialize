@@ -18,6 +18,7 @@ use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoE
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{GlobalId, RelationType};
 use mz_storage_types::controller::CollectionMetadata;
+use mz_storage_types::time_dependence::TimeDependence;
 use proptest::prelude::{any, Arbitrary};
 use proptest::strategy::{BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
@@ -31,7 +32,6 @@ use crate::plan::flat_plan::FlatPlan;
 use crate::plan::Plan;
 use crate::sinks::{ComputeSinkConnection, ComputeSinkDesc};
 use crate::sources::{SourceInstanceArguments, SourceInstanceDesc};
-use crate::time_dependence::TimeDependence;
 
 include!(concat!(env!("OUT_DIR"), "/mz_compute_types.dataflows.rs"));
 
@@ -350,6 +350,16 @@ impl<P, S, T> DataflowDescription<P, S, T> {
             .iter()
             .filter_map(|(id, desc)| match desc.connection {
                 ComputeSinkConnection::Subscribe(_) => Some(*id),
+                _ => None,
+            })
+    }
+
+    /// Identifiers of exported continual tasks.
+    pub fn continual_task_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
+        self.sink_exports
+            .iter()
+            .filter_map(|(id, desc)| match desc.connection {
+                ComputeSinkConnection::ContinualTask(_) => Some(*id),
                 _ => None,
             })
     }

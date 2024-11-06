@@ -45,7 +45,6 @@ use crate::error::AdapterError;
 use crate::explain::explain_dataflow;
 use crate::explain::explain_plan;
 use crate::explain::optimizer_trace::OptimizerTrace;
-use crate::optimize::dataflow_expiration::time_dependence;
 use crate::optimize::dataflows::dataflow_import_id_bundle;
 use crate::optimize::{self, Optimize};
 use crate::session::Session;
@@ -650,9 +649,6 @@ impl Coordinator {
                 let output_desc = global_lir_plan.desc().clone();
                 let (mut df_desc, df_meta) = global_lir_plan.unapply();
 
-                df_desc.time_dependence =
-                    time_dependence(coord.catalog(), df_desc.import_ids(), refresh_schedule);
-
                 // Save plan structures.
                 coord
                     .catalog_mut()
@@ -685,6 +681,7 @@ impl Coordinator {
                                 data_source: DataSource::Other,
                                 since: Some(storage_as_of),
                                 status_collection_id: None,
+                                timeline: None,
                             },
                         )],
                     )

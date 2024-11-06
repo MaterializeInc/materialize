@@ -46,7 +46,7 @@ use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sinks::{MetadataUnfilled, StorageSinkConnection, StorageSinkDesc};
 use mz_storage_types::sources::{
     GenericSourceConnection, IngestionDescription, SourceData, SourceDesc, SourceExportDataConfig,
-    SourceExportDetails,
+    SourceExportDetails, Timeline,
 };
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp as TimelyTimestamp;
@@ -136,6 +136,8 @@ pub struct CollectionDescription<T> {
     /// A GlobalId to use for this collection to use for the status collection.
     /// Used to keep track of source status/error information.
     pub status_collection_id: Option<GlobalId>,
+    /// The timeline of the source. Absent for materialized views, continual tasks, etc.
+    pub timeline: Option<Timeline>,
 }
 
 impl<T> CollectionDescription<T> {
@@ -145,6 +147,7 @@ impl<T> CollectionDescription<T> {
             data_source: DataSource::Table,
             since: None,
             status_collection_id: None,
+            timeline: Some(Timeline::EpochMilliseconds),
         }
     }
 }

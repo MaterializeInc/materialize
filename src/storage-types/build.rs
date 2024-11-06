@@ -32,6 +32,7 @@ fn main() {
         .extern_path(".mz_expr.linear", "::mz_expr")
         .extern_path(".mz_expr.relation", "::mz_expr")
         .extern_path(".mz_expr.scalar", "::mz_expr")
+        .extern_path(".mz_repr.refresh_schedule", "::mz_repr::refresh_schedule")
         .extern_path(".mz_kafka_util.addr", "::mz_kafka_util")
         .extern_path(".mz_postgres_util.desc", "::mz_postgres_util::desc")
         .extern_path(".mz_mysql_util", "::mz_mysql_util")
@@ -69,6 +70,7 @@ fn main() {
                 "storage-types/src/sources/mysql.proto",
                 "storage-types/src/sources/postgres.proto",
                 "storage-types/src/sources/load_generator.proto",
+                "storage-types/src/time_dependence.proto",
             ],
             &[PathBuf::from(".."), mz_build_tools::protoc_include()],
         )
