@@ -229,6 +229,16 @@ pub enum Message {
     TryDeferred {
         /// The connection that created this op.
         conn_id: ConnectionId,
+        /// The write lock that notified us our deferred op might be able to run.
+        ///
+        /// Note: While we never want to hold a partial set of locks, it can be important to hold
+        /// onto the _one_ that notified us our op might be ready. If there are multiple operations
+        /// waiting on a single collection, and we don't hold this lock through retyring the op,
+        /// then everything waiting on this collection will get retried causing traffic in the
+        /// Coordinator's message queue.
+        ///
+        /// See [`DeferredWriteOp::can_be_optimistically_retried`] for more detail.
+        acquired_lock: Option<(GlobalId, tokio::sync::OwnedMutexGuard<()>)>,
     },
     /// Initiates a group commit.
     GroupCommitInitiate(Span, Option<GroupCommitPermit>),
