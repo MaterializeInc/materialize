@@ -75,7 +75,7 @@ pub(crate) const PUBSUB_PUSH_DIFF_ENABLED: Config<bool> = Config::new(
 /// subscribed clients.
 pub(crate) const PUBSUB_SAME_PROCESS_DELEGATE_ENABLED: Config<bool> = Config::new(
     "persist_pubsub_same_process_delegate_enabled",
-    false, // TODO(database-issues#8725)
+    true,
     "Whether to push state diffs to Persist PubSub on the same process.",
 );
 
