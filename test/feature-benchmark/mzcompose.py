@@ -29,9 +29,6 @@ from materialize.feature_benchmark.benchmark_result_selection import (
     BestBenchmarkResultSelector,
     get_discarded_reports_per_scenario,
 )
-from materialize.feature_benchmark.benchmark_versioning import (
-    FEATURE_BENCHMARK_FRAMEWORK_VERSION,
-)
 from materialize.feature_benchmark.report import (
     Report,
     determine_scenario_classes_with_regressions,
@@ -105,6 +102,9 @@ from materialize.util import all_subclasses
 #
 # Global feature benchmark thresholds and termination conditions
 #
+
+
+FEATURE_BENCHMARK_FRAMEWORK_VERSION = "1.4.0"
 
 
 def make_filter(args: argparse.Namespace) -> Filter:

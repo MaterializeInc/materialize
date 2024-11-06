@@ -60,7 +60,7 @@ class Materialized(Service):
         deploy_generation: int | None = None,
         force_migrations: str | None = None,
         publish: bool | None = None,
-        stop_grace_period: str = "60s",
+        stop_grace_period: str = "120s",
         metadata_store: str = METADATA_STORE,
     ) -> None:
         if name is None:

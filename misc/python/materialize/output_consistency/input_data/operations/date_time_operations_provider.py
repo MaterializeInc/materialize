@@ -18,6 +18,7 @@ from materialize.output_consistency.input_data.params.enum_constant_operation_pa
     DATE_TIME_COMPONENT_PARAM,
     ISO8601_TIMESTAMP_PARAM,
     PRECISION_PARAM,
+    TIME_COMPONENT_PARAM,
     TIME_ZONE_PARAM,
     TYPE_FORMAT_PARAM,
 )
@@ -100,9 +101,18 @@ DATE_TIME_OPERATION_TYPES.append(
 DATE_TIME_OPERATION_TYPES.append(
     DbOperation(
         "EXTRACT($ FROM $)",
-        [DATE_TIME_COMPONENT_PARAM, DateTimeOperationParam()],
+        [DATE_TIME_COMPONENT_PARAM, DateTimeOperationParam(support_time=False)],
         NumericReturnTypeSpec(),
-        comment="for date types other than interval",
+        comment="for date types",
+    )
+)
+
+DATE_TIME_OPERATION_TYPES.append(
+    DbOperation(
+        "EXTRACT($ FROM $)",
+        [TIME_COMPONENT_PARAM, DateTimeOperationParam(support_date=False)],
+        NumericReturnTypeSpec(),
+        comment="for time types",
     )
 )
 
