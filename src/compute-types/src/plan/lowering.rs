@@ -773,13 +773,6 @@ This is not expected to cause incorrect results, but could indicate a performanc
             MirRelationExpr::Threshold { input } => {
                 let arity = input.arity();
                 let (plan, keys) = self.lower_mir_expr(input)?;
-                // We don't have an MFP here -- install an operator to permute the
-                // input, if necessary.
-                let plan = if !keys.raw {
-                    self.arrange_by(plan, AvailableCollections::new_raw(), &keys, arity)
-                } else {
-                    plan
-                };
                 let (threshold_plan, required_arrangement) = ThresholdPlan::create_from(arity);
                 let mut types = keys.types.clone();
                 let plan = if !keys
