@@ -129,7 +129,7 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.args.startupLogFilter` |  | ``"INFO,mz_orchestratord=TRACE"`` |
 | `operator.image.pullPolicy` |  | ``"IfNotPresent"`` |
 | `operator.image.repository` |  | ``"materialize/orchestratord"`` |
-| `operator.image.tag` |  | ``"v0.124.0-dev.0--pr.g993af7c1c493f8ca20389c7cc64769208867d3c9"`` |
+| `operator.image.tag` |  | ``"v0.124.0-dev.0--pr.gd5e227d7d07dc4878d2a065c7c10a48c2555385a"`` |
 | `operator.nodeSelector` |  | ``{}`` |
 | `operator.resources.limits.memory` |  | ``"512Mi"`` |
 | `operator.resources.requests.cpu` |  | ``"100m"`` |
@@ -159,6 +159,50 @@ Alternatively, a YAML file that specifies the values for the parameters can be p
 
 ```shell
 helm install my-materialize-operator -f values.yaml materialize/materialize-operator
+```
+
+## Deploying Materialize Environments
+
+To deploy a Materialize environment, create a `Materialize` custom resource definition with the desired configuration.
+
+```yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: materialize-environment
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: materialize-backend
+  namespace: materialize-environment
+stringData:
+  metadata_backend_url: "postgres://materialize_user:materialize_pass@postgres.materialize.svc.cluster.local:5432/materialize_db?sslmode=disable"
+  persist_backend_url: "s3://minio:minio123@bucket/12345678-1234-1234-1234-123456789012?endpoint=http%3A%2F%2Fminio.materialize.svc.cluster.local%3A9000&region=minio"
+---
+apiVersion: materialize.cloud/v1alpha1
+kind: Materialize
+metadata:
+  name: 12345678-1234-1234-1234-123456789012
+  namespace: materialize-environment
+spec:
+  environmentdImageRef: materialize/environmentd:v0.124.0-dev.0--pr.gd5e227d7d07dc4878d2a065c7c10a48c2555385a
+  environmentdResourceRequirements:
+    limits:
+      memory: 16Gi
+    requests:
+      cpu: 2
+      memory: 16Gi
+  balancerdResourceRequirements:
+    limits:
+      memory: 256Mi
+    requests:
+      cpu: 100m
+      memory: 256Mi
+  requestRollout: 22222222-2222-2222-2222-222222222222
+  forceRollout: 33333333-3333-3333-3333-333333333333
+  inPlaceRollout: false
+  backendSecretName: materialize-backend
 ```
 
 ## Configuration and Installation Details
