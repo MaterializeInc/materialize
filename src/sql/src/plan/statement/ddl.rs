@@ -160,8 +160,8 @@ use crate::plan::{
     WebhookHeaders, WebhookValidation,
 };
 use crate::session::vars::{
-    self, ENABLE_CLUSTER_SCHEDULE_REFRESH, ENABLE_KAFKA_SINK_HEADERS,
-    ENABLE_KAFKA_SINK_PARTITION_BY, ENABLE_REFRESH_EVERY_MVS,
+    self, ENABLE_CLUSTER_SCHEDULE_REFRESH, ENABLE_COLLECTION_PARTITION_BY,
+    ENABLE_KAFKA_SINK_HEADERS, ENABLE_KAFKA_SINK_PARTITION_BY, ENABLE_REFRESH_EVERY_MVS,
 };
 use crate::{names, parse};
 
@@ -2607,6 +2607,7 @@ pub fn plan_create_materialized_view(
     }: MaterializedViewOptionExtracted = stmt.with_options.try_into()?;
 
     if let Some(partition_by) = partition_by {
+        scx.require_feature_flag(&ENABLE_COLLECTION_PARTITION_BY)?;
         let partition_by: Vec<_> = partition_by
             .into_iter()
             .map(normalize::column_name)
