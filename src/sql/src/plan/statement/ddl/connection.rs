@@ -303,6 +303,12 @@ impl ConnectionOptionExtracted {
                         }).transpose()?,
                         topic_config: btreemap! {
                             "cleanup.policy".to_string() => "compact".to_string(),
+                            // Disables tiered storage for the progress topic, which is enabled
+                            // by default on Redpanda cloud. Kafka brokers ignore unknown
+                            // configuration keys so it is safe to set this without checking
+                            // if the underlying broker is actually redpanda or not.
+                            "redpanda.remote.write".to_string() => "false".to_string(),
+                            "redpanda.remote.read".to_string() => "false".to_string(),
                         },
                     },
                     options: BTreeMap::new(),
