@@ -541,8 +541,8 @@ impl LogVariant {
                 .with_column("operator", ScalarType::String.nullable(false))
                 .with_column("parent_lir_id", ScalarType::UInt64.nullable(true))
                 .with_column("nesting", ScalarType::UInt16.nullable(false))
-                .with_column("operator_id_start", ScalarType::UInt64.nullable(true))
-                .with_column("operator_id_end", ScalarType::UInt64.nullable(true))
+                .with_column("operator_id_start", ScalarType::UInt64.nullable(false))
+                .with_column("operator_id_end", ScalarType::UInt64.nullable(false))
                 .with_key(vec![0, 1, 2])
                 .finish(),
 
