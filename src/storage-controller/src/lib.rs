@@ -507,9 +507,11 @@ where
                 .latest_schema::<SourceData, (), T, Diff>(shard_id, diagnostics)
                 .await
                 .expect("invalid persist usage");
-            let Some((schema_id, _, _)) = latest_schema else {
+            let Some((schema_id, current_schema, _)) = latest_schema else {
+                tracing::debug!(?global_id, "no schema registered");
                 continue;
             };
+            tracing::debug!(?global_id, ?current_schema, new_schema = ?relation_desc, "migrating schema");
 
             let diagnostics = Diagnostics {
                 shard_name: global_id.to_string(),
