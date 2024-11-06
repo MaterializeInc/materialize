@@ -444,9 +444,9 @@ pub(super) fn construct<A: Allocate + 'static>(
 
         let packer = PermutedRowPacker::new(ComputeLog::LirMapping);
         let lir_mapping = lir_mapping.as_collection().map({
+            let mut scratch1 = String::new();
+            let mut scratch2 = String::new();
             move |datum| {
-                let mut scratch1 = String::new();
-                let mut scratch2 = String::new();
                 packer.pack_slice(&[
                     make_string_datum(datum.global_id, &mut scratch1),
                     Datum::UInt64(datum.lir_id.into()),
@@ -465,8 +465,8 @@ pub(super) fn construct<A: Allocate + 'static>(
 
         let packer = PermutedRowPacker::new(ComputeLog::DataflowGlobal);
         let dataflow_global_ids = dataflow_global_ids.as_collection().map({
+            let mut scratch = String::new();
             move |datum| {
-                let mut scratch = String::new();
                 packer.pack_slice(&[
                     Datum::UInt64(u64::cast_from(datum.id)),
                     Datum::UInt64(u64::cast_from(worker_id)),
@@ -545,7 +545,7 @@ struct DemuxState<A: Allocate> {
     arrangement_size: BTreeMap<usize, ArrangementSizeState>,
     /// LIR -> operator span mapping.
     lir_mapping: BTreeMap<GlobalId, BTreeMap<LirId, LirMetadata>>,
-    /// Dataflow -> `GlobalId` mapping (many-to-one)/
+    /// Dataflow -> `GlobalId` mapping (many-to-one).
     dataflow_global_ids: BTreeMap<usize, BTreeSet<GlobalId>>,
 }
 

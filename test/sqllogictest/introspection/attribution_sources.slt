@@ -46,22 +46,58 @@ u2  1
 u3  7
 u3  6
 
+## attribution queries
+
+# omitting sum(duration_ns) as duration, sum(count) as count
+query TIIT
+SELECT global_id, lir_id, parent_lir_id, REPEAT(' ', nesting * 2) || operator AS operator
+    FROM           mz_internal.mz_lir_mapping mlm
+         LEFT JOIN mz_introspection.mz_compute_operator_durations_histogram mcodh
+         ON (mlm.operator_id_start <= mcodh.id AND mcodh.id < mlm.operator_id_end)
+GROUP BY global_id, lir_id, operator, parent_lir_id, nesting
+ORDER BY global_id, lir_id DESC;
+----
+u2  5  NULL  Join::Differential␠2»␠4
+u2  4  5  ␠␠Arrange␠3
+u2  3  4  ␠␠␠␠Get::Collection␠u1
+u2  2  5  ␠␠Arrange␠1
+u2  1  2  ␠␠␠␠Get::Collection␠u1
+u3  7  NULL  Arrange␠6
+u3  6  7  ␠␠Get::PassArrangements␠u2
+
+# omitting pg_size_pretty(sum(size)) as size
+query TIIT
+SELECT global_id, lir_id, parent_lir_id, repeat(' ', nesting * 2) || operator AS operator
+    FROM           mz_internal.mz_lir_mapping mlm
+         LEFT JOIN mz_introspection.mz_arrangement_sizes mas
+         ON (mlm.operator_id_start <= mas.operator_id AND mas.operator_id < mlm.operator_id_end)
+GROUP BY global_id, lir_id, operator, parent_lir_id, nesting
+ORDER BY global_id, lir_id DESC;
+----
+u2  5  NULL  Join::Differential␠2»␠4
+u2  4  5  ␠␠Arrange␠3
+u2  3  4  ␠␠␠␠Get::Collection␠u1
+u2  2  5  ␠␠Arrange␠1
+u2  1  2  ␠␠␠␠Get::Collection␠u1
+u3  7  NULL  Arrange␠6
+u3  6  7  ␠␠Get::PassArrangements␠u2
+
 statement ok
 DROP TABLE t CASCADE;
 
 # we need the dataflow to actually drop to see the updates
 statement ok
-SELECT mz_unsafe.mz_sleep(2)
+SELECT mz_unsafe.mz_sleep(3)
 
 query I
 SELECT COUNT(*) FROM mz_internal.mz_dataflow_global_ids;
 ----
-2
+0
 
 query I
 SELECT COUNT(*) FROM mz_internal.mz_lir_mapping;
 ----
-7
+0
 
 # MATERIALIZED VIEW
 
@@ -81,25 +117,56 @@ SELECT mz_unsafe.mz_sleep(2)
 query IT
 SELECT id, global_id FROM mz_internal.mz_dataflow_global_ids ORDER BY id, global_id;
 ----
-11  t53
+13  t59
 
 
 query TI
 SELECT global_id, lir_id FROM mz_internal.mz_lir_mapping ORDER BY global_id, lir_id DESC;
 ----
-t53  5
-t53  4
-t53  3
-t53  2
-t53  1
+t59  5
+t59  4
+t59  3
+t59  2
+t59  1
 
+## attribution queries
+
+# omitting sum(duration_ns) as duration, sum(count) as count
+query TIIT
+SELECT global_id, lir_id, parent_lir_id, REPEAT(' ', nesting * 2) || operator AS operator
+    FROM           mz_internal.mz_lir_mapping mlm
+         LEFT JOIN mz_introspection.mz_compute_operator_durations_histogram mcodh
+         ON (mlm.operator_id_start <= mcodh.id AND mcodh.id < mlm.operator_id_end)
+GROUP BY global_id, lir_id, operator, parent_lir_id, nesting
+ORDER BY global_id, lir_id DESC;
+----
+t59  5  NULL  Join::Differential␠2»␠4
+t59  4  5  ␠␠Arrange␠3
+t59  3  4  ␠␠␠␠Get::Collection␠u4
+t59  2  5  ␠␠Arrange␠1
+t59  1  2  ␠␠␠␠Get::Collection␠u4
+
+# omitting pg_size_pretty(sum(size)) as size
+query TIIT
+SELECT global_id, lir_id, parent_lir_id, REPEAT(' ', nesting * 2) || operator AS operator
+    FROM           mz_internal.mz_lir_mapping mlm
+         LEFT JOIN mz_introspection.mz_arrangement_sizes mas
+         ON (mlm.operator_id_start <= mas.operator_id AND mas.operator_id < mlm.operator_id_end)
+GROUP BY global_id, lir_id, operator, parent_lir_id, nesting
+ORDER BY global_id, lir_id DESC;
+----
+t59  5  NULL  Join::Differential␠2»␠4
+t59  4  5  ␠␠Arrange␠3
+t59  3  4  ␠␠␠␠Get::Collection␠u4
+t59  2  5  ␠␠Arrange␠1
+t59  1  2  ␠␠␠␠Get::Collection␠u4
 
 statement ok
 DROP TABLE u CASCADE;
 
 # we need the dataflow to actually drop to see the updates
 statement ok
-SELECT mz_unsafe.mz_sleep(2)
+SELECT mz_unsafe.mz_sleep(3)
 
 query I
 SELECT COUNT(*) FROM mz_internal.mz_dataflow_global_ids;
@@ -110,3 +177,32 @@ query I
 SELECT COUNT(*) FROM mz_internal.mz_lir_mapping;
 ----
 0
+
+# ATTRIBUTING TOP K HINTS
+
+statement ok
+CREATE TABLE t(x INT NOT NULL, y INT, z TEXT);
+
+statement ok
+CREATE VIEW v2 AS SELECT DISTINCT ON(x, y) * FROM t ORDER BY x, y;
+
+statement ok
+CREATE INDEX v2_idx_x ON v2(x);
+
+statement ok
+SELECT mz_unsafe.mz_sleep(2)
+
+query TIITIIIT
+SELECT mlm.global_id AS global_id, lir_id, parent_lir_id, REPEAT(' ', nesting * 2) || operator AS operator, levels, to_cut, savings, hint
+    FROM           mz_internal.mz_lir_mapping mlm
+         JOIN      mz_introspection.mz_dataflow_global_ids mdgi
+         ON (mlm.global_id = mdgi.global_id)
+         LEFT JOIN mz_introspection.mz_expected_group_size_advice megsa
+         ON (megsa.dataflow_id = mdgi.id AND
+             mlm.operator_id_start <= megsa.region_id AND megsa.region_id < mlm.operator_id_end)
+ORDER BY mlm.global_id, lir_id DESC;
+----
+u7  2  NULL  TopK::Basic␠1  8  7  3584  15.000
+u7  1  2  ␠␠Get::PassArrangements␠u6  NULL  NULL  NULL  NULL
+u8  4  NULL  Arrange␠3  NULL  NULL  NULL  NULL
+u8  3  4  ␠␠Get::PassArrangements␠u7  NULL  NULL  NULL  NULL

@@ -349,11 +349,15 @@ pub fn build_compute_dataflow<A: Allocate>(
                         },
                     );
                     let global_id = object.id;
-                    if let Some(id) = bundle.scope().addr().first() {
-                        context.log_dataflow_global_id(*id, global_id);
-                    } else {
-                        tracing::error!(%global_id, "could not find dataflow, bundle address was empty");
-                    }
+
+                    context.log_dataflow_global_id(
+                        *bundle
+                            .scope()
+                            .addr()
+                            .first()
+                            .expect("Dataflow root id must exist"),
+                        global_id,
+                    );
                     context.insert_id(Id::Global(object.id), bundle);
                 }
 
@@ -430,11 +434,14 @@ pub fn build_compute_dataflow<A: Allocate>(
                         },
                     );
                     let global_id = object.id;
-                    if let Some(id) = bundle.scope().addr().first() {
-                        context.log_dataflow_global_id(*id, global_id);
-                    } else {
-                        tracing::error!(%global_id, "could not find dataflow, bundle address was empty");
-                    }
+                    context.log_dataflow_global_id(
+                        *bundle
+                            .scope()
+                            .addr()
+                            .first()
+                            .expect("Dataflow root id must exist"),
+                        global_id,
+                    );
                     context.insert_id(Id::Global(object.id), bundle);
                 }
 
