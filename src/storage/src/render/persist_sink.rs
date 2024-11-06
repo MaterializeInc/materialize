@@ -108,6 +108,7 @@ use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::{Codec, Codec64};
 use mz_repr::{Diff, GlobalId, Row};
 use mz_storage_types::controller::CollectionMetadata;
+use mz_storage_types::dyncfgs;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceData;
 use mz_timely_util::builder_async::{
@@ -910,6 +911,14 @@ where
     let shard_id = target.data_shard;
     let target_relation_desc = target.relation_desc.clone();
 
+    // We can only be lenient with concurrent modifications when we know that
+    // this source pipeline is using the feedback upsert operator, which works
+    // correctly when multiple instances of an ingestion pipeline produce
+    // different updates, because of concurrency/non-determinism.
+    let use_continual_feedback_upsert = dyncfgs::STORAGE_USE_CONTINUAL_FEEDBACK_UPSERT
+        .get(storage_state.storage_configuration.config_set());
+    let bail_on_concurrent_modification = !use_continual_feedback_upsert;
+
     let operator_name = format!("{} append_batches", operator_name);
     let mut append_op = AsyncOperatorBuilder::new(operator_name, scope.clone());
 
@@ -1220,6 +1229,8 @@ where
                             // Best-effort attempt to delete unneeded batches.
                             future::join_all(batches.into_iter().map(|b| b.batch.delete())).await;
 
+                            // We always bail when this happens, regardless of
+                            // `bail_on_concurrent_modification`.
                             tracing::warn!(
                                 "persist_sink({}): invalid upper! \
                                     Tried to append batch ({:?} -> {:?}) but upper \
@@ -1243,8 +1254,8 @@ where
 
                             // First, construct a new batch description with the
                             // lower advanced to the current shard upper.
-                            let new_batch_lower = mismatch.current;
-                            let new_done_batch_metadata = (new_batch_lower.clone(), batch_upper);
+                            let new_batch_lower = mismatch.current.clone();
+                            let new_done_batch_metadata = (new_batch_lower.clone(), batch_upper.clone());
 
                             // Re-add the new batch to the list of batches to
                             // process.
@@ -1275,6 +1286,18 @@ where
                         } else {
                             // Best-effort attempt to delete unneeded batches.
                             future::join_all(batches.into_iter().map(|b| b.batch.delete())).await;
+                        }
+
+                        if bail_on_concurrent_modification {
+                            tracing::warn!(
+                                "persist_sink({}): invalid upper! \
+                                    Tried to append batch ({:?} -> {:?}) but upper \
+                                    is {:?}. This is not a problem, it just means \
+                                    someone else was faster than us. We will try \
+                                    again with a new batch description.",
+                                collection_id, batch_lower, batch_upper, mismatch.current,
+                            );
+                            anyhow::bail!("collection concurrently modified. Ingestion dataflow will be restarted");
                         }
                     }
                 }
