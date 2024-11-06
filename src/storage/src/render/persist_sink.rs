@@ -1231,18 +1231,12 @@ where
                     }
                 };
 
-                source_statistics
-                    .inc_updates_committed_by(batch_metrics.inserts + batch_metrics.retractions);
+
+                // These metrics are independent of whether it was _us_ or
+                // _someone_ that managed to commit a batch that advanced the
+                // upper.
                 source_statistics.update_snapshot_committed(&batch_upper);
                 source_statistics.update_rehydration_latency_ms(&batch_upper);
-
-                metrics.processed_batches.inc();
-                metrics.row_inserts.inc_by(batch_metrics.inserts);
-                metrics.row_retractions.inc_by(batch_metrics.retractions);
-                metrics.error_inserts.inc_by(batch_metrics.error_inserts);
-                metrics
-                    .error_retractions
-                    .inc_by(batch_metrics.error_retractions);
                 metrics
                     .progress
                     .set(mz_persist_client::metrics::encode_ts_metric(&batch_upper));
@@ -1259,6 +1253,18 @@ where
 
                 match result {
                     Ok(()) => {
+                        // Only update these metrics when we know that _we_ were
+                        // successful.
+                        source_statistics
+                            .inc_updates_committed_by(batch_metrics.inserts + batch_metrics.retractions);
+                        metrics.processed_batches.inc();
+                        metrics.row_inserts.inc_by(batch_metrics.inserts);
+                        metrics.row_retractions.inc_by(batch_metrics.retractions);
+                        metrics.error_inserts.inc_by(batch_metrics.error_inserts);
+                        metrics
+                            .error_retractions
+                            .inc_by(batch_metrics.error_retractions);
+
                         current_upper.borrow_mut().clone_from(&batch_upper);
                         upper_cap_set.downgrade(current_upper.borrow().iter());
                     }
