@@ -8,7 +8,9 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::{Display, Formatter};
 use std::rc::Rc;
+use std::str::FromStr;
 use std::{fmt, vec};
 
 use anyhow::bail;
@@ -367,6 +369,20 @@ pub struct ColumnIndex(usize);
 
 static_assertions::assert_not_impl_all!(ColumnIndex: Arbitrary);
 
+impl Display for ColumnIndex {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl FromStr for ColumnIndex {
+    type Err = <u64 as FromStr>::Err;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(ColumnIndex(s.parse()?))
+    }
+}
+
 /// The version a given column was added at.
 #[derive(
     Clone,
@@ -485,6 +501,8 @@ struct ColumnMetadata {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct RelationDesc {
     typ: RelationType,
+    #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
+    #[serde(deserialize_with = "mz_ore::serde::string_key_to_btree_map")]
     metadata: BTreeMap<ColumnIndex, ColumnMetadata>,
 }
 

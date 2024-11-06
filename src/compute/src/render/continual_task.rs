@@ -171,6 +171,8 @@ use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceData;
 use mz_timely_util::builder_async::{Button, Event, OperatorBuilder as AsyncOperatorBuilder};
 use mz_timely_util::operator::CollectionExt;
+use serde::de::DeserializeOwned;
+use serde::Serialize;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::{Filter, FrontierNotificator, Map, Operator};
@@ -311,7 +313,9 @@ impl ContinualTaskSourceTransformer {
 }
 
 impl<G: Scope<Timestamp = Timestamp>> ContinualTaskCtx<G> {
-    pub fn new<P, S>(dataflow: &DataflowDescription<P, S, Timestamp>) -> Self {
+    pub fn new<P, S: Serialize + DeserializeOwned>(
+        dataflow: &DataflowDescription<P, S, Timestamp>,
+    ) -> Self {
         let mut name = None;
         let mut ct_inputs = BTreeSet::new();
         let mut ct_outputs = BTreeSet::new();

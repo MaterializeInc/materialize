@@ -22,6 +22,7 @@ use mz_storage_types::time_dependence::TimeDependence;
 use proptest::prelude::{any, Arbitrary};
 use proptest::strategy::{BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
 
@@ -37,11 +38,19 @@ include!(concat!(env!("OUT_DIR"), "/mz_compute_types.dataflows.rs"));
 
 /// A description of a dataflow to construct and results to surface.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct DataflowDescription<P, S: 'static = (), T = mz_repr::Timestamp> {
+pub struct DataflowDescription<
+    P,
+    S: 'static + Serialize + DeserializeOwned = (),
+    T = mz_repr::Timestamp,
+> {
     /// Sources instantiations made available to the dataflow pair with monotonicity information.
+    #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
+    #[serde(deserialize_with = "mz_ore::serde::string_key_to_btree_map")]
     pub source_imports: BTreeMap<GlobalId, (SourceInstanceDesc<S>, bool)>,
     /// Indexes made available to the dataflow.
     /// (id of index, import)
+    #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
+    #[serde(deserialize_with = "mz_ore::serde::string_key_to_btree_map")]
     pub index_imports: BTreeMap<GlobalId, IndexImport>,
     /// Views and indexes to be built and stored in the local context.
     /// Objects must be built in the specific order, as there may be
@@ -49,9 +58,13 @@ pub struct DataflowDescription<P, S: 'static = (), T = mz_repr::Timestamp> {
     pub objects_to_build: Vec<BuildDesc<P>>,
     /// Indexes to be made available to be shared with other dataflows
     /// (id of new index, description of index, relationtype of base source/view/table)
+    #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
+    #[serde(deserialize_with = "mz_ore::serde::string_key_to_btree_map")]
     pub index_exports: BTreeMap<GlobalId, (IndexDesc, RelationType)>,
     /// sinks to be created
     /// (id of new sink, description of sink)
+    #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
+    #[serde(deserialize_with = "mz_ore::serde::string_key_to_btree_map")]
     pub sink_exports: BTreeMap<GlobalId, ComputeSinkDesc<S, T>>,
     /// An optional frontier to which inputs should be advanced.
     ///
@@ -77,7 +90,7 @@ pub struct DataflowDescription<P, S: 'static = (), T = mz_repr::Timestamp> {
     pub time_dependence: Option<TimeDependence>,
 }
 
-impl<P, S> DataflowDescription<P, S, mz_repr::Timestamp> {
+impl<P, S: Serialize + DeserializeOwned> DataflowDescription<P, S, mz_repr::Timestamp> {
     /// Tests if the dataflow refers to a single timestamp, namely
     /// that `as_of` has a single coordinate and that the `until`
     /// value corresponds to the `as_of` value plus one, or `as_of`
@@ -270,7 +283,7 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
     }
 }
 
-impl<P, S, T> DataflowDescription<P, S, T> {
+impl<P, S: Serialize + DeserializeOwned, T> DataflowDescription<P, S, T> {
     /// Sets the `as_of` frontier to the supplied argument.
     ///
     /// This method allows the dataflow to indicate a frontier up through
@@ -407,7 +420,7 @@ impl<P, S, T> DataflowDescription<P, S, T> {
     }
 }
 
-impl<P, S, T> DataflowDescription<P, S, T>
+impl<P, S: Serialize + DeserializeOwned, T> DataflowDescription<P, S, T>
 where
     P: CollectionPlan,
 {
@@ -476,7 +489,7 @@ where
     }
 }
 
-impl<S, T> DataflowDescription<FlatPlan, S, T>
+impl<S: Serialize + DeserializeOwned, T> DataflowDescription<FlatPlan, S, T>
 where
     S: Clone + PartialEq,
     T: Clone + timely::PartialOrder,
@@ -744,7 +757,7 @@ fn any_dataflow_description<P, S, T>(
 ) -> impl Strategy<Value = DataflowDescription<P, S, T>>
 where
     P: Arbitrary,
-    S: 'static + Arbitrary,
+    S: 'static + Arbitrary + Serialize + DeserializeOwned,
     T: Arbitrary + timely::PartialOrder,
     ComputeSinkDesc<S, T>: Arbitrary,
 {

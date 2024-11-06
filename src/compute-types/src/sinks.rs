@@ -24,7 +24,7 @@ include!(concat!(env!("OUT_DIR"), "/mz_compute_types.sinks.rs"));
 
 /// A sink for updates to a relational collection.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct ComputeSinkDesc<S: 'static = (), T = Timestamp> {
+pub struct ComputeSinkDesc<S: 'static + Serialize = (), T = Timestamp> {
     /// TODO(database-issues#7533): Add documentation.
     pub from: GlobalId,
     /// TODO(database-issues#7533): Add documentation.

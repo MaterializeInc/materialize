@@ -17,6 +17,8 @@ use mz_expr::explain::{enforce_linear_chains, ExplainContext, ExplainMultiPlan, 
 use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
 use mz_repr::explain::{AnnotatedPlan, Explain, ExplainError, UnsupportedFormat};
 use mz_repr::GlobalId;
+use serde::de::DeserializeOwned;
+use serde::Serialize;
 
 use crate::dataflows::DataflowDescription;
 use crate::plan::Plan;
@@ -152,7 +154,9 @@ impl<'a> DataflowDescription<OptimizedMirRelationExpr> {
 }
 
 /// TODO(database-issues#7533): Add documentation.
-pub fn export_ids_for<P, S, T>(dd: &DataflowDescription<P, S, T>) -> BTreeMap<GlobalId, GlobalId> {
+pub fn export_ids_for<P, S: Serialize + DeserializeOwned, T>(
+    dd: &DataflowDescription<P, S, T>,
+) -> BTreeMap<GlobalId, GlobalId> {
     let mut map = BTreeMap::<GlobalId, GlobalId>::default();
 
     // Dataflows created from a `CREATE MATERIALIZED VIEW` have:

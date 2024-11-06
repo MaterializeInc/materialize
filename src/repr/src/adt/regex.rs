@@ -247,7 +247,7 @@ impl<'de> Deserialize<'de> for Regex {
             where
                 V: de::MapAccess<'de>,
             {
-                let mut pattern: Option<&str> = None;
+                let mut pattern: Option<String> = None;
                 let mut case_insensitive: Option<bool> = None;
                 let mut dot_matches_new_line: Option<bool> = None;
                 while let Some(key) = map.next_key()? {
@@ -277,7 +277,7 @@ impl<'de> Deserialize<'de> for Regex {
                     case_insensitive.ok_or_else(|| de::Error::missing_field("case_insensitive"))?;
                 let dot_matches_new_line = dot_matches_new_line
                     .ok_or_else(|| de::Error::missing_field("dot_matches_new_line"))?;
-                Regex::new_dot_matches_new_line(pattern, case_insensitive, dot_matches_new_line)
+                Regex::new_dot_matches_new_line(&pattern, case_insensitive, dot_matches_new_line)
                     .map_err(|err| {
                         V::Error::custom(format!(
                             "Unable to recreate regex during deserialization: {}",
