@@ -1084,12 +1084,13 @@ where
             // Extract ready bindings
             let new_upper = frontiers[0].frontier();
             if PartialOrder::less_than(&upper.borrow(), &new_upper) {
+                upper = new_upper.to_owned();
+
                 accepted_times.sort_unstable_by(|a, b| a.1.cmp(&b.1));
                 // The times are totally ordered so we can binary search to find the prefix that is
                 // not beyond the upper and extract it into a batch.
                 let idx = accepted_times.partition_point(|(_, t, _)| !upper.less_equal(t));
                 ready_times.extend(accepted_times.drain(0..idx));
-                upper = new_upper.to_owned();
             }
 
             // The received times only accumulate correctly for times beyond the as_of.
