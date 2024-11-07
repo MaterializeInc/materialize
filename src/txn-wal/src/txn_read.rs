@@ -68,7 +68,7 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
         V: Debug + Codec,
         D: Debug + Semigroup + Ord + Codec64 + Send + Sync,
     {
-        debug!(
+        tracing::info!(
             "unblock_read latest_write={:?} as_of={:?} for {:.9}",
             self.latest_write,
             self.as_of,
@@ -123,6 +123,11 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
             .await;
             match res {
                 Ok(()) => {
+                    tracing::info!(
+                        data_id = %self.data_id.to_string(),
+                        schemas = ?data_write.write_schemas,
+                        "unblocked read",
+                    );
                     // Persist registers writers on the first write, so politely
                     // expire the writer we just created, but (as a performance
                     // optimization) only if we actually wrote something.

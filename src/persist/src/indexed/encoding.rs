@@ -263,8 +263,7 @@ impl BlobTraceUpdates {
                             error!(
                                 ?from_type,
                                 ?to_type,
-                                ?key_schema,
-                                "foobar failed to migrate array type; backwards-incompatible schema migration?"
+                                "failed to migrate array type; backwards-incompatible schema migration?"
                             );
                         }
                     }

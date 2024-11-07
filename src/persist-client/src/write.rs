@@ -117,7 +117,7 @@ pub struct WriteHandle<K: Codec, V: Codec, T, D> {
     pub(crate) isolated_runtime: Arc<IsolatedRuntime>,
     pub(crate) writer_id: WriterId,
     pub(crate) debug_state: HandleDebugState,
-    pub(crate) write_schemas: Schemas<K, V>,
+    pub write_schemas: Schemas<K, V>,
 
     pub(crate) upper: Antichain<T>,
     expire_fn: Option<ExpireFn>,
