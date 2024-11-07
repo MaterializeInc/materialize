@@ -56,6 +56,11 @@ rust_library(
     ] + all_crate_deps(normal = True),
 )
 
+alias(
+    name = "storage-types",
+    actual = "mz_storage_types",
+)
+
 rust_test(
     name = "mz_storage_types_lib_tests",
     size = "medium",

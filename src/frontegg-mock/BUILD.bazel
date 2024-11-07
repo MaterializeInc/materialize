@@ -34,6 +34,11 @@ rust_library(
     ] + all_crate_deps(normal = True),
 )
 
+alias(
+    name = "frontegg-mock",
+    actual = "mz_frontegg_mock",
+)
+
 rust_test(
     name = "mz_frontegg_mock_lib_tests",
     size = "medium",
