@@ -563,7 +563,6 @@ async fn upgrade_check(
         state: _state,
         storage_collections_to_drop: _,
         migrated_storage_collections_0dt: _,
-        new_builtins: _,
         builtin_table_updates: _,
         last_seen_version,
     } = Catalog::initialize_state(
@@ -575,6 +574,7 @@ async fn upgrade_check(
             now,
             boot_ts,
             skip_migrations: false,
+            read_only: false,
             cluster_replica_sizes,
             builtin_system_cluster_replica_size: builtin_clusters_replica_size.clone(),
             builtin_catalog_server_cluster_replica_size: builtin_clusters_replica_size.clone(),

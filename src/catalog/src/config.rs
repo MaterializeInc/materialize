@@ -52,6 +52,8 @@ pub struct StateConfig {
     pub boot_ts: mz_repr::Timestamp,
     /// Whether or not to skip catalog migrations.
     pub skip_migrations: bool,
+    /// Whether the system is starting in read-only mode or not.
+    pub read_only: bool,
     /// Map of strings to corresponding compute replica sizes.
     pub cluster_replica_sizes: ClusterReplicaSizeMap,
     /// Builtin system cluster replica size.

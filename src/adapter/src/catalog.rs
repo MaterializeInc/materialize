@@ -557,7 +557,6 @@ impl Catalog {
             catalog,
             storage_collections_to_drop: _,
             migrated_storage_collections_0dt: _,
-            new_builtins: _,
             builtin_table_updates: _,
         } = Catalog::open(Config {
             storage,
@@ -570,6 +569,7 @@ impl Catalog {
                 now,
                 boot_ts: previous_ts,
                 skip_migrations: true,
+                read_only: false,
                 cluster_replica_sizes: Default::default(),
                 builtin_system_cluster_replica_size: "1".into(),
                 builtin_catalog_server_cluster_replica_size: "1".into(),
@@ -2616,6 +2616,7 @@ mod tests {
 
             let builtins_cfg = BuiltinsConfig {
                 include_continual_tasks: true,
+                include_new_items: true,
             };
             for builtin in BUILTINS::iter(&builtins_cfg) {
                 match builtin {

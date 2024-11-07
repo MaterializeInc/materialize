@@ -3739,6 +3739,7 @@ async fn test_builtin_schemas() {
 
     let builtins_cfg = BuiltinsConfig {
         include_continual_tasks: true,
+        include_new_items: true,
     };
     let mut builtins = BTreeMap::new();
     for builtin in BUILTINS::iter(&builtins_cfg) {

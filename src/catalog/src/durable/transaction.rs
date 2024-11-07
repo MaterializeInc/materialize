@@ -694,6 +694,10 @@ impl<'a> Transaction<'a> {
         key: String,
         amount: u64,
     ) -> Result<Vec<u64>, CatalogError> {
+        if amount == 0 {
+            return Ok(Vec::new());
+        }
+
         let current_id = self
             .id_allocator
             .items()

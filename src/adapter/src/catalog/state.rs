@@ -194,6 +194,7 @@ impl CatalogState {
                 )),
                 builtins_cfg: BuiltinsConfig {
                     include_continual_tasks: true,
+                    include_new_items: true,
                 },
                 helm_chart_version: None,
             },
@@ -1380,11 +1381,20 @@ impl CatalogState {
     ///
     /// Panics if the builtin object doesn't exist in the catalog.
     pub fn resolve_builtin_object<T: TypeReference>(&self, builtin: &Builtin<T>) -> GlobalId {
-        let schema_id = &self.ambient_schemas_by_name[builtin.schema()];
-        let schema = &self.ambient_schemas_by_id[schema_id];
+        self.try_resolve_builtin_object(builtin)
+            .unwrap_or_else(|| panic!("unknown builtin: {builtin:?}"))
+    }
+
+    /// Optimized lookup for a builtin object.
+    pub fn try_resolve_builtin_object<T: TypeReference>(
+        &self,
+        builtin: &Builtin<T>,
+    ) -> Option<GlobalId> {
+        let schema_id = self.ambient_schemas_by_name.get(builtin.schema())?;
+        let schema = self.ambient_schemas_by_id.get(schema_id)?;
         match builtin.catalog_item_type() {
-            CatalogItemType::Type => schema.types[builtin.name()].clone(),
-            CatalogItemType::Func => schema.functions[builtin.name()].clone(),
+            CatalogItemType::Type => schema.types.get(builtin.name()).cloned(),
+            CatalogItemType::Func => schema.functions.get(builtin.name()).cloned(),
             CatalogItemType::Table
             | CatalogItemType::Source
             | CatalogItemType::Sink
@@ -1393,7 +1403,7 @@ impl CatalogState {
             | CatalogItemType::Index
             | CatalogItemType::Secret
             | CatalogItemType::Connection
-            | CatalogItemType::ContinualTask => schema.items[builtin.name()].clone(),
+            | CatalogItemType::ContinualTask => schema.items.get(builtin.name()).cloned(),
         }
     }
 

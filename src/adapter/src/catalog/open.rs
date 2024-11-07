@@ -169,8 +169,6 @@ pub struct InitializeStateResult {
     pub storage_collections_to_drop: BTreeSet<GlobalId>,
     /// A set of new shards that may need to be initialized (only used by 0dt migration).
     pub migrated_storage_collections_0dt: BTreeSet<GlobalId>,
-    /// A set of new builtin items.
-    pub new_builtins: BTreeSet<GlobalId>,
     /// A list of builtin table updates corresponding to the initialized state.
     pub builtin_table_updates: Vec<BuiltinTableUpdate>,
     /// The version of the catalog that existed before initializing the catalog.
@@ -184,8 +182,6 @@ pub struct OpenCatalogResult {
     pub storage_collections_to_drop: BTreeSet<GlobalId>,
     /// A set of new shards that may need to be initialized (only used by 0dt migration).
     pub migrated_storage_collections_0dt: BTreeSet<GlobalId>,
-    /// A set of new builtin items.
-    pub new_builtins: BTreeSet<GlobalId>,
     /// A list of builtin table updates corresponding to the initialized state.
     pub builtin_table_updates: Vec<BuiltinTableUpdate>,
 }
@@ -258,6 +254,7 @@ impl Catalog {
                         config.remote_system_parameters.as_ref(),
                         &ENABLE_CONTINUAL_TASK_BUILTINS,
                     ),
+                    include_new_items: !config.read_only,
                 },
                 helm_chart_version: config.helm_chart_version,
             },
@@ -274,7 +271,7 @@ impl Catalog {
         let mut txn = storage.transaction().await?;
 
         // Migrate/update durable data before we start loading the in-memory catalog.
-        let (migrated_builtins, new_builtins) = {
+        let migrated_builtins = {
             migrate::durable_migrate(&mut txn, config.boot_ts)?;
             // Overwrite and persist selected parameter values in `remote_system_parameters` that
             // was pulled from a remote frontend (e.g. LaunchDarkly) if present.
@@ -285,7 +282,7 @@ impl Catalog {
                 txn.set_system_config_synced_once()?;
             }
             // Add any new builtin objects and remove old ones.
-            let (migrated_builtins, new_builtins) =
+            let migrated_builtins =
                 add_new_remove_old_builtin_items_migration(&state.config().builtins_cfg, &mut txn)?;
             let cluster_sizes = BuiltinBootstrapClusterSizes {
                 system_cluster: config.builtin_system_cluster_replica_size,
@@ -298,13 +295,16 @@ impl Catalog {
             // roles like they do for builtin items and introspection sources, but they
             // don't.
             add_new_builtin_clusters_migration(&mut txn, &cluster_sizes)?;
-            add_new_remove_old_builtin_introspection_source_migration(&mut txn)?;
+            add_new_remove_old_builtin_introspection_source_migration(
+                &state.config().builtins_cfg,
+                &mut txn,
+            )?;
             add_new_builtin_cluster_replicas_migration(&mut txn, &cluster_sizes)?;
             add_new_builtin_roles_migration(&mut txn)?;
             remove_invalid_config_param_role_defaults_migration(&mut txn)?;
-            (migrated_builtins, new_builtins)
+            remove_pending_cluster_replicas_migration(&mut txn)?;
+            migrated_builtins
         };
-        remove_pending_cluster_replicas_migration(&mut txn)?;
 
         let op_updates = txn.get_and_commit_op_updates();
         updates.extend(op_updates);
@@ -436,7 +436,6 @@ impl Catalog {
             state,
             storage_collections_to_drop,
             migrated_storage_collections_0dt,
-            new_builtins: new_builtins.into_iter().collect(),
             builtin_table_updates,
             last_seen_version,
         })
@@ -460,7 +459,6 @@ impl Catalog {
                 state,
                 storage_collections_to_drop,
                 migrated_storage_collections_0dt,
-                new_builtins,
                 mut builtin_table_updates,
                 last_seen_version: _,
             } =
@@ -506,7 +504,6 @@ impl Catalog {
                 catalog,
                 storage_collections_to_drop,
                 migrated_storage_collections_0dt,
-                new_builtins,
                 builtin_table_updates,
             })
         }
@@ -872,7 +869,7 @@ impl CatalogState {
 fn add_new_remove_old_builtin_items_migration(
     builtins_cfg: &BuiltinsConfig,
     txn: &mut mz_catalog::durable::Transaction<'_>,
-) -> Result<(Vec<GlobalId>, Vec<GlobalId>), mz_catalog::durable::CatalogError> {
+) -> Result<Vec<GlobalId>, mz_catalog::durable::CatalogError> {
     let mut new_builtin_mappings = Vec::new();
     let mut migrated_builtin_ids = Vec::new();
     // Used to validate unique descriptions.
@@ -912,7 +909,7 @@ fn add_new_remove_old_builtin_items_migration(
         })
         .collect();
 
-    let (existing_builtins, new_builtins): (Vec<_>, Vec<_>) =
+    let (existing_builtins, mut new_builtins): (Vec<_>, Vec<_>) =
         builtins.into_iter().partition_map(|(desc, builtin)| {
             let fingerprint = match builtin.runtime_alterable() {
                 false => builtin.fingerprint(),
@@ -925,6 +922,11 @@ fn add_new_remove_old_builtin_items_migration(
                 None => Either::Right((builtin, fingerprint)),
             }
         });
+    // In read-only mode, there's no way to get stable `GlobalId`s, so we have to skip
+    // processing new builtins.
+    if !builtins_cfg.include_new_items {
+        new_builtins.clear();
+    }
     let new_builtin_ids = txn.allocate_system_item_ids(usize_to_u64(new_builtins.len()))?;
     let new_builtins = new_builtins.into_iter().zip(new_builtin_ids.clone());
 
@@ -1040,7 +1042,7 @@ fn add_new_remove_old_builtin_items_migration(
     txn.remove_items(&deleted_runtime_alterable_system_ids)?;
     txn.remove_system_object_mappings(deleted_system_objects)?;
 
-    Ok((migrated_builtin_ids, new_builtin_ids))
+    Ok(migrated_builtin_ids)
 }
 
 fn add_new_builtin_clusters_migration(
@@ -1079,6 +1081,7 @@ fn add_new_builtin_clusters_migration(
 }
 
 fn add_new_remove_old_builtin_introspection_source_migration(
+    builtins_cfg: &BuiltinsConfig,
     txn: &mut mz_catalog::durable::Transaction<'_>,
 ) -> Result<(), AdapterError> {
     let mut new_indexes = Vec::new();
@@ -1086,18 +1089,20 @@ fn add_new_remove_old_builtin_introspection_source_migration(
     for cluster in txn.get_clusters() {
         let mut introspection_source_index_ids = txn.get_introspection_source_indexes(cluster.id);
 
-        let mut new_logs = Vec::new();
+        if builtins_cfg.include_new_items {
+            let mut new_logs = Vec::new();
 
-        for log in BUILTINS::logs() {
-            if introspection_source_index_ids.remove(log.name).is_none() {
-                new_logs.push(log);
+            for log in BUILTINS::logs() {
+                if introspection_source_index_ids.remove(log.name).is_none() {
+                    new_logs.push(log);
+                }
             }
-        }
 
-        let new_ids = txn.allocate_system_item_ids(usize_to_u64(new_logs.len()))?;
-        assert_eq!(new_logs.len(), new_ids.len());
-        for (log, index_id) in new_logs.into_iter().zip(new_ids) {
-            new_indexes.push((cluster.id, log.name.to_string(), index_id));
+            let new_ids = txn.allocate_system_item_ids(usize_to_u64(new_logs.len()))?;
+            assert_eq!(new_logs.len(), new_ids.len());
+            for (log, index_id) in new_logs.into_iter().zip(new_ids) {
+                new_indexes.push((cluster.id, log.name.to_string(), index_id));
+            }
         }
 
         // Anything left in `introspection_source_index_ids` must have been deleted and should be

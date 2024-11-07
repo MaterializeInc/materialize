@@ -828,7 +828,7 @@ pub struct CatalogTypePgMetadata {
 }
 
 /// Represents a reference to type in the catalog
-pub trait TypeReference {
+pub trait TypeReference: Debug {
     /// The actual type used to reference a `CatalogType`
     type Reference: Clone + Debug + Eq + PartialEq;
 }
@@ -1709,6 +1709,8 @@ impl DefaultPrivilegeAclItem {
 pub struct BuiltinsConfig {
     /// If true, include system builtin continual tasks.
     pub include_continual_tasks: bool,
+    /// If true, include new system builtin items.
+    pub include_new_items: bool,
 }
 
 #[cfg(test)]

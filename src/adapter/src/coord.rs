@@ -3626,7 +3626,6 @@ pub fn serve(
             mut catalog,
             storage_collections_to_drop,
             migrated_storage_collections_0dt,
-            new_builtins,
             builtin_table_updates,
         } = Catalog::open(mz_catalog::config::Config {
             storage,
@@ -3639,6 +3638,7 @@ pub fn serve(
                 now: now.clone(),
                 boot_ts: boot_ts.clone(),
                 skip_migrations: false,
+                read_only: read_only_controllers,
                 cluster_replica_sizes,
                 builtin_system_cluster_replica_size,
                 builtin_catalog_server_cluster_replica_size,
@@ -3715,10 +3715,7 @@ pub fn serve(
         };
 
         let clusters_caught_up_check =
-            clusters_caught_up_trigger.map(|trigger| CaughtUpCheckContext {
-                trigger,
-                exclude_collections: new_builtins,
-            });
+            clusters_caught_up_trigger.map(|trigger| CaughtUpCheckContext { trigger });
 
         if let Some(config) = pg_timestamp_oracle_config.as_ref() {
             // Apply settings from system vars as early as possible because some

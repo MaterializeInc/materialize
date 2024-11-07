@@ -662,7 +662,6 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
     pub fn collections_hydrated_on_replicas(
         &self,
         target_replica_ids: Option<Vec<ReplicaId>>,
-        exclude_collections: &BTreeSet<GlobalId>,
     ) -> Result<bool, HydrationCheckBadTarget> {
         if self.replicas.is_empty() {
             return Ok(true);
@@ -684,7 +683,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         }
 
         for (id, _collection) in self.collections_iter() {
-            if id.is_transient() || exclude_collections.contains(&id) {
+            if id.is_transient() {
                 continue;
             }
 
@@ -721,8 +720,8 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
     /// This also returns `true` in case this cluster does not have any
     /// replicas.
     #[mz_ore::instrument(level = "debug")]
-    pub fn collections_hydrated(&self, exclude_collections: &BTreeSet<GlobalId>) -> bool {
-        self.collections_hydrated_on_replicas(None, exclude_collections)
+    pub fn collections_hydrated(&self) -> bool {
+        self.collections_hydrated_on_replicas(None)
             .expect("Cannot error if target_replica_ids is None")
     }
 

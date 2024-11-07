@@ -549,7 +549,7 @@ impl Coordinator {
         let hydrated_fut = self
             .controller
             .compute
-            .collections_hydrated_for_replicas(cluster.id, pending_replicas, [].into())
+            .collections_hydrated_for_replicas(cluster.id, pending_replicas)
             .map_err(|e| AdapterError::internal("Failed to check hydration", e))?;
 
         let span = Span::current();

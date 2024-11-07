@@ -89,11 +89,13 @@ async fn migrate_builtin_items_legacy(
     migrated_builtins: Vec<GlobalId>,
 ) -> Result<BuiltinItemMigrationResult, Error> {
     let id_fingerprint_map: BTreeMap<_, _> = BUILTINS::iter(&state.config().builtins_cfg)
-        .map(|builtin| {
-            let id = state.resolve_builtin_object(builtin);
-            let fingerprint = builtin.fingerprint();
-            (id, fingerprint)
+        // Ignore builtins that weren't loaded into the catalog.
+        .filter_map(|builtin| {
+            state
+                .try_resolve_builtin_object(builtin)
+                .map(|id| (id, builtin))
         })
+        .map(|(id, builtin)| (id, builtin.fingerprint()))
         .collect();
     let mut builtin_migration_metadata = Catalog::generate_builtin_migration_metadata(
         state,
@@ -183,11 +185,13 @@ async fn migrate_builtin_items_0dt(
 
     // 0. Update durably stored fingerprints.
     let id_fingerprint_map: BTreeMap<_, _> = BUILTINS::iter(&state.config().builtins_cfg)
-        .map(|builtin| {
-            let id = state.resolve_builtin_object(builtin);
-            let fingerprint = builtin.fingerprint();
-            (id, fingerprint)
+        // Ignore builtins that weren't loaded into the catalog.
+        .filter_map(|builtin| {
+            state
+                .try_resolve_builtin_object(builtin)
+                .map(|id| (id, builtin))
         })
+        .map(|(id, builtin)| (id, builtin.fingerprint()))
         .collect();
     let mut migrated_system_object_mappings = BTreeMap::new();
     for id in &migrated_builtins {

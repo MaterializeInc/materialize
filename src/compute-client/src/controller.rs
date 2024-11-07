@@ -385,13 +385,12 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
     /// For this check, zero-replica clusters are always considered hydrated.
     /// Their collections would never normally be considered hydrated but it's
     /// clearly intentional that they have no replicas.
-    pub async fn clusters_hydrated(&self, exclude_collections: &BTreeSet<GlobalId>) -> bool {
+    pub async fn clusters_hydrated(&self) -> bool {
         let instances = self.instances.iter();
         let mut pending: FuturesUnordered<_> = instances
             .map(|(id, instance)| {
-                let exclude_collections = exclude_collections.clone();
                 instance
-                    .call_sync(move |i| i.collections_hydrated(&exclude_collections))
+                    .call_sync(move |i| i.collections_hydrated())
                     .map(move |x| (id, x))
             })
             .collect();
@@ -439,7 +438,6 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
         &self,
         instance_id: ComputeInstanceId,
         replicas: Vec<ReplicaId>,
-        exclude_collections: BTreeSet<GlobalId>,
     ) -> Result<oneshot::Receiver<bool>, anyhow::Error> {
         let instance = self.instance(instance_id)?;
 
@@ -452,7 +450,7 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
         let (tx, rx) = oneshot::channel();
         instance.call(move |i| {
             let result = i
-                .collections_hydrated_on_replicas(Some(replicas), &exclude_collections)
+                .collections_hydrated_on_replicas(Some(replicas))
                 .expect("validated");
             let _ = tx.send(result);
         });

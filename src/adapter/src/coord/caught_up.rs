@@ -10,7 +10,7 @@
 //! Support for checking whether clusters/collections are caught up during a 0dt
 //! deployment.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use differential_dataflow::lattice::Lattice as _;
 use itertools::Itertools;
@@ -33,11 +33,6 @@ pub struct CaughtUpCheckContext {
     /// A trigger that signals that all clusters/collections have been caught
     /// up.
     pub trigger: Trigger,
-    /// Collections to exclude from the caught up check.
-    ///
-    /// When a caught up check is performed as part of a 0dt upgrade, it makes sense to exclude
-    /// collections of newly added builtin objects, as these might not hydrate in read-only mode.
-    pub exclude_collections: BTreeSet<GlobalId>,
 }
 
 impl Coordinator {
@@ -57,7 +52,7 @@ impl Coordinator {
     }
 
     async fn maybe_check_caught_up_new(&mut self) {
-        let Some(ctx) = &self.caught_up_check else {
+        let Some(_ctx) = &self.caught_up_check else {
             return;
         };
 
@@ -141,7 +136,6 @@ impl Coordinator {
                 cutoff.into(),
                 now.into(),
                 &live_collection_frontiers,
-                &ctx.exclude_collections,
             )
             .await;
 
@@ -171,7 +165,6 @@ impl Coordinator {
         cutoff: Timestamp,
         now: Timestamp,
         live_frontiers: &BTreeMap<GlobalId, Antichain<Timestamp>>,
-        exclude_collections: &BTreeSet<GlobalId>,
     ) -> bool {
         let mut result = true;
         for cluster in self.catalog().clusters() {
@@ -182,7 +175,6 @@ impl Coordinator {
                     cutoff.clone(),
                     now.clone(),
                     live_frontiers,
-                    exclude_collections,
                 )
                 .await;
 
@@ -224,7 +216,6 @@ impl Coordinator {
         cutoff: Timestamp,
         now: Timestamp,
         live_frontiers: &BTreeMap<GlobalId, Antichain<Timestamp>>,
-        exclude_collections: &BTreeSet<GlobalId>,
     ) -> Result<bool, anyhow::Error> {
         if cluster.replicas().next().is_none() {
             return Ok(true);
@@ -238,7 +229,7 @@ impl Coordinator {
             .active_ingestions(cluster.id)
             .iter()
             .copied()
-            .filter(|id| !id.is_transient() && !exclude_collections.contains(id))
+            .filter(|id| !id.is_transient())
             .map(|id| {
                 let (_read_frontier, write_frontier) =
                     self.controller.storage.collection_frontiers(id)?;
@@ -249,7 +240,7 @@ impl Coordinator {
             .controller
             .compute
             .collection_ids(cluster.id)?
-            .filter(|id| !id.is_transient() && !exclude_collections.contains(id))
+            .filter(|id| !id.is_transient())
             .map(|id| {
                 let write_frontier = self
                     .controller
@@ -351,15 +342,11 @@ impl Coordinator {
     }
 
     async fn maybe_check_caught_up_legacy(&mut self) {
-        let Some(ctx) = &self.caught_up_check else {
+        let Some(_ctx) = &self.caught_up_check else {
             return;
         };
 
-        let compute_hydrated = self
-            .controller
-            .compute
-            .clusters_hydrated(&ctx.exclude_collections)
-            .await;
+        let compute_hydrated = self.controller.compute.clusters_hydrated().await;
         tracing::info!(%compute_hydrated, "checked hydration status of clusters");
 
         if compute_hydrated {
