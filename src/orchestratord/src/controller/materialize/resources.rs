@@ -116,7 +116,6 @@ impl Resources {
         let role_api: Api<Role> = Api::namespaced(client.clone(), namespace);
         let role_binding_api: Api<RoleBinding> = Api::namespaced(client.clone(), namespace);
         let statefulset_api: Api<StatefulSet> = Api::namespaced(client.clone(), namespace);
-        let deployment_api: Api<Deployment> = Api::namespaced(client.clone(), namespace);
         let pod_api: Api<Pod> = Api::namespaced(client.clone(), namespace);
 
         for policy in &self.network_policies {
@@ -141,16 +140,6 @@ impl Resources {
 
         trace!("creating new environmentd statefulset");
         apply_resource(&statefulset_api, &*self.environmentd_statefulset).await?;
-
-        if let Some(balancerd_deployment) = &self.balancerd_deployment {
-            trace!("creating new balancerd deployment");
-            apply_resource(&deployment_api, &*balancerd_deployment).await?;
-        }
-
-        if let Some(balancerd_service) = &self.balancerd_service {
-            trace!("creating new balancerd service");
-            apply_resource(&service_api, &*balancerd_service).await?;
-        }
 
         // until we have full zero downtime upgrades, we have a tradeoff: if
         // we use the graceful upgrade mechanism, we minimize environmentd
@@ -280,9 +269,20 @@ impl Resources {
         namespace: &str,
     ) -> Result<(), anyhow::Error> {
         let service_api: Api<Service> = Api::namespaced(client.clone(), namespace);
+        let deployment_api: Api<Deployment> = Api::namespaced(client.clone(), namespace);
 
         trace!("applying environmentd public service");
         apply_resource(&service_api, &*self.public_service).await?;
+
+        if let Some(balancerd_deployment) = &self.balancerd_deployment {
+            trace!("creating new balancerd deployment");
+            apply_resource(&deployment_api, &*balancerd_deployment).await?;
+        }
+
+        if let Some(balancerd_service) = &self.balancerd_service {
+            trace!("creating new balancerd service");
+            apply_resource(&service_api, &*balancerd_service).await?;
+        }
 
         Ok(())
     }
