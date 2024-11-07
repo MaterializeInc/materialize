@@ -10,6 +10,9 @@
 import logging
 import os
 import subprocess
+from typing import Any
+
+from pg8000 import Connection, Cursor
 
 from materialize.cloudtest.app.cloudtest_application_base import (
     CloudtestApplicationBase,
@@ -46,12 +49,24 @@ class MaterializeApplication(CloudtestApplicationBase):
         apply_node_selectors: bool = False,
     ) -> None:
         self.tag = tag
+        # TODO: Remove
         self.environmentd = EnvironmentdService()
         self.materialized_alias = MaterializedAliasService()
+
+        wait(
+            condition="condition=Ready",
+            resource="pod",
+            label="app=environmentd",
+        )
+        environmentd_host = self.get_k8s_value(
+            "app=environmentd", "{.items[0].spec.hostname}"
+        )[:-2]
         self.testdrive = TestdrivePod(
             release_mode=release_mode,
             aws_region=aws_region,
             apply_node_selectors=apply_node_selectors,
+            materialize_url=f"postgres://materialize:materialize@{environmentd_host}.default:6875/materialize",
+            materialize_internal_url=f"postgres://mz_system@{environmentd_host}.default:6877/materializ",
         )
         self.apply_node_selectors = apply_node_selectors
         super().__init__(release_mode, aws_region, log_filter)
@@ -133,20 +148,44 @@ class MaterializeApplication(CloudtestApplicationBase):
                 label=f"cluster.environmentd.materialize.cloud/cluster-id={cluster_id}",
             )
 
+    def sql(
+        self,
+        sql: str,
+        port: str | None = None,
+        user: str = "materialize",
+    ) -> None:
+        self.environmentd.sql(sql=sql, port=port, user=user)
+
+    def sql_query(self, sql: str) -> Any:
+        return self.environmentd.sql_query(sql=sql)
+
+    def sql_conn(
+        self,
+        port: str | None = None,
+        user: str = "materialize",
+    ) -> Connection:
+        return self.environmentd.sql_conn(port=port, user=user)
+
+    def sql_cursor(self, autocommit: bool = True) -> Cursor:
+        return self.environmentd.sql_cursor(autocommit=autocommit)
+
     def wait_for_sql(self) -> None:
         """Wait until environmentd pod is ready and can accept SQL connections"""
         return
-        wait(condition="condition=Ready", resource="pod/testdrive")
+        # wait(
+        #     condition="condition=Ready",
+        #     resource="pod/environmentd-12345678-1234-1234-1234-123456789012-1-0",
+        # )
 
         # start = datetime.now()
         # while datetime.now() - start < timedelta(seconds=300):
-        #    try:
-        #        self.environmentd.sql("SELECT 1")
-        #        break
-        #    except InterfaceError as e:
-        #        # Since we crash environmentd, we expect some errors that we swallow.
-        #        LOGGER.info(f"SQL interface not ready, {e} while SELECT 1. Waiting...")
-        #        time.sleep(2)
+        #     try:
+        #         self.sql("SELECT 1")
+        #         break
+        #     except InterfaceError as e:
+        #         # Since we crash environmentd, we expect some errors that we swallow.
+        #         LOGGER.info(f"SQL interface not ready, {e} while SELECT 1. Waiting...")
+        #         time.sleep(2)
 
     def set_environmentd_failpoints(self, failpoints: str) -> None:
         """Set the FAILPOINTS environmentd variable in the stateful set. This
@@ -206,13 +245,13 @@ class MaterializeApplication(CloudtestApplicationBase):
         return values
 
     def get_cluster_id(self, cluster_name: str) -> str:
-        cluster_id: str = self.environmentd.sql_query(
+        cluster_id: str = self.sql_query(
             f"SELECT id FROM mz_clusters WHERE name = '{cluster_name}'"
         )[0][0]
         return cluster_id
 
     def get_cluster_and_replica_id(self, mz_table: str, name: str) -> tuple[str, str]:
-        [cluster_id, replica_id] = self.environmentd.sql_query(
+        [cluster_id, replica_id] = self.sql_query(
             f"SELECT s.cluster_id, r.id FROM {mz_table} s JOIN mz_cluster_replicas r ON r.cluster_id = s.cluster_id WHERE s.name = '{name}'"
         )[0]
         return cluster_id, replica_id
