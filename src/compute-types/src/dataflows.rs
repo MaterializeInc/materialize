@@ -796,7 +796,7 @@ proptest::prop_compose! {
         initial_as_of in proptest::collection::vec(any::<mz_repr::Timestamp>(), 1..5),
         refresh_schedule_some in any::<bool>(),
         refresh_schedule in any::<RefreshSchedule>(),
-        time_dependence in any::<Option<TimeDependence >>(),
+        time_dependence in any::<Option<TimeDependence>>(),
     ) -> DataflowDescription<OptimizedMirRelationExpr, (), mz_repr::Timestamp> {
         DataflowDescription {
             source_imports: BTreeMap::from_iter(source_imports.into_iter()),
