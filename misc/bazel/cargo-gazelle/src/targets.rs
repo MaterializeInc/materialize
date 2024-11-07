@@ -25,7 +25,7 @@ use crate::config::{CrateConfig, GlobalConfig};
 use crate::context::CrateContext;
 use crate::platforms::PlatformVariant;
 use crate::rules::Rule;
-use crate::{Dict, Field, FileGroup, Glob, List, QuotedString, Select};
+use crate::{Alias, Dict, Field, FileGroup, Glob, List, QuotedString, Select};
 
 use super::{AutoIndentingWriter, ToBazelDefinition};
 
@@ -62,8 +62,8 @@ pub struct RustLibrary {
     disable_pipelining: Option<Field<bool>>,
     rustc_flags: Field<List<QuotedString>>,
     rustc_env: Field<Dict<QuotedString, QuotedString>>,
-    unit_test: Option<RustTest>,
-    doc_tests: Option<RustDocTest>,
+    /// Other targets, e.g. unit tests, that we generate for a library.
+    extra_targets: Vec<Box<dyn ToBazelDefinition>>,
 }
 
 impl RustTarget for RustLibrary {
@@ -150,6 +150,26 @@ impl RustLibrary {
         // For every library we also generate the tests targets.
         let unit_test = RustTest::library(config, metadata, crate_config, features.clone())?;
         let doc_tests = RustDocTest::generate(config, metadata, crate_config)?;
+        let mut extra_targets: Vec<Box<dyn ToBazelDefinition>> =
+            vec![Box::new(unit_test), Box::new(doc_tests)];
+
+        // Generate an alias with the same name as the containing directory that points to the
+        // library target. This allows you to build the library with a short-hand notation, e.g.
+        // `//src/compute-types` instead of `//src/compute-types:mz_compute_types`.
+        let crate_filename = metadata
+            .manifest_path()
+            .parent()
+            .and_then(|path| path.file_name());
+        if let Some(crate_filename) = crate_filename {
+            let other_target_conflicts = metadata
+                .build_targets()
+                .map(|target| target.name())
+                .any(|target_name| target_name.to_case(Case::Snake) == crate_filename);
+            if !other_target_conflicts {
+                let alias = Alias::new(crate_filename, name.unquoted());
+                extra_targets.insert(0, Box::new(alias));
+            }
+        }
 
         // Extend with any extra config specified in the Cargo.toml.
         let lib_common = crate_config.lib().common();
@@ -193,8 +213,7 @@ impl RustLibrary {
             disable_pipelining: disable_pipelining.map(|v| Field::new("disable_pipelining", v)),
             rustc_flags: Field::new("rustc_flags", rustc_flags),
             rustc_env: Field::new("rustc_env", rustc_env),
-            unit_test,
-            doc_tests,
+            extra_targets,
         }))
     }
 }
@@ -230,13 +249,9 @@ impl ToBazelDefinition for RustLibrary {
         }
         writeln!(w, ")")?;
 
-        if let Some(unit_test) = &self.unit_test {
+        for extra_target in &self.extra_targets {
             writeln!(w)?;
-            unit_test.format(&mut w)?;
-        }
-        if let Some(doc_tests) = &self.doc_tests {
-            writeln!(w)?;
-            doc_tests.format(&mut w)?;
+            extra_target.format(&mut w)?;
         }
 
         Ok(())
