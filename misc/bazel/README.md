@@ -102,7 +102,7 @@ A good default to start with is:
 # Bazel will use all but one CPU core, so your machine is still responsive.
 common --local_resources=cpu="HOST_CPUS-1"
 
-# Define a shared disk cache so builds from different directories can share artifacts.
+# Define a shared disk cache so builds from different Materialize repos can share artifacts.
 build --disk_cache=~/.cache/bazel
 ```
 
