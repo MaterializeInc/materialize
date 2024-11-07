@@ -594,6 +594,7 @@ def compileSlowSltConfig() -> SltRunConfig:
         # transactions:
         "test/sqllogictest/github-11568.slt",
         "test/sqllogictest/introspection/cluster_log_compaction.slt",
+        "test/sqllogictest/introspection/attribution_sources.slt",
         "test/sqllogictest/timedomain.slt",
         "test/sqllogictest/transactions.slt",
         # depends on unmaterializable functions
