@@ -1232,8 +1232,6 @@ pub struct DataflowMetainfo<Notice = RawOptimizerNotice> {
     pub optimizer_notices: Vec<Notice>,
     /// What kind of operation (full scan, lookup, ...) will access each index. Computed by
     /// `prune_and_annotate_dataflow_index_imports`.
-    #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
-    #[serde(deserialize_with = "mz_ore::serde::string_key_to_btree_map")]
     pub index_usage_types: BTreeMap<GlobalId, Vec<IndexUsageType>>,
 }
 
