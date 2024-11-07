@@ -26,7 +26,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::task::AbortOnDropHandle;
-use mz_ore::{assert_none, instrument};
+use mz_ore::{assert_none, instrument, soft_assert_or_log};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
 use mz_persist_client::critical::SinceHandle;
@@ -2286,15 +2286,20 @@ where
             >,
         > = FuturesUnordered::new();
 
-        let gen_upper_future = |id, mut handle: WriteHandle<_, _, _, _>, prev_upper| {
-            let fut = async move {
-                handle.wait_for_upper_past(&prev_upper).await;
-                let new_upper = handle.shared_upper();
-                (id, handle, new_upper)
-            };
+        let gen_upper_future =
+            |id, mut handle: WriteHandle<_, _, _, _>, prev_upper: Antichain<T>| {
+                let fut = async move {
+                    soft_assert_or_log!(
+                        !prev_upper.is_empty(),
+                        "cannot await progress when upper is already empty"
+                    );
+                    handle.wait_for_upper_past(&prev_upper).await;
+                    let new_upper = handle.shared_upper();
+                    (id, handle, new_upper)
+                };
 
-            fut
-        };
+                fut
+            };
 
         let mut txns_upper_future = match self.txns_handle.take() {
             Some(txns_handle) => {
@@ -2330,8 +2335,10 @@ where
                             // again!
                             let uppers = vec![(id, upper.clone())];
                             self.update_write_frontiers(&uppers).await;
-                            let fut = gen_upper_future(id, handle, upper);
-                            upper_futures.push(fut.boxed());
+                            if !upper.is_empty() {
+                                let fut = gen_upper_future(id, handle, upper);
+                                upper_futures.push(fut.boxed());
+                            }
                         } else {
                             // Be polite and expire the write handle. This can
                             // happen when we get an upper update for a write
@@ -2365,8 +2372,10 @@ where
                                 self.txns_shards.insert(id);
                             } else {
                                 let upper = write_handle.upper().clone();
-                                let fut = gen_upper_future(id, write_handle, upper);
-                                upper_futures.push(fut.boxed());
+                                if !upper.is_empty() {
+                                    let fut = gen_upper_future(id, write_handle, upper);
+                                    upper_futures.push(fut.boxed());
+                                }
                             }
 
                         }
