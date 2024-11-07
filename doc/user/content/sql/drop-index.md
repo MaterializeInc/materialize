@@ -14,7 +14,7 @@ menu:
 DROP INDEX [IF EXISTS] <index_name> [ 'CASCADE' | 'RESTRICT' ];
 ```
 
-Options | Description
+Option | Description
 ------|-----
 **IF EXISTS** | Do not return an error if the specified index does not exist.
 **CASCADE** | Remove the index and its dependent objects.
@@ -38,21 +38,6 @@ To execute the `DROP INDEX` statement, you need:
 
 ### Remove an index
 
-Assume you want to drop an index named `q01_geo_idx`. You can remove an index
-with any of the following `DROP INDEX` commands:
-
-- ```mzsql
-  DROP INDEX q01_geo_idx;
-  ```
-- ```mzsql
-  DROP INDEX q01_geo_idx RESTRICT;
-  ```
-- ```mzsql
-  DROP INDEX q01_geo_idx CASCADE;
-  ```
-
-If the index `q01_geo_idx` does not exist, the above operations return an error.
-
 {{< tip >}}
 
 In the **Materialize Console**, you can view existing indexes in the [**Database
@@ -60,6 +45,14 @@ object explorer**](/console/data/). Alternatively, you can use the
 [`SHOW INDEXES`](/sql/show-indexes) command.
 
 {{< /tip >}}
+
+Using the  `DROP INDEX` commands, the following example drops an index named `q01_geo_idx`.
+
+```mzsql
+DROP INDEX q01_geo_idx;
+```
+
+If the index `q01_geo_idx` does not exist, the above operation return an error.
 
 ### Remove an index without erroring if the index does not exist
 

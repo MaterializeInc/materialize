@@ -293,8 +293,6 @@ drop_cluster_replica ::=
   'DROP' 'CLUSTER' 'REPLICA' ('IF EXISTS')? cluster_name.replica_name
 drop_database ::=
     'DROP' 'DATABASE' ('IF EXISTS')? database_name ('CASCADE' | 'RESTRICT')?
-drop_index ::=
-    'DROP' 'INDEX' ('IF EXISTS')? index_name ('CASCADE' | 'RESTRICT')?
 drop_materialized_view ::=
   'DROP' 'MATERIALIZED VIEW' 'IF EXISTS'? view_name ('RESTRICT' | 'CASCADE')?
 drop_owned ::=
