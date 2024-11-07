@@ -29,7 +29,7 @@ use crate::ShardId;
 /// Percent of filtered data to opt in to correctness auditing.
 pub(crate) const STATS_AUDIT_PERCENT: Config<usize> = Config::new(
     "persist_stats_audit_percent",
-    0,
+    1,
     "Percent of filtered data to opt in to correctness auditing (Materialize).",
 );
 

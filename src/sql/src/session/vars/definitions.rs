@@ -453,21 +453,21 @@ pub static MAX_MYSQL_CONNECTIONS: VarDefinition = VarDefinition::new(
 
 pub static MAX_AWS_PRIVATELINK_CONNECTIONS: VarDefinition = VarDefinition::new(
     "max_aws_privatelink_connections",
-    value!(u32; 0),
+    value!(u32; 4),
      "The maximum number of AWS PrivateLink connections in the region, across all schemas (Materialize).",
     true,
 );
 
 pub static MAX_TABLES: VarDefinition = VarDefinition::new(
     "max_tables",
-    value!(u32; 25),
+    value!(u32; 200),
     "The maximum number of tables in the region, across all schemas (Materialize).",
     true,
 );
 
 pub static MAX_SOURCES: VarDefinition = VarDefinition::new(
     "max_sources",
-    value!(u32; 25),
+    value!(u32; 200),
     "The maximum number of sources in the region, across all schemas (Materialize).",
     true,
 );
@@ -780,7 +780,7 @@ pub mod upsert_rocksdb {
     /// Controls whether automatic spill to disk should be turned on when using `DISK`.
     pub static UPSERT_ROCKSDB_AUTO_SPILL_TO_DISK: VarDefinition = VarDefinition::new(
         "upsert_rocksdb_auto_spill_to_disk",
-        value!(bool; false),
+        value!(bool; true),
         "Controls whether automatic spill to disk should be turned on when using `DISK`",
         false,
     );
@@ -1119,7 +1119,7 @@ pub static KAFKA_TRANSACTION_TIMEOUT: VarDefinition = VarDefinition::new(
     "kafka_transaction_timeout",
     value!(Duration; mz_kafka_util::client::DEFAULT_TRANSACTION_TIMEOUT),
     "Controls `transaction.timeout.ms` for rdkafka \
-        client connections. Defaults to the rdkafka default (60000ms). \
+        client connections. Defaults to the 10min. \
         Cannot be greater than `i32::MAX` or less than 1000ms.",
     false,
 );
@@ -1337,7 +1337,7 @@ pub static OPTIMIZER_STATS_TIMEOUT: VarDefinition = VarDefinition::new(
 
 pub static OPTIMIZER_ONESHOT_STATS_TIMEOUT: VarDefinition = VarDefinition::new(
     "optimizer_oneshot_stats_timeout",
-    value!(Duration; Duration::from_millis(20)),
+    value!(Duration; Duration::from_millis(10)),
     "Sets the timeout applied to the optimizer's statistics collection from storage; \
         applied to oneshot queries, like SELECT (Materialize).",
     false,
@@ -1391,7 +1391,7 @@ pub static STATEMENT_LOGGING_TARGET_DATA_RATE: VarDefinition = VarDefinition::ne
 
 pub static STATEMENT_LOGGING_MAX_SAMPLE_RATE: VarDefinition = VarDefinition::new_lazy(
     "statement_logging_max_sample_rate",
-    lazy_value!(Numeric; || 0.0.into()),
+    lazy_value!(Numeric; || 0.99.into()),
     "The maximum rate at which statements may be logged. If this value is less than \
         that of `statement_logging_sample_rate`, the latter is ignored (Materialize).",
     true,
@@ -1400,7 +1400,7 @@ pub static STATEMENT_LOGGING_MAX_SAMPLE_RATE: VarDefinition = VarDefinition::new
 
 pub static STATEMENT_LOGGING_DEFAULT_SAMPLE_RATE: VarDefinition = VarDefinition::new_lazy(
     "statement_logging_default_sample_rate",
-    lazy_value!(Numeric; || 0.0.into()),
+    lazy_value!(Numeric; || 0.99.into()),
     "The default value of `statement_logging_sample_rate` for new sessions (Materialize).",
     true,
 )
@@ -1783,7 +1783,7 @@ feature_flags!(
     {
         name: allow_real_time_recency,
         desc: "real time recency",
-        default: false,
+        default: true,
         enable_for_item_parsing: true,
     },
     // Actual feature flags
@@ -1826,7 +1826,7 @@ feature_flags!(
     {
         name: enable_explain_pushdown,
         desc: "EXPLAIN FILTER PUSHDOWN",
-        default: false,
+        default: true,
         enable_for_item_parsing: true,
     },
     {
@@ -2025,7 +2025,7 @@ feature_flags!(
     {
         name: enable_expressions_in_limit_syntax,
         desc: "LIMIT <expr> syntax",
-        default: false,
+        default: true,
         enable_for_item_parsing: true,
     },
     {
@@ -2062,7 +2062,7 @@ feature_flags!(
     {
         name: enable_reduce_mfp_fusion,
         desc: "fusion of MFPs in reductions",
-        default: false,
+        default: true,
         enable_for_item_parsing: false,
     },
     {
@@ -2074,7 +2074,7 @@ feature_flags!(
     {
         name: enable_copy_to_expr,
         desc: "COPY ... TO 's3://...'",
-        default: false,
+        default: true,
         enable_for_item_parsing: false,
     },
     {
@@ -2086,7 +2086,7 @@ feature_flags!(
     {
         name: enable_variadic_left_join_lowering,
         desc: "Enable joint HIR ⇒ MIR lowering of stacks of left joins",
-        default: false,
+        default: true,
         enable_for_item_parsing: false,
     },
     {

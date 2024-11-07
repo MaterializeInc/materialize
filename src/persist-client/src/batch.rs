@@ -404,7 +404,7 @@ pub(crate) const STRUCTURED_ORDER_UNTIL_SHARD: Config<&'static str> = Config::ne
 
 pub(crate) const STRUCTURED_KEY_LOWER_LEN: Config<usize> = Config::new(
     "persist_batch_structured_key_lower_len",
-    0,
+    256,
     "The maximum size in proto bytes of any structured key-lower metadata to preserve. \
     (If we're unable to fit the lower in budget, or the budget is zero, no metadata is kept.)",
 );
@@ -430,13 +430,13 @@ pub(crate) const BLOB_TARGET_SIZE: Config<usize> = Config::new(
 
 pub(crate) const INLINE_WRITES_SINGLE_MAX_BYTES: Config<usize> = Config::new(
     "persist_inline_writes_single_max_bytes",
-    0,
+    4096,
     "The (exclusive) maximum size of a write that persist will inline in metadata.",
 );
 
 pub(crate) const INLINE_WRITES_TOTAL_MAX_BYTES: Config<usize> = Config::new(
     "persist_inline_writes_total_max_bytes",
-    0,
+    1 * MiB,
     "\
     The (exclusive) maximum total size of inline writes in metadata before \
     persist will backpressure them by flushing out to s3.",

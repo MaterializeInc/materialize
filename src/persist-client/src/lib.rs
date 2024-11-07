@@ -78,7 +78,7 @@ pub mod operators {
     // TODO(cfg): Move this next to the use.
     pub(crate) const STORAGE_SOURCE_DECODE_FUEL: Config<usize> = Config::new(
         "storage_source_decode_fuel",
-        1_000_000,
+        100_000,
         "\
         The maximum amount of work to do in the persist_source mfp_and_decode \
         operator before yielding.",

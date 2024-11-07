@@ -34,7 +34,7 @@ pub const LINEAR_JOIN_YIELDING: Config<&str> = Config::new(
 /// Enable lgalloc for columnation.
 pub const ENABLE_COLUMNATION_LGALLOC: Config<bool> = Config::new(
     "enable_columnation_lgalloc",
-    false,
+    true,
     "Enable allocating regions from lgalloc.",
 );
 

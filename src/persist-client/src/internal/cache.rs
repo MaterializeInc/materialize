@@ -32,12 +32,7 @@ pub struct BlobMemCache {
 
 pub(crate) const BLOB_CACHE_MEM_LIMIT_BYTES: Config<usize> = Config::new(
     "persist_blob_cache_mem_limit_bytes",
-    // This initial value was tuned via a one-time experiment that showed an
-    // environment running our demo "auction" source + mv got 90%+ cache hits
-    // with a 1 MiB cache. This doesn't scale up to prod data sizes and doesn't
-    // help with multi-process replicas, but the memory usage seems
-    // unobjectionable enough to have it for the cases that it does help.
-    1024 * 1024,
+    128 * 1024 * 1024,
     "Capacity of in-mem blob cache in bytes (Materialize).",
 );
 

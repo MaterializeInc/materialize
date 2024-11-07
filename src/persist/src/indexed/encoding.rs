@@ -65,8 +65,7 @@ pub enum BatchColumnarFormat {
 impl BatchColumnarFormat {
     /// Returns a default value for [`BatchColumnarFormat`].
     pub const fn default() -> Self {
-        // IMPORTANT: Default to only writing Row data and not our newer structured format.
-        BatchColumnarFormat::Row
+        BatchColumnarFormat::Both(2)
     }
 
     /// Returns a [`BatchColumnarFormat`] for a given `&str`, falling back to a default value if

@@ -1288,14 +1288,14 @@ where
 
 pub(crate) const NEXT_LISTEN_BATCH_RETRYER_FIXED_SLEEP: Config<Duration> = Config::new(
     "persist_next_listen_batch_retryer_fixed_sleep",
-    Duration::ZERO,
+    Duration::from_millis(1200), // pubsub is on by default!
     "\
     The fixed sleep when polling for new batches from a Listen or Subscribe. Skipped if zero.",
 );
 
 pub(crate) const NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF: Config<Duration> = Config::new(
     "persist_next_listen_batch_retryer_initial_backoff",
-    Duration::from_millis(1200), // pubsub is on by default!
+    Duration::from_millis(100), // pubsub is on by default!
     "The initial backoff when polling for new batches from a Listen or Subscribe.",
 );
 
@@ -1307,7 +1307,7 @@ pub(crate) const NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER: Config<u32> = Config::new
 
 pub(crate) const NEXT_LISTEN_BATCH_RETRYER_CLAMP: Config<Duration> = Config::new(
     "persist_next_listen_batch_retryer_clamp",
-    Duration::from_secs(1), // pubsub is on by default!
+    Duration::from_secs(16), // pubsub is on by default!
     "The backoff clamp duration when polling for new batches from a Listen or Subscribe.",
 );
 
