@@ -53,6 +53,29 @@ spec:
         {{- if .Values.operator.args.createBalancers }}
         - "--create-balancers"
         {{- end }}
+        {{- if .Values.operator.clusters }}
+        {{- if .Values.operator.clusters.sizes }}
+        - '--environmentd-cluster-replica-sizes={{ toJson .Values.operator.clusters.sizes }}'
+        {{- end }}
+        {{ if .Values.operator.clusters.defaultSizes.default }}
+        - "--bootstrap-default-cluster-replica-size={{ .Values.operator.clusters.defaultSizes.default }}"
+        {{- end }}
+        {{ if .Values.operator.clusters.defaultSizes.system }}
+        - "--bootstrap-builtin-system-cluster-replica-size={{ .Values.operator.clusters.defaultSizes.system }}"
+        {{- end }}
+        {{ if .Values.operator.clusters.defaultSizes.probe }}
+        - "--bootstrap-builtin-probe-cluster-replica-size={{ .Values.operator.clusters.defaultSizes.probe }}"
+        {{- end }}
+        {{ if .Values.operator.clusters.defaultSizes.support }}
+        - "--bootstrap-builtin-support-cluster-replica-size={{ .Values.operator.clusters.defaultSizes.support }}"
+        {{- end }}
+        {{ if .Values.operator.clusters.defaultSizes.catalogServer }}
+        - "--bootstrap-builtin-catalog-server-cluster-replica-size={{ .Values.operator.clusters.defaultSizes.catalogServer }}"
+        {{- end }}
+        {{ if .Values.operator.clusters.defaultSizes.analytics }}
+        - "--bootstrap-builtin-analytics-cluster-replica-size={{ .Values.operator.clusters.defaultSizes.analytics }}"
+        {{- end }}
+        {{- end }}
         - "--image-pull-policy={{ kebabcase .Values.operator.image.pullPolicy }}"
         {{- range $key, $value := .Values.environmentd.nodeSelector }}
         - "--environmentd-node-selector={{ $key }}={{ $value }}"

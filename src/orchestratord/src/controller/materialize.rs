@@ -16,7 +16,6 @@ use std::{
 use http::HeaderValue;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
 use kube::{api::PostParams, runtime::controller::Action, Api, Client, Resource, ResourceExt};
-use serde_json::json;
 use tracing::{debug, trace};
 
 use crate::metrics::Metrics;
@@ -61,20 +60,20 @@ pub struct Args {
     #[clap(flatten)]
     network_policies: NetworkPolicyConfig,
 
-    #[clap(long, default_value_t = default_cluster_replica_sizes())]
-    environmentd_cluster_replica_sizes: String,
-    #[clap(long, default_value = "25cc")]
-    bootstrap_default_cluster_replica_size: String,
-    #[clap(long, default_value = "25cc")]
-    bootstrap_builtin_system_cluster_replica_size: String,
-    #[clap(long, default_value = "mz_probe")]
-    bootstrap_builtin_probe_cluster_replica_size: String,
-    #[clap(long, default_value = "25cc")]
-    bootstrap_builtin_support_cluster_replica_size: String,
-    #[clap(long, default_value = "50cc")]
-    bootstrap_builtin_catalog_server_cluster_replica_size: String,
-    #[clap(long, default_value = "25cc")]
-    bootstrap_builtin_analytics_cluster_replica_size: String,
+    #[clap(long)]
+    environmentd_cluster_replica_sizes: Option<String>,
+    #[clap(long)]
+    bootstrap_default_cluster_replica_size: Option<String>,
+    #[clap(long)]
+    bootstrap_builtin_system_cluster_replica_size: Option<String>,
+    #[clap(long)]
+    bootstrap_builtin_probe_cluster_replica_size: Option<String>,
+    #[clap(long)]
+    bootstrap_builtin_support_cluster_replica_size: Option<String>,
+    #[clap(long)]
+    bootstrap_builtin_catalog_server_cluster_replica_size: Option<String>,
+    #[clap(long)]
+    bootstrap_builtin_analytics_cluster_replica_size: Option<String>,
 
     #[clap(
         long,
@@ -185,15 +184,6 @@ impl Display for Error {
             Self::Kube(e) => write!(f, "{e}"),
         }
     }
-}
-
-fn default_cluster_replica_sizes() -> String {
-    json!({
-        "25cc": {"workers": 1, "scale": 1, "credits_per_hour": "0.25"},
-        "50cc": {"workers": 1, "scale": 1, "credits_per_hour": "0.5"},
-        "mz_probe": {"workers": 1, "scale": 1, "credits_per_hour": "0.00"},
-    })
-    .to_string()
 }
 
 pub struct Context {

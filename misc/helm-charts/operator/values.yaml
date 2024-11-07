@@ -33,6 +33,27 @@ operator:
     environmentdConnectionRoleARN: ""
     # awsAccountID is required when cloudProvider is "aws"
     awsAccountID: ""
+  clusters:
+    sizes:
+      3xsmall:
+        workers: 1
+        scale: 1
+        credits_per_hour: "0.25"
+      2xsmall:
+        workers: 1
+        scale: 1
+        credits_per_hour: "0.5"
+      probe:
+        workers: 1
+        scale: 1
+        credits_per_hour: "0"
+    defaultSizes:
+      default: 3xsmall
+      system: 3xsmall
+      probe: probe
+      support: 3xsmall
+      catalogServer: 2xsmall
+      analytics: 3xsmall
   # Node selector to use for the operator pod
   nodeSelector: {}
   resources:
