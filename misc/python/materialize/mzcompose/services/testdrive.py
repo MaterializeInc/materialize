@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import json
 import random
 
 from materialize import buildkite
@@ -15,6 +16,7 @@ from materialize.mzcompose.service import (
     Service,
     ServiceDependency,
 )
+from materialize.mzcompose.services.materialized import cluster_replica_sizes
 from materialize.mzcompose.services.postgres import METADATA_STORE
 
 
@@ -56,8 +58,12 @@ class Testdrive(Service):
         mz_service: str = "materialized",
         metadata_store: str = METADATA_STORE,
         stop_grace_period: str = "120s",
+        cluster_replica_size: dict[str, str] | None = None,
     ) -> None:
         depends_graph: dict[str, ServiceDependency] = {}
+
+        if cluster_replica_size is None:
+            cluster_replica_size = cluster_replica_sizes()
 
         if environment is None:
             environment = [
@@ -74,6 +80,10 @@ class Testdrive(Service):
                 "AWS_SECRET_ACCESS_KEY",
                 "AWS_SESSION_TOKEN",
             ]
+
+        environment += [
+            f"CLUSTER_REPLICA_SIZES={json.dumps(cluster_replica_size)}",
+        ]
 
         volumes = [
             volume_workdir,

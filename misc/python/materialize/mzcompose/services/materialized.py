@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 
+import json
 from enum import Enum
 
 from materialize import docker
@@ -62,6 +63,8 @@ class Materialized(Service):
         publish: bool | None = None,
         stop_grace_period: str = "120s",
         metadata_store: str = METADATA_STORE,
+        cluster_replica_size: dict[str, str] | None = None,
+        bootstrap_replica_size: str = "1",
     ) -> None:
         if name is None:
             name = "materialized"
@@ -72,6 +75,9 @@ class Materialized(Service):
         depends_graph: dict[str, ServiceDependency] = {
             s: {"condition": "service_started"} for s in depends_on
         }
+
+        if cluster_replica_size is None:
+            cluster_replica_size = cluster_replica_sizes()
 
         environment = [
             "MZ_NO_TELEMETRY=1",
@@ -94,6 +100,13 @@ class Materialized(Service):
             # use Composition.override.
             "MZ_LOG_FILTER",
             "CLUSTERD_LOG_FILTER",
+            f"MZ_CLUSTER_REPLICA_SIZES={json.dumps(cluster_replica_size)}",
+            f"MZ_BOOTSTRAP_DEFAULT_CLUSTER_REPLICA_SIZE={bootstrap_replica_size}",
+            f"MZ_BOOTSTRAP_BUILTIN_SYSTEM_CLUSTER_REPLICA_SIZE={bootstrap_replica_size}",
+            f"MZ_BOOTSTRAP_BUILTIN_PROBE_CLUSTER_REPLICA_SIZE={bootstrap_replica_size}",
+            f"MZ_BOOTSTRAP_BUILTIN_SUPPORT_CLUSTER_REPLICA_SIZE={bootstrap_replica_size}",
+            f"MZ_BOOTSTRAP_BUILTIN_CATALOG_SERVER_CLUSTER_REPLICA_SIZE={bootstrap_replica_size}",
+            f"MZ_BOOTSTRAP_BUILTIN_ANALYTICS_CLUSTER_REPLICA_SIZE={bootstrap_replica_size}",
             *environment_extra,
             *DEFAULT_CRDB_ENVIRONMENT,
         ]
@@ -297,3 +310,39 @@ LEADER_STATUS_HEALTHCHECK: list[str] = [
     "-f",
     "localhost:6878/api/leader/status",
 ]
+
+
+def cluster_replica_sizes() -> dict[str, dict[str, any]]:
+    def replica_size(
+        workers: int, scale: int, memory_limit: str | None, disabled: bool = False
+    ) -> dict[str, any]:
+        return {
+            "memory_limit": memory_limit,
+            # "cpu_limit": None,
+            # "disk_limit": None,
+            "scale": scale,
+            "workers": workers,
+            "credits_per_hour": "1",
+            # "cpu_exclusive": False,
+            "disabled": disabled,
+            # "selectors": {},
+        }
+
+    replica_sizes = {}
+
+    for i in range(0, 6):
+        workers = 1 << i
+        replica_sizes[f"{workers}"] = replica_size(workers, 1, None)
+        for mem in [4, 8, 16, 32]:
+            replica_sizes[f"{workers}-{mem}G"] = replica_size(workers, 1, f"{mem} GiB")
+
+        replica_sizes[f"{workers}-1"] = replica_size(1, workers, None)
+        replica_sizes[f"{workers}-{workers}"] = replica_size(workers, workers, None)
+        replica_sizes[f"mem-{workers}"] = replica_size(workers, 1, f"{workers} GiB")
+
+    replica_sizes["2-4"] = replica_size(4, 2, None)
+    replica_sizes["free"] = replica_size(0, 0, None, True)
+    replica_sizes["1cc"] = replica_size(1, 1, None)
+    replica_sizes["1C"] = replica_size(1, 1, None)
+
+    return replica_sizes
