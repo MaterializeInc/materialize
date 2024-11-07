@@ -801,16 +801,42 @@ fn create_environmentd_statefulset_object(
     ));
 
     // Add cluster and storage host size arguments.
-    args.extend([
-        format!(
-            "--cluster-replica-sizes={}",
-            &config.environmentd_cluster_replica_sizes
-        ),
-        format!(
-            "--bootstrap-default-cluster-replica-size={}",
-            &config.bootstrap_default_cluster_replica_size
-        ),
-    ]);
+    args.extend(
+        [
+            config
+                .environmentd_cluster_replica_sizes
+                .as_ref()
+                .map(|sizes| format!("--cluster-replica-sizes={sizes}")),
+            config
+                .bootstrap_default_cluster_replica_size
+                .as_ref()
+                .map(|size| format!("--bootstrap-default-cluster-replica-size={size}")),
+            config
+                .bootstrap_builtin_system_cluster_replica_size
+                .as_ref()
+                .map(|size| format!("--bootstrap-builtin-system-cluster-replica-size={size}")),
+            config
+                .bootstrap_builtin_probe_cluster_replica_size
+                .as_ref()
+                .map(|size| format!("--bootstrap-builtin-probe-cluster-replica-size={size}")),
+            config
+                .bootstrap_builtin_support_cluster_replica_size
+                .as_ref()
+                .map(|size| format!("--bootstrap-builtin-support-cluster-replica-size={size}")),
+            config
+                .bootstrap_builtin_catalog_server_cluster_replica_size
+                .as_ref()
+                .map(|size| {
+                    format!("--bootstrap-builtin-catalog-server-cluster-replica-size={size}")
+                }),
+            config
+                .bootstrap_builtin_analytics_cluster_replica_size
+                .as_ref()
+                .map(|size| format!("--bootstrap-builtin-analytics-cluster-replica-size={size}")),
+        ]
+        .into_iter()
+        .flatten(),
+    );
 
     // Add networking arguments.
     args.extend([
@@ -992,29 +1018,6 @@ fn create_environmentd_statefulset_object(
         }
         args.push(format!("--sentry-tag=region={}", config.region));
     }
-
-    args.extend([
-        format!(
-            "--bootstrap-builtin-system-cluster-replica-size={}",
-            &config.bootstrap_builtin_system_cluster_replica_size
-        ),
-        format!(
-            "--bootstrap-builtin-probe-cluster-replica-size={}",
-            &config.bootstrap_builtin_probe_cluster_replica_size
-        ),
-        format!(
-            "--bootstrap-builtin-support-cluster-replica-size={}",
-            &config.bootstrap_builtin_support_cluster_replica_size
-        ),
-        format!(
-            "--bootstrap-builtin-catalog-server-cluster-replica-size={}",
-            &config.bootstrap_builtin_catalog_server_cluster_replica_size
-        ),
-        format!(
-            "--bootstrap-builtin-analytics-cluster-replica-size={}",
-            &config.bootstrap_builtin_analytics_cluster_replica_size
-        ),
-    ]);
 
     // Add Persist PubSub arguments
     args.push(format!(
