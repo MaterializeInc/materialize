@@ -748,33 +748,41 @@ where
     T: Arbitrary + timely::PartialOrder,
     ComputeSinkDesc<S, T>: Arbitrary,
 {
+    // `prop_map` is only implemented for tuples of 12 elements or less, so we need to use nested
+    // tuples.
     (
-        proptest::collection::vec(any_source_import, 1..3),
-        proptest::collection::vec(any_dataflow_index_import(), 1..3),
-        proptest::collection::vec(any::<BuildDesc<P>>(), 1..3),
-        proptest::collection::vec(any_dataflow_index_export(), 1..3),
-        proptest::collection::vec(any::<(GlobalId, ComputeSinkDesc<S, T>)>(), 1..3),
-        any::<bool>(),
-        proptest::collection::vec(any::<T>(), 1..5),
-        any::<bool>(),
-        proptest::collection::vec(any::<T>(), 1..5),
-        any::<bool>(),
-        any::<RefreshSchedule>(),
+        (
+            proptest::collection::vec(any_source_import, 1..3),
+            proptest::collection::vec(any_dataflow_index_import(), 1..3),
+            proptest::collection::vec(any::<BuildDesc<P>>(), 1..3),
+            proptest::collection::vec(any_dataflow_index_export(), 1..3),
+            proptest::collection::vec(any::<(GlobalId, ComputeSinkDesc<S, T>)>(), 1..3),
+            any::<bool>(),
+            proptest::collection::vec(any::<T>(), 1..5),
+            any::<bool>(),
+            proptest::collection::vec(any::<T>(), 1..5),
+            any::<bool>(),
+            any::<RefreshSchedule>(),
+            proptest::string::string_regex(".*").unwrap(),
+        ),
         any::<Option<TimeDependence>>(),
     )
         .prop_map(
             |(
-                source_imports,
-                index_imports,
-                objects_to_build,
-                index_exports,
-                sink_descs,
-                as_of_some,
-                as_of,
-                initial_storage_as_of_some,
-                initial_as_of,
-                refresh_schedule_some,
-                refresh_schedule,
+                (
+                    source_imports,
+                    index_imports,
+                    objects_to_build,
+                    index_exports,
+                    sink_descs,
+                    as_of_some,
+                    as_of,
+                    initial_storage_as_of_some,
+                    initial_as_of,
+                    refresh_schedule_some,
+                    refresh_schedule,
+                    debug_name,
+                ),
                 time_dependence,
             )| DataflowDescription {
                 source_imports: BTreeMap::from_iter(source_imports),
@@ -798,7 +806,7 @@ where
                 } else {
                     None
                 },
-                debug_name: "debug_name".to_string(),
+                debug_name,
                 time_dependence,
             },
         )
