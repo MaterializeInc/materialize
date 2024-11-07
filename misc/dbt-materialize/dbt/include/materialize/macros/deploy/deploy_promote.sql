@@ -97,6 +97,7 @@
 
     COMMIT;
     {%- endcall %}
+    {{ tag_deployed_schemas(schemas) }}
 {% else %}
     {{ log("Starting dry run...", info=True) }}
     {% for schema in schemas %}
@@ -199,4 +200,35 @@
     {% else %}
         {{ log("No sinks to process.", info=True) }}
     {% endif %}
+{% endmacro %}
+
+{% macro tag_deployed_schemas(schemas) %}
+    {% set commit_sha = adapter.get_git_commit_sha() %}
+
+    {% set result = run_query("SELECT current_user, now();") %}
+    {% if result is not none and result.rows|length > 0 %}
+        {% set db_user = result.columns[0][0] %}
+        {% set deploy_time = result.columns[0][1] %}
+    {% else %}
+        {% set db_user = "unknown" %}
+        {% set deploy_time = "unknown" %}
+    {% endif %}
+
+    {% set schema_comment %}
+        Deployment by {{ db_user }} on {{ deploy_time }}
+        {%- if commit_sha is not none and commit_sha != '' %}
+            | Commit SHA: {{ commit_sha }}
+        {%- endif %}
+    {% endset %}
+
+    {% call statement('tag_schemas', fetch_result=True, auto_begin=False) -%}
+    BEGIN;
+
+    {% for schema in schemas %}
+        {{ log("Tagging schema: " ~ schema, info=True) }}
+        COMMENT ON SCHEMA {{ adapter.quote(schema) }} IS {{ dbt.string_literal(schema_comment) }};
+    {% endfor %}
+
+    COMMIT;
+    {%- endcall %}
 {% endmacro %}

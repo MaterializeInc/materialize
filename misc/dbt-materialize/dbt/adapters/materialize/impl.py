@@ -13,6 +13,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import subprocess
 import time
 from collections import namedtuple
 from dataclasses import dataclass
@@ -255,6 +256,20 @@ class MaterializeAdapter(PostgresAdapter, SQLAdapter):
     @classmethod
     def sleep(cls, seconds):
         time.sleep(seconds)
+
+    @available
+    @classmethod
+    def get_git_commit_sha(cls):
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                capture_output=True,
+                check=True,
+                text=True,
+            )
+            return result.stdout.strip()
+        except subprocess.CalledProcessError:
+            return None
 
     def get_column_schema_from_query(self, sql: str) -> List[PostgresColumn]:
         # The idea is that this function returns the names and types of the

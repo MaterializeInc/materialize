@@ -461,6 +461,21 @@ class TestTargetDeploy:
         assert before_schemas["prod"] == after_schemas["prod_dbt_deploy"]
         assert before_schemas["prod"] == after_schemas["prod_dbt_deploy"]
 
+        # Verify that the 'prod' schema is tagged correctly
+        tagged_schema_comment = project.run_sql(
+            """
+            SELECT c.comment
+            FROM mz_internal.mz_comments c
+            JOIN mz_schemas s USING (id)
+            WHERE s.name = 'prod';
+            """,
+            fetch="one",
+        )
+
+        assert tagged_schema_comment is not None
+        assert "Deployment by" in tagged_schema_comment[0]
+        assert "on" in tagged_schema_comment[0]
+
     def test_dbt_deploy_with_force(self, project):
         project.run_sql("CREATE CLUSTER prod SIZE = '1'")
         project.run_sql("CREATE CLUSTER prod_dbt_deploy SIZE = '1'")
