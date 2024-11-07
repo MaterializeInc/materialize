@@ -39,11 +39,11 @@ class TestdriveBase:
         self.aws_region = aws_region
         self.materialize_url = (
             materialize_url
-            or "postgres://materialize:materialize@environmentd-12345678-1234-1234-1234-123456789012-1.default:6875/materialize"
+            or "postgres://materialize:materialize@mz72v56elvbv-environmentd-1.default:6875/materialize"
         )
         self.materialize_internal_url = (
             materialize_internal_url
-            or "postgres://mz_system@environmentd-12345678-1234-1234-1234-123456789012-1.default:6877/materialize"
+            or "postgres://mz_system@mz72v56elvbv-environmentd-1.default:6877/materialize"
         )
         self.kafka_addr = kafka_addr or "redpanda:9092"
         self.schema_registry_url = schema_registry_url or "http://redpanda:8081"

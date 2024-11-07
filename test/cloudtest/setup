@@ -38,7 +38,7 @@ run kubectl create namespace materialize-environment
 #  #--set environment.environmentdExtraArgs[0]=--orchestrator-kubernetes-ephemeral-volume-class=standard
 # TODO: use namespace materialize-environment
 #run kubectl apply -n materialize-environment -f misc/helm-charts/testing/environmentd.yaml
-run kubectl apply -f misc/helm-charts/testing/environmentd.yaml
+run kubectl apply -f misc/helm-charts/testing/materialize.yaml
 
 for f in misc/kind/configmaps/*; do
     run kubectl --context="$K8S_CONTEXT" apply -f "$f"

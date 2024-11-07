@@ -109,5 +109,11 @@ class K8sResource:
         self,
         condition: str,
         resource: str,
+        label: str | None = None,
     ) -> None:
-        wait(condition=condition, resource=resource, namespace=self.selected_namespace)
+        wait(
+            condition=condition,
+            resource=resource,
+            namespace=self.selected_namespace,
+            label=label,
+        )
