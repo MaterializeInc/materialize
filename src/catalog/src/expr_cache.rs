@@ -460,7 +460,6 @@ mod tests {
     use proptest::proptest;
     use proptest::strategy::{Strategy, ValueTree};
     use proptest::test_runner::TestRunner;
-    use timely::progress::Antichain;
     use uuid::Uuid;
 
     use crate::expr_cache::{
@@ -489,29 +488,14 @@ mod tests {
     impl Arbitrary for GlobalExpressions {
         type Parameters = ();
         fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
-            // It would be better to actually implement `Arbitrary` for this type.
-            let physical_plan = DataflowDescription {
-                source_imports: Default::default(),
-                index_imports: Default::default(),
-                objects_to_build: Vec::new(),
-                index_exports: Default::default(),
-                sink_exports: Default::default(),
-                as_of: Default::default(),
-                until: Antichain::new(),
-                initial_storage_as_of: None,
-                refresh_schedule: None,
-                debug_name: "pp".to_string(),
-                time_dependence: None,
-            };
-
             (
                 any::<DataflowDescription<OptimizedMirRelationExpr>>(),
+                any::<DataflowDescription<mz_compute_types::plan::Plan>>(),
                 any::<DataflowMetainfo<Arc<OptimizerNotice>>>(),
                 any::<OptimizerFeatures>(),
             )
                 .prop_map(
-                    move |(global_mir, dataflow_metainfos, optimizer_features)| {
-                        let physical_plan = physical_plan.clone();
+                    |(global_mir, physical_plan, dataflow_metainfos, optimizer_features)| {
                         GlobalExpressions {
                             global_mir,
                             physical_plan,
