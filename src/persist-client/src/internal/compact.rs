@@ -294,12 +294,32 @@ where
             // or 1s per MB of input data
             Duration::from_secs(u64::cast_from(total_input_bytes / MiB)),
         );
+        // always use the latest schema for compaction to prevent Compactors created before the
+        // schema was evolved, from trying to "de-evolve" a Part.
+        let compaction_schema = match machine.latest_schema() {
+            Some((id, key_schema, val_schema)) => Schemas {
+                id: Some(id),
+                key: Arc::new(key_schema),
+                val: Arc::new(val_schema),
+            },
+            // TODO(parkmycar): Remove this fallback case after we're confident all of our shards
+            // have at least one schema registered.
+            None => {
+                tracing::error!(
+                    shard_id = ?req.shard_id,
+                    ?write_schemas,
+                    "no schema found for compaction, falling back"
+                );
+                write_schemas
+            }
+        };
 
         trace!(
-            "compaction request for {}MBs ({} bytes), with timeout of {}s.",
+            "compaction request for {}MBs ({} bytes), with timeout of {}s, and schema {:?}.",
             total_input_bytes / MiB,
             total_input_bytes,
-            timeout.as_secs_f64()
+            timeout.as_secs_f64(),
+            compaction_schema.id,
         );
 
         let compact_span = debug_span!("compact::consolidate");
@@ -317,7 +337,7 @@ where
                         Arc::clone(&machine.applier.shard_metrics),
                         Arc::clone(&machine.isolated_runtime),
                         req,
-                        write_schemas,
+                        compaction_schema,
                     )
                     .instrument(compact_span),
                 )
