@@ -58,6 +58,9 @@ pub struct ServiceArgs {
     #[clap(long, value_name = "HOST:PORT")]
     internal_http_listen_addr: SocketAddr,
 
+    /// Whether to initiate internal connections over TLS
+    #[clap(long)]
+    internal_tls: bool,
     /// Static pgwire resolver address to use for local testing.
     #[clap(long, value_name = "HOST:PORT")]
     static_resolver_addr: Option<String>,
@@ -237,6 +240,7 @@ pub async fn run(args: ServiceArgs, tracing_handle: TracingHandle) -> Result<(),
         resolver,
         args.https_resolver_template,
         args.tls.into_config()?,
+        args.internal_tls,
         metrics_registry,
         mz_server_core::default_cert_reload_ticker(),
         args.launchdarkly_sdk_key,
