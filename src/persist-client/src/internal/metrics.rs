@@ -816,6 +816,7 @@ pub struct CompactionMetrics {
 
     pub(crate) batch: BatchWriteMetrics,
     pub(crate) steps: CompactionStepTimings,
+    pub(crate) schema_selection: CompactionSchemaSelection,
 
     pub(crate) _steps_vec: CounterVec,
 }
@@ -826,6 +827,11 @@ impl CompactionMetrics {
                 name: "mz_persist_compaction_step_seconds",
                 help: "time spent on individual steps of compaction",
                 var_labels: ["step"],
+        ));
+        let schema_selection: CounterVec = registry.register(metric!(
+            name: "mz_persist_compaction_schema_selection",
+            help: "count of compactions and how we did schema selection",
+            var_labels: ["selection"],
         ));
 
         CompactionMetrics {
@@ -919,6 +925,7 @@ impl CompactionMetrics {
             )),
             batch: BatchWriteMetrics::new(registry, "compaction"),
             steps: CompactionStepTimings::new(step_timings.clone()),
+            schema_selection: CompactionSchemaSelection::new(schema_selection.clone()),
             _steps_vec: step_timings,
         }
     }
@@ -935,6 +942,23 @@ impl CompactionStepTimings {
         CompactionStepTimings {
             part_fetch_seconds: step_timings.with_label_values(&["part_fetch"]),
             heap_population_seconds: step_timings.with_label_values(&["heap_population"]),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct CompactionSchemaSelection {
+    pub(crate) recent_schema: Counter,
+    pub(crate) no_schema: Counter,
+    pub(crate) disabled: Counter,
+}
+
+impl CompactionSchemaSelection {
+    fn new(schema_selection: CounterVec) -> CompactionSchemaSelection {
+        CompactionSchemaSelection {
+            recent_schema: schema_selection.with_label_values(&["recent"]),
+            no_schema: schema_selection.with_label_values(&["none"]),
+            disabled: schema_selection.with_label_values(&["disabled"]),
         }
     }
 }
