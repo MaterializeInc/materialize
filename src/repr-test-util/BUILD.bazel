@@ -35,6 +35,11 @@ rust_library(
     ] + all_crate_deps(normal = True),
 )
 
+alias(
+    name = "repr-test-util",
+    actual = "mz_repr_test_util",
+)
+
 rust_test(
     name = "mz_repr_test_util_lib_tests",
     size = "medium",
