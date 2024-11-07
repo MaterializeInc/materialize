@@ -52,7 +52,7 @@ Using the  `DROP INDEX` commands, the following example drops an index named `q0
 DROP INDEX q01_geo_idx;
 ```
 
-If the index `q01_geo_idx` does not exist, the above operation return an error.
+If the index `q01_geo_idx` does not exist, the above operation returns an error.
 
 ### Remove an index without erroring if the index does not exist
 
