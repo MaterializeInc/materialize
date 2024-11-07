@@ -320,9 +320,6 @@ where
             return;
         }
 
-        // Wait for the start signal before doing any work.
-        let () = start_signal.await;
-
         // Internally, the `open_leased_reader` call registers a new LeasedReaderId and then fires
         // up a background tokio task to heartbeat it. It is possible that we might get a
         // particularly adversarial scheduling where the CRDB query to register the id is sent and
@@ -353,6 +350,11 @@ where
         .await
         .expect("reader creation shouldn't panic")
         .expect("could not open persist shard");
+
+        // Wait for the start signal only after we have obtained a read handle. This makes "cannot
+        // serve requested as_of" panics caused by (database-issues#8729) significantly less
+        // likely.
+        let () = start_signal.await;
 
         let cfg = read.cfg.clone();
         let metrics = Arc::clone(&read.metrics);
