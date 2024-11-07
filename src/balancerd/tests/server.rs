@@ -168,6 +168,7 @@ async fn test_balancer() {
             resolver,
             envd_server.inner.http_local_addr().to_string(),
             cert_config.clone(),
+            true,
             MetricsRegistry::new(),
             ticker,
             None,

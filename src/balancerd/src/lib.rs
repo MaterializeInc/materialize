@@ -94,6 +94,7 @@ pub struct BalancerConfig {
     resolver: Resolver,
     https_addr_template: String,
     tls: Option<TlsCertConfig>,
+    internal_tls: bool,
     metrics_registry: MetricsRegistry,
     reload_certs: BoxStream<'static, Option<oneshot::Sender<Result<(), anyhow::Error>>>>,
     launchdarkly_sdk_key: Option<String>,
@@ -115,6 +116,7 @@ impl BalancerConfig {
         resolver: Resolver,
         https_addr_template: String,
         tls: Option<TlsCertConfig>,
+        internal_tls: bool,
         metrics_registry: MetricsRegistry,
         reload_certs: ReloadTrigger,
         launchdarkly_sdk_key: Option<String>,
@@ -134,6 +136,7 @@ impl BalancerConfig {
             resolver,
             https_addr_template,
             tls,
+            internal_tls,
             metrics_registry,
             reload_certs,
             launchdarkly_sdk_key,
@@ -292,6 +295,7 @@ impl BalancerService {
                 resolver: Arc::new(self.cfg.resolver),
                 cancellation_resolver,
                 tls: pgwire_tls,
+                internal_tls: self.cfg.internal_tls,
                 metrics: ServerMetrics::new(metrics.clone(), "pgwire"),
             };
             let (handle, stream) = self.pgwire;
@@ -325,6 +329,7 @@ impl BalancerService {
                 port,
                 metrics: Arc::from(ServerMetrics::new(metrics, "https")),
                 configs: self.configs.clone(),
+                internal_tls: self.cfg.internal_tls,
             };
             let (handle, stream) = self.https;
             server_handles.push(handle);
@@ -565,6 +570,7 @@ impl ServerMetrics {
 
 struct PgwireBalancer {
     tls: Option<ReloadingTlsConfig>,
+    internal_tls: bool,
     cancellation_resolver: Option<Arc<PathBuf>>,
     resolver: Arc<Resolver>,
     metrics: ServerMetrics,
@@ -578,6 +584,7 @@ impl PgwireBalancer {
         params: BTreeMap<String, String>,
         resolver: &Resolver,
         tls_mode: Option<TlsMode>,
+        internal_tls: bool,
         metrics: &ServerMetrics,
     ) -> Result<(), io::Error>
     where
@@ -630,7 +637,7 @@ impl PgwireBalancer {
             .as_ref()
             .map(|tenant| metrics.tenant_connections(tenant));
         let Ok(mut mz_stream) =
-            Self::init_stream(conn, resolved.addr, resolved.password, params).await
+            Self::init_stream(conn, resolved.addr, resolved.password, params, internal_tls).await
         else {
             return Ok(());
         };
@@ -659,6 +666,7 @@ impl PgwireBalancer {
         envd_addr: SocketAddr,
         password: Option<String>,
         params: BTreeMap<String, String>,
+        internal_tls: bool,
     ) -> Result<Conn<TcpStream>, anyhow::Error>
     where
         A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin,
@@ -666,24 +674,28 @@ impl PgwireBalancer {
         let mut mz_stream = TcpStream::connect(envd_addr).await?;
         let mut buf = BytesMut::new();
 
-        FrontendStartupMessage::SslRequest.encode(&mut buf)?;
-        mz_stream.write_all(&buf).await?;
-        buf.clear();
-        let mut maybe_ssl_request_response = [0u8; 1];
-        let nread =
-            netio::read_exact_or_eof(&mut mz_stream, &mut maybe_ssl_request_response).await?;
-        let mut mz_stream = if nread == 1 && maybe_ssl_request_response == [ACCEPT_SSL_ENCRYPTION] {
-            // do a TLS handshake
-            let mut builder =
-                SslConnector::builder(SslMethod::tls()).expect("Error creating builder.");
-            // environmentd doesn't yet have a cert we trust, so for now disable verification.
-            builder.set_verify(SslVerifyMode::NONE);
-            let mut ssl = builder
-                .build()
-                .configure()?
-                .into_ssl(&envd_addr.to_string())?;
-            ssl.set_connect_state();
-            Conn::Ssl(SslStream::new(ssl, mz_stream)?)
+        let mut mz_stream = if internal_tls {
+            FrontendStartupMessage::SslRequest.encode(&mut buf)?;
+            mz_stream.write_all(&buf).await?;
+            buf.clear();
+            let mut maybe_ssl_request_response = [0u8; 1];
+            let nread =
+                netio::read_exact_or_eof(&mut mz_stream, &mut maybe_ssl_request_response).await?;
+            if nread == 1 && maybe_ssl_request_response == [ACCEPT_SSL_ENCRYPTION] {
+                // do a TLS handshake
+                let mut builder =
+                    SslConnector::builder(SslMethod::tls()).expect("Error creating builder.");
+                // environmentd doesn't yet have a cert we trust, so for now disable verification.
+                builder.set_verify(SslVerifyMode::NONE);
+                let mut ssl = builder
+                    .build()
+                    .configure()?
+                    .into_ssl(&envd_addr.to_string())?;
+                ssl.set_connect_state();
+                Conn::Ssl(SslStream::new(ssl, mz_stream)?)
+            } else {
+                Conn::Unencrypted(mz_stream)
+            }
         } else {
             Conn::Unencrypted(mz_stream)
         };
@@ -733,6 +745,7 @@ impl mz_server_core::Server for PgwireBalancer {
 
     fn handle_connection(&self, conn: Connection) -> mz_server_core::ConnectionHandler {
         let tls = self.tls.clone();
+        let internal_tls = self.internal_tls;
         let resolver = Arc::clone(&self.resolver);
         let inner_metrics = self.metrics.clone();
         let outer_metrics = self.metrics.clone();
@@ -798,6 +811,7 @@ impl mz_server_core::Server for PgwireBalancer {
                                 params,
                                 &resolver,
                                 tls.map(|tls| tls.mode),
+                                internal_tls,
                                 &inner_metrics,
                             )
                             .await?;
@@ -996,6 +1010,7 @@ struct HttpsBalancer {
     port: u16,
     metrics: Arc<ServerMetrics>,
     configs: ConfigSet,
+    internal_tls: bool,
 }
 
 impl HttpsBalancer {
@@ -1094,6 +1109,7 @@ impl mz_server_core::Server for HttpsBalancer {
     // TODO(jkosh44) consider forwarding the connection UUID to the adapter.
     fn handle_connection(&self, conn: Connection) -> mz_server_core::ConnectionHandler {
         let tls_context = self.tls.clone();
+        let internal_tls = self.internal_tls.clone();
         let resolver = Arc::clone(&self.resolver);
         let resolve_template = Arc::clone(&self.resolve_template);
         let port = self.port;
@@ -1146,17 +1162,22 @@ impl mz_server_core::Server for HttpsBalancer {
                     mz_stream.write_all(&buf[..len]).await?;
                 }
 
-                // do a TLS handshake
-                let mut builder =
-                    SslConnector::builder(SslMethod::tls()).expect("Error creating builder.");
-                // environmentd doesn't yet have a cert we trust, so for now disable verification.
-                builder.set_verify(SslVerifyMode::NONE);
-                let mut ssl = builder
-                    .build()
-                    .configure()?
-                    .into_ssl(&resolved.addr.to_string())?;
-                ssl.set_connect_state();
-                let mut mz_stream = SslStream::new(ssl, mz_stream)?;
+                let mut mz_stream = if internal_tls {
+                    // do a TLS handshake
+                    let mut builder =
+                        SslConnector::builder(SslMethod::tls()).expect("Error creating builder.");
+                    // environmentd doesn't yet have a cert we trust, so for now disable verification.
+                    builder.set_verify(SslVerifyMode::NONE);
+                    let mut ssl = builder
+                        .build()
+                        .configure()?
+                        .into_ssl(&resolved.addr.to_string())?;
+                    ssl.set_connect_state();
+                    Conn::Ssl(SslStream::new(ssl, mz_stream)?)
+                } else {
+                    Conn::Unencrypted(mz_stream)
+                };
+
                 let mut client_counter = CountingConn::new(client_stream);
 
                 // Now blindly shuffle bytes back and forth until closed.
