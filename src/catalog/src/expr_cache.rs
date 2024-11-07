@@ -26,12 +26,10 @@ use mz_persist_client::cli::admin::{
     EXPRESSION_CACHE_FORCE_COMPACTION_FUEL, EXPRESSION_CACHE_FORCE_COMPACTION_WAIT,
 };
 use mz_persist_client::PersistClient;
-use mz_persist_types::codec_impls::UnitSchema;
+use mz_persist_types::codec_impls::VecU8Schema;
 use mz_persist_types::Codec;
-use mz_repr::adt::jsonb::{JsonbPacker, JsonbRef};
 use mz_repr::optimize::OptimizerFeatures;
-use mz_repr::{Datum, GlobalId, RelationDesc, Row, ScalarType};
-use mz_storage_types::sources::SourceData;
+use mz_repr::GlobalId;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::OptimizerNotice;
 use proptest_derive::Arbitrary;
@@ -77,55 +75,27 @@ struct ExpressionCodec;
 
 impl DurableCacheCodec for ExpressionCodec {
     type Key = CacheKey;
-    // We use a raw JSON string instead of `Expressions` so that there is no backwards compatibility
+    // We use a raw bytes instead of `Expressions` so that there is no backwards compatibility
     // requirement on `Expressions` between versions.
-    type Val = String;
-    type KeyCodec = SourceData;
-    type ValCodec = ();
+    type Val = Vec<u8>;
+    type KeyCodec = Vec<u8>;
+    type ValCodec = Vec<u8>;
 
     fn schemas() -> (
         <Self::KeyCodec as Codec>::Schema,
         <Self::ValCodec as Codec>::Schema,
     ) {
-        (
-            RelationDesc::builder()
-                .with_column("key", ScalarType::Jsonb.nullable(false))
-                .with_column("val", ScalarType::String.nullable(false))
-                .finish(),
-            UnitSchema::default(),
-        )
+        (VecU8Schema::default(), VecU8Schema::default())
     }
 
     fn encode(key: &Self::Key, val: &Self::Val) -> (Self::KeyCodec, Self::ValCodec) {
-        let mut row = Row::default();
-        let mut packer = row.packer();
-
-        let serde_key = serde_json::to_value(key).expect("valid json");
-        JsonbPacker::new(&mut packer)
-            .pack_serde_json(serde_key)
-            .expect("valid json");
-
-        packer.push(Datum::String(val));
-
-        let source_data = SourceData(Ok(row));
-        (source_data, ())
+        let key = bincode::serialize(key).expect("must serialize");
+        (key, val.clone())
     }
 
-    fn decode(key: &Self::KeyCodec, (): &Self::ValCodec) -> (Self::Key, Self::Val) {
-        let row = key
-            .0
-            .as_ref()
-            .expect("only Ok values stored in expression cache");
-        let datums = row.unpack();
-        assert_eq!(datums.len(), 2, "Row should have 2 columns: {datums:?}");
-
-        let key_json = JsonbRef::from_datum(datums[0]);
-        let serde_key = key_json.to_serde_json();
-        let key = serde_json::from_value(serde_key).expect("jsonb should roundtrip");
-
-        let val = datums[1].unwrap_str().to_string();
-
-        (key, val)
+    fn decode(key: &Self::KeyCodec, val: &Self::ValCodec) -> (Self::Key, Self::Val) {
+        let key = bincode::deserialize(key).expect("must deserialize");
+        (key, val.clone())
     }
 }
 
@@ -228,12 +198,12 @@ impl ExpressionCache {
                 // Only deserialize the current generation.
                 match key.expr_type {
                     ExpressionType::Local => {
-                        let expressions: LocalExpressions = match serde_json::from_str(expressions)
+                        let expressions: LocalExpressions = match bincode::deserialize(expressions)
                         {
                             Ok(expressions) => expressions,
                             Err(err) => {
                                 soft_panic_or_log!(
-                                    "unable to deserialize local json: {expressions:?}: {err:?}"
+                                    "unable to deserialize local expressions: {expressions:?}: {err:?}"
                                 );
                                 continue;
                             }
@@ -249,12 +219,12 @@ impl ExpressionCache {
                         }
                     }
                     ExpressionType::Global => {
-                        let expressions: GlobalExpressions = match serde_json::from_str(expressions)
+                        let expressions: GlobalExpressions = match bincode::deserialize(expressions)
                         {
                             Ok(expressions) => expressions,
                             Err(err) => {
                                 soft_panic_or_log!(
-                                    "unable to deserialize global json: {expressions:?}: {err:?}"
+                                    "unable to deserialize global expressions: {expressions:?}: {err:?}"
                                 );
                                 continue;
                             }
@@ -326,10 +296,12 @@ impl ExpressionCache {
             );
         }
         for (id, expressions) in new_local_expressions {
-            let expressions = match serde_json::to_string(&expressions) {
+            let expressions = match bincode::serialize(&expressions) {
                 Ok(expressions) => expressions,
                 Err(err) => {
-                    soft_panic_or_log!("unable to serialize local json: {expressions:?}: {err:?}");
+                    soft_panic_or_log!(
+                        "unable to serialize local expressions: {expressions:?}: {err:?}"
+                    );
                     continue;
                 }
             };
@@ -343,10 +315,12 @@ impl ExpressionCache {
             );
         }
         for (id, expressions) in new_global_expressions {
-            let expressions = match serde_json::to_string(&expressions) {
+            let expressions = match bincode::serialize(&expressions) {
                 Ok(expressions) => expressions,
                 Err(err) => {
-                    soft_panic_or_log!("unable to serialize global json: {expressions:?}: {err:?}");
+                    soft_panic_or_log!(
+                        "unable to serialize global expressions: {expressions:?}: {err:?}"
+                    );
                     continue;
                 }
             };
@@ -510,7 +484,6 @@ mod tests {
         type Strategy = BoxedStrategy<Self>;
     }
 
-    #[ignore]
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn expression_cache() {
@@ -828,23 +801,22 @@ mod tests {
         #[mz_ore::test]
         #[cfg_attr(miri, ignore)]
         fn local_expr_cache_roundtrip((key, val) in any::<(CacheKey, LocalExpressions)>()) {
-            let serde_val = serde_json::to_string(&val).expect("valid json");
-            let (encoded_key, encoded_val) = ExpressionCodec::encode(&key, &serde_val);
+            let bincode_val = bincode::serialize(&val).expect("must serialize");
+            let (encoded_key, encoded_val) = ExpressionCodec::encode(&key, &bincode_val);
             let (decoded_key, decoded_val) = ExpressionCodec::decode(&encoded_key, &encoded_val);
-            let decoded_val: LocalExpressions = serde_json::from_str(&decoded_val).expect("local expressions should roundtrip");
+            let decoded_val: LocalExpressions = bincode::deserialize(&decoded_val).expect("local expressions should roundtrip");
 
             assert_eq!(key, decoded_key);
             assert_eq!(val, decoded_val);
         }
 
-        #[ignore]
         #[mz_ore::test]
         #[cfg_attr(miri, ignore)]
         fn global_expr_cache_roundtrip((key, val) in any::<(CacheKey, GlobalExpressions)>()) {
-            let serde_val = serde_json::to_string(&val).expect("valid json");
-            let (encoded_key, encoded_val) = ExpressionCodec::encode(&key, &serde_val);
+            let bincode_val = bincode::serialize(&val).expect("must serialize");
+            let (encoded_key, encoded_val) = ExpressionCodec::encode(&key, &bincode_val);
             let (decoded_key, decoded_val) = ExpressionCodec::decode(&encoded_key, &encoded_val);
-            let decoded_val: GlobalExpressions = serde_json::from_str(&decoded_val).expect("global expressions should roundtrip");
+            let decoded_val: GlobalExpressions = bincode::deserialize(&decoded_val).expect("global expressions should roundtrip");
 
             assert_eq!(key, decoded_key);
             assert_eq!(val, decoded_val);
