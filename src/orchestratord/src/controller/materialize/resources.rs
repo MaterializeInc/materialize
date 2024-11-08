@@ -788,6 +788,10 @@ fn create_environmentd_statefulset_object(
 
     let mut args = vec![];
 
+    if let Some(helm_chart_version) = &config.helm_chart_version {
+        args.push(format!("--helm-chart-version={helm_chart_version}"));
+    }
+
     // Add environment ID argument.
     args.push(format!(
         "--environment-id={}",
