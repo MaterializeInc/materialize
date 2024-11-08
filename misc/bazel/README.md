@@ -17,7 +17,9 @@ your machine might fail when run with Bazel because it has a different version o
 can't find some necessary file. This is a key feature though because it makes builds hermetic and
 allows Bazel to aggressively cache artifacts, which reduces build times.
 
-# Installing `bazelisk`
+# Getting Started
+
+## Installing `bazelisk`
 
 To use `bazel` you first need to install [`bazelisk`](https://github.com/bazelbuild/bazelisk), which
 is a launcher that automatically makes sure you have the correct version of Bazel installed.
@@ -37,7 +39,76 @@ chmod +x bazelisk-linux-amd64
 sudo mv bazelisk-linux-amd64 /usr/local/bin/bazel
 ```
 
-# `WORKSPACE`, `BUILD.bazel`, `*.bzl` files
+## Using Bazel
+
+Bazel has been integrated into [`mzbuild`](../../doc/developer/mzbuild.md), which means you can use
+it for other tools as well like `mzimage` and `mzcompose`! To enable Bazel specify the `--bazel`
+flag like you would specify the `--dev` flag, e.g. `bin/mzcompose --bazel ...`.
+
+Otherwise Bazel can be used just like `cargo`, to build individual targets and run tests. We
+provide a thin wrapper around the `bazel` command in the form of `bin/bazel`. This sets up remote
+caching, and provides the `fmt` and `gen` subcommands. Otherwise it forwards all commands onto
+`bazel` itself.
+
+### Building a crate.
+
+All Rust crates have a `BUILD.bazel` file that define different build targets for the crate. You
+don't have to write these files, they are automatically generated from the crate's `Cargo.toml`.
+For more details see the [Generating `BUILD.bazel` files](#generating-buildbazel-files) section.
+
+> **tl;dr** to build a crate run `bin/bazel build //src/<crate-name>` from the root of the repo.
+
+To determine what targets are available for a crate you can use the `query` subcommand, e.g.
+
+```shell
+$ bin/bazel query //src/adapter/...
+
+//src/adapter:adapter
+//src/adapter:mz_adapter
+//src/adapter:mz_adapter_doc_test
+//src/adapter:mz_adapter_lib_tests
+//src/adapter:mz_adapter_parameters_tests
+//src/adapter:mz_adapter_sql_tests
+//src/adapter:mz_adapter_timestamp_selection_tests
+```
+
+Every Rust crate has at least one Bazel target, which is the name of the crate. In the example
+above the "adapter" crate has the target `mz_adapter`. So you can build the `mz_adapter` crate
+by running the following:
+
+```shell
+$ bin/bazel build //src/adapter:mz_adapter
+```
+
+For convenience we also alias the primary target to have the same name as the folder, in the
+example above we alias `mz_adapter` to `adapter`. This allows a shorthand syntax for building a
+crate:
+
+```shell
+# Builds the same target as the example above!
+$ bin/bazel build //src/adapter
+```
+
+### Defining your own `.bazelrc` file
+
+Bazel has numerous [command line options](https://bazel.build/reference/command-line-reference),
+which can be defined in a `.bazelrc` file to create different configurations that you run Bazel
+with. We have a [`.bazelrc`](../../.bazelrc) in the root of our repository that defines several
+common build configurations, but it's also recommended that you create a `.bazelrc` in your home
+directory (i.e. `~/.bazelrc`) to customize how you run Bazel locally.
+
+A good default to start with is:
+```
+# Bazel will use all but one CPU core, so your machine is still responsive.
+common --local_resources=cpu="HOST_CPUS-1"
+
+# Define a shared disk cache so builds from different Materialize repos can share artifacts.
+build --disk_cache=~/.cache/bazel
+```
+
+# How Bazel Works
+
+## `WORKSPACE`, `BUILD.bazel`, `*.bzl` files
 
 There are three kinds of files in our Bazel setup:
 
@@ -77,7 +148,7 @@ resulting [`rust_library`](http://bazelbuild.github.io/rules_rust/defs.html#rust
 # Configuration for the crate as a whole.
 [package.metadata.cargo-gazelle]
 # Will skip generating a BUILD.bazel entirely.
-skip_generating = [True | False]
+skip_generating = (true | false)
 # Concatenate the specified string at the end of the generated BUILD.bazel file.
 #
 # This is largely an escape hatch and should be avoided if possible.
@@ -87,44 +158,44 @@ additive_content = "String"
 # Configuration for the library target of the crate.
 [package.metadata.cargo-gazelle.lib]
 # Skip generating the library target.
-skip = [True | False]
+skip = (true | false)
 # Extra data that will be provided to the Bazel target at compile time.
-compile_data = ["String"]
+compile_data = ["String Array"]
 # Extra data that will be provided to the Bazel target at compile and run time.
-data = ["String"]
+data = ["String Array"]
 # Extra flags for rustc.
-rustc_flags = ["String"]
+rustc_flags = ["String Array"]
 # Environment variables to set for rustc.
 [package.metadata.cargo-gazelle.lib.rustc_env]
 var1 = "my_value"
 
 # By default Bazel enables all features of a crate, if provided we will
 # _override_ that set with this list.
-features_override = ["String"]
+features_override = ["String Array"]
 # Extra dependencies to include for the target.
-extra_deps = ["String"]
+extra_deps = ["String Array"]
 # Extra proc-macro dependencies to include for the target.
-extra_proc_macro_deps = ["String"]
+extra_proc_macro_deps = ["String Array"]
 
 
 # Configuration for the crate's build script.
 [package.metadata.cargo-gazelle.build]
 # Skip generating the library target.
-skip = [True | False]
+skip = (true | false)
 # Extra data that will be provided to the Bazel target at compile time.
-compile_data = ["String"]
+compile_data = ["String Array"]
 # Extra data that will be provided to the Bazel target at compile and run time.
-data = ["String"]
+data = ["String Array"]
 # Extra flags for rustc.
-rustc_flags = ["String"]
+rustc_flags = ["String Array"]
 # Environment variables to set for rustc.
 [package.metadata.cargo-gazelle.build.rustc_env]
 var1 = "my_value"
 
 # Environment variables to set for the build script.
-build_script_env = ["String"]
+build_script_env = ["String Array"]
 # Skip the automatic search for protobuf dependencies.
-skip_proto_search = [True | False]
+skip_proto_search = (true | false)
 
 
 # Configuration for test targets in the crate.
@@ -134,13 +205,13 @@ skip_proto_search = [True | False]
 #
 [package.metadata.cargo-gazelle.test.<name>]
 # Skip generating the library target.
-skip = [True | False]
+skip = (true | false)
 # Extra data that will be provided to the Bazel target at compile time.
-compile_data = ["String"]
+compile_data = ["String Array"]
 # Extra data that will be provided to the Bazel target at compile and run time.
-data = ["String"]
+data = ["String Array"]
 # Extra flags for rustc.
-rustc_flags = ["String"]
+rustc_flags = ["String Array"]
 # Environment variables to set for rustc.
 [package.metadata.cargo-gazelle.test.<name>.rustc_env]
 var1 = "my_value"
@@ -157,13 +228,13 @@ var1 = "my_value"
 # Configuration for binary targets of the crate.
 [package.metadata.cargo-gazelle.binary.<name>]
 # Skip generating the library target.
-skip = [True | False]
+skip = (true | false)
 # Extra data that will be provided to the Bazel target at compile time.
-compile_data = ["String"]
+compile_data = ["String Array"]
 # Extra data that will be provided to the Bazel target at compile and run time.
-data = ["String"]
+data = ["String Array"]
 # Extra flags for rustc.
-rustc_flags = ["String"]
+rustc_flags = ["String Array"]
 # Environment variables to set for rustc.
 [[package.metadata.cargo-gazelle.binary.<name>.rustc_env]]
 var1 = "my_value"
@@ -176,7 +247,7 @@ var1 = "my_value"
 If all else fails, the code that handles this configuration lives in [`misc/bazel/cargo-gazelle`](../bazel/cargo-gazelle/src/config.rs)!
 
 
-# Platforms
+## Platforms
 
 [Official Documentation](https://bazel.build/extending/platforms)
 
@@ -196,7 +267,7 @@ A common way to configure a build based on platform is to use the
 [`select`](https://bazel.build/reference/be/functions#select) function. This allows you to return
 different values depending on the platform we're targetting.
 
-# Toolchains
+## Toolchains
 
 [Official Documentation](https://bazel.build/extending/toolchains)
 
@@ -204,7 +275,14 @@ Bazel has a specific framework to manage compiler toolchains. For example, inste
 specify a Rust toolchain every time you use the `rust_library` rule, you instead register a global
 Rust toolchain that rules resolve during analysis.
 
-Toolchains are defined and registered in the [`WORKSPACE`](/WORKSPACE) file.
+Toolchains are defined and registered in the [`WORKSPACE`](/WORKSPACE) file. We currently use
+Clang/LLVM to build C/C++ code, the version is defined by `LLVM_VERSION`, and we support both
+stable and nightly Rust, the versions defined by `RUST_VERSION` and `RUST_NIGHTLY_VERSION`
+respectively.
+
+The upstream [LLVM toolchains](https://github.com/llvm/llvm-project/releases) are very large and
+built for bespoke CPU architectures. As such we build our own, see the
+[MaterializeInc/toolchains](https://github.com/MaterializeInc/toolchains) repo for more details.
 
 # [`rules_rust`](https://github.com/bazelbuild/rules_rust)
 
