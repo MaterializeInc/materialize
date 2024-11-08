@@ -937,8 +937,8 @@ enum CursorConsolidator<K: Codec, V: Codec, T: Timestamp + Codec64, D: Codec64> 
 
 impl<K, V, T, D> Cursor<K, V, T, D>
 where
-    K: Debug + Codec + Ord,
-    V: Debug + Codec + Ord,
+    K: Debug + Codec + Ord + Clone,
+    V: Debug + Codec + Ord + Clone,
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Ord + Codec64 + Send + Sync,
 {
@@ -970,14 +970,18 @@ where
                     .val
                     .decoder_any(structured.val.as_ref())
                     .expect("ok");
+                // Reusing the K/V doesn't help avoid allocations - we still return a separate K/V
+                // instance for each row - but it does help avoid reallocs.
+                let mut k = K::default();
+                let mut v = V::default();
                 let iter = (0..iter.len()).map(move |i| {
-                    let mut k = K::default();
-                    let mut v = V::default();
+                    // Decode is expected to set K/V to the correct value regardless of the
+                    // original contents.
                     key_decoder.decode(i, &mut k);
                     val_decoder.decode(i, &mut v);
                     let t = T::decode(iter.records().timestamps().value(i).to_le_bytes());
                     let d = D::decode(iter.records().diffs().value(i).to_le_bytes());
-                    ((Ok(k), Ok(v)), t, d)
+                    ((Ok(k.clone()), Ok(v.clone())), t, d)
                 });
 
                 Some(Either::Left(iter))
@@ -1001,8 +1005,8 @@ where
 
 impl<K, V, T, D> ReadHandle<K, V, T, D>
 where
-    K: Debug + Codec + Ord,
-    V: Debug + Codec + Ord,
+    K: Debug + Codec + Ord + Clone,
+    V: Debug + Codec + Ord + Clone,
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Ord + Codec64 + Send + Sync,
 {
@@ -1249,8 +1253,8 @@ where
 
 impl<K, V, T, D> ReadHandle<K, V, T, D>
 where
-    K: Debug + Codec + Ord,
-    V: Debug + Codec + Ord,
+    K: Debug + Codec + Ord + Clone,
+    V: Debug + Codec + Ord + Clone,
     T: Timestamp + Lattice + Codec64 + Ord,
     D: Semigroup + Ord + Codec64 + Send + Sync,
 {
