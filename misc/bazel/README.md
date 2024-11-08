@@ -95,7 +95,8 @@ Bazel has numerous [command line options](https://bazel.build/reference/command-
 which can be defined in a `.bazelrc` file to create different configurations that you run Bazel
 with. We have a [`.bazelrc`](../../.bazelrc) in the root of our repository that defines several
 common build configurations, but it's also recommended that you create a `.bazelrc` in your home
-directory (i.e. `~/.bazelrc`) to customize how you run Bazel locally.
+directory (i.e. `~/.bazelrc`) to customize how you run Bazel locally. Options specified in your
+home RC file will override those of the workspace RC file.
 
 A good default to start with is:
 ```
@@ -104,6 +105,10 @@ common --local_resources=cpu="HOST_CPUS-1"
 
 # Define a shared disk cache so builds from different Materialize repos can share artifacts.
 build --disk_cache=~/.cache/bazel
+
+# Optional. The workspace RC already sets a max disk cache size, but you can override that if you
+# have more limited disk space.
+common --experimental_disk_cache_gc_max-size=40G
 ```
 
 # How Bazel Works
