@@ -786,6 +786,8 @@ fn create_environmentd_statefulset_object(
         });
     }
 
+    env.extend(mz.spec.environmentd_extra_env.iter().flatten().cloned());
+
     let mut args = vec![];
 
     if let Some(helm_chart_version) = &config.helm_chart_version {

@@ -10,7 +10,7 @@
 use std::collections::BTreeMap;
 
 use k8s_openapi::{
-    api::core::v1::ResourceRequirements,
+    api::core::v1::{EnvVar, ResourceRequirements},
     apimachinery::pkg::{
         api::resource::Quantity,
         apis::meta::v1::{Condition, OwnerReference, Time},
@@ -52,6 +52,8 @@ pub mod v1alpha1 {
         pub environmentd_image_ref: String,
         // Extra args to pass to the environmentd binary
         pub environmentd_extra_args: Option<Vec<String>>,
+        // Extra environment variables to pass to the environmentd binary
+        pub environmentd_extra_env: Option<Vec<EnvVar>>,
         // If running in AWS, override the IAM role to use to give
         // environmentd access to the persist S3 bucket
         pub environmentd_iam_role_arn: Option<String>,
