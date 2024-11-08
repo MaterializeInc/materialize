@@ -1334,10 +1334,6 @@ where
                 // generate the next id if/when we start supporting the removal
                 // of schemas.
                 let id = SchemaId(self.schemas.len());
-                let key_data_type = mz_persist_types::columnar::data_type::<K>(key_schema)
-                    .expect("valid key schema");
-                let val_data_type = mz_persist_types::columnar::data_type::<V>(val_schema)
-                    .expect("valid val schema");
                 let prev = self.schemas.insert(
                     id,
                     EncodedSchemas {

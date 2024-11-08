@@ -495,7 +495,6 @@ impl BatchBuilderConfig {
     }
 
     fn run_meta(&self, order: RunOrder, schema: Option<SchemaId>) -> RunMeta {
-        let schema = if self.record_schema_id { schema } else { None };
         RunMeta {
             order: Some(order),
             schema,
@@ -1103,7 +1102,6 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                     batch_metrics
                         .step_inline
                         .inc_by(start.elapsed().as_secs_f64());
-                    let schema_id = if record_schema_id { schema_id } else { None };
                     RunPart::Single(BatchPart::Inline {
                         updates,
                         ts_rewrite,
@@ -1282,11 +1280,6 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             }
             stats
         });
-        let schema_id = if cfg.record_schema_id {
-            schema_id
-        } else {
-            None
-        };
 
         BatchPart::Hollow(HollowBatchPart {
             key: partial_key,
