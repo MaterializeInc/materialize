@@ -6,16 +6,18 @@ menu:
     parent: commands
 ---
 
-`SHOW TYPES` returns a list of the data types in Materialize. By default, only custom types are returned.
+`SHOW TYPES` returns a list of the data types in Materialize. Only custom types
+are returned.
 
 ## Syntax
 
-{{< diagram "show-types.svg" >}}
+```mzsql
+SHOW TYPES [FROM <schema_name>]
+```
 
-Field | Use
+Options | Description
 ------|-----
-_schema&lowbar;name_ | The schema to show types from. Defaults to first resolvable schema in the search path. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
-
+**FROM**| The schema to show types from. Defaults to first resolvable schema in the search path. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
 
 ## Examples
 

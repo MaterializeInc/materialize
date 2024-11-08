@@ -6,53 +6,68 @@ menu:
     parent: commands
 ---
 
-The `VALUES` expression constructs a relation from value expressions.
+`VALUES` constructs a relation from a list of parenthesized values.
 
 ## Syntax
 
-{{< diagram "values-expr.svg" >}}
+```mzsql
+VALUES ( expr [, ...] ) [, ( expr [, ...] ) ... ]
+```
 
-Field  | Use
--------|-----
-_expr_ | The value of a single column of a single row.
+Each parenthesis represents a single row. The comma-delimited expressions in
+the parenthesis represent the values of the columns in that row.
 
 ## Details
 
-`VALUES` expressions can be used anywhere that [`SELECT`] expressions are valid.
-They are most commonly used in [`INSERT`] statements, but they can also stand
-alone.
+`VALUES` statements can be used anywhere that [`SELECT`] statements are valid.
+They are most commonly used in [`INSERT`] statements, but they can also be used
+on their own.
 
 ## Examples
 
-Using a `VALUES` expression as a standalone statement:
+### Use `VALUES` in an `INSERT`
+
+`VALUES` statements are most commonly used in [`INSERT`] statements. The
+following example uses a `VALUES` expression in an [`INSERT`] statement:
 
 ```mzsql
-VALUES (1, 2, 3), (4, 5, 6);
-```
-```nofmt
- column1 | column2 | column3
----------+---------+---------
-       1 |       2 |       3
-       4 |       5 |       6
+INSERT INTO my_table VALUES (1, 2), (3, 4);
 ```
 
-Using a `VALUES` expression in place of a `SELECT` expression:
+### Use `VALUES` as a standalone
 
-```mzsql
-VALUES (1), (2), (3) ORDER BY column1 DESC LIMIT 2;
-```
-```nofmt
- column1
----------
-       3
-       2
-```
+`VALUES` statements can be used anywhere that [`SELECT`] statements are valid.
+For example:
 
-Using a `VALUES` expression in an [`INSERT`] statement:
+- As a standalone statement.
 
-```mzsql
-INSERT INTO t VALUES (1, 2), (3, 4);
-```
+  ```mzsql
+  VALUES (1, 2, 3), (4, 5, 6);
+  ```
+
+  The operation returns the following:
+
+  ```nofmt
+  column1 | column2 | column3
+  ---------+---------+---------
+          1 |       2 |       3
+          4 |       5 |       6
+  ```
+
+- With an `ORDER BY` and `LIMIT`.
+
+  ```mzsql
+  VALUES (1), (2), (3) ORDER BY column1 DESC LIMIT 2;
+  ```
+
+  The operation returns the following:
+
+  ```nofmt
+  column1
+  --------
+        3
+        2
+  ```
 
 [`INSERT`]: ../insert
 [`SELECT`]: ../select

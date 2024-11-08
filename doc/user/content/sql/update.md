@@ -10,14 +10,18 @@ menu:
 
 ## Syntax
 
-{{< diagram "update-stmt.svg" >}}
+```mzsql
+UPDATE <table_name> [ AS <alias> ]
+   SET <column1_name> = <expression1> [, <column2_name> = <expression2>, ...]
+[WHERE <condition> ];
+```
 
-Field | Use
+### Options
+
+Option | Description
 ------|-----
-**UPDATE** _table_name_ | The table whose values you want to update.
-_alias_ | Only permit references to _table_name_ as _alias_.
-**SET** _col_ref_ **=** _expr_ | Assign the value of `expr` to `col_ref`.
-**WHERE** _condition_ | Only update rows which evaluate to `true` for _condition_.
+**AS**  | Only permit references to _table_name_ as the specified _alias_.
+**WHERE** | Only update rows which evaluate to `true` for _condition_.
 
 ## Details
 
@@ -28,43 +32,95 @@ _alias_ | Only permit references to _table_name_ as _alias_.
 * **Low performance.** While processing an `UPDATE` statement, Materialize cannot
   process other `INSERT`, `UPDATE`, or `DELETE` statements.
 
-## Examples
-
-```mzsql
-CREATE TABLE update_me (a int, b text);
-INSERT INTO update_me VALUES (1, 'hello'), (2, 'goodbye');
-UPDATE update_me SET a = a + 2 WHERE b = 'hello';
-SELECT * FROM update_me;
-```
-```
- a |    b
----+---------
- 3 | hello
- 2 | goodbye
-```
-```mzsql
-UPDATE update_me SET b = 'aloha';
-SELECT * FROM update_me;
-```
-```
- a |   b
----+-------
- 2 | aloha
- 3 | aloha
-```
-
 ## Privileges
 
 The privileges required to execute this statement are:
 
 - `USAGE` privileges on the schemas that all relations and types in the query are contained in.
-- `UPDATE` privileges on `table_name`.
+- `UPDATE` privileges on the table being updated.
 - `SELECT` privileges on all relations in the query.
   - NOTE: if any item is a view, then the view owner must also have the necessary privileges to
     execute the view definition. Even if the view owner is a _superuser_, they still must explicitly be
     granted the necessary privileges.
 - `USAGE` privileges on all types used in the query.
 - `USAGE` privileges on the active cluster.
+
+## Examples
+
+The following examples use the following table `example_table`:
+
+```mzsql
+CREATE TABLE example_table (a int, b text);
+INSERT INTO example_table VALUES (1, 'hello'), (2, 'goodbye');
+```
+
+To verify the initial state of the table, run the following   `SELECT` statement:
+
+```mzsql
+SELECT * FROM example_table;
+```
+
+The results show that the table contains two rows:
+
+```
+ a |    b
+---+---------
+ 1 | hello
+ 2 | goodbye
+```
+
+### Update based on a condition
+
+The following `UPDATE` example includes a `WHERE` clause to specify which rows
+to update:
+
+```mzsql
+UPDATE example_table
+SET a = a + 2
+WHERE b = 'hello';
+```
+
+Only one row should be updated, namely the row with `b = 'hello'`. To verify
+that the operation updated the `a` column only for that row, run the following
+`SELECT` statement:
+
+```mzsql
+SELECT * FROM example_table;
+```
+
+The results show that column `a` was updated only for the row with `b = 'hello'`:
+
+```
+ a |    b
+---+---------
+ 3 | hello         -- Previous value: 1
+ 2 | goodbye
+```
+
+### Update all rows
+
+The following `UPDATE` example updates all rows in the table to set `a` to 0 and
+`b` to `aloha`:
+
+```mzsql
+UPDATE example_table
+SET a = 0, b = 'aloha';
+```
+
+To verify, run the following `SELECT` statement:
+
+```mzsql
+SELECT * FROM example_table;
+```
+
+The results show that all rows were updated:
+
+```
+ a |   b
+---+-------
+ 0 | aloha
+ 0 | aloha
+```
 
 ## Related pages
 
