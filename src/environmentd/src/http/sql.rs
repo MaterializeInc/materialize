@@ -120,6 +120,42 @@ impl<'a> PrometheusSqlQuery<'a> {
     }
 }
 
+static QUERIES: &[PrometheusSqlQuery] = &[
+    PrometheusSqlQuery {
+        metric_name: "mz_write_frontier",
+        help: "The global write frontiers of compute and storage collections.",
+        query: "SELECT
+                    object_id AS collection_id,
+                    coalesce(write_frontier::text::uint8, 18446744073709551615::uint8) AS write_frontier
+                FROM mz_internal.mz_frontiers
+                WHERE object_id NOT LIKE 't%';",
+        value_column_name: "write_frontier",
+    },
+    PrometheusSqlQuery {
+        metric_name: "mz_read_frontier",
+        help: "The global read frontiers of compute and storage collections.",
+        query: "SELECT
+                    object_id AS collection_id,
+                    coalesce(read_frontier::text::uint8, 18446744073709551615::uint8) AS read_frontier
+                FROM mz_internal.mz_frontiers
+                WHERE object_id NOT LIKE 't%';",
+        value_column_name: "read_frontier",
+    },
+    PrometheusSqlQuery {
+        metric_name: "mz_replica_write_frontiers",
+        help: "The per-replica write frontiers of compute and storage collections.",
+        query: "SELECT
+                    object_id AS collection_id,
+                    coalesce(write_frontier::text::uint8, 18446744073709551615::uint8) AS write_frontier,
+                    cluster_id AS instance_id,
+                    replica_id AS replica_id
+                FROM mz_catalog.mz_cluster_replica_frontiers
+                JOIN mz_cluster_replicas ON (id = replica_id)
+                WHERE object_id NOT LIKE 't%';",
+        value_column_name: "write_frontier",
+    },
+];
+
 async fn handle_promsql_query(
     mut client: &mut AuthedClient,
     query: &PrometheusSqlQuery<'_>,
@@ -177,42 +213,6 @@ async fn handle_promsql_query(
             .set(value);
     }
 }
-
-static QUERIES: &[PrometheusSqlQuery] = &[
-    PrometheusSqlQuery {
-        metric_name: "mz_write_frontier",
-        help: "The global write frontiers of compute and storage collections.",
-        query: "SELECT
-                    object_id AS collection_id,
-                    coalesce(write_frontier::text::uint8, 18446744073709551615::uint8) AS write_frontier
-                FROM mz_internal.mz_frontiers
-                WHERE object_id NOT LIKE 't%';",
-        value_column_name: "write_frontier",
-    },
-    PrometheusSqlQuery {
-        metric_name: "mz_read_frontier",
-        help: "The global read frontiers of compute and storage collections.",
-        query: "SELECT
-                    object_id AS collection_id,
-                    coalesce(read_frontier::text::uint8, 18446744073709551615::uint8) AS read_frontier
-                FROM mz_internal.mz_frontiers
-                WHERE object_id NOT LIKE 't%';",
-        value_column_name: "read_frontier",
-    },
-    PrometheusSqlQuery {
-        metric_name: "mz_replica_write_frontiers",
-        help: "The per-replica write frontiers of compute and storage collections.",
-        query: "SELECT
-                    object_id AS collection_id,
-                    coalesce(write_frontier::text::uint8, 18446744073709551615::uint8) AS write_frontier,
-                    cluster_id AS instance_id,
-                    replica_id AS replica_id
-                FROM mz_catalog.mz_cluster_replica_frontiers
-                JOIN mz_cluster_replicas ON (id = replica_id)
-                WHERE object_id NOT LIKE 't%';",
-        value_column_name: "write_frontier",
-    },
-];
 
 pub async fn handle_promsql(mut client: AuthedClient) -> MetricsRegistry {
     let metrics_registry = MetricsRegistry::new();
