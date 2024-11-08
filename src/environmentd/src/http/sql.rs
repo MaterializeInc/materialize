@@ -36,6 +36,7 @@ use mz_adapter::{
 use mz_interchange::encode::TypedDatum;
 use mz_interchange::json::{JsonNumberPolicy, ToJson};
 use mz_ore::cast::CastFrom;
+use mz_ore::metrics::{MakeCollectorOpts, MetricsRegistry};
 use mz_ore::result::ResultExt;
 use mz_repr::{Datum, RelationDesc, RowArena, RowIterator};
 use mz_sql::ast::display::AstDisplay;
@@ -43,11 +44,13 @@ use mz_sql::ast::{CopyDirection, CopyStatement, CopyTarget, Raw, Statement, Stat
 use mz_sql::parse::StatementParseResult;
 use mz_sql::plan::Plan;
 use mz_sql::session::metadata::SessionMetadata;
+use prometheus::core::{AtomicF64, GenericGaugeVec};
+use prometheus::Opts;
 use serde::{Deserialize, Serialize};
 use tokio::{select, time};
 use tokio_postgres::error::SqlState;
 use tokio_stream::wrappers::UnboundedReceiverStream;
-use tracing::debug;
+use tracing::{debug, warn};
 use tungstenite::protocol::frame::coding::CloseCode;
 
 use crate::http::{init_ws, AuthedClient, AuthedUser, WsState, MAX_REQUEST_SIZE};
@@ -99,6 +102,134 @@ impl Error {
             _ => SqlState::INTERNAL_ERROR,
         }
     }
+}
+
+struct PrometheusSqlQuery<'a> {
+    metric_name: &'a str,
+    help: &'a str,
+    query: &'a str,
+    value_column_name: &'a str,
+}
+
+impl<'a> PrometheusSqlQuery<'a> {
+    fn to_sql_request(&self) -> SqlRequest {
+        SqlRequest::Simple {
+            query: self.query.to_string(),
+        }
+    }
+}
+
+async fn handle_promsql_query(
+    mut client: &mut AuthedClient,
+    query: &PrometheusSqlQuery<'_>,
+    metrics_registry: &MetricsRegistry,
+) {
+    let mut res = SqlResponse {
+        results: Vec::new(),
+    };
+
+    match execute_request(&mut client, query.to_sql_request(), &mut res).await {
+        Ok(()) => {
+            let row = res.results.first().expect("must have one result");
+
+            match row {
+                SqlResult::Rows { desc, rows, .. } => {
+                    let label_names = desc
+                        .columns
+                        .iter()
+                        .filter(|col| col.name != query.value_column_name)
+                        .map(|col| col.name.clone())
+                        .collect();
+
+                    let gauge_vec = metrics_registry.register::<GenericGaugeVec<AtomicF64>>(
+                        MakeCollectorOpts {
+                            opts: Opts::new(query.metric_name, query.help)
+                                .variable_labels(label_names),
+                            buckets: None,
+                        },
+                    );
+
+                    for row in rows {
+                        let label_values = desc
+                            .columns
+                            .iter()
+                            .zip(row)
+                            .filter(|(col, _)| col.name != query.value_column_name)
+                            .map(|(_, val)| val.as_str().expect("must be string"))
+                            .collect::<Vec<_>>();
+
+                        let value = desc
+                            .columns
+                            .iter()
+                            .zip(row)
+                            .find(|(col, _)| col.name == query.value_column_name)
+                            .map(|(_, val)| {
+                                val.as_str().unwrap_or("0").parse::<f64>().unwrap_or(0.0)
+                            })
+                            .unwrap_or(0.0);
+
+                        gauge_vec
+                            .get_metric_with_label_values(&label_values)
+                            .expect("valid labels")
+                            .set(value);
+                    }
+                }
+                SqlResult::Ok { .. } => {
+                    warn!("sql ok");
+                }
+                SqlResult::Err { error, .. } => {
+                    warn!("sql error: {error:?}");
+                }
+            };
+        }
+        Err(e) => warn!("{e}"),
+    };
+}
+
+static QUERIES: &[PrometheusSqlQuery] = &[
+    PrometheusSqlQuery {
+        metric_name: "mz_write_frontier",
+        help: "The global write frontiers of compute and storage collections.",
+        query: "SELECT
+                    object_id AS collection_id,
+                    coalesce(write_frontier::text::uint8, 18446744073709551615::uint8) AS write_frontier
+                FROM mz_internal.mz_frontiers
+                WHERE object_id NOT LIKE 't%';",
+        value_column_name: "write_frontier",
+    },
+    PrometheusSqlQuery {
+        metric_name: "mz_read_frontier",
+        help: "The global read frontiers of compute and storage collections.",
+        query: "SELECT
+                    object_id AS collection_id,
+                    coalesce(read_frontier::text::uint8, 18446744073709551615::uint8) AS read_frontier
+                FROM mz_internal.mz_frontiers
+                WHERE object_id NOT LIKE 't%';",
+        value_column_name: "read_frontier",
+    },
+    PrometheusSqlQuery {
+        metric_name: "mz_replica_write_frontiers",
+        help: "The per-replica write frontiers of compute and storage collections.",
+        query: "SELECT
+                    object_id AS collection_id,
+                    coalesce(write_frontier::text::uint8, 18446744073709551615::uint8) AS write_frontier,
+                    cluster_id AS instance_id,
+                    replica_id AS replica_id
+                FROM mz_catalog.mz_cluster_replica_frontiers
+                JOIN mz_cluster_replicas ON (id = replica_id)
+                WHERE object_id NOT LIKE 't%';",
+        value_column_name: "write_frontier",
+    },
+];
+
+pub async fn handle_promsql(mut client: AuthedClient) -> MetricsRegistry {
+    let metrics_registry = MetricsRegistry::new();
+
+    for query in QUERIES {
+        handle_promsql_query(&mut client, &query, &metrics_registry).await;
+    }
+
+    metrics_registry
 }
 
 pub async fn handle_sql(

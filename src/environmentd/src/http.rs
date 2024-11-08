@@ -345,6 +345,13 @@ impl InternalHttpServer {
                 }),
             )
             .route(
+                "/promsql-metrics",
+                routing::get(|client: AuthedClient| async move {
+                    let registry = sql::handle_promsql(client).await;
+                    mz_http_util::handle_prometheus(&registry).await
+                }),
+            )
+            .route(
                 "/api/livez",
                 routing::get(mz_http_util::handle_liveness_check),
             )
