@@ -4079,7 +4079,7 @@ impl Coordinator {
             };
             let network_policy_exists = policy_name
                 .as_ref()
-                .and_then(|name| self.catalog.get_network_policy_by_name(&name))
+                .and_then(|name| self.catalog.get_network_policy_by_name(name))
                 .is_some();
             if !network_policy_exists {
                 return Err(AdapterError::PlanError(plan::PlanError::VarError(
