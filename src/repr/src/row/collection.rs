@@ -15,8 +15,10 @@ use std::num::NonZeroUsize;
 
 use bytes::Bytes;
 use mz_ore::cast::CastFrom;
-use mz_proto::RustType;
+use mz_proto::ProtoType;
+use mz_proto::{RustType, TryFromProtoError};
 use serde::{Deserialize, Serialize};
+use timely::Container;
 
 use crate::row::iter::{IntoRowIterator, RowIterator};
 use crate::row::{Row, RowRef};
@@ -86,17 +88,8 @@ impl RowCollection {
     /// Total count of [`Row`]s represented by this collection, considering a
     /// possible `OFFSET` and `LIMIT`.
     pub fn count(&self, offset: usize, limit: Option<usize>) -> usize {
-        let mut total: usize = self.metadata.iter().map(|meta| meta.diff.get()).sum();
-
-        // Consider a possible OFFSET.
-        total = total.saturating_sub(offset);
-
-        // Consider a possible LIMIT.
-        if let Some(limit) = limit {
-            total = std::cmp::min(limit, total);
-        }
-
-        total
+        let total: usize = self.metadata.iter().map(|meta| meta.diff.get()).sum();
+        count_offset_limit(total, offset, limit)
     }
 
     /// Total count of ([`Row`], `EncodedRowMetadata`) pairs in this collection.
@@ -177,6 +170,68 @@ impl RustType<ProtoRowCollection> for RowCollection {
                 .into_iter()
                 .map(EncodedRowMetadata::from_proto)
                 .collect::<Result<_, _>>()?,
+        })
+    }
+}
+
+/// Represents multiple [`RowCollection`]s. Primarily used to collect sorted runs of row
+/// collections and merge them together using [`SortedRowCollections`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct RowCollections {
+    data: Vec<RowCollection>,
+}
+
+impl RowCollections {
+    /// Creates an empty [`RowCollections`].
+    pub fn new() -> Self {
+        Self { data: Vec::new() }
+    }
+
+    /// Creates a [`RowCollections`] with a single [`RowCollection`] containing the given `rows`.
+    pub fn from_rows(rows: &[(Row, NonZeroUsize)]) -> Self {
+        Self {
+            data: vec![RowCollection::new(rows)],
+        }
+    }
+
+    /// Extends an existing [`RowCollections`] from another instance.
+    pub fn extend(&mut self, other: RowCollections) {
+        self.data.extend(other.data);
+    }
+
+    /// Total count of [`Row`]s represented by this collection, considering a
+    /// possible `OFFSET` and `LIMIT`.
+    pub fn count(&self, offset: usize, limit: Option<usize>) -> usize {
+        count_offset_limit(
+            self.data.iter().map(|rows| rows.count(0, None)).sum(),
+            offset,
+            limit,
+        )
+    }
+
+    /// Returns the number of bytes of rows this collection stores.
+    pub fn byte_len(&self) -> usize {
+        self.data
+            .iter()
+            .fold(0, |acc, row| acc.saturating_add(row.byte_len()))
+    }
+
+    /// Returns the inner collection.
+    pub fn inner(self) -> Vec<RowCollection> {
+        self.data
+    }
+}
+
+impl RustType<ProtoRowCollections> for RowCollections {
+    fn into_proto(&self) -> ProtoRowCollections {
+        ProtoRowCollections {
+            data: self.data.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoRowCollections) -> Result<Self, TryFromProtoError> {
+        Ok(RowCollections {
+            data: proto.data.into_rust()?,
         })
     }
 }
@@ -476,18 +531,21 @@ impl RowIterator for SortedRowCollectionsIter {
     }
 
     fn count(&self) -> usize {
-        let mut total = self.collection.total_count;
-
-        // Consider a possible OFFSET.
-        total = total.saturating_sub(self.offset);
-
-        // Consider a possible LIMIT.
-        if let Some(limit) = self.limit {
-            total = std::cmp::min(limit, total);
-        }
-
-        total
+        count_offset_limit(self.collection.total_count, self.offset, self.limit)
     }
+}
+
+/// Recomputes `count` based on an `offset` and a `limit`.
+fn count_offset_limit(mut total: usize, offset: usize, limit: Option<usize>) -> usize {
+    // Consider a possible OFFSET.
+    total = total.saturating_sub(offset);
+
+    // Consider a possible LIMIT.
+    if let Some(limit) = limit {
+        total = std::cmp::min(limit, total);
+    }
+
+    total
 }
 
 #[cfg(test)]

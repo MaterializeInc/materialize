@@ -17,7 +17,7 @@ use futures::FutureExt;
 use inner::return_if_err;
 use mz_expr::{MirRelationExpr, RowSetFinishing};
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::{CatalogItemId, Diff, GlobalId, RowCollection};
+use mz_repr::{CatalogItemId, Diff, GlobalId, RowCollections};
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{
@@ -838,7 +838,7 @@ impl Coordinator {
             let duration_histogram = session.metrics().row_set_finishing_seconds();
 
             return match finishing.finish(
-                vec![RowCollection::new(&plan.returning)],
+                RowCollections::from_rows(&plan.returning),
                 plan.max_result_size,
                 Some(max_returned_query_size),
                 duration_histogram,

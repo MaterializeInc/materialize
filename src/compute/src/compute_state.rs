@@ -44,7 +44,7 @@ use mz_persist_client::read::ReadHandle;
 use mz_persist_client::Diagnostics;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::fixed_length::ToDatumIter;
-use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena, RowCollection, Timestamp};
+use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena, RowCollections, Timestamp};
 use mz_storage_operators::stats::StatsCursor;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::sources::SourceData;
@@ -1095,7 +1095,7 @@ impl PendingPeek {
                 Ok(vec![])
             };
             let result = match result {
-                Ok(rows) => PeekResponse::Rows(RowCollection::new(&rows)),
+                Ok(rows) => PeekResponse::Rows(RowCollections::from_rows(&rows)),
                 Err(e) => PeekResponse::Error(e.to_string()),
             };
             match result_tx.send((result, start.elapsed())) {
@@ -1297,7 +1297,7 @@ impl IndexPeek {
         }
 
         let response = match self.collect_finished_data(max_result_size) {
-            Ok(rows) => PeekResponse::Rows(RowCollection::new(&rows)),
+            Ok(rows) => PeekResponse::Rows(RowCollections::from_rows(&rows)),
             Err(text) => PeekResponse::Error(text),
         };
         Some(response)

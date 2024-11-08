@@ -21,7 +21,7 @@ use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::lattice::Lattice;
 use mz_ore::assert_none;
 use mz_ore::cast::CastFrom;
-use mz_repr::{Diff, GlobalId, Row, RowCollection};
+use mz_repr::{Diff, GlobalId, Row, RowCollections};
 use mz_service::client::{GenericClient, Partitionable, PartitionedState};
 use mz_service::grpc::{GrpcClient, GrpcServer, ProtoServiceTypes, ResponseStream};
 use timely::progress::frontier::{Antichain, MutableAntichain};
@@ -319,7 +319,7 @@ where
                 assert_none!(novel, "Duplicate peek response");
                 // We may be ready to respond.
                 if entry.len() == self.parts {
-                    let mut response = PeekResponse::Rows(RowCollection::default());
+                    let mut response = PeekResponse::Rows(RowCollections::new());
                     for (_part, r) in std::mem::take(entry).into_iter() {
                         response = match (response, r) {
                             (_, PeekResponse::Canceled) => PeekResponse::Canceled,
@@ -340,7 +340,7 @@ where
                                     );
                                     PeekResponse::Error(err)
                                 } else {
-                                    rows.merge(&other);
+                                    rows.extend(other);
                                     PeekResponse::Rows(rows)
                                 }
                             }

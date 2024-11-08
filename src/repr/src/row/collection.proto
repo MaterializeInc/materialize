@@ -20,3 +20,7 @@ message ProtoEncodedRowMetadata {
   uint64 offset = 1;
   uint64 diff = 2;
 }
+
+message ProtoRowCollections {
+  repeated ProtoRowCollection data = 1;
+}

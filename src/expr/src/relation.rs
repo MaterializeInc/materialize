@@ -35,7 +35,7 @@ use mz_repr::explain::{
 };
 use mz_repr::{
     ColumnName, ColumnType, Datum, Diff, GlobalId, IntoRowIterator, RelationType, Row,
-    RowCollection, RowIterator, ScalarType, SortedRowCollections, SortedRowCollectionsIter,
+    RowCollections, RowIterator, ScalarType, SortedRowCollections, SortedRowCollectionsIter,
 };
 use proptest::prelude::{any, Arbitrary, BoxedStrategy};
 use proptest::strategy::{Strategy, Union};
@@ -3521,11 +3521,11 @@ impl<L> RowSetFinishing<L> {
 }
 
 impl RowSetFinishing {
-    /// Applies finishing actions to a [`RowCollection`], and reports the total
+    /// Applies finishing actions to a [`RowCollections`], and reports the total
     /// time it took to run.
     pub fn finish(
         &self,
-        rows: Vec<RowCollection>,
+        rows: RowCollections,
         max_result_size: u64,
         max_returned_query_size: Option<u64>,
         duration_histogram: &Histogram,
@@ -3541,11 +3541,11 @@ impl RowSetFinishing {
     /// Implementation for [`RowSetFinishing::finish`].
     fn finish_inner(
         &self,
-        rows: Vec<RowCollection>,
+        rows: RowCollections,
         _max_result_size: u64,
         max_returned_query_size: Option<u64>,
     ) -> Result<SortedRowCollectionsIter, String> {
-        let sorted_view = SortedRowCollections::new(rows);
+        let sorted_view = SortedRowCollections::new(rows.inner());
         let mut iter = sorted_view
             .into_row_iter()
             .apply_offset(self.offset)

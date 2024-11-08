@@ -15,7 +15,7 @@ use mz_compute_types::plan::LirId;
 use mz_ore::cast::CastFrom;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_proto::{any_uuid, IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use mz_repr::{Diff, GlobalId, Row, RowCollection};
+use mz_repr::{Diff, GlobalId, Row, RowCollections};
 use mz_timely_util::progress::any_antichain;
 use proptest::prelude::{any, Arbitrary};
 use proptest::strategy::{BoxedStrategy, Just, Strategy, Union};
@@ -322,7 +322,7 @@ impl Arbitrary for FrontiersResponse {
 #[derive(Clone, Debug, PartialEq)]
 pub enum PeekResponse {
     /// Returned rows of a successful peek.
-    Rows(RowCollection),
+    Rows(RowCollections),
     /// Error of an unsuccessful peek.
     Error(String),
     /// The peek was canceled.
@@ -334,8 +334,8 @@ impl RustType<ProtoPeekResponse> for PeekResponse {
         use proto_peek_response::Kind::*;
         ProtoPeekResponse {
             kind: Some(match self {
-                PeekResponse::Rows(rows) => Rows(rows.into_proto()),
-                PeekResponse::Error(err) => proto_peek_response::Kind::Error(err.clone()),
+                PeekResponse::Rows(rows) => RowCollections(rows.into_proto()),
+                PeekResponse::Error(err) => Error(err.clone()),
                 PeekResponse::Canceled => Canceled(()),
             }),
         }
@@ -344,8 +344,10 @@ impl RustType<ProtoPeekResponse> for PeekResponse {
     fn from_proto(proto: ProtoPeekResponse) -> Result<Self, TryFromProtoError> {
         use proto_peek_response::Kind::*;
         match proto.kind {
-            Some(Rows(rows)) => Ok(PeekResponse::Rows(rows.into_rust()?)),
-            Some(proto_peek_response::Kind::Error(err)) => Ok(PeekResponse::Error(err)),
+            Some(RowCollections(row_collections)) => {
+                Ok(PeekResponse::Rows(row_collections.into_rust()?))
+            }
+            Some(Error(err)) => Ok(PeekResponse::Error(err)),
             Some(Canceled(())) => Ok(PeekResponse::Canceled),
             None => Err(TryFromProtoError::missing_field("ProtoPeekResponse::kind")),
         }
@@ -365,7 +367,7 @@ impl Arbitrary for PeekResponse {
                 ),
                 1..11,
             )
-            .prop_map(|rows| PeekResponse::Rows(RowCollection::new(&rows)))
+            .prop_map(|rows| PeekResponse::Rows(RowCollections::from_rows(&rows)))
             .boxed(),
             ".*".prop_map(PeekResponse::Error).boxed(),
             Just(PeekResponse::Canceled).boxed(),

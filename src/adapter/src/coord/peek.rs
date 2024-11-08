@@ -37,7 +37,7 @@ use mz_ore::str::{separated, StrExt};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::explain::text::DisplayText;
 use mz_repr::explain::{CompactScalars, IndexUsageType, PlanRenderingContext, UsedIndexes};
-use mz_repr::{Diff, GlobalId, IntoRowIterator, RelationType, Row, RowCollection, RowIterator};
+use mz_repr::{Diff, GlobalId, IntoRowIterator, RelationType, Row, RowCollections, RowIterator};
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp;
 use uuid::Uuid;
@@ -481,11 +481,11 @@ impl crate::coord::Coordinator {
                     ));
                 }
             }
-            let row_collection = RowCollection::new(&results);
+            let row_collections = RowCollections::from_rows(&results);
             let duration_histogram = self.metrics.row_set_finishing_seconds();
 
             let (ret, reason) = match finishing.finish(
-                vec![row_collection],
+                row_collections,
                 max_result_size,
                 max_returned_query_size,
                 &duration_histogram,
@@ -645,7 +645,7 @@ impl crate::coord::Coordinator {
             move |resp| match resp {
                 PeekResponse::Rows(rows) => {
                     match finishing.finish(
-                        vec![rows],
+                        rows,
                         max_result_size,
                         max_returned_query_size,
                         &duration_histogram,
