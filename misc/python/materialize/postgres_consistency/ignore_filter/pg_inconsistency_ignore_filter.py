@@ -227,6 +227,11 @@ class PgPreExecutionInconsistencyIgnoreFilter(
         expression: ExpressionWithArgs,
         all_involved_characteristics: set[ExpressionCharacteristics],
     ) -> IgnoreVerdict:
+        if db_function.function_name_in_lower_case == "generate_subscripts":
+            return YesIgnore(
+                "database-issues#8410: table functions: combination with operations with NULL"
+            )
+
         if db_function.function_name_in_lower_case == "jsonb_pretty":
             return YesIgnore("Accepted")
 

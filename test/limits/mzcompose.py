@@ -1675,6 +1675,7 @@ SERVICES = [
             "--https-resolver-template=materialized:6876",
             "--tls-key=/secrets/balancerd.key",
             "--tls-cert=/secrets/balancerd.crt",
+            "--internal-tls",
         ],
         depends_on=["test-certs"],
         volumes=[
