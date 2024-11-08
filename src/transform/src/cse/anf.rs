@@ -53,7 +53,7 @@ impl ANF {
         relation: &mut MirRelationExpr,
     ) -> Result<(), crate::TransformError> {
         let mut bindings = Bindings::default();
-        bindings.intern_expression(&mut IdGen::default(), relation)?;
+        bindings.insert_expression(&mut IdGen::default(), relation)?;
         bindings.populate_expression(relation);
         Ok(())
     }
@@ -103,15 +103,26 @@ impl Bindings {
 }
 
 impl Bindings {
-    /// Replace `relation` with an equivalent `Get` expression referencing a location in `bindings`.
+    /// Ensures `self` contains bindings for all of `relation`'s subexpressions, including itself,
+    /// and replaces `relation` with a reference to its corresponding identifier.
     ///
     /// The algorithm performs a post-order traversal of the expression tree, binding each distinct
-    /// expression to a new local identifier. It maintains the invariant that `bindings` contains no
-    /// `Let` expressions, nor any two structurally equivalent expressions.
+    /// expression to a new local identifier and replacing each expression with a reference to the
+    /// identifier for the expression. It maintains the invariant that `bindings` contains no `Let`
+    /// expressions, nor any two structurally identical expressions.
     ///
-    /// Once each sub-expression is replaced by a canonical `Get` expression, each expression is also
-    /// in a canonical representation, which is used to check for prior instances and drives re-use.
-    fn intern_expression(
+    /// `LetRec` expressions are treated differently, as their expressions cannot simply be bound to
+    /// `Let` expressions. Each `LetRec` expression clones the current bindings `self`, and then goes
+    /// through its bindings in order, extending `self` with terms discovered in order. Importantly,
+    /// when a bound term is first visited we re-introduce its identifier with a fresh identifier,
+    /// to ensure that preceding references to the term are not equated with subsequent references.
+    /// The `LetRec::body` is treated differently, as it is "outside" the scope, and should not rely
+    /// on expressions from within the scope, other than those that it has coming in to the analysis.
+    /// This is a limitation of our optimization pipeline at the moment, that it breaks if `body`
+    /// gains new references to terms within the `LetRec` bindings (for example: `JoinImplementation`
+    /// can break if `body` acquires a reference to an arranged term, as that arrangement is not
+    /// available outside the loop).
+    fn insert_expression(
         &mut self,
         id_gen: &mut IdGen,
         relation: &mut MirRelationExpr,
@@ -124,103 +135,85 @@ impl Bindings {
                     body,
                     limits,
                 } => {
+                    // Used for `zip_eq`.
+                    use itertools::Itertools;
+
                     // Introduce a new copy of `self`, which will be specific to this scope.
-                    // This makes expressions used in the outer scope available for re-use
-                    // in this new recursive scope. By retaining `self`, we'll be able to see
-                    // the new bindings, and install only them when we reform the expression.
+                    // This makes expressions used in the outer scope available for re-use.
+                    // We will discard `scoped_anf` once we have processed the `LetRec`.
                     let mut scoped_anf = this.clone();
 
                     // Used to distinguish new bindings from old bindings.
+                    // This is needed to extract from `scoped_anf` only the bindings added
+                    // in this block, and not those inherited from `self`.
                     let id_boundary = id_gen.allocate_id();
 
                     // Each identifier in `ids` will be given *two* new identifiers,
-                    // one "old" and one "new". This is important to ensure that use
-                    // of the "old" collection does not result in hits for uses of the
-                    // "new" collection. We will need to unify these identifiers before
-                    // returning, but this should just be a matter of rewritting one
-                    // with the other (their distinction comes only from the moment they
-                    // are referenced).
+                    // initially one "before" and then once bound another one "after".
+                    // The two identifiers are important to distinguish references to the
+                    // binding "before" it is refreshed, and "after" it is refreshed.
+                    // We can equate two "before" references and two "after" references,
+                    // but we must not equate a "before" and an "after" reference.
 
-                    // The plan is to walk the bindings `values` in turn, producing a sequence
-                    // of ANF bindings that represent the same computation. As we reach each
-                    // `value`, we'll mint a new identifier and commit that term, but also
-                    // 1. Update the rebindings map to the new identifier, and
-                    // 2. Replace references to the old identifier with the new identifier.
-                    // Once finished, we'll lay out the new sequence of `ids` and `values`.
-
-                    // For each bound identifier from `ids`, a temporary identifier for the "old" version.
-                    let prevs = ids
+                    // For each bound identifier from `ids`, a temporary identifier for the "before" version.
+                    let before_ids = ids
                         .iter()
                         .map(|_id| LocalId::new(id_gen.allocate_id()))
                         .collect::<Vec<_>>();
-                    let mut nexts = Vec::new();
+                    let mut after_ids = Vec::new();
 
-                    // Install the "old" rebindings to start.
-                    // As we discover uses of `id`, we'll replace them with `old`.
+                    // Install the "before" rebindings to start.
+                    // These rebindings will be used for each binding until we process the binding.
                     scoped_anf
                         .rebindings
-                        .extend(ids.iter().zip(prevs.iter()).map(|(x, y)| (*x, *y)));
+                        .extend(ids.iter().zip(before_ids.iter()).map(|(x, y)| (*x, *y)));
 
-                    // Intern the sequence of values and then body.
-                    // Care is taken as each value is bound to alter the rebinding
-                    // of the identifier, so that uses of the "old" value do not
-                    // match uses of the "new" value.
+                    // Convert each bound expression into a sequence of let bindings, which are appended
+                    // to the sequence of let bindings from prior bound expressions.
+                    // After visiting the expression, we'll update the binding for the `id` to its "after"
+                    // identifier.
                     for (index, value) in values.iter_mut().enumerate() {
-                        scoped_anf.intern_expression(id_gen, value)?;
-                        // Now replace the rebinding of `id` from `old` to `new`.
-                        // We will ultimately use `new_id` for `value`, and should
-                        // imagine a `let new_id = value` that will appear at this
-                        // point. We cannot use `scoped_anf` for this, because `value`
-                        // may already be bound to something else, and we cannot set
-                        // all references to `value` to now be `new_id`. We can set
-                        // *subsequent* references to `value` to be `new_id`, but we
-                        // oughtn't uninstall `value` if it already exists.
+                        scoped_anf.insert_expression(id_gen, value)?;
+                        // Update the binding for `ids[index]` from its "before" id to a new "after" id.
                         let new_id = id_gen.allocate_id();
-                        nexts.push(new_id);
+                        after_ids.push(new_id);
                         scoped_anf
                             .rebindings
                             .insert(ids[index].clone(), LocalId::new(new_id));
                     }
 
-                    // We handle `body` separately, as it is an error to rely on arrangements from within the WMR.
-                    // Ideally we wouldn't need that complexity here, but this is called on arrangement-laden MRE
+                    // We handle `body` separately, as it is an error to rely on arrangements from within the `LetRec`.
+                    // Ideally we wouldn't need that complexity here, but this is called on arrangement-laden expressions
                     // after join planning where we need to have locked in arrangements. Revisit if we correct that.
+                    // TODO: this logic does not find expressions shared between `body` and `values` that could be hoisted
+                    // out of the `LetRec`; for example terms that depend only on bindings from outside the `LetRec`.
                     let mut body_anf = Bindings::new(this.rebindings.clone());
                     for id in ids.iter() {
                         body_anf
                             .rebindings
                             .insert(*id, scoped_anf.rebindings[id].clone());
                     }
-                    body_anf.intern_expression(id_gen, body)?;
+                    body_anf.insert_expression(id_gen, body)?;
                     body_anf.populate_expression(body);
 
-                    // We now want to rebuild the let bindings that will make `body`
-                    // the correct answer. We have these in `scoped_anf`, but we must
-                    // 1. rewrite occurrences of `Get(old)` into `Get(new)`,
-                    // 2. insert `let new = value` for each existing binding.
-                    // 3. update `ids` and `values` to reflect all of this.
-
-                    // Map from "old" identifiers to "new" identifiers.
-                    // If we have a hit in this map, we should perform the replacement.
-                    let mut remap = BTreeMap::new();
-                    for (p, n) in prevs
-                        .iter()
-                        .zip(nexts.iter())
-                        .map(|(p, n)| (*p, LocalId::new(*n)))
-                    {
-                        remap.insert(p, n);
-                    }
-
-                    // Convert the bindings in to a sequence, by the local identifier.
+                    // Collect the bindings that are new to this `LetRec` scope (delineated by `id_boundary`).
                     let mut bindings = scoped_anf
                         .bindings
                         .into_iter()
                         .filter(|(_e, i)| i > &id_boundary)
                         .map(|(e, i)| (i, e))
                         .collect::<Vec<_>>();
-                    // Add bindings corresponding to `(ids, values)`
-                    bindings.extend(nexts.into_iter().zip(values.drain(..)));
+                    // Add bindings corresponding to `(ids, values)` using after identifiers.
+                    bindings.extend(after_ids.iter().cloned().zip_eq(values.drain(..)));
                     bindings.sort();
+
+                    // Before continuing, we should rewrite each "before" id to its corresponding "after" id.
+                    let before_to_after: BTreeMap<_, _> = before_ids
+                        .into_iter()
+                        .zip_eq(after_ids)
+                        .map(|(b, a)| (b, LocalId::new(a)))
+                        .collect();
+                    // Perform the rewrite of  "before" ids into "after" ids.
                     for (_id, expr) in bindings.iter_mut() {
                         let mut todo = vec![&mut *expr];
                         while let Some(e) = todo.pop() {
@@ -228,8 +221,8 @@ impl Bindings {
                                 id: Id::Local(i), ..
                             } = e
                             {
-                                if let Some(next) = remap.get(i) {
-                                    i.clone_from(next);
+                                if let Some(after) = before_to_after.get(i) {
+                                    i.clone_from(after);
                                 }
                             }
                             todo.extend(e.children_mut());
@@ -237,26 +230,27 @@ impl Bindings {
                     }
 
                     // New ids and new values can be extracted from the bindings.
-                    let (new_ids, new_values): (Vec<_>, Vec<_>) = bindings.into_iter().unzip();
-                    use itertools::Itertools;
+                    let (new_ids, new_values): (Vec<_>, Vec<_>) = bindings
+                        .into_iter()
+                        .map(|(id_int, value)| (LocalId::new(id_int), value))
+                        .unzip();
                     // New limits will all be `None`, except for any pre-existing limits.
                     let mut new_limits: BTreeMap<LocalId, _> = BTreeMap::default();
                     for (id, limit) in ids.iter().zip_eq(limits.iter()) {
                         new_limits.insert(scoped_anf.rebindings[id], limit.clone());
                     }
                     for id in new_ids.iter() {
-                        if !new_limits.contains_key(&LocalId::new(*id)) {
-                            new_limits.insert(LocalId::new(*id), None);
+                        if !new_limits.contains_key(id) {
+                            new_limits.insert(id.clone(), None);
                         }
                     }
-                    let new_limits = new_limits.into_values().collect::<Vec<_>>();
 
-                    *ids = new_ids.into_iter().map(LocalId::new).collect();
+                    *ids = new_ids;
                     *values = new_values;
-                    *limits = new_limits;
+                    *limits = new_limits.into_values().collect();
                 }
                 MirRelationExpr::Let { id, value, body } => {
-                    this.intern_expression(id_gen, value)?;
+                    this.insert_expression(id_gen, value)?;
                     let new_id = if let MirRelationExpr::Get {
                         id: Id::Local(x), ..
                     } = **value
@@ -266,7 +260,7 @@ impl Bindings {
                         panic!("Invariant violated")
                     };
                     this.rebindings.insert(*id, new_id);
-                    this.intern_expression(id_gen, body)?;
+                    this.insert_expression(id_gen, body)?;
                     let body = body.take_dangerous();
                     this.rebindings.remove(id);
                     *relation = body;
@@ -283,10 +277,9 @@ impl Bindings {
                         }
                     }
                 }
-
                 _ => {
                     // All other expressions just need to apply the logic recursively.
-                    relation.try_visit_mut_children(|expr| this.intern_expression(id_gen, expr))?;
+                    relation.try_visit_mut_children(|expr| this.insert_expression(id_gen, expr))?;
                 }
             };
 
