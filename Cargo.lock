@@ -5564,7 +5564,7 @@ dependencies = [
 
 [[package]]
 name = "mz-orchestratord"
-version = "0.120.0-dev.0"
+version = "0.125.0-dev.0"
 dependencies = [
  "anyhow",
  "async-trait",
