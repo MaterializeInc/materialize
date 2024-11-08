@@ -671,7 +671,7 @@ async fn force_gc(
 /// Exposed for `mz-catalog`.
 pub const CATALOG_FORCE_COMPACTION_FUEL: Config<usize> = Config::new(
     "persist_catalog_force_compaction_fuel",
-    131_072,
+    1024,
     "fuel to use in catalog dangerous_force_compaction task",
 );
 

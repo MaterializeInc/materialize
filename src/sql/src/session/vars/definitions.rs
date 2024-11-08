@@ -453,7 +453,7 @@ pub static MAX_MYSQL_CONNECTIONS: VarDefinition = VarDefinition::new(
 
 pub static MAX_AWS_PRIVATELINK_CONNECTIONS: VarDefinition = VarDefinition::new(
     "max_aws_privatelink_connections",
-    value!(u32; 4),
+    value!(u32; 0),
      "The maximum number of AWS PrivateLink connections in the region, across all schemas (Materialize).",
     true,
 );
@@ -1783,7 +1783,7 @@ feature_flags!(
     {
         name: allow_real_time_recency,
         desc: "real time recency",
-        default: true,
+        default: false,
         enable_for_item_parsing: true,
     },
     // Actual feature flags
@@ -2086,7 +2086,7 @@ feature_flags!(
     {
         name: enable_variadic_left_join_lowering,
         desc: "Enable joint HIR ⇒ MIR lowering of stacks of left joins",
-        default: true,
+        default: false,
         enable_for_item_parsing: false,
     },
     {
