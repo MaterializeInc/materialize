@@ -44,7 +44,7 @@ use mz_sql::rbac;
 use mz_sql::rbac::CREATE_ITEM_USAGE;
 use mz_sql::session::user::User;
 use mz_sql::session::vars::{
-    EndTransactionAction, OwnedVarInput, Value, Var, STATEMENT_LOGGING_SAMPLE_RATE,
+    EndTransactionAction, OwnedVarInput, Value, Var, NETWORK_POLICY, STATEMENT_LOGGING_SAMPLE_RATE,
 };
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
@@ -257,34 +257,7 @@ impl Coordinator {
     ) {
         // Early return if successful, otherwise cleanup any possible state.
         match self.handle_startup_inner(&user, &conn_id, &client_ip).await {
-            Ok(role_id) => {
-                let system_config = self.catalog().state().system_config();
-                let mut session_defaults = BTreeMap::new();
-
-                // Override the session with any system defaults.
-                session_defaults.extend(
-                    system_config
-                        .iter_session()
-                        .map(|v| (v.name().to_string(), OwnedVarInput::Flat(v.value()))),
-                );
-
-                // Special case.
-                let statement_logging_default = system_config
-                    .statement_logging_default_sample_rate()
-                    .format();
-                session_defaults.insert(
-                    STATEMENT_LOGGING_SAMPLE_RATE.name().to_string(),
-                    OwnedVarInput::Flat(statement_logging_default),
-                );
-
-                // Override system defaults with role defaults.
-                session_defaults.extend(
-                    self.catalog()
-                        .get_role(&role_id)
-                        .vars()
-                        .map(|(name, val)| (name.to_string(), val.clone())),
-                );
-
+            Ok((role_id, session_defaults)) => {
                 let session_type = metrics::session_type_label_value(&user);
                 self.metrics
                     .active_sessions
@@ -348,46 +321,7 @@ impl Coordinator {
         user: &User,
         conn_id: &ConnectionId,
         client_ip: &Option<IpAddr>,
-    ) -> Result<RoleId, AdapterError> {
-        // Validate network policies for external users. Internal users
-        // can only connect on the internal interfaces (internal HTTP/
-        // pgwire). It is up to the person deploying the system to
-        // ensure these internal interfaces are well secured.
-        let system_config = self.catalog().state().system_config();
-        if !user.is_internal() {
-            let Some(network_policy) = self
-                .catalog()
-                .get_network_policy_by_name(&system_config.default_network_policy_name())
-            else {
-                tracing::error!("Network_policy system var is not pointing to a existing network policy. All user traffic will be blocked");
-                match client_ip {
-                    Some(ip) => {
-                        return Err(AdapterError::NetworkPolicyDenied(
-                            super::NetworkPolicyError::AddressDenied(ip.clone()),
-                        ));
-                    }
-                    None => {
-                        return Err(AdapterError::NetworkPolicyDenied(
-                            super::NetworkPolicyError::MissingIp,
-                        ));
-                    }
-                }
-            };
-            if let Some(ip) = client_ip {
-                match validate_network_with_policy(ip, network_policy) {
-                    Ok(_) => {}
-                    Err(e) => return Err(AdapterError::NetworkPolicyDenied(e)),
-                }
-            } else {
-                // Only temporary and internal representation of a session
-                // should be missing a client_ip. These sessions should not be
-                // making requests or going through handle_startup.
-                return Err(AdapterError::NetworkPolicyDenied(
-                    super::NetworkPolicyError::MissingIp,
-                ));
-            }
-        }
-
+    ) -> Result<(RoleId, BTreeMap<String, OwnedVarInput>), AdapterError> {
         if self.catalog().try_get_role_by_name(&user.name).is_none() {
             // If the user has made it to this point, that means they have been fully authenticated.
             // This includes preventing any user, except a pre-defined set of system users, from
@@ -410,9 +344,87 @@ impl Coordinator {
             return Err(AdapterError::UserSessionsDisallowed);
         }
 
+        // Initialize the default session variables for this role.
+        let mut session_defaults = BTreeMap::new();
+        let system_config = self.catalog().state().system_config();
+
+        // Override the session with any system defaults.
+        session_defaults.extend(
+            system_config
+                .iter_session()
+                .map(|v| (v.name().to_string(), OwnedVarInput::Flat(v.value()))),
+        );
+        // Special case.
+        let statement_logging_default = system_config
+            .statement_logging_default_sample_rate()
+            .format();
+        session_defaults.insert(
+            STATEMENT_LOGGING_SAMPLE_RATE.name().to_string(),
+            OwnedVarInput::Flat(statement_logging_default),
+        );
+        // Override system defaults with role defaults.
+        session_defaults.extend(
+            self.catalog()
+                .get_role(&role_id)
+                .vars()
+                .map(|(name, val)| (name.to_string(), val.clone())),
+        );
+
+        // Validate network policies for external users. Internal users can only connect on the
+        // internal interfaces (internal HTTP/ pgwire). It is up to the person deploying the system
+        // to ensure these internal interfaces are well secured.
+        //
+        // HACKY(parkmycar): We don't have a fully formed session yet for this role, but we want
+        // the default network policy for this role, so we read directly out of what the session
+        // will get initialized with.
+        if !user.is_internal() {
+            let network_policy_name = session_defaults
+                .get(NETWORK_POLICY.name())
+                .and_then(|value| match value {
+                    OwnedVarInput::Flat(name) => Some(name.clone()),
+                    OwnedVarInput::SqlSet(names) => {
+                        tracing::error!(?names, "found multiple network policies");
+                        None
+                    }
+                })
+                .unwrap_or(system_config.default_network_policy_name());
+            let maybe_network_policy = self
+                .catalog()
+                .get_network_policy_by_name(&network_policy_name);
+
+            let Some(network_policy) = maybe_network_policy else {
+                // We should prevent dropping the default network policy, or setting the policy
+                // to something that doesn't exist, so complain loudly if this occurs.
+                tracing::error!(
+                    network_policy_name,
+                    "default network policy does not exist. All user traffic will be blocked"
+                );
+                let reason = match client_ip {
+                    Some(ip) => super::NetworkPolicyError::AddressDenied(ip.clone()),
+                    None => super::NetworkPolicyError::MissingIp,
+                };
+                return Err(AdapterError::NetworkPolicyDenied(reason));
+            };
+
+            if let Some(ip) = client_ip {
+                match validate_network_with_policy(ip, network_policy) {
+                    Ok(_) => {}
+                    Err(e) => return Err(AdapterError::NetworkPolicyDenied(e)),
+                }
+            } else {
+                // Only temporary and internal representation of a session
+                // should be missing a client_ip. These sessions should not be
+                // making requests or going through handle_startup.
+                return Err(AdapterError::NetworkPolicyDenied(
+                    super::NetworkPolicyError::MissingIp,
+                ));
+            }
+        }
+
         self.catalog_mut()
             .create_temporary_schema(conn_id, role_id)?;
-        Ok(role_id)
+
+        Ok((role_id, session_defaults))
     }
 
     /// Handles an execute command.
