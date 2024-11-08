@@ -275,13 +275,13 @@ pub struct SortedRowCollections {
 impl SortedRowCollections {
     /// Sort a vector of [`RowCollection`]s. Each individual row collection must already be sorted.
     pub fn new(data: Vec<RowCollection>) -> SortedRowCollections {
-        let mut merges = BinaryHeap::new();
-        let mut total = 0;
+        let mut heap = BinaryHeap::new();
+        let mut total_count = 0;
         for row_collection in data {
-            total += row_collection.count(0, None);
+            total_count += row_collection.count(0, None);
             if let Some((_, meta)) = row_collection.get(0) {
                 let diffs_left = meta.diff.get();
-                merges.push(HeapRowCollection {
+                heap.push(HeapRowCollection {
                     row_collection,
                     row_index: 0,
                     diffs_left,
@@ -289,10 +289,7 @@ impl SortedRowCollections {
             }
         }
 
-        Self {
-            heap: merges,
-            total_count: total,
-        }
+        Self { heap, total_count }
     }
 
     fn row(&self) -> Option<&RowRef> {
@@ -301,26 +298,26 @@ impl SortedRowCollections {
 
     fn advance_by(&mut self, mut count: usize) {
         while count > 0 {
-            let Some(mut sorted_run_ref) = self.heap.peek_mut() else {
+            let Some(mut row_collection) = self.heap.peek_mut() else {
                 return;
             };
-            if sorted_run_ref.diffs_left > count {
-                // More diffs present than we currently need to read. Simply update the counts.
-                sorted_run_ref.diffs_left -= count;
+            if row_collection.diffs_left > count {
+                // More diffs present than we currently need to skip.
+                row_collection.diffs_left -= count;
                 count = 0;
             } else {
-                count -= sorted_run_ref.diffs_left;
+                count -= row_collection.diffs_left;
                 // We exhausted the current row and need to pop it and insert the next row from the
                 // same row collection.
-                let next_index = sorted_run_ref.row_index + 1;
-                if let Some((_, meta)) = sorted_run_ref.row_collection.get(next_index) {
-                    // Just update the `row_index` to the next entry, which will automatically update
-                    // its position in the heap after the mutable peek reference is dropped.
-                    sorted_run_ref.diffs_left = meta.diff.get();
-                    sorted_run_ref.row_index = next_index;
+                let next_index = row_collection.row_index + 1;
+                if let Some((_, meta)) = row_collection.row_collection.get(next_index) {
+                    // Incrementing `row_index` will automatically update its position in the heap
+                    // after the mutable peek reference is dropped.
+                    row_collection.diffs_left = meta.diff.get();
+                    row_collection.row_index = next_index;
                 } else {
                     // No more rows. Pop the entry from the heap.
-                    drop(sorted_run_ref);
+                    drop(row_collection);
                     self.heap.pop();
                 }
             }
@@ -401,12 +398,12 @@ impl SortedRowCollectionsIter {
     /// Helper method for implementing [`RowIterator`].
     ///
     /// Projects columns for the provided `row`.
-    fn project<'b>(
-        projection: Option<&'b Vec<usize>>,
-        row: &'b RowRef,
-        datum_buf: &'b mut DatumVec,
-        row_buf: &'b mut Row,
-    ) -> Option<&'b RowRef> {
+    fn project<'a>(
+        projection: Option<&'a Vec<usize>>,
+        row: &'a RowRef,
+        datum_buf: &'a mut DatumVec,
+        row_buf: &'a mut Row,
+    ) -> Option<&'a RowRef> {
         if let Some(projection) = projection.as_ref() {
             // Copy the required columns into our reusable buffer.
             {
