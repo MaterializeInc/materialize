@@ -1288,7 +1288,6 @@ pub struct ShardsMetrics {
     blob_gets: mz_ore::metrics::IntCounterVec,
     blob_sets: mz_ore::metrics::IntCounterVec,
     live_writers: mz_ore::metrics::UIntGaugeVec,
-    unconsolidated_snapshot: mz_ore::metrics::IntCounterVec,
     backpressure_emitted_bytes: IntCounterVec,
     backpressure_last_backpressured_bytes: UIntGaugeVec,
     backpressure_retired_bytes: IntCounterVec,
@@ -1472,11 +1471,6 @@ impl ShardsMetrics {
                 help: "number of writers that have recently appended updates to this shard",
                 var_labels: ["shard", "name"],
             )),
-            unconsolidated_snapshot: registry.register(metric!(
-                name: "mz_persist_shard_unconsolidated_snapshot",
-                help: "in snapshot_and_read, the number of times consolidating the raw data wasn't enough to produce consolidated output",
-                var_labels: ["shard", "name"],
-            )),
             backpressure_emitted_bytes: registry.register(metric!(
                 name: "mz_persist_backpressure_emitted_bytes",
                 help: "A counter with the number of emitted bytes.",
@@ -1610,7 +1604,6 @@ pub struct ShardMetrics {
     pub blob_gets: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub blob_sets: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub live_writers: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub unconsolidated_snapshot: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub backpressure_emitted_bytes: Arc<DeleteOnDropCounter<'static, AtomicU64, Vec<String>>>,
     pub backpressure_last_backpressured_bytes:
         Arc<DeleteOnDropGauge<'static, AtomicU64, Vec<String>>>,
@@ -1717,9 +1710,6 @@ impl ShardMetrics {
                 .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             live_writers: shards_metrics
                 .live_writers
-                .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
-            unconsolidated_snapshot: shards_metrics
-                .unconsolidated_snapshot
                 .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             backpressure_emitted_bytes: Arc::new(
                 shards_metrics

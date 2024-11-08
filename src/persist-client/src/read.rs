@@ -14,7 +14,7 @@ use std::backtrace::Backtrace;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::future::Future;
-use std::sync::Arc;
+use std::sync::{atomic, Arc};
 use std::time::Duration;
 
 use differential_dataflow::consolidation::consolidate_updates;
@@ -25,6 +25,7 @@ use futures::Stream;
 use futures_util::{stream, StreamExt};
 use itertools::Either;
 use mz_dyncfg::Config;
+use mz_ore::assert::SOFT_ASSERTIONS;
 use mz_ore::instrument;
 use mz_ore::now::EpochMillis;
 use mz_ore::task::{AbortOnDropHandle, JoinHandle, RuntimeExt};
@@ -1022,23 +1023,26 @@ where
         &mut self,
         as_of: Antichain<T>,
     ) -> Result<Vec<((Result<K, String>, Result<V, String>), T, D)>, Since<T>> {
-        let mut cursor = self.snapshot_cursor(as_of, |_| true).await?;
+        let mut cursor = self.snapshot_cursor(as_of.clone(), |_| true).await?;
         let mut contents = Vec::new();
         while let Some(iter) = cursor.next().await {
             contents.extend(iter);
         }
 
-        // We don't currently guarantee that encoding is one-to-one, so we still need to
-        // consolidate the decoded outputs. However, let's report if this isn't a noop.
-        let old_len = contents.len();
-        consolidate_updates(&mut contents);
-        if old_len != contents.len() {
-            // TODO(bkirwi): do we need more / finer-grained metrics for this?
-            self.machine
-                .applier
-                .shard_metrics
-                .unconsolidated_snapshot
-                .inc();
+        // Persist encoding is expected to be deterministic - this is tested for in the old codec
+        // encoding, and required for the new structured encodings - so we expect the snapshot cursor
+        // results to be fully consolidated already.
+        if SOFT_ASSERTIONS.load(atomic::Ordering::Relaxed) {
+            let old_len = contents.len();
+            consolidate_updates(&mut contents);
+            let new_len = contents.len();
+            assert_eq!(
+                old_len,
+                new_len,
+                "unconsolidated snapshot for shard {} at {:?}: {old_len} -> {new_len}",
+                self.shard_id(),
+                as_of.elements()
+            );
         }
 
         Ok(contents)
