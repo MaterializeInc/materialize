@@ -97,7 +97,7 @@ pub trait SourceRender {
         Option<Stream<G, Infallible>>,
         Stream<G, HealthStatusMessage>,
         Stream<G, ProgressStatisticsUpdate>,
-        Stream<G, Probe<Self::Time>>,
+        Option<Stream<G, Probe<Self::Time>>>,
         Vec<PressOnDropButton>,
     );
 }

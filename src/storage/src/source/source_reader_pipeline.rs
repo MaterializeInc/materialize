@@ -332,6 +332,8 @@ where
     let source_id = config.id;
     let worker_id = config.worker_id;
     let source_statistics = config.source_statistics.clone();
+    let now_fn = config.now_fn.clone();
+    let timestamp_interval = config.timestamp_interval;
 
     let resume_uppers = resume_uppers.inspect(move |upper| {
         let upper = upper.pretty();
@@ -340,14 +342,6 @@ where
 
     let (input_data, progress, health, stats, probes, tokens) =
         source_connection.render(scope, config, resume_uppers, start_signal);
-
-    // Broadcasting does more work than necessary, which would be to exchange the probes to the
-    // worker that will be the one minting the bindings but we'd have to thread this information
-    // through and couple the two functions enough that it's not worth the optimization (I think).
-    probes.broadcast().inspect(move |probe| {
-        // We don't care if the receiver is gone
-        let _ = probed_upper_tx.send(Some(probe.clone()));
-    });
 
     crate::source::statistics::process_statistics(
         scope.clone(),
@@ -425,9 +419,24 @@ where
         }
     });
 
+    let progress = progress.unwrap_or(derived_progress);
+
+    let probe_stream = match probes {
+        Some(stream) => stream,
+        None => synthesize_probes(source_id, &progress, timestamp_interval, now_fn),
+    };
+
+    // Broadcasting does more work than necessary, which would be to exchange the probes to the
+    // worker that will be the one minting the bindings but we'd have to thread this information
+    // through and couple the two functions enough that it's not worth the optimization (I think).
+    probe_stream.broadcast().inspect(move |probe| {
+        // We don't care if the receiver is gone
+        let _ = probed_upper_tx.send(Some(probe.clone()));
+    });
+
     (
         data.as_collection(),
-        progress.unwrap_or(derived_progress),
+        progress,
         health.concat(&derived_health),
         tokens,
     )
@@ -1164,4 +1173,70 @@ where
     });
 
     WatchStream::from_changes(rx)
+}
+
+/// Synthesizes a probe stream that produces the frontier of the given progress stream at the given
+/// interval.
+///
+/// This is used as a fallback for sources that don't support probing the frontier of the upstream
+/// system.
+fn synthesize_probes<G>(
+    source_id: GlobalId,
+    progress: &Stream<G, Infallible>,
+    interval: Duration,
+    now_fn: NowFn,
+) -> Stream<G, Probe<G::Timestamp>>
+where
+    G: Scope,
+{
+    let scope = progress.scope();
+
+    let active_worker = usize::cast_from(source_id.hashed()) % scope.peers();
+    let is_active_worker = active_worker == scope.index();
+
+    let mut ticker = tokio::time::interval(interval);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+    let mut op = AsyncOperatorBuilder::new("synthesize_probes".into(), scope);
+    let (output, output_stream) = op.new_output();
+    let mut input = op.new_input_for(progress, Pipeline, &output);
+
+    op.build(|caps| async move {
+        if !is_active_worker {
+            return;
+        }
+
+        let [cap] = caps.try_into().expect("one capability per output");
+
+        let minimum_frontier = Antichain::from_elem(Timestamp::minimum());
+        let mut frontier = minimum_frontier.clone();
+        loop {
+            tokio::select! {
+                event = input.next() => match event {
+                    Some(AsyncEvent::Progress(progress)) => frontier = progress,
+                    Some(AsyncEvent::Data(..)) => unreachable!(),
+                    None => break,
+                },
+                // We only report a probe if the source upper frontier is not the minimum frontier.
+                // This makes it so the first remap binding corresponds to the snapshot of the
+                // source, and because the first binding always maps to the minimum *target*
+                // frontier we guarantee that the source will never appear empty.
+                _ = ticker.tick(), if frontier != minimum_frontier => {
+                    let probe = Probe {
+                        probe_ts: now_fn().into(),
+                        upstream_frontier: frontier.clone(),
+                    };
+                    output.give(&cap, probe);
+                }
+            }
+        }
+
+        let probe = Probe {
+            probe_ts: now_fn().into(),
+            upstream_frontier: Antichain::new(),
+        };
+        output.give(&cap, probe);
+    });
+
+    output_stream
 }
