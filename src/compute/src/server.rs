@@ -635,6 +635,8 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
             let mut old_compaction = BTreeMap::default();
             // Exported identifiers from dataflows we retain.
             let mut retain_ids = BTreeSet::default();
+            // Old and new IDs of log collections.
+            let mut log_ids = BTreeMap::default();
 
             // Traverse new commands, sorting out what remediation we can do.
             for command in new_commands.iter() {
@@ -703,13 +705,32 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                         }
                     }
                     ComputeCommand::CreateInstance(config) => {
-                        // Cluster creation should not be performed again!
-                        if Some(config) != old_instance_config {
+                        let mut new_config = config.clone();
+                        let mut old_config = old_instance_config
+                            .cloned()
+                            .expect("instance has been created");
+
+                        // At the moment we are only able to reconcile new `GlobalId` mappings for log collections.
+                        // We require the old and the new config to be identical otherwise.
+                        let old_logs = std::mem::take(&mut old_config.logging.index_logs);
+                        let mut new_logs = std::mem::take(&mut new_config.logging.index_logs);
+
+                        if new_config != old_config {
                             halt!(
-                                "new instance configuration does not match existing instance configuration:\n{:?}\nvs\n{:?}",
-                                config,
-                                old_instance_config,
+                                "incompatible instance configs \
+                                 (old={old_config:?}, new={new_config:?})"
                             );
+                        }
+                        if old_logs.keys().ne(new_logs.keys()) {
+                            halt!(
+                                "instance configs contain different log variants \
+                                 (old={old_logs:?}, new={new_logs:?})"
+                            );
+                        }
+
+                        for (log, old_id) in old_logs {
+                            let new_id = new_logs.remove(&log).expect("checked above");
+                            log_ids.insert(log, (old_id, new_id));
                         }
                     }
                     // All other commands we apply as requested.
@@ -797,23 +818,24 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
             // If it were broken out by `GlobalId` then we could drop only those of dataflows we drop.
             compute_state.subscribe_response_buffer = Rc::new(RefCell::new(Vec::new()));
 
-            // The controller expects the logging collections to be readable from the minimum time
-            // initially. We cannot recreate the logging arrangements without restarting the
-            // instance, but we can pad the compacted times with empty data. Doing so is sound
-            // because logging collections from different replica incarnations are considered
-            // distinct TVCs, so the controller doesn't expect any historical consistency from
-            // these collections when it reconnects to a replica.
+            // Reconcile log collections. This involves assigning them their new `GlobalId`s, in
+            // case they changed.
+            //
+            // Additionally, the controller expects the logging collections to be readable from the
+            // minimum time initially. We cannot recreate the logging arrangements without
+            // restarting the instance, but we can pad the compacted times with empty data. Doing
+            // so is sound because logging collections from different replica incarnations are
+            // considered distinct TVCs, so the controller doesn't expect any historical
+            // consistency from these collections when it reconnects to a replica.
             //
             // TODO(database-issues#8152): Consider resolving this with controller-side reconciliation instead.
-            if let Some(config) = old_instance_config {
-                for id in config.logging.index_logs.values() {
-                    let trace = compute_state
-                        .traces
-                        .remove(id)
-                        .expect("logging trace exists");
-                    let padded = trace.into_padded();
-                    compute_state.traces.set(*id, padded);
-                }
+            for (old_id, new_id) in log_ids.values() {
+                let collection = compute_state.collections.remove(old_id).expect("exists");
+                compute_state.collections.insert(*new_id, collection);
+
+                let trace = compute_state.traces.remove(old_id).expect("exists");
+                let padded_trace = trace.into_padded();
+                compute_state.traces.set(*new_id, padded_trace);
             }
         } else {
             todo_commands.clone_from(&new_commands);
