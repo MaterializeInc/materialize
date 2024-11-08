@@ -21,6 +21,10 @@ filter = "package(mz-catalog) and test(global_expr_cache_roundtrip)"
 slow-timeout = { period = "300s", terminate-after = 2 }
 
 [[profile.default.overrides]]
+filter = "package(mz-catalog) and test(local_expr_cache_roundtrip)"
+slow-timeout = { period = "300s", terminate-after = 2 }
+
+[[profile.default.overrides]]
 filter = "package(mz-environmentd)"
 threads-required = 8
 slow-timeout = { period = "120s", terminate-after = 2 }
