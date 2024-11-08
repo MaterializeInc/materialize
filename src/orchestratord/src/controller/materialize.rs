@@ -38,6 +38,8 @@ pub struct Args {
     create_balancers: bool,
     #[clap(long)]
     enable_tls: bool,
+    #[clap(long)]
+    helm_chart_version: Option<String>,
 
     #[clap(flatten)]
     aws_info: AwsInfo,
