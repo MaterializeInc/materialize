@@ -42,6 +42,11 @@ Target cluster: quickstart
 
 EOF
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_explain_pushdown = false
+----
+COMPLETE 0
+
 query error db error: ERROR: EXPLAIN FILTER PUSHDOWN is not supported
 EXPLAIN FILTER PUSHDOWN FOR SELECT * FROM numbers where value > 10;
 

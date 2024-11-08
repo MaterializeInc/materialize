@@ -45,6 +45,10 @@ ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS = {
     "persist_catalog_force_compaction_fuel": "0",
     "statement_logging_default_sample_rate": "0",
     "statement_logging_max_sample_rate": "0",
+    # Default of 128 MB increases memory usage by a lot for some small
+    # performance in benchmarks, see for example FastPathLimit scenario: 55%
+    # more memory, 5% faster
+    "persist_blob_cache_mem_limit_bytes": "1048576",
 }
 
 

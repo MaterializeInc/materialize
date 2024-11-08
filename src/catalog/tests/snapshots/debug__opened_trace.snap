@@ -1,6 +1,7 @@
 ---
 source: src/catalog/tests/debug.rs
 expression: test_trace
+snapshot_kind: text
 ---
 Trace {
     audit_log: CollectionTrace {

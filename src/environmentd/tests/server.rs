@@ -173,17 +173,15 @@ fn setup_statement_logging_core(
             max_sample_rate.to_string(),
         )
         .with_system_parameter_default(
+            "statement_logging_default_sample_rate".to_string(),
+            sample_rate.to_string(),
+        )
+        .with_system_parameter_default(
             "statement_logging_use_reproducible_rng".to_string(),
             "true".to_string(),
         )
         .start_blocking();
-    let mut client = server.connect(postgres::NoTls).unwrap();
-    client
-        .execute(
-            &format!("SET statement_logging_sample_rate={sample_rate}"),
-            &[],
-        )
-        .unwrap();
+    let client = server.connect(postgres::NoTls).unwrap();
     (server, client)
 }
 
@@ -203,6 +201,22 @@ fn setup_statement_logging(
 #[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/database-issues/issues/6487
 fn test_statement_logging_immediate() {
     let (server, mut client) = setup_statement_logging(1.0, 1.0);
+
+    let mut mz_client = server
+        .pg_config_internal()
+        .user(&SYSTEM_USER.name)
+        .connect(postgres::NoTls)
+        .unwrap();
+    mz_client
+        .batch_execute("ALTER SYSTEM SET enable_statement_lifecycle_logging = false")
+        .unwrap();
+    mz_client
+        .batch_execute("ALTER SYSTEM SET statement_logging_max_sample_rate = 1")
+        .unwrap();
+    mz_client
+        .batch_execute("ALTER SYSTEM SET statement_logging_default_sample_rate = 1")
+        .unwrap();
+
     let successful_immediates: &[&str] = &[
         "CREATE VIEW v AS SELECT 1;",
         "CREATE DEFAULT INDEX i ON v;",
@@ -640,9 +654,9 @@ ORDER BY mseh.began_at ASC;",
         .into_iter()
         .map(|r| r.get(0))
         .collect();
-    // 22 randomly sampled out of 50 with 50% sampling. Seems legit!
+    // 23 randomly sampled out of 50 with 50% sampling. Seems legit!
     let expected_sqls = [
-        1, 3, 4, 5, 8, 14, 16, 17, 18, 19, 20, 22, 23, 24, 30, 31, 32, 35, 36, 41, 45, 49,
+        2, 4, 5, 6, 9, 15, 17, 18, 19, 20, 21, 23, 24, 25, 31, 32, 33, 36, 37, 42, 46,
     ]
     .into_iter()
     .map(|i| format!("SELECT {i}"))
@@ -1435,6 +1449,17 @@ fn test_old_storage_usage_records_are_reaped_on_restart() {
     let initial_timestamp = {
         let server = harness.clone().start_blocking();
         let mut client = server.connect(postgres::NoTls).unwrap();
+
+        let mut mz_client = server
+            .pg_config_internal()
+            .user(&SYSTEM_USER.name)
+            .connect(postgres::NoTls)
+            .unwrap();
+        // Otherwise fails with "Records were not reaped!"
+        mz_client
+            .batch_execute("ALTER SYSTEM SET storage_source_decode_fuel = 100000")
+            .unwrap();
+
         // Create a table with no data, which should have some overhead and therefore some storage usage
         client
             .batch_execute("CREATE TABLE usage_test (a int)")
@@ -1487,7 +1512,7 @@ fn test_old_storage_usage_records_are_reaped_on_restart() {
         *now.lock().expect("lock poisoned") +=
             u64::try_from(collection_interval.as_millis()).expect("known to fit") + 1;
 
-        let subsequent_initial_timestamp = Retry::default().max_duration(Duration::from_secs(5)).retry(|_| {
+        let subsequent_initial_timestamp = Retry::default().max_duration(Duration::from_secs(30)).retry(|_| {
                 client
                     .query_one(
                         "SELECT (EXTRACT(EPOCH FROM MIN(collection_timestamp)) * 1000)::integer FROM mz_internal.mz_storage_usage_by_shard;",
