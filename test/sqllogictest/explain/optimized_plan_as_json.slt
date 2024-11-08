@@ -2734,7 +2734,7 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                             }
                                           ],
                                           {
-                                            "unique_key": true,
+                                            "unique_key": false,
                                             "key_length": 1,
                                             "arranged": false,
                                             "cardinality": null,
@@ -2756,7 +2756,7 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                             }
                                           ],
                                           {
-                                            "unique_key": true,
+                                            "unique_key": false,
                                             "key_length": 1,
                                             "arranged": false,
                                             "cardinality": null,
@@ -2772,28 +2772,6 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                         ]
                                       ],
                                       [
-                                        [
-                                          2,
-                                          [
-                                            {
-                                              "Column": 0
-                                            }
-                                          ],
-                                          {
-                                            "unique_key": true,
-                                            "key_length": 1,
-                                            "arranged": false,
-                                            "cardinality": null,
-                                            "filters": {
-                                              "literal_equality": false,
-                                              "like": false,
-                                              "is_null": false,
-                                              "literal_inequality": 0,
-                                              "any_filter": false
-                                            },
-                                            "input": 2
-                                          }
-                                        ],
                                         [
                                           0,
                                           [
@@ -2815,9 +2793,53 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                             },
                                             "input": 0
                                           }
+                                        ],
+                                        [
+                                          2,
+                                          [
+                                            {
+                                              "Column": 0
+                                            }
+                                          ],
+                                          {
+                                            "unique_key": false,
+                                            "key_length": 1,
+                                            "arranged": false,
+                                            "cardinality": null,
+                                            "filters": {
+                                              "literal_equality": false,
+                                              "like": false,
+                                              "is_null": false,
+                                              "literal_inequality": 0,
+                                              "any_filter": false
+                                            },
+                                            "input": 2
+                                          }
                                         ]
                                       ],
                                       [
+                                        [
+                                          0,
+                                          [
+                                            {
+                                              "Column": 0
+                                            }
+                                          ],
+                                          {
+                                            "unique_key": false,
+                                            "key_length": 1,
+                                            "arranged": false,
+                                            "cardinality": null,
+                                            "filters": {
+                                              "literal_equality": false,
+                                              "like": false,
+                                              "is_null": false,
+                                              "literal_inequality": 0,
+                                              "any_filter": false
+                                            },
+                                            "input": 0
+                                          }
+                                        ],
                                         [
                                           1,
                                           [
@@ -2826,28 +2848,6 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                             }
                                           ],
                                           {
-                                            "unique_key": true,
-                                            "key_length": 1,
-                                            "arranged": false,
-                                            "cardinality": null,
-                                            "filters": {
-                                              "literal_equality": false,
-                                              "like": false,
-                                              "is_null": false,
-                                              "literal_inequality": 0,
-                                              "any_filter": false
-                                            },
-                                            "input": 1
-                                          }
-                                        ],
-                                        [
-                                          0,
-                                          [
-                                            {
-                                              "Column": 0
-                                            }
-                                          ],
-                                          {
                                             "unique_key": false,
                                             "key_length": 1,
                                             "arranged": false,
@@ -2859,7 +2859,7 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                               "literal_inequality": 0,
                                               "any_filter": false
                                             },
-                                            "input": 0
+                                            "input": 1
                                           }
                                         ]
                                       ]

@@ -238,16 +238,16 @@ Explained Query:
                   - ()
         ArrangeBy keys=[[]]
           Union
-            Get l14
+            Get l18
             Map (null)
               Union
                 Negate
                   Project ()
-                    Get l14
+                    Get l18
                 Constant
                   - ()
     With
-      cte l14 =
+      cte l18 =
         Reduce aggregates=[max(#0)]
           Project (#1)
             Reduce group_by=[#0] aggregates=[count(*)]
@@ -257,69 +257,73 @@ Explained Query:
                     Distinct project=[#0..=#2]
                       Project (#0, #1, #3)
                         Filter (#0) IS NOT NULL AND (#1) IS NOT NULL
-                          Get l13
+                          Get l17
                   ArrangeBy keys=[[#0, #1]]
                     Distinct project=[#0, #1]
                       Project (#0, #1)
                         Get l0
   With Mutually Recursive
-    cte l13 =
+    cte l17 =
       Distinct project=[#0..=#3]
         Union
           Project (#0, #1, #3, #2)
             Map (("r" || integer_to_text(#0)), "r")
               CrossJoin type=differential
-                Get l11
+                Get l15
                 ArrangeBy keys=[[]]
                   Union
-                    Get l4
+                    Get l5
                     Map (null)
                       Union
                         Negate
-                          Project ()
-                            Get l4
+                          Distinct project=[]
+                            Project ()
+                              Get l5
                         Constant
                           - ()
           Project (#0, #1, #3, #2)
             Map (("l" || integer_to_text(#0)), "l")
               CrossJoin type=differential
-                Get l11
-                ArrangeBy keys=[[]]
-                  Union
-                    Get l6
-                    Map (null)
-                      Union
-                        Negate
-                          Project ()
-                            Get l6
-                        Constant
-                          - ()
-          Project (#1, #0, #3, #2)
-            Map (("d" || integer_to_text(#0)), "d")
-              CrossJoin type=differential
-                Get l12
+                Get l15
                 ArrangeBy keys=[[]]
                   Union
                     Get l8
                     Map (null)
                       Union
                         Negate
-                          Project ()
-                            Get l8
+                          Distinct project=[]
+                            Project ()
+                              Get l8
+                        Constant
+                          - ()
+          Project (#1, #0, #3, #2)
+            Map (("d" || integer_to_text(#0)), "d")
+              CrossJoin type=differential
+                Get l16
+                ArrangeBy keys=[[]]
+                  Union
+                    Get l11
+                    Map (null)
+                      Union
+                        Negate
+                          Distinct project=[]
+                            Project ()
+                              Get l11
                         Constant
                           - ()
           Project (#1, #0, #3, #2)
             Map (("u" || integer_to_text(#0)), "u")
               CrossJoin type=differential
-                Get l12
+                Get l16
                 ArrangeBy keys=[[]]
                   Union
-                    Get l10
+                    Get l14
                     Map (null)
                       Union
                         Negate
-                          Project ()
-                            Get l10
+                          Distinct project=[]
+                            Project ()
+                              Get l14
                         Constant
                           - ()
           Project (#12, #13, #11, #3)
@@ -327,7 +331,7 @@ Explained Query:
               Join on=(#0 = #4 AND #1 = #5 AND #2 = #7 AND #6 = #8) type=differential
                 ArrangeBy keys=[[#0, #1]]
                   Filter (#0) IS NOT NULL AND (#1) IS NOT NULL
-                    Get l13
+                    Get l17
                 ArrangeBy keys=[[#0, #1]]
                   Filter (#2) IS NOT NULL
                     Get l0
@@ -355,14 +359,46 @@ Explained Query:
                       - ("l", "|", 1, 0, "d")
                       - ("r", "-", 0, 1, "r")
                       - ("r", ".", 0, 1, "r")
-    cte l12 =
+    cte l16 =
       ArrangeBy keys=[[]]
         Project (#1)
           Get l0
-    cte l11 =
+    cte l15 =
       ArrangeBy keys=[[]]
         Project (#0)
           Get l0
+    cte l14 =
+      Union
+        Get l13
+        Map (error("more than one record produced in subquery"))
+          Project ()
+            Filter (#0 > 1)
+              Reduce aggregates=[count(*)]
+                Project ()
+                  Get l13
+    cte l13 =
+      Union
+        Get l12
+        Map (null)
+          Union
+            Negate
+              Project ()
+                Get l12
+            Constant
+              - ()
+    cte l12 =
+      Reduce aggregates=[max(#0)]
+        Project (#1)
+          Get l0
+    cte l11 =
+      Union
+        Get l10
+        Map (error("more than one record produced in subquery"))
+          Project ()
+            Filter (#0 > 1)
+              Reduce aggregates=[count(*)]
+                Project ()
+                  Get l10
     cte l10 =
       Union
         Get l9
@@ -374,37 +410,41 @@ Explained Query:
             Constant
               - ()
     cte l9 =
-      Reduce aggregates=[max(#0)]
-        Project (#1)
+      Reduce aggregates=[min(#0)]
+        Project (#0)
           Get l0
     cte l8 =
       Union
         Get l7
-        Map (null)
-          Union
-            Negate
-              Project ()
-                Get l7
-            Constant
-              - ()
+        Map (error("more than one record produced in subquery"))
+          Project ()
+            Filter (#0 > 1)
+              Reduce aggregates=[count(*)]
+                Project ()
+                  Get l7
     cte l7 =
-      Reduce aggregates=[min(#0)]
-        Project (#0)
-          Get l0
-    cte l6 =
       Union
-        Get l5
+        Get l6
         Map (null)
           Union
             Negate
               Project ()
-                Get l5
+                Get l6
             Constant
               - ()
-    cte l5 =
+    cte l6 =
       Reduce aggregates=[max(#0)]
         Project (#1)
           Get l0
+    cte l5 =
+      Union
+        Get l4
+        Map (error("more than one record produced in subquery"))
+          Project ()
+            Filter (#0 > 1)
+              Reduce aggregates=[count(*)]
+                Project ()
+                  Get l4
     cte l4 =
       Union
         Get l3
