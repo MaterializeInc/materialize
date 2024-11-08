@@ -9,8 +9,9 @@
 
 //! Defines types for working with collections of [`Row`].
 
+use std::cmp::Ordering;
+use std::collections::BinaryHeap;
 use std::num::NonZeroUsize;
-use std::sync::Arc;
 
 use bytes::Bytes;
 use mz_ore::cast::CastFrom;
@@ -131,22 +132,8 @@ impl RowCollection {
         Some((row, upper))
     }
 
-    /// "Sorts" the [`RowCollection`] by returning a sorted view over the collection.
-    pub fn sorted_view<F>(self, mut f: F) -> SortedRowCollection
-    where
-        F: FnMut(&RowRef, &RowRef) -> std::cmp::Ordering,
-    {
-        let mut view: Vec<_> = (0..self.metadata.len()).collect();
-        view.sort_by(|a, b| {
-            let (a_row, _) = self.get(*a).expect("index invalid?");
-            let (b_row, _) = self.get(*b).expect("index invalid?");
-            f(a_row, b_row)
-        });
-
-        SortedRowCollection {
-            collection: self,
-            sorted_view: view.into(),
-        }
+    pub fn get_row(&self, idx: usize) -> Option<&RowRef> {
+        self.get(idx).map(|(row, _)| row)
     }
 }
 
@@ -225,32 +212,146 @@ impl RustType<ProtoEncodedRowMetadata> for EncodedRowMetadata {
     }
 }
 
-/// Provides a sorted view of a [`RowCollection`].
+/// Used to store a [`RowCollection`] in a [`BinaryHeap`] without creating any references.
+/// Each row in the row collection is successively "inserted" into the heap by simply updating
+/// `row_index`. Once all entries are exhausted, the `HeapRowCollection` is removed from the heap.
+///
+/// Implements a custom [`Ord`] to make the heap a _min-heap_.
 #[derive(Debug, Clone)]
-pub struct SortedRowCollection {
-    /// The inner [`RowCollection`].
-    collection: RowCollection,
-    /// Indexes into the inner collection that represent the sorted order.
-    sorted_view: Arc<[usize]>,
+pub struct HeapRowCollection {
+    /// A sorted [`RowCollection`].
+    row_collection: RowCollection,
+    /// The `row_collection` index that is considered active in the heap.
+    row_index: usize,
+    /// The number of diffs left to process of the current row.
+    diffs_left: usize,
 }
 
-impl SortedRowCollection {
-    pub fn get(&self, idx: usize) -> Option<(&RowRef, &EncodedRowMetadata)> {
-        self.sorted_view
-            .get(idx)
-            .and_then(|inner_idx| self.collection.get(*inner_idx))
+impl HeapRowCollection {
+    /// Helper function to retrieve the currently active [`RowRef`].
+    fn get_row(&self) -> Option<&RowRef> {
+        self.row_collection.get_row(self.row_index)
+    }
+}
+
+impl PartialEq for HeapRowCollection {
+    fn eq(&self, other: &Self) -> bool {
+        self.get_row().eq(&other.get_row())
+    }
+}
+// Cannot derive [`Eq`] as [`RowCollection`] does not implement it.
+impl Eq for HeapRowCollection {}
+
+impl PartialOrd for HeapRowCollection {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for HeapRowCollection {
+    fn cmp(&self, other: &Self) -> Ordering {
+        // The comparison is done the other way to ensure a _min-heap_ when inserting into a
+        // [`BinaryHeap`], which is a _max-heap_ by default.
+        other.get_row().cmp(&self.get_row())
+    }
+}
+
+/// Used to merge a vector of sorted [`RowCollection`]s using a [`BinaryHeap`]. One row from each of
+/// the `k` row collections is inserted into the heap at a time, with the top most row representing
+/// the next output entry.
+///
+/// ## Time Complexity
+/// For `N` total rows across `k` row collections, the expected cost is `N * log(K)`, as each
+/// element is pushed to and popped from the heap once.
+#[derive(Debug, Clone)]
+pub struct SortedRowCollections {
+    /// A heap consisting of 'k' rows. The [`HeapRowCollection`] helper implements an index-based
+    /// representation of a row within a [`RowCollection`] and avoids creating any references.
+    heap: BinaryHeap<HeapRowCollection>,
+    /// The total number of rows and diffs present across all row collections.
+    total_count: usize,
+}
+
+impl SortedRowCollections {
+    /// Sort a vector of [`RowCollection`]s. Each individual row collection must already be sorted.
+    pub fn new(data: Vec<RowCollection>) -> SortedRowCollections {
+        let mut merges = BinaryHeap::new();
+        let mut total = 0;
+        for row_collection in data {
+            total += row_collection.count(0, None);
+            if let Some((_, meta)) = row_collection.get(0) {
+                let diffs_left = meta.diff.get();
+                merges.push(HeapRowCollection {
+                    row_collection,
+                    row_index: 0,
+                    diffs_left,
+                });
+            }
+        }
+
+        Self {
+            heap: merges,
+            total_count: total,
+        }
+    }
+
+    fn row(&self) -> Option<&RowRef> {
+        self.heap.peek()?.get_row()
+    }
+
+    fn advance_by(&mut self, mut count: usize) {
+        while count > 0 {
+            let Some(mut sorted_run_ref) = self.heap.peek_mut() else {
+                return;
+            };
+            if sorted_run_ref.diffs_left > count {
+                // More diffs present than we currently need to read. Simply update the counts.
+                sorted_run_ref.diffs_left -= count;
+                count = 0;
+            } else {
+                count -= sorted_run_ref.diffs_left;
+                // We exhausted the current row and need to pop it and insert the next row from the
+                // same row collection.
+                let next_index = sorted_run_ref.row_index + 1;
+                if let Some((_, meta)) = sorted_run_ref.row_collection.get(next_index) {
+                    // Just update the `row_index` to the next entry, which will automatically update
+                    // its position in the heap after the mutable peek reference is dropped.
+                    sorted_run_ref.diffs_left = meta.diff.get();
+                    sorted_run_ref.row_index = next_index;
+                } else {
+                    // No more rows. Pop the entry from the heap.
+                    drop(sorted_run_ref);
+                    self.heap.pop();
+                }
+            }
+        }
+    }
+}
+
+impl IntoRowIterator for SortedRowCollections {
+    type Iter = SortedRowCollectionsIter;
+
+    fn into_row_iter(self) -> Self::Iter {
+        SortedRowCollectionsIter {
+            collection: self,
+            pending_advance: false,
+            limit: None,
+            offset: 0,
+            projection: None,
+            // Note: Neither of these types allocate until elements are pushed in.
+            projection_buf: (DatumVec::new(), Row::default()),
+        }
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct SortedRowCollectionIter {
+pub struct SortedRowCollectionsIter {
     /// Collection we're iterating over.
-    collection: SortedRowCollection,
+    collection: SortedRowCollections,
 
-    /// Index for the row we're currently referencing.
-    row_idx: usize,
-    /// Number of diffs we've emitted for the current row.
-    diff_idx: usize,
+    /// Whether the collection should be advanced before a peek. Helps avoids a conflict between
+    /// read and write references to the same collection.
+    pending_advance: bool,
 
     /// Maximum number of rows this iterator will yield.
     limit: Option<usize>,
@@ -266,20 +367,10 @@ pub struct SortedRowCollectionIter {
     projection_buf: (DatumVec, Row),
 }
 
-impl SortedRowCollectionIter {
-    /// Returns the inner `SortedRowCollection`.
-    pub fn into_inner(self) -> SortedRowCollection {
-        self.collection
-    }
-
+impl SortedRowCollectionsIter {
     /// Immediately applies an offset to this iterator.
-    pub fn apply_offset(mut self, offset: usize) -> SortedRowCollectionIter {
-        Self::advance_by(
-            &self.collection,
-            &mut self.row_idx,
-            &mut self.diff_idx,
-            offset,
-        );
+    pub fn apply_offset(mut self, offset: usize) -> SortedRowCollectionsIter {
+        self.collection.advance_by(offset);
 
         // Keep track of how many rows we've offset by.
         self.offset = self.offset.saturating_add(offset);
@@ -288,15 +379,15 @@ impl SortedRowCollectionIter {
     }
 
     /// Sets the limit for this iterator.
-    pub fn with_limit(mut self, limit: usize) -> SortedRowCollectionIter {
+    pub fn with_limit(mut self, limit: usize) -> SortedRowCollectionsIter {
         self.limit = Some(limit);
         self
     }
 
     /// Specify the columns that should be yielded.
-    pub fn with_projection(mut self, projection: Vec<usize>) -> SortedRowCollectionIter {
+    pub fn with_projection(mut self, projection: Vec<usize>) -> SortedRowCollectionsIter {
         // Omit the projection if it would be a no-op to avoid a relatively expensive memcpy.
-        if let Some((row, _)) = self.collection.get(0) {
+        if let Some(row) = self.collection.row() {
             let cols = row.into_iter().enumerate().map(|(idx, _datum)| idx);
             if projection.iter().copied().eq(cols) {
                 return self;
@@ -309,39 +400,13 @@ impl SortedRowCollectionIter {
 
     /// Helper method for implementing [`RowIterator`].
     ///
-    /// Advances the internal pointers by the specified amount.
-    fn advance_by(
-        collection: &SortedRowCollection,
-        row_idx: &mut usize,
-        diff_idx: &mut usize,
-        mut count: usize,
-    ) {
-        while count > 0 {
-            let Some((_, row_meta)) = collection.get(*row_idx) else {
-                return;
-            };
-
-            let remaining_diff = row_meta.diff.get() - *diff_idx;
-            if remaining_diff <= count {
-                *diff_idx = 0;
-                *row_idx += 1;
-                count -= remaining_diff;
-            } else {
-                *diff_idx += count;
-                count = 0;
-            }
-        }
-    }
-
-    /// Helper method for implementing [`RowIterator`].
-    ///
     /// Projects columns for the provided `row`.
-    fn project<'a>(
-        projection: Option<&'a Vec<usize>>,
-        row: &'a RowRef,
-        datum_buf: &'a mut DatumVec,
-        row_buf: &'a mut Row,
-    ) -> Option<&'a RowRef> {
+    fn project<'b>(
+        projection: Option<&'b Vec<usize>>,
+        row: &'b RowRef,
+        datum_buf: &'b mut DatumVec,
+        row_buf: &'b mut Row,
+    ) -> Option<&'b RowRef> {
         if let Some(projection) = projection.as_ref() {
             // Copy the required columns into our reusable buffer.
             {
@@ -358,22 +423,29 @@ impl SortedRowCollectionIter {
     }
 }
 
-impl RowIterator for SortedRowCollectionIter {
+impl RowIterator for SortedRowCollectionsIter {
     fn next(&mut self) -> Option<&RowRef> {
         // Bail if we've reached our limit.
         if let Some(0) = self.limit {
             return None;
         }
 
-        let row = self.collection.get(self.row_idx).map(|(r, _)| r)?;
+        // We cannot mutably advance the collection after taking a read reference to a row.
+        // Instead, note down that the collection needs to be advanced and perform it before
+        // the next peek.
+        if self.pending_advance {
+            self.collection.advance_by(1);
+        }
+
+        let row = self.collection.row()?;
+
+        // The collection should be advanced before the next peek.
+        self.pending_advance = true;
 
         // If we're about to yield a row, then subtract from our limit.
         if let Some(limit) = &mut self.limit {
             *limit = limit.saturating_sub(1);
         }
-
-        // Advance to the next row.
-        Self::advance_by(&self.collection, &mut self.row_idx, &mut self.diff_idx, 1);
 
         // Project away and/or re-order any columns.
         let (datum_buf, row_buf) = &mut self.projection_buf;
@@ -388,7 +460,13 @@ impl RowIterator for SortedRowCollectionIter {
             return None;
         }
 
-        let row = self.collection.get(self.row_idx).map(|(r, _)| r)?;
+        // Apply a pending advance, if any.
+        if self.pending_advance {
+            self.collection.advance_by(1);
+            self.pending_advance = false;
+        }
+
+        let row = self.collection.row()?;
 
         // Note: Unlike `next()` we do not subtract from our limit, nor advance
         // the internal pointers.
@@ -401,33 +479,28 @@ impl RowIterator for SortedRowCollectionIter {
     }
 
     fn count(&self) -> usize {
-        self.collection.collection.count(self.offset, self.limit)
-    }
-}
+        let mut total = self.collection.total_count;
 
-impl IntoRowIterator for SortedRowCollection {
-    type Iter = SortedRowCollectionIter;
+        // Consider a possible OFFSET.
+        total = total.saturating_sub(self.offset);
 
-    fn into_row_iter(self) -> Self::Iter {
-        SortedRowCollectionIter {
-            collection: self,
-            row_idx: 0,
-            diff_idx: 0,
-            limit: None,
-            offset: 0,
-            projection: None,
-            // Note: Neither of these types allocate until elements are pushed in.
-            projection_buf: (DatumVec::new(), Row::default()),
+        // Consider a possible LIMIT.
+        if let Some(limit) = self.limit {
+            total = std::cmp::min(limit, total);
         }
+
+        total
     }
 }
 
 #[cfg(test)]
 mod tests {
     use std::borrow::Borrow;
+    use std::cmp::Reverse;
 
     use mz_ore::assert_none;
     use proptest::prelude::*;
+    use proptest::proptest;
     use proptest::test_runner::Config;
 
     use super::*;
@@ -448,6 +521,51 @@ mod tests {
     }
 
     #[mz_ore::test]
+    fn test_row_collection_runs() {
+        let a = Row::pack_slice(&[Datum::Int16(2)]);
+        let b = Row::pack_slice(&[Datum::Int16(3)]);
+        let c = Row::pack_slice(&[Datum::Int16(5)]);
+
+        let d = Row::pack_slice(&[Datum::Int16(1)]);
+        let e = Row::pack_slice(&[Datum::Int16(4)]);
+
+        let collection1 = RowCollection::from([&a, &b, &c]);
+        let collection2 = RowCollection::from([&d, &e]);
+        let runs = vec![collection1, collection2];
+
+        let mut heap = BinaryHeap::new();
+        heap.push(Reverse(&a));
+        heap.push(Reverse(&b));
+        heap.push(Reverse(&c));
+        heap.push(Reverse(&d));
+        heap.push(Reverse(&e));
+
+        let mut iter = SortedRowCollections::new(runs);
+        assert_eq!(iter.row(), Some(d.borrow()));
+        assert_eq!(heap.pop().map(|x| x.0), Some(d.borrow()));
+
+        iter.advance_by(1);
+        assert_eq!(iter.row(), Some(a.borrow()));
+        assert_eq!(heap.pop().map(|x| x.0), Some(a.borrow()));
+
+        iter.advance_by(1);
+        assert_eq!(iter.row(), Some(b.borrow()));
+        assert_eq!(heap.pop().map(|x| x.0), Some(b.borrow()));
+
+        iter.advance_by(1);
+        assert_eq!(iter.row(), Some(e.borrow()));
+        assert_eq!(heap.pop().map(|x| x.0), Some(e.borrow()));
+
+        iter.advance_by(1);
+        assert_eq!(iter.row(), Some(c.borrow()));
+        assert_eq!(heap.pop().map(|x| x.0), Some(c.borrow()));
+
+        iter.advance_by(1);
+        assert_eq!(iter.row(), None);
+        assert_eq!(heap.pop(), None);
+    }
+
+    #[mz_ore::test]
     fn test_merge() {
         let a = Row::pack_slice(&[Datum::False, Datum::String("hello world"), Datum::Int16(42)]);
         let b = Row::pack_slice(&[Datum::MzTimestamp(crate::Timestamp::new(10))]);
@@ -464,17 +582,18 @@ mod tests {
 
     #[mz_ore::test]
     fn test_sort() {
-        let a = Row::pack_slice(&[Datum::False, Datum::String("hello world"), Datum::Int16(42)]);
-        let b = Row::pack_slice(&[Datum::MzTimestamp(crate::Timestamp::new(10))]);
+        let a = Row::pack_slice(&[Datum::False, Datum::String("hello world"), Datum::Int16(24)]);
+        let b = Row::pack_slice(&[Datum::True, Datum::String("hello world"), Datum::Int16(42)]);
 
-        let col = RowCollection::from([&a, &b]);
-        let mut rows = [a, b];
+        let c = Row::pack_slice(&[Datum::False, Datum::String("hello world"), Datum::Int16(42)]);
 
-        let sorted_view = col.sorted_view(|a, b| a.cmp(b));
-        rows.sort_by(|a, b| a.cmp(b));
+        let cols = vec![RowCollection::from([&a, &b]), RowCollection::from([&c])];
+        let rows = [a, c, b];
+
+        let mut iter = SortedRowCollections::new(cols).into_row_iter();
 
         for i in 0..rows.len() {
-            let (row_x, _) = sorted_view.get(i).unwrap();
+            let row_x = iter.next().unwrap();
             let row_y = rows.get(i).unwrap();
 
             assert_eq!(row_x, row_y.borrow());
@@ -485,12 +604,11 @@ mod tests {
     fn test_sorted_iter() {
         let a = Row::pack_slice(&[Datum::String("hello world")]);
         let b = Row::pack_slice(&[Datum::UInt32(42)]);
-        let col = RowCollection::new(&[
-            (a.clone(), NonZeroUsize::new(3).unwrap()),
-            (b.clone(), NonZeroUsize::new(2).unwrap()),
-        ]);
-        let col = col.sorted_view(|a, b| a.cmp(b));
-        let mut iter = col.into_row_iter();
+        let col = vec![
+            RowCollection::new(&[(a.clone(), NonZeroUsize::new(3).unwrap())]),
+            RowCollection::new(&[(b.clone(), NonZeroUsize::new(2).unwrap())]),
+        ];
+        let mut iter = SortedRowCollections::new(col).into_row_iter();
 
         // Peek shouldn't advance the iterator.
         assert_eq!(iter.peek(), Some(b.borrow()));
@@ -511,14 +629,15 @@ mod tests {
     fn test_sorted_iter_offset() {
         let a = Row::pack_slice(&[Datum::String("hello world")]);
         let b = Row::pack_slice(&[Datum::UInt32(42)]);
-        let col = RowCollection::new(&[
-            (a.clone(), NonZeroUsize::new(3).unwrap()),
-            (b.clone(), NonZeroUsize::new(2).unwrap()),
-        ]);
-        let col = col.sorted_view(|a, b| a.cmp(b));
+        let col = vec![
+            RowCollection::new(&[(a.clone(), NonZeroUsize::new(3).unwrap())]),
+            RowCollection::new(&[(b.clone(), NonZeroUsize::new(2).unwrap())]),
+        ];
 
         // Test with a reasonable offset that does not span rows.
-        let mut iter = col.into_row_iter().apply_offset(1);
+        let mut iter = SortedRowCollections::new(col.clone())
+            .into_row_iter()
+            .apply_offset(1);
         assert_eq!(iter.next(), Some(b.borrow()));
         assert_eq!(iter.next(), Some(a.borrow()));
         assert_eq!(iter.next(), Some(a.borrow()));
@@ -526,22 +645,20 @@ mod tests {
         assert_eq!(iter.next(), None);
         assert_eq!(iter.next(), None);
 
-        let col = iter.into_inner();
-
         // Test with an offset that spans the first row.
-        let mut iter = col.into_row_iter().apply_offset(3);
-
+        let mut iter = SortedRowCollections::new(col.clone())
+            .into_row_iter()
+            .apply_offset(3);
         assert_eq!(iter.peek(), Some(a.borrow()));
-
         assert_eq!(iter.next(), Some(a.borrow()));
         assert_eq!(iter.next(), Some(a.borrow()));
         assert_eq!(iter.next(), None);
         assert_eq!(iter.next(), None);
-
-        let col = iter.into_inner();
 
         // Test with an offset that passes the entire collection.
-        let mut iter = col.into_row_iter().apply_offset(100);
+        let mut iter = SortedRowCollections::new(col.clone())
+            .into_row_iter()
+            .apply_offset(100);
         assert_eq!(iter.peek(), None);
         assert_eq!(iter.next(), None);
         assert_eq!(iter.peek(), None);
@@ -552,22 +669,23 @@ mod tests {
     fn test_sorted_iter_limit() {
         let a = Row::pack_slice(&[Datum::String("hello world")]);
         let b = Row::pack_slice(&[Datum::UInt32(42)]);
-        let col = RowCollection::new(&[
-            (a.clone(), NonZeroUsize::new(3).unwrap()),
-            (b.clone(), NonZeroUsize::new(2).unwrap()),
-        ]);
-        let col = col.sorted_view(|a, b| a.cmp(b));
+        let col = vec![
+            RowCollection::new(&[(a.clone(), NonZeroUsize::new(3).unwrap())]),
+            RowCollection::new(&[(b.clone(), NonZeroUsize::new(2).unwrap())]),
+        ];
 
         // Test with a limit that spans only the first row.
-        let mut iter = col.into_row_iter().with_limit(1);
+        let mut iter = SortedRowCollections::new(col.clone())
+            .into_row_iter()
+            .with_limit(1);
         assert_eq!(iter.next(), Some(b.borrow()));
         assert_eq!(iter.next(), None);
         assert_eq!(iter.next(), None);
 
-        let col = iter.into_inner();
-
         // Test with a limit that spans both rows.
-        let mut iter = col.into_row_iter().with_limit(4);
+        let mut iter = SortedRowCollections::new(col.clone())
+            .into_row_iter()
+            .with_limit(4);
         assert_eq!(iter.peek(), Some(b.borrow()));
         assert_eq!(iter.next(), Some(b.borrow()));
         assert_eq!(iter.next(), Some(b.borrow()));
@@ -579,10 +697,10 @@ mod tests {
         assert_eq!(iter.next(), None);
         assert_eq!(iter.next(), None);
 
-        let col = iter.into_inner();
-
         // Test with a limit that is more rows than we have.
-        let mut iter = col.into_row_iter().with_limit(1000);
+        let mut iter = SortedRowCollections::new(col.clone())
+            .into_row_iter()
+            .with_limit(1000);
         assert_eq!(iter.next(), Some(b.borrow()));
         assert_eq!(iter.next(), Some(b.borrow()));
         assert_eq!(iter.next(), Some(a.borrow()));
@@ -590,11 +708,11 @@ mod tests {
         assert_eq!(iter.next(), Some(a.borrow()));
         assert_eq!(iter.next(), None);
         assert_eq!(iter.next(), None);
-
-        let col = iter.into_inner();
 
         // Test with a limit of 0.
-        let mut iter = col.into_row_iter().with_limit(0);
+        let mut iter = SortedRowCollections::new(col.clone())
+            .into_row_iter()
+            .with_limit(0);
         assert_eq!(iter.peek(), None);
         assert_eq!(iter.next(), None);
         assert_eq!(iter.next(), None);
@@ -603,11 +721,13 @@ mod tests {
     #[mz_ore::test]
     fn test_mapped_row_iterator() {
         let a = Row::pack_slice(&[Datum::String("hello world")]);
-        let col = RowCollection::new(&[(a.clone(), NonZeroUsize::new(3).unwrap())]);
-        let col = col.sorted_view(|a, b| a.cmp(b));
+        let col = vec![RowCollection::new(&[(
+            a.clone(),
+            NonZeroUsize::new(3).unwrap(),
+        )])];
 
         // Make sure we can call `.map` on a `dyn RowIterator`.
-        let iter: Box<dyn RowIterator> = Box::new(col.into_row_iter());
+        let iter: Box<dyn RowIterator> = Box::new(SortedRowCollections::new(col).into_row_iter());
 
         let mut mapped = iter.map(|f| f.to_owned());
         assert!(mapped.next().is_some());
@@ -620,11 +740,15 @@ mod tests {
     #[mz_ore::test]
     fn test_projected_row_iterator() {
         let a = Row::pack_slice(&[Datum::String("hello world"), Datum::Int16(42)]);
-        let col = RowCollection::new(&[(a.clone(), NonZeroUsize::new(2).unwrap())]);
-        let col = col.sorted_view(|a, b| a.cmp(b));
+        let col = vec![RowCollection::new(&[(
+            a.clone(),
+            NonZeroUsize::new(2).unwrap(),
+        )])];
 
         // Project away the first column.
-        let mut iter = col.into_row_iter().with_projection(vec![1]);
+        let mut iter = SortedRowCollections::new(col.clone())
+            .into_row_iter()
+            .with_projection(vec![1]);
 
         let projected_a = Row::pack_slice(&[Datum::Int16(42)]);
         assert_eq!(iter.next(), Some(projected_a.as_ref()));
@@ -632,10 +756,10 @@ mod tests {
         assert_eq!(iter.next(), None);
         assert_eq!(iter.next(), None);
 
-        let col = iter.into_inner();
-
         // Project away all columns.
-        let mut iter = col.into_row_iter().with_projection(vec![]);
+        let mut iter = SortedRowCollections::new(col.clone())
+            .into_row_iter()
+            .with_projection(vec![]);
 
         let projected_a = Row::default();
         assert_eq!(iter.next(), Some(projected_a.as_ref()));
@@ -643,20 +767,20 @@ mod tests {
         assert_eq!(iter.next(), None);
         assert_eq!(iter.next(), None);
 
-        let col = iter.into_inner();
-
         // Include all columns.
-        let mut iter = col.into_row_iter().with_projection(vec![0, 1]);
+        let mut iter = SortedRowCollections::new(col.clone())
+            .into_row_iter()
+            .with_projection(vec![0, 1]);
 
         assert_eq!(iter.next(), Some(a.as_ref()));
         assert_eq!(iter.next(), Some(a.as_ref()));
         assert_eq!(iter.next(), None);
         assert_eq!(iter.next(), None);
-
-        let col = iter.into_inner();
 
         // Swap the order of columns.
-        let mut iter = col.into_row_iter().with_projection(vec![1, 0]);
+        let mut iter = SortedRowCollections::new(col.clone())
+            .into_row_iter()
+            .with_projection(vec![1, 0]);
 
         let projected_a = Row::pack_slice(&[Datum::Int16(42), Datum::String("hello world")]);
         assert_eq!(iter.next(), Some(projected_a.as_ref()));
@@ -669,44 +793,44 @@ mod tests {
     fn test_count_respects_limit_and_offset() {
         let a = Row::pack_slice(&[Datum::String("hello world")]);
         let b = Row::pack_slice(&[Datum::UInt32(42)]);
-        let col = RowCollection::new(&[
-            (a.clone(), NonZeroUsize::new(3).unwrap()),
-            (b.clone(), NonZeroUsize::new(2).unwrap()),
-        ]);
-        let col = col.sorted_view(|a, b| a.cmp(b));
+        let col = vec![
+            RowCollection::new(&[(a.clone(), NonZeroUsize::new(3).unwrap())]),
+            RowCollection::new(&[(b.clone(), NonZeroUsize::new(2).unwrap())]),
+        ];
 
         // How many total rows there are.
-        let iter = col.into_row_iter();
+        let iter = SortedRowCollections::new(col.clone()).into_row_iter();
         assert_eq!(iter.count(), 5);
-
-        let col = iter.into_inner();
 
         // With a LIMIT.
-        let iter = col.into_row_iter().with_limit(1);
+        let iter = SortedRowCollections::new(col.clone())
+            .into_row_iter()
+            .with_limit(1);
         assert_eq!(iter.count(), 1);
 
-        let col = iter.into_inner();
-
         // With a LIMIT larger than the total number of rows.
-        let iter = col.into_row_iter().with_limit(100);
+        let iter = SortedRowCollections::new(col.clone())
+            .into_row_iter()
+            .with_limit(100);
         assert_eq!(iter.count(), 5);
 
-        let col = iter.into_inner();
-
         // With an OFFSET.
-        let iter = col.into_row_iter().apply_offset(3);
+        let iter = SortedRowCollections::new(col.clone())
+            .into_row_iter()
+            .apply_offset(3);
         assert_eq!(iter.count(), 2);
 
-        let col = iter.into_inner();
-
         // With an OFFSET greater than the total number of rows.
-        let iter = col.into_row_iter().apply_offset(100);
+        let iter = SortedRowCollections::new(col.clone())
+            .into_row_iter()
+            .apply_offset(100);
         assert_eq!(iter.count(), 0);
 
-        let col = iter.into_inner();
-
         // With a LIMIT and an OFFSET.
-        let iter = col.into_row_iter().with_limit(2).apply_offset(4);
+        let iter = SortedRowCollections::new(col.clone())
+            .into_row_iter()
+            .with_limit(2)
+            .apply_offset(4);
         assert_eq!(iter.count(), 1);
     }
 
@@ -764,13 +888,16 @@ mod tests {
     #[cfg_attr(miri, ignore)] // too slow
     fn proptest_sort() {
         fn row_collection_sort(mut a: Vec<Row>) {
-            let a_col = RowCollection::from(&a);
+            let a_col = a
+                .iter()
+                .map(|r| RowCollection::from([r]))
+                .collect::<Vec<_>>();
 
-            let sorted_view = a_col.sorted_view(|a, b| a.cmp(b));
+            let mut sorted_view = SortedRowCollections::new(a_col).into_row_iter();
             a.sort_by(|a, b| a.cmp(b));
 
             for i in 0..a.len() {
-                let (row_x, _) = sorted_view.get(i).unwrap();
+                let row_x = sorted_view.next().unwrap();
                 let row_y = a.get(i).unwrap();
 
                 assert_eq!(row_x, row_y.borrow());

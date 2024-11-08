@@ -1485,7 +1485,7 @@ impl IndexPeek {
                     }
 
                     // If we hold many more than `max_results` records, we can thin down
-                    // `results` using `self.finishing.ordering`.
+                    // `results` using `self.finishing.order_by`.
                     if let Some(max_results) = max_results {
                         // We use a threshold twice what we intend, to amortize the work
                         // across all of the insertions. We could tighten this, but it
@@ -1533,6 +1533,23 @@ impl IndexPeek {
                 // We are simply stepping through all the keys that the index has.
                 cursor.step_key(&storage);
             }
+        }
+
+        // Sort all results, if not already sorted.
+        // The coordinator collects sorted results from all workers and performs an N-way merge
+        // to produce the final results. This way the bulk of the sorting happens in the
+        // workers, as compared to merging unsorted results and sorting in the coordinator thread.
+        if max_results.is_none() && !peek.finishing.order_by.is_empty() {
+            results.sort_by(|left, right| {
+                let left_datums = l_datum_vec.borrow_with(&left.0);
+                let right_datums = r_datum_vec.borrow_with(&right.0);
+                mz_expr::compare_columns(
+                    &peek.finishing.order_by,
+                    &left_datums,
+                    &right_datums,
+                    || left.0.cmp(&right.0),
+                )
+            });
         }
 
         Ok(results)

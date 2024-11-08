@@ -485,7 +485,7 @@ impl crate::coord::Coordinator {
             let duration_histogram = self.metrics.row_set_finishing_seconds();
 
             let (ret, reason) = match finishing.finish(
-                row_collection,
+                vec![row_collection],
                 max_result_size,
                 max_returned_query_size,
                 &duration_histogram,
@@ -645,7 +645,7 @@ impl crate::coord::Coordinator {
             move |resp| match resp {
                 PeekResponse::Rows(rows) => {
                     match finishing.finish(
-                        rows,
+                        vec![rows],
                         max_result_size,
                         max_returned_query_size,
                         &duration_histogram,

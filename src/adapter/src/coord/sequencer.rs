@@ -838,7 +838,7 @@ impl Coordinator {
             let duration_histogram = session.metrics().row_set_finishing_seconds();
 
             return match finishing.finish(
-                RowCollection::new(&plan.returning),
+                vec![RowCollection::new(&plan.returning)],
                 plan.max_result_size,
                 Some(max_returned_query_size),
                 duration_histogram,

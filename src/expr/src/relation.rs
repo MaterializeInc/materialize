@@ -35,7 +35,7 @@ use mz_repr::explain::{
 };
 use mz_repr::{
     ColumnName, ColumnType, Datum, Diff, GlobalId, IntoRowIterator, RelationType, Row,
-    RowCollection, RowIterator, RowRef, ScalarType, SortedRowCollectionIter,
+    RowCollection, RowIterator, ScalarType, SortedRowCollections, SortedRowCollectionsIter,
 };
 use proptest::prelude::{any, Arbitrary, BoxedStrategy};
 use proptest::strategy::{Strategy, Union};
@@ -3525,11 +3525,11 @@ impl RowSetFinishing {
     /// time it took to run.
     pub fn finish(
         &self,
-        rows: RowCollection,
+        rows: Vec<RowCollection>,
         max_result_size: u64,
         max_returned_query_size: Option<u64>,
         duration_histogram: &Histogram,
-    ) -> Result<SortedRowCollectionIter, String> {
+    ) -> Result<SortedRowCollectionsIter, String> {
         let now = Instant::now();
         let result = self.finish_inner(rows, max_result_size, max_returned_query_size);
         let duration = now.elapsed();
@@ -3541,31 +3541,11 @@ impl RowSetFinishing {
     /// Implementation for [`RowSetFinishing::finish`].
     fn finish_inner(
         &self,
-        rows: RowCollection,
-        max_result_size: u64,
+        rows: Vec<RowCollection>,
+        _max_result_size: u64,
         max_returned_query_size: Option<u64>,
-    ) -> Result<SortedRowCollectionIter, String> {
-        // How much additional memory is required to make a sorted view.
-        let sorted_view_mem = rows.entries().saturating_mul(std::mem::size_of::<usize>());
-        let required_memory = rows.byte_len().saturating_add(sorted_view_mem);
-
-        // Bail if creating the sorted view would require us to use too much memory.
-        if required_memory > usize::cast_from(max_result_size) {
-            let max_bytes = ByteSize::b(max_result_size);
-            return Err(format!("result exceeds max size of {max_bytes}",));
-        }
-
-        let mut left_datum_vec = mz_repr::DatumVec::new();
-        let mut right_datum_vec = mz_repr::DatumVec::new();
-
-        let sort_by = |left: &RowRef, right: &RowRef| {
-            let left_datums = left_datum_vec.borrow_with(left);
-            let right_datums = right_datum_vec.borrow_with(right);
-            compare_columns(&self.order_by, &left_datums, &right_datums, || {
-                left.cmp(right)
-            })
-        };
-        let sorted_view = rows.sorted_view(sort_by);
+    ) -> Result<SortedRowCollectionsIter, String> {
+        let sorted_view = SortedRowCollections::new(rows);
         let mut iter = sorted_view
             .into_row_iter()
             .apply_offset(self.offset)
