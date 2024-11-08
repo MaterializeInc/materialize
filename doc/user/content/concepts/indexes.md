@@ -13,28 +13,34 @@ aliases:
 ## Overview
 
 In Materialize, indexes represent query results stored in memory **within a
-[cluster](/concepts/clusters/)**. You can create indexes on
-[sources](/concepts/sources/), [views](/concepts/views/#views), or [materialized
+[cluster](/concepts/clusters/)**. Indexes in Materialize store **both** the key
+and any associated rows.
+
+You can create indexes on [sources](/concepts/sources/), tables,
+[views](/concepts/views/#views), or [materialized
 views](/concepts/views/#materialized-views).
 
-## Indexes on sources
+## Indexes on sources and tables
 
 {{< note >}}
 In practice, you may find that you rarely need to index a source
-without performing some transformation using a view, etc.
-{{</ note >}}
+or a table without performing some transformation using a view, etc.
+{{</ note>}}
 
-In Materialize, you can create indexes on a [source](/concepts/sources/) to
-maintain in-memory up-to-date source data within the cluster you create the
-index. This can help improve [query
-performance](#indexes-and-query-optimizations) when serving results directly
-from the source or when [using joins](/transform-data/optimization/#join).
-However, in practice, you may find that you rarely need to index a source
-directly.
+In Materialize, you can create indexes on a [source](/concepts/sources/) or a
+[table](/sql/create-table) to maintain in-memory up-to-date source or table data
+in the cluster you create the index. This can help improve [query
+performance](#indexes-and-query-optimizations) when [using
+joins](/transform-data/optimization/#join) or when serving results directly
+from a source or a table. However, in practice, you may find that you rarely
+need to index a source or a table directly.
 
 ```mzsql
 CREATE INDEX idx_on_my_source ON my_source (...);
+CREATE INDEX idx_on_my_table ON my_table (...);
 ```
+
+Indexes in Materialize store **both** the key and any associated rows.
 
 ## Indexes on views
 
@@ -47,9 +53,9 @@ CREATE INDEX idx_on_my_view ON my_view_name(...) ;
 ```
 
 During the index creation on a [view](/concepts/views/#views "query saved under
-a name"), the view is executed and the view results are stored in memory within
-the cluster. **As new data arrives**, the index **incrementally updates** the
-view results in memory.
+a name"), the view is executed. The index stores both the key and the associated
+the view results (i.e., the associated rows) in memory within the cluster. **As
+new data arrives**, the index **incrementally updates** the view results.
 
 Within the cluster, querying an indexed view is:
 
@@ -63,10 +69,18 @@ vs. materialized views, see [Usage patterns](#usage-patterns).
 ## Indexes on materialized views
 
 In Materialize, materialized view results are stored in durable storage and
-**incrementally updated** as new data arrives. Indexing a materialized view
-makes the already up-to-date view results available **in memory** within the
+**incrementally updated** as new data arrives. That is, the materialized view
+contains up-to-date results. You can index a materialized view to make the
+already up-to-date view results available **in memory** within the
 [cluster](/concepts/clusters/) you create the index. That is, indexes on
 materialized views require no additional computation to keep results up-to-date.
+
+```mzsql
+CREATE INDEX idx_on_my_mat_view ON my_mat_view_name(...) ;
+```
+
+The index stores both the key and the associated view results in memory within
+the cluster.
 
 {{< note >}}
 
@@ -82,26 +96,27 @@ than from storage.
 For best practices on using indexes, and understanding when to use indexed views
 vs. materialized views, see [Usage patterns](#usage-patterns).
 
-```mzsql
-CREATE INDEX idx_on_my_mat_view ON my_mat_view_name(...) ;
-```
-
 ## Indexes and clusters
 
-Indexes are local to a cluster. Queries in a different cluster cannot use the
+Indexes are local to a cluster. Queries from a different cluster cannot use the
 indexes in another cluster.
 
-For example, to create an index in the current cluster:
+For example, the following operation creates an index in the current cluster:
 
 ```mzsql
 CREATE INDEX idx_on_my_view ON my_view_name(...) ;
 ```
 
-You can also explicitly specify the cluster:
+Only queries in the current cluster can use the index.
+
+Similarly, the following operation creates an index in the specified cluster
+named `active_cluster`:
 
 ```mzsql
 CREATE INDEX idx_on_my_view IN CLUSTER active_cluster ON my_view (...);
 ```
+
+Only queries in the `active_cluster` cluster can use the index.
 
 ## Usage patterns
 
