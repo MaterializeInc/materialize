@@ -283,8 +283,8 @@ ARG BAZEL_VERSION
 # contain arm64 releases.
 RUN arch_bazel=$(echo "$ARCH_GCC" | sed -e "s/aarch64/arm64/" -e "s/amd64/x86_64/") bazel_version=$(echo "$BAZEL_VERSION") \
     && curl -fsSL -o /usr/local/bin/bazel https://github.com/bazelbuild/bazel/releases/download/$bazel_version/bazel-$bazel_version-linux-$arch_bazel \
-    && if [ "$arch_bazel" = arm64 ]; then echo '5a4cc979353671e438b9469b833924c2361e25a580cc278a75877aedc27c1c53 /usr/local/bin/bazel' | sha256sum --check; fi \
-    && if [ "$arch_bazel" = x86_64 ]; then echo '80ccd1ecb4b88750fbe5d7622d67072fddcba9da7808f13356555e480bf67875 /usr/local/bin/bazel' | sha256sum --check; fi \
+    && if [ "$arch_bazel" = arm64 ]; then echo 'fac4b954e0501c2be8b9653a550b443eb85284e568d08b102977e2bf587b09d7 /usr/local/bin/bazel' | sha256sum --check; fi \
+    && if [ "$arch_bazel" = x86_64 ]; then echo '48ea0ff9d397a48add6369c261c5a4431fe6d5d5348cfb81411782fb80c388d3 /usr/local/bin/bazel' | sha256sum --check; fi \
     && chmod +x /usr/local/bin/bazel
 
 # Hardcode some known SSH hosts, or else SSH will ask whether the host is
