@@ -1265,7 +1265,6 @@ mod tests {
                             diffs_sum: None,
                             format: None,
                             schema_id: None,
-                            deprecated_schema_id: None,
                         }))
                     })
                     .collect();
