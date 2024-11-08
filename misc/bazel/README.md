@@ -148,7 +148,7 @@ resulting [`rust_library`](http://bazelbuild.github.io/rules_rust/defs.html#rust
 # Configuration for the crate as a whole.
 [package.metadata.cargo-gazelle]
 # Will skip generating a BUILD.bazel entirely.
-skip_generating = [True | False]
+skip_generating = (true | false)
 # Concatenate the specified string at the end of the generated BUILD.bazel file.
 #
 # This is largely an escape hatch and should be avoided if possible.
@@ -158,44 +158,44 @@ additive_content = "String"
 # Configuration for the library target of the crate.
 [package.metadata.cargo-gazelle.lib]
 # Skip generating the library target.
-skip = [True | False]
+skip = (true | false)
 # Extra data that will be provided to the Bazel target at compile time.
-compile_data = ["String"]
+compile_data = ["String Array"]
 # Extra data that will be provided to the Bazel target at compile and run time.
-data = ["String"]
+data = ["String Array"]
 # Extra flags for rustc.
-rustc_flags = ["String"]
+rustc_flags = ["String Array"]
 # Environment variables to set for rustc.
 [package.metadata.cargo-gazelle.lib.rustc_env]
 var1 = "my_value"
 
 # By default Bazel enables all features of a crate, if provided we will
 # _override_ that set with this list.
-features_override = ["String"]
+features_override = ["String Array"]
 # Extra dependencies to include for the target.
-extra_deps = ["String"]
+extra_deps = ["String Array"]
 # Extra proc-macro dependencies to include for the target.
-extra_proc_macro_deps = ["String"]
+extra_proc_macro_deps = ["String Array"]
 
 
 # Configuration for the crate's build script.
 [package.metadata.cargo-gazelle.build]
 # Skip generating the library target.
-skip = [True | False]
+skip = (true | false)
 # Extra data that will be provided to the Bazel target at compile time.
-compile_data = ["String"]
+compile_data = ["String Array"]
 # Extra data that will be provided to the Bazel target at compile and run time.
-data = ["String"]
+data = ["String Array"]
 # Extra flags for rustc.
-rustc_flags = ["String"]
+rustc_flags = ["String Array"]
 # Environment variables to set for rustc.
 [package.metadata.cargo-gazelle.build.rustc_env]
 var1 = "my_value"
 
 # Environment variables to set for the build script.
-build_script_env = ["String"]
+build_script_env = ["String Array"]
 # Skip the automatic search for protobuf dependencies.
-skip_proto_search = [True | False]
+skip_proto_search = (true | false)
 
 
 # Configuration for test targets in the crate.
@@ -205,13 +205,13 @@ skip_proto_search = [True | False]
 #
 [package.metadata.cargo-gazelle.test.<name>]
 # Skip generating the library target.
-skip = [True | False]
+skip = (true | false)
 # Extra data that will be provided to the Bazel target at compile time.
-compile_data = ["String"]
+compile_data = ["String Array"]
 # Extra data that will be provided to the Bazel target at compile and run time.
-data = ["String"]
+data = ["String Array"]
 # Extra flags for rustc.
-rustc_flags = ["String"]
+rustc_flags = ["String Array"]
 # Environment variables to set for rustc.
 [package.metadata.cargo-gazelle.test.<name>.rustc_env]
 var1 = "my_value"
@@ -228,13 +228,13 @@ var1 = "my_value"
 # Configuration for binary targets of the crate.
 [package.metadata.cargo-gazelle.binary.<name>]
 # Skip generating the library target.
-skip = [True | False]
+skip = (true | false)
 # Extra data that will be provided to the Bazel target at compile time.
-compile_data = ["String"]
+compile_data = ["String Array"]
 # Extra data that will be provided to the Bazel target at compile and run time.
-data = ["String"]
+data = ["String Array"]
 # Extra flags for rustc.
-rustc_flags = ["String"]
+rustc_flags = ["String Array"]
 # Environment variables to set for rustc.
 [[package.metadata.cargo-gazelle.binary.<name>.rustc_env]]
 var1 = "my_value"
