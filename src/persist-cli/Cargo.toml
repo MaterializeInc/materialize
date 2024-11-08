@@ -22,7 +22,7 @@ arrow = { version = "51.0.0", default-features = false }
 async-trait = "0.1.68"
 axum = "0.7.5"
 bytes = { version = "1.3.0", features = ["serde"] }
-clap = { version = "3.2.24", features = ["derive", "env"] }
+clap = { version = "4.5.20", features = ["derive", "env"] }
 differential-dataflow = "0.13.0"
 futures = "0.3.25"
 humantime = "2.1.0"
