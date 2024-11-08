@@ -210,73 +210,71 @@ SELECT a FROM t EXCEPT SELECT b FROM mv
   "Threshold": {
     "input": {
       "Union": {
-        "base": {
-          "Distinct": {
-            "input": {
-              "Project": {
-                "input": {
-                  "Get": {
-                    "id": {
-                      "Global": {
-                        "User": 1
-                      }
-                    },
-                    "typ": {
-                      "column_types": [
-                        {
-                          "scalar_type": "Int32",
-                          "nullable": true
-                        },
-                        {
-                          "scalar_type": "Int32",
-                          "nullable": true
+        "positive": [
+          {
+            "Distinct": {
+              "input": {
+                "Project": {
+                  "input": {
+                    "Get": {
+                      "id": {
+                        "Global": {
+                          "User": 1
                         }
-                      ],
-                      "keys": []
+                      },
+                      "typ": {
+                        "column_types": [
+                          {
+                            "scalar_type": "Int32",
+                            "nullable": true
+                          },
+                          {
+                            "scalar_type": "Int32",
+                            "nullable": true
+                          }
+                        ],
+                        "keys": []
+                      }
                     }
-                  }
-                },
-                "outputs": [
-                  0
-                ]
+                  },
+                  "outputs": [
+                    0
+                  ]
+                }
               }
             }
           }
-        },
-        "inputs": [
+        ],
+        "negative": [
           {
-            "Negate": {
+            "Distinct": {
               "input": {
-                "Distinct": {
+                "Project": {
                   "input": {
-                    "Project": {
-                      "input": {
-                        "Get": {
-                          "id": {
-                            "Global": {
-                              "User": 5
-                            }
-                          },
-                          "typ": {
-                            "column_types": [
-                              {
-                                "scalar_type": "Int32",
-                                "nullable": false
-                              },
-                              {
-                                "scalar_type": "Int32",
-                                "nullable": true
-                              }
-                            ],
-                            "keys": []
-                          }
+                    "Get": {
+                      "id": {
+                        "Global": {
+                          "User": 5
                         }
                       },
-                      "outputs": [
-                        1
-                      ]
+                      "typ": {
+                        "column_types": [
+                          {
+                            "scalar_type": "Int32",
+                            "nullable": false
+                          },
+                          {
+                            "scalar_type": "Int32",
+                            "nullable": true
+                          }
+                        ],
+                        "keys": []
+                      }
                     }
-                  }
+                  },
+                  "outputs": [
+                    1
+                  ]
                 }
               }
             }

@@ -22,13 +22,12 @@ use itertools::Itertools;
 use std::fmt;
 
 use mz_expr::explain::{fmt_text_constant_rows, HumanizedExplain, HumanizerMode};
-use mz_expr::virtual_syntax::{AlgExcept, Except};
 use mz_expr::{Id, WindowFrame};
 use mz_ore::str::{separated, IndentLike};
 use mz_repr::explain::text::DisplayText;
 use mz_repr::explain::{CompactScalarSeq, Indices, PlanRenderingContext};
 
-use crate::plan::{AggregateExpr, Hir, HirRelationExpr, HirScalarExpr, JoinKind, WindowExprType};
+use crate::plan::{AggregateExpr, HirRelationExpr, HirScalarExpr, JoinKind, WindowExprType};
 
 impl DisplayText<PlanRenderingContext<'_, HirRelationExpr>> for HirRelationExpr {
     fn fmt_text(
@@ -36,39 +35,11 @@ impl DisplayText<PlanRenderingContext<'_, HirRelationExpr>> for HirRelationExpr 
         f: &mut fmt::Formatter<'_>,
         ctx: &mut PlanRenderingContext<'_, HirRelationExpr>,
     ) -> fmt::Result {
-        if ctx.config.raw_syntax {
-            self.fmt_raw_syntax(f, ctx)
-        } else {
-            self.fmt_virtual_syntax(f, ctx)
-        }
+        self.fmt_raw_syntax(f, ctx)
     }
 }
 
 impl HirRelationExpr {
-    fn fmt_virtual_syntax(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, HirRelationExpr>,
-    ) -> fmt::Result {
-        if let Some(Except { all, lhs, rhs }) = Hir::un_except(self) {
-            if all {
-                writeln!(f, "{}ExceptAll", ctx.indent)?;
-            } else {
-                writeln!(f, "{}Except", ctx.indent)?;
-            }
-            ctx.indented(|ctx| {
-                lhs.fmt_text(f, ctx)?;
-                rhs.fmt_text(f, ctx)?;
-                Ok(())
-            })?;
-        } else {
-            // fallback to raw syntax formatting as a last resort
-            self.fmt_raw_syntax(f, ctx)?;
-        }
-
-        Ok(())
-    }
-
     fn fmt_raw_syntax(
         &self,
         f: &mut fmt::Formatter<'_>,
@@ -254,19 +225,18 @@ impl HirRelationExpr {
                 writeln!(f)?;
                 ctx.indented(|ctx| input.fmt_text(f, ctx))?;
             }
-            Negate { input } => {
-                writeln!(f, "{}Negate", ctx.indent)?;
-                ctx.indented(|ctx| input.fmt_text(f, ctx))?;
-            }
             Threshold { input } => {
                 writeln!(f, "{}Threshold", ctx.indent)?;
                 ctx.indented(|ctx| input.fmt_text(f, ctx))?;
             }
-            Union { base, inputs } => {
+            Union { positive, negative } => {
                 writeln!(f, "{}Union", ctx.indent)?;
                 ctx.indented(|ctx| {
-                    base.fmt_text(f, ctx)?;
-                    for input in inputs.iter() {
+                    for input in positive.iter() {
+                        input.fmt_text(f, ctx)?;
+                    }
+                    for input in negative.iter() {
+                        // TODO: print something I guess.
                         input.fmt_text(f, ctx)?;
                     }
                     Ok(())
