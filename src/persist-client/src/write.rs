@@ -503,6 +503,11 @@ where
             }
 
             let heartbeat_timestamp = (self.cfg.now)();
+
+            if !parts.is_empty() {
+                tracing::info!(shard_id = %self.shard_id(), num_parts = %parts.len(), "appending batch");
+            }
+
             let res = self
                 .machine
                 .compare_and_append(

@@ -476,7 +476,7 @@ async fn apply_caa<K, V, T, D>(
         // they were written with.
         data_write.maybe_replace_with_batch_schema(&batches).await;
 
-        debug!(
+        tracing::info!(
             "CaA data {:.9} apply b={:?} t={:?} [{:?},{:?})",
             data_write.shard_id().to_string(),
             batch_raws

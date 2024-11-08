@@ -205,6 +205,7 @@ where
             .await
             .expect("schema shouldn't change");
         if let Some(snapshot) = subscribe.snapshot.take() {
+            tracing::info!("unblocking read for {}", data_id);
             snapshot.unblock_read(data_write).await;
         }
 
