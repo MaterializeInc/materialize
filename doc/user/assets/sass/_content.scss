@@ -897,7 +897,7 @@ p+p {
     }
 
     thead th {
-        background: #fff;
+        background: var(--bg);
         position: sticky;
         top: 0;
 
@@ -915,7 +915,6 @@ p+p {
         margin-top: rem(3) !important;
     }
 }
-
 
 .level-of-support {
     display: inline-block;
