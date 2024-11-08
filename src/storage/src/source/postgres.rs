@@ -245,7 +245,7 @@ impl SourceRender for PostgresSourceConnection {
             Some(uppers),
             health,
             stats_stream,
-            Some(probe_stream),
+            probe_stream,
             vec![snapshot_token, repl_token],
         )
     }

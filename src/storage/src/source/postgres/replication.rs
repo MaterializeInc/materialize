@@ -85,6 +85,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashSet;
 use mz_ore::future::InTask;
 use mz_ore::iter::IteratorExt;
+use mz_postgres_util::tunnel::PostgresFlavor;
 use mz_postgres_util::{simple_query_opt, Client};
 use mz_repr::{Datum, DatumVec, Diff, Row};
 use mz_sql_parser::ast::{display::AstDisplay, Ident};
@@ -150,7 +151,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
     Stream<G, Infallible>,
     Stream<G, ProgressStatisticsUpdate>,
-    Stream<G, Probe<MzOffset>>,
+    Option<Stream<G, Probe<MzOffset>>>,
     Stream<G, ReplicationError>,
     PressOnDropButton,
 ) {
@@ -164,6 +165,12 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 
     let (stats_output, stats_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
     let (probe_output, probe_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
+
+    // Yugabyte doesn't support LSN probing currently.
+    let probe_stream = match connection.connection.flavor {
+        PostgresFlavor::Vanilla => Some(probe_stream),
+        PostgresFlavor::Yugabyte => None,
+    };
 
     let mut rewind_input = builder.new_input_for(
         rewind_stream,
