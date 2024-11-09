@@ -1511,7 +1511,6 @@ mv  on-commit  NULL  NULL  NULL
 mv10  at  NULL  NULL  true
 mv11  at  NULL  NULL  true
 mv12  every  00:00:00.001  true  NULL
-mv13  at  NULL  NULL  true
 mv3  at  NULL  NULL  true
 mv3  at  NULL  NULL  true
 mv4  at  NULL  NULL  true
@@ -1562,7 +1561,6 @@ c_schedule_2  manual  NULL
 c_schedule_3  on-refresh  00:00:00
 c_schedule_4  manual  NULL
 c_schedule_5  manual  NULL
-c_schedule_6  on-refresh  00:00:00
 c_schedule_hydration_time_estimate  on-refresh  00:16:35
 
 statement ok
@@ -1588,18 +1586,15 @@ drop  cluster-replica  "c_schedule_4"  "manual"  true  NULL
 create  cluster-replica  "c_schedule_1"  "manual"  true  NULL
 create  cluster-replica  "c_schedule_2"  "manual"  true  NULL
 create  cluster-replica  "c_schedule_5"  "manual"  true  NULL
-drop  cluster-replica  "c_schedule_1"  "schedule"  false  {"decision":"off","hydration_time_estimate":"00:00:00","objects_needing_refresh":[]}
-drop  cluster-replica  "c_schedule_3"  "schedule"  false  {"decision":"off","hydration_time_estimate":"00:00:00","objects_needing_refresh":[]}
-drop  cluster-replica  "c_schedule_6"  "schedule"  false  {"decision":"off","hydration_time_estimate":"00:00:00","objects_needing_refresh":[]}
-create  cluster-replica  "c_schedule_1"  "schedule"  false  {"decision":"on","hydration_time_estimate":"00:00:00","objects_needing_refresh":[]}
-create  cluster-replica  "c_schedule_3"  "schedule"  false  {"decision":"on","hydration_time_estimate":"00:00:00","objects_needing_refresh":[]}
-create  cluster-replica  "c_schedule_1"  "schedule"  false  {"decision":"on","hydration_time_estimate":"00:00:00","objects_needing_refresh":["uXXX"]}
-create  cluster-replica  "c_schedule_3"  "schedule"  false  {"decision":"on","hydration_time_estimate":"00:00:00","objects_needing_refresh":["uXXX"]}
-create  cluster-replica  "c_schedule_4"  "schedule"  false  {"decision":"on","hydration_time_estimate":"00:00:00","objects_needing_refresh":["uXXX"]}
-create  cluster-replica  "c_schedule_6"  "schedule"  false  {"decision":"on","hydration_time_estimate":"00:00:00","objects_needing_refresh":["uXXX"]}
-create  cluster-replica  "c_schedule_hydration_time_estimate"  "schedule"  false  {"decision":"on","hydration_time_estimate":"00:16:35","objects_needing_refresh":["uXXX"]}
+drop  cluster-replica  "c_schedule_1"  "schedule"  false  {"decision":"off","hydration_time_estimate":"00:00:00","objects_needing_compaction":[],"objects_needing_refresh":[]}
+drop  cluster-replica  "c_schedule_3"  "schedule"  false  {"decision":"off","hydration_time_estimate":"00:00:00","objects_needing_compaction":[],"objects_needing_refresh":[]}
+create  cluster-replica  "c_schedule_1"  "schedule"  false  {"decision":"on","hydration_time_estimate":"00:00:00","objects_needing_compaction":[],"objects_needing_refresh":["uXXX"]}
+create  cluster-replica  "c_schedule_3"  "schedule"  false  {"decision":"on","hydration_time_estimate":"00:00:00","objects_needing_compaction":[],"objects_needing_refresh":["uXXX"]}
+create  cluster-replica  "c_schedule_4"  "schedule"  false  {"decision":"on","hydration_time_estimate":"00:00:00","objects_needing_compaction":[],"objects_needing_refresh":["uXXX"]}
+create  cluster-replica  "c_schedule_hydration_time_estimate"  "schedule"  false  {"decision":"on","hydration_time_estimate":"00:16:35","objects_needing_compaction":[],"objects_needing_refresh":["uXXX"]}
 
 ## Now test `cluster_refresh_mv_compaction_estimate`.
+## (This would make the above audit test flaky, so it should be after that.)
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET cluster_refresh_mv_compaction_estimate = 1200000
 ----
@@ -1647,6 +1642,44 @@ query I
 SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'c_schedule_6';
 ----
 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET cluster_refresh_mv_compaction_estimate = 120000
+----
+COMPLETE 0
+
+# Should turn on at the next scheduling decision.
+statement ok
+SELECT mz_unsafe.mz_sleep(3+1+1);
+
+query I
+SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'c_schedule_6';
+----
+1
+
+# The audit events should now have a row that has a non-empty `objects_needing_compaction`.
+query TTTTBT
+SELECT DISTINCT
+  event_type,
+  object_type,
+  (details->'cluster_name')::text,
+  (details->'reason')::text,
+  (details->'scheduling_policies') IS NULL,
+  regexp_replace((details->'scheduling_policies'->'on_refresh')::text, '\["u.*"\]', '["uXXX"]')
+FROM mz_audit_events
+WHERE
+  event_type IN ('create', 'drop') AND
+  object_type = 'cluster-replica' AND
+  (details->'cluster_name')::text = '"c_schedule_6"';
+----
+drop  cluster-replica  "c_schedule_6"  "schedule"  false  {"decision":"off","hydration_time_estimate":"00:00:00","objects_needing_compaction":[],"objects_needing_refresh":[]}
+create  cluster-replica  "c_schedule_6"  "schedule"  false  {"decision":"on","hydration_time_estimate":"00:00:00","objects_needing_compaction":["uXXX"],"objects_needing_refresh":[]}
+create  cluster-replica  "c_schedule_6"  "schedule"  false  {"decision":"on","hydration_time_estimate":"00:00:00","objects_needing_compaction":[],"objects_needing_refresh":["uXXX"]}
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET cluster_refresh_mv_compaction_estimate = 0
+----
+COMPLETE 0
 
 ## EXPLAIN FILTER PUSHDOWN can be run on materialized views in this file
 

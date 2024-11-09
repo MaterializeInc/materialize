@@ -9,11 +9,11 @@
 
 use crate::coord::{Coordinator, Message};
 use itertools::Itertools;
-use mz_audit_log::SchedulingDecisionsWithReasonsV1;
+use mz_audit_log::SchedulingDecisionsWithReasonsV2;
 use mz_catalog::memory::objects::{CatalogItem, ClusterVariant, ClusterVariantManaged};
 use mz_controller_types::ClusterId;
 use mz_ore::collections::CollectionExt;
-use mz_ore::soft_panic_or_log;
+use mz_ore::{soft_assert_or_log, soft_panic_or_log};
 use mz_repr::adt::interval::Interval;
 use mz_repr::{GlobalId, TimestampManipulation};
 use mz_sql::catalog::CatalogCluster;
@@ -48,26 +48,36 @@ pub struct RefreshDecision {
     /// Whether the ON REFRESH policy wants a certain cluster to be On.
     cluster_on: bool,
     /// Objects that currently need a refresh on the cluster (taking into account the rehydration
-    /// time estimate).
+    /// time estimate), and therefore should keep the cluster On.
     objects_needing_refresh: Vec<GlobalId>,
+    /// Objects for which we estimate that they currently need Persist compaction, and therefore
+    /// should keep the cluster On.
+    objects_needing_compaction: Vec<GlobalId>,
     /// The HYDRATION TIME ESTIMATE setting of the cluster.
     hydration_time_estimate: Duration,
 }
 
 impl SchedulingDecision {
-    pub fn reasons_to_audit_log_reasons<'a, I>(reasons: I) -> SchedulingDecisionsWithReasonsV1
+    pub fn reasons_to_audit_log_reasons<'a, I>(reasons: I) -> SchedulingDecisionsWithReasonsV2
     where
         I: IntoIterator<Item = &'a SchedulingDecision>,
     {
-        SchedulingDecisionsWithReasonsV1 {
+        SchedulingDecisionsWithReasonsV2 {
             on_refresh: reasons
                 .into_iter()
                 .filter_map(|r| match r {
                     SchedulingDecision::Refresh(RefreshDecision {
                         cluster_on,
-                        objects_needing_refresh: mvs_needing_refresh,
+                        objects_needing_refresh,
+                        objects_needing_compaction,
                         hydration_time_estimate,
                     }) => {
+                        soft_assert_or_log!(
+                            !cluster_on
+                                || !objects_needing_refresh.is_empty()
+                                || !objects_needing_compaction.is_empty(),
+                            "`cluster_on = true` should have an explanation"
+                        );
                         let mut hydration_time_estimate_str = String::new();
                         mz_repr::strconv::format_interval(
                             &mut hydration_time_estimate_str,
@@ -75,9 +85,13 @@ impl SchedulingDecision {
                                 "planning ensured that this is convertible back to Interval",
                             ),
                         );
-                        Some(mz_audit_log::RefreshDecisionWithReasonV1 {
+                        Some(mz_audit_log::RefreshDecisionWithReasonV2 {
                             decision: (*cluster_on).into(),
-                            objects_needing_refresh: mvs_needing_refresh
+                            objects_needing_refresh: objects_needing_refresh
+                                .iter()
+                                .map(|id| id.to_string())
+                                .collect(),
+                            objects_needing_compaction: objects_needing_compaction
                                 .iter()
                                 .map(|id| id.to_string())
                                 .collect(),
@@ -229,9 +243,9 @@ impl Coordinator {
                     (
                         cluster_id,
                         SchedulingDecision::Refresh(RefreshDecision {
-                            /////////////// todo: add mvs_needing_compaction
                             cluster_on,
                             objects_needing_refresh: mvs_needing_refresh,
+                            objects_needing_compaction: mvs_needing_compaction,
                             hydration_time_estimate,
                         }),
                     )
