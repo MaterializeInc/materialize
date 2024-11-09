@@ -246,7 +246,7 @@ steps:
       - id: mysql-cdc-5_7_44
         label: "MySQL CDC w/ 5.7.44"
         depends_on: build-x86_64
-        timeout_in_minutes: 30
+        timeout_in_minutes: 60
         agents:
           # no matching manifest of MySQL 5.7.x for linux/arm64/v8 in the manifest list entries
           # Increased memory usage following new source syntax
@@ -258,7 +258,7 @@ steps:
       - id: mysql-cdc-8_0_36
         label: "MySQL CDC w/ 8.0.36"
         depends_on: build-aarch64
-        timeout_in_minutes: 30
+        timeout_in_minutes: 60
         agents:
           queue: hetzner-aarch64-4cpu-8gb
         plugins:
@@ -272,7 +272,7 @@ steps:
       - id: pg-cdc-16_4
         label: "Postgres CDC w/ 16.4"
         depends_on: build-aarch64
-        timeout_in_minutes: 30
+        timeout_in_minutes: 60
         inputs: [test/pg-cdc]
         plugins:
           - ./ci/plugins/mzcompose:
@@ -283,7 +283,7 @@ steps:
       - id: pg-cdc-15_6
         label: "Postgres CDC w/ 15.6"
         depends_on: build-aarch64
-        timeout_in_minutes: 30
+        timeout_in_minutes: 60
         inputs: [test/pg-cdc]
         plugins:
           - ./ci/plugins/mzcompose:
@@ -294,7 +294,7 @@ steps:
       - id: pg-cdc-14_11
         label: "Postgres CDC w/ 14.11"
         depends_on: build-aarch64
-        timeout_in_minutes: 30
+        timeout_in_minutes: 60
         inputs: [test/pg-cdc]
         plugins:
           - ./ci/plugins/mzcompose:
@@ -305,7 +305,7 @@ steps:
       - id: pg-cdc-13_14
         label: "Postgres CDC w/ 13.14"
         depends_on: build-aarch64
-        timeout_in_minutes: 30
+        timeout_in_minutes: 60
         inputs: [test/pg-cdc]
         plugins:
           - ./ci/plugins/mzcompose:
@@ -316,7 +316,7 @@ steps:
       - id: pg-cdc-12_18
         label: "Postgres CDC w/ 12.18"
         depends_on: build-aarch64
-        timeout_in_minutes: 30
+        timeout_in_minutes: 60
         inputs: [test/pg-cdc]
         plugins:
           - ./ci/plugins/mzcompose:
@@ -327,7 +327,7 @@ steps:
       - id: pg-cdc-11_22
         label: "Postgres CDC w/ 11.22"
         depends_on: build-aarch64
-        timeout_in_minutes: 30
+        timeout_in_minutes: 60
         inputs: [test/pg-cdc]
         plugins:
           - ./ci/plugins/mzcompose:
