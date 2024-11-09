@@ -1653,6 +1653,19 @@ pub mod cluster_scheduling {
         "Enables SecurityContext for clusterd instances, restricting capabilities to improve security.",
         false,
     );
+
+    const DEFAULT_CLUSTER_REFRESH_MV_COMPACTION_ESTIMATE: Duration = Duration::from_secs(1200);
+
+    pub static CLUSTER_REFRESH_MV_COMPACTION_ESTIMATE: VarDefinition = VarDefinition::new(
+        "cluster_refresh_mv_compaction_estimate",
+        value!(Duration; DEFAULT_CLUSTER_REFRESH_MV_COMPACTION_ESTIMATE),
+        "How much time to wait for compaction after a REFRESH MV completes a refresh \
+            before turning off the refresh cluster. This is needed because Persist does compaction \
+            only after a write, but refresh MVs do writes only at their refresh times. \
+            (In the long term, we'd like to remove this configuration and instead wait exactly \
+            until compaction has settled. We'd need some new Persist API for this.)",
+        false,
+    );
 }
 
 /// Macro to simplify creating feature flags, i.e. boolean flags that we use to toggle the

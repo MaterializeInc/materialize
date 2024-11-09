@@ -15,7 +15,7 @@ use mz_controller_types::ClusterId;
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_panic_or_log;
 use mz_repr::adt::interval::Interval;
-use mz_repr::GlobalId;
+use mz_repr::{GlobalId, TimestampManipulation};
 use mz_sql::catalog::CatalogCluster;
 use mz_sql::plan::{AlterClusterPlanStrategy, ClusterSchedule};
 use std::time::{Duration, Instant};
@@ -105,8 +105,13 @@ impl Coordinator {
     fn check_refresh_policy(&self) {
         let start_time = Instant::now();
 
-        // Collect the smallest REFRESH MV write frontiers per cluster.
-        let mut refresh_mv_write_frontiers = Vec::new();
+        // Collect information about REFRESH MVs:
+        // - cluster
+        // - hydration_time_estimate of the cluster
+        // - MV's id
+        // - MV's write frontier
+        // - MV's refresh schedule
+        let mut refresh_mv_infos = Vec::new();
         for cluster in self.catalog().clusters() {
             if let ClusterVariant::Managed(ref config) = cluster.config.variant {
                 match config.schedule {
@@ -123,23 +128,21 @@ impl Coordinator {
                                 if let CatalogItem::MaterializedView(mv) =
                                     self.catalog().get_entry(id).item()
                                 {
-                                    if mv.refresh_schedule.is_some() {
+                                    mv.refresh_schedule.clone().map(|refresh_schedule| {
                                         let (_since, write_frontier) = self
                                             .controller
                                             .storage
-                                              .collection_frontiers(*id)
+                                            .collection_frontiers(*id)
                                             .expect("the storage controller should know about MVs that exist in the catalog");
-                                        Some((*id, write_frontier))
-                                    } else {
-                                        None
-                                    }
+                                        (*id, write_frontier, refresh_schedule)
+                                    })
                                 } else {
                                     None
                                 }
                             })
                             .collect_vec();
-                        debug!(%cluster.id, ?refresh_mv_write_frontiers, "check_refresh_policy");
-                        refresh_mv_write_frontiers.push((cluster.id, hydration_time_estimate, mvs));
+                        debug!(%cluster.id, ?refresh_mv_infos, "check_refresh_policy");
+                        refresh_mv_infos.push((cluster.id, hydration_time_estimate, mvs));
                     }
                 }
             }
@@ -152,42 +155,87 @@ impl Coordinator {
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         let check_scheduling_policies_seconds_cloned =
             self.metrics.check_scheduling_policies_seconds.clone();
+        let compaction_estimate = self
+            .catalog()
+            .system_config()
+            .cluster_refresh_mv_compaction_estimate()
+            .try_into()
+            .expect("should be configured to a reasonable value");
         mz_ore::task::spawn(|| "refresh policy get ts and make decisions", async move {
             let task_start_time = Instant::now();
             let local_read_ts = ts_oracle.read_ts().await;
-            debug!(%local_read_ts, ?refresh_mv_write_frontiers, "check_refresh_policy background task");
-            let decisions = refresh_mv_write_frontiers
+            debug!(%local_read_ts, ?refresh_mv_infos, "check_refresh_policy background task");
+            let decisions = refresh_mv_infos
                 .into_iter()
-                .map(
-                    |(cluster_id, hydration_time_estimate, refresh_mv_write_frontiers)| {
-                        // We are just checking that
-                        // write_frontier < local_read_ts + hydration_time_estimate
-                        let hydration_estimate = &hydration_time_estimate
-                            .try_into()
-                            .expect("checked during planning");
-                        let local_read_ts_adjusted =
-                            local_read_ts.step_forward_by(hydration_estimate);
-                        let mvs_needing_refresh = refresh_mv_write_frontiers
-                            .into_iter()
-                            .filter_map(|(id, frontier)| {
-                                if frontier.less_than(&local_read_ts_adjusted) {
-                                    Some(id)
-                                } else {
-                                    None
-                                }
-                            })
-                            .collect_vec();
-                        let cluster_on = !mvs_needing_refresh.is_empty();
-                        (
-                            cluster_id,
-                            SchedulingDecision::Refresh(RefreshDecision {
-                                cluster_on,
-                                objects_needing_refresh: mvs_needing_refresh,
-                                hydration_time_estimate,
-                            }),
-                        )
-                    },
-                )
+                .map(|(cluster_id, hydration_time_estimate, refresh_mv_info)| {
+                    // 1. check that
+                    // write_frontier < local_read_ts + hydration_time_estimate
+                    let hydration_estimate = &hydration_time_estimate
+                        .try_into()
+                        .expect("checked during planning");
+                    let local_read_ts_adjusted = local_read_ts.step_forward_by(hydration_estimate);
+                    let mvs_needing_refresh = refresh_mv_info
+                        .iter()
+                        .cloned()
+                        .filter_map(|(id, frontier, _refresh_schedule)| {
+                            if frontier.less_than(&local_read_ts_adjusted) {
+                                Some(id)
+                            } else {
+                                None
+                            }
+                        })
+                        .collect_vec();
+
+                    // 2. check that
+                    // prev_refresh + compaction_estimate > local_read_ts
+                    let mvs_needing_compaction = refresh_mv_info
+                        .into_iter()
+                        .filter_map(|(id, frontier, refresh_schedule)| {
+                            let frontier = frontier.as_option();
+                            // `prev_refresh` will be None in two cases:
+                            // 1. When there is no previous refresh, because we haven't yet had
+                            // the first refresh. In this case, there is no need to schedule
+                            // time now for compaction.
+                            // 2. In the niche case where a `REFRESH EVERY` MV's write frontier
+                            // is empty. In this case, it's not impossible that there would be a
+                            // need for compaction. But I can't see any easy way to correctly
+                            // handle this case, because we don't have any info handy about when
+                            // the last refresh happened in wall clock time, because the
+                            // frontiers have no relation to wall clock time. So, we'll not
+                            // schedule any compaction time.
+                            // (Note that `REFRESH AT` MVs with empty frontiers, which is a more
+                            // common case, are fine, because `last_refresh` will return
+                            // Some(...) for them.)
+                            let prev_refresh = match frontier {
+                                Some(frontier) => frontier.round_down_minus_1(&refresh_schedule),
+                                None => refresh_schedule.last_refresh(),
+                            };
+                            prev_refresh
+                                .map(|prev_refresh| {
+                                    if prev_refresh.step_forward_by(&compaction_estimate)
+                                        > local_read_ts
+                                    {
+                                        Some(id)
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .flatten()
+                        })
+                        .collect_vec();
+
+                    let cluster_on =
+                        !mvs_needing_refresh.is_empty() || !mvs_needing_compaction.is_empty();
+                    (
+                        cluster_id,
+                        SchedulingDecision::Refresh(RefreshDecision {
+                            /////////////// todo: add mvs_needing_compaction
+                            cluster_on,
+                            objects_needing_refresh: mvs_needing_refresh,
+                            hydration_time_estimate,
+                        }),
+                    )
+                })
                 .collect();
             if let Err(e) = internal_cmd_tx.send(Message::SchedulingDecisions(vec![(
                 REFRESH_POLICY_NAME,
