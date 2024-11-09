@@ -14,6 +14,7 @@ package mz_repr.row.collection;
 message ProtoRowCollection {
   bytes encoded = 1;
   repeated ProtoEncodedRowMetadata metadata = 2;
+  bool is_sorted = 3;
 }
 
 message ProtoEncodedRowMetadata {

@@ -15,6 +15,7 @@ use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::num::NonZeroU64;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use bytesize::ByteSize;
@@ -35,7 +36,8 @@ use mz_repr::explain::{
 };
 use mz_repr::{
     ColumnName, ColumnType, Datum, Diff, GlobalId, IntoRowIterator, RelationType, Row,
-    RowCollections, RowIterator, ScalarType, SortedRowCollections, SortedRowCollectionsIter,
+    RowCollections, RowIterator, RowRef, ScalarType, SortedRowCollections,
+    SortedRowCollectionsIter,
 };
 use proptest::prelude::{any, Arbitrary, BoxedStrategy};
 use proptest::strategy::{Strategy, Union};
@@ -3545,7 +3547,17 @@ impl RowSetFinishing {
         _max_result_size: u64,
         max_returned_query_size: Option<u64>,
     ) -> Result<SortedRowCollectionsIter, String> {
-        let sorted_view = SortedRowCollections::new(rows.inner());
+        let order_by = self.order_by.clone();
+        let left_datum_vec = Mutex::new(mz_repr::DatumVec::new());
+        let right_datum_vec = Mutex::new(mz_repr::DatumVec::new());
+        let sort_by = move |left: &RowRef, right: &RowRef| {
+            let mut left_vec = left_datum_vec.lock().unwrap();
+            let left_datums = left_vec.borrow_with(left);
+            let mut right_vec = right_datum_vec.lock().unwrap();
+            let right_datums = right_vec.borrow_with(right);
+            compare_columns(&order_by, &left_datums, &right_datums, || left.cmp(right))
+        };
+        let sorted_view = SortedRowCollections::new(rows.inner(), Arc::new(sort_by));
         let mut iter = sorted_view
             .into_row_iter()
             .apply_offset(self.offset)

@@ -481,7 +481,7 @@ impl crate::coord::Coordinator {
                     ));
                 }
             }
-            let row_collections = RowCollections::from_rows(&results);
+            let row_collections = RowCollections::from_rows(&results, false);
             let duration_histogram = self.metrics.row_set_finishing_seconds();
 
             let (ret, reason) = match finishing.finish(

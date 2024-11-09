@@ -59,7 +59,7 @@ message ProtoFrontiersResponse {
 
 message ProtoPeekResponse {
   oneof kind {
-    mz_repr.row.collection.ProtoRowCollections row_collections = 4;
+    mz_repr.row.collection.ProtoRowCollections row_collections = 1;
     string error = 2;
     google.protobuf.Empty canceled = 3;
   }

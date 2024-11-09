@@ -44,7 +44,7 @@ use mz_persist_client::read::ReadHandle;
 use mz_persist_client::Diagnostics;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::fixed_length::ToDatumIter;
-use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena, RowCollections, Timestamp};
+use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena, RowCollections, RowDiffs, Timestamp};
 use mz_storage_operators::stats::StatsCursor;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::sources::SourceData;
@@ -1092,10 +1092,12 @@ impl PendingPeek {
                 )
                 .await
             } else {
-                Ok(vec![])
+                Ok(RowDiffs::sorted(vec![]))
             };
             let result = match result {
-                Ok(rows) => PeekResponse::Rows(RowCollections::from_rows(&rows)),
+                Ok(rows) => {
+                    PeekResponse::Rows(RowCollections::from_rows(&rows.rows, rows.is_sorted))
+                }
                 Err(e) => PeekResponse::Error(e.to_string()),
             };
             match result_tx.send((result, start.elapsed())) {
@@ -1157,7 +1159,7 @@ impl PersistPeek {
         mfp_plan: SafeMfpPlan,
         max_result_size: usize,
         mut limit_remaining: usize,
-    ) -> Result<Vec<(Row, NonZeroUsize)>, String> {
+    ) -> Result<RowDiffs, String> {
         let client = persist_clients
             .open(metadata.persist_location)
             .await
@@ -1246,7 +1248,7 @@ impl PersistPeek {
             }
         }
 
-        Ok(result)
+        Ok(RowDiffs::unsorted(result))
     }
 }
 
@@ -1297,17 +1299,14 @@ impl IndexPeek {
         }
 
         let response = match self.collect_finished_data(max_result_size) {
-            Ok(rows) => PeekResponse::Rows(RowCollections::from_rows(&rows)),
+            Ok(rows) => PeekResponse::Rows(RowCollections::from_rows(&rows.rows, rows.is_sorted)),
             Err(text) => PeekResponse::Error(text),
         };
         Some(response)
     }
 
     /// Collects data for a known-complete peek from the ok stream.
-    fn collect_finished_data(
-        &mut self,
-        max_result_size: u64,
-    ) -> Result<Vec<(Row, NonZeroUsize)>, String> {
+    fn collect_finished_data(&mut self, max_result_size: u64) -> Result<RowDiffs, String> {
         // Check if there exist any errors and, if so, return whatever one we
         // find first.
         let (mut cursor, storage) = self.trace_bundle.errs_mut().cursor();
@@ -1339,7 +1338,7 @@ impl IndexPeek {
     fn dispatch_collect_ok_finished_data(
         &mut self,
         max_result_size: u64,
-    ) -> Result<Vec<(Row, NonZeroUsize)>, String> {
+    ) -> Result<RowDiffs, String> {
         let peek = &mut self.peek;
         let oks = self.trace_bundle.oks_mut();
         match oks {
@@ -1354,7 +1353,7 @@ impl IndexPeek {
         peek: &mut Peek<Timestamp>,
         oks_handle: &mut Tr,
         max_result_size: u64,
-    ) -> Result<Vec<(Row, NonZeroUsize)>, String>
+    ) -> Result<RowDiffs, String>
     where
         for<'a> Tr: TraceReader<DiffGat<'a> = &'a Diff>,
         for<'a> Tr::Key<'a>: ToDatumIter + IntoOwned<'a, Owned = Row> + Eq,
@@ -1402,13 +1401,13 @@ impl IndexPeek {
                     // (i.e., to the next OR argument in something like `c=3 OR c=7 OR c=9`)
                     current_literal = literals.next();
                     match current_literal {
-                        None => return Ok(results),
+                        None => return Ok(RowDiffs::unsorted(results)),
                         Some(current_literal) => {
                             // NOTE(vmarcos): We expect the extra allocations below to be manageable
                             // since we only perform as many of them as there are literals.
                             cursor.seek_key(&storage, IntoOwned::borrow_as(current_literal));
                             if !cursor.key_valid(&storage) {
-                                return Ok(results);
+                                return Ok(RowDiffs::unsorted(results));
                             }
                             if cursor.get_key(&storage).unwrap()
                                 == IntoOwned::borrow_as(current_literal)
@@ -1493,7 +1492,7 @@ impl IndexPeek {
                         if results.len() >= 2 * max_results {
                             if peek.finishing.order_by.is_empty() {
                                 results.truncate(max_results);
-                                return Ok(results);
+                                return Ok(RowDiffs::unsorted(results));
                             } else {
                                 // We can sort `results` and then truncate to `max_results`.
                                 // This has an effect similar to a priority queue, without
@@ -1539,7 +1538,7 @@ impl IndexPeek {
         // The coordinator collects sorted results from all workers and performs an N-way merge
         // to produce the final results. This way the bulk of the sorting happens in the
         // workers, as compared to merging unsorted results and sorting in the coordinator thread.
-        if max_results.is_none() && !peek.finishing.order_by.is_empty() {
+        if !peek.finishing.order_by.is_empty() {
             results.sort_by(|left, right| {
                 let left_datums = l_datum_vec.borrow_with(&left.0);
                 let right_datums = r_datum_vec.borrow_with(&right.0);
@@ -1550,9 +1549,10 @@ impl IndexPeek {
                     || left.0.cmp(&right.0),
                 )
             });
+            Ok(RowDiffs::sorted(results))
+        } else {
+            Ok(RowDiffs::unsorted(results))
         }
-
-        Ok(results)
     }
 }
 

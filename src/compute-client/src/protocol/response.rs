@@ -367,7 +367,7 @@ impl Arbitrary for PeekResponse {
                 ),
                 1..11,
             )
-            .prop_map(|rows| PeekResponse::Rows(RowCollections::from_rows(&rows)))
+            .prop_map(|rows| PeekResponse::Rows(RowCollections::from_rows(&rows, false)))
             .boxed(),
             ".*".prop_map(PeekResponse::Error).boxed(),
             Just(PeekResponse::Canceled).boxed(),

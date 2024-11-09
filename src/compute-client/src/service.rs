@@ -319,7 +319,7 @@ where
                 assert_none!(novel, "Duplicate peek response");
                 // We may be ready to respond.
                 if entry.len() == self.parts {
-                    let mut response = PeekResponse::Rows(RowCollections::new());
+                    let mut response = PeekResponse::Rows(RowCollections::default());
                     for (_part, r) in std::mem::take(entry).into_iter() {
                         response = match (response, r) {
                             (_, PeekResponse::Canceled) => PeekResponse::Canceled,
