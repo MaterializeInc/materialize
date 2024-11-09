@@ -161,21 +161,29 @@ impl RowCollection {
         self,
         sort_by: Arc<Mutex<dyn FnMut(&RowRef, &RowRef) -> Ordering + Send + Sync>>,
     ) -> SortedRowCollection {
-        let mut view: Vec<_> = (0..self.metadata.len()).collect();
+        let mut view = None;
 
         if !self.is_sorted {
-            view.sort_by(|a, b| {
+            let mut indices = (0..self.metadata.len()).collect::<Vec<_>>();
+            let mut sort_by = sort_by.lock().expect("Mutex should lock");
+            indices.sort_by(|a, b| {
                 let (left, _) = self.get(*a).expect("index invalid?");
                 let (right, _) = self.get(*b).expect("index invalid?");
 
-                (sort_by.lock().unwrap())(left, right)
+                sort_by(left, right)
             });
+            view = Some(indices.into())
         }
 
         SortedRowCollection {
             collection: self,
-            sorted_view: view.into(),
+            sorted_view: view,
         }
+    }
+
+    pub fn sorted_view_cost(&self) -> usize {
+        let sorted_view_mem = self.entries().saturating_mul(size_of::<usize>());
+        self.byte_len().saturating_add(sorted_view_mem)
     }
 
     pub fn get_row(&self, idx: usize) -> Option<&RowRef> {
@@ -214,17 +222,23 @@ impl RustType<ProtoRowCollection> for RowCollection {
 pub struct SortedRowCollection {
     /// The inner [`RowCollection`].
     collection: RowCollection,
-    /// Indexes into the inner collection that represent the sorted order.
-    sorted_view: Arc<[usize]>,
+    /// Optionally indexes into the inner collection that represent the sorted order. If `None`,
+    /// the collection is already sorted and can be accessed directly.
+    sorted_view: Option<Arc<[usize]>>,
 }
 
 impl SortedRowCollection {
+    /// Retrieves a single row at position `idx`, either directly if the collection is already
+    /// sorted or indirectly through `sorted_view` indices.
     pub fn get(&self, idx: usize) -> Option<(&RowRef, &EncodedRowMetadata)> {
         self.sorted_view
-            .get(idx)
+            .as_ref()
+            .map_or(Some(&idx), |view| view.get(idx))
             .and_then(|inner_idx| self.collection.get(*inner_idx))
     }
 
+    /// Convenience wrapper function around [`SortedRowCollection::get`] to only get a `RowRef`
+    /// without the metadata.
     pub fn get_row(&self, idx: usize) -> Option<&RowRef> {
         self.get(idx).map(|(row, _)| row)
     }
@@ -374,7 +388,7 @@ impl Ord for HeapRowCollection {
         let left = other.get_row().expect("A Row should be active");
         let right = self.get_row().expect("A Row should be active");
 
-        (self.sort_by.lock().unwrap())(left, right)
+        (self.sort_by.lock().expect("Mutex should lock"))(left, right)
     }
 }
 

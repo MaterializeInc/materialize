@@ -3544,9 +3544,21 @@ impl RowSetFinishing {
     fn finish_inner(
         &self,
         rows: RowCollections,
-        _max_result_size: u64,
+        max_result_size: u64,
         max_returned_query_size: Option<u64>,
     ) -> Result<SortedRowCollectionsIter, String> {
+        let rows = rows.inner();
+
+        // How much additional memory is required to make a sorted view.
+        let required_memory = rows
+            .iter()
+            .fold(0, |acc, row| row.sorted_view_cost().saturating_add(acc));
+        // Bail if creating the sorted view would require us to use too much memory.
+        if required_memory > usize::cast_from(max_result_size) {
+            let max_bytes = ByteSize::b(max_result_size);
+            return Err(format!("result exceeds max size of {max_bytes}",));
+        }
+
         let order_by = self.order_by.clone();
         let mut left_datum_vec = mz_repr::DatumVec::new();
         let mut right_datum_vec = mz_repr::DatumVec::new();
@@ -3555,7 +3567,8 @@ impl RowSetFinishing {
             let right_datums = right_datum_vec.borrow_with(right);
             compare_columns(&order_by, &left_datums, &right_datums, || left.cmp(right))
         };
-        let sorted_view = SortedRowCollections::new(rows.inner(), Arc::new(Mutex::new(sort_by)));
+
+        let sorted_view = SortedRowCollections::new(rows, Arc::new(Mutex::new(sort_by)));
         let mut iter = sorted_view
             .into_row_iter()
             .apply_offset(self.offset)
