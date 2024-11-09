@@ -13,7 +13,7 @@ use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 use std::fmt::{Debug, Formatter};
 use std::num::NonZeroUsize;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
 use mz_ore::cast::CastFrom;
@@ -159,7 +159,7 @@ impl RowCollection {
     /// sorted row collections are not sorted again.
     fn sorted_view(
         self,
-        sort_by: Arc<dyn Fn(&RowRef, &RowRef) -> Ordering + Send + Sync>,
+        sort_by: Arc<Mutex<dyn FnMut(&RowRef, &RowRef) -> Ordering + Send + Sync>>,
     ) -> SortedRowCollection {
         let mut view: Vec<_> = (0..self.metadata.len()).collect();
 
@@ -168,7 +168,7 @@ impl RowCollection {
                 let (left, _) = self.get(*a).expect("index invalid?");
                 let (right, _) = self.get(*b).expect("index invalid?");
 
-                sort_by(left, right)
+                (sort_by.lock().unwrap())(left, right)
             });
         }
 
@@ -332,7 +332,7 @@ pub struct HeapRowCollection {
     /// The number of diffs left to process of the current row.
     diffs_left: usize,
     /// Sort order
-    sort_by: Arc<dyn Fn(&RowRef, &RowRef) -> Ordering + Sync + Send>,
+    sort_by: Arc<Mutex<dyn FnMut(&RowRef, &RowRef) -> Ordering + Sync + Send>>,
 }
 
 impl Debug for HeapRowCollection {
@@ -374,7 +374,7 @@ impl Ord for HeapRowCollection {
         let left = other.get_row().expect("A Row should be active");
         let right = self.get_row().expect("A Row should be active");
 
-        (self.sort_by)(left, right)
+        (self.sort_by.lock().unwrap())(left, right)
     }
 }
 
@@ -398,7 +398,7 @@ impl SortedRowCollections {
     /// Sort a vector of [`RowCollection`]s. Each individual row collection must already be sorted.
     pub fn new(
         data: Vec<RowCollection>,
-        sort_by: Arc<dyn Fn(&RowRef, &RowRef) -> Ordering + Sync + Send>,
+        sort_by: Arc<Mutex<dyn FnMut(&RowRef, &RowRef) -> Ordering + Sync + Send>>,
     ) -> SortedRowCollections {
         let mut heap = BinaryHeap::new();
         let mut total_count = 0;
@@ -666,7 +666,10 @@ mod tests {
         heap.push(Reverse(&d));
         heap.push(Reverse(&e));
 
-        let mut iter = SortedRowCollections::new(runs, Arc::new(|l: &RowRef, r: &RowRef| l.cmp(r)));
+        let mut iter = SortedRowCollections::new(
+            runs,
+            Arc::new(Mutex::new(|l: &RowRef, r: &RowRef| l.cmp(r))),
+        );
         assert_eq!(iter.row(), Some(d.borrow()));
         assert_eq!(heap.pop().map(|x| x.0), Some(d.borrow()));
 
@@ -704,8 +707,11 @@ mod tests {
         ];
         let rows = [a, c, b];
 
-        let mut iter = SortedRowCollections::new(cols, Arc::new(|l: &RowRef, r: &RowRef| l.cmp(r)))
-            .into_row_iter();
+        let mut iter = SortedRowCollections::new(
+            cols,
+            Arc::new(Mutex::new(|l: &RowRef, r: &RowRef| l.cmp(r))),
+        )
+        .into_row_iter();
 
         for i in 0..rows.len() {
             let row_x = iter.next().unwrap();
@@ -723,8 +729,9 @@ mod tests {
             RowCollection::new(&[(a.clone(), NonZeroUsize::new(3).unwrap())], true),
             RowCollection::new(&[(b.clone(), NonZeroUsize::new(2).unwrap())], true),
         ];
-        let mut iter = SortedRowCollections::new(col, Arc::new(|l: &RowRef, r: &RowRef| l.cmp(r)))
-            .into_row_iter();
+        let mut iter =
+            SortedRowCollections::new(col, Arc::new(Mutex::new(|l: &RowRef, r: &RowRef| l.cmp(r))))
+                .into_row_iter();
 
         // Peek shouldn't advance the iterator.
         assert_eq!(iter.peek(), Some(b.borrow()));
@@ -751,10 +758,12 @@ mod tests {
         ];
 
         // Test with a reasonable offset that does not span rows.
-        let mut iter =
-            SortedRowCollections::new(col.clone(), Arc::new(|l: &RowRef, r: &RowRef| l.cmp(r)))
-                .into_row_iter()
-                .apply_offset(1);
+        let mut iter = SortedRowCollections::new(
+            col.clone(),
+            Arc::new(Mutex::new(|l: &RowRef, r: &RowRef| l.cmp(r))),
+        )
+        .into_row_iter()
+        .apply_offset(1);
         assert_eq!(iter.next(), Some(b.borrow()));
         assert_eq!(iter.next(), Some(a.borrow()));
         assert_eq!(iter.next(), Some(a.borrow()));
@@ -763,10 +772,12 @@ mod tests {
         assert_eq!(iter.next(), None);
 
         // Test with an offset that spans the first row.
-        let mut iter =
-            SortedRowCollections::new(col.clone(), Arc::new(|l: &RowRef, r: &RowRef| l.cmp(r)))
-                .into_row_iter()
-                .apply_offset(3);
+        let mut iter = SortedRowCollections::new(
+            col.clone(),
+            Arc::new(Mutex::new(|l: &RowRef, r: &RowRef| l.cmp(r))),
+        )
+        .into_row_iter()
+        .apply_offset(3);
         assert_eq!(iter.peek(), Some(a.borrow()));
         assert_eq!(iter.next(), Some(a.borrow()));
         assert_eq!(iter.next(), Some(a.borrow()));
@@ -774,10 +785,12 @@ mod tests {
         assert_eq!(iter.next(), None);
 
         // Test with an offset that passes the entire collection.
-        let mut iter =
-            SortedRowCollections::new(col.clone(), Arc::new(|l: &RowRef, r: &RowRef| l.cmp(r)))
-                .into_row_iter()
-                .apply_offset(100);
+        let mut iter = SortedRowCollections::new(
+            col.clone(),
+            Arc::new(Mutex::new(|l: &RowRef, r: &RowRef| l.cmp(r))),
+        )
+        .into_row_iter()
+        .apply_offset(100);
         assert_eq!(iter.peek(), None);
         assert_eq!(iter.next(), None);
         assert_eq!(iter.peek(), None);
@@ -794,19 +807,23 @@ mod tests {
         ];
 
         // Test with a limit that spans only the first row.
-        let mut iter =
-            SortedRowCollections::new(col.clone(), Arc::new(|l: &RowRef, r: &RowRef| l.cmp(r)))
-                .into_row_iter()
-                .with_limit(1);
+        let mut iter = SortedRowCollections::new(
+            col.clone(),
+            Arc::new(Mutex::new(|l: &RowRef, r: &RowRef| l.cmp(r))),
+        )
+        .into_row_iter()
+        .with_limit(1);
         assert_eq!(iter.next(), Some(b.borrow()));
         assert_eq!(iter.next(), None);
         assert_eq!(iter.next(), None);
 
         // Test with a limit that spans both rows.
-        let mut iter =
-            SortedRowCollections::new(col.clone(), Arc::new(|l: &RowRef, r: &RowRef| l.cmp(r)))
-                .into_row_iter()
-                .with_limit(4);
+        let mut iter = SortedRowCollections::new(
+            col.clone(),
+            Arc::new(Mutex::new(|l: &RowRef, r: &RowRef| l.cmp(r))),
+        )
+        .into_row_iter()
+        .with_limit(4);
         assert_eq!(iter.peek(), Some(b.borrow()));
         assert_eq!(iter.next(), Some(b.borrow()));
         assert_eq!(iter.next(), Some(b.borrow()));
@@ -819,10 +836,12 @@ mod tests {
         assert_eq!(iter.next(), None);
 
         // Test with a limit that is more rows than we have.
-        let mut iter =
-            SortedRowCollections::new(col.clone(), Arc::new(|l: &RowRef, r: &RowRef| l.cmp(r)))
-                .into_row_iter()
-                .with_limit(1000);
+        let mut iter = SortedRowCollections::new(
+            col.clone(),
+            Arc::new(Mutex::new(|l: &RowRef, r: &RowRef| l.cmp(r))),
+        )
+        .into_row_iter()
+        .with_limit(1000);
         assert_eq!(iter.next(), Some(b.borrow()));
         assert_eq!(iter.next(), Some(b.borrow()));
         assert_eq!(iter.next(), Some(a.borrow()));
@@ -832,10 +851,12 @@ mod tests {
         assert_eq!(iter.next(), None);
 
         // Test with a limit of 0.
-        let mut iter =
-            SortedRowCollections::new(col.clone(), Arc::new(|l: &RowRef, r: &RowRef| l.cmp(r)))
-                .into_row_iter()
-                .with_limit(0);
+        let mut iter = SortedRowCollections::new(
+            col.clone(),
+            Arc::new(Mutex::new(|l: &RowRef, r: &RowRef| l.cmp(r))),
+        )
+        .into_row_iter()
+        .with_limit(0);
         assert_eq!(iter.peek(), None);
         assert_eq!(iter.next(), None);
         assert_eq!(iter.next(), None);
@@ -851,7 +872,7 @@ mod tests {
 
         // Make sure we can call `.map` on a `dyn RowIterator`.
         let iter: Box<dyn RowIterator> = Box::new(
-            SortedRowCollections::new(col, Arc::new(|l: &RowRef, r: &RowRef| l.cmp(r)))
+            SortedRowCollections::new(col, Arc::new(Mutex::new(|l: &RowRef, r: &RowRef| l.cmp(r))))
                 .into_row_iter(),
         );
 
@@ -872,10 +893,12 @@ mod tests {
         )];
 
         // Project away the first column.
-        let mut iter =
-            SortedRowCollections::new(col.clone(), Arc::new(|l: &RowRef, r: &RowRef| l.cmp(r)))
-                .into_row_iter()
-                .with_projection(vec![1]);
+        let mut iter = SortedRowCollections::new(
+            col.clone(),
+            Arc::new(Mutex::new(|l: &RowRef, r: &RowRef| l.cmp(r))),
+        )
+        .into_row_iter()
+        .with_projection(vec![1]);
 
         let projected_a = Row::pack_slice(&[Datum::Int16(42)]);
         assert_eq!(iter.next(), Some(projected_a.as_ref()));
@@ -884,10 +907,12 @@ mod tests {
         assert_eq!(iter.next(), None);
 
         // Project away all columns.
-        let mut iter =
-            SortedRowCollections::new(col.clone(), Arc::new(|l: &RowRef, r: &RowRef| l.cmp(r)))
-                .into_row_iter()
-                .with_projection(vec![]);
+        let mut iter = SortedRowCollections::new(
+            col.clone(),
+            Arc::new(Mutex::new(|l: &RowRef, r: &RowRef| l.cmp(r))),
+        )
+        .into_row_iter()
+        .with_projection(vec![]);
 
         let projected_a = Row::default();
         assert_eq!(iter.next(), Some(projected_a.as_ref()));
@@ -896,10 +921,12 @@ mod tests {
         assert_eq!(iter.next(), None);
 
         // Include all columns.
-        let mut iter =
-            SortedRowCollections::new(col.clone(), Arc::new(|l: &RowRef, r: &RowRef| l.cmp(r)))
-                .into_row_iter()
-                .with_projection(vec![0, 1]);
+        let mut iter = SortedRowCollections::new(
+            col.clone(),
+            Arc::new(Mutex::new(|l: &RowRef, r: &RowRef| l.cmp(r))),
+        )
+        .into_row_iter()
+        .with_projection(vec![0, 1]);
 
         assert_eq!(iter.next(), Some(a.as_ref()));
         assert_eq!(iter.next(), Some(a.as_ref()));
@@ -907,10 +934,12 @@ mod tests {
         assert_eq!(iter.next(), None);
 
         // Swap the order of columns.
-        let mut iter =
-            SortedRowCollections::new(col.clone(), Arc::new(|l: &RowRef, r: &RowRef| l.cmp(r)))
-                .into_row_iter()
-                .with_projection(vec![1, 0]);
+        let mut iter = SortedRowCollections::new(
+            col.clone(),
+            Arc::new(Mutex::new(|l: &RowRef, r: &RowRef| l.cmp(r))),
+        )
+        .into_row_iter()
+        .with_projection(vec![1, 0]);
 
         let projected_a = Row::pack_slice(&[Datum::Int16(42), Datum::String("hello world")]);
         assert_eq!(iter.next(), Some(projected_a.as_ref()));
@@ -929,45 +958,57 @@ mod tests {
         ];
 
         // How many total rows there are.
-        let iter =
-            SortedRowCollections::new(col.clone(), Arc::new(|l: &RowRef, r: &RowRef| l.cmp(r)))
-                .into_row_iter();
+        let iter = SortedRowCollections::new(
+            col.clone(),
+            Arc::new(Mutex::new(|l: &RowRef, r: &RowRef| l.cmp(r))),
+        )
+        .into_row_iter();
         assert_eq!(iter.count(), 5);
 
         // With a LIMIT.
-        let iter =
-            SortedRowCollections::new(col.clone(), Arc::new(|l: &RowRef, r: &RowRef| l.cmp(r)))
-                .into_row_iter()
-                .with_limit(1);
+        let iter = SortedRowCollections::new(
+            col.clone(),
+            Arc::new(Mutex::new(|l: &RowRef, r: &RowRef| l.cmp(r))),
+        )
+        .into_row_iter()
+        .with_limit(1);
         assert_eq!(iter.count(), 1);
 
         // With a LIMIT larger than the total number of rows.
-        let iter =
-            SortedRowCollections::new(col.clone(), Arc::new(|l: &RowRef, r: &RowRef| l.cmp(r)))
-                .into_row_iter()
-                .with_limit(100);
+        let iter = SortedRowCollections::new(
+            col.clone(),
+            Arc::new(Mutex::new(|l: &RowRef, r: &RowRef| l.cmp(r))),
+        )
+        .into_row_iter()
+        .with_limit(100);
         assert_eq!(iter.count(), 5);
 
         // With an OFFSET.
-        let iter =
-            SortedRowCollections::new(col.clone(), Arc::new(|l: &RowRef, r: &RowRef| l.cmp(r)))
-                .into_row_iter()
-                .apply_offset(3);
+        let iter = SortedRowCollections::new(
+            col.clone(),
+            Arc::new(Mutex::new(|l: &RowRef, r: &RowRef| l.cmp(r))),
+        )
+        .into_row_iter()
+        .apply_offset(3);
         assert_eq!(iter.count(), 2);
 
         // With an OFFSET greater than the total number of rows.
-        let iter =
-            SortedRowCollections::new(col.clone(), Arc::new(|l: &RowRef, r: &RowRef| l.cmp(r)))
-                .into_row_iter()
-                .apply_offset(100);
+        let iter = SortedRowCollections::new(
+            col.clone(),
+            Arc::new(Mutex::new(|l: &RowRef, r: &RowRef| l.cmp(r))),
+        )
+        .into_row_iter()
+        .apply_offset(100);
         assert_eq!(iter.count(), 0);
 
         // With a LIMIT and an OFFSET.
-        let iter =
-            SortedRowCollections::new(col.clone(), Arc::new(|l: &RowRef, r: &RowRef| l.cmp(r)))
-                .into_row_iter()
-                .with_limit(2)
-                .apply_offset(4);
+        let iter = SortedRowCollections::new(
+            col.clone(),
+            Arc::new(Mutex::new(|l: &RowRef, r: &RowRef| l.cmp(r))),
+        )
+        .into_row_iter()
+        .with_limit(2)
+        .apply_offset(4);
         assert_eq!(iter.count(), 1);
     }
 
@@ -1004,9 +1045,11 @@ mod tests {
                 .map(|r| RowCollection::from([r].into_iter(), true))
                 .collect::<Vec<_>>();
 
-            let mut sorted_view =
-                SortedRowCollections::new(a_col, Arc::new(|l: &RowRef, r: &RowRef| l.cmp(r)))
-                    .into_row_iter();
+            let mut sorted_view = SortedRowCollections::new(
+                a_col,
+                Arc::new(Mutex::new(|l: &RowRef, r: &RowRef| l.cmp(r))),
+            )
+            .into_row_iter();
             a.sort_by(|a, b| a.cmp(b));
 
             for i in 0..a.len() {
