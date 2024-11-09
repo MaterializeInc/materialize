@@ -1654,7 +1654,7 @@ pub mod cluster_scheduling {
         false,
     );
 
-    const DEFAULT_CLUSTER_REFRESH_MV_COMPACTION_ESTIMATE: Duration = Duration::from_secs(1200);
+    const DEFAULT_CLUSTER_REFRESH_MV_COMPACTION_ESTIMATE: Duration = Duration::from_secs(60);
 
     pub static CLUSTER_REFRESH_MV_COMPACTION_ESTIMATE: VarDefinition = VarDefinition::new(
         "cluster_refresh_mv_compaction_estimate",
