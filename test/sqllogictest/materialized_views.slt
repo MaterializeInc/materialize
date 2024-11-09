@@ -1281,6 +1281,12 @@ ALTER SYSTEM SET enable_cluster_schedule_refresh = true
 ----
 COMPLETE 0
 
+# Let's not complicate things with `cluster_refresh_mv_compaction_estimate` at first.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET cluster_refresh_mv_compaction_estimate = 0
+----
+COMPLETE 0
+
 statement error db error: ERROR: Expected one of MANUAL or ON, found identifier "aaaaaaaa"
 CREATE CLUSTER c_schedule_0 (SIZE = '1', SCHEDULE = AAAAAAAA);
 
@@ -1505,6 +1511,7 @@ mv  on-commit  NULL  NULL  NULL
 mv10  at  NULL  NULL  true
 mv11  at  NULL  NULL  true
 mv12  every  00:00:00.001  true  NULL
+mv13  at  NULL  NULL  true
 mv3  at  NULL  NULL  true
 mv3  at  NULL  NULL  true
 mv4  at  NULL  NULL  true
@@ -1555,6 +1562,7 @@ c_schedule_2  manual  NULL
 c_schedule_3  on-refresh  00:00:00
 c_schedule_4  manual  NULL
 c_schedule_5  manual  NULL
+c_schedule_6  on-refresh  00:00:00
 c_schedule_hydration_time_estimate  on-refresh  00:16:35
 
 statement ok
@@ -1582,12 +1590,65 @@ create  cluster-replica  "c_schedule_2"  "manual"  true  NULL
 create  cluster-replica  "c_schedule_5"  "manual"  true  NULL
 drop  cluster-replica  "c_schedule_1"  "schedule"  false  {"decision":"off","hydration_time_estimate":"00:00:00","objects_needing_refresh":[]}
 drop  cluster-replica  "c_schedule_3"  "schedule"  false  {"decision":"off","hydration_time_estimate":"00:00:00","objects_needing_refresh":[]}
+drop  cluster-replica  "c_schedule_6"  "schedule"  false  {"decision":"off","hydration_time_estimate":"00:00:00","objects_needing_refresh":[]}
+create  cluster-replica  "c_schedule_1"  "schedule"  false  {"decision":"on","hydration_time_estimate":"00:00:00","objects_needing_refresh":[]}
+create  cluster-replica  "c_schedule_3"  "schedule"  false  {"decision":"on","hydration_time_estimate":"00:00:00","objects_needing_refresh":[]}
 create  cluster-replica  "c_schedule_1"  "schedule"  false  {"decision":"on","hydration_time_estimate":"00:00:00","objects_needing_refresh":["uXXX"]}
 create  cluster-replica  "c_schedule_3"  "schedule"  false  {"decision":"on","hydration_time_estimate":"00:00:00","objects_needing_refresh":["uXXX"]}
 create  cluster-replica  "c_schedule_4"  "schedule"  false  {"decision":"on","hydration_time_estimate":"00:00:00","objects_needing_refresh":["uXXX"]}
+create  cluster-replica  "c_schedule_6"  "schedule"  false  {"decision":"on","hydration_time_estimate":"00:00:00","objects_needing_refresh":["uXXX"]}
 create  cluster-replica  "c_schedule_hydration_time_estimate"  "schedule"  false  {"decision":"on","hydration_time_estimate":"00:16:35","objects_needing_refresh":["uXXX"]}
 
-# Materialized views in this file can be explained
+## Now test `cluster_refresh_mv_compaction_estimate`.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET cluster_refresh_mv_compaction_estimate = 1200000
+----
+COMPLETE 0
+
+statement ok
+CREATE CLUSTER c_schedule_6 (SIZE = '1', SCHEDULE = ON REFRESH);
+
+query I
+SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'c_schedule_6';
+----
+0
+
+statement ok
+CREATE MATERIALIZED VIEW mv13
+IN CLUSTER c_schedule_6
+WITH (REFRESH AT CREATION)
+AS SELECT sum(x*y) - count(*) AS r FROM t2;
+
+# Wait until the first refresh is complete.
+query I
+SELECT r+r FROM mv13;
+----
+31916
+
+# We'd turn it off at the next scheduling decision if it were not for `cluster_refresh_mv_compaction_estimate`
+statement ok
+SELECT mz_unsafe.mz_sleep(3+1+1);
+
+query I
+SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'c_schedule_6';
+----
+1
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET cluster_refresh_mv_compaction_estimate = 0
+----
+COMPLETE 0
+
+# Should turn off at the next scheduling decision.
+statement ok
+SELECT mz_unsafe.mz_sleep(3+1+1);
+
+query I
+SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'c_schedule_6';
+----
+0
+
+## EXPLAIN FILTER PUSHDOWN can be run on materialized views in this file
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_explain_pushdown = true
