@@ -1394,20 +1394,31 @@ impl IndexPeek {
         let mut literals = peek.literal_constraints.iter().flatten();
         let mut current_literal = None;
 
-        while cursor.key_valid(&storage) {
+        let mut sort_by = |left: &(Row, NonZeroUsize), right: &(Row, NonZeroUsize)| {
+            let left_datums = l_datum_vec.borrow_with(&left.0);
+            let right_datums = r_datum_vec.borrow_with(&right.0);
+            mz_expr::compare_columns(
+                &peek.finishing.order_by,
+                &left_datums,
+                &right_datums,
+                || left.0.cmp(&right.0),
+            )
+        };
+
+        'outer: while cursor.key_valid(&storage) {
             if has_literal_constraints {
                 loop {
                     // Go to the next literal constraint.
                     // (i.e., to the next OR argument in something like `c=3 OR c=7 OR c=9`)
                     current_literal = literals.next();
                     match current_literal {
-                        None => return Ok(RowDiffs::unsorted(results)),
+                        None => break 'outer,
                         Some(current_literal) => {
                             // NOTE(vmarcos): We expect the extra allocations below to be manageable
                             // since we only perform as many of them as there are literals.
                             cursor.seek_key(&storage, IntoOwned::borrow_as(current_literal));
                             if !cursor.key_valid(&storage) {
-                                return Ok(RowDiffs::unsorted(results));
+                                break 'outer;
                             }
                             if cursor.get_key(&storage).unwrap()
                                 == IntoOwned::borrow_as(current_literal)
@@ -1492,7 +1503,7 @@ impl IndexPeek {
                         if results.len() >= 2 * max_results {
                             if peek.finishing.order_by.is_empty() {
                                 results.truncate(max_results);
-                                return Ok(RowDiffs::unsorted(results));
+                                break 'outer;
                             } else {
                                 // We can sort `results` and then truncate to `max_results`.
                                 // This has an effect similar to a priority queue, without
@@ -1502,16 +1513,7 @@ impl IndexPeek {
                                 // it will require a re-pivot of the code to branch on this
                                 // inner test (as we prefer not to maintain `Vec<Datum>`
                                 // in the other case).
-                                results.sort_by(|left, right| {
-                                    let left_datums = l_datum_vec.borrow_with(&left.0);
-                                    let right_datums = r_datum_vec.borrow_with(&right.0);
-                                    mz_expr::compare_columns(
-                                        &peek.finishing.order_by,
-                                        &left_datums,
-                                        &right_datums,
-                                        || left.0.cmp(&right.0),
-                                    )
-                                });
+                                results.sort_by(&mut sort_by);
                                 let dropped = results.drain(max_results..);
                                 let dropped_size =
                                     dropped.into_iter().fold(0, |acc: usize, (row, _count)| {
@@ -1534,25 +1536,11 @@ impl IndexPeek {
             }
         }
 
-        // Sort all results, if not already sorted.
-        // The coordinator collects sorted results from all workers and performs an N-way merge
-        // to produce the final results. This way the bulk of the sorting happens in the
-        // workers, as compared to merging unsorted results and sorting in the coordinator thread.
-        if !peek.finishing.order_by.is_empty() {
-            results.sort_by(|left, right| {
-                let left_datums = l_datum_vec.borrow_with(&left.0);
-                let right_datums = r_datum_vec.borrow_with(&right.0);
-                mz_expr::compare_columns(
-                    &peek.finishing.order_by,
-                    &left_datums,
-                    &right_datums,
-                    || left.0.cmp(&right.0),
-                )
-            });
-            Ok(RowDiffs::sorted(results))
-        } else {
-            Ok(RowDiffs::unsorted(results))
-        }
+        // Sort results. The coordinator collects sorted results from all workers and performs
+        // an N-way merge to produce the final results. This way most of the sorting happens in
+        // the workers, as compared to merging unsorted results and sorting in the coordinator thread.
+        results.sort_by(sort_by);
+        Ok(RowDiffs::sorted(results))
     }
 }
 
