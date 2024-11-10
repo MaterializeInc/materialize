@@ -18,7 +18,9 @@ SELECT * FROM bar;
 ----
 Explained Query:
   Return
-    Get l0
+    Project (#1)
+      Map (1)
+        Get l0
   With Mutually Recursive
     cte l0 =
       Project (#1)

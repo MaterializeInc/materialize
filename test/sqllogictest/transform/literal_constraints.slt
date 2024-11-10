@@ -793,15 +793,16 @@ WHERE
     t1.b = 'l2'
 ----
 Explained Query:
-  Project (#0, #1, #5) // { arity: 3 }
-    Filter (#0) IS NOT NULL // { arity: 6 }
-      Join on=(#0 = #3) type=differential // { arity: 6 }
-        implementation
-          %0:t1[#0]KAe » %1:t2[#0]KAe
-        ArrangeBy keys=[[#0]] // { arity: 3 }
-          ReadIndex on=materialize.public.t1 idx_t1_b=[lookup value=("l2")] // { arity: 3 }
-        ArrangeBy keys=[[#0]] // { arity: 3 }
-          ReadIndex on=t2 idx_t2_a=[differential join] // { arity: 3 }
+  Project (#0, #6, #5) // { arity: 3 }
+    Filter (#0) IS NOT NULL // { arity: 7 }
+      Map ("l2") // { arity: 7 }
+        Join on=(#0 = #3) type=differential // { arity: 6 }
+          implementation
+            %0:t1[#0]KAe » %1:t2[#0]KAe
+          ArrangeBy keys=[[#0]] // { arity: 3 }
+            ReadIndex on=materialize.public.t1 idx_t1_b=[lookup value=("l2")] // { arity: 3 }
+          ArrangeBy keys=[[#0]] // { arity: 3 }
+            ReadIndex on=t2 idx_t2_a=[differential join] // { arity: 3 }
 
 Used Indexes:
   - materialize.public.idx_t2_a (differential join)
@@ -832,15 +833,17 @@ WHERE
     t1.a = 2 AND t1.b = 'l2'
 ----
 Explained Query:
-  CrossJoin type=differential // { arity: 3 }
-    implementation
-      %0:t1[×]e » %1:t2[×]e
-    ArrangeBy keys=[[]] // { arity: 2 }
-      Project (#0, #1) // { arity: 2 }
-        ReadIndex on=materialize.public.t1 idx_t1_a_b=[lookup value=(2, "l2")] // { arity: 4 }
-    ArrangeBy keys=[[]] // { arity: 1 }
-      Project (#2) // { arity: 1 }
-        ReadIndex on=materialize.public.t2 idx_t2_a=[lookup value=(2)] // { arity: 4 }
+  Project (#1, #2, #0) // { arity: 3 }
+    Map (2, "l2") // { arity: 3 }
+      CrossJoin type=differential // { arity: 1 }
+        implementation
+          %0:t1[×]e » %1:t2[×]e
+        ArrangeBy keys=[[]] // { arity: 0 }
+          Project () // { arity: 0 }
+            ReadIndex on=materialize.public.t1 idx_t1_a_b=[lookup value=(2, "l2")] // { arity: 4 }
+        ArrangeBy keys=[[]] // { arity: 1 }
+          Project (#2) // { arity: 1 }
+            ReadIndex on=materialize.public.t2 idx_t2_a=[lookup value=(2)] // { arity: 4 }
 
 Used Indexes:
   - materialize.public.idx_t1_a_b (lookup)

@@ -77,15 +77,18 @@ query T multiline
 explain with(arity, join implementations) select * from foo, bar where foo.a = abs(bar.a) and foo.a = 3
 ----
 Explained Query:
-  CrossJoin type=differential // { arity: 6 }
-    implementation
-      %0:foo[×]ef » %1:bar[×]ef
-    ArrangeBy keys=[[]] // { arity: 3 }
-      Filter (#0 = 3) // { arity: 3 }
-        ReadStorage materialize.public.foo // { arity: 3 }
-    ArrangeBy keys=[[]] // { arity: 3 }
-      Filter (3 = abs(#0)) // { arity: 3 }
-        ReadStorage materialize.public.bar // { arity: 3 }
+  Project (#5, #0..=#4) // { arity: 6 }
+    Map (3) // { arity: 6 }
+      CrossJoin type=differential // { arity: 5 }
+        implementation
+          %0:foo[×]ef » %1:bar[×]ef
+        ArrangeBy keys=[[]] // { arity: 2 }
+          Project (#1, #2) // { arity: 2 }
+            Filter (#0 = 3) // { arity: 3 }
+              ReadStorage materialize.public.foo // { arity: 3 }
+        ArrangeBy keys=[[]] // { arity: 3 }
+          Filter (3 = abs(#0)) // { arity: 3 }
+            ReadStorage materialize.public.bar // { arity: 3 }
 
 Source materialize.public.foo
   filter=((#0 = 3))
