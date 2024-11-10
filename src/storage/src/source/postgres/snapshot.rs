@@ -143,6 +143,7 @@ use anyhow::bail;
 use differential_dataflow::AsCollection;
 use futures::{StreamExt as _, TryStreamExt};
 use mz_ore::cast::CastFrom;
+use mz_ore::collections::HashMap;
 use mz_ore::future::InTask;
 use mz_postgres_util::tunnel::PostgresFlavor;
 use mz_postgres_util::{simple_query_opt, Client, PostgresError};
@@ -395,7 +396,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 }
             };
 
-            let upstream_info = upstream_info.into_iter().map(|t| (t.oid, t)).collect();
+            let upstream_info: HashMap<_, _> = upstream_info.into_iter().map(|t| (t.oid, t)).collect();
 
             let worker_tables = reader_table_info
                 .iter()
@@ -431,7 +432,11 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 let mut table_name = None;
                 let mut output_indexes = vec![];
                 for (output_index, (expected_desc, casts)) in outputs.iter() {
-                    match verify_schema(oid, expected_desc, &upstream_info, casts) {
+                    let validation_result = upstream_info
+                        .get(&oid)
+                        .ok_or(DefiniteError::TableDropped)
+                        .and_then(|cur_desc| verify_schema(expected_desc, cur_desc, casts));
+                    match validation_result {
                         Ok(()) => {
                             if table_name.is_none() {
                                 table_name = Some((
