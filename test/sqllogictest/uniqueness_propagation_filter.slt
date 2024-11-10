@@ -79,7 +79,7 @@ query T multiline
 EXPLAIN WITH(arity, join implementations) SELECT DISTINCT f2, f3 FROM v1 WHERE f1 = f2;
 ----
 Explained Query (fast path):
-  Project (#1, #2)
+  Project (#0, #2)
     Filter (#0 = #1)
       ReadIndex on=materialize.public.v1 v1_primary_idx=[*** full scan ***]
 
@@ -109,7 +109,7 @@ query T multiline
 EXPLAIN WITH(arity, join implementations) SELECT DISTINCT f1, f3 FROM v1 WHERE f1 = f2 AND f1 = f3;
 ----
 Explained Query (fast path):
-  Project (#0, #2)
+  Project (#0, #0)
     Filter (#0 = #1) AND (#0 = #2)
       ReadIndex on=materialize.public.v1 v1_primary_idx=[*** full scan ***]
 
@@ -124,7 +124,7 @@ query T multiline
 EXPLAIN WITH(arity, join implementations) SELECT DISTINCT f2, f3 FROM v1 WHERE f1 = f2 AND f1 = f3;
 ----
 Explained Query (fast path):
-  Project (#1, #2)
+  Project (#0, #0)
     Filter (#0 = #1) AND (#0 = #2)
       ReadIndex on=materialize.public.v1 v1_primary_idx=[*** full scan ***]
 
@@ -139,7 +139,7 @@ query T multiline
 EXPLAIN WITH(arity, join implementations) SELECT DISTINCT f2, f3 FROM v1 WHERE f1 = f2 AND f2 = f3;
 ----
 Explained Query (fast path):
-  Project (#1, #2)
+  Project (#0, #0)
     Filter (#0 = #1) AND (#1 = #2)
       ReadIndex on=materialize.public.v1 v1_primary_idx=[*** full scan ***]
 
@@ -277,7 +277,7 @@ query T multiline
 EXPLAIN WITH(arity, join implementations) SELECT DISTINCT f1, f3 FROM t2 WHERE f2 = f3;
 ----
 Explained Query:
-  Project (#0, #2) // { arity: 2 }
+  Project (#0, #1) // { arity: 2 }
     Filter (#1 = #2) // { arity: 4 }
       ReadStorage materialize.public.t2 // { arity: 4 }
 
@@ -292,7 +292,7 @@ query T multiline
 EXPLAIN WITH(arity, join implementations) SELECT DISTINCT f3 FROM t2 WHERE f1 = f2 AND f2 = f3;
 ----
 Explained Query:
-  Project (#2) // { arity: 1 }
+  Project (#0) // { arity: 1 }
     Filter (#0 = #1) AND (#1 = #2) // { arity: 4 }
       ReadStorage materialize.public.t2 // { arity: 4 }
 
@@ -307,7 +307,7 @@ query T multiline
 EXPLAIN WITH(arity, join implementations) SELECT DISTINCT f2 FROM t2 WHERE f1 = f3 AND f3 = f2;
 ----
 Explained Query:
-  Project (#1) // { arity: 1 }
+  Project (#0) // { arity: 1 }
     Filter (#0 = #2) AND (#1 = #2) // { arity: 4 }
       ReadStorage materialize.public.t2 // { arity: 4 }
 
@@ -337,7 +337,7 @@ query T multiline
 EXPLAIN WITH(arity, join implementations) SELECT DISTINCT f3, f4 FROM t2 WHERE f1 = f3 AND f2 = f4;
 ----
 Explained Query:
-  Project (#2, #3) // { arity: 2 }
+  Project (#0, #1) // { arity: 2 }
     Filter (#0 = #2) AND (#1 = #3) // { arity: 4 }
       ReadStorage materialize.public.t2 // { arity: 4 }
 

@@ -360,18 +360,19 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
 Explained Query:
   Return
     Union
-      Map (█, █)
-        Union
-          Negate
+      Project (#0, #0)
+        Map (█)
+          Union
+            Negate
+              Project ()
+                Join on=(#0{b} = #1{b}) type=differential
+                  Get l2
+                  ArrangeBy keys=[[#0{b}]]
+                    Distinct project=[#0{b}]
+                      Project (#1)
+                        Get l3
             Project ()
-              Join on=(#0{b} = #1{b}) type=differential
-                Get l2
-                ArrangeBy keys=[[#0{b}]]
-                  Distinct project=[#0{b}]
-                    Project (#1)
-                      Get l3
-          Project ()
-            ReadIndex on=t t_a_idx=[*** full scan ***]
+              ReadIndex on=t t_a_idx=[*** full scan ***]
       Project (#0{a}, #2)
         Get l3
   With
