@@ -527,23 +527,26 @@ impl HirRelationExpr {
                     input
                 }
                 Filter { input, predicates } => {
-                    // Filter expressions may contain correlated subqueries.
-                    // We extend `get_outer` with sufficient values to determine the value of the predicate,
-                    // then filter the results, then strip off any columns that were added for this purpose.
-                    let mut input =
-                        input.applied_to(id_gen, get_outer, col_map, cte_map, context)?;
-                    for predicate in predicates {
-                        let old_arity = input.arity();
-                        let predicate = predicate
-                            .applied_to(id_gen, col_map, cte_map, &mut input, &None, context)?;
-                        let new_arity = input.arity();
-                        input = input.filter(vec![predicate]);
-                        if old_arity != new_arity {
-                            // this means we added some columns to handle subqueries, and now we need to get rid of them
-                            input = input.project((0..old_arity).collect());
-                        }
+                    // Use `Map`'s variadic expression lowering.
+                    let pred_len = predicates.len();
+                    let input = input
+                        .map(predicates)
+                        .applied_to(id_gen, get_outer, col_map, cte_map, context)?;
+                    let old_arity = input.arity();
+                    let mut result = input
+                        .filter((old_arity - pred_len..old_arity).map(MirScalarExpr::Column))
+                        .project((0..old_arity - pred_len).collect());
+
+                    // Tidy up the result
+                    use mz_expr::MapFilterProject;
+                    let mut mfp = MapFilterProject::extract_non_errors_from_expr_mut(&mut result);
+                    mfp.optimize();
+                    let (map, filter, project) = mfp.as_map_filter_project();
+                    result = result.map(map).filter(filter);
+                    if !project.iter().cloned().eq(0..result.arity()) {
+                        result = result.project(project)
                     }
-                    input
+                    result
                 }
                 Join {
                     left,

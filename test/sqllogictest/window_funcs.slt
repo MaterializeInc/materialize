@@ -211,26 +211,28 @@ WHERE f1 IN (SELECT ROW_NUMBER() OVER () FROM t2);
 ----
 Return // { arity: 1 }
   Project (#0) // { arity: 1 }
-    Filter #2 // { arity: 3 }
-      Project (#0, #1, #3) // { arity: 3 }
-        Join on=(#0 = #2) // { arity: 4 }
-          Get l0 // { arity: 2 }
-          Union // { arity: 2 }
-            Get l2 // { arity: 2 }
-            CrossJoin // { arity: 2 }
-              Project (#0) // { arity: 1 }
-                Join on=(#0 = #1) // { arity: 2 }
-                  Union // { arity: 1 }
-                    Negate // { arity: 1 }
+    Filter #4 // { arity: 5 }
+      Join on=(#0 = #2 AND #1 = #3) // { arity: 5 }
+        Get l0 // { arity: 2 }
+        Project (#0, #1, #3) // { arity: 3 }
+          Join on=(#0 = #2) // { arity: 4 }
+            Get l1 // { arity: 2 }
+            Union // { arity: 2 }
+              Get l3 // { arity: 2 }
+              CrossJoin // { arity: 2 }
+                Project (#0) // { arity: 1 }
+                  Join on=(#0 = #1) // { arity: 2 }
+                    Union // { arity: 1 }
+                      Negate // { arity: 1 }
+                        Distinct project=[#0] // { arity: 1 }
+                          Get l3 // { arity: 2 }
                       Distinct project=[#0] // { arity: 1 }
-                        Get l2 // { arity: 2 }
-                    Distinct project=[#0] // { arity: 1 }
-                      Get l1 // { arity: 1 }
-                  Get l1 // { arity: 1 }
-              Constant // { arity: 1 }
-                - (false)
+                        Get l2 // { arity: 1 }
+                    Get l2 // { arity: 1 }
+                Constant // { arity: 1 }
+                  - (false)
 With
-  cte l2 =
+  cte l3 =
     Map (true) // { arity: 2 }
       Distinct project=[#0] // { arity: 1 }
         Filter (integer_to_bigint(#0) = #1) // { arity: 2 }
@@ -241,10 +243,13 @@ With
                   FlatMap unnest_list(#1) // { arity: 3 }
                     Reduce group_by=[#0] aggregates=[row_number[order_by=[]](row(list[row(#0, #1, #2)]))] // { arity: 2 }
                       CrossJoin // { arity: 3 }
-                        Get l1 // { arity: 1 }
+                        Get l2 // { arity: 1 }
                         Get materialize.public.t2 // { arity: 2 }
-  cte l1 =
+  cte l2 =
     Distinct project=[#0] // { arity: 1 }
+      Get l1 // { arity: 2 }
+  cte l1 =
+    Distinct project=[#0, #1] // { arity: 2 }
       Get l0 // { arity: 2 }
   cte l0 =
     CrossJoin // { arity: 2 }

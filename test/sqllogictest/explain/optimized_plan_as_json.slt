@@ -1322,141 +1322,95 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
     {
       "id": "Explained Query",
       "plan": {
-        "Let": {
-          "id": 0,
-          "value": {
-            "Project": {
-              "input": {
-                "Join": {
-                  "inputs": [
-                    {
-                      "ArrangeBy": {
-                        "input": {
-                          "Get": {
-                            "id": {
-                              "Global": {
-                                "User": 1
-                              }
-                            },
-                            "typ": {
-                              "column_types": [
-                                {
-                                  "scalar_type": "Int32",
-                                  "nullable": true
-                                },
-                                {
-                                  "scalar_type": "Int32",
-                                  "nullable": true
-                                }
-                              ],
-                              "keys": []
-                            },
-                            "access_strategy": {
-                              "Index": [
-                                [
-                                  {
-                                    "User": 4
-                                  },
-                                  "DifferentialJoin"
-                                ]
-                              ]
-                            }
+        "Project": {
+          "input": {
+            "Join": {
+              "inputs": [
+                {
+                  "ArrangeBy": {
+                    "input": {
+                      "Get": {
+                        "id": {
+                          "Global": {
+                            "User": 1
                           }
                         },
-                        "keys": [
-                          [
+                        "typ": {
+                          "column_types": [
                             {
-                              "Column": 0
+                              "scalar_type": "Int32",
+                              "nullable": true
+                            },
+                            {
+                              "scalar_type": "Int32",
+                              "nullable": true
                             }
+                          ],
+                          "keys": []
+                        },
+                        "access_strategy": {
+                          "Index": [
+                            [
+                              {
+                                "User": 4
+                              },
+                              {
+                                "DeltaJoin": "FirstInputFullScan"
+                              }
+                            ],
+                            [
+                              {
+                                "User": 4
+                              },
+                              "FullScan"
+                            ]
                           ]
-                        ]
+                        }
                       }
                     },
-                    {
-                      "ArrangeBy": {
+                    "keys": [
+                      [
+                        {
+                          "Column": 0
+                        }
+                      ],
+                      [
+                        {
+                          "Column": 1
+                        }
+                      ]
+                    ]
+                  }
+                },
+                {
+                  "ArrangeBy": {
+                    "input": {
+                      "Reduce": {
                         "input": {
-                          "Reduce": {
+                          "Project": {
                             "input": {
-                              "Project": {
+                              "Filter": {
                                 "input": {
-                                  "Filter": {
-                                    "input": {
-                                      "Join": {
-                                        "inputs": [
-                                          {
-                                            "ArrangeBy": {
-                                              "input": {
-                                                "Reduce": {
-                                                  "input": {
-                                                    "Project": {
-                                                      "input": {
-                                                        "Get": {
-                                                          "id": {
-                                                            "Global": {
-                                                              "User": 1
-                                                            }
-                                                          },
-                                                          "typ": {
-                                                            "column_types": [
-                                                              {
-                                                                "scalar_type": "Int32",
-                                                                "nullable": true
-                                                              },
-                                                              {
-                                                                "scalar_type": "Int32",
-                                                                "nullable": true
-                                                              }
-                                                            ],
-                                                            "keys": []
-                                                          },
-                                                          "access_strategy": {
-                                                            "Index": [
-                                                              [
-                                                                {
-                                                                  "User": 4
-                                                                },
-                                                                "FullScan"
-                                                              ]
-                                                            ]
-                                                          }
-                                                        }
-                                                      },
-                                                      "outputs": [
-                                                        0
-                                                      ]
-                                                    }
-                                                  },
-                                                  "group_key": [
-                                                    {
-                                                      "Column": 0
-                                                    }
-                                                  ],
-                                                  "aggregates": [],
-                                                  "monotonic": false,
-                                                  "expected_group_size": null
-                                                }
-                                              },
-                                              "keys": [
-                                                []
-                                              ]
-                                            }
-                                          },
-                                          {
-                                            "ArrangeBy": {
+                                  "Join": {
+                                    "inputs": [
+                                      {
+                                        "ArrangeBy": {
+                                          "input": {
+                                            "Reduce": {
                                               "input": {
                                                 "Project": {
                                                   "input": {
                                                     "Get": {
                                                       "id": {
                                                         "Global": {
-                                                          "User": 8
+                                                          "User": 1
                                                         }
                                                       },
                                                       "typ": {
                                                         "column_types": [
                                                           {
                                                             "scalar_type": "Int32",
-                                                            "nullable": false
+                                                            "nullable": true
                                                           },
                                                           {
                                                             "scalar_type": "Int32",
@@ -1465,7 +1419,16 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                         ],
                                                         "keys": []
                                                       },
-                                                      "access_strategy": "Persist"
+                                                      "access_strategy": {
+                                                        "Index": [
+                                                          [
+                                                            {
+                                                              "User": 4
+                                                            },
+                                                            "FullScan"
+                                                          ]
+                                                        ]
+                                                      }
                                                     }
                                                   },
                                                   "outputs": [
@@ -1473,276 +1436,172 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                   ]
                                                 }
                                               },
-                                              "keys": [
-                                                []
+                                              "group_key": [
+                                                {
+                                                  "Column": 0
+                                                }
+                                              ],
+                                              "aggregates": [],
+                                              "monotonic": false,
+                                              "expected_group_size": null
+                                            }
+                                          },
+                                          "keys": [
+                                            []
+                                          ]
+                                        }
+                                      },
+                                      {
+                                        "ArrangeBy": {
+                                          "input": {
+                                            "Project": {
+                                              "input": {
+                                                "Get": {
+                                                  "id": {
+                                                    "Global": {
+                                                      "User": 8
+                                                    }
+                                                  },
+                                                  "typ": {
+                                                    "column_types": [
+                                                      {
+                                                        "scalar_type": "Int32",
+                                                        "nullable": false
+                                                      },
+                                                      {
+                                                        "scalar_type": "Int32",
+                                                        "nullable": true
+                                                      }
+                                                    ],
+                                                    "keys": []
+                                                  },
+                                                  "access_strategy": "Persist"
+                                                }
+                                              },
+                                              "outputs": [
+                                                0
                                               ]
                                             }
-                                          }
-                                        ],
-                                        "equivalences": [],
-                                        "implementation": {
-                                          "Differential": [
-                                            [
-                                              0,
-                                              [],
-                                              {
-                                                "unique_key": false,
-                                                "key_length": 0,
-                                                "arranged": false,
-                                                "cardinality": null,
-                                                "filters": {
-                                                  "literal_equality": false,
-                                                  "like": false,
-                                                  "is_null": false,
-                                                  "literal_inequality": 0,
-                                                  "any_filter": false
-                                                },
-                                                "input": 0
-                                              }
-                                            ],
-                                            [
-                                              [
-                                                1,
-                                                [],
-                                                {
-                                                  "unique_key": false,
-                                                  "key_length": 0,
-                                                  "arranged": false,
-                                                  "cardinality": null,
-                                                  "filters": {
-                                                    "literal_equality": false,
-                                                    "like": false,
-                                                    "is_null": false,
-                                                    "literal_inequality": 0,
-                                                    "any_filter": false
-                                                  },
-                                                  "input": 1
-                                                }
-                                              ]
-                                            ]
+                                          },
+                                          "keys": [
+                                            []
                                           ]
                                         }
                                       }
-                                    },
-                                    "predicates": [
-                                      {
-                                        "CallBinary": {
-                                          "func": "Lt",
-                                          "expr1": {
-                                            "Column": 0
-                                          },
-                                          "expr2": {
-                                            "Column": 1
+                                    ],
+                                    "equivalences": [],
+                                    "implementation": {
+                                      "Differential": [
+                                        [
+                                          0,
+                                          [],
+                                          {
+                                            "unique_key": false,
+                                            "key_length": 0,
+                                            "arranged": false,
+                                            "cardinality": null,
+                                            "filters": {
+                                              "literal_equality": false,
+                                              "like": false,
+                                              "is_null": false,
+                                              "literal_inequality": 0,
+                                              "any_filter": false
+                                            },
+                                            "input": 0
                                           }
-                                        }
-                                      }
-                                    ]
+                                        ],
+                                        [
+                                          [
+                                            1,
+                                            [],
+                                            {
+                                              "unique_key": false,
+                                              "key_length": 0,
+                                              "arranged": false,
+                                              "cardinality": null,
+                                              "filters": {
+                                                "literal_equality": false,
+                                                "like": false,
+                                                "is_null": false,
+                                                "literal_inequality": 0,
+                                                "any_filter": false
+                                              },
+                                              "input": 1
+                                            }
+                                          ]
+                                        ]
+                                      ]
+                                    }
                                   }
                                 },
-                                "outputs": [
-                                  0
+                                "predicates": [
+                                  {
+                                    "CallBinary": {
+                                      "func": "Lt",
+                                      "expr1": {
+                                        "Column": 0
+                                      },
+                                      "expr2": {
+                                        "Column": 1
+                                      }
+                                    }
+                                  }
                                 ]
                               }
                             },
-                            "group_key": [
-                              {
-                                "Column": 0
-                              }
-                            ],
-                            "aggregates": [],
-                            "monotonic": false,
-                            "expected_group_size": null
+                            "outputs": [
+                              0
+                            ]
                           }
                         },
-                        "keys": [
-                          [
-                            {
-                              "Column": 0
-                            }
-                          ]
-                        ]
-                      }
-                    }
-                  ],
-                  "equivalences": [
-                    [
-                      {
-                        "Column": 0
-                      },
-                      {
-                        "Column": 2
-                      }
-                    ]
-                  ],
-                  "implementation": {
-                    "Differential": [
-                      [
-                        1,
-                        [
+                        "group_key": [
                           {
                             "Column": 0
                           }
                         ],
-                        {
-                          "unique_key": true,
-                          "key_length": 1,
-                          "arranged": true,
-                          "cardinality": null,
-                          "filters": {
-                            "literal_equality": false,
-                            "like": false,
-                            "is_null": false,
-                            "literal_inequality": 0,
-                            "any_filter": false
-                          },
-                          "input": 1
-                        }
-                      ],
+                        "aggregates": [],
+                        "monotonic": false,
+                        "expected_group_size": null
+                      }
+                    },
+                    "keys": [
                       [
-                        [
-                          0,
-                          [
-                            {
-                              "Column": 0
-                            }
-                          ],
-                          {
-                            "unique_key": false,
-                            "key_length": 1,
-                            "arranged": true,
-                            "cardinality": null,
-                            "filters": {
-                              "literal_equality": false,
-                              "like": false,
-                              "is_null": false,
-                              "literal_inequality": 0,
-                              "any_filter": false
-                            },
-                            "input": 0
-                          }
-                        ]
+                        {
+                          "Column": 0
+                        }
                       ]
                     ]
                   }
-                }
-              },
-              "outputs": [
-                0,
-                1
-              ]
-            }
-          },
-          "body": {
-            "Project": {
-              "input": {
-                "Join": {
-                  "inputs": [
-                    {
-                      "ArrangeBy": {
+                },
+                {
+                  "ArrangeBy": {
+                    "input": {
+                      "Reduce": {
                         "input": {
-                          "Get": {
-                            "id": {
-                              "Local": 0
-                            },
-                            "typ": {
-                              "column_types": [
-                                {
-                                  "scalar_type": "Int32",
-                                  "nullable": false
-                                },
-                                {
-                                  "scalar_type": "Int32",
-                                  "nullable": true
-                                }
-                              ],
-                              "keys": []
-                            },
-                            "access_strategy": "UnknownOrLocal"
-                          }
-                        },
-                        "keys": [
-                          [
-                            {
-                              "Column": 1
-                            }
-                          ]
-                        ]
-                      }
-                    },
-                    {
-                      "ArrangeBy": {
-                        "input": {
-                          "Reduce": {
+                          "Project": {
                             "input": {
-                              "Project": {
+                              "Filter": {
                                 "input": {
-                                  "Filter": {
-                                    "input": {
-                                      "Join": {
-                                        "inputs": [
-                                          {
-                                            "ArrangeBy": {
-                                              "input": {
-                                                "Reduce": {
-                                                  "input": {
-                                                    "Project": {
-                                                      "input": {
-                                                        "Get": {
-                                                          "id": {
-                                                            "Local": 0
-                                                          },
-                                                          "typ": {
-                                                            "column_types": [
-                                                              {
-                                                                "scalar_type": "Int32",
-                                                                "nullable": false
-                                                              },
-                                                              {
-                                                                "scalar_type": "Int32",
-                                                                "nullable": true
-                                                              }
-                                                            ],
-                                                            "keys": []
-                                                          },
-                                                          "access_strategy": "UnknownOrLocal"
-                                                        }
-                                                      },
-                                                      "outputs": [
-                                                        1
-                                                      ]
-                                                    }
-                                                  },
-                                                  "group_key": [
-                                                    {
-                                                      "Column": 0
-                                                    }
-                                                  ],
-                                                  "aggregates": [],
-                                                  "monotonic": false,
-                                                  "expected_group_size": null
-                                                }
-                                              },
-                                              "keys": [
-                                                []
-                                              ]
-                                            }
-                                          },
-                                          {
-                                            "ArrangeBy": {
+                                  "Join": {
+                                    "inputs": [
+                                      {
+                                        "ArrangeBy": {
+                                          "input": {
+                                            "Reduce": {
                                               "input": {
                                                 "Project": {
                                                   "input": {
                                                     "Get": {
                                                       "id": {
                                                         "Global": {
-                                                          "User": 8
+                                                          "User": 1
                                                         }
                                                       },
                                                       "typ": {
                                                         "column_types": [
                                                           {
                                                             "scalar_type": "Int32",
-                                                            "nullable": false
+                                                            "nullable": true
                                                           },
                                                           {
                                                             "scalar_type": "Int32",
@@ -1751,7 +1610,16 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                         ],
                                                         "keys": []
                                                       },
-                                                      "access_strategy": "Persist"
+                                                      "access_strategy": {
+                                                        "Index": [
+                                                          [
+                                                            {
+                                                              "User": 4
+                                                            },
+                                                            "FullScan"
+                                                          ]
+                                                        ]
+                                                      }
                                                     }
                                                   },
                                                   "outputs": [
@@ -1759,165 +1627,310 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                   ]
                                                 }
                                               },
-                                              "keys": [
-                                                []
+                                              "group_key": [
+                                                {
+                                                  "Column": 0
+                                                }
+                                              ],
+                                              "aggregates": [],
+                                              "monotonic": false,
+                                              "expected_group_size": null
+                                            }
+                                          },
+                                          "keys": [
+                                            []
+                                          ]
+                                        }
+                                      },
+                                      {
+                                        "ArrangeBy": {
+                                          "input": {
+                                            "Project": {
+                                              "input": {
+                                                "Get": {
+                                                  "id": {
+                                                    "Global": {
+                                                      "User": 8
+                                                    }
+                                                  },
+                                                  "typ": {
+                                                    "column_types": [
+                                                      {
+                                                        "scalar_type": "Int32",
+                                                        "nullable": false
+                                                      },
+                                                      {
+                                                        "scalar_type": "Int32",
+                                                        "nullable": true
+                                                      }
+                                                    ],
+                                                    "keys": []
+                                                  },
+                                                  "access_strategy": "Persist"
+                                                }
+                                              },
+                                              "outputs": [
+                                                1
                                               ]
                                             }
-                                          }
-                                        ],
-                                        "equivalences": [],
-                                        "implementation": {
-                                          "Differential": [
-                                            [
-                                              0,
-                                              [],
-                                              {
-                                                "unique_key": false,
-                                                "key_length": 0,
-                                                "arranged": false,
-                                                "cardinality": null,
-                                                "filters": {
-                                                  "literal_equality": false,
-                                                  "like": false,
-                                                  "is_null": false,
-                                                  "literal_inequality": 0,
-                                                  "any_filter": false
-                                                },
-                                                "input": 0
-                                              }
-                                            ],
-                                            [
-                                              [
-                                                1,
-                                                [],
-                                                {
-                                                  "unique_key": false,
-                                                  "key_length": 0,
-                                                  "arranged": false,
-                                                  "cardinality": null,
-                                                  "filters": {
-                                                    "literal_equality": false,
-                                                    "like": false,
-                                                    "is_null": false,
-                                                    "literal_inequality": 0,
-                                                    "any_filter": false
-                                                  },
-                                                  "input": 1
-                                                }
-                                              ]
-                                            ]
+                                          },
+                                          "keys": [
+                                            []
                                           ]
                                         }
                                       }
-                                    },
-                                    "predicates": [
-                                      {
-                                        "CallBinary": {
-                                          "func": "Gt",
-                                          "expr1": {
-                                            "Column": 0
-                                          },
-                                          "expr2": {
-                                            "Column": 1
+                                    ],
+                                    "equivalences": [],
+                                    "implementation": {
+                                      "Differential": [
+                                        [
+                                          0,
+                                          [],
+                                          {
+                                            "unique_key": false,
+                                            "key_length": 0,
+                                            "arranged": false,
+                                            "cardinality": null,
+                                            "filters": {
+                                              "literal_equality": false,
+                                              "like": false,
+                                              "is_null": false,
+                                              "literal_inequality": 0,
+                                              "any_filter": false
+                                            },
+                                            "input": 0
                                           }
-                                        }
-                                      }
-                                    ]
+                                        ],
+                                        [
+                                          [
+                                            1,
+                                            [],
+                                            {
+                                              "unique_key": false,
+                                              "key_length": 0,
+                                              "arranged": false,
+                                              "cardinality": null,
+                                              "filters": {
+                                                "literal_equality": false,
+                                                "like": false,
+                                                "is_null": false,
+                                                "literal_inequality": 0,
+                                                "any_filter": false
+                                              },
+                                              "input": 1
+                                            }
+                                          ]
+                                        ]
+                                      ]
+                                    }
                                   }
                                 },
-                                "outputs": [
-                                  0
+                                "predicates": [
+                                  {
+                                    "CallBinary": {
+                                      "func": "Gt",
+                                      "expr1": {
+                                        "Column": 0
+                                      },
+                                      "expr2": {
+                                        "Column": 1
+                                      }
+                                    }
+                                  }
                                 ]
                               }
                             },
-                            "group_key": [
-                              {
-                                "Column": 0
-                              }
-                            ],
-                            "aggregates": [],
-                            "monotonic": false,
-                            "expected_group_size": null
+                            "outputs": [
+                              0
+                            ]
                           }
                         },
-                        "keys": [
-                          [
-                            {
-                              "Column": 0
-                            }
-                          ]
-                        ]
-                      }
-                    }
-                  ],
-                  "equivalences": [
-                    [
-                      {
-                        "Column": 1
-                      },
-                      {
-                        "Column": 2
-                      }
-                    ]
-                  ],
-                  "implementation": {
-                    "Differential": [
-                      [
-                        1,
-                        [
+                        "group_key": [
                           {
                             "Column": 0
                           }
                         ],
-                        {
-                          "unique_key": true,
-                          "key_length": 1,
-                          "arranged": true,
-                          "cardinality": null,
-                          "filters": {
-                            "literal_equality": false,
-                            "like": false,
-                            "is_null": false,
-                            "literal_inequality": 0,
-                            "any_filter": false
-                          },
-                          "input": 1
-                        }
-                      ],
+                        "aggregates": [],
+                        "monotonic": false,
+                        "expected_group_size": null
+                      }
+                    },
+                    "keys": [
                       [
-                        [
-                          0,
-                          [
-                            {
-                              "Column": 1
-                            }
-                          ],
-                          {
-                            "unique_key": false,
-                            "key_length": 1,
-                            "arranged": false,
-                            "cardinality": null,
-                            "filters": {
-                              "literal_equality": false,
-                              "like": false,
-                              "is_null": false,
-                              "literal_inequality": 0,
-                              "any_filter": false
-                            },
-                            "input": 0
-                          }
-                        ]
+                        {
+                          "Column": 0
+                        }
                       ]
                     ]
                   }
                 }
-              },
-              "outputs": [
-                0,
-                1
-              ]
+              ],
+              "equivalences": [
+                [
+                  {
+                    "Column": 0
+                  },
+                  {
+                    "Column": 2
+                  }
+                ],
+                [
+                  {
+                    "Column": 1
+                  },
+                  {
+                    "Column": 3
+                  }
+                ]
+              ],
+              "implementation": {
+                "DeltaQuery": [
+                  [
+                    [
+                      1,
+                      [
+                        {
+                          "Column": 0
+                        }
+                      ],
+                      {
+                        "unique_key": true,
+                        "key_length": 1,
+                        "arranged": true,
+                        "cardinality": null,
+                        "filters": {
+                          "literal_equality": false,
+                          "like": false,
+                          "is_null": false,
+                          "literal_inequality": 0,
+                          "any_filter": false
+                        },
+                        "input": 1
+                      }
+                    ],
+                    [
+                      2,
+                      [
+                        {
+                          "Column": 0
+                        }
+                      ],
+                      {
+                        "unique_key": true,
+                        "key_length": 1,
+                        "arranged": true,
+                        "cardinality": null,
+                        "filters": {
+                          "literal_equality": false,
+                          "like": false,
+                          "is_null": false,
+                          "literal_inequality": 0,
+                          "any_filter": false
+                        },
+                        "input": 2
+                      }
+                    ]
+                  ],
+                  [
+                    [
+                      0,
+                      [
+                        {
+                          "Column": 0
+                        }
+                      ],
+                      {
+                        "unique_key": false,
+                        "key_length": 1,
+                        "arranged": true,
+                        "cardinality": null,
+                        "filters": {
+                          "literal_equality": false,
+                          "like": false,
+                          "is_null": false,
+                          "literal_inequality": 0,
+                          "any_filter": false
+                        },
+                        "input": 0
+                      }
+                    ],
+                    [
+                      2,
+                      [
+                        {
+                          "Column": 0
+                        }
+                      ],
+                      {
+                        "unique_key": true,
+                        "key_length": 1,
+                        "arranged": true,
+                        "cardinality": null,
+                        "filters": {
+                          "literal_equality": false,
+                          "like": false,
+                          "is_null": false,
+                          "literal_inequality": 0,
+                          "any_filter": false
+                        },
+                        "input": 2
+                      }
+                    ]
+                  ],
+                  [
+                    [
+                      0,
+                      [
+                        {
+                          "Column": 1
+                        }
+                      ],
+                      {
+                        "unique_key": false,
+                        "key_length": 1,
+                        "arranged": false,
+                        "cardinality": null,
+                        "filters": {
+                          "literal_equality": false,
+                          "like": false,
+                          "is_null": false,
+                          "literal_inequality": 0,
+                          "any_filter": false
+                        },
+                        "input": 0
+                      }
+                    ],
+                    [
+                      1,
+                      [
+                        {
+                          "Column": 0
+                        }
+                      ],
+                      {
+                        "unique_key": true,
+                        "key_length": 1,
+                        "arranged": true,
+                        "cardinality": null,
+                        "filters": {
+                          "literal_equality": false,
+                          "like": false,
+                          "is_null": false,
+                          "literal_inequality": 0,
+                          "any_filter": false
+                        },
+                        "input": 1
+                      }
+                    ]
+                  ]
+                ]
+              }
             }
-          }
+          },
+          "outputs": [
+            0,
+            1
+          ]
         }
       }
     }

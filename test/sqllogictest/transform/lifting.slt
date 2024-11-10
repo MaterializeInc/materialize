@@ -816,7 +816,7 @@ Explained Query:
             ArrangeBy keys=[[#0]] // { arity: 1 }
               Map (error("more than one record produced in subquery")) // { arity: 1 }
                 Project () // { arity: 0 }
-                  Filter (#0 > 1) // { arity: 1 }
+                  Filter error("more than one record produced in subquery") AND (#0 > 1) // { arity: 1 }
                     Reduce aggregates=[count(*)] // { arity: 1 }
                       Project () // { arity: 0 }
                         Filter (#0 = 1308) // { arity: 2 }
@@ -859,7 +859,7 @@ Explained Query:
             ArrangeBy keys=[[#0]] // { arity: 1 }
               Map (error("more than one record produced in subquery")) // { arity: 1 }
                 Project () // { arity: 0 }
-                  Filter (#0 > 1) // { arity: 1 }
+                  Filter error("more than one record produced in subquery") AND (#0 > 1) // { arity: 1 }
                     Reduce aggregates=[count(*)] // { arity: 1 }
                       Project () // { arity: 0 }
                         Filter (#0 = 1308) // { arity: 2 }

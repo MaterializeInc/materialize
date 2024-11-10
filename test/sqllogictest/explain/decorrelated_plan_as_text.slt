@@ -234,71 +234,75 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
 ----
 Return
   Project (#0, #1)
-    Filter #2
-      Project (#0, #1, #3)
-        Join on=(#1 = #2)
-          Get l3
-          Union
-            Get l5
-            CrossJoin
-              Project (#0)
-                Join on=(#0 = #1)
-                  Union
-                    Negate
-                      Distinct project=[#0]
-                        Get l5
-                    Distinct project=[#0]
-                      Get l4
-                  Get l4
-              Constant
-                - (false)
-With
-  cte l5 =
-    Map (true)
-      Distinct project=[#0]
-        Filter (#0 > #2)
-          CrossJoin
-            Get l4
-            Get materialize.public.mv
-  cte l4 =
-    Distinct project=[#1]
-      Get l3
-  cte l3 =
-    Project (#0, #1)
-      Filter #2
+    Filter #4 AND #7 AND (true AND true)
+      Join on=(#0 = #2 = #5 AND #1 = #3 = #6)
+        Get l0
         Project (#0, #1, #3)
           Join on=(#0 = #2)
-            Get l0
+            Get l1
             Union
-              Get l2
+              Get l3
               CrossJoin
                 Project (#0)
                   Join on=(#0 = #1)
                     Union
                       Negate
                         Distinct project=[#0]
-                          Get l2
+                          Get l3
                       Distinct project=[#0]
-                        Get l1
-                    Get l1
+                        Get l2
+                    Get l2
                 Constant
                   - (false)
-  cte l2 =
+        Project (#0, #1, #3)
+          Join on=(#1 = #2)
+            Get l4
+            Union
+              Get l6
+              CrossJoin
+                Project (#0)
+                  Join on=(#0 = #1)
+                    Union
+                      Negate
+                        Distinct project=[#0]
+                          Get l6
+                      Distinct project=[#0]
+                        Get l5
+                    Get l5
+                Constant
+                  - (false)
+With
+  cte l6 =
+    Map (true)
+      Distinct project=[#0]
+        Filter (#0 > #2)
+          CrossJoin
+            Get l5
+            Get materialize.public.mv
+  cte l5 =
+    Distinct project=[#1]
+      Get l4
+  cte l4 =
+    Distinct project=[#0, #1]
+      Get l0
+  cte l3 =
     Map (true)
       Distinct project=[#0]
         Filter (#0 < #1)
           CrossJoin
-            Get l1
+            Get l2
             Get materialize.public.mv
-  cte l1 =
+  cte l2 =
     Distinct project=[#0]
+      Get l1
+  cte l1 =
+    Distinct project=[#0, #1]
       Get l0
   cte l0 =
-    Filter (true AND true)
-      CrossJoin
-        Constant
-          - ()
-        Get materialize.public.t
+    CrossJoin
+      Constant
+        - ()
+      Get materialize.public.t
 
 Target cluster: quickstart
 
