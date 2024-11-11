@@ -1,6 +1,6 @@
 # Materialize Kubernetes Operator Helm Chart
 
-![Version: 0.1.0](https://img.shields.io/badge/Version-0.1.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: 0.1.0](https://img.shields.io/badge/AppVersion-0.1.0-informational?style=flat-square)
+![Version: 0.1.0](https://img.shields.io/badge/Version-0.1.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v0.125.0-dev.0--pr.g38d50d921720caaf15998f30988db1aed720b2fc](https://img.shields.io/badge/AppVersion-v0.125.0--dev.0----pr.g38d50d921720caaf15998f30988db1aed720b2fc-informational?style=flat-square)
 
 Materialize Kubernetes Operator Helm Chart
 
@@ -144,7 +144,7 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.clusters.sizes.probe.workers` |  | ``1`` |
 | `operator.image.pullPolicy` |  | ``"IfNotPresent"`` |
 | `operator.image.repository` |  | ``"materialize/orchestratord"`` |
-| `operator.image.tag` |  | ``"v0.124.0-dev.0--pr.gd5e227d7d07dc4878d2a065c7c10a48c2555385a"`` |
+| `operator.image.tag` |  | ``"v0.125.0-dev.0--pr.g38d50d921720caaf15998f30988db1aed720b2fc"`` |
 | `operator.nodeSelector` |  | ``{}`` |
 | `operator.resources.limits.memory` |  | ``"512Mi"`` |
 | `operator.resources.requests.cpu` |  | ``"100m"`` |
@@ -201,7 +201,7 @@ metadata:
   name: 12345678-1234-1234-1234-123456789012
   namespace: materialize-environment
 spec:
-  environmentdImageRef: materialize/environmentd:v0.124.0-dev.0--pr.gd5e227d7d07dc4878d2a065c7c10a48c2555385a
+  environmentdImageRef: materialize/environmentd:v0.125.0-dev.0--pr.g38d50d921720caaf15998f30988db1aed720b2fc
   environmentdResourceRequirements:
     limits:
       memory: 16Gi
