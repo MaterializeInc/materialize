@@ -10,11 +10,9 @@ The `TABLE` expression retrieves all rows from a single table.
 
 ## Syntax
 
-{{< diagram "table-expr.svg" >}}
-
-Field | Use
-------|-----
-_table\_name_ | The name of the tablefrom which to retrieve rows.
+```mzsql
+TABLE <table_name>
+```
 
 ## Details
 

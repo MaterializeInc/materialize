@@ -10,11 +10,13 @@ menu:
 
 ## Syntax
 
-{{< diagram "show-views.svg" >}}
+```mzsql
+SHOW VIEWS [FROM <schema_name>]
+```
 
-Field | Use
-------|-----
-_schema&lowbar;name_ | The schema to show views from. Defaults to first resolvable schema in the search path. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
+Option       | Description
+-------------|------------
+**FROM**     | The schema to show views from. Defaults to first resolvable schema in the search path. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
 
 ## Details
 
