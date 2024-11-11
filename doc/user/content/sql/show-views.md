@@ -16,7 +16,7 @@ SHOW VIEWS [FROM <schema_name>]
 
 Option       | Description
 -------------|------------
-**FROM**     | The schema to show views from. Defaults to first resolvable schema in the search path. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
+**FROM**     | Specifies the schema to show views from. Defaults to first resolvable schema in the search path. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
 
 ## Details
 

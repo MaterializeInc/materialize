@@ -10,12 +10,14 @@ menu:
 
 ## Syntax
 
-{{< diagram "show-sources.svg" >}}
+```mzsql
+SHOW SOURCES [ FROM <schema_name> ] [ IN CLUSTER <cluster_name> ]
+```
 
-Field | Use
-------|-----
-_schema&lowbar;name_ | The schema to show sources from. Defaults to first resolvable schema in the search path. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
-_cluster&lowbar;name_ | The cluster to show sources from. If omitted, sources from all clusters are shown. For available clusters, see [`SHOW CLUSTERS`](../show-clusters).
+Option       | Description
+-------------|------------
+**FROM**     | Specifies the schema to show sources from. Defaults to first resolvable schema in the search path. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
+**IN CLUSTER** | Specifies the cluster to show sources from. If omitted, sources from all clusters are shown. For available clusters, see [`SHOW CLUSTERS`](../show-clusters).
 
 ## Details
 

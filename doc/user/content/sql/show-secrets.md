@@ -10,11 +10,15 @@ menu:
 
 ## Syntax
 
-{{< diagram "show-secrets.svg" >}}
+```mzsql
+SHOW SECRETS [ FROM <schema_name> ] [ LIKE <pattern>  | WHERE <condition> ]
+```
 
-Field                | Use
----------------------|-----
-_schema&lowbar;name_ | The schema to show secrets from. If omitted, secrets from the first schema in the search path are shown. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
+Option       | Description
+---------------------|------------
+**FROM**             | Specifies the schema to show secrets from. If omitted, secrets from the first schema in the search path are shown. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
+**LIKE**             | Specifies the pattern to filter the secrets shown.
+**WHERE**            | Specifies the condition(s) to filter the secrets shown.
 
 ## Examples
 

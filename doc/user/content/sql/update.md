@@ -16,10 +16,10 @@ UPDATE <table_name> [ AS <alias> ]
 [WHERE <condition> ];
 ```
 
-Option | Description
-------|-----
-**AS**  | Only permit references to _table_name_ as the specified _alias_.
-**WHERE** | Only update rows which evaluate to `true` for _condition_.
+Option       | Description
+-------------|------------
+**AS**       | Specifies an alias for the table. If specified, you can only reference the table using the alias.
+**WHERE**    | Specifies the condition(s) that must be met for the update to apply.
 
 ## Details
 
