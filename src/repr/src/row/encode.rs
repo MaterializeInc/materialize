@@ -2278,6 +2278,30 @@ mod tests {
         let ord_col = ::arrow::compute::take(&col, &indices, None).expect("takeable");
         assert_eq!(row_col.as_ref(), ord_col.as_ref());
 
+        // Check that our order matches the datum-native order when `preserves_order` is true.
+        let ordered_prefix_len = desc
+            .iter()
+            .take_while(|(_, c)| preserves_order(&c.scalar_type))
+            .count();
+
+        let decoder = <RelationDesc as Schema2<Row>>::decoder_any(desc, ord_col.as_ref()).unwrap();
+        let is_sorted = (0..ord_col.len())
+            .map(|i| {
+                let mut row = Row::default();
+                decoder.decode(i, &mut row);
+                row
+            })
+            .is_sorted_by(|a, b| {
+                let a_prefix = a.iter().take(ordered_prefix_len);
+                let b_prefix = b.iter().take(ordered_prefix_len);
+                a_prefix.cmp(b_prefix).is_le()
+            });
+        assert!(
+            is_sorted,
+            "ordering should be consistent on preserves_order columns: {:#?}",
+            desc.iter().take(ordered_prefix_len).collect_vec()
+        );
+
         // Check that our size estimates are consistent.
         assert_eq!(
             ord.goodbytes(),
