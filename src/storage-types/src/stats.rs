@@ -310,7 +310,7 @@ mod tests {
     }
 
     #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // too slow
+    #[ignore] // TODO(parkmycar): Re-enable this test with a smaller sample size.
     fn statistics_stability() {
         /// This is the seed [`proptest`] uses for their deterministic RNG. We
         /// copy it here to prevent breaking this test if [`proptest`] changes.

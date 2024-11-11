@@ -1413,6 +1413,7 @@ mod builtin_migration_tests {
     use mz_catalog::SYSTEM_CONN_ID;
     use mz_controller_types::ClusterId;
     use mz_expr::MirRelationExpr;
+    use mz_ore::id_gen::Gen;
     use mz_repr::{
         CatalogItemId, GlobalId, RelationDesc, RelationType, RelationVersion, ScalarType,
     };
@@ -1451,6 +1452,7 @@ mod builtin_migration_tests {
             self,
             item_id_mapping: &BTreeMap<String, CatalogItemId>,
             global_id_mapping: &BTreeMap<String, GlobalId>,
+            global_id_gen: &mut Gen<u64>,
         ) -> (String, ItemNamespace, CatalogItem) {
             let item = match self.item {
                 SimplifiedItem::Table => CatalogItem::Table(Table {
@@ -1459,9 +1461,12 @@ mod builtin_migration_tests {
                         .with_column("a", ScalarType::Int32.nullable(true))
                         .with_key(vec![0])
                         .finish(),
-                    collections: [(RelationVersion::root(), GlobalId::User(1))]
-                        .into_iter()
-                        .collect(),
+                    collections: [(
+                        RelationVersion::root(),
+                        GlobalId::User(global_id_gen.allocate_id()),
+                    )]
+                    .into_iter()
+                    .collect(),
                     conn_id: None,
                     resolved_ids: ResolvedIds::empty(),
                     custom_logical_compaction_window: None,
@@ -1484,8 +1489,7 @@ mod builtin_migration_tests {
                         convert_names_to_ids(referenced_names, item_id_mapping, global_id_mapping);
 
                     CatalogItem::MaterializedView(MaterializedView {
-                        // TODO(alter_table).
-                        global_id: GlobalId::User(1),
+                        global_id: GlobalId::User(global_id_gen.allocate_id()),
                         create_sql: format!(
                             "CREATE MATERIALIZED VIEW materialize.public.mv ({column_list}) AS SELECT * FROM {table_list}"
                         ),
@@ -1521,7 +1525,7 @@ mod builtin_migration_tests {
                     let on_gid = global_id_mapping[&on];
                     CatalogItem::Index(Index {
                         create_sql: format!("CREATE INDEX idx ON materialize.public.{on} (a)"),
-                        global_id: GlobalId::User(1),
+                        global_id: GlobalId::User(global_id_gen.allocate_id()),
                         on: on_gid,
                         keys: Default::default(),
                         conn_id: None,
@@ -1622,12 +1626,14 @@ mod builtin_migration_tests {
     async fn run_test_case(test_case: BuiltinMigrationTestCase) {
         Catalog::with_debug(|mut catalog| async move {
             let mut item_id_mapping = BTreeMap::new();
-            let mut global_id_mapping = BTreeMap::new();
             let mut name_mapping = BTreeMap::new();
+
+            let mut global_id_gen = Gen::<u64>::default();
+            let mut global_id_mapping = BTreeMap::new();
 
             for entry in test_case.initial_state {
                 let (name, namespace, item) =
-                    entry.to_catalog_item(&item_id_mapping, &global_id_mapping);
+                    entry.to_catalog_item(&item_id_mapping, &global_id_mapping, &mut global_id_gen);
                 let (item_id, global_id) =
                     add_item(&mut catalog, name.clone(), item, namespace).await;
 
