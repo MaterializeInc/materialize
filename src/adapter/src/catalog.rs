@@ -1079,6 +1079,10 @@ impl Catalog {
         self.state.get_network_policy(&network_policy_id)
     }
 
+    pub fn get_network_policy_by_name(&self, name: &str) -> Option<&NetworkPolicy> {
+        self.state.try_get_network_policy_by_name(name)
+    }
+
     pub fn clusters(&self) -> impl Iterator<Item = &Cluster> {
         self.state.clusters_by_id.values()
     }

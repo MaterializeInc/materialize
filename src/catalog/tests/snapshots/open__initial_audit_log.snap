@@ -1,6 +1,5 @@
 ---
 source: src/catalog/tests/open.rs
-assertion_line: 444
 expression: audit_log
 ---
 [
@@ -130,6 +129,21 @@ expression: audit_log
         EventV1 {
             id: 8,
             event_type: Create,
+            object_type: NetworkPolicy,
+            details: IdNameV1(
+                IdNameV1 {
+                    id: "u1",
+                    name: "default",
+                },
+            ),
+            user: None,
+            occurred_at: 0,
+        },
+    ),
+    V1(
+        EventV1 {
+            id: 9,
+            event_type: Create,
             object_type: Cluster,
             details: IdNameV1(
                 IdNameV1 {
@@ -143,7 +157,7 @@ expression: audit_log
     ),
     V1(
         EventV1 {
-            id: 9,
+            id: 10,
             event_type: Grant,
             object_type: Cluster,
             details: UpdatePrivilegeV1(
@@ -160,7 +174,7 @@ expression: audit_log
     ),
     V1(
         EventV1 {
-            id: 10,
+            id: 11,
             event_type: Create,
             object_type: ClusterReplica,
             details: CreateClusterReplicaV2(
@@ -185,7 +199,7 @@ expression: audit_log
     ),
     V1(
         EventV1 {
-            id: 11,
+            id: 12,
             event_type: Grant,
             object_type: System,
             details: UpdatePrivilegeV1(

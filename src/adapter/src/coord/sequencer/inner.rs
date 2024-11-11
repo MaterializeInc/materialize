@@ -70,8 +70,8 @@ use mz_sql::plan::{
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::UserKind;
 use mz_sql::session::vars::{
-    self, IsolationLevel, OwnedVarInput, SessionVars, Var, VarInput, SCHEMA_ALIAS,
-    TRANSACTION_ISOLATION_VAR_NAME,
+    self, IsolationLevel, OwnedVarInput, SessionVars, Var, VarError, VarInput, NETWORK_POLICY,
+    SCHEMA_ALIAS, TRANSACTION_ISOLATION_VAR_NAME,
 };
 use mz_sql::{plan, rbac};
 use mz_sql_parser::ast::display::AstDisplay;
@@ -4060,6 +4060,38 @@ impl Coordinator {
         plan::AlterSystemSetPlan { name, value }: plan::AlterSystemSetPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         self.is_user_allowed_to_alter_system(session, Some(&name))?;
+
+        // Make sure the network policy we're trying to set actually exists.
+        //
+        // TODO(parkmycar): It would be great if we could impose this as a constraint on
+        // `VarDefinition`, but the current API doesn't support that.
+        if NETWORK_POLICY.name.to_string().to_lowercase() == name.clone().to_lowercase() {
+            let policy_name = match &value {
+                // Make sure the compiled in default still exists.
+                plan::VariableValue::Default => Some(NETWORK_POLICY.default_value().format()),
+                plan::VariableValue::Values(values) if values.len() == 1 => {
+                    values.iter().next().cloned()
+                }
+                plan::VariableValue::Values(values) => {
+                    tracing::warn!(?values, "can't set multiple network policies at once");
+                    None
+                }
+            };
+            let network_policy_exists = policy_name
+                .as_ref()
+                .and_then(|name| self.catalog.get_network_policy_by_name(name))
+                .is_some();
+            if !network_policy_exists {
+                return Err(AdapterError::PlanError(plan::PlanError::VarError(
+                    VarError::InvalidParameterValue {
+                        name: NETWORK_POLICY.name(),
+                        invalid_values: vec![policy_name.unwrap_or("<none>".to_string())],
+                        reason: "no network policy with such name exists".to_string(),
+                    },
+                )));
+            }
+        }
+
         let op = match value {
             plan::VariableValue::Values(values) => catalog::Op::UpdateSystemConfiguration {
                 name: name.clone(),
