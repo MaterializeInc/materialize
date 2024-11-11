@@ -622,8 +622,7 @@ steps:
       - id: testdrive-old-kafka-src-syntax
         label: "Testdrive %N (before Kafka source versioning)"
         depends_on: build-aarch64
-        timeout_in_minutes: 40
-        parallelism: 8
+        timeout_in_minutes: 180
         plugins:
           - ./ci/plugins/mzcompose:
               composition: testdrive-old-kafka-src-syntax
