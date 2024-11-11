@@ -62,7 +62,6 @@ use mz_storage_client::controller::StorageController;
 use timely::Container;
 use tracing::{error, info, warn, Instrument};
 use uuid::Uuid;
-
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
 use crate::catalog::open::builtin_item_migration::{
     migrate_builtin_items, BuiltinItemMigrationResult,
@@ -562,12 +561,17 @@ impl Catalog {
         envd_epoch: core::num::NonZeroI64,
         read_only: bool,
         storage_collections_to_drop: BTreeSet<GlobalId>,
-    ) -> Result<mz_controller::Controller<mz_repr::Timestamp>, mz_catalog::durable::CatalogError>
-    {
+    ) -> Result<
+        (
+            mz_controller::Controller<mz_repr::Timestamp>,
+            mz_controller::ControllerReceivers<mz_repr::Timestamp>,
+        ),
+        mz_catalog::durable::CatalogError,
+    > {
         let controller_start = Instant::now();
         info!("startup: controller init: beginning");
 
-        let mut controller = {
+        let (mut controller, rxs) = {
             let mut storage = self.storage().await;
             let mut tx = storage.transaction().await?;
             mz_controller::prepare_initialization(&mut tx)
@@ -595,7 +599,7 @@ impl Catalog {
             controller_start.elapsed()
         );
 
-        Ok(controller)
+        Ok((controller, rxs))
     }
 
     /// The objects in the catalog form one or more DAGs (directed acyclic graph) via object

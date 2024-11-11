@@ -102,11 +102,12 @@ use mz_catalog::memory::objects::{
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig, VpcEndpointEvent};
 use mz_compute_client::as_of_selection;
 use mz_compute_client::controller::error::InstanceMissing;
+use mz_compute_client::controller::ComputeControllerResponse;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::Plan;
 use mz_compute_types::ComputeInstanceId;
 use mz_controller::clusters::{ClusterConfig, ClusterEvent, ClusterStatus, ProcessId};
-use mz_controller::ControllerConfig;
+use mz_controller::{ControllerConfig, ControllerResponse};
 use mz_controller_types::{ClusterId, ReplicaId, WatchSetId};
 use mz_expr::{MapFilterProject, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_orchestrator::{OfflineReason, ServiceProcessMetrics};
@@ -160,6 +161,7 @@ use timely::progress::{Antichain, Timestamp as _};
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
+use tokio::time;
 use tokio::time::{Interval, MissedTickBehavior};
 use tracing::{debug, info, info_span, span, warn, Instrument, Level, Span};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
@@ -223,6 +225,9 @@ mod validity;
 pub enum Message {
     Command(OpenTelemetryContext, Command),
     ControllerReady,
+    Controller(ControllerResponse<T>),
+    Compute(ComputeControllerResponse<T>),
+    Maintenance,
     PurifiedStatementReady(PurifiedStatementReady),
     CreateConnectionValidationReady(CreateConnectionValidationReady),
     AlterConnectionValidationReady(AlterConnectionValidationReady),
@@ -341,6 +346,9 @@ impl Message {
                 Command::Dump { .. } => "command-dump",
             },
             Message::ControllerReady => "controller_ready",
+            Message::Controller(..) => "controller",
+            Message::Compute(..) => "compute",
+            Message::Maintenance => "maintenance",
             Message::PurifiedStatementReady(_) => "purified_statement_ready",
             Message::CreateConnectionValidationReady(_) => "create_connection_validation_ready",
             Message::TryDeferred { .. } => "try_deferred",
@@ -1595,6 +1603,7 @@ pub struct Coordinator {
     /// The controller for the storage and compute layers.
     #[derivative(Debug = "ignore")]
     controller: mz_controller::Controller,
+    controller_rxs: mz_controller::ControllerReceivers,
     /// The catalog in an Arc suitable for readonly references. The Arc allows
     /// us to hand out cheap copies of the catalog to functions that can use it
     /// off of the main coordinator thread. If the coordinator needs to mutate
@@ -2926,10 +2935,15 @@ impl Coordinator {
                 .system_config()
                 .coord_slow_message_warn_threshold();
 
+            let mut maintenance_ticker = time::interval(Duration::from_secs(1));
+            maintenance_ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
             // How many messages we'd like to batch up before processing them. Must be > 0.
             const MESSAGE_BATCH: usize = 64;
             let mut messages = Vec::with_capacity(MESSAGE_BATCH);
             let mut cmd_messages = Vec::with_capacity(MESSAGE_BATCH);
+            let mut controller_messages = Vec::with_capacity(MESSAGE_BATCH);
+            let mut compute_messages = Vec::with_capacity(MESSAGE_BATCH);
 
             let message_batch = self.metrics
                 .message_batch
@@ -2959,6 +2973,32 @@ impl Coordinator {
                     // Receive a single command.
                     () = self.controller.ready() => {
                         messages.push(Message::ControllerReady);
+                    }
+                    // `tick` documented to be cancellation safe.
+                    // Receive a regular maintenance message.
+                    _ = maintenance_ticker.tick() => {
+                        messages.push(Message::Maintenance);
+                        maintenance_ticker.reset();
+                    }
+                    // `recv_many()` on `UnboundedReceiver` is cancellation safe:
+                    // https://docs.rs/tokio/1.38.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety-1
+                    // Receive a batch of compute controller responses.
+                    count = self.controller_rxs.compute_controller_rx.recv_many(&mut compute_messages, MESSAGE_BATCH) => {
+                        if count == 0 {
+                            break;
+                        } else {
+                            messages.extend(compute_messages.drain(..).map(Message::Compute));
+                        }
+                    }
+                    // `recv_many()` on `UnboundedReceiver` is cancellation safe:
+                    // https://docs.rs/tokio/1.38.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety-1
+                    // Receive a batch of controller responses.
+                    count = self.controller_rxs.immediate_rx.recv_many(&mut controller_messages, MESSAGE_BATCH) => {
+                        if count == 0 {
+                            break;
+                        } else {
+                            messages.extend(controller_messages.drain(..).map(Message::Controller));
+                        }
                     }
                     // See [`appends::GroupCommitWaiter`] for notes on why this is cancel safe.
                     // Receive a single command.
@@ -3066,7 +3106,7 @@ impl Coordinator {
                     let msg_kind = msg.kind();
                     let span = span!(
                         target: "mz_adapter::coord::handle_message_loop",
-                        Level::INFO,
+                        Level::DEBUG,
                         "coord::handle_message",
                         kind = msg_kind
                     );
@@ -3738,7 +3778,7 @@ pub fn serve(
             .spawn(move || {
                 let span = info_span!(parent: parent_span, "coord::coordinator").entered();
 
-                let controller = handle
+                let (controller, controller_rxs) = handle
                     .block_on({
                         catalog.initialize_controller(
                             controller_config,
@@ -3754,6 +3794,7 @@ pub fn serve(
                 let caching_secrets_reader = CachingSecretsReader::new(secrets_controller.reader());
                 let mut coord = Coordinator {
                     controller,
+                    controller_rxs,
                     catalog,
                     internal_cmd_tx,
                     group_commit_tx,

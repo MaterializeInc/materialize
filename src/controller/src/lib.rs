@@ -124,24 +124,20 @@ pub enum ControllerResponse<T = mz_repr::Timestamp> {
     /// Notification that a watch set has finished. See
     /// [`Controller::install_compute_watch_set`] and
     /// [`Controller::install_storage_watch_set`] for details.
-    WatchSetFinished(Vec<WatchSetId>),
+    WatchSetFinished(WatchSetId),
 }
 
 /// Whether one of the underlying controllers is ready for their `process`
 /// method to be called.
 #[derive(Debug, Default)]
-enum Readiness<T> {
+enum Readiness {
     /// No underlying controllers are ready.
     #[default]
     NotReady,
     /// The storage controller is ready.
     Storage,
-    /// The compute controller is ready.
-    Compute,
     /// A batch of metric data is ready.
     Metrics((ReplicaId, Vec<ServiceProcessMetrics>)),
-    /// An internally-generated message is ready to be returned.
-    Internal(ControllerResponse<T>),
 }
 
 /// A client that maintains soft state and validates commands, in addition to forwarding them.
@@ -164,7 +160,7 @@ pub struct Controller<T: ComputeControllerTimestamp = mz_repr::Timestamp> {
     /// The cluster orchestrator.
     orchestrator: Arc<dyn NamespacedOrchestrator>,
     /// Tracks the readiness of the underlying controllers.
-    readiness: Readiness<T>,
+    readiness: Readiness,
     /// Tasks for collecting replica metrics.
     metrics_tasks: BTreeMap<ReplicaId, AbortOnDropHandle<()>>,
     /// Sender for the channel over which replica metrics are sent.
@@ -198,7 +194,14 @@ pub struct Controller<T: ComputeControllerTimestamp = mz_repr::Timestamp> {
     /// client on the next call to [`self.process`].
     ///
     /// See [`self.install_watch_set`] for a description of watch sets.
-    immediate_watch_sets: Vec<WatchSetId>,
+    // immediate_watch_sets: Vec<WatchSetId>,
+    immediate_tx: mpsc::UnboundedSender<ControllerResponse<T>>,
+}
+
+#[derive(Debug)]
+pub struct ControllerReceivers<T = mz_repr::Timestamp> {
+    pub compute_controller_rx: mpsc::UnboundedReceiver<ComputeControllerResponse<T>>,
+    pub immediate_rx: mpsc::UnboundedReceiver<ControllerResponse<T>>,
 }
 
 impl<T: ComputeControllerTimestamp> Controller<T> {
@@ -249,7 +252,7 @@ impl<T: ComputeControllerTimestamp> Controller<T> {
             unfulfilled_watch_sets_by_object: _,
             unfulfilled_watch_sets,
             watch_set_id_gen: _,
-            immediate_watch_sets,
+            immediate_tx: _,
         } = self;
 
         let compute = compute.dump().await?;
@@ -257,10 +260,6 @@ impl<T: ComputeControllerTimestamp> Controller<T> {
         let unfulfilled_watch_sets: BTreeMap<_, _> = unfulfilled_watch_sets
             .iter()
             .map(|(ws_id, watches)| (format!("{ws_id:?}"), format!("{watches:?}")))
-            .collect();
-        let immediate_watch_sets: Vec<_> = immediate_watch_sets
-            .iter()
-            .map(|watch| format!("{watch:?}"))
             .collect();
 
         fn field(
@@ -277,7 +276,6 @@ impl<T: ComputeControllerTimestamp> Controller<T> {
             field("read_only", read_only)?,
             field("readiness", format!("{readiness:?}"))?,
             field("unfulfilled_watch_sets", unfulfilled_watch_sets)?,
-            field("immediate_watch_sets", immediate_watch_sets)?,
         ]);
         Ok(serde_json::Value::Object(map))
     }
@@ -309,14 +307,6 @@ where
         self.read_only
     }
 
-    /// Returns `Some` if there is an immediately available
-    /// internally-generated response that we need to return to the
-    /// client (as opposed to waiting for a response from compute or storage).
-    fn take_internal_response(&mut self) -> Option<ControllerResponse<T>> {
-        let ws = std::mem::take(&mut self.immediate_watch_sets);
-        (!ws.is_empty()).then_some(ControllerResponse::WatchSetFinished(ws))
-    }
-
     /// Waits until the controller is ready to process a response.
     ///
     /// This method may block for an arbitrarily long time.
@@ -327,27 +317,14 @@ where
     /// This method is cancellation safe.
     pub async fn ready(&mut self) {
         if let Readiness::NotReady = self.readiness {
-            // the coordinator wants to be able to make a simple
-            // sequence of ready, process, ready, process, .... calls,
-            // but the controller sometimes has responses immediately
-            // ready to be processed and should do so before calling
-            // into either of the lower-level controllers. This `if`
-            // statement handles that case.
-            if let Some(response) = self.take_internal_response() {
-                self.readiness = Readiness::Internal(response);
-            } else {
-                // The underlying `ready` methods are cancellation safe, so it is
-                // safe to construct this `select!`.
-                tokio::select! {
-                    () = self.storage.ready() => {
-                        self.readiness = Readiness::Storage;
-                    }
-                    () = self.compute.ready() => {
-                        self.readiness = Readiness::Compute;
-                    }
-                    Some(metrics) = self.metrics_rx.recv() => {
-                        self.readiness = Readiness::Metrics(metrics);
-                    }
+            // The underlying `ready` methods are cancellation safe, so it is
+            // safe to construct this `select!`.
+            tokio::select! {
+                () = self.storage.ready() => {
+                    self.readiness = Readiness::Storage;
+                }
+                Some(metrics) = self.metrics_rx.recv() => {
+                    self.readiness = Readiness::Metrics(metrics);
                 }
             }
         }
@@ -377,7 +354,9 @@ where
             frontier.less_equal(&t)
         });
         if objects.is_empty() {
-            self.immediate_watch_sets.push(ws_id);
+            self.immediate_tx
+                .send(ControllerResponse::WatchSetFinished(ws_id))
+                .expect("recv exists");
         } else {
             for id in objects.iter() {
                 self.unfulfilled_watch_sets_by_object
@@ -419,7 +398,9 @@ where
             upper.less_equal(&t)
         });
         if objects.is_empty() {
-            self.immediate_watch_sets.push(ws_id);
+            self.immediate_tx
+                .send(ControllerResponse::WatchSetFinished(ws_id))
+                .expect("recv exists");
         } else {
             for id in objects.iter() {
                 self.unfulfilled_watch_sets_by_object
@@ -457,21 +438,25 @@ where
     fn process_storage_response(
         &mut self,
         storage_metadata: &StorageMetadata,
-    ) -> Result<Option<ControllerResponse<T>>, anyhow::Error> {
+    ) -> Result<(), anyhow::Error> {
         let maybe_response = self.storage.process(storage_metadata)?;
-        Ok(maybe_response.and_then(
-            |mz_storage_client::controller::Response::FrontierUpdates(r)| {
-                self.handle_frontier_updates(&r)
-            },
-        ))
+        if let Some(response) = maybe_response {
+            match response {
+                mz_storage_client::controller::Response::FrontierUpdates(r) => {
+                    self.handle_frontier_updates(&r);
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Process a pending response from the compute controller. If necessary,
     /// return a higher-level response to our client.
-    fn process_compute_response(&mut self) -> Result<Option<ControllerResponse<T>>, anyhow::Error> {
-        let response = self.compute.process(&mut *self.storage);
-
-        let response = response.and_then(|r| match r {
+    pub fn process_compute_response(
+        &mut self,
+        response: ComputeControllerResponse<T>,
+    ) -> Option<ControllerResponse<T>> {
+        match response {
             ComputeControllerResponse::PeekNotification(uuid, peek, otel_ctx) => {
                 Some(ControllerResponse::PeekNotification(uuid, peek, otel_ctx))
             }
@@ -482,10 +467,10 @@ where
                 Some(ControllerResponse::CopyToResponse(id, tail))
             }
             ComputeControllerResponse::FrontierUpper { id, upper } => {
-                self.handle_frontier_updates(&[(id, upper)])
+                self.handle_frontier_updates(&[(id, upper)]);
+                None
             }
-        });
-        Ok(response)
+        }
     }
 
     /// Processes the work queued by [`Controller::ready`].
@@ -502,21 +487,22 @@ where
     ) -> Result<Option<ControllerResponse<T>>, anyhow::Error> {
         match mem::take(&mut self.readiness) {
             Readiness::NotReady => Ok(None),
-            Readiness::Storage => self.process_storage_response(storage_metadata),
-            Readiness::Compute => self.process_compute_response(),
+            Readiness::Storage => {
+                self.process_storage_response(storage_metadata)?;
+                Ok(None)
+            }
             Readiness::Metrics((id, metrics)) => self.process_replica_metrics(id, metrics),
-            Readiness::Internal(message) => Ok(Some(message)),
         }
+    }
+
+    pub fn maintenance(&mut self) {
+        self.compute.maintain(&mut *self.storage);
     }
 
     /// Record updates to frontiers, and propagate any necessary responses.
     /// As of this writing (2/29/2024), the only response that can be generated
     /// from a frontier update is `WatchSetCompleted`.
-    fn handle_frontier_updates(
-        &mut self,
-        updates: &[(GlobalId, Antichain<T>)],
-    ) -> Option<ControllerResponse<T>> {
-        let mut finished = vec![];
+    fn handle_frontier_updates(&mut self, updates: &[(GlobalId, Antichain<T>)]) {
         for (obj_id, antichain) in updates {
             let ws_ids = self.unfulfilled_watch_sets_by_object.entry(*obj_id);
             if let Entry::Occupied(mut ws_ids) = ws_ids {
@@ -532,7 +518,9 @@ where
                         // 2. Mark the watchset as finished if this was the last watched object
                         if entry.get().0.is_empty() {
                             entry.remove();
-                            finished.push(*ws_id);
+                            self.immediate_tx
+                                .send(ControllerResponse::WatchSetFinished(*ws_id))
+                                .expect("recv exists");
                         }
                         // 3. Remove the watchset from the set of pending watchsets for the object
                         false
@@ -547,7 +535,6 @@ where
                 }
             }
         }
-        (!(finished.is_empty())).then(|| ControllerResponse::WatchSetFinished(finished))
     }
 
     fn process_replica_metrics(
@@ -636,7 +623,7 @@ where
         envd_epoch: NonZeroI64,
         read_only: bool,
         storage_txn: &dyn StorageTxn<T>,
-    ) -> Self {
+    ) -> (Self, ControllerReceivers<T>) {
         if read_only {
             tracing::info!("starting controllers in read-only mode!");
         }
@@ -682,6 +669,8 @@ where
         )
         .await;
 
+        let (compute_controller_tx, compute_controller_rx) = mpsc::unbounded_channel();
+
         let storage_collections = Arc::clone(&collections_ctl);
         let compute_controller = ComputeController::new(
             config.build_info,
@@ -691,8 +680,11 @@ where
             config.metrics_registry.clone(),
             config.now.clone(),
             wallclock_lag,
+            compute_controller_tx,
         );
         let (metrics_tx, metrics_rx) = mpsc::unbounded_channel();
+
+        let (immediate_tx, immediate_rx) = mpsc::unbounded_channel();
 
         let this = Self {
             storage: Box::new(storage_controller),
@@ -713,13 +705,18 @@ where
             unfulfilled_watch_sets_by_object: BTreeMap::new(),
             unfulfilled_watch_sets: BTreeMap::new(),
             watch_set_id_gen: Gen::default(),
-            immediate_watch_sets: Vec::new(),
+            immediate_tx,
         };
 
         if !this.read_only {
             this.remove_past_generation_replicas_in_background();
         }
 
-        this
+        let rxs = ControllerReceivers {
+            compute_controller_rx,
+            immediate_rx,
+        };
+
+        (this, rxs)
     }
 }

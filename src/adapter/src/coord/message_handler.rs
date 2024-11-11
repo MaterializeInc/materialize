@@ -73,8 +73,20 @@ impl Coordinator {
                     .process(storage_metadata)
                     .expect("`process` never returns an error")
                 {
-                    self.message_controller(m).boxed_local().await
+                    self.message_controller(m).boxed_local().await;
                 }
+            }
+            Message::Controller(response) => {
+                self.message_controller(response).boxed_local().await;
+            }
+            Message::Compute(response) => {
+                if let Some(m) = self.controller.process_compute_response(response) {
+                    self.message_controller(m).boxed_local().await;
+                }
+            }
+            Message::Maintenance => {
+                // Periodic maintenance tasks.
+                self.controller.maintenance();
             }
             Message::PurifiedStatementReady(ready) => {
                 self.message_purified_statement_ready(ready)
@@ -437,27 +449,25 @@ impl Coordinator {
                     self.builtin_table_update().background(updates);
                 }
             }
-            ControllerResponse::WatchSetFinished(ws_ids) => {
+            ControllerResponse::WatchSetFinished(ws_id) => {
                 let now = self.now();
-                for ws_id in ws_ids {
-                    let Some((conn_id, rsp)) = self.installed_watch_sets.remove(&ws_id) else {
-                        continue;
-                    };
-                    self.connection_watch_sets
-                        .get_mut(&conn_id)
-                        .expect("corrupted coordinator state: unknown connection id")
-                        .remove(&ws_id);
-                    if self.connection_watch_sets[&conn_id].is_empty() {
-                        self.connection_watch_sets.remove(&conn_id);
-                    }
+                let Some((conn_id, rsp)) = self.installed_watch_sets.remove(&ws_id) else {
+                    return;
+                };
+                self.connection_watch_sets
+                    .get_mut(&conn_id)
+                    .expect("corrupted coordinator state: unknown connection id")
+                    .remove(&ws_id);
+                if self.connection_watch_sets[&conn_id].is_empty() {
+                    self.connection_watch_sets.remove(&conn_id);
+                }
 
-                    match rsp {
-                        WatchSetResponse::StatementDependenciesReady(id, ev) => {
-                            self.record_statement_lifecycle_event(&id, &ev, now);
-                        }
-                        WatchSetResponse::AlterSinkReady(ctx) => {
-                            self.sequence_alter_sink_finish(ctx).await;
-                        }
+                match rsp {
+                    WatchSetResponse::StatementDependenciesReady(id, ev) => {
+                        self.record_statement_lifecycle_event(&id, &ev, now);
+                    }
+                    WatchSetResponse::AlterSinkReady(ctx) => {
+                        self.sequence_alter_sink_finish(ctx).await;
                     }
                 }
             }
