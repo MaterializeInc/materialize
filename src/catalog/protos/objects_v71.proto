@@ -646,6 +646,19 @@ message AuditLogEventV1 {
     SchedulingDecisionsWithReasonsV1 scheduling_policies = 10;
   }
 
+  message CreateClusterReplicaV3 {
+    string cluster_id = 1;
+    string cluster_name = 2;
+    StringWrapper replica_id = 3;
+    string replica_name = 4;
+    string logical_size = 5;
+    bool disk = 6;
+    optional string billed_as = 7;
+    bool internal = 8;
+    CreateOrDropClusterReplicaReasonV1 reason = 9;
+    SchedulingDecisionsWithReasonsV2 scheduling_policies = 10;
+  }
+
   message DropClusterReplicaV1 {
     string cluster_id = 1;
     string cluster_name = 2;
@@ -662,6 +675,15 @@ message AuditLogEventV1 {
     SchedulingDecisionsWithReasonsV1 scheduling_policies = 6;
   }
 
+  message DropClusterReplicaV3 {
+    string cluster_id = 1;
+    string cluster_name = 2;
+    StringWrapper replica_id = 3;
+    string replica_name = 4;
+    CreateOrDropClusterReplicaReasonV1 reason = 5;
+    SchedulingDecisionsWithReasonsV2 scheduling_policies = 6;
+  }
+
   message CreateOrDropClusterReplicaReasonV1 {
     oneof reason {
       Empty Manual = 1;
@@ -674,12 +696,26 @@ message AuditLogEventV1 {
     RefreshDecisionWithReasonV1 on_refresh = 1;
   }
 
+  message SchedulingDecisionsWithReasonsV2 {
+    RefreshDecisionWithReasonV2 on_refresh = 1;
+  }
+
   message RefreshDecisionWithReasonV1 {
     oneof decision {
       Empty On = 1;
       Empty Off = 2;
     }
     repeated string objects_needing_refresh = 3;
+    string rehydration_time_estimate = 4;
+  }
+
+  message RefreshDecisionWithReasonV2 {
+    oneof decision {
+      Empty On = 1;
+      Empty Off = 2;
+    }
+    repeated string objects_needing_refresh = 3;
+    repeated string objects_needing_compaction = 5;
     string rehydration_time_estimate = 4;
   }
 
@@ -841,8 +877,10 @@ message AuditLogEventV1 {
   oneof details {
     CreateClusterReplicaV1 create_cluster_replica_v1 = 6;
     CreateClusterReplicaV2 create_cluster_replica_v2 = 33;
+    CreateClusterReplicaV3 create_cluster_replica_v3 = 41;
     DropClusterReplicaV1 drop_cluster_replica_v1 = 7;
     DropClusterReplicaV2 drop_cluster_replica_v2 = 34;
+    DropClusterReplicaV3 drop_cluster_replica_v3 = 42;
     CreateSourceSinkV1 create_source_sink_v1 = 8;
     CreateSourceSinkV2 create_source_sink_v2 = 9;
     AlterSourceSinkV1 alter_source_sink_v1 = 10;
