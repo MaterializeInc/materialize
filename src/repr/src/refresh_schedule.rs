@@ -56,6 +56,13 @@ impl RefreshSchedule {
 
     /// Returns the time of the last refresh. Returns None if there is no last refresh (e.g., for a
     /// periodic refresh).
+    ///
+    /// (If there is no last refresh, then we have a `REFRESH EVERY`, in which case the saturating
+    /// roundup puts a refresh at the maximum possible timestamp. This means that it would make
+    /// some sense to return the maximum possible timestamp instead of None. Indeed, some of our
+    /// callers handle our None return value in exactly this way. However, some other callers do
+    /// something else with None, and therefore we don't want to hardcode this behavior in this
+    /// function.)
     pub fn last_refresh(&self) -> Option<Timestamp> {
         if self.everies.is_empty() {
             self.ats.iter().max().cloned()

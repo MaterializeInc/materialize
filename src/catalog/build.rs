@@ -172,6 +172,7 @@ fn main() -> anyhow::Result<()> {
         .enum_attribute("ClusterSchedule.value", ATTR)
         .enum_attribute("CreateOrDropClusterReplicaReasonV1.reason", ATTR)
         .enum_attribute("RefreshDecisionWithReasonV1.decision", ATTR)
+        .enum_attribute("RefreshDecisionWithReasonV2.decision", ATTR)
         // Serialize/deserialize the top-level enum in the persist-backed
         // catalog as "internally tagged"[^1] to set up persist pushdown
         // statistics for success.
