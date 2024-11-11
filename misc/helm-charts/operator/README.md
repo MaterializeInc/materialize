@@ -13,7 +13,7 @@ This Helm chart deploys the Materialize operator on a Kubernetes cluster. The op
 
 ### Kubernetes Storage Configuration
 
-Materialize requires fast storage for optimal performance. Network-attached storage (like EBS volumes) can significantly impact performance, so we strongly recommend using locally-attached NVMe drives.
+Materialize requires fast, locally-attached NVMe storage for optimal performance. Network-attached storage (like EBS volumes) can significantly degrade performance and is not supported.
 
 We recommend using OpenEBS with LVM Local PV for managing local volumes. While other storage solutions may work, we have tested and recommend OpenEBS for optimal performance.
 
@@ -41,7 +41,7 @@ LVM setup varies by environment. Below is our tested and recommended configurati
 
 ##### AWS EC2 with Bottlerocket AMI
 Tested configurations:
-- Instance types: m6g, m7g families
+- Instance types: r6g, r7g families
 - AMI: AWS Bottlerocket
 - Instance store volumes required
 
@@ -243,6 +243,28 @@ kubectl logs -l app.kubernetes.io/name=materialize-operator -n materialize
 ```
 
 For more detailed information on using and troubleshooting the Materialize operator, refer to the [Materialize documentation](https://materialize.com/docs).
+
+# Operational Guidelines
+
+Beyond the Helm configuration, there are other important knobs to tune to get the best out of Materialize within a
+Kubernetes environment.
+
+## Recommended Instance Types
+
+Materialize has been vetted to work on instances with the following properties:
+
+- ARM-based CPU
+- 1:8 ratio of vCPU to GiB memory
+- 1:16 ratio of vCPU to GiB local instance storage (if enabling spill-to-disk)
+
+When operating in AWS, we recommend using the `r7gd` and `r6gd` families of instances (and `r8gd` once available)
+when running with local disk, and the `r8g`, `r7g`, and `r6g` families when running without local disk.
+
+## CPU Affinity
+
+It is strongly recommended to enable the Kubernetes `static` [CPU management policy](https://kubernetes.io/docs/tasks/administer-cluster/cpu-management-policies/#static-policy).
+This ensures that each worker thread of Materialize is given exclusively access to a vCPU. Our benchmarks have shown this
+to substantially improve the performance of compute-bound workloads.
 
 ## Learn More
 
