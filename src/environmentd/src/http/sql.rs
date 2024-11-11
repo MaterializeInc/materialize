@@ -54,6 +54,7 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::{debug, error, info};
 use tungstenite::protocol::frame::coding::CloseCode;
 
+use crate::http::prometheus::{PrometheusSqlQuery, QUERIES};
 use crate::http::{init_ws, AuthedClient, AuthedUser, WsState, MAX_REQUEST_SIZE};
 
 #[derive(Debug, thiserror::Error)]
@@ -105,124 +106,7 @@ impl Error {
     }
 }
 
-#[derive(Debug)]
-struct PrometheusSqlQuery<'a> {
-    metric_name: &'a str,
-    help: &'a str,
-    query: &'a str,
-    value_column_name: &'a str,
-    per_replica: bool,
-}
-
-impl<'a> PrometheusSqlQuery<'a> {
-    fn to_sql_request(&self, cluster: Option<(&Cluster, &ClusterReplica)>) -> SqlRequest {
-        SqlRequest::Simple {
-            query: if let Some((cluster, replica)) = cluster {
-                format!(
-                    "SET auto_route_catalog_queries = false; SET CLUSTER = '{}'; SET CLUSTER_REPLICA = '{}'; {}",
-                    cluster.name, replica.name, self.query
-                )
-            } else {
-                format!(
-                    "SET auto_route_catalog_queries = true; RESET CLUSTER; RESET CLUSTER_REPLICA; {}",
-                    self.query
-                )
-            },
-        }
-    }
-}
-
 static PER_REPLICA_LABELS: &[&str] = &["replica_full_name", "instance_id", "replica_id"];
-
-static QUERIES: &[PrometheusSqlQuery] = &[
-    PrometheusSqlQuery {
-        metric_name: "mz_write_frontier",
-        help: "The global write frontiers of compute and storage collections.",
-        query: "SELECT
-                    object_id AS collection_id,
-                    coalesce(write_frontier::text::uint8, 18446744073709551615::uint8) AS write_frontier
-                FROM mz_internal.mz_frontiers
-                WHERE object_id NOT LIKE 't%';",
-        value_column_name: "write_frontier",
-        per_replica: false,
-    },
-    PrometheusSqlQuery {
-        metric_name: "mz_read_frontier",
-        help: "The global read frontiers of compute and storage collections.",
-        query: "SELECT
-                    object_id AS collection_id,
-                    coalesce(read_frontier::text::uint8, 18446744073709551615::uint8) AS read_frontier
-                FROM mz_internal.mz_frontiers
-                WHERE object_id NOT LIKE 't%';",
-        value_column_name: "read_frontier",
-        per_replica: false,
-    },
-    PrometheusSqlQuery {
-        metric_name: "mz_replica_write_frontiers",
-        help: "The per-replica write frontiers of compute and storage collections.",
-        query: "SELECT
-                    object_id AS collection_id,
-                    coalesce(write_frontier::text::uint8, 18446744073709551615::uint8) AS write_frontier,
-                    cluster_id AS instance_id,
-                    replica_id AS replica_id
-                FROM mz_catalog.mz_cluster_replica_frontiers
-                JOIN mz_cluster_replicas ON (id = replica_id)
-                WHERE object_id NOT LIKE 't%';",
-        value_column_name: "write_frontier",
-        per_replica: false,
-    },
-    PrometheusSqlQuery {
-        metric_name: "mz_replica_write_frontiers",
-        help: "The per-replica write frontiers of compute and storage collections.",
-        query: "SELECT
-                    object_id AS collection_id,
-                    coalesce(write_frontier::text::uint8, 18446744073709551615::uint8) AS write_frontier,
-                    cluster_id AS instance_id,
-                    replica_id AS replica_id
-                FROM mz_catalog.mz_cluster_replica_frontiers
-                JOIN mz_cluster_replicas ON (id = replica_id)
-                WHERE object_id NOT LIKE 't%';",
-        value_column_name: "write_frontier",
-        per_replica: false,
-    },
-    PrometheusSqlQuery {
-        metric_name: "mz_arrangement_count",
-        help: "The number of arrangements in a dataflow.",
-        query: "WITH
-                    arrangements AS (
-                        SELECT DISTINCT operator_id AS id
-                        FROM mz_internal.mz_arrangement_records_raw
-                    ),
-                    collections AS (
-                        SELECT
-                            id,
-                            regexp_replace(export_id, '^t.+', 'transient') as export_id
-                        FROM
-                            mz_internal.mz_dataflow_addresses,
-                            mz_internal.mz_compute_exports
-                        WHERE address[1] = dataflow_id
-                    )
-                SELECT
-                    COALESCE(export_id, 'none') AS collection_id,
-                    count(*)
-                FROM arrangements
-                    LEFT JOIN collections USING (id)
-                    GROUP BY export_id",
-        value_column_name: "count",
-        per_replica: true,
-    },
-    PrometheusSqlQuery {
-        metric_name: "mz_compute_replica_park_duration_seconds_total",
-        help: "The total time workers were parked since restart.",
-        query: "SELECT
-                    worker_id,
-                    sum(slept_for_ns * count)::float8 / 1000000000 AS duration_s
-                FROM mz_internal.mz_scheduling_parks_histogram_per_worker
-                GROUP BY worker_id",
-        value_column_name: "duration_s",
-        per_replica: true,
-    },
-];
 
 async fn execute_promsql_query(
     client: &mut AuthedClient,
@@ -357,7 +241,7 @@ pub async fn handle_promsql(mut client: AuthedClient) -> MetricsRegistry {
     let mut metrics_by_name = BTreeMap::new();
 
     for query in QUERIES {
-        handle_promsql_query(&mut client, &query, &metrics_registry, &mut metrics_by_name).await;
+        handle_promsql_query(&mut client, query, &metrics_registry, &mut metrics_by_name).await;
     }
 
     metrics_registry

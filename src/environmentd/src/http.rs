@@ -75,6 +75,7 @@ mod console;
 mod memory;
 mod metrics;
 mod probe;
+mod prometheus;
 mod root;
 mod sql;
 mod webhook;
