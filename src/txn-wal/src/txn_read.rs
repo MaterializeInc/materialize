@@ -143,8 +143,8 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
         data_read: &mut ReadHandle<K, V, T, D>,
     ) -> Result<Vec<((Result<K, String>, Result<V, String>), T, D)>, Since<T>>
     where
-        K: Debug + Codec + Ord,
-        V: Debug + Codec + Ord,
+        K: Debug + Codec + Ord + Clone,
+        V: Debug + Codec + Ord + Clone,
         D: Debug + Semigroup + Ord + Codec64 + Send + Sync,
     {
         let data_write = WriteHandle::from_read(data_read, "unblock_read");
@@ -161,8 +161,8 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
         should_fetch_part: impl for<'a> Fn(Option<&'a LazyPartStats>) -> bool,
     ) -> Result<Cursor<K, V, T, D>, Since<T>>
     where
-        K: Debug + Codec + Ord,
-        V: Debug + Codec + Ord,
+        K: Debug + Codec + Ord + Clone,
+        V: Debug + Codec + Ord + Clone,
         D: Debug + Semigroup + Ord + Codec64 + Send + Sync,
     {
         let data_write = WriteHandle::from_read(data_read, "unblock_read");
@@ -226,8 +226,8 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
         data_since: &ReadHandle<K, V, T, D>,
     ) -> impl Future<Output = Result<SnapshotStats, Since<T>>> + Send + 'static
     where
-        K: Debug + Codec + Ord,
-        V: Debug + Codec + Ord,
+        K: Debug + Codec + Ord + Clone,
+        V: Debug + Codec + Ord + Clone,
         D: Ord + Semigroup + Codec64 + Send + Sync,
     {
         // This is used by the optimizer in planning to get cost statistics, so
@@ -256,8 +256,8 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
         data_read: &ReadHandle<K, V, T, D>,
     ) -> Result<SnapshotPartsStats, Since<T>>
     where
-        K: Debug + Codec + Ord,
-        V: Debug + Codec + Ord,
+        K: Debug + Codec + Ord + Clone,
+        V: Debug + Codec + Ord + Clone,
         D: Debug + Semigroup + Ord + Codec64 + Send + Sync,
     {
         let data_write = WriteHandle::from_read(data_read, "unblock_read");
