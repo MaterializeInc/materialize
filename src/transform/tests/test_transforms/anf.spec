@@ -107,10 +107,6 @@ With
 
 
 # Recursive queries.
-# Here:
-# (1) l5 and l10 are equivalent.
-# (2) l7 is equivalent to l12.
-# (3) l6 is not equivalent (although structurally equal) to l11.
 apply pipeline=anf
 Return
   Get l3

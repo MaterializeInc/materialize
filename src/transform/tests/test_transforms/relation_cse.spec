@@ -42,10 +42,6 @@ With
 
 
 # Recursive queries.
-# Here:
-# (1) a Filter (#1 > 7) over l1 appears twice.
-# (2) l3 is equivalent to l6.
-# (3) l2 is not equivalent (although structurally equal) to l5.
 apply pipeline=relation_cse
 Return
   Return
