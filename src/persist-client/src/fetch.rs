@@ -1483,10 +1483,8 @@ pub enum PartDecodeFormat {
 impl PartDecodeFormat {
     /// Returns a default value for [`PartDecodeFormat`].
     pub const fn default() -> Self {
-        // IMPORTANT: By default we will not decode or validate our structured format until it's
-        // more stable.
         PartDecodeFormat::Row {
-            validate_structured: false,
+            validate_structured: true,
         }
     }
 
