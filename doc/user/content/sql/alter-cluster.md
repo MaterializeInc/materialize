@@ -146,7 +146,6 @@ Depending on the type of objects in a cluster, a resizing operation might incur
 
 {{< private-preview />}}
 
-Changing the size of a cluster using the `ALTER CLUSTER` command requires the
 For clusters that do not contain sources or sinks, you can use the `WAIT UNTIL
 READY` option to perform a graceful resizing, which incurs **no downtime**.
 Instead of restarting the cluster, this approach spins up an additional cluster
