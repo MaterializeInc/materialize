@@ -197,8 +197,7 @@ impl ExpressionCache {
                                 continue;
                             }
                         };
-                        // Remove dropped IDs and local expressions that were cached with different
-                        // features.
+                        // Remove dropped IDs.
                         if !current_ids.contains(&key.id) {
                             keys_to_remove.push((key.clone(), None));
                         } else {
@@ -216,9 +215,17 @@ impl ExpressionCache {
                                 continue;
                             }
                         };
-                        // Remove dropped IDs and global expressions that were cached with different
-                        // features.
-                        if !current_ids.contains(&key.id) {
+                        // Remove dropped IDs and expressions that rely on dropped indexes.
+                        let index_dependencies: BTreeSet<_> = expressions
+                            .global_mir
+                            .index_imports
+                            .keys()
+                            .chain(expressions.physical_plan.index_imports.keys())
+                            .cloned()
+                            .collect();
+                        if !current_ids.contains(&key.id)
+                            || !index_dependencies.is_subset(current_ids)
+                        {
                             keys_to_remove.push((key.clone(), None));
                         } else {
                             global_expressions.insert(key.id, expressions);
