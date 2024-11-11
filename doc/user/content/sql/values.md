@@ -20,7 +20,7 @@ the parenthesis represent the values of the columns in that row.
 ## Details
 
 `VALUES` statements can be used anywhere that [`SELECT`] statements are valid.
-They are most commonly used in [`INSERT`] statements, but they can also be used
+They are most commonly used in [`INSERT`] statements, but can also be used
 on their own.
 
 ## Examples
@@ -34,33 +34,33 @@ following example uses a `VALUES` expression in an [`INSERT`] statement:
 INSERT INTO my_table VALUES (1, 2), (3, 4);
 ```
 
-### Use `VALUES` as a standalone
+### Use `VALUES` as a standalone expression
 
 `VALUES` statements can be used anywhere that [`SELECT`] statements are valid.
 For example:
 
-- As a standalone statement.
+- As a standalone statement:
 
   ```mzsql
   VALUES (1, 2, 3), (4, 5, 6);
   ```
 
-  The operation returns the following:
+  The statement above returns the following results:
 
   ```nofmt
   column1 | column2 | column3
-  ---------+---------+---------
-          1 |       2 |       3
-          4 |       5 |       6
+  --------+---------+---------
+        1 |       2 |       3
+        4 |       5 |       6
   ```
 
-- With an `ORDER BY` and `LIMIT`.
+- With an `ORDER BY` and `LIMIT`:
 
   ```mzsql
   VALUES (1), (2), (3) ORDER BY column1 DESC LIMIT 2;
   ```
 
-  The operation returns the following:
+  The statement above returns the following results:
 
   ```nofmt
   column1

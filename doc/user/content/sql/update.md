@@ -12,7 +12,7 @@ menu:
 
 ```mzsql
 UPDATE <table_name> [ AS <alias> ]
-   SET <column1_name> = <expression1> [, <column2_name> = <expression2>, ...]
+   SET <column_name> = <expression> [, <column2_name> = <expression2>, ...]
 [WHERE <condition> ];
 ```
 
@@ -47,20 +47,20 @@ The privileges required to execute this statement are:
 
 ## Examples
 
-The following examples use the following table `example_table`:
+All examples below will use the `example_table` table:
 
 ```mzsql
 CREATE TABLE example_table (a int, b text);
 INSERT INTO example_table VALUES (1, 'hello'), (2, 'goodbye');
 ```
 
-To verify the initial state of the table, run the following   `SELECT` statement:
+To verify the initial state of the table, run the following `SELECT` statement:
 
 ```mzsql
 SELECT * FROM example_table;
 ```
 
-The results show that the table contains two rows:
+The `SELECT` statement above should return two rows:
 
 ```
  a |    b
@@ -88,7 +88,8 @@ that the operation updated the `a` column only for that row, run the following
 SELECT * FROM example_table;
 ```
 
-The results show that column `a` was updated only for the row with `b = 'hello'`:
+The results returned show that column `a` was updated only for the row with `b
+= 'hello'`:
 
 ```
  a |    b
@@ -107,13 +108,13 @@ UPDATE example_table
 SET a = 0, b = 'aloha';
 ```
 
-To verify, run the following `SELECT` statement:
+To verify the results, run the following `SELECT` statement:
 
 ```mzsql
 SELECT * FROM example_table;
 ```
 
-The results show that all rows were updated:
+The results returned show that all rows were updated:
 
 ```
  a |   b
