@@ -430,13 +430,13 @@ pub(crate) const BLOB_TARGET_SIZE: Config<usize> = Config::new(
 
 pub(crate) const INLINE_WRITES_SINGLE_MAX_BYTES: Config<usize> = Config::new(
     "persist_inline_writes_single_max_bytes",
-    0,
+    4096,
     "The (exclusive) maximum size of a write that persist will inline in metadata.",
 );
 
 pub(crate) const INLINE_WRITES_TOTAL_MAX_BYTES: Config<usize> = Config::new(
     "persist_inline_writes_total_max_bytes",
-    0,
+    1 * MiB,
     "\
     The (exclusive) maximum total size of inline writes in metadata before \
     persist will backpressure them by flushing out to s3.",
@@ -1657,6 +1657,10 @@ mod tests {
         let cache = PersistClientCache::new_no_metrics();
         // Set blob_target_size to 0 so that each row gets forced into its own batch part
         cache.cfg.set_config(&BLOB_TARGET_SIZE, 0);
+        // Otherwise fails: expected hollow part!
+        cache.cfg.set_config(&STRUCTURED_KEY_LOWER_LEN, 0);
+        cache.cfg.set_config(&INLINE_WRITES_SINGLE_MAX_BYTES, 0);
+        cache.cfg.set_config(&INLINE_WRITES_TOTAL_MAX_BYTES, 0);
         let client = cache
             .open(PersistLocation::new_in_mem())
             .await
@@ -1697,6 +1701,10 @@ mod tests {
         let cache = PersistClientCache::new_no_metrics();
         // Set blob_target_size to 0 so that each row gets forced into its own batch part
         cache.cfg.set_config(&BLOB_TARGET_SIZE, 0);
+        // Otherwise fails: expected hollow part!
+        cache.cfg.set_config(&STRUCTURED_KEY_LOWER_LEN, 0);
+        cache.cfg.set_config(&INLINE_WRITES_SINGLE_MAX_BYTES, 0);
+        cache.cfg.set_config(&INLINE_WRITES_TOTAL_MAX_BYTES, 0);
         let client = cache
             .open(PersistLocation::new_in_mem())
             .await
@@ -1796,6 +1804,9 @@ mod tests {
         cache.cfg().set_config(&BATCH_COLUMNAR_FORMAT, "both_v2");
         cache.cfg().set_config(&BATCH_COLUMNAR_FORMAT_PERCENT, 100);
         cache.cfg().set_config(&STRUCTURED_KEY_LOWER_LEN, 1024);
+        // Otherwise fails: expected hollow part!
+        cache.cfg().set_config(&INLINE_WRITES_SINGLE_MAX_BYTES, 0);
+        cache.cfg().set_config(&INLINE_WRITES_TOTAL_MAX_BYTES, 0);
         let client = cache
             .open(PersistLocation::new_in_mem())
             .await

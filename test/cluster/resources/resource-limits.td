@@ -262,7 +262,7 @@ $ postgres-execute connection=mz_system
 ALTER SYSTEM RESET max_tables
 
 > SHOW max_tables
-25
+200
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM RESET ALL

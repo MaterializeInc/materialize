@@ -208,7 +208,7 @@ pub const STORAGE_SUSPEND_AND_RESTART_DELAY: Config<Duration> = Config::new(
 /// Whether to use the new reclock implementation.
 pub const STORAGE_USE_RECLOCK_V2: Config<bool> = Config::new(
     "storage_use_reclock_v2",
-    false,
+    true,
     "Whether to use the new reclock implementation.",
 );
 

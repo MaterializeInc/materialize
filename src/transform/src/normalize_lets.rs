@@ -521,7 +521,11 @@ mod let_motion {
                     body,
                 } => {
                     // push bindings into `bindings` as they should not be further processed.
-                    bindings.extend(ids.drain(..).zip(values.drain(..).zip(limits.drain(..))));
+                    use itertools::Itertools;
+                    bindings.extend(
+                        ids.drain(..)
+                            .zip_eq(values.drain(..).zip_eq(limits.drain(..))),
+                    );
                     *expr = body.take_dangerous();
                     // Stop at `LetRec` nodes as we cannot always lift `Let` nodes out of them.
                 }

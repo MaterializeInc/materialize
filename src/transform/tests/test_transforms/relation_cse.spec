@@ -42,10 +42,6 @@ With
 
 
 # Recursive queries.
-# Here:
-# (1) a Filter (#1 > 7) over l1 appears twice.
-# (2) l3 is equivalent to l6.
-# (3) l2 is not equivalent (although structurally equal) to l5.
 apply pipeline=relation_cse
 Return
   Return
@@ -96,44 +92,40 @@ Return
     Filter (#1 > 7)
       Get t0
     Filter (#1 > 7)
-      Get l7
+      Get l6
     Filter (#1 > 7)
       Get l4
 With Mutually Recursive
-  cte l7 =
+  cte l6 =
     Distinct project=[#0, #1]
       Union
-        Filter (#1 > 7)
-          Get l1
+        Get l1
         Get l5
         Get l5
-        Get l6
-        Get l6
-  cte l6 =
-    Filter (#1 > 7)
-      Get l7
+        Get l3
+        Get l3
   cte l5 =
     Filter (#1 > 7)
       Get l4
   cte l4 =
     Distinct project=[#0, #1]
       Union
-        Filter (#1 > 7)
-          Get l1
+        Get l1
         Get l2
         Get l2
         Get l3
         Get l3
   cte l3 =
     Filter (#1 > 7)
-      Get l7
+      Get l6
   cte l2 =
     Filter (#1 > 7)
       Get l4
   cte l1 =
-    Union
-      Get l0
-      Get l0
+    Filter (#1 > 7)
+      Union
+        Get l0
+        Get l0
   cte l0 =
     Project (#0, #1)
       Get t0

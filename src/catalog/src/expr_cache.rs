@@ -782,7 +782,9 @@ mod tests {
     }
 
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(8))]
+        // Generating the expression structs can take an extremely long amount of time because
+        // they are recursive, which can cause test timeouts.
+        #![proptest_config(ProptestConfig::with_cases(1))]
 
         #[mz_ore::test]
         #[cfg_attr(miri, ignore)]

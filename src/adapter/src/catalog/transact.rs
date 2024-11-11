@@ -19,7 +19,7 @@ use mz_adapter_types::dyncfgs::{
 };
 use mz_audit_log::{
     CreateOrDropClusterReplicaReasonV1, EventDetails, EventType, IdFullNameV1, IdNameV1,
-    ObjectType, SchedulingDecisionsWithReasonsV1, VersionedEvent, VersionedStorageUsage,
+    ObjectType, SchedulingDecisionsWithReasonsV2, VersionedEvent, VersionedStorageUsage,
 };
 use mz_catalog::builtin::BuiltinLog;
 use mz_catalog::durable::{NetworkPolicy, Transaction};
@@ -294,7 +294,7 @@ impl ReplicaCreateDropReason {
         self,
     ) -> (
         CreateOrDropClusterReplicaReasonV1,
-        Option<SchedulingDecisionsWithReasonsV1>,
+        Option<SchedulingDecisionsWithReasonsV2>,
     ) {
         let (reason, scheduling_policies) = match self {
             ReplicaCreateDropReason::Manual => (CreateOrDropClusterReplicaReasonV1::Manual, None),
@@ -952,8 +952,8 @@ impl Catalog {
                 }) = &config.location
                 {
                     let (reason, scheduling_policies) = reason.into_audit_log();
-                    let details = EventDetails::CreateClusterReplicaV2(
-                        mz_audit_log::CreateClusterReplicaV2 {
+                    let details = EventDetails::CreateClusterReplicaV3(
+                        mz_audit_log::CreateClusterReplicaV3 {
                             cluster_id: cluster_id.to_string(),
                             cluster_name: cluster.name.clone(),
                             replica_id: Some(id.to_string()),
@@ -1443,7 +1443,7 @@ impl Catalog {
 
                     let (reason, scheduling_policies) = reason.into_audit_log();
                     let details =
-                        EventDetails::DropClusterReplicaV2(mz_audit_log::DropClusterReplicaV2 {
+                        EventDetails::DropClusterReplicaV3(mz_audit_log::DropClusterReplicaV3 {
                             cluster_id: cluster_id.to_string(),
                             cluster_name: cluster.name.clone(),
                             replica_id: Some(replica_id.to_string()),

@@ -21,14 +21,14 @@ pub const ALLOW_USER_SESSIONS: Config<bool> = Config::new(
 
 pub const ENABLE_0DT_DEPLOYMENT: Config<bool> = Config::new(
     "enable_0dt_deployment",
-    false,
+    true,
     "Whether to enable zero-downtime deployments (experimental).",
 );
 
 // Slightly awkward with the WITH prefix, but we can't start with a 0.
 pub const WITH_0DT_DEPLOYMENT_MAX_WAIT: Config<Duration> = Config::new(
     "with_0dt_deployment_max_wait",
-    Duration::from_secs(5 * 60),
+    Duration::from_secs(60 * 60),
     "How long to wait at most for clusters to be hydrated, when doing a zero-downtime deployment.",
 );
 
@@ -66,7 +66,7 @@ pub const WITH_0DT_CAUGHT_UP_CHECK_CUTOFF: Config<Duration> = Config::new(
 /// Enable logging of statement lifecycle events in mz_internal.mz_statement_lifecycle_history.
 pub const ENABLE_STATEMENT_LIFECYCLE_LOGGING: Config<bool> = Config::new(
     "enable_statement_lifecycle_logging",
-    false,
+    true,
     "Enable logging of statement lifecycle events in mz_internal.mz_statement_lifecycle_history.",
 );
 

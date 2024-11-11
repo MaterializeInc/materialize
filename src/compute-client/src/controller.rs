@@ -1092,7 +1092,6 @@ where
         // Perform periodic maintenance work.
         if self.maintenance_scheduled {
             self.maintain(storage);
-            self.maintenance_ticker.reset();
             self.maintenance_scheduled = false;
         }
 

@@ -88,7 +88,7 @@ ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;
     ),
     -- Collect ready dataflows.
     -- For a dataflow to be ready it must be hydrated and caught up.
-    -- We define a dataflow to be caught up if its local lag is less than 1 second.
+    -- We define a dataflow to be caught up if its local lag is less than 2 seconds.
     ready_dataflows AS (
         SELECT id
         FROM dataflows d
