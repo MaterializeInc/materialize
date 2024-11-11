@@ -61,6 +61,15 @@ pub struct GlobalExpressions {
     pub optimizer_features: OptimizerFeatures,
 }
 
+impl GlobalExpressions {
+    fn index_imports(&self) -> impl Iterator<Item = &GlobalId> {
+        self.global_mir
+            .index_imports
+            .keys()
+            .chain(self.physical_plan.index_imports.keys())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Arbitrary)]
 struct CacheKey {
     deploy_generation: u64,
@@ -216,13 +225,8 @@ impl ExpressionCache {
                             }
                         };
                         // Remove dropped IDs and expressions that rely on dropped indexes.
-                        let index_dependencies: BTreeSet<_> = expressions
-                            .global_mir
-                            .index_imports
-                            .keys()
-                            .chain(expressions.physical_plan.index_imports.keys())
-                            .cloned()
-                            .collect();
+                        let index_dependencies: BTreeSet<_> =
+                            expressions.index_imports().cloned().collect();
                         if !current_ids.contains(&key.id)
                             || !index_dependencies.is_subset(current_ids)
                         {
@@ -520,7 +524,7 @@ mod tests {
             // Insert some expressions into the cache.
             let mut local_exps = BTreeMap::new();
             let mut global_exps = BTreeMap::new();
-            for _ in 0..3 {
+            for _ in 0..4 {
                 let id = GlobalId::User(next_id);
                 let local_exp = generate_local_expressions();
                 let global_exp = generate_global_expressions();
@@ -534,6 +538,7 @@ mod tests {
                     .await;
 
                 current_ids.insert(id);
+                current_ids.extend(global_exp.index_imports());
                 local_exps.insert(id, local_exp);
                 global_exps.insert(id, global_exp);
 
@@ -594,6 +599,49 @@ mod tests {
             );
         }
 
+        {
+            // Simulate dropping an object dependency.
+            let global_exp_to_remove = global_exps.keys().next().expect("not empty").clone();
+            let removed_global_exp = global_exps
+                .remove(&global_exp_to_remove)
+                .expect("known to exist");
+            let dependency_to_remove = removed_global_exp
+                .index_imports()
+                .next()
+                .expect("arbitrary impl always makes non-empty vecs");
+            current_ids.remove(&dependency_to_remove);
+
+            // If the dependency is also tracked in the cache remove it.
+            let _removed_local_exp = local_exps.remove(&dependency_to_remove);
+            let _removed_global_exp = global_exps.remove(&dependency_to_remove);
+            // Remove any other exps that depend on dependency.
+            global_exps.retain(|_, exp| {
+                let index_imports: BTreeSet<_> = exp.index_imports().collect();
+                !index_imports.contains(&dependency_to_remove)
+            });
+
+            // Re-open the cache.
+            let (_cache, local_entries, global_entries) =
+                ExpressionCacheHandle::spawn_expression_cache(ExpressionCacheConfig {
+                    deploy_generation: first_deploy_generation,
+                    persist: persist.clone(),
+                    organization_id,
+                    current_ids: current_ids.clone(),
+                    remove_prior_gens,
+                    compact_shard,
+                    dyncfgs: dyncfgs.clone(),
+                })
+                .await;
+            assert_eq!(
+                local_entries, local_exps,
+                "dropped object dependencies should NOT remove local expressions"
+            );
+            assert_eq!(
+                global_entries, global_exps,
+                "dropped object dependencies should remove global expressions"
+            );
+        }
+
         let (new_gen_local_exps, new_gen_global_exps) = {
             // Open the cache at a new generation.
             let (cache, local_entries, global_entries) =
@@ -635,6 +683,7 @@ mod tests {
                     .await;
 
                 current_ids.insert(id);
+                current_ids.extend(global_exp.index_imports());
                 local_exps.insert(id, local_exp);
                 global_exps.insert(id, global_exp);
 
