@@ -1023,12 +1023,15 @@ dependencies = [
  "itertools 0.12.1",
  "lazy_static",
  "lazycell",
+ "log",
+ "prettyplease",
  "proc-macro2",
  "quote",
  "regex",
  "rustc-hash",
  "shlex",
  "syn 2.0.63",
+ "which",
 ]
 
 [[package]]
@@ -1826,6 +1829,17 @@ checksum = "6d2301688392eb071b0bf1a37be05c469d3cc4dbbd95df672fe28ab021e6a096"
 dependencies = [
  "quote",
  "syn 1.0.107",
+]
+
+[[package]]
+name = "custom-labels"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b8be3ae20903692f48a3be44e08a202636503829f94c7143bbe94a485d76b35"
+dependencies = [
+ "bindgen",
+ "cc",
+ "libc",
 ]
 
 [[package]]
@@ -4582,6 +4596,7 @@ dependencies = [
  "bytesize",
  "clap",
  "crossbeam-channel",
+ "custom-labels",
  "dec",
  "differential-dataflow",
  "futures",

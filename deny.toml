@@ -142,6 +142,7 @@ name = "strum-macros"
 [[bans.deny]]
 name = "log"
 wrappers = [
+    "bindgen",
     "deadpool-postgres",
     "eventsource-client",
     "fail",

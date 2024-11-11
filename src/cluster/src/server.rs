@@ -229,22 +229,31 @@ where
         }
 
         let worker_guards = execute_from(builders, other, worker_config, move |timely_worker| {
-            let timely_worker_index = timely_worker.index();
-            let _tokio_guard = tokio_executor.enter();
-            let client_rx = client_rxs.lock().unwrap()[timely_worker_index % config.workers]
-                .take()
-                .unwrap();
-            let persist_clients = Arc::clone(&persist_clients);
-            let txns_ctx = txns_ctx.clone();
-            let user_worker_config = user_worker_config.clone();
-            let tracing_handle = Arc::clone(&tracing_handle);
-            Worker::build_and_run(
-                user_worker_config,
-                timely_worker,
-                client_rx,
-                persist_clients,
-                txns_ctx,
-                tracing_handle,
+            custom_labels::with_labels(
+                [
+                    ("timely_worker", format!("{}", timely_worker.index())),
+                    ("cluster_worker", Worker::name()),
+                ],
+                || {
+                    let timely_worker_index = timely_worker.index();
+                    let _tokio_guard = tokio_executor.enter();
+                    let client_rx = client_rxs.lock().unwrap()
+                        [timely_worker_index % config.workers]
+                        .take()
+                        .unwrap();
+                    let persist_clients = Arc::clone(&persist_clients);
+                    let txns_ctx = txns_ctx.clone();
+                    let user_worker_config = user_worker_config.clone();
+                    let tracing_handle = Arc::clone(&tracing_handle);
+                    Worker::build_and_run(
+                        user_worker_config,
+                        timely_worker,
+                        client_rx,
+                        persist_clients,
+                        txns_ctx,
+                        tracing_handle,
+                    )
+                },
             )
         })
         .map_err(|e| anyhow!("{e}"))?;

@@ -296,6 +296,11 @@ who = "Parker Timmerman <parker.timmerman@materialize.com>"
 criteria = "safe-to-deploy"
 version = "1.2.6"
 
+[[audits.custom-labels]]
+who = "Moritz Hoffmann <mh@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.1.2"
+
 [[audits.datadriven]]
 who = "Ben Kirwin <bkirwi@materialize.com>"
 criteria = "safe-to-deploy"

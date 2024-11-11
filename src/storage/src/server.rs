@@ -120,4 +120,8 @@ impl mz_cluster::types::AsRunnableWorker<StorageCommand, StorageResponse> for Co
         )
         .run();
     }
+
+    fn name() -> String {
+        "storage".to_string()
+    }
 }

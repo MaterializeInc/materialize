@@ -229,6 +229,10 @@ impl mz_cluster::types::AsRunnableWorker<ComputeCommand, ComputeResponse> for Co
         }
         .run()
     }
+
+    fn name() -> String {
+        "compute".to_string()
+    }
 }
 
 /// Set the current thread's core affinity, based on the given `worker_id`.
