@@ -26,7 +26,6 @@ use mz_ore::{soft_assert_or_log, task};
 use mz_persist_client::usage::ShardsUsageReferenced;
 use mz_repr::{Datum, Row};
 use mz_sql::ast::Statement;
-use mz_sql::names::ResolvedIds;
 use mz_sql::pure::PurifiedStatement;
 use mz_storage_client::controller::IntrospectionType;
 use mz_storage_types::controller::CollectionMetadata;

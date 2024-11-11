@@ -146,7 +146,7 @@ impl Coordinator {
                                         let (_since, write_frontier) = self
                                             .controller
                                             .storage
-                                            .collection_frontiers(id.global_id())
+                                            .collection_frontiers(mv.global_id())
                                             .expect("the storage controller should know about MVs that exist in the catalog");
                                         (mv.global_id(), write_frontier, refresh_schedule)
                                     })

@@ -471,8 +471,6 @@ impl Coordinator {
                     .catalog_mut()
                     .set_physical_plan(global_id, df_desc.clone());
 
-                let (mut df_desc, df_meta) = global_lir_plan.unapply();
-
                 let notice_builtin_updates_fut = coord
                     .process_dataflow_metainfo(df_meta, global_id, session, notice_ids)
                     .await;

@@ -236,7 +236,7 @@ pub enum Message {
         /// Coordinator's message queue.
         ///
         /// See [`DeferredWriteOp::can_be_optimistically_retried`] for more detail.
-        acquired_lock: Option<(GlobalId, tokio::sync::OwnedMutexGuard<()>)>,
+        acquired_lock: Option<(CatalogItemId, tokio::sync::OwnedMutexGuard<()>)>,
     },
     /// Initiates a group commit.
     GroupCommitInitiate(Span, Option<GroupCommitPermit>),
@@ -1656,7 +1656,7 @@ pub struct Coordinator {
     introspection_subscribes: BTreeMap<GlobalId, IntrospectionSubscribe>,
 
     /// Locks that grant access to a specific object, populated lazily as objects are written to.
-    write_locks: BTreeMap<GlobalId, Arc<tokio::sync::Mutex<()>>>,
+    write_locks: BTreeMap<CatalogItemId, Arc<tokio::sync::Mutex<()>>>,
     /// Plans that are currently deferred and waiting on a write lock.
     deferred_write_ops: BTreeMap<ConnectionId, DeferredWriteOp>,
 
@@ -2503,6 +2503,10 @@ impl Coordinator {
                         cluster_id,
                     } => {
                         let desc = desc.into_inline_connection(catalog.state());
+                        // TODO(parkmycar): We should probably check the type here, but I'm not sure if
+                        // this will always be a Source or a Table.
+                        let progress_subsource =
+                            catalog.get_entry(&progress_subsource).latest_global_id();
                         let ingestion = mz_storage_types::sources::IngestionDescription::new(
                             desc,
                             cluster_id,
@@ -2519,14 +2523,19 @@ impl Coordinator {
                         external_reference: _,
                         details,
                         data_config,
-                    } => (
-                        DataSource::IngestionExport {
-                            ingestion_id,
-                            details,
-                            data_config: data_config.into_inline_connection(catalog.state()),
-                        },
-                        Some(source_status_collection_id),
-                    ),
+                    } => {
+                        // TODO(parkmycar): We should probably check the type here, but I'm not sure if
+                        // this will always be a Source or a Table.
+                        let ingestion_id = catalog.get_entry(&ingestion_id).latest_global_id();
+                        (
+                            DataSource::IngestionExport {
+                                ingestion_id,
+                                details,
+                                data_config: data_config.into_inline_connection(catalog.state()),
+                            },
+                            Some(source_status_collection_id),
+                        )
+                    }
                     DataSourceDesc::Webhook { .. } => {
                         (DataSource::Webhook, Some(source_status_collection_id))
                     }
@@ -2551,7 +2560,7 @@ impl Coordinator {
                 CatalogItem::Source(source) => {
                     collections.push((
                         source.global_id(),
-                        source_desc(&source.data_source, &source.desc, &source.timleline),
+                        source_desc(&source.data_source, &source.desc, &source.timeline),
                     ));
                 }
                 CatalogItem::Table(table) => {

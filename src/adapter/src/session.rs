@@ -1471,12 +1471,12 @@ impl From<&ExplainContext> for RequireLinearization {
     }
 }
 
-/// A complete set of exclusive locks for writing to collections identified by [`GlobalId`]s.
+/// A complete set of exclusive locks for writing to collections identified by [`CatalogItemId`]s.
 ///
 /// To prevent deadlocks between two sessions, we do not allow acquiring a partial set of locks.
 #[derive(Debug)]
 pub struct WriteLocks {
-    locks: BTreeMap<GlobalId, tokio::sync::OwnedMutexGuard<()>>,
+    locks: BTreeMap<CatalogItemId, tokio::sync::OwnedMutexGuard<()>>,
     /// Connection that currently holds these locks, used for tracing purposes only.
     conn_id: ConnectionId,
 }
@@ -1486,7 +1486,7 @@ impl WriteLocks {
     ///
     /// When "finishing" the builder with [`WriteLocksBuilder::all_or_nothing`], if we haven't
     /// acquired all of the necessary locks we drop any partially acquired ones.
-    pub fn builder(sources: impl IntoIterator<Item = GlobalId>) -> WriteLocksBuilder {
+    pub fn builder(sources: impl IntoIterator<Item = CatalogItemId>) -> WriteLocksBuilder {
         let locks = sources.into_iter().map(|gid| (gid, None)).collect();
         WriteLocksBuilder { locks }
     }
@@ -1495,8 +1495,8 @@ impl WriteLocks {
     /// Dropping the currently held locks if it's not.
     pub fn validate(
         self,
-        collections: impl Iterator<Item = GlobalId>,
-    ) -> Result<Self, BTreeSet<GlobalId>> {
+        collections: impl Iterator<Item = CatalogItemId>,
+    ) -> Result<Self, BTreeSet<CatalogItemId>> {
         let mut missing = BTreeSet::new();
         for collection in collections {
             if !self.locks.contains_key(&collection) {
@@ -1532,20 +1532,20 @@ impl Drop for WriteLocks {
 /// See [`WriteLocks::builder`].
 #[derive(Debug)]
 pub struct WriteLocksBuilder {
-    locks: BTreeMap<GlobalId, Option<tokio::sync::OwnedMutexGuard<()>>>,
+    locks: BTreeMap<CatalogItemId, Option<tokio::sync::OwnedMutexGuard<()>>>,
 }
 
 impl WriteLocksBuilder {
     /// Adds a lock to this builder.
-    pub fn insert_lock(&mut self, id: GlobalId, lock: tokio::sync::OwnedMutexGuard<()>) {
+    pub fn insert_lock(&mut self, id: CatalogItemId, lock: tokio::sync::OwnedMutexGuard<()>) {
         self.locks.insert(id, Some(lock));
     }
 
     /// Finish this builder by returning either all of the necessary locks, or none of them.
     ///
-    /// If we fail to acquire all of the locks, returns one of the [`GlobalId`]s that we failed to
-    /// acquire a lock for, that should be awaited so we know when to run again.
-    pub fn all_or_nothing(self, conn_id: &ConnectionId) -> Result<WriteLocks, GlobalId> {
+    /// If we fail to acquire all of the locks, returns one of the [`CatalogItemId`]s that we
+    /// failed to acquire a lock for, that should be awaited so we know when to run again.
+    pub fn all_or_nothing(self, conn_id: &ConnectionId) -> Result<WriteLocks, CatalogItemId> {
         let (locks, missing): (BTreeMap<_, _>, BTreeSet<_>) =
             self.locks
                 .into_iter()
@@ -1622,7 +1622,7 @@ impl WriteLocksBuilder {
 /// [`group_commit`]: super::coord::Coordinator::group_commit
 #[derive(Debug, Default)]
 pub(crate) struct GroupCommitWriteLocks {
-    locks: BTreeMap<GlobalId, tokio::sync::OwnedMutexGuard<()>>,
+    locks: BTreeMap<CatalogItemId, tokio::sync::OwnedMutexGuard<()>>,
 }
 
 impl GroupCommitWriteLocks {
@@ -1636,7 +1636,10 @@ impl GroupCommitWriteLocks {
     }
 
     /// Returns the collections we're missing locks for, if any.
-    pub fn missing_locks(&self, writes: impl Iterator<Item = GlobalId>) -> BTreeSet<GlobalId> {
+    pub fn missing_locks(
+        &self,
+        writes: impl Iterator<Item = CatalogItemId>,
+    ) -> BTreeSet<CatalogItemId> {
         let mut missing = BTreeSet::new();
         for write in writes {
             if !self.locks.contains_key(&write) {

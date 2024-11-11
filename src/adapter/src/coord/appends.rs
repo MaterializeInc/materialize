@@ -20,9 +20,8 @@ use mz_adapter_types::connection::ConnectionId;
 use mz_ore::metrics::MetricsFutureExt;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_ore::vec::VecExt;
 use mz_ore::{assert_none, instrument};
-use mz_repr::{CatalogItemId, Diff, GlobalId, Row, Timestamp};
+use mz_repr::{CatalogItemId, Diff, Row, Timestamp};
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan::Plan;
 use mz_sql::session::metadata::SessionMetadata;
@@ -66,7 +65,7 @@ impl DeferredWriteOp {
     }
 
     /// Returns an Iterator of all the required locks for current operation.
-    pub fn required_locks(&self) -> impl Iterator<Item = GlobalId> + use<'_> {
+    pub fn required_locks(&self) -> impl Iterator<Item = CatalogItemId> + use<'_> {
         match self {
             DeferredWriteOp::Plan(plan) => {
                 let iter = plan.requires_locks.iter().copied();
@@ -104,13 +103,13 @@ pub struct DeferredPlan {
     pub ctx: ExecuteContext,
     pub plan: Plan,
     pub validity: PlanValidity,
-    pub requires_locks: BTreeSet<GlobalId>,
+    pub requires_locks: BTreeSet<CatalogItemId>,
 }
 
 #[derive(Debug)]
 pub struct DeferredWrite {
     pub span: Span,
-    pub writes: BTreeMap<GlobalId, Vec<(Row, i64)>>,
+    pub writes: BTreeMap<CatalogItemId, Vec<(Row, i64)>>,
     pub pending_txn: PendingTxn,
 }
 
@@ -130,8 +129,8 @@ pub(crate) enum PendingWriteTxn {
     User {
         span: Span,
         /// List of all write operations within the transaction.
-        writes: BTreeMap<GlobalId, Vec<(Row, Diff)>>,
-        /// If they exist, should contain locks for each [`GlobalId`] in `writes`.
+        writes: BTreeMap<CatalogItemId, Vec<(Row, Diff)>>,
+        /// If they exist, should contain locks for each [`CatalogItemId`] in `writes`.
         write_locks: Option<WriteLocks>,
         /// Inner transaction.
         pending_txn: PendingTxn,
@@ -172,7 +171,7 @@ impl Coordinator {
     pub(crate) async fn try_deferred(
         &mut self,
         conn_id: ConnectionId,
-        acquired_lock: Option<(GlobalId, tokio::sync::OwnedMutexGuard<()>)>,
+        acquired_lock: Option<(CatalogItemId, tokio::sync::OwnedMutexGuard<()>)>,
     ) {
         // Try getting the deferred op, it may have already been canceled.
         let Some(op) = self.deferred_write_ops.remove(&conn_id) else {
@@ -217,7 +216,7 @@ impl Coordinator {
                 } else {
                     // Write statements never need to track resolved IDs (NOTE: This is not the
                     // same thing as plan dependencies, which we do need to re-validate).
-                    let resolved_ids = ResolvedIds(BTreeSet::new());
+                    let resolved_ids = ResolvedIds::empty();
 
                     // If we pre-acquired our locks, grant them to the session.
                     if let Some(locks) = write_locks {
@@ -602,7 +601,7 @@ impl Coordinator {
 
     pub(crate) fn defer_op<F>(&mut self, acquire_future: F, op: DeferredWriteOp)
     where
-        F: Future<Output = (GlobalId, tokio::sync::OwnedMutexGuard<()>)> + Send + 'static,
+        F: Future<Output = (CatalogItemId, tokio::sync::OwnedMutexGuard<()>)> + Send + 'static,
     {
         let conn_id = op.conn_id().clone();
 
@@ -639,8 +638,8 @@ impl Coordinator {
     /// Returns a future that waits until it can get an exclusive lock on the specified collection.
     pub(crate) fn grant_object_write_lock(
         &mut self,
-        object_id: GlobalId,
-    ) -> impl Future<Output = (GlobalId, OwnedMutexGuard<()>)> + 'static {
+        object_id: CatalogItemId,
+    ) -> impl Future<Output = (CatalogItemId, OwnedMutexGuard<()>)> + 'static {
         let write_lock_handle = self
             .write_locks
             .entry(object_id)
@@ -656,7 +655,7 @@ impl Coordinator {
     /// `None` if the lock is already held.
     pub(crate) fn try_grant_object_write_lock(
         &mut self,
-        object_id: GlobalId,
+        object_id: CatalogItemId,
     ) -> Option<OwnedMutexGuard<()>> {
         let write_lock_handle = self
             .write_locks

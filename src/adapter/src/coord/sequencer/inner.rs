@@ -2173,7 +2173,7 @@ impl Coordinator {
                     },
                 };
 
-                let mut collected_writes: BTreeMap<GlobalId, Vec<_>> = BTreeMap::new();
+                let mut collected_writes: BTreeMap<CatalogItemId, Vec<_>> = BTreeMap::new();
                 for WriteOp { id, rows } in writes {
                     let total_rows = collected_writes.entry(id).or_default();
                     total_rows.extend(rows);

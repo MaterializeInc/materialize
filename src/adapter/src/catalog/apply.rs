@@ -1256,12 +1256,14 @@ impl CatalogState {
         retractions: &mut InProgressRetractions,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
         let (updates, additions): (Vec<_>, Vec<_>) =
-            builtin_views.into_iter().partition_map(|(view, item_id, gid)| {
-                match retractions.system_object_mappings.remove(&item_id) {
-                    Some(entry) => Either::Left(entry),
-                    None => Either::Right((view, item_id, gid)),
-                }
-            });
+            builtin_views
+                .into_iter()
+                .partition_map(|(view, item_id, gid)| {
+                    match retractions.system_object_mappings.remove(&item_id) {
+                        Some(entry) => Either::Left(entry),
+                        None => Either::Right((view, item_id, gid)),
+                    }
+                });
 
         for entry in updates {
             // This implies that we updated the fingerprint for some builtin view. The retraction
@@ -1283,13 +1285,10 @@ impl CatalogState {
         let mut completed_names: BTreeSet<String> = BTreeSet::new();
 
         // Avoid some reference lifetime issues by not passing `builtin` into the spawned task.
-        let mut views: BTreeMap<CatalogItemId, (&BuiltinView, GlobalId)> =
-            BTreeMap::from_iter(additions.into_iter().map(|(builtin, item_id, gid)| {
-                let Builtin::View(view) = builtin else {
-                    unreachable!("handled elsewhere");
-                };
-                (item_id, (*view, gid))
-            }));
+        let mut views: BTreeMap<CatalogItemId, (&BuiltinView, GlobalId)> = additions
+            .into_iter()
+            .map(|(view, item_id, gid)| (item_id, (view, gid)))
+            .collect();
         let item_ids: Vec<_> = views.keys().copied().collect();
 
         let mut ready: VecDeque<CatalogItemId> = views.keys().cloned().collect();
