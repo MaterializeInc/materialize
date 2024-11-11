@@ -183,6 +183,8 @@ impl LocalExpressionCache {
         }
     }
 
+    /// Insert an expression that was cached, back into the cache. This is generally needed when
+    /// parsing/planning an expression fails, but we don't want to lose the cached expression.
     pub(super) fn insert_cached_expression(
         &mut self,
         id: GlobalId,
@@ -196,6 +198,8 @@ impl LocalExpressionCache {
         }
     }
 
+    /// Inform the cache that `id` was not found in the cache and that we should add it as
+    /// `local_mir` and `optimizer_features`.
     pub(super) fn insert_uncached_expression(
         &mut self,
         id: GlobalId,

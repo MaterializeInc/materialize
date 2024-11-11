@@ -371,6 +371,14 @@ impl Catalog {
 
     /// Return a set of [`GlobalId`]s for items that need to have their cache entries invalidated
     /// as a result of creating new indexes on the items in `ons`.
+    ///
+    /// When creating and inserting a new index, we need to invalidate some entries that may
+    /// optimize to new expressions. When creating index `i` on object `o`, we need to invalidate
+    /// the following objects:
+    ///
+    ///   - `o`.
+    ///   - All compute objects that depend directly on `o`.
+    ///   - All compute objects that would directly depend on `o`, if all views were inlined.
     pub(crate) fn invalidate_for_index(
         &self,
         ons: impl Iterator<Item = GlobalId>,
@@ -384,7 +392,6 @@ impl Catalog {
             let entry = self.get_entry(&on);
             let uses = entry.uses();
             queue.extend(uses.clone());
-            seen.extend(uses);
         }
 
         while let Some(cur) = queue.pop_front() {
@@ -404,6 +411,7 @@ impl Catalog {
                         dependencies.insert(cur);
                     }
                     CatalogItemType::View => {
+                        dependencies.insert(cur);
                         queue.extend(entry.uses());
                     }
                 }
