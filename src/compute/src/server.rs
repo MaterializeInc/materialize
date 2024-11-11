@@ -230,7 +230,7 @@ impl mz_cluster::types::AsRunnableWorker<ComputeCommand, ComputeResponse> for Co
         .run()
     }
 
-    fn name() -> String {
+    fn server_name() -> String {
         "compute".to_string()
     }
 }

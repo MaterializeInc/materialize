@@ -44,5 +44,5 @@ pub trait AsRunnableWorker<C, R> {
     );
 
     /// A debug name for the implementation.
-    fn name() -> String;
+    fn server_name() -> String;
 }

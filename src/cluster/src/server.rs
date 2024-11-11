@@ -232,7 +232,7 @@ where
             custom_labels::with_labels(
                 [
                     ("timely_worker", format!("{}", timely_worker.index())),
-                    ("cluster_worker", Worker::name()),
+                    ("server_name", Worker::server_name()),
                 ],
                 || {
                     let timely_worker_index = timely_worker.index();
