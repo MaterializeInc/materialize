@@ -311,10 +311,7 @@ impl Coordinator {
                 return Err(AdapterError::Unsupported("EXPLAIN TIMESTAMP AS DOT"));
             }
         };
-        let source_items = source_ids
-            .iter()
-            .map(|gid| self.catalog().resolve_item_id(gid));
-        let mut timeline_context = self.validate_timeline_context(source_items)?;
+        let mut timeline_context = self.validate_timeline_context(source_ids.iter().copied())?;
         if matches!(timeline_context, TimelineContext::TimestampIndependent)
             && optimized_plan.contains_temporal()
         {

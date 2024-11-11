@@ -374,9 +374,13 @@ impl Coordinator {
         ids: I,
     ) -> Result<TimelineContext, AdapterError>
     where
-        I: IntoIterator<Item = CatalogItemId>,
+        I: IntoIterator<Item = GlobalId>,
     {
-        let mut timeline_contexts: Vec<_> = self.get_timeline_contexts(ids).into_iter().collect();
+        let items_ids = ids
+            .into_iter()
+            .filter_map(|gid| self.catalog().try_resolve_item_id(&gid));
+        let mut timeline_contexts: Vec<_> =
+            self.get_timeline_contexts(items_ids).into_iter().collect();
         // If there's more than one timeline, we will not produce meaningful
         // data to a user. Take, for example, some realtime source and a debezium
         // consistency topic source. The realtime source uses something close to now
@@ -417,11 +421,18 @@ impl Coordinator {
 
     /// Return the [`TimelineContext`] belonging to a [`CatalogItemId`], if one exists.
     pub(crate) fn get_timeline_context(&self, id: CatalogItemId) -> TimelineContext {
+        let entry = self.catalog().get_entry(&id);
+        self.validate_timeline_context(entry.global_ids())
+            .expect("impossible for a single object to belong to incompatible timeline contexts")
+    }
+
+    /// Return the [`TimelineContext`] belonging to a [`GlobalId`], if one exists.
+    pub(crate) fn get_timeline_context_for_global_id(&self, id: GlobalId) -> TimelineContext {
         self.validate_timeline_context(vec![id])
             .expect("impossible for a single object to belong to incompatible timeline contexts")
     }
 
-    /// Return the [`TimelineContext`]s belonging to a list of GlobalIds, if any exist.
+    /// Return the [`TimelineContext`]s belonging to a list of [`CatalogItemId`]s, if any exist.
     fn get_timeline_contexts<I>(&self, ids: I) -> BTreeSet<TimelineContext>
     where
         I: IntoIterator<Item = CatalogItemId>,
@@ -514,8 +525,7 @@ impl Coordinator {
         let mut res: BTreeMap<TimelineContext, CollectionIdBundle> = BTreeMap::new();
 
         for gid in &id_bundle.storage_ids {
-            let item_id = self.catalog().resolve_item_id(gid);
-            let timeline_context = self.get_timeline_context(item_id);
+            let timeline_context = self.get_timeline_context_for_global_id(*gid);
             res.entry(timeline_context)
                 .or_default()
                 .storage_ids
@@ -524,8 +534,7 @@ impl Coordinator {
 
         for (compute_instance, ids) in &id_bundle.compute_ids {
             for gid in ids {
-                let item_id = self.catalog().resolve_item_id(gid);
-                let timeline_context = self.get_timeline_context(item_id);
+                let timeline_context = self.get_timeline_context_for_global_id(*gid);
                 res.entry(timeline_context)
                     .or_default()
                     .compute_ids
@@ -606,9 +615,8 @@ impl Coordinator {
             &mut id_bundle.compute_ids.entry(compute_instance).or_default(),
         ] {
             ids.retain(|gid| {
-                let item_id = self.catalog().resolve_item_id(gid);
                 let id_timeline_context = self
-                    .validate_timeline_context(vec![item_id])
+                    .validate_timeline_context(vec![*gid])
                     .expect("single id should never fail");
                 match (&id_timeline_context, &timeline_context) {
                     // If this id doesn't have a timeline, we can keep it.

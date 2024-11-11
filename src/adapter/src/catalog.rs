@@ -861,6 +861,11 @@ impl Catalog {
         self.get_entry_by_global_id(id).id()
     }
 
+    pub fn try_resolve_item_id(&self, id: &GlobalId) -> Option<CatalogItemId> {
+        let item = self.try_get_entry_by_global_id(id)?;
+        Some(item.id())
+    }
+
     pub fn get_schema(
         &self,
         database_spec: &ResolvedDatabaseSpecifier,

@@ -260,10 +260,7 @@ impl Coordinator {
         // reject queries that depend on a relation in the wrong timeline, for
         // example, even if we can *technically* optimize that reference away.
         let expr_depends_on = expr.depends_on();
-        let expr_depends_on_items = expr_depends_on
-            .iter()
-            .map(|gid| self.catalog().resolve_item_id(gid));
-        self.validate_timeline_context(expr_depends_on_items)?;
+        self.validate_timeline_context(expr_depends_on.iter().copied())?;
         self.validate_system_column_references(*ambiguous_columns, &expr_depends_on)?;
 
         let validity =

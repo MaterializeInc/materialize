@@ -353,10 +353,7 @@ impl Coordinator {
             .transpose()?;
 
         let source_ids = plan.source.depends_on();
-        let source_items = source_ids
-            .iter()
-            .map(|gid| self.catalog().resolve_item_id(gid));
-        let mut timeline_context = self.validate_timeline_context(source_items)?;
+        let mut timeline_context = self.validate_timeline_context(source_ids.iter().copied())?;
         if matches!(timeline_context, TimelineContext::TimestampIndependent)
             && plan.source.contains_temporal()?
         {
