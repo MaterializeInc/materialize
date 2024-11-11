@@ -6,7 +6,7 @@ menu:
     parent: commands
 ---
 
-`VALUES` constructs a relation from a list of parenthesized values.
+`VALUES` constructs a relation from a list of parenthesized value expressions.
 
 ## Syntax
 
@@ -19,7 +19,7 @@ the parenthesis represent the values of the columns in that row.
 
 ## Details
 
-`VALUES` statements can be used anywhere that [`SELECT`] statements are valid.
+`VALUES` expressionscan be used anywhere that [`SELECT`] statements are valid.
 They are most commonly used in [`INSERT`] statements, but can also be used
 on their own.
 
@@ -27,7 +27,7 @@ on their own.
 
 ### Use `VALUES` in an `INSERT`
 
-`VALUES` statements are most commonly used in [`INSERT`] statements. The
+`VALUES` expressions are most commonly used in [`INSERT`] statements. The
 following example uses a `VALUES` expression in an [`INSERT`] statement:
 
 ```mzsql
@@ -36,16 +36,17 @@ INSERT INTO my_table VALUES (1, 2), (3, 4);
 
 ### Use `VALUES` as a standalone expression
 
-`VALUES` statements can be used anywhere that [`SELECT`] statements are valid.
+`VALUES` expression can be used anywhere that [`SELECT`] statements are valid.
+
 For example:
 
-- As a standalone statement:
+- As a standalone expression:
 
   ```mzsql
   VALUES (1, 2, 3), (4, 5, 6);
   ```
 
-  The statement above returns the following results:
+  The above expression returns the following results:
 
   ```nofmt
   column1 | column2 | column3
@@ -60,7 +61,7 @@ For example:
   VALUES (1), (2), (3) ORDER BY column1 DESC LIMIT 2;
   ```
 
-  The statement above returns the following results:
+  The above expression returns the following results:
 
   ```nofmt
   column1

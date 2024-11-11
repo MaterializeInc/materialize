@@ -16,8 +16,6 @@ UPDATE <table_name> [ AS <alias> ]
 [WHERE <condition> ];
 ```
 
-### Options
-
 Option | Description
 ------|-----
 **AS**  | Only permit references to _table_name_ as the specified _alias_.
@@ -88,7 +86,7 @@ that the operation updated the `a` column only for that row, run the following
 SELECT * FROM example_table;
 ```
 
-The results returned show that column `a` was updated only for the row with `b
+The returned results show that column `a` was updated only for the row with `b
 = 'hello'`:
 
 ```
@@ -114,7 +112,7 @@ To verify the results, run the following `SELECT` statement:
 SELECT * FROM example_table;
 ```
 
-The results returned show that all rows were updated:
+The returned results show that all rows were updated:
 
 ```
  a |   b
