@@ -84,6 +84,52 @@ mod fixed_binary_sizes {
 }
 use fixed_binary_sizes::*;
 
+/// Returns true iff the ordering of the "raw" and Persist-encoded versions of this columm would match:
+/// ie. `sort(encode(column)) == encode(sort(column))`. This encoding has been designed so that this
+/// is true for many types.
+pub fn preserves_order(scalar_type: &ScalarType) -> bool {
+    match scalar_type {
+        ScalarType::Bool
+        | ScalarType::Int16
+        | ScalarType::Int32
+        | ScalarType::Int64
+        | ScalarType::UInt16
+        | ScalarType::UInt32
+        | ScalarType::UInt64
+        | ScalarType::Float32
+        | ScalarType::Float64
+        | ScalarType::Numeric { .. }
+        | ScalarType::Date
+        | ScalarType::Time
+        | ScalarType::Timestamp { .. }
+        | ScalarType::TimestampTz { .. }
+        | ScalarType::Interval
+        | ScalarType::Bytes
+        | ScalarType::String
+        | ScalarType::Uuid
+        | ScalarType::MzTimestamp
+        | ScalarType::MzAclItem
+        | ScalarType::AclItem => true,
+        ScalarType::Record { fields, .. } => fields
+            .iter()
+            .all(|(_, field_type)| preserves_order(&field_type.scalar_type)),
+        ScalarType::PgLegacyChar
+        | ScalarType::PgLegacyName
+        | ScalarType::Char { .. }
+        | ScalarType::VarChar { .. }
+        | ScalarType::Jsonb
+        | ScalarType::Array(_)
+        | ScalarType::List { .. }
+        | ScalarType::Oid
+        | ScalarType::Map { .. }
+        | ScalarType::RegProc
+        | ScalarType::RegType
+        | ScalarType::RegClass
+        | ScalarType::Int2Vector
+        | ScalarType::Range { .. } => false,
+    }
+}
+
 /// An encoder for a column of [`Datum`]s.
 #[derive(Debug)]
 struct DatumEncoder {
@@ -2231,6 +2277,30 @@ mod tests {
         let indices = UInt64Array::from(indices);
         let ord_col = ::arrow::compute::take(&col, &indices, None).expect("takeable");
         assert_eq!(row_col.as_ref(), ord_col.as_ref());
+
+        // Check that our order matches the datum-native order when `preserves_order` is true.
+        let ordered_prefix_len = desc
+            .iter()
+            .take_while(|(_, c)| preserves_order(&c.scalar_type))
+            .count();
+
+        let decoder = <RelationDesc as Schema2<Row>>::decoder_any(desc, ord_col.as_ref()).unwrap();
+        let is_sorted = (0..ord_col.len())
+            .map(|i| {
+                let mut row = Row::default();
+                decoder.decode(i, &mut row);
+                row
+            })
+            .is_sorted_by(|a, b| {
+                let a_prefix = a.iter().take(ordered_prefix_len);
+                let b_prefix = b.iter().take(ordered_prefix_len);
+                a_prefix.cmp(b_prefix).is_le()
+            });
+        assert!(
+            is_sorted,
+            "ordering should be consistent on preserves_order columns: {:#?}",
+            desc.iter().take(ordered_prefix_len).collect_vec()
+        );
 
         // Check that our size estimates are consistent.
         assert_eq!(

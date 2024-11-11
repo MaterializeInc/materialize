@@ -3801,11 +3801,15 @@ impl<'a> Parser<'a> {
     fn parse_materialized_view_option_name(
         &mut self,
     ) -> Result<MaterializedViewOptionName, ParserError> {
-        let option = self.expect_one_of_keywords(&[ASSERT, RETAIN, REFRESH])?;
+        let option = self.expect_one_of_keywords(&[ASSERT, PARTITION, RETAIN, REFRESH])?;
         let name = match option {
             ASSERT => {
                 self.expect_keywords(&[NOT, NULL])?;
                 MaterializedViewOptionName::AssertNotNull
+            }
+            PARTITION => {
+                self.expect_keyword(BY)?;
+                MaterializedViewOptionName::PartitionBy
             }
             RETAIN => {
                 self.expect_keyword(HISTORY)?;
