@@ -135,65 +135,65 @@ Explained Query:
           CrossJoin type=differential
             ArrangeBy keys=[[]]
               Union
-                Get l9
+                Get l10
                 Map (null)
                   Union
                     Negate
                       Project ()
-                        Get l9
+                        Get l10
                     Constant
                       - ()
             ArrangeBy keys=[[]]
               Union
-                Get l11
+                Get l12
                 Map (null)
                   Union
                     Negate
                       Project ()
-                        Get l11
+                        Get l12
                     Constant
                       - ()
     With
-      cte l11 =
+      cte l12 =
         Union
-          Get l10
+          Get l11
           Map (0)
             Union
               Negate
                 Project ()
-                  Get l10
+                  Get l11
               Constant
                 - ()
-      cte l10 =
+      cte l11 =
         Reduce aggregates=[count(*)]
           Project ()
             Filter (#1 > 0)
-              Get l6
-      cte l9 =
+              Get l7
+      cte l10 =
         Union
-          Get l8
+          Get l9
           Map (0)
             Union
               Negate
                 Project ()
-                  Get l8
+                  Get l9
               Constant
                 - ()
-      cte l8 =
+      cte l9 =
         Reduce aggregates=[count(*)]
           Project ()
             Filter (#1 < 0)
-              Get l6
+              Get l7
   With Mutually Recursive
-    cte [recursion_limit=50, return_at_limit] l7 =
+    cte [recursion_limit=50, return_at_limit] l8 =
       Get l1
-    cte [recursion_limit=50, return_at_limit] l6 =
+    cte [recursion_limit=50, return_at_limit] l7 =
       Union
         Threshold
           Union
             Get l1
             Negate
-              Get l7
+              Get l8
         Reduce group_by=[#0] aggregates=[sum(((#1 - #2) / #3))]
           Project (#0, #3..=#5)
             Join on=(#1 = #2) type=delta
@@ -206,59 +206,60 @@ Explained Query:
                       Get l0
               ArrangeBy keys=[[#0]]
                 Filter (#0) IS NOT NULL
+                  Get l7
+              ArrangeBy keys=[[]]
+                Union
+                  Get l4
+                  Map (null)
+                    Union
+                      Negate
+                        Project ()
+                          Get l4
+                      Constant
+                        - ()
+              ArrangeBy keys=[[]]
+                Union
                   Get l6
-              ArrangeBy keys=[[]]
-                Union
-                  Get l3
                   Map (null)
                     Union
                       Negate
                         Project ()
-                          Get l3
+                          Get l6
                       Constant
                         - ()
-              ArrangeBy keys=[[]]
-                Union
-                  Get l5
-                  Map (null)
-                    Union
-                      Negate
-                        Project ()
-                          Get l5
-                      Constant
-                        - ()
-    cte l5 =
+    cte l6 =
       Project (#3)
         Map (sqrtnumeric(case when ((#0) IS NULL OR (#1) IS NULL OR (case when (#2 = 0) then null else #2 end) IS NULL OR (case when (0 = (#2 - 1)) then null else (#2 - 1) end) IS NULL) then null else greatest(((#0 - ((#1 * #1) / bigint_to_numeric(case when (#2 = 0) then null else #2 end))) / bigint_to_numeric(case when (0 = (#2 - 1)) then null else (#2 - 1) end)), 0) end))
           Union
-            Get l4
+            Get l5
             Map (null, null, 0)
               Union
                 Negate
                   Project ()
-                    Get l4
+                    Get l5
                 Constant
                   - ()
-    cte l4 =
+    cte l5 =
       Reduce aggregates=[sum((#0 * #0)), sum(#0), count(#0)]
-        Project (#1)
-          Get l6
-    cte l3 =
+        Get l2
+    cte l4 =
       Project (#2)
         Map ((#0 / bigint_to_numeric(case when (#1 = 0) then null else #1 end)))
           Union
-            Get l2
+            Get l3
             Map (null, 0)
               Union
                 Negate
                   Project ()
-                    Get l2
+                    Get l3
                 Constant
                   - ()
-    cte l2 =
+    cte l3 =
       Reduce aggregates=[sum(#0), count(#0)]
-        Project (#1)
-          Get l6
+        Get l2
+    cte l2 =
+      Project (#1)
+        Get l7
     cte l1 =
       Map (case when (#0 < "n") then 1 else -1 end)
         Union
