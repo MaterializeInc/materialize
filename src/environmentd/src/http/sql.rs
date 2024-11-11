@@ -33,6 +33,7 @@ use mz_adapter::{
     verify_datum_desc, AdapterError, AdapterNotice, ExecuteContextExtra, ExecuteResponse,
     ExecuteResponseKind, PeekResponseUnary, SessionClient,
 };
+use mz_catalog::memory::objects::{Cluster, ClusterReplica};
 use mz_interchange::encode::TypedDatum;
 use mz_interchange::json::{JsonNumberPolicy, ToJson};
 use mz_ore::cast::CastFrom;
@@ -50,7 +51,7 @@ use serde::{Deserialize, Serialize};
 use tokio::{select, time};
 use tokio_postgres::error::SqlState;
 use tokio_stream::wrappers::UnboundedReceiverStream;
-use tracing::{debug, error, warn};
+use tracing::{debug, error, info};
 use tungstenite::protocol::frame::coding::CloseCode;
 
 use crate::http::{init_ws, AuthedClient, AuthedUser, WsState, MAX_REQUEST_SIZE};
@@ -110,15 +111,28 @@ struct PrometheusSqlQuery<'a> {
     help: &'a str,
     query: &'a str,
     value_column_name: &'a str,
+    per_replica: bool,
 }
 
 impl<'a> PrometheusSqlQuery<'a> {
-    fn to_sql_request(&self) -> SqlRequest {
+    fn to_sql_request(&self, cluster: Option<(&Cluster, &ClusterReplica)>) -> SqlRequest {
         SqlRequest::Simple {
-            query: self.query.to_string(),
+            query: if let Some((cluster, replica)) = cluster {
+                format!(
+                    "SET auto_route_catalog_queries = false; SET CLUSTER = '{}'; SET CLUSTER_REPLICA = '{}'; {}",
+                    cluster.name, replica.name, self.query
+                )
+            } else {
+                format!(
+                    "SET auto_route_catalog_queries = true; RESET CLUSTER; RESET CLUSTER_REPLICA; {}",
+                    self.query
+                )
+            },
         }
     }
 }
+
+static PER_REPLICA_LABELS: &[&str] = &["replica_full_name", "instance_id", "replica_id"];
 
 static QUERIES: &[PrometheusSqlQuery] = &[
     PrometheusSqlQuery {
@@ -130,6 +144,7 @@ static QUERIES: &[PrometheusSqlQuery] = &[
                 FROM mz_internal.mz_frontiers
                 WHERE object_id NOT LIKE 't%';",
         value_column_name: "write_frontier",
+        per_replica: false,
     },
     PrometheusSqlQuery {
         metric_name: "mz_read_frontier",
@@ -140,6 +155,7 @@ static QUERIES: &[PrometheusSqlQuery] = &[
                 FROM mz_internal.mz_frontiers
                 WHERE object_id NOT LIKE 't%';",
         value_column_name: "read_frontier",
+        per_replica: false,
     },
     PrometheusSqlQuery {
         metric_name: "mz_replica_write_frontiers",
@@ -153,45 +169,121 @@ static QUERIES: &[PrometheusSqlQuery] = &[
                 JOIN mz_cluster_replicas ON (id = replica_id)
                 WHERE object_id NOT LIKE 't%';",
         value_column_name: "write_frontier",
+        per_replica: false,
+    },
+    PrometheusSqlQuery {
+        metric_name: "mz_replica_write_frontiers",
+        help: "The per-replica write frontiers of compute and storage collections.",
+        query: "SELECT
+                    object_id AS collection_id,
+                    coalesce(write_frontier::text::uint8, 18446744073709551615::uint8) AS write_frontier,
+                    cluster_id AS instance_id,
+                    replica_id AS replica_id
+                FROM mz_catalog.mz_cluster_replica_frontiers
+                JOIN mz_cluster_replicas ON (id = replica_id)
+                WHERE object_id NOT LIKE 't%';",
+        value_column_name: "write_frontier",
+        per_replica: false,
+    },
+    PrometheusSqlQuery {
+        metric_name: "mz_arrangement_count",
+        help: "The number of arrangements in a dataflow.",
+        query: "WITH
+                    arrangements AS (
+                        SELECT DISTINCT operator_id AS id
+                        FROM mz_internal.mz_arrangement_records_raw
+                    ),
+                    collections AS (
+                        SELECT
+                            id,
+                            regexp_replace(export_id, '^t.+', 'transient') as export_id
+                        FROM
+                            mz_internal.mz_dataflow_addresses,
+                            mz_internal.mz_compute_exports
+                        WHERE address[1] = dataflow_id
+                    )
+                SELECT
+                    COALESCE(export_id, 'none') AS collection_id,
+                    count(*)
+                FROM arrangements
+                    LEFT JOIN collections USING (id)
+                    GROUP BY export_id",
+        value_column_name: "count",
+        per_replica: true,
+    },
+    PrometheusSqlQuery {
+        metric_name: "mz_compute_replica_park_duration_seconds_total",
+        help: "The total time workers were parked since restart.",
+        query: "SELECT
+                    worker_id,
+                    sum(slept_for_ns * count)::float8 / 1000000000 AS duration_s
+                FROM mz_internal.mz_scheduling_parks_histogram_per_worker
+                GROUP BY worker_id",
+        value_column_name: "duration_s",
+        per_replica: true,
     },
 ];
 
-async fn handle_promsql_query(
-    mut client: &mut AuthedClient,
+async fn execute_promsql_query(
+    client: &mut AuthedClient,
     query: &PrometheusSqlQuery<'_>,
     metrics_registry: &MetricsRegistry,
+    metrics_by_name: &mut BTreeMap<String, GenericGaugeVec<AtomicF64>>,
+    cluster: Option<(&Cluster, &ClusterReplica)>,
 ) {
+    assert!(query.per_replica == cluster.is_some());
+
     let mut res = SqlResponse {
         results: Vec::new(),
     };
 
-    execute_request(&mut client, query.to_sql_request(), &mut res)
+    execute_request(client, query.to_sql_request(cluster), &mut res)
         .await
         .expect("valid SQL query");
 
-    let row = res.results.first().expect("must have one result");
-    let SqlResult::Rows { desc, rows, .. } = row else {
-        error!(
-            "did not receive rows for SQL query for prometheus metric {}",
-            query.metric_name
+    let result = match res.results.as_slice() {
+        [SqlResult::Ok { .. }, SqlResult::Ok { .. }, SqlResult::Ok { .. }, result] => result,
+        _ => {
+            // This might be fine, like if the cluster or replica
+            // was dropped before the promsql query was executed
+            info!(
+                "error executing prometheus query {}: {:?}",
+                query.metric_name, res
+            );
+            return;
+        }
+    };
+
+    let SqlResult::Rows { desc, rows, .. } = result else {
+        info!(
+            "did not receive rows for SQL query for prometheus metric {}: {:?}, {:?}",
+            query.metric_name, result, cluster
         );
         return;
     };
 
-    let label_names = desc
-        .columns
-        .iter()
-        .filter(|col| col.name != query.value_column_name)
-        .map(|col| col.name.clone())
-        .collect();
+    let gauge_vec = metrics_by_name
+        .entry(query.metric_name.to_string())
+        .or_insert_with(|| {
+            let mut label_names: Vec<String> = desc
+                .columns
+                .iter()
+                .filter(|col| col.name != query.value_column_name)
+                .map(|col| col.name.clone())
+                .collect();
 
-    let gauge_vec = metrics_registry.register::<GenericGaugeVec<AtomicF64>>(MakeCollectorOpts {
-        opts: Opts::new(query.metric_name, query.help).variable_labels(label_names),
-        buckets: None,
-    });
+            if query.per_replica {
+                label_names.extend(PER_REPLICA_LABELS.iter().map(|label| label.to_string()));
+            }
+
+            metrics_registry.register::<GenericGaugeVec<AtomicF64>>(MakeCollectorOpts {
+                opts: Opts::new(query.metric_name, query.help).variable_labels(label_names),
+                buckets: None,
+            })
+        });
 
     for row in rows {
-        let label_values = desc
+        let mut label_values = desc
             .columns
             .iter()
             .zip(row)
@@ -207,18 +299,65 @@ async fn handle_promsql_query(
             .map(|(_, val)| val.as_str().unwrap_or("0").parse::<f64>().unwrap_or(0.0))
             .unwrap_or(0.0);
 
-        gauge_vec
-            .get_metric_with_label_values(&label_values)
-            .expect("valid labels")
-            .set(value);
+        match cluster {
+            Some((cluster, replica)) => {
+                let replica_full_name = format!("{}.{}", cluster.name, replica.name);
+                let cluster_id = cluster.id.to_string();
+                let replica_id = replica.replica_id.to_string();
+
+                label_values.push(&replica_full_name);
+                label_values.push(&cluster_id);
+                label_values.push(&replica_id);
+
+                gauge_vec
+                    .get_metric_with_label_values(&label_values)
+                    .expect("valid labels")
+                    .set(value);
+            }
+            None => {
+                gauge_vec
+                    .get_metric_with_label_values(&label_values)
+                    .expect("valid labels")
+                    .set(value);
+            }
+        }
+    }
+}
+
+async fn handle_promsql_query(
+    client: &mut AuthedClient,
+    query: &PrometheusSqlQuery<'_>,
+    metrics_registry: &MetricsRegistry,
+    metrics_by_name: &mut BTreeMap<String, GenericGaugeVec<AtomicF64>>,
+) {
+    if !query.per_replica {
+        execute_promsql_query(client, query, metrics_registry, metrics_by_name, None).await;
+        return;
+    }
+
+    let catalog = client.client.catalog_snapshot().await;
+    let clusters: Vec<&Cluster> = catalog.clusters().collect();
+
+    for cluster in clusters {
+        for replica in cluster.replicas() {
+            execute_promsql_query(
+                client,
+                query,
+                metrics_registry,
+                metrics_by_name,
+                Some((cluster, replica)),
+            )
+            .await;
+        }
     }
 }
 
 pub async fn handle_promsql(mut client: AuthedClient) -> MetricsRegistry {
     let metrics_registry = MetricsRegistry::new();
+    let mut metrics_by_name = BTreeMap::new();
 
     for query in QUERIES {
-        handle_promsql_query(&mut client, &query, &metrics_registry).await;
+        handle_promsql_query(&mut client, &query, &metrics_registry, &mut metrics_by_name).await;
     }
 
     metrics_registry
