@@ -481,7 +481,7 @@ def workflow_autospill(c: Composition) -> None:
                 additional_system_parameter_defaults={
                     "disk_cluster_replicas_default": "true",
                     "upsert_rocksdb_auto_spill_to_disk": "true",
-                    "upsert_rocksdb_auto_spill_threshold_bytes": "250",
+                    "upsert_rocksdb_auto_spill_threshold_bytes": "266",
                     "enable_unorchestrated_cluster_replicas": "true",
                     "storage_dataflow_delay_sources_past_rehydration": "true",
                 },
@@ -496,7 +496,7 @@ def workflow_autospill(c: Composition) -> None:
                 additional_system_parameter_defaults={
                     "disk_cluster_replicas_default": "true",
                     "upsert_rocksdb_auto_spill_to_disk": "true",
-                    "upsert_rocksdb_auto_spill_threshold_bytes": "250",
+                    "upsert_rocksdb_auto_spill_threshold_bytes": "266",
                     "enable_unorchestrated_cluster_replicas": "true",
                     "storage_dataflow_delay_sources_past_rehydration": "true",
                     # Enable the RocksDB merge operator
