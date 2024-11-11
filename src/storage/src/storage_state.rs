@@ -414,11 +414,14 @@ impl<'w, A: Allocate> Worker<'w, A> {
             return;
         }
 
+        // The last time we reported statistics.
+        let mut last_stats_time = Instant::now();
+
         let mut disconnected = false;
-
-        let mut last_stats_time: Option<Instant> = None;
-
         while !disconnected {
+            let config = &self.storage_state.storage_configuration;
+            let stats_interval = config.parameters.statistics_collection_interval;
+
             // Ask Timely to execute a unit of work.
             //
             // If there are no pending commands or responses from the async
@@ -432,7 +435,9 @@ impl<'w, A: Allocate> Worker<'w, A> {
             // consumed by the call to `client_rx.recv`. See:
             // https://github.com/MaterializeInc/materialize/pull/13973#issuecomment-1200312212
             if command_rx.is_empty() && self.storage_state.async_worker.is_empty() {
-                self.timely_worker.step_or_park(None);
+                // Make sure we wake up again to report any pending statistics updates.
+                let park_duration = stats_interval.saturating_sub(last_stats_time.elapsed());
+                self.timely_worker.step_or_park(Some(park_duration));
             } else {
                 self.timely_worker.step();
             }
@@ -453,16 +458,9 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 );
             }
 
-            if last_stats_time.is_none()
-                || last_stats_time.as_ref().unwrap().elapsed()
-                    >= self
-                        .storage_state
-                        .storage_configuration
-                        .parameters
-                        .statistics_collection_interval
-            {
+            if last_stats_time.elapsed() >= stats_interval {
                 self.report_storage_statistics(&response_tx);
-                last_stats_time = Some(Instant::now());
+                last_stats_time = Instant::now();
             }
 
             // Handle any received commands.
