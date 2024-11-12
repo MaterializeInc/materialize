@@ -20,7 +20,7 @@ use kube::api::{DeleteParams, ListParams, ObjectMeta, Patch, PatchParams};
 use kube::runtime::{watcher, WatchStreamExt};
 use kube::{Api, ResourceExt};
 use maplit::btreemap;
-use mz_repr::GlobalId;
+use mz_repr::CatalogItemId;
 
 use mz_cloud_resources::crd::vpc_endpoint::v1::{
     VpcEndpoint, VpcEndpointSpec, VpcEndpointState, VpcEndpointStatus,
@@ -35,7 +35,7 @@ use crate::{util, KubernetesOrchestrator, FIELD_MANAGER};
 impl CloudResourceController for KubernetesOrchestrator {
     async fn ensure_vpc_endpoint(
         &self,
-        id: GlobalId,
+        id: CatalogItemId,
         config: VpcEndpointConfig,
     ) -> Result<(), anyhow::Error> {
         let name = mz_cloud_resources::vpc_endpoint_name(id);
@@ -72,7 +72,7 @@ impl CloudResourceController for KubernetesOrchestrator {
         Ok(())
     }
 
-    async fn delete_vpc_endpoint(&self, id: GlobalId) -> Result<(), anyhow::Error> {
+    async fn delete_vpc_endpoint(&self, id: CatalogItemId) -> Result<(), anyhow::Error> {
         match self
             .vpc_endpoint_api
             .delete(
@@ -90,7 +90,7 @@ impl CloudResourceController for KubernetesOrchestrator {
 
     async fn list_vpc_endpoints(
         &self,
-    ) -> Result<BTreeMap<GlobalId, VpcEndpointStatus>, anyhow::Error> {
+    ) -> Result<BTreeMap<CatalogItemId, VpcEndpointStatus>, anyhow::Error> {
         let objects = self.vpc_endpoint_api.list(&ListParams::default()).await?;
         let mut endpoints = BTreeMap::new();
         for object in objects {
@@ -162,7 +162,7 @@ impl CloudResourceController for KubernetesOrchestrator {
 
 #[async_trait]
 impl CloudResourceReader for KubernetesOrchestrator {
-    async fn read(&self, id: GlobalId) -> Result<VpcEndpointStatus, anyhow::Error> {
+    async fn read(&self, id: CatalogItemId) -> Result<VpcEndpointStatus, anyhow::Error> {
         self.resource_reader.read(id).await
     }
 }
@@ -187,7 +187,7 @@ impl KubernetesResourceReader {
 
 #[async_trait]
 impl CloudResourceReader for KubernetesResourceReader {
-    async fn read(&self, id: GlobalId) -> Result<VpcEndpointStatus, anyhow::Error> {
+    async fn read(&self, id: CatalogItemId) -> Result<VpcEndpointStatus, anyhow::Error> {
         let name = mz_cloud_resources::vpc_endpoint_name(id);
         let endpoint = self.vpc_endpoint_api.get(&name).await?;
         Ok(endpoint.status.unwrap_or_default())

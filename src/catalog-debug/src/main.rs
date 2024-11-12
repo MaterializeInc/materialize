@@ -572,7 +572,7 @@ async fn upgrade_check(
         state: _state,
         storage_collections_to_drop: _,
         migrated_storage_collections_0dt: _,
-        new_builtins: _,
+        new_builtin_collections: _,
         builtin_table_updates: _,
         last_seen_version,
         expr_cache_handle: _,

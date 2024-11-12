@@ -27,12 +27,16 @@ operator:
     localDevelopment: true
     # Flag to indicate whether to create balancerd pods for the environments
     createBalancers: true
+    # Flag to indicate whether to create console pods for the environments
+    createConsole: true
     # ARN of the IAM role for environmentd
     environmentdIAMRoleARN: ""
     # ARN of the IAM role for the CREATE CONNECTION feature
     environmentdConnectionRoleARN: ""
     # awsAccountID is required when cloudProvider is "aws"
     awsAccountID: ""
+    # override the mapping of environmentd versions to console versions
+    consoleImageTagMapOverride: {}
   clusters:
     sizes:
       3xsmall:

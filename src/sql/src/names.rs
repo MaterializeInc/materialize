@@ -417,7 +417,7 @@ pub struct ItemQualifiers {
 #[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ResolvedItemName {
     Item {
-        id: GlobalId,
+        id: CatalogItemId,
         qualifiers: ItemQualifiers,
         full_name: FullItemName,
         // Whether this object, when printed out, should use [id AS name] syntax. We
@@ -454,10 +454,17 @@ impl ResolvedItemName {
         }
     }
 
-    pub fn item_id(&self) -> &GlobalId {
+    pub fn item_id(&self) -> &CatalogItemId {
         match self {
             ResolvedItemName::Item { id, .. } => id,
             _ => panic!("cannot call item_id on non-object"),
+        }
+    }
+
+    pub fn version(&self) -> &RelationVersionSelector {
+        match self {
+            ResolvedItemName::Item { version, .. } => version,
+            _ => panic!("cannot call version on non-object"),
         }
     }
 }
@@ -659,7 +666,7 @@ pub enum ResolvedDataType {
         value_type: Box<ResolvedDataType>,
     },
     Named {
-        id: GlobalId,
+        id: CatalogItemId,
         qualifiers: ItemQualifiers,
         full_name: FullItemName,
         modifiers: Vec<i64>,
@@ -960,7 +967,7 @@ pub enum ObjectId {
     Database(DatabaseId),
     Schema((ResolvedDatabaseSpecifier, SchemaSpecifier)),
     Role(RoleId),
-    Item(GlobalId),
+    Item(CatalogItemId),
     NetworkPolicy(NetworkPolicyId),
 }
 
@@ -995,7 +1002,7 @@ impl ObjectId {
             _ => panic!("ObjectId::unwrap_role_id called on {self:?}"),
         }
     }
-    pub fn unwrap_item_id(self) -> GlobalId {
+    pub fn unwrap_item_id(self) -> CatalogItemId {
         match self {
             ObjectId::Item(id) => id,
             _ => panic!("ObjectId::unwrap_item_id called on {self:?}"),
@@ -1153,14 +1160,14 @@ impl From<&RoleId> for ObjectId {
     }
 }
 
-impl From<GlobalId> for ObjectId {
-    fn from(id: GlobalId) -> Self {
+impl From<CatalogItemId> for ObjectId {
+    fn from(id: CatalogItemId) -> Self {
         ObjectId::Item(id)
     }
 }
 
-impl From<&GlobalId> for ObjectId {
-    fn from(id: &GlobalId) -> Self {
+impl From<&CatalogItemId> for ObjectId {
+    fn from(id: &CatalogItemId) -> Self {
         ObjectId::Item(*id)
     }
 }
@@ -1178,7 +1185,7 @@ impl From<CommentObjectId> for ObjectId {
             | CommentObjectId::Connection(item_id)
             | CommentObjectId::Type(item_id)
             | CommentObjectId::Secret(item_id)
-            | CommentObjectId::ContinualTask(item_id) => ObjectId::Item(item_id.to_global_id()),
+            | CommentObjectId::ContinualTask(item_id) => ObjectId::Item(item_id),
             CommentObjectId::Role(id) => ObjectId::Role(id),
             CommentObjectId::Database(id) => ObjectId::Database(id),
             CommentObjectId::Schema(id) => ObjectId::Schema(id),
@@ -1265,7 +1272,7 @@ pub struct NameResolver<'a> {
     ctes: BTreeMap<String, LocalId>,
     continual_task: Option<(PartialItemName, LocalId)>,
     status: Result<(), PlanError>,
-    ids: BTreeSet<GlobalId>,
+    ids: BTreeMap<CatalogItemId, BTreeSet<GlobalId>>,
 }
 
 impl<'a> NameResolver<'a> {
@@ -1275,7 +1282,7 @@ impl<'a> NameResolver<'a> {
             ctes: BTreeMap::new(),
             continual_task: None,
             status: Ok(()),
-            ids: BTreeSet::new(),
+            ids: BTreeMap::new(),
         }
     }
 
@@ -1309,7 +1316,7 @@ impl<'a> NameResolver<'a> {
                                 );
                             }
                         };
-                        self.ids.insert(array_item.id());
+                        self.ids.insert(array_item.id(), BTreeSet::new());
                         Ok(ResolvedDataType::Named {
                             id: array_item.id(),
                             qualifiers: array_item.name().qualifiers.clone(),
@@ -1345,15 +1352,15 @@ impl<'a> NameResolver<'a> {
                         (full_name, item)
                     }
                     RawItemName::Id(id, name, version) => {
-                        let gid: GlobalId = id.parse()?;
-                        let item = self.catalog.get_item(&gid);
+                        let id: CatalogItemId = id.parse()?;
+                        let item = self.catalog.get_item(&id);
                         let full_name = normalize::full_name(name)?;
                         assert_none!(version, "no support for versioning data types");
 
                         (full_name, item)
                     }
                 };
-                self.ids.insert(item.id());
+                self.ids.insert(item.id(), BTreeSet::new());
                 // If this is a named array type, then make sure to include the element reference
                 // in the resolved IDs. This helps ensure that named array types are resolved the
                 // same as an array type with the same element type. For example, `int4[]` and
@@ -1363,7 +1370,7 @@ impl<'a> NameResolver<'a> {
                     ..
                 }) = item.type_details()
                 {
-                    self.ids.insert(*element_reference);
+                    self.ids.insert(*element_reference, BTreeSet::new());
                 }
                 Ok(ResolvedDataType::Named {
                     id: item.id(),
@@ -1442,7 +1449,13 @@ impl<'a> NameResolver<'a> {
 
         match r {
             Ok(item) => {
-                self.ids.insert(item.id());
+                // Record the item at its current version.
+                let item = item.at_version(RelationVersionSelector::Latest);
+                self.ids
+                    .entry(item.id())
+                    .or_default()
+                    .insert(item.global_id());
+
                 let print_id = !matches!(
                     item.item_type(),
                     CatalogItemType::Func | CatalogItemType::Type
@@ -1495,7 +1508,7 @@ impl<'a> NameResolver<'a> {
         raw_name: UnresolvedItemName,
         _version: Option<Version>,
     ) -> ResolvedItemName {
-        let gid: GlobalId = match id.parse() {
+        let id: CatalogItemId = match id.parse() {
             Ok(id) => id,
             Err(e) => {
                 if self.status.is_ok() {
@@ -1504,17 +1517,23 @@ impl<'a> NameResolver<'a> {
                 return ResolvedItemName::Error;
             }
         };
-        let item = match self.catalog.try_get_item(&gid) {
+        let item = match self.catalog.try_get_item(&id) {
             Some(item) => item,
             None => {
                 if self.status.is_ok() {
-                    self.status = Err(PlanError::InvalidId(gid));
+                    self.status = Err(PlanError::InvalidId(id));
                 }
                 return ResolvedItemName::Error;
             }
         };
 
-        self.ids.insert(gid.clone());
+        // TODO(alter_table): Use the actual version here.
+        let item = item.at_version(RelationVersionSelector::Latest);
+        self.ids
+            .entry(item.id())
+            .or_default()
+            .insert(item.global_id());
+
         let full_name = match normalize::full_name(raw_name) {
             Ok(full_name) => full_name,
             Err(e) => {
@@ -1525,11 +1544,11 @@ impl<'a> NameResolver<'a> {
             }
         };
         ResolvedItemName::Item {
-            id: gid,
+            id,
             qualifiers: item.name().qualifiers.clone(),
             full_name,
             print_id: true,
-            // TODO(alter_table): Specify an actual version here.
+            // TODO(alter_table): Use the actual version here.
             version: RelationVersionSelector::Latest,
         }
     }
@@ -1701,11 +1720,11 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
             ResolvedItemName::Item {
                 id,
                 full_name,
-                version: _,
+                version,
                 qualifiers: _,
                 print_id: _,
             } => {
-                let item = self.catalog.get_item(id);
+                let item = self.catalog.get_item(id).at_version(*version);
                 let desc = match item.desc(full_name) {
                     Ok(desc) => desc,
                     Err(e) => {
@@ -2187,25 +2206,121 @@ where
     let mut resolver = NameResolver::new(catalog);
     let result = node.fold(&mut resolver);
     resolver.status?;
-    Ok((result, ResolvedIds(resolver.ids)))
+    Ok((result, ResolvedIds::new(resolver.ids)))
 }
 
-/// A set of IDs resolved by name resolution.
+/// A set of items and their corresponding collections resolved by name resolution.
 ///
-/// This is a newtype of a `BTreeSet<GlobalId>` that is provided to make it
-/// harder to confuse a set of resolved IDs with other sets of `GlobalId`.
+/// This is a newtype of a [`BTreeMap`] that is provided to make it harder to confuse a set of
+/// resolved IDs with other collections of [`CatalogItemId`].
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub struct ResolvedIds(pub BTreeSet<GlobalId>);
-
-#[derive(Debug, Default)]
-pub struct DependencyVisitor {
-    ids: BTreeSet<GlobalId>,
+pub struct ResolvedIds {
+    #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
+    entries: BTreeMap<CatalogItemId, BTreeSet<GlobalId>>,
 }
 
-impl<'ast> Visit<'ast, Aug> for DependencyVisitor {
+impl ResolvedIds {
+    fn new(entries: BTreeMap<CatalogItemId, BTreeSet<GlobalId>>) -> Self {
+        ResolvedIds { entries }
+    }
+
+    /// Returns an emptry [`ResolvedIds`].
+    pub fn empty() -> Self {
+        ResolvedIds {
+            entries: BTreeMap::new(),
+        }
+    }
+
+    /// Returns if the set of IDs is empty.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Returns all of the [`GlobalId`]s in this set.
+    pub fn collections(&self) -> impl Iterator<Item = &GlobalId> {
+        self.entries.values().flat_map(|gids| gids.into_iter())
+    }
+
+    /// Returns all of the [`CatalogItemId`]s in this set.
+    pub fn items(&self) -> impl Iterator<Item = &CatalogItemId> {
+        self.entries.keys()
+    }
+
+    /// Returns if this set of IDs contains the provided [`CatalogItemId`].
+    pub fn contains_item(&self, item: &CatalogItemId) -> bool {
+        self.entries.contains_key(item)
+    }
+
+    pub fn add_item(&mut self, item: CatalogItemId) {
+        self.entries.insert(item, BTreeSet::new());
+    }
+
+    pub fn remove_item(&mut self, item: &CatalogItemId) {
+        self.entries.remove(item);
+    }
+
+    /// Create a new [`ResolvedIds`] that contains the elements from `self`
+    /// where `predicate` returns `true`.
+    pub fn retain_items<F>(&self, predicate: F) -> Self
+    where
+        F: Fn(&CatalogItemId) -> bool,
+    {
+        let mut new_ids = self.clone();
+        new_ids
+            .entries
+            .retain(|item_id, _global_ids| predicate(item_id));
+        new_ids
+    }
+}
+
+impl FromIterator<(CatalogItemId, GlobalId)> for ResolvedIds {
+    fn from_iter<T: IntoIterator<Item = (CatalogItemId, GlobalId)>>(iter: T) -> Self {
+        let mut ids = ResolvedIds::empty();
+        ids.extend(iter);
+        ids
+    }
+}
+
+impl Extend<(CatalogItemId, GlobalId)> for ResolvedIds {
+    fn extend<T: IntoIterator<Item = (CatalogItemId, GlobalId)>>(&mut self, iter: T) {
+        for (item_id, global_id) in iter {
+            self.entries.entry(item_id).or_default().insert(global_id);
+        }
+    }
+}
+
+/// A set of IDs references by the `HirRelationExpr` of an object.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct DependencyIds(pub BTreeSet<CatalogItemId>);
+
+impl FromIterator<CatalogItemId> for DependencyIds {
+    fn from_iter<T: IntoIterator<Item = CatalogItemId>>(iter: T) -> Self {
+        DependencyIds(iter.into_iter().collect())
+    }
+}
+
+#[derive(Debug)]
+pub struct DependencyVisitor<'a> {
+    catalog: &'a dyn SessionCatalog,
+    ids: BTreeMap<CatalogItemId, BTreeSet<GlobalId>>,
+}
+
+impl<'a> DependencyVisitor<'a> {
+    pub fn new(catalog: &'a dyn SessionCatalog) -> Self {
+        DependencyVisitor {
+            catalog,
+            ids: Default::default(),
+        }
+    }
+}
+
+impl<'a, 'ast> Visit<'ast, Aug> for DependencyVisitor<'a> {
     fn visit_item_name(&mut self, item_name: &'ast <Aug as AstInfo>::ItemName) {
-        if let ResolvedItemName::Item { id, .. } = item_name {
-            self.ids.insert(*id);
+        if let ResolvedItemName::Item { id, version, .. } = item_name {
+            let global_ids = self.ids.entry(*id).or_default();
+            if let Some(item) = self.catalog.try_get_item(id) {
+                global_ids.insert(item.at_version(*version).global_id());
+            }
         }
     }
 
@@ -2220,20 +2335,20 @@ impl<'ast> Visit<'ast, Aug> for DependencyVisitor {
                 self.visit_data_type(value_type);
             }
             ResolvedDataType::Named { id, .. } => {
-                self.ids.insert(*id);
+                self.ids.entry(*id).or_default();
             }
             ResolvedDataType::Error => {}
         }
     }
 }
 
-pub fn visit_dependencies<'ast, N>(node: &'ast N) -> ResolvedIds
+pub fn visit_dependencies<'ast, N>(catalog: &dyn SessionCatalog, node: &'ast N) -> ResolvedIds
 where
     N: VisitNode<'ast, Aug> + 'ast,
 {
-    let mut visitor = DependencyVisitor::default();
+    let mut visitor = DependencyVisitor::new(catalog);
     node.visit(&mut visitor);
-    ResolvedIds(visitor.ids)
+    ResolvedIds::new(visitor.ids)
 }
 
 // Used when displaying a view's source for human creation. If the name

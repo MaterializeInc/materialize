@@ -66,6 +66,8 @@ pub mod v1alpha1 {
         pub environmentd_scratch_volume_storage_requirement: Option<Quantity>,
         // Resource requirements for the balancerd pod
         pub balancerd_resource_requirements: Option<ResourceRequirements>,
+        // Resource requirements for the console pod
+        pub console_resource_requirements: Option<ResourceRequirements>,
 
         // When changes are made to the environmentd resources (either via
         // modifying fields in the spec here or by deploying a new
@@ -135,6 +137,14 @@ pub mod v1alpha1 {
 
         pub fn balancerd_service_name(&self) -> String {
             self.name_prefixed("balancerd")
+        }
+
+        pub fn console_deployment_name(&self) -> String {
+            self.name_prefixed("console")
+        }
+
+        pub fn console_service_name(&self) -> String {
+            self.name_prefixed("console")
         }
 
         pub fn persist_pubsub_service_name(&self, generation: u64) -> String {

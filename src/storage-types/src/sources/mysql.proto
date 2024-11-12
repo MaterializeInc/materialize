@@ -7,17 +7,19 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+// buf breaking: ignore (temporarily ignored by ParkMyCar)
+
 syntax = "proto3";
 
 package mz_storage_types.sources.mysql;
 
 import "mysql-util/src/desc.proto";
-import "repr/src/global_id.proto";
+import "repr/src/catalog_item_id.proto";
 import "storage-types/src/connections.proto";
 
 message ProtoMySqlSourceConnection {
   reserved 4, 5;
-  mz_repr.global_id.ProtoGlobalId connection_id = 1;
+  mz_repr.catalog_item_id.ProtoCatalogItemId connection_id = 1;
   mz_storage_types.connections.ProtoMySqlConnection connection = 2;
   ProtoMySqlSourceDetails details = 3;
 }

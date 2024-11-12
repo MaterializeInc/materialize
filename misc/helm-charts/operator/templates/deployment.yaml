@@ -35,7 +35,6 @@ spec:
         image: "{{ .Values.operator.image.repository }}:{{ .Values.operator.image.tag }}"
         imagePullPolicy: {{ .Values.operator.image.pullPolicy }}
         args:
-        - "--helm-chart-version={{ .Chart.Version }}"
         - "--startup-log-filter={{ .Values.operator.args.startupLogFilter }}"
         - "--cloud-provider={{ .Values.operator.args.cloudProvider }}"
         - "--region={{ .Values.operator.args.region }}"
@@ -54,6 +53,13 @@ spec:
         {{- if .Values.operator.args.createBalancers }}
         - "--create-balancers"
         {{- end }}
+        {{- if .Values.operator.args.createConsole }}
+        - "--create-console"
+        {{- end }}
+        {{- range $key, $value := .Values.operator.args.consoleImageTagMapOverride }}
+        - "--console-image-tag-map={{ $key }}={{ $value }}"
+        {{- end }}
+        - "--console-image-tag-map=v0.125.0-dev.0--pr.g38d50d921720caaf15998f30988db1aed720b2fc=0.1.2"
         {{- if .Values.operator.clusters }}
         {{- if .Values.operator.clusters.sizes }}
         - '--environmentd-cluster-replica-sizes={{ toJson .Values.operator.clusters.sizes }}'

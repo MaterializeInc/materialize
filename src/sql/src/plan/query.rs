@@ -51,8 +51,8 @@ use mz_repr::adt::numeric::{NumericMaxScale, NUMERIC_DATUM_MAX_PRECISION};
 use mz_repr::adt::timestamp::TimestampPrecision;
 use mz_repr::adt::varchar::VarCharMaxLength;
 use mz_repr::{
-    strconv, ColumnName, ColumnType, Datum, GlobalId, RelationDesc, RelationType, Row, RowArena,
-    ScalarType,
+    strconv, CatalogItemId, ColumnName, ColumnType, Datum, RelationDesc, RelationType,
+    RelationVersionSelector, Row, RowArena, ScalarType,
 };
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit::Visit;
@@ -257,7 +257,7 @@ pub fn plan_insert_query(
     returning: Vec<SelectItem<Aug>>,
 ) -> Result<
     (
-        GlobalId,
+        CatalogItemId,
         HirRelationExpr,
         PlannedRootQuery<Vec<HirScalarExpr>>,
     ),
@@ -475,7 +475,7 @@ pub fn plan_copy_item(
     scx: &StatementContext,
     item_name: ResolvedItemName,
     columns: Vec<Ident>,
-) -> Result<(GlobalId, RelationDesc, Vec<usize>), PlanError> {
+) -> Result<(CatalogItemId, RelationDesc, Vec<usize>), PlanError> {
     let item = scx.get_item_by_resolved_name(&item_name)?;
 
     let mut desc = item
@@ -524,7 +524,7 @@ pub fn plan_copy_from(
     scx: &StatementContext,
     table_name: ResolvedItemName,
     columns: Vec<Ident>,
-) -> Result<(GlobalId, RelationDesc, Vec<usize>), PlanError> {
+) -> Result<(CatalogItemId, RelationDesc, Vec<usize>), PlanError> {
     let table = scx.get_item_by_resolved_name(&table_name)?;
 
     // Validate the target of the insert.
@@ -559,13 +559,16 @@ pub fn plan_copy_from(
 pub fn plan_copy_from_rows(
     pcx: &PlanContext,
     catalog: &dyn SessionCatalog,
-    id: GlobalId,
+    id: CatalogItemId,
     columns: Vec<usize>,
     rows: Vec<mz_repr::Row>,
 ) -> Result<HirRelationExpr, PlanError> {
     let scx = StatementContext::new(Some(pcx), catalog);
 
-    let table = catalog.get_item(&id);
+    // Always copy at the latest version of the table.
+    let table = catalog
+        .get_item(&id)
+        .at_version(RelationVersionSelector::Latest);
     let desc = table.desc(&catalog.resolve_full_name(table.name()))?;
 
     let mut defaults = table
@@ -626,7 +629,7 @@ pub fn plan_copy_from_rows(
 
 /// Common information used for DELETE, UPDATE, and INSERT INTO ... SELECT plans.
 pub struct ReadThenWritePlan {
-    pub id: GlobalId,
+    pub id: CatalogItemId,
     /// Read portion of query.
     ///
     /// NOTE: Even if the WHERE filter is left off, we still need to perform a read to generate
@@ -680,14 +683,14 @@ pub fn plan_mutation_query_inner(
     assignments: Vec<Assignment<Aug>>,
     selection: Option<Expr<Aug>>,
 ) -> Result<ReadThenWritePlan, PlanError> {
-    // Get global ID and version of the relation desc.
-    let id = match table_name {
-        ResolvedItemName::Item { id, version: _, .. } => id,
+    // Get ID and version of the relation desc.
+    let (id, version) = match table_name {
+        ResolvedItemName::Item { id, version, .. } => (id, version),
         _ => sql_bail!("cannot mutate non-user table"),
     };
 
     // Perform checks on item with given ID.
-    let item = qcx.scx.get_item(&id);
+    let item = qcx.scx.get_item(&id).at_version(version);
     if item.item_type() != CatalogItemType::Table {
         sql_bail!(
             "cannot mutate {} '{}'",
@@ -5697,7 +5700,7 @@ pub fn scalar_type_from_sql(
 
 pub fn scalar_type_from_catalog(
     catalog: &dyn SessionCatalog,
-    id: GlobalId,
+    id: CatalogItemId,
     modifiers: &[i64],
 ) -> Result<ScalarType, PlanError> {
     let entry = catalog.get_item(&id);
@@ -6240,14 +6243,19 @@ impl<'a> QueryContext<'a> {
         object: ResolvedItemName,
     ) -> Result<(HirRelationExpr, Scope), PlanError> {
         match object {
-            ResolvedItemName::Item { id, full_name, .. } => {
+            ResolvedItemName::Item {
+                id,
+                full_name,
+                version,
+                ..
+            } => {
                 let name = full_name.into();
-                let item = self.scx.get_item(&id);
+                let item = self.scx.get_item(&id).at_version(version);
                 let desc = item
                     .desc(&self.scx.catalog.resolve_full_name(item.name()))?
                     .clone();
                 let expr = HirRelationExpr::Get {
-                    id: Id::Global(item.id()),
+                    id: Id::Global(item.global_id()),
                     typ: desc.typ().clone(),
                 };
 

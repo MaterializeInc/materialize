@@ -23,7 +23,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::EpochMillis;
 use mz_persist_client::PersistClient;
-use mz_repr::GlobalId;
+use mz_repr::{CatalogItemId, GlobalId};
 
 use crate::durable::debug::{DebugCatalogState, Trace};
 pub use crate::durable::error::{CatalogError, DurableCatalogError, FenceError};
@@ -292,17 +292,23 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
         Ok(ids)
     }
 
-    /// Allocates and returns `amount` system [`GlobalId`]s.
-    async fn allocate_system_ids(&mut self, amount: u64) -> Result<Vec<GlobalId>, CatalogError> {
+    /// Allocates and returns `amount` system [`CatalogItemId`]s.
+    async fn allocate_system_ids(
+        &mut self,
+        amount: u64,
+    ) -> Result<Vec<(CatalogItemId, GlobalId)>, CatalogError> {
         let id = self.allocate_id(SYSTEM_ITEM_ALLOC_KEY, amount).await?;
-        Ok(id.into_iter().map(GlobalId::System).collect())
+        Ok(id
+            .into_iter()
+            .map(|id| (CatalogItemId::System(id), GlobalId::System(id)))
+            .collect())
     }
 
-    /// Allocates and returns a user [`GlobalId`].
-    async fn allocate_user_id(&mut self) -> Result<GlobalId, CatalogError> {
+    /// Allocates and returns both a user [`CatalogItemId`] and [`GlobalId`].
+    async fn allocate_user_id(&mut self) -> Result<(CatalogItemId, GlobalId), CatalogError> {
         let id = self.allocate_id(USER_ITEM_ALLOC_KEY, 1).await?;
         let id = id.into_element();
-        Ok(GlobalId::User(id))
+        Ok((CatalogItemId::User(id), GlobalId::User(id)))
     }
 
     /// Allocates and returns a user [`ClusterId`].

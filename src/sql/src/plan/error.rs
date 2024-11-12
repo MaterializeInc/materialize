@@ -26,7 +26,7 @@ use mz_repr::adt::mz_acl_item::AclMode;
 use mz_repr::adt::numeric::InvalidNumericMaxScaleError;
 use mz_repr::adt::timestamp::InvalidTimestampPrecisionError;
 use mz_repr::adt::varchar::InvalidVarCharMaxLengthError;
-use mz_repr::{strconv, ColumnName, GlobalId};
+use mz_repr::{strconv, CatalogItemId, ColumnName};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{IdentError, UnresolvedItemName};
 use mz_sql_parser::parser::{ParserError, ParserStatementError};
@@ -110,7 +110,7 @@ pub enum PlanError {
     InvalidWmrRecursionLimit(String),
     InvalidNumericMaxScale(InvalidNumericMaxScaleError),
     InvalidCharLength(InvalidCharLengthError),
-    InvalidId(GlobalId),
+    InvalidId(CatalogItemId),
     InvalidIdent(IdentError),
     InvalidObject(Box<ResolvedItemName>),
     InvalidObjectType {
