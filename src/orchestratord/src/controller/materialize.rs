@@ -24,6 +24,7 @@ use mz_orchestrator_kubernetes::KubernetesImagePullPolicy;
 use mz_orchestrator_tracing::TracingCliArgs;
 use mz_ore::{cast::CastFrom, cli::KeyValueArg, instrument};
 
+mod console;
 mod resources;
 
 #[derive(clap::Parser)]
@@ -37,9 +38,14 @@ pub struct Args {
     #[clap(long)]
     create_balancers: bool,
     #[clap(long)]
+    create_console: bool,
+    #[clap(long)]
     enable_tls: bool,
     #[clap(long)]
     helm_chart_version: Option<String>,
+
+    #[clap(long)]
+    console_image_tag_map: Vec<KeyValueArg<String, String>>,
 
     #[clap(flatten)]
     aws_info: AwsInfo,
@@ -57,6 +63,8 @@ pub struct Args {
     clusterd_node_selector: Vec<KeyValueArg<String, String>>,
     #[clap(long)]
     balancerd_node_selector: Vec<KeyValueArg<String, String>>,
+    #[clap(long)]
+    console_node_selector: Vec<KeyValueArg<String, String>>,
     #[clap(long, default_value = "always", arg_enum)]
     image_pull_policy: KubernetesImagePullPolicy,
     #[clap(flatten)]
@@ -108,6 +116,9 @@ pub struct Args {
     balancerd_http_port: i32,
     #[clap(long, default_value = "8080")]
     balancerd_internal_http_port: i32,
+
+    #[clap(long, default_value = "9000")]
+    console_http_port: i32,
 }
 
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
@@ -516,6 +527,46 @@ impl k8s_controller::Context for Context {
             Ok(None)
         };
 
+        // console resources don't need to block on an explicit rollout, but
+        // we do want to wait to deploy the console until the environmentd is
+        // successfully up and running, or else it will crashloop trying to
+        // contact the service
+        if let Ok(None) = result {
+            if self.config.create_console {
+                let Some((_, environmentd_image_tag)) =
+                    mz.spec.environmentd_image_ref.rsplit_once(':')
+                else {
+                    return Err(Error::Anyhow(anyhow::anyhow!(
+                        "failed to parse environmentd image ref: {}",
+                        mz.spec.environmentd_image_ref
+                    )));
+                };
+                let Some(console_image_tag) = self
+                    .config
+                    .console_image_tag_map
+                    .iter()
+                    .find(|kv| kv.key == environmentd_image_tag)
+                    .map(|kv| kv.value.clone())
+                else {
+                    return Err(Error::Anyhow(anyhow::anyhow!(
+                        "no console image ref found for environmentd image ref: {}",
+                        mz.spec.environmentd_image_ref
+                    )));
+                };
+                console::Resources::new(
+                    &self.config,
+                    mz,
+                    &matching_image_from_environmentd_image_ref(
+                        &mz.spec.environmentd_image_ref,
+                        "console",
+                        Some(&console_image_tag),
+                    ),
+                )
+                .apply(&client, &mz.namespace())
+                .await?;
+            }
+        }
+
         result.map_err(Error::Anyhow)
     }
 
@@ -529,4 +580,22 @@ impl k8s_controller::Context for Context {
 
         Ok(None)
     }
+}
+
+fn matching_image_from_environmentd_image_ref(
+    environmentd_image_ref: &str,
+    image_name: &str,
+    image_tag: Option<&str>,
+) -> String {
+    let namespace = environmentd_image_ref
+        .rsplit_once('/')
+        .unwrap_or(("materialize", ""))
+        .0;
+    let tag = image_tag.unwrap_or_else(|| {
+        environmentd_image_ref
+            .rsplit_once(':')
+            .unwrap_or(("", "unstable"))
+            .1
+    });
+    format!("{namespace}/{image_name}:{tag}")
 }

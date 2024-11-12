@@ -121,7 +121,9 @@ The following table lists the configurable parameters of the Materialize operato
 | `observability.prometheus.enabled` |  | ``false`` |
 | `operator.args.awsAccountID` |  | ``""`` |
 | `operator.args.cloudProvider` |  | ``"local"`` |
+| `operator.args.consoleImageTagMapOverride` |  | ``{}`` |
 | `operator.args.createBalancers` |  | ``true`` |
+| `operator.args.createConsole` |  | ``true`` |
 | `operator.args.environmentdConnectionRoleARN` |  | ``""`` |
 | `operator.args.environmentdIAMRoleARN` |  | ``""`` |
 | `operator.args.localDevelopment` |  | ``true`` |
