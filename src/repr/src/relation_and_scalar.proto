@@ -10,6 +10,8 @@
 // Note: protobuf does not support cyclic imports. Thus, this file contains
 // both, definitions from relation.rs and scalar.rs
 
+// buf breaking: ignore (temporarily ignored by ParkMyCar)
+
 syntax = "proto3";
 
 package mz_repr.relation_and_scalar;

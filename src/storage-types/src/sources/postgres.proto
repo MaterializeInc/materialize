@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+// buf breaking: ignore (temporarily ignored by ParkMyCar)
+
 syntax = "proto3";
 
 package mz_storage_types.sources.postgres;
@@ -52,7 +54,8 @@ message ProtoPostgresSourceExportDetails {
 
 // NOTE: this message is encoded and stored as part of source export
 // statement options
-// Be extra careful about changes, ensuring that all changes are backwards compatible
+// Be extra careful about changes, ensuring that all changes are backwards
+// compatible
 message ProtoPostgresSourceExportStatementDetails {
   mz_postgres_util.desc.ProtoPostgresTableDesc table = 1;
 }
