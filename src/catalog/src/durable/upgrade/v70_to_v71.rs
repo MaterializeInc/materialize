@@ -9,74 +9,73 @@
 
 use mz_pgrepr::oid::NETWORK_POLICIES_DEFAULT_POLICY_OID;
 
-use crate::durable::upgrade::objects_v70::Empty;
+use crate::durable::upgrade::objects_v71::Empty;
 
 use crate::durable::upgrade::MigrationAction;
-use crate::durable::upgrade::{objects_v69 as v69, objects_v70 as v70};
+use crate::durable::upgrade::{objects_v70 as v70, objects_v71 as v71};
 
 const DEFAULT_USER_NETWORK_POLICY_NAME: &str = "default";
 
 const MZ_SYSTEM_ROLE_ID: u64 = 1;
 const MZ_SUPPORT_ROLE_ID: u64 = 2;
 
-/// In v69, we add the Network Policy resources.
 pub fn upgrade(
-    _snapshot: Vec<v69::StateUpdateKind>,
-) -> Vec<MigrationAction<v69::StateUpdateKind, v70::StateUpdateKind>> {
-    let policy = v70::state_update_kind::NetworkPolicy {
-        key: Some(v70::NetworkPolicyKey {
-            id: Some(v70::NetworkPolicyId {
-                value: Some(v70::network_policy_id::Value::User(1)),
+    _snapshot: Vec<v70::StateUpdateKind>,
+) -> Vec<MigrationAction<v70::StateUpdateKind, v71::StateUpdateKind>> {
+    let policy = v71::state_update_kind::NetworkPolicy {
+        key: Some(v71::NetworkPolicyKey {
+            id: Some(v71::NetworkPolicyId {
+                value: Some(v71::network_policy_id::Value::User(1)),
             }),
         }),
-        value: Some(v70::NetworkPolicyValue {
+        value: Some(v71::NetworkPolicyValue {
             name: DEFAULT_USER_NETWORK_POLICY_NAME.to_string(),
-            rules: vec![v70::NetworkPolicyRule {
+            rules: vec![v71::NetworkPolicyRule {
                 name: "open_ingress".to_string(),
-                action: Some(v70::network_policy_rule::Action::Allow(Empty {})),
-                direction: Some(v70::network_policy_rule::Direction::Ingress(Empty {})),
+                action: Some(v71::network_policy_rule::Action::Allow(Empty {})),
+                direction: Some(v71::network_policy_rule::Direction::Ingress(Empty {})),
                 address: "0.0.0.0/0".to_string(),
             }],
-            owner_id: Some(v70::RoleId {
-                value: Some(v70::role_id::Value::System(MZ_SYSTEM_ROLE_ID)),
+            owner_id: Some(v71::RoleId {
+                value: Some(v71::role_id::Value::System(MZ_SYSTEM_ROLE_ID)),
             }),
             privileges: vec![
-                v70::MzAclItem {
-                    grantee: Some(v70::RoleId {
-                        value: Some(v70::role_id::Value::Public(Empty {})),
+                v71::MzAclItem {
+                    grantee: Some(v71::RoleId {
+                        value: Some(v71::role_id::Value::Public(Empty {})),
                     }),
-                    grantor: Some(v70::RoleId {
-                        value: Some(v70::role_id::Value::System(MZ_SYSTEM_ROLE_ID)),
-                    }),
-                    // usage
-                    acl_mode: Some(v70::AclMode { bitflags: 256 }),
-                },
-                v70::MzAclItem {
-                    grantee: Some(v70::RoleId {
-                        value: Some(v70::role_id::Value::System(MZ_SUPPORT_ROLE_ID)),
-                    }),
-                    grantor: Some(v70::RoleId {
-                        value: Some(v70::role_id::Value::System(MZ_SYSTEM_ROLE_ID)),
+                    grantor: Some(v71::RoleId {
+                        value: Some(v71::role_id::Value::System(MZ_SYSTEM_ROLE_ID)),
                     }),
                     // usage
-                    acl_mode: Some(v70::AclMode { bitflags: 256 }),
+                    acl_mode: Some(v71::AclMode { bitflags: 256 }),
                 },
-                v70::MzAclItem {
-                    grantee: Some(v70::RoleId {
-                        value: Some(v70::role_id::Value::System(MZ_SYSTEM_ROLE_ID)),
+                v71::MzAclItem {
+                    grantee: Some(v71::RoleId {
+                        value: Some(v71::role_id::Value::System(MZ_SUPPORT_ROLE_ID)),
                     }),
-                    grantor: Some(v70::RoleId {
-                        value: Some(v70::role_id::Value::System(MZ_SYSTEM_ROLE_ID)),
+                    grantor: Some(v71::RoleId {
+                        value: Some(v71::role_id::Value::System(MZ_SYSTEM_ROLE_ID)),
+                    }),
+                    // usage
+                    acl_mode: Some(v71::AclMode { bitflags: 256 }),
+                },
+                v71::MzAclItem {
+                    grantee: Some(v71::RoleId {
+                        value: Some(v71::role_id::Value::System(MZ_SYSTEM_ROLE_ID)),
+                    }),
+                    grantor: Some(v71::RoleId {
+                        value: Some(v71::role_id::Value::System(MZ_SYSTEM_ROLE_ID)),
                     }),
                     // usage_create
-                    acl_mode: Some(v70::AclMode { bitflags: 768 }),
+                    acl_mode: Some(v71::AclMode { bitflags: 768 }),
                 },
             ],
             oid: NETWORK_POLICIES_DEFAULT_POLICY_OID,
         }),
     };
 
-    vec![MigrationAction::Insert(v70::StateUpdateKind {
-        kind: Some(v70::state_update_kind::Kind::NetworkPolicy(policy)),
+    vec![MigrationAction::Insert(v71::StateUpdateKind {
+        kind: Some(v71::state_update_kind::Kind::NetworkPolicy(policy)),
     })]
 }
