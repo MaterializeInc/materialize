@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use mz_ore::task::{JoinHandle, JoinHandleExt};
 use std::fmt::{Debug, Formatter};
 use std::mem;
 
@@ -128,6 +129,38 @@ impl<T> MergeTree<T> {
             deepest.len() <= self.max_len,
             "at most max elements at deepest level"
         );
+    }
+}
+
+/// Either a handle to a task that returns a value or the value itself.
+#[derive(Debug)]
+pub enum Pending<T> {
+    Writing(JoinHandle<T>),
+    Blocking,
+    Finished(T),
+}
+
+impl<T: Send + 'static> Pending<T> {
+    pub fn new(handle: JoinHandle<T>) -> Self {
+        Self::Writing(handle)
+    }
+
+    pub fn is_finished(&self) -> bool {
+        matches!(self, Self::Finished(_))
+    }
+
+    pub async fn into_result(self) -> T {
+        match self {
+            Pending::Writing(h) => h.wait_and_assert_finished().await,
+            Pending::Blocking => panic!("block_until_ready cancelled?"),
+            Pending::Finished(t) => t,
+        }
+    }
+
+    pub async fn block_until_ready(&mut self) {
+        let pending = mem::replace(self, Self::Blocking);
+        let value = pending.into_result().await;
+        *self = Pending::Finished(value);
     }
 }
 

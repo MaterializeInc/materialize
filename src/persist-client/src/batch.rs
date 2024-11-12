@@ -29,7 +29,6 @@ use futures_util::stream::StreamExt;
 use futures_util::{stream, FutureExt};
 use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
-use mz_ore::task::{JoinHandle, JoinHandleExt};
 use mz_ore::{instrument, soft_panic_or_log};
 use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
 use mz_persist::indexed::encoding::{BatchColumnarFormat, BlobTraceBatchPart, BlobTraceUpdates};
@@ -53,7 +52,7 @@ use crate::cfg::MiB;
 use crate::error::InvalidUsage;
 use crate::internal::encoding::{LazyInlineBatchPart, LazyPartStats, LazyProto, Schemas};
 use crate::internal::machine::retry_external;
-use crate::internal::merge::MergeTree;
+use crate::internal::merge::{MergeTree, Pending};
 use crate::internal::metrics::{BatchWriteMetrics, Metrics, RetryMetrics, ShardMetrics};
 use crate::internal::paths::{PartId, PartialBatchKey, WriterKey};
 use crate::internal::state::{
@@ -959,38 +958,6 @@ impl BatchBuffer {
         let records = builder.finish(&self.metrics.columnar);
         assert_eq!(self.records_builder.len(), 0);
         BlobTraceUpdates::Row(records)
-    }
-}
-
-/// Either a handle to a task that returns a value or the value itself.
-#[derive(Debug)]
-enum Pending<T> {
-    Writing(JoinHandle<T>),
-    Blocking,
-    Finished(T),
-}
-
-impl<T: Send + 'static> Pending<T> {
-    fn new(handle: JoinHandle<T>) -> Self {
-        Self::Writing(handle)
-    }
-
-    fn is_finished(&self) -> bool {
-        matches!(self, Self::Finished(_))
-    }
-
-    async fn into_result(self) -> T {
-        match self {
-            Pending::Writing(h) => h.wait_and_assert_finished().await,
-            Pending::Blocking => panic!("block_until_ready cancelled?"),
-            Pending::Finished(t) => t,
-        }
-    }
-
-    async fn block_until_ready(&mut self) {
-        let pending = mem::replace(self, Self::Blocking);
-        let value = pending.into_result().await;
-        *self = Pending::Finished(value);
     }
 }
 
