@@ -42,6 +42,9 @@ test/scalability/results/**/*.png
 misc/wasm/target
 parallel-benchmark.db
 
+# Ignore any editor specific settings for the workspace.
+/.vscode
+
 # This is un-orthodox, but adding it to the repo would "tie" it to each user's
 # local version of nixpkgs. This way, we can all use the flake and have a
 # flake.lock that works well with the rest of the package versions on our
