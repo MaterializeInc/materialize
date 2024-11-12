@@ -280,9 +280,23 @@ user-id = 704
 user-login = "frankmcsherry"
 user-name = "Frank McSherry"
 
+[[publisher.differential-dataflow]]
+version = "0.13.1"
+when = "2024-11-11"
+user-id = 704
+user-login = "frankmcsherry"
+user-name = "Frank McSherry"
+
 [[publisher.differential-dogs3]]
 version = "0.1.0"
 when = "2024-10-29"
+user-id = 704
+user-login = "frankmcsherry"
+user-name = "Frank McSherry"
+
+[[publisher.differential-dogs3]]
+version = "0.1.1"
+when = "2024-11-11"
 user-id = 704
 user-login = "frankmcsherry"
 user-name = "Frank McSherry"
@@ -693,8 +707,8 @@ user-login = "BurntSushi"
 user-name = "Andrew Gallant"
 
 [[publisher.timely]]
-version = "0.13.0"
-when = "2024-10-29"
+version = "0.14.1"
+when = "2024-11-12"
 user-id = 704
 user-login = "frankmcsherry"
 user-name = "Frank McSherry"
@@ -707,8 +721,8 @@ user-login = "frankmcsherry"
 user-name = "Frank McSherry"
 
 [[publisher.timely_communication]]
-version = "0.13.0"
-when = "2024-10-29"
+version = "0.14.0"
+when = "2024-11-11"
 user-id = 704
 user-login = "frankmcsherry"
 user-name = "Frank McSherry"
