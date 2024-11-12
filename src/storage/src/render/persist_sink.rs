@@ -921,7 +921,7 @@ where
         .get(storage_state.storage_configuration.config_set());
     let bail_on_concurrent_modification = !use_continual_feedback_upsert;
 
-    let read_only_rx = storage_state.read_only_rx.clone();
+    let mut read_only_rx = storage_state.read_only_rx.clone();
 
     let operator_name = format!("{} append_batches", operator_name);
     let mut append_op = AsyncOperatorBuilder::new(operator_name, scope.clone());
@@ -1214,12 +1214,11 @@ where
                             }
 
                             // We don't try to be smart here, and for example
-                            // use `wait_for_upper_past()` and awaiting the
-                            // read-only flag. We'd have to use a select!, which
-                            // would require cancel safety of
+                            // use `wait_for_upper_past()`. We'd have to use a
+                            // select!, which would require cancel safety of
                             // `wait_for_upper_past()`, which it doesn't
                             // advertise.
-                            tokio::time::sleep(Duration::from_secs(1)).await;
+                            let _ = tokio::time::timeout(Duration::from_secs(1), read_only_rx.changed()).await;
 
                             if !*read_only_rx.borrow() {
                                 if collection_id.is_user() {
