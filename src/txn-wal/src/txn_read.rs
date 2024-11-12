@@ -58,7 +58,7 @@ pub struct DataSnapshot<T> {
     pub(crate) empty_to: T,
 }
 
-impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
+impl<T: Timestamp + Lattice + TotalOrder + Codec64 + Sync> DataSnapshot<T> {
     /// Unblocks reading a snapshot at `self.as_of` by waiting for the latest
     /// write before that time and then running an empty CaA if necessary.
     #[instrument(level = "debug", fields(shard = %self.data_id, ts = ?self.as_of, empty_to = ?self.empty_to))]
@@ -352,7 +352,7 @@ impl<K, V, T, D> UnblockRead<T> for WriteHandle<K, V, T, D>
 where
     K: Debug + Codec + Send + Sync,
     V: Debug + Codec + Send + Sync,
-    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
+    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
     D: Debug + Semigroup + Ord + Codec64 + Send + Sync,
 {
     async fn unblock_read(self: Box<Self>, snapshot: DataSnapshot<T>) {
@@ -369,7 +369,7 @@ pub struct TxnsRead<T> {
     _subscribe_task: Arc<AbortOnDropHandle<()>>,
 }
 
-impl<T: Timestamp + Lattice + Codec64> TxnsRead<T> {
+impl<T: Timestamp + Lattice + Codec64 + Sync> TxnsRead<T> {
     /// Starts the task worker and returns a handle for communicating with it.
     pub async fn start<C>(client: PersistClient, txns_id: ShardId) -> Self
     where
@@ -650,7 +650,7 @@ impl<T: Timestamp + Lattice + Codec64> PendingWait<T> {
 
 impl<T> TxnsReadTask<T>
 where
-    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
+    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
 {
     async fn run(&mut self) {
         while let Some(cmd) = self.rx.recv().await {
@@ -812,7 +812,7 @@ struct TxnsSubscribeTask<T, C: TxnsCodec = TxnsCodecDefault> {
 
 impl<T, C> TxnsSubscribeTask<T, C>
 where
-    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
+    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
     C: TxnsCodec,
 {
     /// Creates a [TxnsSubscribeTask] reading from the given txn shard that

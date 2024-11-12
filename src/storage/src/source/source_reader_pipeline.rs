@@ -1071,12 +1071,10 @@ where
         let mut ready_times = VecDeque::new();
         let mut source_upper = MutableAntichain::new();
 
-        let mut vector = Vec::new();
         move |frontiers| {
             // Accept new bindings
             while let Some((_, data)) = bindings.next() {
-                data.swap(&mut vector);
-                accepted_times.extend(vector.drain(..).map(|(from, mut into, diff)| {
+                accepted_times.extend(data.drain(..).map(|(from, mut into, diff)| {
                     into.advance_by(as_of.borrow());
                     (from, into, diff)
                 }));

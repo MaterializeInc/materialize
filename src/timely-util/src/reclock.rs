@@ -179,7 +179,7 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{consolidation, AsCollection, Collection, ExchangeData};
 use mz_ore::collections::CollectionExt;
-use timely::communication::{Message, Pull, Push};
+use timely::communication::{Pull, Push};
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::capture::Event;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
@@ -200,7 +200,7 @@ pub fn reclock<G, D, FromTime, IntoTime, R>(
     remap_collection: &Collection<G, FromTime, i64>,
     as_of: Antichain<G::Timestamp>,
 ) -> (
-    Box<dyn Push<Message<Event<FromTime, Vec<(D, FromTime, R)>>>>>,
+    Box<dyn Push<Event<FromTime, Vec<(D, FromTime, R)>>>>,
     Collection<G, D, R>,
 )
 where
@@ -247,7 +247,6 @@ where
         let mut source_frontier = MutableAntichain::new_bottom(FromTime::minimum());
 
         let mut binding_buffer = Vec::new();
-        let mut remap_buffer = Vec::new();
         let mut interesting_times = Vec::new();
 
         // The operator drains `remap_input` and organizes new bindings that are not beyond
@@ -270,8 +269,7 @@ where
 
             // STEP 1. Accept new bindings into `pending_remap`.
             while let Some((_, data)) = remap_input.next() {
-                data.swap(&mut remap_buffer);
-                for (from, into, diff) in remap_buffer.drain(..) {
+                for (from, into, diff) in data.drain(..) {
                     pending_remap.push(Reverse((into, from, diff)));
                 }
             }
@@ -299,7 +297,7 @@ where
             //         violated.
             let mut stash = Vec::new();
             while let Some(event) = events.pull() {
-                match event.as_mut() {
+                match event {
                     Event::Progress(changes) => {
                         source_frontier.update_iter(changes.drain(..));
                     }

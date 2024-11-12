@@ -222,8 +222,8 @@ pub(crate) fn upsert<G: Scope, FromTime>(
     PressOnDropButton,
 )
 where
-    G::Timestamp: TotalOrder,
-    FromTime: Timestamp,
+    G::Timestamp: TotalOrder + Sync,
+    FromTime: Timestamp + Sync,
 {
     let upsert_metrics = source_config.metrics.get_upsert_metrics(
         source_config.id,
@@ -400,11 +400,11 @@ fn upsert_operator<G: Scope, FromTime, F, Fut, US>(
     PressOnDropButton,
 )
 where
-    G::Timestamp: TotalOrder,
+    G::Timestamp: TotalOrder + Sync,
     F: FnOnce() -> Fut + 'static,
     Fut: std::future::Future<Output = US>,
     US: UpsertStateBackend<Option<FromTime>>,
-    FromTime: Debug + timely::ExchangeData + Ord,
+    FromTime: Debug + timely::ExchangeData + Ord + Sync,
 {
     let use_continual_feedback_upsert =
         dyncfgs::STORAGE_USE_CONTINUAL_FEEDBACK_UPSERT.get(storage_configuration.config_set());
@@ -463,15 +463,13 @@ where
             let mut capability: Option<InputCapability<G::Timestamp>> = None;
             // A batch of received updates
             let mut updates = Vec::new();
-            let mut tmp = Vec::new();
             move |input, output| {
                 while let Some((cap, data)) = input.next() {
                     assert!(
                         data.iter().all(|(_, _, diff)| *diff > 0),
                         "invalid upsert input"
                     );
-                    data.swap(&mut tmp);
-                    updates.append(&mut tmp);
+                    updates.append(data);
                     match capability.as_mut() {
                         Some(capability) => {
                             if cap.time() <= capability.time() {
@@ -555,7 +553,7 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
     S: UpsertStateBackend<Option<FromTime>>,
     G: Scope,
     T: PartialOrder + Ord + Clone + Debug,
-    FromTime: timely::ExchangeData + Ord,
+    FromTime: timely::ExchangeData + Ord + Sync,
     E: UpsertErrorEmitter<G>,
 {
     stash.sort_unstable();
@@ -710,11 +708,11 @@ fn upsert_classic<G: Scope, FromTime, F, Fut, US>(
     PressOnDropButton,
 )
 where
-    G::Timestamp: TotalOrder,
+    G::Timestamp: TotalOrder + Sync,
     F: FnOnce() -> Fut + 'static,
     Fut: std::future::Future<Output = US>,
     US: UpsertStateBackend<Option<FromTime>>,
-    FromTime: timely::ExchangeData + Ord,
+    FromTime: timely::ExchangeData + Ord + Sync,
 {
     let mut builder = AsyncOperatorBuilder::new("Upsert".to_string(), input.scope());
 

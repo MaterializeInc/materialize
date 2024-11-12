@@ -92,7 +92,7 @@ where
     F: FnMut(&PartStats, AntichainRef<G::Timestamp>) -> bool + 'static,
     G: Scope,
     // TODO: Figure out how to get rid of the TotalOrder bound :(.
-    G::Timestamp: Timestamp + Lattice + Codec64 + TotalOrder,
+    G::Timestamp: Timestamp + Lattice + Codec64 + TotalOrder + Sync,
     T: Refines<G::Timestamp>,
     DT: FnOnce(
         Child<'g, G, T>,
@@ -245,7 +245,7 @@ where
     F: FnMut(&PartStats, AntichainRef<G::Timestamp>) -> bool + 'static,
     G: Scope,
     // TODO: Figure out how to get rid of the TotalOrder bound :(.
-    G::Timestamp: Timestamp + Lattice + Codec64 + TotalOrder,
+    G::Timestamp: Timestamp + Lattice + Codec64 + TotalOrder + Sync,
 {
     let worker_index = scope.index();
     let num_workers = scope.peers();
@@ -541,7 +541,7 @@ pub(crate) fn shard_source_fetch<K, V, T, D, G>(
 where
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + Codec64,
+    T: Timestamp + Lattice + Codec64 + Sync,
     D: Semigroup + Codec64 + Send + Sync,
     G: Scope,
     G::Timestamp: Refines<T>,

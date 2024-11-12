@@ -17,7 +17,7 @@ bytes = "1.3.0"
 bytesize = "1.1.0"
 chrono = { version = "0.4.35", default-features = false, features = ["std"] }
 crossbeam-channel = "0.5.8"
-differential-dataflow = "0.13.0"
+differential-dataflow = "0.13.1"
 futures = "0.3.25"
 http = "1.1.0"
 mz-build-info = { path = "../build-info" }
@@ -47,7 +47,7 @@ regex = "1.7.0"
 serde = { version = "1.0.152", features = ["derive"] }
 serde_json = "1.0.125"
 thiserror = "1.0.37"
-timely = "0.13.0"
+timely = "0.14.1"
 tokio = "1.38.0"
 tokio-stream = "0.1.11"
 tonic = "0.12.1"

@@ -158,7 +158,7 @@ fn render_source_stream<G, FromTime>(
 )
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
-    FromTime: Timestamp,
+    FromTime: Timestamp + Sync,
 {
     let mut needed_tokens = vec![];
 

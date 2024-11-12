@@ -83,7 +83,6 @@ pub(super) fn construct<A: Allocate>(
         let (mut batcher_capacity_out, batcher_capacity) = demux.new_output();
         let (mut batcher_allocations_out, batcher_allocations) = demux.new_output();
 
-        let mut demux_buffer = Vec::new();
         let mut demux_state = Default::default();
         demux.build(move |_capability| {
             move |_frontiers| {
@@ -106,9 +105,7 @@ pub(super) fn construct<A: Allocate>(
                         batcher_allocations: batcher_allocations.session_with_builder(&cap),
                     };
 
-                    data.swap(&mut demux_buffer);
-
-                    for (time, logger_id, event) in demux_buffer.drain(..) {
+                    for (time, logger_id, event) in data.drain(..) {
                         // We expect the logging infrastructure to not shuffle events between
                         // workers and this code relies on the assumption that each worker handles
                         // its own events.

@@ -2039,9 +2039,9 @@ dependencies = [
 
 [[package]]
 name = "differential-dataflow"
-version = "0.13.0"
+version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4f5ad19c6ddddedba008bf9626348810ff5171de9cad62406cd4e9ea291fa8d1"
+checksum = "c437c8688c813b36da4823af3562607dca0bface950206afccec6bb8ef7f762b"
 dependencies = [
  "fnv",
  "serde",
@@ -2050,9 +2050,9 @@ dependencies = [
 
 [[package]]
 name = "differential-dogs3"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bd672f3f2167a08496c0ba47206e1c857b75abd14a7c560d1a7da2e07ee08cb1"
+checksum = "5a4c2c8d32c7fc5ac4f0412d45ec8b019478a69e82e570f8f892156ae542d95e"
 dependencies = [
  "differential-dataflow",
  "serde",
@@ -9784,9 +9784,9 @@ dependencies = [
 
 [[package]]
 name = "timely"
-version = "0.13.0"
+version = "0.14.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "81b6f390cec7160992fd8502fe02064a0f52dcfd2978544f4999f18664b709aa"
+checksum = "7a4794ec27c59ae109928ce1273a16633d324268bca4538c7e40e6c4608b40a3"
 dependencies = [
  "bincode",
  "crossbeam-channel",
@@ -9807,11 +9807,10 @@ checksum = "1f8a545b35b019b8b63afb913214695f542cbbf39032c7b7349e1a15b7f2a2cf"
 
 [[package]]
 name = "timely_communication"
-version = "0.13.0"
+version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22d602b340fd8d5d4128660a577f7886070098b860dc9a9aa46512a2e0d683b4"
+checksum = "0dad90c2eb029d4ed8d8c7f26c326b1ec86a5104d38e3ec94fdefdd995a944a5"
 dependencies = [
- "bincode",
  "byteorder",
  "crossbeam-channel",
  "getopts",

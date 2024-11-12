@@ -93,7 +93,7 @@ impl<K, V, T, D> SchemaCache<K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + Codec64,
+    T: Timestamp + Lattice + Codec64 + Sync,
     D: Semigroup + Codec64,
 {
     pub fn new(maps: Arc<SchemaCacheMaps<K, V>>, applier: Applier<K, V, T, D>) -> Self {
@@ -342,7 +342,7 @@ where
         schema_cache: &mut SchemaCache<K, V, T, D>,
     ) -> Result<Self, Schemas<K, V>>
     where
-        T: Timestamp + Lattice + Codec64,
+        T: Timestamp + Lattice + Codec64 + Sync,
         D: Semigroup + Codec64,
     {
         match (write, read.id) {

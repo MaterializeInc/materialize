@@ -332,7 +332,7 @@ where
     F: Fn() -> S,
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + TotalOrder + Codec64,
+    T: Timestamp + Lattice + TotalOrder + Codec64 + Sync,
     D: Debug + Semigroup + Ord + Codec64 + Send + Sync,
 {
     fn debug_sep<'a, T: Debug + 'a>(sep: &str, xs: impl IntoIterator<Item = &'a T>) -> String {
@@ -396,7 +396,7 @@ pub(crate) async fn empty_caa<S, F, K, V, T, D>(
     F: Fn() -> S,
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
+    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
     D: Debug + Semigroup + Ord + Codec64 + Send + Sync,
 {
     let name = name();
@@ -442,7 +442,7 @@ async fn apply_caa<K, V, T, D>(
 ) where
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
+    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
     D: Semigroup + Ord + Codec64 + Send + Sync,
 {
     let mut batches = batch_raws
@@ -529,7 +529,7 @@ pub(crate) async fn cads<T, O, C>(
     txns_since: &mut SinceHandle<C::Key, C::Val, T, i64, O>,
     new_since_ts: T,
 ) where
-    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
+    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
     O: Opaque + Debug + Codec64,
     C: TxnsCodec,
 {
@@ -574,7 +574,7 @@ pub mod tests {
     where
         K: Debug + Codec + Clone,
         V: Debug + Codec + Clone,
-        T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
+        T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
         D: Debug + Semigroup + Ord + Codec64 + Send + Sync + Clone,
         O: Opaque + Debug + Codec64,
         C: TxnsCodec,
@@ -598,7 +598,7 @@ pub mod tests {
     where
         K: Debug + Codec + Clone,
         V: Debug + Codec + Clone,
-        T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
+        T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
         D: Debug + Semigroup + Ord + Codec64 + Send + Sync + Clone,
     {
         pub(crate) fn new() -> Self {

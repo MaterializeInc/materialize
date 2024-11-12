@@ -39,7 +39,6 @@ where
         let until = self.until.clone();
         let mfp_plan = mfp.into_plan().expect("MapFilterProject planning failed");
         let (ok_collection, err_collection) = input.as_specific_collection(input_key.as_deref());
-        let mut storage = Vec::new();
         let stream = ok_collection.inner;
         let (oks, errs) = stream.unary_fallible(Pipeline, "FlatMapStage", move |_, _| {
             Box::new(move |input, ok_output, err_output| {
@@ -50,12 +49,10 @@ where
                 let mut table_func_output = Vec::new();
 
                 input.for_each(|cap, data| {
-                    data.swap(&mut storage);
-
                     let mut ok_session = ok_output.session_with_builder(&cap);
                     let mut err_session = err_output.session_with_builder(&cap);
 
-                    'input: for (input_row, time, diff) in storage.drain(..) {
+                    'input: for (input_row, time, diff) in data.drain(..) {
                         let temp_storage = RowArena::new();
 
                         // Unpack datums for expression evaluation.

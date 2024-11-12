@@ -89,7 +89,7 @@ type StorageCollections<T> = Arc<
 
 /// A composite trait for types that serve as timestamps in the Compute Controller.
 /// `Into<Datum<'a>>` is needed for writing timestamps to introspection collections.
-pub trait ComputeControllerTimestamp: TimestampManipulation + Into<Datum<'static>> {}
+pub trait ComputeControllerTimestamp: TimestampManipulation + Into<Datum<'static>> + Sync {}
 
 impl ComputeControllerTimestamp for mz_repr::Timestamp {}
 

@@ -135,11 +135,11 @@ pub fn upsert_inner<G: Scope, FromTime, F, Fut, US>(
     PressOnDropButton,
 )
 where
-    G::Timestamp: TotalOrder,
+    G::Timestamp: TotalOrder + Sync,
     F: FnOnce() -> Fut + 'static,
     Fut: std::future::Future<Output = US>,
     US: UpsertStateBackend<Option<FromTime>>,
-    FromTime: Debug + timely::ExchangeData + Ord,
+    FromTime: Debug + timely::ExchangeData + Ord + Sync,
 {
     let mut builder = AsyncOperatorBuilder::new("Upsert".to_string(), input.scope());
 
@@ -633,8 +633,8 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
 where
     S: UpsertStateBackend<Option<FromTime>>,
     G: Scope,
-    T: TotalOrder + Ord + Clone + Debug + timely::progress::Timestamp,
-    FromTime: timely::ExchangeData + Ord,
+    T: TotalOrder + Ord + Clone + Debug + timely::progress::Timestamp + Sync,
+    FromTime: timely::ExchangeData + Ord + Sync,
     E: UpsertErrorEmitter<G>,
 {
     let mut min_remaining_time = Antichain::new();
@@ -790,7 +790,7 @@ async fn ingest_state_updates<S, G, T, FromTime, E>(
     S: UpsertStateBackend<Option<FromTime>>,
     G: Scope,
     T: PartialOrder + Ord + Clone + Debug + timely::progress::Timestamp,
-    FromTime: timely::ExchangeData + Ord,
+    FromTime: timely::ExchangeData + Ord + Sync,
     E: UpsertErrorEmitter<G>,
 {
     // Sort by (key, diff) and make sure additions sort before retractions,

@@ -18,7 +18,7 @@ bytesize = "1.1.0"
 chrono = { version = "0.4.35", default-features = false, features = ["std"] }
 clap = { version = "3.2.24", features = ["derive"] }
 derivative = "2.2.0"
-differential-dataflow = "0.13.0"
+differential-dataflow = "0.13.1"
 fail = { version = "0.5.1", features = ["failpoints"] }
 futures = "0.3.25"
 ipnet = "2.5.0"
@@ -64,7 +64,7 @@ smallvec = { version = "1.10.0", features = ["union"] }
 static_assertions = "1.1"
 sha2 = "0.10.6"
 thiserror = "1.0.37"
-timely = "0.13.0"
+timely = "0.14.1"
 tokio = { version = "1.38.0" }
 tracing = "0.1.37"
 uuid = "1.2.2"

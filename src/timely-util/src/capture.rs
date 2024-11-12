@@ -14,7 +14,7 @@
 // limitations under the License.
 
 use mz_ore::channel::{InstrumentedChannelMetric, InstrumentedUnboundedSender};
-use timely::communication::{Message, Push};
+use timely::communication::Push;
 use timely::dataflow::operators::capture::{Event, EventPusher};
 
 pub struct UnboundedTokioCapture<T, C, M>(pub InstrumentedUnboundedSender<Event<T, C>, M>);
@@ -33,9 +33,9 @@ where
 /// A helper type to allow capturing timely streams into timely pushers
 pub struct PusherCapture<P>(pub P);
 
-impl<P: Push<Message<Event<T, D>>>, T, D> EventPusher<T, D> for PusherCapture<P> {
+impl<P: Push<Event<T, D>>, T, D> EventPusher<T, D> for PusherCapture<P> {
     fn push(&mut self, event: Event<T, D>) {
-        self.0.send(Message::from_typed(event));
+        self.0.send(event);
         self.0.done();
     }
 }
