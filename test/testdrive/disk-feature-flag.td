@@ -11,6 +11,16 @@ $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.mater
 ALTER SYSTEM SET enable_disk_cluster_replicas = false
 ALTER SYSTEM SET disk_cluster_replicas_default = false
 
+! CREATE CLUSTER no SIZE = '1', REPLICATION FACTOR 0, DISK;
+exact:`WITH (DISK)` for cluster replicas is not supported
+
+> CREATE CLUSTER no SIZE = '1', REPLICATION FACTOR 0;
+
+! ALTER CLUSTER no SET (REPLICATION FACTOR 1, DISK);
+exact:`WITH (DISK)` for cluster replicas is not supported
+
+> DROP CLUSTER no;
+
 # Test that with `enable_create_source_denylist_with_options` off, if
 # `enable_disk_cluster_replicas` is on, we can use `WITH(DISK)`.
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
@@ -20,14 +30,11 @@ ALTER SYSTEM SET enable_disk_cluster_replicas = true
 > DROP CLUSTER IF EXISTS c;
 
 # Can set unmanaged cluster replica options directly, mixing and matching disk
-! CREATE CLUSTER c REPLICAS (r1 (SIZE '1', DISK), r2 (SIZE '1'))
-contains: DISK option not supported for non-legacy cluster sizes because disk is always enabled
-
-> CREATE CLUSTER c REPLICAS (r1 (SIZE '1'), r2 (SIZE '1'))
+> CREATE CLUSTER c REPLICAS (r1 (SIZE '1', DISK), r2 (SIZE '1'))
 
 > SELECT r.name, r.size, r.disk FROM mz_catalog.mz_clusters c, mz_catalog.mz_cluster_replicas r WHERE c.name = 'c' AND c.id = r.cluster_id;
 r1 1 true
-r2 1 true
+r2 1 false
 
 > DROP CLUSTER c;
 
@@ -44,10 +51,7 @@ r2 1 true
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET disk_cluster_replicas_default = true
 
-! CREATE CLUSTER c REPLICAS (r1 (SIZE '1', DISK), r2 (SIZE '1'))
-contains:DISK option not supported for non-legacy cluster sizes because disk is always enabled
-
-> CREATE CLUSTER c REPLICAS (r1 (SIZE '1'), r2 (SIZE '1'))
+> CREATE CLUSTER c REPLICAS (r1 (SIZE '1', DISK), r2 (SIZE '1'))
 
 > SELECT r.name, r.size, r.disk FROM mz_catalog.mz_clusters c, mz_catalog.mz_cluster_replicas r WHERE c.name = 'c' AND c.id = r.cluster_id;
 r1 1 true

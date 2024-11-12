@@ -28,12 +28,12 @@ class SqlLogicTest(Service):
         volumes: list[str] = ["../..:/workdir"],
         depends_on: list[str] = [METADATA_STORE],
     ) -> None:
-        params = get_default_system_parameters()
-        # Otherwise very noisy in SLT: lgalloc error: I/O error, falling back to heap
-        params["enable_columnation_lgalloc"] = "false"
         environment += [
             "MZ_SYSTEM_PARAMETER_DEFAULT="
-            + ";".join(f"{key}={value}" for key, value in params.items())
+            + ";".join(
+                f"{key}={value}"
+                for key, value in get_default_system_parameters().items()
+            )
         ]
 
         super().__init__(

@@ -275,9 +275,10 @@ def main() -> int:
             if args.monitoring:
                 command += ["--opentelemetry-endpoint=http://localhost:4317"]
         elif args.program == "sqllogictest":
-            params = get_default_system_parameters()
-            params["enable_columnation_lgalloc"] = "false"
-            formatted_params = [f"{key}={value}" for key, value in params.items()]
+            formatted_params = [
+                f"{key}={value}"
+                for key, value in get_default_system_parameters().items()
+            ]
             system_parameter_default = ";".join(formatted_params)
             # Connect to the database to ensure it exists.
             _connect_sql(args.postgres)

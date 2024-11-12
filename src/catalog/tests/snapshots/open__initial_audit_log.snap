@@ -1,7 +1,6 @@
 ---
 source: src/catalog/tests/open.rs
 expression: audit_log
-snapshot_kind: text
 ---
 [
     V1(
@@ -187,7 +186,7 @@ snapshot_kind: text
                     ),
                     replica_name: "r1",
                     logical_size: "1",
-                    disk: true,
+                    disk: false,
                     billed_as: None,
                     internal: false,
                     reason: System,

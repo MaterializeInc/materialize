@@ -374,7 +374,7 @@ Trace {
                                                 ),
                                                 replica_name: "r1",
                                                 logical_size: "1",
-                                                disk: true,
+                                                disk: false,
                                                 billed_as: None,
                                                 internal: false,
                                                 reason: Some(
@@ -558,7 +558,7 @@ Trace {
                                                     ),
                                                 },
                                             ),
-                                            disk: true,
+                                            disk: false,
                                             optimizer_feature_overrides: [],
                                             schedule: Some(
                                                 ClusterSchedule {
@@ -628,7 +628,7 @@ Trace {
                                         ManagedLocation {
                                             size: "1",
                                             availability_zone: None,
-                                            disk: true,
+                                            disk: false,
                                             internal: false,
                                             billed_as: None,
                                             pending: false,
