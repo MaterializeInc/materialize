@@ -89,6 +89,7 @@ use fixed_binary_sizes::*;
 /// is true for many types.
 pub fn preserves_order(scalar_type: &ScalarType) -> bool {
     match scalar_type {
+        // These types have short, fixed-length encodings that are designed to sort identically.
         ScalarType::Bool
         | ScalarType::Int16
         | ScalarType::Int32
@@ -96,8 +97,6 @@ pub fn preserves_order(scalar_type: &ScalarType) -> bool {
         | ScalarType::UInt16
         | ScalarType::UInt32
         | ScalarType::UInt64
-        | ScalarType::Float32
-        | ScalarType::Float64
         | ScalarType::Numeric { .. }
         | ScalarType::Date
         | ScalarType::Time
@@ -110,9 +109,15 @@ pub fn preserves_order(scalar_type: &ScalarType) -> bool {
         | ScalarType::MzTimestamp
         | ScalarType::MzAclItem
         | ScalarType::AclItem => true,
+        // We sort records lexicographically; a record has a meaningful sort if all its fields do.
         ScalarType::Record { fields, .. } => fields
             .iter()
             .all(|(_, field_type)| preserves_order(&field_type.scalar_type)),
+        // Our floating-point encoding preserves order generally, but differs when comparing
+        // -0 and 0. Opt these out for now.
+        ScalarType::Float32 | ScalarType::Float64 => false,
+        // For all other types: either the encoding is known to not preserve ordering, or we
+        // don't yet care to make strong guarantees one way or the other.
         ScalarType::PgLegacyChar
         | ScalarType::PgLegacyName
         | ScalarType::Char { .. }
@@ -2138,6 +2143,7 @@ mod tests {
     use crate::adt::interval::Interval;
     use crate::adt::numeric::Numeric;
     use crate::adt::timestamp::CheckedTimestamp;
+    use crate::fixed_length::ToDatumIter;
     use crate::relation::arb_relation_desc;
     use crate::{arb_datum_for_column, arb_row_for_relation, ColumnName, ColumnType, RowArena};
     use crate::{Datum, RelationDesc, Row, ScalarType};
@@ -2283,24 +2289,23 @@ mod tests {
             .iter()
             .take_while(|(_, c)| preserves_order(&c.scalar_type))
             .count();
-
         let decoder = <RelationDesc as Schema2<Row>>::decoder_any(desc, ord_col.as_ref()).unwrap();
-        let is_sorted = (0..ord_col.len())
-            .map(|i| {
-                let mut row = Row::default();
-                decoder.decode(i, &mut row);
-                row
-            })
-            .is_sorted_by(|a, b| {
-                let a_prefix = a.iter().take(ordered_prefix_len);
-                let b_prefix = b.iter().take(ordered_prefix_len);
-                a_prefix.cmp(b_prefix).is_le()
-            });
-        assert!(
-            is_sorted,
-            "ordering should be consistent on preserves_order columns: {:#?}",
-            desc.iter().take(ordered_prefix_len).collect_vec()
-        );
+        let rows = (0..ord_col.len()).map(|i| {
+            let mut row = Row::default();
+            decoder.decode(i, &mut row);
+            row
+        });
+        for (a, b) in rows.tuple_windows() {
+            let a_prefix = a.iter().take(ordered_prefix_len);
+            let b_prefix = b.iter().take(ordered_prefix_len);
+            assert!(
+                a_prefix.cmp(b_prefix).is_le(),
+                "ordering should be consistent on preserves_order columns: {:#?}\n{:?}\n{:?}",
+                desc.iter().take(ordered_prefix_len).collect_vec(),
+                a.to_datum_iter().take(ordered_prefix_len).collect_vec(),
+                b.to_datum_iter().take(ordered_prefix_len).collect_vec()
+            );
+        }
 
         // Check that our size estimates are consistent.
         assert_eq!(
@@ -2345,7 +2350,6 @@ mod tests {
 
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
-    #[ignore] // TODO: Reenable when database-issues#8744 is fixed
     fn proptest_non_empty_relation_descs() {
         let strat = arb_relation_desc(1..8).prop_flat_map(|desc| {
             proptest::collection::vec(arb_row_for_relation(&desc), 0..12)
