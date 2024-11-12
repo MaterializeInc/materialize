@@ -2345,6 +2345,7 @@ mod tests {
 
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
+    #[ignore] // TODO: Reenable when database-issues#8744 is fixed
     fn proptest_non_empty_relation_descs() {
         let strat = arb_relation_desc(1..8).prop_flat_map(|desc| {
             proptest::collection::vec(arb_row_for_relation(&desc), 0..12)
