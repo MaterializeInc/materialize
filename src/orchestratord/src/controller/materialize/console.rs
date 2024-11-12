@@ -86,8 +86,6 @@ fn create_console_deployment_object(
             port: IntOrString::Int(CONSOLE_IMAGE_HTTP_PORT),
             ..Default::default()
         }),
-        initial_delay_seconds: Some(10),
-        period_seconds: Some(30),
         ..Default::default()
     };
 
@@ -137,7 +135,20 @@ fn create_console_deployment_object(
         image_pull_policy: Some(config.image_pull_policy.to_string()),
         ports: Some(ports),
         env: Some(env),
-        readiness_probe: Some(probe),
+        startup_probe: Some(Probe {
+            period_seconds: Some(1),
+            failure_threshold: Some(10),
+            ..probe.clone()
+        }),
+        readiness_probe: Some(Probe {
+            period_seconds: Some(30),
+            failure_threshold: Some(1),
+            ..probe.clone()
+        }),
+        liveness_probe: Some(Probe {
+            period_seconds: Some(30),
+            ..probe.clone()
+        }),
         resources: mz.spec.console_resource_requirements.clone(),
         security_context,
         ..Default::default()
