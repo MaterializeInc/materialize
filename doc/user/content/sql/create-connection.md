@@ -226,7 +226,7 @@ to tunnel into a private network, as shown below.
 {{< /warning >}}
 ```mzsql
 CREATE CONNECTION kafka_connection TO KAFKA (
-    BROKER 'unique-jellyfish-0000-kafka.upstash.io:9092',
+    BROKER 'unique-jellyfish-0000.prd.cloud.redpanda.com:9092',
     SECURITY PROTOCOL = 'PLAINTEXT',
     SSH TUNNEL ssh_connection
 );
@@ -241,7 +241,7 @@ CREATE SECRET kafka_ssl_key AS '-----BEGIN PRIVATE KEY----- ...';
 CREATE SECRET ca_cert AS '-----BEGIN CERTIFICATE----- ...';
 
 CREATE CONNECTION kafka_connection TO KAFKA (
-    BROKER 'rp-f00000bar.data.vectorized.cloud:30365',
+    BROKER 'rp-f00000bar.cloud.redpanda.com:30365',
     SECURITY PROTOCOL = 'SSL'
     SSL CERTIFICATE = SECRET kafka_ssl_cert,
     SSL KEY = SECRET kafka_ssl_key,
@@ -261,7 +261,7 @@ to tunnel into a private network as shown below.
 CREATE SECRET ca_cert AS '-----BEGIN CERTIFICATE----- ...';
 
 CREATE CONNECTION kafka_connection TO KAFKA (
-    BROKER = 'rp-f00000bar.data.vectorized.cloud:30365',
+    BROKER = 'rp-f00000bar.cloud.redpanda.com:30365',
     SECURITY PROTOCOL = 'SSL',
     SSH TUNNEL ssh_connection,
     -- Specifying a certificate authority is only required if your cluster's
@@ -282,7 +282,7 @@ to tunnel into a private network, as shown below.
 CREATE SECRET kafka_password AS '...';
 
 CREATE CONNECTION kafka_connection TO KAFKA (
-    BROKER 'unique-jellyfish-0000-kafka.upstash.io:9092',
+    BROKER 'unique-jellyfish-0000.us-east-1.aws.confluent.cloud:9092',
     SECURITY PROTOCOL = 'SASL_PLAINTEXT',
     SASL MECHANISMS = 'SCRAM-SHA-256', -- or `PLAIN` or `SCRAM-SHA-512`
     SASL USERNAME = 'foo',
@@ -298,7 +298,7 @@ CREATE SECRET kafka_password AS '...';
 CREATE SECRET ca_cert AS '-----BEGIN CERTIFICATE----- ...';
 
 CREATE CONNECTION kafka_connection TO KAFKA (
-    BROKER 'unique-jellyfish-0000-kafka.upstash.io:9092',
+    BROKER 'unique-jellyfish-0000.us-east-1.aws.confluent.cloud:9092',
     SECURITY PROTOCOL = 'SASL_SSL',
     SASL MECHANISMS = 'SCRAM-SHA-256', -- or `PLAIN` or `SCRAM-SHA-512`
     SASL USERNAME = 'foo',
@@ -541,7 +541,7 @@ CREATE SECRET csr_password AS '...';
 CREATE SECRET ca_cert AS '-----BEGIN CERTIFICATE----- ...';
 
 CREATE CONNECTION csr_basic TO CONFLUENT SCHEMA REGISTRY (
-    URL 'https://rp-f00000bar.data.vectorized.cloud:30993',
+    URL 'https://rp-f00000bar.cloud.redpanda.com:30993',
     USERNAME = 'foo',
     PASSWORD = SECRET csr_password
     -- Specifying a certificate authority is only required if your cluster's
@@ -558,7 +558,7 @@ CREATE SECRET csr_ssl_key AS '-----BEGIN PRIVATE KEY----- ...';
 CREATE SECRET ca_cert AS '-----BEGIN CERTIFICATE----- ...';
 
 CREATE CONNECTION csr_ssl TO CONFLUENT SCHEMA REGISTRY (
-    URL 'https://rp-f00000bar.data.vectorized.cloud:30993',
+    URL 'https://rp-f00000bar.cloud.redpanda.com:30993',
     SSL CERTIFICATE = SECRET csr_ssl_cert,
     SSL KEY = SECRET csr_ssl_key,
     -- Specifying a certificate authority is only required if your cluster's
