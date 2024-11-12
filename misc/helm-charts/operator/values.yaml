@@ -42,19 +42,232 @@ operator:
       3xsmall:
         workers: 1
         scale: 1
+        cpu_exclusive: false
+        cpu_limit: 0.5
         credits_per_hour: "0.25"
+        disk_limit: "27GiB"
+        memory_limit: "4GiB"
       2xsmall:
         workers: 1
         scale: 1
+        cpu_exclusive: true
+        cpu_limit: 1
         credits_per_hour: "0.5"
-      probe:
+        disk_limit: "54GiB"
+        memory_limit: "8GiB"
+      xsmall:
         workers: 1
         scale: 1
-        credits_per_hour: "0"
+        cpu_exclusive: true
+        cpu_limit: 2
+        credits_per_hour: "1"
+        disk_limit: "109GiB"
+        memory_limit: "16GiB"
+      small:
+        workers: 5
+        scale: 1
+        cpu_exclusive: true
+        cpu_limit: 6
+        credits_per_hour: "2"
+        disk_limit: "329GiB"
+        memory_limit: "48GiB"
+      medium:
+        workers: 12
+        scale: 1
+        cpu_exclusive: true
+        cpu_limit: 14
+        credits_per_hour: "4"
+        disk_limit: "767GiB"
+        memory_limit: "112GiB"
+      large:
+        workers: 27
+        scale: 1
+        cpu_exclusive: true
+        cpu_limit: 30
+        credits_per_hour: "8"
+        disk_limit: "1645GiB"
+        memory_limit: "235GiB"
+      xlarge:
+        workers: 56
+        scale: 1
+        cpu_exclusive: true
+        cpu_limit: 62
+        credits_per_hour: "16"
+        disk_limit: "3400GiB"
+        memory_limit: "470GiB"
+      2xlarge:
+        workers: 56
+        scale: 2
+        cpu_exclusive: true
+        cpu_limit: 62
+        credits_per_hour: "32"
+        disk_limit: "3400GiB"
+        memory_limit: "470GiB"
+      3xlarge:
+        workers: 56
+        scale: 4
+        cpu_exclusive: true
+        cpu_limit: 62
+        credits_per_hour: "64"
+        disk_limit: "3400GiB"
+        memory_limit: "470GiB"
+      4xlarge:
+        workers: 56
+        scale: 8
+        cpu_exclusive: true
+        cpu_limit: 62
+        credits_per_hour: "128"
+        disk_limit: "3400GiB"
+        memory_limit: "470GiB"
+      5xlarge:
+        workers: 56
+        scale: 16
+        cpu_exclusive: true
+        cpu_limit: 62
+        credits_per_hour: "256"
+        disk_limit: "3400GiB"
+        memory_limit: "470GiB"
+      6xlarge:
+        workers: 56
+        scale: 32
+        cpu_exclusive: true
+        cpu_limit: 62
+        credits_per_hour: "512"
+        disk_limit: "3400GiB"
+        memory_limit: "470GiB"
+      mz_probe:
+        workers: 1
+        scale: 1
+        cpu_exclusive: false
+        cpu_limit: 0.1
+        credits_per_hour: "0.00"
+        disk_limit: "1552MiB"
+        memory_limit: "776MiB"
+      25cc:
+        workers: 1
+        scale: 1
+        cpu_exclusive: false
+        cpu_limit: 0.5
+        credits_per_hour: "0.25"
+        disk_limit: "7762MiB"
+        memory_limit: "3881MiB"
+      50cc:
+        workers: 1
+        scale: 1
+        cpu_exclusive: true
+        cpu_limit: 1
+        credits_per_hour: "0.5"
+        disk_limit: "15525MiB"
+        memory_limit: "7762MiB"
+      100cc:
+        workers: 2
+        scale: 1
+        cpu_exclusive: true
+        cpu_limit: 2
+        credits_per_hour: "1"
+        disk_limit: "31050MiB"
+        memory_limit: "15525MiB"
+      200cc:
+        workers: 4
+        scale: 1
+        cpu_exclusive: true
+        cpu_limit: 4
+        credits_per_hour: "2"
+        disk_limit: "62100MiB"
+        memory_limit: "31050MiB"
+      300cc:
+        workers: 6
+        scale: 1
+        cpu_exclusive: true
+        cpu_limit: 6
+        credits_per_hour: "3"
+        disk_limit: "93150MiB"
+        memory_limit: "46575MiB"
+      400cc:
+        workers: 8
+        scale: 1
+        cpu_exclusive: true
+        cpu_limit: 8
+        credits_per_hour: "4"
+        disk_limit: "124201MiB"
+        memory_limit: "62100MiB"
+      600cc:
+        workers: 12
+        scale: 1
+        cpu_exclusive: true
+        cpu_limit: 12
+        credits_per_hour: "6"
+        disk_limit: "186301MiB"
+        memory_limit: "93150MiB"
+      800cc:
+        workers: 16
+        scale: 1
+        cpu_exclusive: true
+        cpu_limit: 16
+        credits_per_hour: "8"
+        disk_limit: "248402MiB"
+        memory_limit: "124201MiB"
+      1200cc:
+        workers: 24
+        scale: 1
+        cpu_exclusive: true
+        cpu_limit: 24
+        credits_per_hour: "12"
+        disk_limit: "372603MiB"
+        memory_limit: "186301MiB"
+      1600cc:
+        workers: 31
+        scale: 1
+        cpu_exclusive: true
+        cpu_limit: 31
+        credits_per_hour: "16"
+        disk_limit: "481280MiB"
+        memory_limit: "240640MiB"
+      3200cc:
+        workers: 62
+        scale: 1
+        cpu_exclusive: true
+        cpu_limit: 62
+        credits_per_hour: "32"
+        disk_limit: "962560MiB"
+        memory_limit: "481280MiB"
+      6400cc:
+        workers: 62
+        scale: 2
+        cpu_exclusive: true
+        cpu_limit: 62
+        credits_per_hour: "64"
+        disk_limit: "962560MiB"
+        memory_limit: "481280MiB"
+      128C:
+        workers: 62
+        scale: 4
+        cpu_exclusive: true
+        cpu_limit: 62
+        credits_per_hour: "128"
+        disk_limit: "962560MiB"
+        memory_limit: "481280MiB"
+      256C:
+        workers: 62
+        scale: 8
+        cpu_exclusive: true
+        cpu_limit: 62
+        credits_per_hour: "256"
+        disk_limit: "962560MiB"
+        memory_limit: "481280MiB"
+      512C:
+        workers: 62
+        scale: 16
+        cpu_exclusive: true
+        cpu_limit: 62
+        credits_per_hour: "512"
+        disk_limit: "962560MiB"
+        memory_limit: "481280MiB"
+
     defaultSizes:
       default: 3xsmall
       system: 3xsmall
-      probe: probe
+      probe: mz_probe
       support: 3xsmall
       catalogServer: 2xsmall
       analytics: 3xsmall

@@ -107,3 +107,20 @@ Create the name of the namespace to use
 {{- define "materialize-operator.namespaceName" -}}
 {{- default .Release.Namespace .Values.namespace.name }}
 {{- end }}
+
+{{/*
+Get the cluster sizes
+*/}}
+{{- define "materialize.clusterSizes" -}}
+{{- $allSizes := .Values.operator.clusters.sizes }}
+{{- if not .Values.storage.storageClass.name }}
+{{- $filteredSizes := dict }}
+{{- range $name, $config := $allSizes }}
+{{- if and (not (hasSuffix "cc" $name)) (not (hasSuffix "C" $name)) }}
+{{- $_ := set $filteredSizes $name $config }}
+{{- end }}
+{{- end }}
+{{- $allSizes = $filteredSizes }}
+{{- end }}
+{{ toYaml $allSizes }}
+{{- end }}

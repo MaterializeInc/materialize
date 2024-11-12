@@ -32,7 +32,7 @@ This directory contains simple examples for deploying MinIO, PostgreSQL, and Red
     kubectl get pods -w
     ```
 
-3. (Optional) Create a bucket in MinIO (replace `minio-123456-abcdef` with the actual pod name):
+3. Create a bucket in MinIO (replace `minio-123456-abcdef` with the actual pod name):
 
     ```bash
     kubectl exec -it minio-123456-abcdef -n materialize -- /bin/sh
