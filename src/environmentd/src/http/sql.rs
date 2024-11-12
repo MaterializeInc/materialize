@@ -54,7 +54,7 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::{debug, error, info};
 use tungstenite::protocol::frame::coding::CloseCode;
 
-use crate::http::prometheus::{PrometheusSqlQuery, QUERIES};
+use crate::http::prometheus::PrometheusSqlQuery;
 use crate::http::{init_ws, AuthedClient, AuthedUser, WsState, MAX_REQUEST_SIZE};
 
 #[derive(Debug, thiserror::Error)]
@@ -115,7 +115,7 @@ async fn execute_promsql_query(
     metrics_by_name: &mut BTreeMap<String, GenericGaugeVec<AtomicF64>>,
     cluster: Option<(&Cluster, &ClusterReplica)>,
 ) {
-    assert!(query.per_replica == cluster.is_some());
+    assert_eq!(query.per_replica, cluster.is_some());
 
     let mut res = SqlResponse {
         results: Vec::new(),
@@ -126,10 +126,13 @@ async fn execute_promsql_query(
         .expect("valid SQL query");
 
     let result = match res.results.as_slice() {
+        // Each query issued is preceded by several SET commands
+        // to make sure it is routed to the right cluster replica.
         [SqlResult::Ok { .. }, SqlResult::Ok { .. }, SqlResult::Ok { .. }, result] => result,
+        // Transient errors are fine, like if the cluster or replica
+        // was dropped before the promsql query was executed. We
+        // should not see errors in the steady state.
         _ => {
-            // This might be fine, like if the cluster or replica
-            // was dropped before the promsql query was executed
             info!(
                 "error executing prometheus query {}: {:?}",
                 query.metric_name, res
@@ -236,11 +239,14 @@ async fn handle_promsql_query(
     }
 }
 
-pub async fn handle_promsql(mut client: AuthedClient) -> MetricsRegistry {
+pub async fn handle_promsql(
+    mut client: AuthedClient,
+    queries: &[PrometheusSqlQuery<'_>],
+) -> MetricsRegistry {
     let metrics_registry = MetricsRegistry::new();
     let mut metrics_by_name = BTreeMap::new();
 
-    for query in QUERIES {
+    for query in queries {
         handle_promsql_query(&mut client, query, &metrics_registry, &mut metrics_by_name).await;
     }
 

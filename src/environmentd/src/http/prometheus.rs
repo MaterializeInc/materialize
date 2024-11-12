@@ -41,8 +41,7 @@ impl<'a> PrometheusSqlQuery<'a> {
     }
 }
 
-pub(crate) static QUERIES: &[PrometheusSqlQuery] = &[
-    // Frontier Metrics
+pub(crate) static FRONTIER_METRIC_QUERIES: &[PrometheusSqlQuery] = &[
     PrometheusSqlQuery {
         metric_name: "mz_write_frontier",
         help: "The global write frontiers of compute and storage collections.",
@@ -93,7 +92,9 @@ pub(crate) static QUERIES: &[PrometheusSqlQuery] = &[
         value_column_name: "write_frontier",
         per_replica: false,
     },
-    // Usage Metrics
+];
+
+pub(crate) static USAGE_METRIC_QUERIES: &[PrometheusSqlQuery] = &[
     PrometheusSqlQuery {
         metric_name: "mz_compute_cluster_status",
         help: "Reports the name, ID, size, and availability zone of each cluster replica. Value is always 1.",
@@ -263,7 +264,9 @@ pub(crate) static QUERIES: &[PrometheusSqlQuery] = &[
         value_column_name: "value",
         per_replica: false,
     },
-    // Compute Metrics
+];
+
+pub(crate) static COMPUTE_METRIC_QUERIES: &[PrometheusSqlQuery] = &[
     PrometheusSqlQuery {
         metric_name: "mz_arrangement_count",
         help: "The number of arrangements in a dataflow.",
@@ -310,7 +313,7 @@ pub(crate) static QUERIES: &[PrometheusSqlQuery] = &[
         FROM mz_internal.mz_arrangement_records_raw
         LEFT JOIN collections ON (operator_id = id)
         GROUP BY worker_id, export_id",
-        value_column_name: "count", 
+        value_column_name: "count",
         per_replica: true,
     },
     PrometheusSqlQuery {
@@ -432,7 +435,9 @@ pub(crate) static QUERIES: &[PrometheusSqlQuery] = &[
         value_column_name: "count",
         per_replica: true,
     },
-    // Storage Metrics
+];
+
+pub(crate) static STORAGE_METRIC_QUERIES: &[PrometheusSqlQuery] = &[
     PrometheusSqlQuery {
         metric_name: "mz_storage_objects",
         help: "Nicely labeled information about existing sources and sinks.",
