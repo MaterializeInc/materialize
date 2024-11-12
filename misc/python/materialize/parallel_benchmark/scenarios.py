@@ -746,6 +746,7 @@ class OperationalDataMesh(Scenario):
                                 c,
                             ),
                             dist=Periodic(per_second=1),
+                            report_regressions=False,  # Don't care about this
                         ),
                         ClosedLoop(
                             action=StandaloneQuery(

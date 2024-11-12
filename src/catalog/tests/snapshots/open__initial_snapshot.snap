@@ -1,6 +1,7 @@
 ---
 source: src/catalog/tests/open.rs
 expression: test_snapshot
+snapshot_kind: text
 ---
 Snapshot {
     databases: {
@@ -1220,7 +1221,7 @@ Snapshot {
                                         ),
                                     },
                                 ),
-                                disk: false,
+                                disk: true,
                                 optimizer_feature_overrides: [],
                                 schedule: Some(
                                     ClusterSchedule {
@@ -1346,7 +1347,7 @@ Snapshot {
                             ManagedLocation {
                                 size: "1",
                                 availability_zone: None,
-                                disk: false,
+                                disk: true,
                                 internal: false,
                                 billed_as: None,
                                 pending: false,

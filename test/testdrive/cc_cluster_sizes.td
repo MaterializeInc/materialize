@@ -56,9 +56,9 @@ true
 
 # Altering to a cc size with disk explicitly toggled is not allowed.
 ! ALTER CLUSTER c SET (SIZE = '1cc', DISK = true)
-contains:DISK option not supported for cluster sizes ending in cc or C
+contains:DISK option not supported for modern cluster sizes because disk is always enabled
 ! ALTER CLUSTER c SET (SIZE = '1cc', DISK = false)
-contains:DISK option not supported for cluster sizes ending in cc or C
+contains:DISK option not supported for modern cluster sizes because disk is always enabled
 
 # But it's fine as long as the ALTER command doesn't mention disk explicitly,
 # even though the cluster's initial creation specified disk explicitly. The
@@ -68,59 +68,31 @@ contains:DISK option not supported for cluster sizes ending in cc or C
 true
 > DROP CLUSTER c
 
-# Same test as before, except the legacy size cluster has disk explicitly
-# disabled.
-> CREATE CLUSTER c SIZE '1', DISK = false
-> ALTER CLUSTER c SET (SIZE = '1cc')
-> SELECT disk FROM mz_clusters WHERE name = 'c'
-true
-> DROP CLUSTER c
+! CREATE CLUSTER c SIZE '1', DISK = false
+contains:DISK option disabled is not supported for non-legacy cluster sizes because disk is always enabled
 
 # Same test as before, except the legacy size cluster has no disk explicitly
 # configured.
 > CREATE CLUSTER c SIZE = '1'
 > SELECT disk FROM mz_clusters WHERE name = 'c'
-false
+true
 > ALTER CLUSTER c SET (SIZE = '1cc')
 > SELECT disk FROM mz_clusters WHERE name = 'c'
 true
 
 # Cannot explicitly alter DISK option for new sizes.
 ! ALTER CLUSTER c SET (DISK = false)
-contains:DISK option not supported for cluster sizes ending in cc or C
+contains:DISK option not supported for moern cluster sizes because disk is always enabled
 ! ALTER CLUSTER c SET (DISK = true)
-contains:DISK option not supported for cluster sizes ending in cc or C
-
-# But it's okay if you're going back to a legacy size.
-> ALTER CLUSTER c SET (DISK = true, SIZE = '1')
-> SELECT disk FROM mz_clusters WHERE name = 'c'
-true
+contains:DISK option not supported for moern cluster sizes because disk is always enabled
 > DROP CLUSTER c
-
-# Ensure that altering from a legacy size to a legacy size does not enable disk.
-> CREATE CLUSTER c SIZE = '1'
-> SELECT disk FROM mz_clusters WHERE name = 'c'
-false
-> ALTER CLUSTER c SET (SIZE = '2')
-> SELECT disk FROM mz_clusters WHERE name = 'c'
-false
-> DROP CLUSTER c
-
-# Ensure that disk isn't configurable for the new sizes (as it's force enabled).
-
-> CREATE CLUSTER c SIZE '1cc', DISK = true;
-
-> DROP CLUSTER c;
-
-! CREATE CLUSTER c SIZE '1cc', DISK = false;
-contains:DISK option disabled is not supported for cluster sizes ending in cc or C
 
 > CREATE CLUSTER c REPLICAS (r1 (SIZE '1cc'))
 > CREATE CLUSTER REPLICA c.r2 SIZE '1cc';
 > CREATE CLUSTER REPLICA c.r3 SIZE '1C';
 
 ! CREATE CLUSTER REPLICA c.r SIZE '1cc', DISK = true;
-contains:DISK option not supported for cluster sizes ending in cc or C
+contains:DISK option not supported for non-legacy cluster sizes because disk is always enabled
 
 ! CREATE CLUSTER REPLICA c.r SIZE '1cc', DISK = false;
-contains:DISK option not supported for cluster sizes ending in cc or C
+contains:DISK option not supported for non-legacy cluster sizes because disk is always enabled

@@ -133,27 +133,21 @@ def test_disk_label(mz: MaterializeApplication) -> None:
         user="mz_system",
     )
 
-    for value in ("true", "false"):
-        mz.environmentd.sql(
-            f"CREATE CLUSTER disk_{value} MANAGED, SIZE = '2-1', DISK = {value}"
-        )
+    mz.environmentd.sql("CREATE CLUSTER disk MANAGED, SIZE = '2-1', DISK = true")
 
-        (cluster_id, replica_id) = mz.environmentd.sql_query(
-            f"SELECT mz_clusters.id, mz_cluster_replicas.id FROM mz_cluster_replicas JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id WHERE mz_clusters.name = 'disk_{value}'"
-        )[0]
-        assert cluster_id is not None
-        assert replica_id is not None
+    (cluster_id, replica_id) = mz.environmentd.sql_query(
+        "SELECT mz_clusters.id, mz_cluster_replicas.id FROM mz_cluster_replicas JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id WHERE mz_clusters.name = 'disk'"
+    )[0]
+    assert cluster_id is not None
+    assert replica_id is not None
 
-        node_selectors = get_node_selector(mz, cluster_id, replica_id)
-        if value == "true":
-            assert (
-                node_selectors
-                == '\'{"materialize.cloud/disk":"true"} {"materialize.cloud/disk":"true"}\''
-            ), node_selectors
-        else:
-            assert node_selectors == "''"
+    node_selectors = get_node_selector(mz, cluster_id, replica_id)
+    assert (
+        node_selectors
+        == '\'{"materialize.cloud/disk":"true"} {"materialize.cloud/disk":"true"}\''
+    ), node_selectors
 
-        mz.environmentd.sql(f"DROP CLUSTER disk_{value} CASCADE")
+    mz.environmentd.sql("DROP CLUSTER disk CASCADE")
 
     # Reset
     mz.environmentd.sql(
