@@ -39,8 +39,8 @@ use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::refresh_schedule::{RefreshEvery, RefreshSchedule};
 use mz_repr::role_id::RoleId;
 use mz_repr::{
-    preserves_order, strconv, CatalogItemId, ColumnName, ColumnType, GlobalId, RelationDesc,
-    RelationType, RelationVersionSelector, ScalarType, Timestamp,
+    preserves_order, strconv, CatalogItemId, ColumnName, ColumnType, RelationDesc, RelationType,
+    RelationVersionSelector, ScalarType, Timestamp,
 };
 use mz_sql_parser::ast::display::comma_separated;
 use mz_sql_parser::ast::{
