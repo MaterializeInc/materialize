@@ -17,7 +17,6 @@ use k8s_openapi::{
     },
 };
 use kube::{api::ObjectMeta, CustomResource, Resource, ResourceExt};
-
 use rand::distributions::Uniform;
 use rand::Rng;
 use schemars::JsonSchema;
@@ -25,11 +24,38 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::crd::gen::cert_manager::certificates::{
+    CertificateIssuerRef, CertificateSecretTemplate,
+};
+
 pub const LAST_KNOWN_ACTIVE_GENERATION_ANNOTATION: &str =
     "materialize.cloud/last-known-active-generation";
 
 pub mod v1alpha1 {
+
     use super::*;
+
+    // This is intentionally a subset of the fields of a Certificate.
+    // We do not want customers to configure options that may conflict with
+    // things we override or expand in our code.
+    #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+    #[serde(rename_all = "camelCase")]
+    pub struct MaterializeCertSpec {
+        // Additional DNS names the cert will be valid for.
+        pub dns_names: Option<Vec<String>>,
+        // Duration the certificate will be requested for.
+        // Value must be in units accepted by Go time.ParseDuration
+        // https://golang.org/pkg/time/#ParseDuration.
+        pub duration: Option<String>,
+        // Duration before expiration the certificate will be renewed.
+        // Value must be in units accepted by Go time.ParseDuration
+        // https://golang.org/pkg/time/#ParseDuration.
+        pub renew_before: Option<String>,
+        // Reference to an Issuer or ClusterIssuer that will generate the certificate.
+        pub issuer_ref: CertificateIssuerRef,
+        // Additional annotations and labels to include in the Certificate object.
+        pub secret_template: Option<CertificateSecretTemplate>,
+    }
 
     #[derive(
         CustomResource, Clone, Debug, Default, PartialEq, Deserialize, Serialize, JsonSchema,
@@ -109,6 +135,20 @@ pub mod v1alpha1 {
         // will populate any defaults.
         #[serde(default = "Uuid::new_v4")]
         pub environment_id: Uuid,
+
+        // The configuration for generating an x509 certificate using cert-manager for balancerd
+        // to present to incoming connections.
+        // The dns_names and issuer_ref fields are required.
+        pub balancerd_external_certificate_spec: Option<MaterializeCertSpec>,
+        // The configuration for generating an x509 certificate using cert-manager for the console
+        // to present to incoming connections.
+        // The dns_names and issuer_ref fields are required.
+        // Not yet implemented.
+        pub console_external_certificate_spec: Option<MaterializeCertSpec>,
+        // The cert-manager Issuer or ClusterIssuer to use for database internal communication.
+        // The issuer_ref field is required.
+        // This currently is only used for environmentd, but will eventually support clusterd.
+        pub internal_certificate_spec: Option<MaterializeCertSpec>,
     }
 
     impl Materialize {
@@ -144,12 +184,28 @@ pub mod v1alpha1 {
             self.name_prefixed("environmentd")
         }
 
+        pub fn environmentd_service_internal_fqdn(&self) -> String {
+            format!(
+                "{}.{}.svc.cluster.local",
+                self.environmentd_service_name(),
+                self.meta().namespace.as_ref().unwrap()
+            )
+        }
+
         pub fn environmentd_generation_service_name(&self, generation: u64) -> String {
             self.name_prefixed(&format!("environmentd-{generation}"))
         }
 
         pub fn balancerd_app_name(&self) -> String {
             "balancerd".to_owned()
+        }
+
+        pub fn environmentd_certificate_name(&self) -> String {
+            self.name_prefixed("environmentd-external")
+        }
+
+        pub fn environmentd_certificate_secret_name(&self) -> String {
+            self.name_prefixed("environmentd-tls")
         }
 
         pub fn balancerd_deployment_name(&self) -> String {
@@ -164,12 +220,28 @@ pub mod v1alpha1 {
             "console".to_owned()
         }
 
+        pub fn balancerd_external_certificate_name(&self) -> String {
+            self.name_prefixed("balancerd-external")
+        }
+
+        pub fn balancerd_external_certificate_secret_name(&self) -> String {
+            self.name_prefixed("balancerd-external-tls")
+        }
+
         pub fn console_deployment_name(&self) -> String {
             self.name_prefixed("console")
         }
 
         pub fn console_service_name(&self) -> String {
             self.name_prefixed("console")
+        }
+
+        pub fn console_external_certificate_name(&self) -> String {
+            self.name_prefixed("console-external")
+        }
+
+        pub fn console_external_certificate_secret_name(&self) -> String {
+            self.name_prefixed("console-external-tls")
         }
 
         pub fn persist_pubsub_service_name(&self, generation: u64) -> String {

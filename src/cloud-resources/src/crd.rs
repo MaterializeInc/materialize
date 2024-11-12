@@ -23,6 +23,7 @@ use tracing::{info, warn};
 
 use mz_ore::retry::Retry;
 
+pub mod gen;
 pub mod materialize;
 pub mod vpc_endpoint;
 

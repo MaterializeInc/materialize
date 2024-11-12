@@ -27,6 +27,7 @@ use mz_sql::catalog::CloudProvider;
 
 mod console;
 mod resources;
+mod tls;
 
 #[derive(clap::Parser)]
 pub struct Args {
@@ -38,8 +39,6 @@ pub struct Args {
     create_balancers: bool,
     #[clap(long)]
     create_console: bool,
-    #[clap(long)]
-    enable_tls: bool,
     #[clap(long)]
     helm_chart_version: Option<String>,
     #[clap(long, default_value = "kubernetes")]
@@ -196,8 +195,6 @@ impl Context {
                 "--environmentd-iam-role-arn is required when using --cloud-provider=aws"
             );
         }
-
-        assert!(!config.enable_tls, "--enable-tls is not yet implemented");
 
         Self {
             config,
