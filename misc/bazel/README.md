@@ -108,7 +108,7 @@ build --disk_cache=~/.cache/bazel
 
 # Optional. The workspace RC already sets a max disk cache size, but you can override that if you
 # have more limited disk space.
-common --experimental_disk_cache_gc_max-size=40G
+common --experimental_disk_cache_gc_max_size=40G
 ```
 
 # How Bazel Works
