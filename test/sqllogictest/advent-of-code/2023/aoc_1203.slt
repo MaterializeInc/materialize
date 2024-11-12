@@ -304,13 +304,10 @@ Explained Query:
                   Negate
                     Distinct project=[#0..=#2]
                       Project (#0..=#2)
-                        Filter (#5 OR (#5) IS NULL)
-                          Map (((#0 = #3) AND (#4 = (#1 + #2))))
-                            CrossJoin type=differential
-                              ArrangeBy keys=[[]]
-                                Get l13
-                              ArrangeBy keys=[[]]
-                                Get l11
+                        Join on=(#0 = #3 AND #4 = (#1 + #2)) type=differential
+                          ArrangeBy keys=[[#0, (#1 + #2)]]
+                            Get l13
+                          Get l11
                   Get l13
       cte l13 =
         Distinct project=[#0..=#2]
@@ -329,12 +326,12 @@ Explained Query:
                       Join on=(#0 = #2 AND #3 = (#1 - 1)) type=differential
                         ArrangeBy keys=[[#0, (#1 - 1)]]
                           Get l10
-                        ArrangeBy keys=[[#0, #1]]
-                          Get l11
+                        Get l11
                 Get l10
       cte l11 =
-        Project (#0, #1)
-          Get l5
+        ArrangeBy keys=[[#0, #1]]
+          Project (#0, #1)
+            Get l5
       cte l10 =
         Distinct project=[#0, #1]
           Project (#1, #2)
@@ -366,8 +363,7 @@ Explained Query:
               Join on=(#0 = #4 AND #1 = (#5 + #6)) type=differential
                 Get l8
                 ArrangeBy keys=[[#1, (#2 + #3)]]
-                  Filter (#3) IS NOT NULL
-                    Get l9
+                  Get l9
     cte l8 =
       ArrangeBy keys=[[#0, #1]]
         Get l5

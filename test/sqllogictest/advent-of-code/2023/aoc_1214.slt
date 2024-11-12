@@ -129,59 +129,60 @@ SELECT * FROM part1;
 Explained Query:
   Return
     Union
-      Get l6
+      Get l7
       Map (null)
         Union
           Negate
             Project ()
-              Get l6
+              Get l7
           Constant
             - ()
   With Mutually Recursive
-    cte l7 =
+    cte l8 =
       Get l1
-    cte l6 =
+    cte l7 =
       Reduce aggregates=[sum(((1 + #1) - #0))]
         CrossJoin type=differential
           ArrangeBy keys=[[]]
             Project (#0)
-              Filter (#2 = "O")
-                Get l2
+              Get l3
           ArrangeBy keys=[[]]
             Union
-              Get l5
+              Get l6
               Map (null)
                 Union
                   Negate
                     Project ()
-                      Get l5
+                      Get l6
                   Constant
                     - ()
-    cte l5 =
+    cte l6 =
       Union
-        Get l4
+        Get l5
         Map (null)
           Union
             Negate
               Project ()
-                Get l4
+                Get l5
             Constant
               - ()
-    cte l4 =
+    cte l5 =
       Reduce aggregates=[max(#0)]
         Project (#0)
           Get l0
-    cte l3 =
+    cte l4 =
       Project (#0, #1)
         Join on=(#0 = (#2 + 1) AND #1 = #3) type=differential
           ArrangeBy keys=[[#1, #0]]
             Project (#0, #1)
-              Filter (#2 = "O") AND (#0) IS NOT NULL
-                Get l2
+              Get l3
           ArrangeBy keys=[[#1, (#0 + 1)]]
             Project (#0, #1)
-              Filter (#2 = ".") AND (#0) IS NOT NULL
+              Filter (#2 = ".")
                 Get l2
+    cte l3 =
+      Filter (#2 = "O")
+        Get l2
     cte l2 =
       Threshold
         Union
@@ -192,19 +193,19 @@ Explained Query:
                   Get l2
                   Project (#2, #1, #3)
                     Map ((#0 - 1), "O")
-                      Get l3
+                      Get l4
                   Negate
                     Project (#2, #1, #3)
                       Map ((#0 - 1), ".")
-                        Get l3
+                        Get l4
               Map (".")
-                Get l3
+                Get l4
               Negate
                 Map ("O")
-                  Get l3
+                  Get l4
           Get l1
           Negate
-            Get l7
+            Get l8
     cte l1 =
       Project (#0, #2, #3)
         Map (substr(#1, #2, 1))
@@ -622,11 +623,11 @@ Explained Query:
             Join on=(#0 = #2 AND #1 = (#3 - 1)) type=differential
               ArrangeBy keys=[[#0, #1]]
                 Project (#0, #1)
-                  Filter (#2 = "O") AND (#0) IS NOT NULL AND (#1) IS NOT NULL
+                  Filter (#2 = "O")
                     Get l15
               ArrangeBy keys=[[#0, (#1 - 1)]]
                 Project (#0, #1)
-                  Filter (#2 = ".") AND (#0) IS NOT NULL AND (#1) IS NOT NULL
+                  Filter (#2 = ".")
                     Get l15
         cte l15 =
           Threshold
@@ -662,11 +663,11 @@ Explained Query:
             Join on=(#0 = (#2 - 1) AND #1 = #3) type=differential
               ArrangeBy keys=[[#1, #0]]
                 Project (#0, #1)
-                  Filter (#2 = "O") AND (#0) IS NOT NULL AND (#1) IS NOT NULL
+                  Filter (#2 = "O")
                     Get l11
               ArrangeBy keys=[[#1, (#0 - 1)]]
                 Project (#0, #1)
-                  Filter (#2 = ".") AND (#0) IS NOT NULL AND (#1) IS NOT NULL
+                  Filter (#2 = ".")
                     Get l11
         cte l11 =
           Threshold
@@ -702,11 +703,11 @@ Explained Query:
             Join on=(#0 = #2 AND #1 = (#3 + 1)) type=differential
               ArrangeBy keys=[[#0, #1]]
                 Project (#0, #1)
-                  Filter (#2 = "O") AND (#0) IS NOT NULL AND (#1) IS NOT NULL
+                  Filter (#2 = "O")
                     Get l7
               ArrangeBy keys=[[#0, (#1 + 1)]]
                 Project (#0, #1)
-                  Filter (#2 = ".") AND (#0) IS NOT NULL AND (#1) IS NOT NULL
+                  Filter (#2 = ".")
                     Get l7
         cte l7 =
           Threshold
@@ -742,11 +743,11 @@ Explained Query:
             Join on=(#0 = (#2 + 1) AND #1 = #3) type=differential
               ArrangeBy keys=[[#1, #0]]
                 Project (#0, #1)
-                  Filter (#2 = "O") AND (#0) IS NOT NULL AND (#1) IS NOT NULL
+                  Filter (#2 = "O")
                     Get l3
               ArrangeBy keys=[[#1, (#0 + 1)]]
                 Project (#0, #1)
-                  Filter (#2 = ".") AND (#0) IS NOT NULL AND (#1) IS NOT NULL
+                  Filter (#2 = ".")
                     Get l3
         cte l3 =
           Threshold

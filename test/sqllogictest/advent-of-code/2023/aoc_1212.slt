@@ -148,8 +148,7 @@ Explained Query:
       Project (#0..=#2, #5)
         Join on=(#0 = #3 = #6 AND #4 = (#2 + 1) AND #7 = ((#1 + #5) + 1)) type=delta
           ArrangeBy keys=[[#0], [#0, (#2 + 1)]]
-            Filter (#2) IS NOT NULL
-              Get l5
+            Get l5
           ArrangeBy keys=[[#0, #1]]
             Project (#0, #2, #3)
               Map (text_to_integer(array_index(regexp_split_to_array[",", case_insensitive=false](#1), integer_to_bigint(#2))))
