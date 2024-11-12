@@ -28,12 +28,12 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 use std::num::FpCategory;
+use std::str::FromStr;
 use std::sync::LazyLock;
 
 use chrono::offset::{Offset, TimeZone};
 use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use dec::OrderedDecimal;
-use fast_float::FastFloat;
 use mz_lowertest::MzReflect;
 use mz_ore::cast::ReinterpretCast;
 use mz_ore::error::ErrorExt;
@@ -249,7 +249,7 @@ pub fn parse_oid(s: &str) -> Result<u32, ParseError> {
 
 fn parse_float<Fl>(type_name: &'static str, s: &str) -> Result<Fl, ParseError>
 where
-    Fl: NumFloat + FastFloat,
+    Fl: NumFloat + FromStr,
 {
     // Matching PostgreSQL's float parsing behavior is tricky. PostgreSQL's
     // implementation delegates almost entirely to strtof(3)/strtod(3), which
@@ -260,9 +260,9 @@ where
     //
     // To @benesch's knowledge, there is no Rust implementation of float parsing
     // that reports whether underflow or overflow occurred. So we figure it out
-    // ourselves after the fact. If fast_float returns infinity and the input
+    // ourselves after the fact. If parsing the float returns infinity and the input
     // was not an explicitly-specified infinity, then we know overflow occurred.
-    // If fast_float returns zero and the input was not an explicitly-specified
+    // If parsing the float returns zero and the input was not an explicitly-specified
     // zero, then we know underflow occurred.
 
     // Matches `0`, `-0`, `+0`, `000000.00000`, `0.0e10`, 0., .0, et al.
@@ -271,14 +271,17 @@ where
     // Matches `inf`, `-inf`, `+inf`, `infinity`, et al.
     static INF_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new("(?i-u)^[-+]?inf").unwrap());
 
-    let buf = s.trim().as_bytes();
-    let f: Fl =
-        fast_float::parse(buf).map_err(|_| ParseError::invalid_input_syntax(type_name, s))?;
+    let buf = s.trim();
+    let f: Fl = buf
+        .parse()
+        .map_err(|_| ParseError::invalid_input_syntax(type_name, s))?;
     match f.classify() {
-        FpCategory::Infinite if !INF_RE.is_match(buf) => {
+        FpCategory::Infinite if !INF_RE.is_match(buf.as_bytes()) => {
             Err(ParseError::out_of_range(type_name, s))
         }
-        FpCategory::Zero if !ZERO_RE.is_match(buf) => Err(ParseError::out_of_range(type_name, s)),
+        FpCategory::Zero if !ZERO_RE.is_match(buf.as_bytes()) => {
+            Err(ParseError::out_of_range(type_name, s))
+        }
         _ => Ok(f),
     }
 }

@@ -15,7 +15,6 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
-use ipnet::IpNet;
 use mz_adapter_types::timestamp_oracle::{
     DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_MAX_SIZE, DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_MAX_WAIT,
     DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_TTL, DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_TTL_STAGGER,
@@ -1503,10 +1502,12 @@ pub static USER_STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION: VarDefinition = VarD
     false,
 );
 
-pub static DEFAULT_NETWORK_POLICY_ALLOW_LIST: VarDefinition = VarDefinition::new_lazy(
-    "default_network_policy_allow_list",
-    lazy_value!(Vec<IpNet>; || vec![IpNet::from_str("0.0.0.0/0").expect("this is a valid IpNet")]),
-    "Network policy allow list that external user connections will be validated against.",
+// This system var will need to point to the name of an existing network policy
+// this will be enforced on alter_system_set
+pub static NETWORK_POLICY: VarDefinition = VarDefinition::new_lazy(
+    "network_policy",
+    lazy_value!(String; || "default".to_string()),
+    "Sets the fallback network policy applied to all users without an explicit policy.",
     true,
 );
 
@@ -1863,6 +1864,12 @@ feature_flags!(
     {
         name: enable_primary_key_not_enforced,
         desc: "PRIMARY KEY NOT ENFORCED",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_collection_partition_by,
+        desc: "PARTITION BY",
         default: false,
         enable_for_item_parsing: true,
     },

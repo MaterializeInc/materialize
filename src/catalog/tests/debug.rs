@@ -139,7 +139,8 @@ async fn test_debug<'a>(state_builder: TestCatalogStateBuilder) {
     assert_eq!(Epoch::new(2).unwrap(), epoch);
 
     // Check opened trace.
-    let unconsolidated_trace = openable_state2.trace_unconsolidated().await.unwrap();
+    let mut unconsolidated_trace = openable_state2.trace_unconsolidated().await.unwrap();
+    unconsolidated_trace.sort();
     {
         let test_trace = HiddenUserVersionTrace(&unconsolidated_trace);
         let ((user_version_key, user_version_value), user_version_ts, user_version_diff) =
@@ -155,9 +156,10 @@ async fn test_debug<'a>(state_builder: TestCatalogStateBuilder) {
     let mut debug_state = openable_state2.open_debug().await.unwrap();
 
     let mut openable_state_reader = state_builder.clone().unwrap_build().await;
+    let mut unconsolidated_trace2 = openable_state_reader.trace_unconsolidated().await.unwrap();
+    unconsolidated_trace2.sort();
     assert_eq!(
-        openable_state_reader.trace_unconsolidated().await.unwrap(),
-        unconsolidated_trace,
+        unconsolidated_trace2, unconsolidated_trace,
         "opening a debug catalog should not modify the contents"
     );
 

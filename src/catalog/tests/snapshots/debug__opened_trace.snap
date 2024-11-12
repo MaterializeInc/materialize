@@ -257,6 +257,38 @@ Trace {
                                 AuditLogEventV1 {
                                     id: 8,
                                     event_type: Create,
+                                    object_type: NetworkPolicy,
+                                    user: None,
+                                    occurred_at: Some(
+                                        EpochMillis {
+                                            millis: 0,
+                                        },
+                                    ),
+                                    details: Some(
+                                        IdNameV1(
+                                            IdNameV1 {
+                                                id: "u1",
+                                                name: "default",
+                                            },
+                                        ),
+                                    ),
+                                },
+                            ),
+                        ),
+                    },
+                    (),
+                ),
+                2,
+                1,
+            ),
+            (
+                (
+                    AuditLogKey {
+                        event: Some(
+                            V1(
+                                AuditLogEventV1 {
+                                    id: 9,
+                                    event_type: Create,
                                     object_type: Cluster,
                                     user: None,
                                     occurred_at: Some(
@@ -287,7 +319,7 @@ Trace {
                         event: Some(
                             V1(
                                 AuditLogEventV1 {
-                                    id: 9,
+                                    id: 10,
                                     event_type: Grant,
                                     object_type: Cluster,
                                     user: None,
@@ -321,7 +353,7 @@ Trace {
                         event: Some(
                             V1(
                                 AuditLogEventV1 {
-                                    id: 10,
+                                    id: 11,
                                     event_type: Create,
                                     object_type: ClusterReplica,
                                     user: None,
@@ -373,7 +405,7 @@ Trace {
                         event: Some(
                             V1(
                                 AuditLogEventV1 {
-                                    id: 11,
+                                    id: 12,
                                     event_type: Grant,
                                     object_type: System,
                                     user: None,
@@ -907,7 +939,7 @@ Trace {
                         name: "auditlog",
                     },
                     IdAllocValue {
-                        next_id: 12,
+                        next_id: 13,
                     },
                 ),
                 2,
@@ -1039,7 +1071,7 @@ Trace {
                         name: "user_network_policy",
                     },
                     IdAllocValue {
-                        next_id: 1,
+                        next_id: 2,
                     },
                 ),
                 2,
@@ -1063,7 +1095,81 @@ Trace {
         values: [],
     },
     network_policies: CollectionTrace {
-        values: [],
+        values: [
+            (
+                (
+                    NetworkPolicyKey {
+                        id: Some(
+                            NetworkPolicyId {
+                                value: Some(
+                                    User(
+                                        1,
+                                    ),
+                                ),
+                            },
+                        ),
+                    },
+                    NetworkPolicyValue {
+                        name: "default",
+                        rules: [
+                            NetworkPolicyRule {
+                                name: "open_ingress",
+                                address: "0.0.0.0/0",
+                                action: Some(
+                                    Allow(
+                                        Empty,
+                                    ),
+                                ),
+                                direction: Some(
+                                    Ingress(
+                                        Empty,
+                                    ),
+                                ),
+                            },
+                        ],
+                        owner_id: Some(
+                            RoleId {
+                                value: Some(
+                                    System(
+                                        1,
+                                    ),
+                                ),
+                            },
+                        ),
+                        privileges: [
+                            MzAclItem {
+                                grantee: Some(
+                                    RoleId {
+                                        value: Some(
+                                            System(
+                                                1,
+                                            ),
+                                        ),
+                                    },
+                                ),
+                                grantor: Some(
+                                    RoleId {
+                                        value: Some(
+                                            System(
+                                                1,
+                                            ),
+                                        ),
+                                    },
+                                ),
+                                acl_mode: Some(
+                                    AclMode {
+                                        bitflags: 256,
+                                    },
+                                ),
+                            },
+                        ],
+                        oid: 17048,
+                    },
+                ),
+                2,
+                1,
+            ),
+        ],
     },
     roles: CollectionTrace {
         values: [

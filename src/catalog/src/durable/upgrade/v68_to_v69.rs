@@ -14,5 +14,5 @@ use crate::durable::upgrade::{objects_v68 as v68, objects_v69 as v69};
 pub fn upgrade(
     _snapshot: Vec<v68::StateUpdateKind>,
 ) -> Vec<MigrationAction<v68::StateUpdateKind, v69::StateUpdateKind>> {
-    Vec::new()
+    vec![]
 }

@@ -233,8 +233,6 @@ ignore = [
     "RUSTSEC-2024-0375",
     # `derivative` is unmaintained; consider using an alternative (unmaintained)
     "RUSTSEC-2024-0388",
-    # Multiple soundness issues
-    "RUSTSEC-2024-0379",
     # `instant` is unmaintained, and the author recommends using the maintained [`web-time`] crate instead.
     "RUSTSEC-2024-0384",
 

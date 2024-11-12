@@ -98,7 +98,7 @@ use mz_catalog::durable::OpenableDurableCatalogState;
 use mz_catalog::expr_cache::{GlobalExpressions, LocalExpressions};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, ClusterReplicaProcessStatus, ClusterVariantManaged, Connection,
-    DataSourceDesc, TableDataSource,
+    DataSourceDesc, NetworkPolicy, TableDataSource,
 };
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig, VpcEndpointEvent};
 use mz_compute_client::as_of_selection;
@@ -4233,24 +4233,15 @@ pub enum NetworkPolicyError {
     MissingIp,
 }
 
-// TODO @jubrad this will be moved to a catalog resource in v1
-// of network policies.
-/// Represents a basic network policy.
-#[derive(Debug, Clone)]
-pub struct NetworkPolicy {
-    allow_list: Vec<IpNet>,
-}
-
-impl NetworkPolicy {
-    pub fn new(allow_list: Vec<IpNet>) -> Self {
-        NetworkPolicy { allow_list }
-    }
-
-    /// Validate the provided IP is allowed by the network policy.
-    pub fn validate(&self, ip: &IpAddr) -> Result<(), NetworkPolicyError> {
-        match self.allow_list.iter().any(|net| net.contains(ip)) {
-            true => Ok(()),
-            false => Err(NetworkPolicyError::AddressDenied(ip.clone())),
-        }
+pub(crate) fn validate_network_with_policy(
+    ip: &IpAddr,
+    policy: &NetworkPolicy,
+) -> Result<(), NetworkPolicyError> {
+    // At the moment we're not handling action or direction
+    // as those are only able to be "allow" and "ingress" respectively
+    if policy.rules.iter().any(|r| r.address.0.contains(ip)) {
+        Ok(())
+    } else {
+        Err(NetworkPolicyError::AddressDenied(ip.clone()))
     }
 }
