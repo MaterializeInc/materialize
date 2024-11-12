@@ -17,7 +17,7 @@ use ipnet::IpNet;
 use itertools::max;
 use mz_audit_log::{CreateOrDropClusterReplicaReasonV1, EventV1, VersionedEvent};
 use mz_controller::clusters::ReplicaLogging;
-use mz_controller_types::{is_cluster_size_v2, ClusterId, ReplicaId};
+use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::collections::HashSet;
 use mz_ore::now::EpochMillis;
 use mz_pgrepr::oid::{
@@ -30,8 +30,8 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
 use mz_sql::catalog::{
-    DefaultPrivilegeAclItem, DefaultPrivilegeObject, ObjectType, RoleAttributes, RoleMembership,
-    RoleVars, SystemObjectType,
+    CatalogError as SqlCatalogError, DefaultPrivilegeAclItem, DefaultPrivilegeObject, ObjectType,
+    RoleAttributes, RoleMembership, RoleVars, SystemObjectType,
 };
 use mz_sql::names::{
     DatabaseId, ObjectId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier, PUBLIC_ROLE_NAME,
@@ -619,7 +619,7 @@ pub(crate) async fn initialize(
         Vec::new(),
         MZ_SYSTEM_ROLE_ID,
         cluster_privileges,
-        default_cluster_config(options),
+        default_cluster_config(options)?,
         &HashSet::new(),
     )?;
     audit_events.extend([
@@ -665,7 +665,7 @@ pub(crate) async fn initialize(
         DEFAULT_USER_CLUSTER_ID,
         DEFAULT_USER_REPLICA_ID,
         DEFAULT_USER_REPLICA_NAME,
-        default_replica_config(options),
+        default_replica_config(options)?,
         MZ_SYSTEM_ROLE_ID,
     )?;
     audit_events.push((
@@ -677,7 +677,19 @@ pub(crate) async fn initialize(
             replica_name: DEFAULT_USER_REPLICA_NAME.to_string(),
             replica_id: Some(DEFAULT_USER_REPLICA_ID.to_string()),
             logical_size: options.default_cluster_replica_size.to_string(),
-            disk: is_cluster_size_v2(&options.default_cluster_replica_size),
+            disk: {
+                let cluster_size = options.default_cluster_replica_size.to_string();
+                let cluster_allocation = options
+                    .cluster_replica_size_map
+                    .0
+                    .get(&cluster_size)
+                    .ok_or_else(|| {
+                        CatalogError::Catalog(SqlCatalogError::UnknownClusterReplicaSize(
+                            cluster_size,
+                        ))
+                    })?;
+                cluster_allocation.is_cc
+            },
             billed_as: None,
             internal: false,
             reason: CreateOrDropClusterReplicaReasonV1::System,
@@ -753,31 +765,51 @@ pub fn resolve_system_schema(name: &str) -> &Schema {
 }
 
 /// Defines the default config for a Cluster.
-fn default_cluster_config(args: &BootstrapArgs) -> ClusterConfig {
-    ClusterConfig {
+fn default_cluster_config(args: &BootstrapArgs) -> Result<ClusterConfig, CatalogError> {
+    let cluster_size = args.default_cluster_replica_size.to_string();
+    let cluster_allocation = args
+        .cluster_replica_size_map
+        .0
+        .get(&cluster_size)
+        .ok_or_else(|| {
+            CatalogError::Catalog(SqlCatalogError::UnknownClusterReplicaSize(
+                cluster_size.clone(),
+            ))
+        })?;
+    Ok(ClusterConfig {
         variant: ClusterVariant::Managed(ClusterVariantManaged {
-            size: args.default_cluster_replica_size.to_string(),
+            size: cluster_size,
             replication_factor: 1,
             availability_zones: vec![],
             logging: ReplicaLogging {
                 log_logging: false,
                 interval: Some(Duration::from_secs(1)),
             },
-            disk: is_cluster_size_v2(&args.default_cluster_replica_size),
+            disk: cluster_allocation.is_cc,
             optimizer_feature_overrides: Default::default(),
             schedule: Default::default(),
         }),
         workload_class: None,
-    }
+    })
 }
 
 /// Defines the default config for a Cluster Replica.
-fn default_replica_config(args: &BootstrapArgs) -> ReplicaConfig {
-    ReplicaConfig {
+fn default_replica_config(args: &BootstrapArgs) -> Result<ReplicaConfig, CatalogError> {
+    let cluster_size = args.default_cluster_replica_size.to_string();
+    let cluster_allocation = args
+        .cluster_replica_size_map
+        .0
+        .get(&cluster_size)
+        .ok_or_else(|| {
+            CatalogError::Catalog(SqlCatalogError::UnknownClusterReplicaSize(
+                cluster_size.clone(),
+            ))
+        })?;
+    Ok(ReplicaConfig {
         location: ReplicaLocation::Managed {
-            size: args.default_cluster_replica_size.to_string(),
+            size: cluster_size,
             availability_zone: None,
-            disk: is_cluster_size_v2(&args.default_cluster_replica_size),
+            disk: cluster_allocation.is_cc,
             internal: false,
             billed_as: None,
             pending: false,
@@ -786,5 +818,5 @@ fn default_replica_config(args: &BootstrapArgs) -> ReplicaConfig {
             log_logging: false,
             interval: Some(Duration::from_secs(1)),
         },
-    }
+    })
 }

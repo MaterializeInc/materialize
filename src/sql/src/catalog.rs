@@ -388,6 +388,10 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
 
     /// Returns the associated comments for the given `id`
     fn get_item_comments(&self, id: &CatalogItemId) -> Option<&BTreeMap<Option<usize>, String>>;
+
+    /// Reports whether the specified cluster size is a modern "cc" size rather
+    /// than a legacy T-shirt size.
+    fn is_cluster_size_cc(&self, size: &str) -> bool;
 }
 
 /// Configuration associated with a catalog.
@@ -1264,6 +1268,8 @@ pub enum CatalogError {
     ClusterAlreadyExists(String),
     /// Unknown cluster replica.
     UnknownClusterReplica(String),
+    /// Unknown cluster replica size.
+    UnknownClusterReplicaSize(String),
     /// Duplicate Replica. #[error("cannot create multiple replicas named '{0}' on cluster '{1}'")]
     DuplicateReplica(String, String),
     /// Unknown item.
@@ -1338,6 +1344,9 @@ impl fmt::Display for CatalogError {
             Self::ClusterAlreadyExists(name) => write!(f, "cluster '{name}' already exists"),
             Self::UnknownClusterReplica(name) => {
                 write!(f, "unknown cluster replica '{}'", name)
+            }
+            Self::UnknownClusterReplicaSize(name) => {
+                write!(f, "unknown cluster replica size '{}'", name)
             }
             Self::DuplicateReplica(replica_name, cluster_name) => write!(f, "cannot create multiple replicas named '{replica_name}' on cluster '{cluster_name}'"),
             Self::UnknownItem(name) => write!(f, "unknown catalog item '{}'", name),

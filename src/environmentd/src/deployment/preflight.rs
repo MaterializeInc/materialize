@@ -13,6 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use mz_adapter::ResultExt;
+use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_catalog::durable::{BootstrapArgs, CatalogError, Metrics, OpenableDurableCatalogState};
 use mz_ore::channel::trigger;
 use mz_ore::exit;
@@ -78,6 +79,7 @@ pub async fn preflight_legacy(
                 &BootstrapArgs {
                     default_cluster_replica_size: bootstrap_default_cluster_replica_size,
                     bootstrap_role,
+                    cluster_replica_size_map: ClusterReplicaSizeMap::default(),
                 },
             )
             .await
@@ -215,6 +217,7 @@ pub async fn preflight_0dt(
                         default_cluster_replica_size: bootstrap_default_cluster_replica_size
                             .clone(),
                         bootstrap_role: bootstrap_role.clone(),
+                        cluster_replica_size_map: ClusterReplicaSizeMap::default(),
                     },
                 )
                 .await
