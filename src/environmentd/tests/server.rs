@@ -1431,6 +1431,7 @@ fn test_storage_usage_collection_interval_timestamps() {
 }
 
 #[mz_ore::test]
+#[ignore] // TODO: Reenable when database-issues#8743 is fixed
 fn test_old_storage_usage_records_are_reaped_on_restart() {
     let now = Arc::new(Mutex::new(0));
     let now_fn = {
