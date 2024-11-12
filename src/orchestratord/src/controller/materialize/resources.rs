@@ -38,7 +38,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tracing::trace;
 
-use super::CloudProvider;
+use super::{matching_image_from_environmentd_image_ref, CloudProvider};
 use crate::k8s::{apply_resource, delete_resource, get_resource};
 use mz_cloud_resources::crd::materialize::v1alpha1::Materialize;
 use mz_environmentd::DeploymentStatus;
@@ -803,7 +803,11 @@ fn create_environmentd_statefulset_object(
     // Add clusterd image argument based on environmentd tag.
     args.push(format!(
         "--clusterd-image={}",
-        matching_image_from_environmentd_image_ref(&mz.spec.environmentd_image_ref, "clusterd")
+        matching_image_from_environmentd_image_ref(
+            &mz.spec.environmentd_image_ref,
+            "clusterd",
+            None
+        )
     ));
 
     // Add cluster and storage host size arguments.
@@ -1386,6 +1390,7 @@ fn create_balancerd_deployment_object(config: &super::Args, mz: &Materialize) ->
         image: Some(matching_image_from_environmentd_image_ref(
             &mz.spec.environmentd_image_ref,
             "balancerd",
+            None,
         )),
         image_pull_policy: Some(config.image_pull_policy.to_string()),
         ports: Some(ports),
@@ -1530,19 +1535,4 @@ fn environmentd_internal_http_address(
 
 fn statefulset_pod_name(statefulset: &StatefulSet, idx: u64) -> String {
     format!("{}-{}", statefulset.name_unchecked(), idx)
-}
-
-fn matching_image_from_environmentd_image_ref(
-    environmentd_image_ref: &str,
-    image_name: &str,
-) -> String {
-    let namespace = environmentd_image_ref
-        .rsplit_once('/')
-        .unwrap_or(("materialize", ""))
-        .0;
-    let tag = environmentd_image_ref
-        .rsplit_once(':')
-        .unwrap_or(("", "unstable"))
-        .1;
-    format!("{namespace}/{image_name}:{tag}")
 }
