@@ -18,7 +18,7 @@ use maplit::btreemap;
 use mz_ore::num::NonNeg;
 use mz_ore::str::StrExt;
 use mz_postgres_util::tunnel::PostgresFlavor;
-use mz_repr::GlobalId;
+use mz_repr::CatalogItemId;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::ConnectionOptionName::*;
 use mz_sql_parser::ast::{
@@ -678,7 +678,7 @@ fn plan_kafka_security(
             match &v.aws_connection {
                 Some(id) => {
                     scx.require_feature_flag(&ENABLE_AWS_MSK_IAM_AUTH)?;
-                    let id = GlobalId::from(id);
+                    let id = CatalogItemId::from(id);
                     let item = scx.catalog.get_item(&id);
                     let aws = match item.connection()? {
                         Connection::Aws(_) => AwsConnectionReference {

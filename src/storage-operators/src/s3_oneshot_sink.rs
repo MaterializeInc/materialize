@@ -22,7 +22,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
 use mz_ore::task::JoinHandleExt;
-use mz_repr::{Diff, GlobalId, Row, Timestamp};
+use mz_repr::{CatalogItemId, Diff, GlobalId, Row, Timestamp};
 use mz_storage_types::connections::aws::AwsConnection;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::errors::DataflowError;
@@ -57,7 +57,7 @@ pub fn copy_to<G, F>(
     connection_context: ConnectionContext,
     aws_connection: AwsConnection,
     sink_id: GlobalId,
-    connection_id: GlobalId,
+    connection_id: CatalogItemId,
     params: CopyToParameters,
     worker_callback: F,
 ) where
@@ -142,7 +142,7 @@ fn render_initialization_operator<G>(
     scope: G,
     connection_context: ConnectionContext,
     aws_connection: AwsConnection,
-    connection_id: GlobalId,
+    connection_id: CatalogItemId,
     sink_id: GlobalId,
     s3_key_manager: S3KeyManager,
     up_to: Antichain<G::Timestamp>,
@@ -298,7 +298,7 @@ fn render_completion_operator<G, F>(
     scope: G,
     connection_context: ConnectionContext,
     aws_connection: AwsConnection,
-    connection_id: GlobalId,
+    connection_id: CatalogItemId,
     sink_id: GlobalId,
     s3_key_manager: S3KeyManager,
     completion_stream: Stream<G, Result<u64, String>>,
@@ -377,7 +377,7 @@ fn render_upload_operator<G, T>(
     scope: G,
     connection_context: ConnectionContext,
     aws_connection: AwsConnection,
-    connection_id: GlobalId,
+    connection_id: CatalogItemId,
     connection_details: S3UploadInfo,
     sink_id: GlobalId,
     input_collection: Collection<G, ((Row, u64), ()), Diff>,

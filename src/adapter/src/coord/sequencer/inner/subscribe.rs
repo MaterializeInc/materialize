@@ -137,16 +137,20 @@ impl Coordinator {
         session.add_notices(notices);
 
         // Determine timeline.
-        let mut timeline = self.validate_timeline_context(depends_on.clone())?;
+        let mut timeline = self.validate_timeline_context(depends_on.iter().copied())?;
         if matches!(timeline, TimelineContext::TimestampIndependent) && from.contains_temporal() {
             // If the from IDs are timestamp independent but the query contains temporal functions
             // then the timeline context needs to be upgraded to timestamp dependent.
             timeline = TimelineContext::TimestampDependent;
         }
 
+        let dependencies = depends_on
+            .iter()
+            .map(|id| self.catalog().resolve_item_id(id))
+            .collect();
         let validity = PlanValidity::new(
             self.catalog().transient_revision(),
-            depends_on.clone(),
+            dependencies,
             Some(cluster_id),
             replica_id,
             session.role_metadata().clone(),
@@ -185,8 +189,8 @@ impl Coordinator {
         let compute_instance = self
             .instance_snapshot(cluster_id)
             .expect("compute instance does not exist");
-        let view_id = self.allocate_transient_id();
-        let sink_id = self.allocate_transient_id();
+        let (_, view_id) = self.allocate_transient_id();
+        let (_, sink_id) = self.allocate_transient_id();
         let conn_id = session.conn_id().clone();
         let up_to = up_to
             .as_ref()
@@ -209,6 +213,7 @@ impl Coordinator {
             optimizer_config,
             self.optimizer_metrics(),
         );
+        let catalog = self.owned_catalog();
 
         let span = Span::current();
         Ok(StageResult::Handle(mz_ore::task::spawn_blocking(
@@ -219,7 +224,10 @@ impl Coordinator {
                     let global_mir_plan = optimizer.catch_unwind_optimize(plan.from.clone())?;
                     // Add introduced indexes as validity dependencies.
                     validity.extend_dependencies(
-                        global_mir_plan.id_bundle(optimizer.cluster_id()).iter(),
+                        global_mir_plan
+                            .id_bundle(optimizer.cluster_id())
+                            .iter()
+                            .map(|id| catalog.resolve_item_id(&id)),
                     );
 
                     let stage =

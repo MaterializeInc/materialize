@@ -131,7 +131,7 @@ impl Coordinator {
         let mut names: Vec<_> = id_bundle
             .iter()
             // This could filter out an entry that has been replaced in another transaction.
-            .filter_map(|id| self.catalog().try_get_entry(&id))
+            .filter_map(|id| self.catalog().try_get_entry_by_global_id(&id))
             .map(|item| {
                 self.catalog()
                     .resolve_full_name(item.name(), Some(session.conn_id()))

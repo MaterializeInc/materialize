@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+// buf breaking: ignore (temporarily ignored by ParkMyCar)
+
 syntax = "proto3";
 
 package mz_storage_types.connections;
@@ -14,7 +16,7 @@ package mz_storage_types.connections;
 import "google/protobuf/empty.proto";
 import "postgres-util/src/tunnel.proto";
 import "proto/src/tokio_postgres.proto";
-import "repr/src/global_id.proto";
+import "repr/src/catalog_item_id.proto";
 import "repr/src/url.proto";
 import "storage-types/src/connections/aws.proto";
 import "storage-types/src/connections/string_or_secret.proto";
@@ -22,7 +24,7 @@ import "storage-types/src/errors.proto";
 
 message ProtoTlsIdentity {
   string_or_secret.ProtoStringOrSecret cert = 1;
-  mz_repr.global_id.ProtoGlobalId key = 2;
+  mz_repr.catalog_item_id.ProtoCatalogItemId key = 2;
 }
 
 message ProtoKafkaConnectionTlsConfig {
@@ -34,7 +36,7 @@ message ProtoKafkaConnectionSaslConfig {
   reserved 4;
   string mechanism = 1;
   string_or_secret.ProtoStringOrSecret username = 2;
-  mz_repr.global_id.ProtoGlobalId password = 3;
+  mz_repr.catalog_item_id.ProtoCatalogItemId password = 3;
   aws.ProtoAwsConnectionReference aws = 5;
 }
 
@@ -71,7 +73,7 @@ message ProtoCsrConnection {
 
 message ProtoCsrConnectionHttpAuth {
   string_or_secret.ProtoStringOrSecret username = 1;
-  mz_repr.global_id.ProtoGlobalId password = 2;
+  mz_repr.catalog_item_id.ProtoCatalogItemId password = 2;
 }
 
 message ProtoPostgresConnection {
@@ -79,7 +81,7 @@ message ProtoPostgresConnection {
   uint32 port = 2;
   string database = 3;
   string_or_secret.ProtoStringOrSecret user = 4;
-  mz_repr.global_id.ProtoGlobalId password = 5;
+  mz_repr.catalog_item_id.ProtoCatalogItemId password = 5;
   mz_proto.tokio_postgres.ProtoSslMode tls_mode = 6;
   string_or_secret.ProtoStringOrSecret tls_root_cert = 7;
   ProtoTlsIdentity tls_identity = 8;
@@ -96,7 +98,7 @@ message ProtoTunnel {
 }
 
 message ProtoSshTunnel {
-  mz_repr.global_id.ProtoGlobalId connection_id = 1;
+  mz_repr.catalog_item_id.ProtoCatalogItemId connection_id = 1;
   ProtoSshConnection connection = 10;
 }
 
@@ -110,7 +112,7 @@ message ProtoSshConnection {
 }
 
 message ProtoAwsPrivatelink {
-  mz_repr.global_id.ProtoGlobalId connection_id = 1;
+  mz_repr.catalog_item_id.ProtoCatalogItemId connection_id = 1;
   optional uint32 port = 2;
   optional string availability_zone = 3;
 }
@@ -126,7 +128,7 @@ message ProtoMySqlConnection {
   string host = 1;
   uint32 port = 2;
   string_or_secret.ProtoStringOrSecret user = 3;
-  mz_repr.global_id.ProtoGlobalId password = 4;
+  mz_repr.catalog_item_id.ProtoCatalogItemId password = 4;
   ProtoMySqlSslMode tls_mode = 5;
   string_or_secret.ProtoStringOrSecret tls_root_cert = 6;
   ProtoTlsIdentity tls_identity = 7;

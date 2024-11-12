@@ -10,6 +10,8 @@
 // Note: protobuf does not support cyclic imports. Thus, this file contains
 // both, definitions from relation.rs and scalar.rs
 
+// buf breaking: ignore (temporarily ignored by ParkMyCar)
+
 syntax = "proto3";
 
 package mz_repr.relation_and_scalar;
@@ -19,6 +21,7 @@ import "repr/src/adt/char.proto";
 import "repr/src/adt/numeric.proto";
 import "repr/src/adt/timestamp.proto";
 import "repr/src/adt/varchar.proto";
+import "repr/src/catalog_item_id.proto";
 import "repr/src/global_id.proto";
 
 message ProtoRelationType {
@@ -66,7 +69,7 @@ message ProtoScalarType {
     reserved 2;
     reserved "custom_oid";
     ProtoScalarType element_type = 1;
-    optional global_id.ProtoGlobalId custom_id = 3;
+    optional catalog_item_id.ProtoCatalogItemId custom_id = 3;
   }
 
   message ProtoRecordField {
@@ -78,14 +81,14 @@ message ProtoScalarType {
     reserved 2;
     reserved "custom_oid";
     repeated ProtoRecordField fields = 1;
-    optional global_id.ProtoGlobalId custom_id = 4;
+    optional catalog_item_id.ProtoCatalogItemId custom_id = 4;
   }
 
   message ProtoMap {
     reserved 2;
     reserved "custom_oid";
     ProtoScalarType value_type = 1;
-    optional global_id.ProtoGlobalId custom_id = 3;
+    optional catalog_item_id.ProtoCatalogItemId custom_id = 3;
   }
 
   message ProtoRange {

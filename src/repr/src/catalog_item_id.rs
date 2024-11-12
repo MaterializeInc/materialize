@@ -16,8 +16,6 @@ use mz_proto::{RustType, TryFromProtoError};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
-use crate::GlobalId;
-
 include!(concat!(env!("OUT_DIR"), "/mz_repr.catalog_item_id.rs"));
 
 /// The identifier for an item within the Catalog.
@@ -58,17 +56,6 @@ impl CatalogItemId {
     /// Reports whether this ID is for a transient item.
     pub fn is_transient(&self) -> bool {
         matches!(self, CatalogItemId::Transient(_))
-    }
-
-    /// Converts a [`CatalogItemId`] to a [`GlobalId`].
-    ///
-    /// TODO(alter_table): Remove this method.
-    pub fn to_global_id(&self) -> GlobalId {
-        match self {
-            CatalogItemId::User(x) => GlobalId::User(*x),
-            CatalogItemId::System(x) => GlobalId::System(*x),
-            CatalogItemId::Transient(x) => GlobalId::Transient(*x),
-        }
     }
 }
 
@@ -124,8 +111,12 @@ impl RustType<ProtoCatalogItemId> for CatalogItemId {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use mz_proto::ProtoType;
     use proptest::prelude::*;
+    use prost::Message;
+
+    use super::*;
+    use crate::GlobalId;
 
     #[mz_ore::test]
     fn proptest_catalog_item_id_roundtrips() {
@@ -138,5 +129,32 @@ mod tests {
         proptest!(|(id in any::<CatalogItemId>())| {
             testcase(id);
         })
+    }
+
+    #[mz_ore::test]
+    fn proptest_catalog_item_id_global_id_wire_compat() {
+        fn testcase(og: GlobalId) {
+            let bytes = og.into_proto().encode_to_vec();
+            let proto = ProtoCatalogItemId::decode(&bytes[..]).expect("valid");
+            let rnd = proto.into_rust().expect("valid proto");
+
+            match (og, rnd) {
+                (GlobalId::User(x), CatalogItemId::User(y)) => assert_eq!(x, y),
+                (GlobalId::System(x), CatalogItemId::System(y)) => assert_eq!(x, y),
+                (GlobalId::Transient(x), CatalogItemId::Transient(y)) => assert_eq!(x, y),
+                (gid, item) => panic!("{gid:?} turned into {item:?}"),
+            }
+        }
+
+        let strat = proptest::arbitrary::any::<u64>().prop_flat_map(|inner| {
+            proptest::strategy::Union::new(vec![
+                Just(GlobalId::User(inner)),
+                Just(GlobalId::System(inner)),
+                Just(GlobalId::Transient(inner)),
+            ])
+        });
+        proptest!(|(id in strat)| {
+            testcase(id)
+        });
     }
 }

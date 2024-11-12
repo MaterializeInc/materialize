@@ -19,7 +19,7 @@ use differential_dataflow::{AsCollection, Collection};
 use itertools::{EitherOrBoth, Itertools};
 use maplit::btreemap;
 use mz_ore::cast::CastFrom;
-use mz_repr::{ColumnName, ColumnType, Datum, Diff, GlobalId, Row, RowPacker, ScalarType};
+use mz_repr::{CatalogItemId, ColumnName, ColumnType, Datum, Diff, Row, RowPacker, ScalarType};
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
@@ -136,10 +136,10 @@ where
 // catalog with userspace IDs when the user creates the sink, and their
 // names and IDs should be plumbed in from the catalog at the moment
 // the sink is created.
-pub(crate) const TRANSACTION_TYPE_ID: GlobalId = GlobalId::Transient(1);
-pub(crate) const DBZ_ROW_TYPE_ID: GlobalId = GlobalId::Transient(2);
+pub(crate) const TRANSACTION_TYPE_ID: CatalogItemId = CatalogItemId::Transient(1);
+pub(crate) const DBZ_ROW_TYPE_ID: CatalogItemId = CatalogItemId::Transient(2);
 
-pub static ENVELOPE_CUSTOM_NAMES: LazyLock<BTreeMap<GlobalId, String>> = LazyLock::new(|| {
+pub static ENVELOPE_CUSTOM_NAMES: LazyLock<BTreeMap<CatalogItemId, String>> = LazyLock::new(|| {
     btreemap! {
         TRANSACTION_TYPE_ID => "transaction".into(),
         DBZ_ROW_TYPE_ID => "row".into(),

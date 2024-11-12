@@ -30,12 +30,12 @@ impl DataflowBuilder<'_> {
     /// building a dataflow for the identifiers in `ids` out of the indexes
     /// available in this compute instance.
     #[mz_ore::instrument(level = "debug")]
-    pub fn sufficient_collections<'a, I>(&self, ids: I) -> CollectionIdBundle
+    pub fn sufficient_collections<I>(&self, ids: I) -> CollectionIdBundle
     where
-        I: IntoIterator<Item = &'a GlobalId>,
+        I: IntoIterator<Item = GlobalId>,
     {
         let mut id_bundle = CollectionIdBundle::default();
-        let mut todo: BTreeSet<GlobalId> = ids.into_iter().cloned().collect();
+        let mut todo: BTreeSet<GlobalId> = ids.into_iter().collect();
 
         // Iteratively extract the largest element, potentially introducing lesser elements.
         while let Some(id) = todo.iter().rev().next().cloned() {

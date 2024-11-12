@@ -128,7 +128,7 @@ impl Coordinator {
         replica_id: ReplicaId,
         spec: &'static SubscribeSpec,
     ) {
-        let id = self.allocate_transient_id();
+        let (_, id) = self.allocate_transient_id();
         info!(
             %id,
             %replica_id,
@@ -162,9 +162,15 @@ impl Coordinator {
         let plan = spec.to_plan(&catalog).expect("valid spec");
 
         let role_metadata = RoleMetadata::new(MZ_SYSTEM_ROLE_ID);
+        let dependencies = plan
+            .from
+            .depends_on()
+            .iter()
+            .map(|id| self.catalog().resolve_item_id(id))
+            .collect();
         let validity = PlanValidity::new(
             self.catalog.transient_revision(),
-            plan.from.depends_on(),
+            dependencies,
             Some(cluster_id),
             Some(replica_id),
             role_metadata,
@@ -193,7 +199,7 @@ impl Coordinator {
         } = stage;
 
         let compute_instance = self.instance_snapshot(cluster_id).expect("must exist");
-        let view_id = self.allocate_transient_id();
+        let (_, view_id) = self.allocate_transient_id();
 
         let vars = self.catalog().system_config();
         let overrides = self.catalog.get_cluster(cluster_id).config.features();
@@ -211,6 +217,7 @@ impl Coordinator {
             optimizer_config,
             self.optimizer_metrics(),
         );
+        let catalog = self.owned_catalog();
 
         let span = Span::current();
         Ok(StageResult::Handle(mz_ore::task::spawn_blocking(
@@ -221,7 +228,8 @@ impl Coordinator {
                     let global_mir_plan = optimizer.catch_unwind_optimize(plan.from)?;
                     // Add introduced indexes as validity dependencies.
                     let id_bundle = global_mir_plan.id_bundle(cluster_id);
-                    validity.extend_dependencies(id_bundle.iter());
+                    let item_ids = id_bundle.iter().map(|id| catalog.resolve_item_id(&id));
+                    validity.extend_dependencies(item_ids);
 
                     let stage = IntrospectionSubscribeStage::TimestampOptimizeLir(
                         IntrospectionSubscribeTimestampOptimizeLir {
@@ -379,7 +387,7 @@ impl Coordinator {
             ..
         } = subscribe;
         let old_id = id;
-        let new_id = self.allocate_transient_id();
+        let (_, new_id) = self.allocate_transient_id();
 
         info!(
             %old_id, %new_id, %replica_id,

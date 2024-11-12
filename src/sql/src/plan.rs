@@ -46,7 +46,9 @@ use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::role_id::RoleId;
-use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType, Timestamp};
+use mz_repr::{
+    CatalogItemId, ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType, Timestamp,
+};
 use mz_sql_parser::ast::{
     AlterSourceAddSubsourceOption, ClusterAlterOptionValue, ConnectionOptionName, QualifiedReplica,
     SelectStatement, TransactionIsolationLevel, TransactionMode, UnresolvedItemName, Value,
@@ -77,8 +79,8 @@ use crate::catalog::{
     RoleAttributes,
 };
 use crate::names::{
-    Aug, CommentObjectId, FullItemName, ObjectId, QualifiedItemName, ResolvedDataType,
-    ResolvedDatabaseSpecifier, ResolvedIds, SchemaSpecifier, SystemObjectId,
+    Aug, CommentObjectId, DependencyIds, FullItemName, ObjectId, QualifiedItemName,
+    ResolvedDataType, ResolvedDatabaseSpecifier, ResolvedIds, SchemaSpecifier, SystemObjectId,
 };
 
 pub(crate) mod error;
@@ -662,8 +664,13 @@ pub struct SourceReference {
 /// A [`CreateSourcePlan`] and the metadata necessary to sequence it.
 #[derive(Debug)]
 pub struct CreateSourcePlanBundle {
-    pub source_id: GlobalId,
+    /// ID of this source in the Catalog.
+    pub item_id: CatalogItemId,
+    /// ID used to reference this source from outside the catalog, e.g. compute.
+    pub global_id: GlobalId,
+    /// Details of the source to create.
     pub plan: CreateSourcePlan,
+    /// Other catalog objects that are referenced by this source, determined at name resolution.
     pub resolved_ids: ResolvedIds,
     /// All the available upstream references for this source.
     /// Populated for top-level sources that can contain subsources/tables
@@ -681,7 +688,8 @@ pub struct CreateConnectionPlan {
 
 #[derive(Debug)]
 pub struct ValidateConnectionPlan {
-    pub id: GlobalId,
+    /// ID of the connection in the Catalog.
+    pub id: CatalogItemId,
     /// The connection to validate.
     pub connection: mz_storage_types::connections::Connection<ReferencedConnection>,
 }
@@ -713,10 +721,10 @@ pub struct CreateTablePlan {
 pub struct CreateViewPlan {
     pub name: QualifiedItemName,
     pub view: View,
-    /// The ID of the object that this view is replacing, if any.
-    pub replace: Option<GlobalId>,
-    /// The IDs of all objects that need to be dropped. This includes `replace` and any dependents.
-    pub drop_ids: Vec<GlobalId>,
+    /// The Catalog objects that this view is replacing, if any.
+    pub replace: Option<CatalogItemId>,
+    /// The Catalog objects that need to be dropped. This includes `replace` and any dependents.
+    pub drop_ids: Vec<CatalogItemId>,
     pub if_not_exists: bool,
     /// True if the view contains an expression that can make the exact column list
     /// ambiguous. For example `NATURAL JOIN` or `SELECT *`.
@@ -727,10 +735,10 @@ pub struct CreateViewPlan {
 pub struct CreateMaterializedViewPlan {
     pub name: QualifiedItemName,
     pub materialized_view: MaterializedView,
-    /// The ID of the object that this view is replacing, if any.
-    pub replace: Option<GlobalId>,
-    /// The IDs of all objects that need to be dropped. This includes `replace` and any dependents.
-    pub drop_ids: Vec<GlobalId>,
+    /// The Catalog objects that this materialized view is replacing, if any.
+    pub replace: Option<CatalogItemId>,
+    /// The Catalog objects that need to be dropped. This includes `replace` and any dependents.
+    pub drop_ids: Vec<CatalogItemId>,
     pub if_not_exists: bool,
     /// True if the materialized view contains an expression that can make the exact column list
     /// ambiguous. For example `NATURAL JOIN` or `SELECT *`.
@@ -740,12 +748,14 @@ pub struct CreateMaterializedViewPlan {
 #[derive(Debug, Clone)]
 pub struct CreateContinualTaskPlan {
     pub name: QualifiedItemName,
-    // During initial creation, the `LocalId` placeholder for this CT in
-    // `continual_task.expr`. None on restart.
+    /// During initial creation, the `LocalId` placeholder for this CT in `continual_task.expr`.
+    /// None on restart.
     pub placeholder_id: Option<mz_expr::LocalId>,
     pub desc: RelationDesc,
+    /// ID of the collection we read into this continual task.
     pub input_id: GlobalId,
     pub with_snapshot: bool,
+    /// Definition for the continual task.
     pub continual_task: MaterializedView,
 }
 
@@ -805,6 +815,7 @@ pub struct ShowVariablePlan {
 
 #[derive(Debug)]
 pub struct InspectShardPlan {
+    /// ID of the storage collection to inspect.
     pub id: GlobalId,
 }
 
@@ -878,7 +889,9 @@ pub struct SubscribePlan {
 
 #[derive(Debug, Clone)]
 pub enum SubscribeFrom {
+    /// ID of the collection to subscribe to.
     Id(GlobalId),
+    /// Query to subscribe to.
     Query {
         expr: MirRelationExpr,
         desc: RelationDesc,
@@ -909,14 +922,14 @@ pub struct ShowCreatePlan {
 
 #[derive(Debug)]
 pub struct ShowColumnsPlan {
-    pub id: GlobalId,
+    pub id: CatalogItemId,
     pub select_plan: SelectPlan,
     pub new_resolved_ids: ResolvedIds,
 }
 
 #[derive(Debug)]
 pub struct CopyFromPlan {
-    pub id: GlobalId,
+    pub id: CatalogItemId,
     pub columns: Vec<usize>,
     pub params: CopyFormatParams<'static>,
 }
@@ -930,7 +943,7 @@ pub struct CopyToPlan {
     pub to: HirScalarExpr,
     pub connection: mz_storage_types::connections::Connection<ReferencedConnection>,
     /// The ID of the connection.
-    pub connection_id: GlobalId,
+    pub connection_id: CatalogItemId,
     pub format: S3SinkFormat,
     pub max_file_size: u64,
 }
@@ -947,17 +960,17 @@ pub struct ExplainPlanPlan {
 #[derive(Clone, Debug)]
 pub enum Explainee {
     /// Lookup and explain a plan saved for an view.
-    View(GlobalId),
+    View(CatalogItemId),
     /// Lookup and explain a plan saved for an existing materialized view.
-    MaterializedView(GlobalId),
+    MaterializedView(CatalogItemId),
     /// Lookup and explain a plan saved for an existing index.
-    Index(GlobalId),
+    Index(CatalogItemId),
     /// Replan an existing view.
-    ReplanView(GlobalId),
+    ReplanView(CatalogItemId),
     /// Replan an existing materialized view.
-    ReplanMaterializedView(GlobalId),
+    ReplanMaterializedView(CatalogItemId),
     /// Replan an existing index.
-    ReplanIndex(GlobalId),
+    ReplanIndex(CatalogItemId),
     /// A SQL statement.
     Statement(ExplaineeStatement),
 }
@@ -1066,7 +1079,7 @@ pub struct ExplainSinkSchemaPlan {
 
 #[derive(Debug)]
 pub struct SendDiffsPlan {
-    pub id: GlobalId,
+    pub id: CatalogItemId,
     pub updates: Vec<(Row, Diff)>,
     pub kind: MutationKind,
     pub returning: Vec<(Row, NonZeroUsize)>,
@@ -1075,14 +1088,14 @@ pub struct SendDiffsPlan {
 
 #[derive(Debug)]
 pub struct InsertPlan {
-    pub id: GlobalId,
+    pub id: CatalogItemId,
     pub values: HirRelationExpr,
     pub returning: Vec<mz_expr::MirScalarExpr>,
 }
 
 #[derive(Debug)]
 pub struct ReadThenWritePlan {
-    pub id: GlobalId,
+    pub id: CatalogItemId,
     pub selection: HirRelationExpr,
     pub finishing: RowSetFinishing,
     pub assignments: BTreeMap<usize, mz_expr::MirScalarExpr>,
@@ -1098,13 +1111,13 @@ pub struct AlterNoopPlan {
 
 #[derive(Debug)]
 pub struct AlterSetClusterPlan {
-    pub id: GlobalId,
+    pub id: CatalogItemId,
     pub set_cluster: ClusterId,
 }
 
 #[derive(Debug)]
 pub struct AlterRetainHistoryPlan {
-    pub id: GlobalId,
+    pub id: CatalogItemId,
     pub value: Option<Value>,
     pub window: CompactionWindow,
     pub object_type: ObjectType,
@@ -1130,7 +1143,7 @@ pub enum AlterConnectionAction {
 
 #[derive(Debug)]
 pub struct AlterConnectionPlan {
-    pub id: GlobalId,
+    pub id: CatalogItemId,
     pub action: AlterConnectionAction,
 }
 
@@ -1147,13 +1160,15 @@ pub enum AlterSourceAction {
 
 #[derive(Debug)]
 pub struct AlterSourcePlan {
-    pub id: GlobalId,
+    pub item_id: CatalogItemId,
+    pub ingestion_id: GlobalId,
     pub action: AlterSourceAction,
 }
 
 #[derive(Debug, Clone)]
 pub struct AlterSinkPlan {
-    pub id: GlobalId,
+    pub item_id: CatalogItemId,
+    pub global_id: GlobalId,
     pub sink: Sink,
     pub with_snapshot: bool,
     pub in_cluster: ClusterId,
@@ -1184,7 +1199,7 @@ pub struct AlterClusterReplicaRenamePlan {
 
 #[derive(Debug)]
 pub struct AlterItemRenamePlan {
-    pub id: GlobalId,
+    pub id: CatalogItemId,
     pub current_full_name: FullItemName,
     pub to_name: String,
     pub object_type: ObjectType,
@@ -1216,7 +1231,7 @@ pub struct AlterClusterSwapPlan {
 
 #[derive(Debug)]
 pub struct AlterSecretPlan {
-    pub id: GlobalId,
+    pub id: CatalogItemId,
     pub secret_as: MirScalarExpr,
 }
 
@@ -1250,7 +1265,7 @@ pub struct AlterOwnerPlan {
 
 #[derive(Debug)]
 pub struct AlterTablePlan {
-    pub relation_id: GlobalId,
+    pub relation_id: CatalogItemId,
     pub column_name: ColumnName,
     pub column_type: ResolvedDataType,
 }
@@ -1413,7 +1428,7 @@ pub enum DataSourceDesc {
     /// This source receives its data from the identified ingestion,
     /// specifically the output identified by `external_reference`.
     IngestionExport {
-        ingestion_id: GlobalId,
+        ingestion_id: CatalogItemId,
         external_reference: UnresolvedItemName,
         details: SourceExportDetails,
         data_config: SourceExportDataConfig<ReferencedConnection>,
@@ -1431,7 +1446,7 @@ pub enum DataSourceDesc {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Ingestion {
     pub desc: SourceDesc<ReferencedConnection>,
-    pub progress_subsource: GlobalId,
+    pub progress_subsource: CatalogItemId,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1527,8 +1542,8 @@ impl From<WebhookBodyFormat> for ScalarType {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct WebhookValidationSecret {
-    /// Identifies the secret by [`GlobalId`].
-    pub id: GlobalId,
+    /// Identifies the secret by [`CatalogItemId`].
+    pub id: CatalogItemId,
     /// Column index for the expression context that this secret was originally evaluated in.
     pub column_idx: usize,
     /// Whether or not this secret should be provided to the expression as Bytes or a String.
@@ -1695,8 +1710,11 @@ pub struct Secret {
 
 #[derive(Clone, Debug)]
 pub struct Sink {
+    /// Parse-able SQL that is stored durably and defines this sink.
     pub create_sql: String,
+    /// Collection we read into this sink.
     pub from: GlobalId,
+    /// Type of connection to the external service we sink into.
     pub connection: StorageSinkConnection<ReferencedConnection>,
     pub partition_strategy: SinkPartitionStrategy,
     // TODO(guswynn): this probably should just be in the `connection`.
@@ -1706,17 +1724,29 @@ pub struct Sink {
 
 #[derive(Clone, Debug)]
 pub struct View {
+    /// Parse-able SQL that is stored durably and defines this view.
     pub create_sql: String,
+    /// Unoptimized high-level expression from parsing the `create_sql`.
     pub expr: HirRelationExpr,
+    /// All of the catalog objects that are referenced by this view, according to the `expr`.
+    pub dependencies: DependencyIds,
+    /// Columns of this view.
     pub column_names: Vec<ColumnName>,
+    /// If this view is created in the temporary schema, e.g. `CREATE TEMPORARY ...`.
     pub temporary: bool,
 }
 
 #[derive(Clone, Debug)]
 pub struct MaterializedView {
+    /// Parse-able SQL that is stored durably and defines this materialized view.
     pub create_sql: String,
+    /// Unoptimized high-level expression from parsing the `create_sql`.
     pub expr: HirRelationExpr,
+    /// All of the catalog objects that are referenced by this materialized view, according to the `expr`.
+    pub dependencies: DependencyIds,
+    /// Columns of this view.
     pub column_names: Vec<ColumnName>,
+    /// Cluster this materialized view will get installed on.
     pub cluster_id: ClusterId,
     pub non_null_assertions: Vec<usize>,
     pub compaction_window: Option<CompactionWindow>,
@@ -1726,7 +1756,9 @@ pub struct MaterializedView {
 
 #[derive(Clone, Debug)]
 pub struct Index {
+    /// Parse-able SQL that is stored durably and defines this index.
     pub create_sql: String,
+    /// Collection this index is on top of.
     pub on: GlobalId,
     pub keys: Vec<mz_expr::MirScalarExpr>,
     pub compaction_window: Option<CompactionWindow>,

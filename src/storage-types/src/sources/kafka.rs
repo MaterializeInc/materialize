@@ -21,7 +21,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::future::InTask;
 use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
 use mz_repr::adt::numeric::Numeric;
-use mz_repr::{ColumnType, Datum, GlobalId, RelationDesc, Row, ScalarType};
+use mz_repr::{CatalogItemId, ColumnType, Datum, GlobalId, RelationDesc, Row, ScalarType};
 use mz_timely_util::order::{Extrema, Partitioned};
 use proptest::prelude::any;
 use proptest_derive::Arbitrary;
@@ -51,7 +51,7 @@ pub type KafkaTimestamp = Partitioned<RangeBound<i32>, MzOffset>;
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
 pub struct KafkaSourceConnection<C: ConnectionAccess = InlinedConnection> {
     pub connection: C::Kafka,
-    pub connection_id: GlobalId,
+    pub connection_id: CatalogItemId,
     pub topic: String,
     // Map from partition -> starting offset
     #[proptest(strategy = "proptest::collection::btree_map(any::<i32>(), any::<i64>(), 0..4)")]
@@ -215,7 +215,7 @@ impl<C: ConnectionAccess> SourceConnection for KafkaSourceConnection<C> {
         KAFKA_PROGRESS_DESC.clone()
     }
 
-    fn connection_id(&self) -> Option<GlobalId> {
+    fn connection_id(&self) -> Option<CatalogItemId> {
         Some(self.connection_id)
     }
 

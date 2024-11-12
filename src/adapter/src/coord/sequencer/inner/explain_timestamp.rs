@@ -98,9 +98,15 @@ impl Coordinator {
             .catalog()
             .resolve_target_cluster(target_cluster, session)?;
         let cluster_id = cluster.id;
+        let dependencies = plan
+            .raw_plan
+            .depends_on()
+            .into_iter()
+            .map(|id| self.catalog().resolve_item_id(&id))
+            .collect();
         let validity = PlanValidity::new(
             self.catalog().transient_revision(),
-            plan.raw_plan.depends_on(),
+            dependencies,
             Some(cluster_id),
             None,
             session.role_metadata().clone(),
@@ -168,8 +174,12 @@ impl Coordinator {
         }: ExplainTimestampRealTimeRecency,
     ) -> Result<StageResult<Box<ExplainTimestampStage>>, AdapterError> {
         let source_ids = optimized_plan.depends_on();
+        let source_items: Vec<_> = source_ids
+            .iter()
+            .map(|gid| self.catalog().resolve_item_id(gid))
+            .collect();
         let fut = self
-            .determine_real_time_recent_timestamp(session, source_ids.iter().cloned())
+            .determine_real_time_recent_timestamp(session, source_items.into_iter())
             .await?;
 
         match fut {
@@ -226,7 +236,7 @@ impl Coordinator {
             for (id, since, upper) in frontiers {
                 let name = self
                     .catalog()
-                    .try_get_entry(&id)
+                    .try_get_entry_by_global_id(&id)
                     .map(|item| item.name())
                     .map(|name| {
                         self.catalog()
@@ -251,7 +261,7 @@ impl Coordinator {
                         .collection_frontiers(*id, Some(cluster_id))
                         .expect("id does not exist");
                     let name = catalog
-                        .try_get_entry(id)
+                        .try_get_entry_by_global_id(id)
                         .map(|item| item.name())
                         .map(|name| {
                             catalog
@@ -292,7 +302,7 @@ impl Coordinator {
     ) -> Result<StageResult<Box<ExplainTimestampStage>>, AdapterError> {
         let id_bundle = self
             .index_oracle(cluster_id)
-            .sufficient_collections(&source_ids);
+            .sufficient_collections(source_ids.iter().copied());
 
         let is_json = match format {
             ExplainFormat::Text => false,
@@ -301,7 +311,7 @@ impl Coordinator {
                 return Err(AdapterError::Unsupported("EXPLAIN TIMESTAMP AS DOT"));
             }
         };
-        let mut timeline_context = self.validate_timeline_context(source_ids.clone())?;
+        let mut timeline_context = self.validate_timeline_context(source_ids.iter().copied())?;
         if matches!(timeline_context, TimelineContext::TimestampIndependent)
             && optimized_plan.contains_temporal()
         {
