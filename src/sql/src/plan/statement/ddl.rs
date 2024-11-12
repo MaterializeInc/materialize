@@ -5983,7 +5983,7 @@ pub fn plan_alter_cluster(
                     cluster.managed_size().expect("cluster known to be managed")
                 });
                 if scx.catalog.is_cluster_size_cc(size) {
-                    sql_bail!("DISK option not supported for moern cluster sizes because disk is always enabled");
+                    sql_bail!("DISK option not supported for modern cluster sizes because disk is always enabled");
                 }
 
                 if disk {

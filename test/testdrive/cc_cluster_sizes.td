@@ -82,9 +82,9 @@ true
 
 # Cannot explicitly alter DISK option for new sizes.
 ! ALTER CLUSTER c SET (DISK = false)
-contains:DISK option not supported for moern cluster sizes because disk is always enabled
+contains:DISK option not supported for modern cluster sizes because disk is always enabled
 ! ALTER CLUSTER c SET (DISK = true)
-contains:DISK option not supported for moern cluster sizes because disk is always enabled
+contains:DISK option not supported for modern cluster sizes because disk is always enabled
 > DROP CLUSTER c
 
 > CREATE CLUSTER c REPLICAS (r1 (SIZE '1cc'))
