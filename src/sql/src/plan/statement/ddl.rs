@@ -5952,7 +5952,7 @@ pub fn plan_alter_cluster(
                 // The long term plan is to phase out the v1 cluster sizes, at
                 // which point we'll be able to remove the `DISK` option
                 // entirely and simply always enable disk.
-                if scx.catalog.is_cluster_size_cc(&size) {
+                if scx.catalog.is_cluster_size_cc(size) {
                     if disk.is_some() {
                         sql_bail!("DISK option not supported for modern cluster sizes because disk is always enabled");
                     } else {
@@ -5982,7 +5982,7 @@ pub fn plan_alter_cluster(
                 let size = size.as_deref().unwrap_or_else(|| {
                     cluster.managed_size().expect("cluster known to be managed")
                 });
-                if scx.catalog.is_cluster_size_cc(&size) {
+                if scx.catalog.is_cluster_size_cc(size) {
                     sql_bail!("DISK option not supported for moern cluster sizes because disk is always enabled");
                 }
 

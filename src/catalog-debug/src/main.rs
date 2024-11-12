@@ -542,6 +542,7 @@ async fn upgrade_check(
                 default_cluster_replica_size:
                     "DEFAULT CLUSTER REPLICA SIZE IS ONLY USED FOR NEW ENVIRONMENTS".into(),
                 bootstrap_role: None,
+                cluster_replica_size_map: ClusterReplicaSizeMap::default(),
             },
         )
         .await?;

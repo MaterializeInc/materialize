@@ -135,6 +135,7 @@ fn test_replica_allocation_deserialization() {
             memory_limit: Some(MemoryLimit(ByteSize::gib(10))),
             cpu_limit: Some(CpuLimit::from_millicpus(1000)),
             cpu_exclusive: false,
+            is_cc: true,
             scale: 16,
             workers: 1,
             selectors: BTreeMap::from([
@@ -168,6 +169,7 @@ fn test_replica_allocation_deserialization() {
             memory_limit: Some(MemoryLimit(ByteSize::gib(0))),
             cpu_limit: Some(CpuLimit::from_millicpus(0)),
             cpu_exclusive: true,
+            is_cc: true,
             scale: 0,
             workers: 0,
             selectors: Default::default(),
