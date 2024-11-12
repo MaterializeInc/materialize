@@ -21,7 +21,7 @@ _value_ | The value for the secret. The _value_ expression may not reference any
 ## Examples
 
 ```mzsql
-CREATE SECRET upstash_kafka_ca_cert AS decode('c2VjcmV0Cg==', 'base64');
+CREATE SECRET kafka_ca_cert AS decode('c2VjcmV0Cg==', 'base64');
 ```
 
 ## Privileges

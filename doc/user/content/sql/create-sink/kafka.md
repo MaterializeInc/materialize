@@ -621,7 +621,7 @@ CREATE SECRET kafka_ssl_key AS '<BROKER_SSL_KEY>';
 CREATE SECRET kafka_ssl_crt AS '<BROKER_SSL_CRT>';
 
 CREATE CONNECTION kafka_connection TO KAFKA (
-    BROKER 'rp-f00000bar.data.vectorized.cloud:30365',
+    BROKER 'unique-jellyfish-0000.us-east-1.aws.confluent.cloud:9093',
     SSL KEY = SECRET kafka_ssl_key,
     SSL CERTIFICATE = SECRET kafka_ssl_crt
 );
@@ -634,7 +634,7 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 CREATE SECRET kafka_password AS '<BROKER_PASSWORD>';
 
 CREATE CONNECTION kafka_connection TO KAFKA (
-    BROKER 'unique-jellyfish-0000-kafka.upstash.io:9092',
+    BROKER 'unique-jellyfish-0000.us-east-1.aws.confluent.cloud:9092',
     SASL MECHANISMS = 'SCRAM-SHA-256',
     SASL USERNAME = 'foo',
     SASL PASSWORD = SECRET kafka_password
@@ -655,7 +655,7 @@ CREATE SECRET csr_ssl_key AS '<CSR_SSL_KEY>';
 CREATE SECRET csr_password AS '<CSR_PASSWORD>';
 
 CREATE CONNECTION csr_ssl TO CONFLUENT SCHEMA REGISTRY (
-    URL 'https://rp-f00000bar.data.vectorized.cloud:30993',
+    URL 'unique-jellyfish-0000.us-east-1.aws.confluent.cloud:9093',
     SSL KEY = SECRET csr_ssl_key,
     SSL CERTIFICATE = SECRET csr_ssl_crt,
     USERNAME = 'foo',
