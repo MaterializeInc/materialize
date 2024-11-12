@@ -5309,11 +5309,10 @@ fn plan_drop_network_policy(
 ) -> Result<Option<NetworkPolicyId>, PlanError> {
     match scx.catalog.resolve_network_policy(name.as_str()) {
         Ok(policy) => {
+            // TODO(network_policy): When we support role based network policies, check if any role
+            // currently has the specified policy set.
             if scx.catalog.system_vars().default_network_policy_name() == policy.name() {
-                Err(PlanError::Unstructured(
-                    "Cannot drop the network polic referenced by system variable network_policy."
-                        .into(),
-                ))
+                Err(PlanError::NetworkPolicyInUse)
             } else {
                 Ok(Some(policy.id()))
             }

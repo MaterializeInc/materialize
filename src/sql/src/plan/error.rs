@@ -271,6 +271,7 @@ pub enum PlanError {
     SubsourceResolutionError(ExternalReferenceResolutionError),
     Replan(String),
     NetworkPolicyLockoutError,
+    NetworkPolicyInUse,
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -454,6 +455,9 @@ impl PlanError {
             }
             Self::RetainHistoryLow { .. } | Self::RetainHistoryRequired => {
                 Some("Use ALTER ... RESET (RETAIN HISTORY) to set the retain history to its default and lowest value.".into())
+            }
+            Self::NetworkPolicyInUse => {
+                Some("Use ALTER SYSTEM SET 'network_policy' to change the default network policy.".into())
             }
             _ => None,
         }
@@ -767,6 +771,7 @@ impl fmt::Display for PlanError {
             Self::SubsourceResolutionError(e) => write!(f, "{}", e),
             Self::Replan(msg) => write!(f, "internal error while replanning, please contact support: {msg}"),
             Self::NetworkPolicyLockoutError => write!(f, "policy would block current session IP"),
+            Self::NetworkPolicyInUse => write!(f, "network policy is currently in use"),
             Self::UntilReadyTimeoutRequired => {
                 write!(f, "TIMEOUT=<duration> option is required for ALTER CLUSTER ... WITH (WAIT UNTIL READY ( ... ))")
             },

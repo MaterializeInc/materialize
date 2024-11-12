@@ -973,14 +973,16 @@ impl Coordinator {
         session: &Session,
         plan::AlterNetworkPolicyPlan { id, name, rules }: plan::AlterNetworkPolicyPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        if self
+        // TODO(network_policy): Consider role based network policies here.
+        let current_network_policy_name = self
             .owned_catalog()
             .system_config()
-            .default_network_policy_name()
-            == name.as_str()
-        {
+            .default_network_policy_name();
+        // Check if the way we're alerting the policy is still valid for the current connection.
+        if current_network_policy_name == name {
             self.validate_alter_network_policy(session, &rules)?;
         }
+
         let op = catalog::Op::AlterNetworkPolicy {
             id,
             rules,
@@ -4288,6 +4290,10 @@ impl Coordinator {
         self.validate_alter_network_policy(session, &network_policy.rules)
     }
 
+    /// Validates that a set of [`NetworkPolicyRule`]s is valid for the current [`Session`].
+    ///
+    /// This helps prevent users from modifying network policies in a way that would lock out their
+    /// current connection.
     fn validate_alter_network_policy(
         &self,
         session: &Session,
