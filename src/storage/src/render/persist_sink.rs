@@ -93,6 +93,7 @@ use std::fmt::Debug;
 use std::ops::AddAssign;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Duration;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
@@ -103,6 +104,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashMap;
 use mz_persist_client::batch::{Batch, BatchBuilder, ProtoBatch};
 use mz_persist_client::cache::PersistClientCache;
+use mz_persist_client::error::UpperMismatch;
 use mz_persist_client::Diagnostics;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::{Codec, Codec64};
@@ -919,11 +921,14 @@ where
         .get(storage_state.storage_configuration.config_set());
     let bail_on_concurrent_modification = !use_continual_feedback_upsert;
 
+    let read_only_rx = storage_state.read_only_rx.clone();
+
     let operator_name = format!("{} append_batches", operator_name);
     let mut append_op = AsyncOperatorBuilder::new(operator_name, scope.clone());
 
     let hashed_id = collection_id.hashed();
     let active_worker = usize::cast_from(hashed_id) % scope.peers() == scope.index();
+    let worker_id = scope.index();
 
     // Both of these inputs are disconnected from the output capabilities of this operator, as
     // any output of this operator is entirely driven by the `compare_and_append`s. Currently
@@ -1182,28 +1187,125 @@ where
                 }
 
                 let result = {
-                    let _permit = busy_signal.acquire().await;
-                    write.compare_and_append_batch(
-                        &mut to_append[..],
-                        batch_lower.clone(),
-                        batch_upper.clone(),
-                    )
-                    .await
-                    .expect("Invalid usage")
+                    let maybe_err = if *read_only_rx.borrow() {
+
+                        // We have to wait for either us coming out of read-only
+                        // mode or someone else applying a write that covers our
+                        // batch.
+                        //
+                        // If we didn't wait for the latter here, and just go
+                        // around the loop again, we might miss a moment where
+                        // _we_ have to write down a batch. For example when our
+                        // input frontier advances to a state where we can
+                        // write, and the read-write instance sees the same
+                        // update but then crashes before it can append a batch.
+
+                        let maybe_err = loop {
+                            if collection_id.is_user() {
+                                tracing::debug!(
+                                    %worker_id,
+                                    %collection_id,
+                                    %shard_id,
+                                    ?batch_lower,
+                                    ?batch_upper,
+                                    ?current_upper,
+                                    "persist_sink is in read-only mode, waiting until we come out of it or the shard upper advances"
+                                );
+                            }
+
+                            // We don't try to be smart here, and for example
+                            // use `wait_for_upper_past()` and awaiting the
+                            // read-only flag. We'd have to use a select!, which
+                            // would require cancel safety of
+                            // `wait_for_upper_past()`, which it doesn't
+                            // advertise.
+                            tokio::time::sleep(Duration::from_secs(1)).await;
+
+                            if !*read_only_rx.borrow() {
+                                if collection_id.is_user() {
+                                    tracing::debug!(
+                                        %worker_id,
+                                        %collection_id,
+                                        %shard_id,
+                                        ?batch_lower,
+                                        ?batch_upper,
+                                        ?current_upper,
+                                        "persist_sink has come out of read-only mode"
+                                    );
+                                }
+
+                                // It's okay to write now.
+                                break Ok(());
+                            }
+
+                            let current_upper = write.fetch_recent_upper().await;
+
+                            if PartialOrder::less_than(&batch_upper, current_upper) {
+                                // We synthesize an `UpperMismatch` so that we can go
+                                // through the same logic below for trimming down our
+                                // batches.
+                                //
+                                // Notably, we are not trying to be smart, and teach the
+                                // write operator about read-only mode. Writing down
+                                // those batches does not append anything to the persist
+                                // shard, and it would be a hassle to figure out in the
+                                // write workers how to trim down batches in read-only
+                                // mode, when the shard upper advances.
+                                //
+                                // Right here, in the logic below, we have all we need
+                                // for figuring out how to trim our batches.
+
+                                if collection_id.is_user() {
+                                    tracing::debug!(
+                                        %worker_id,
+                                        %collection_id,
+                                        %shard_id,
+                                        ?batch_lower,
+                                        ?batch_upper,
+                                        ?current_upper,
+                                        "persist_sink not appending in read-only mode"
+                                    );
+                                }
+
+                                break Err(UpperMismatch {
+                                    current: current_upper.clone(),
+                                    expected: batch_lower.clone()}
+                                );
+                            }
+                        };
+
+                        maybe_err
+                    } else {
+                        // It's okay to proceed with the write.
+                        Ok(())
+                    };
+
+                    match maybe_err {
+                        Ok(()) => {
+                            let _permit = busy_signal.acquire().await;
+
+                            write.compare_and_append_batch(
+                                &mut to_append[..],
+                                batch_lower.clone(),
+                                batch_upper.clone(),
+                            )
+                            .await
+                            .expect("Invalid usage")
+                        },
+                        Err(e) => {
+                            // We forward the synthesize error message, so that
+                            // we go though the batch cleanup logic below.
+                            Err(e)
+                        }
+                    }
                 };
 
-                source_statistics
-                    .inc_updates_committed_by(batch_metrics.inserts + batch_metrics.retractions);
+
+                // These metrics are independent of whether it was _us_ or
+                // _someone_ that managed to commit a batch that advanced the
+                // upper.
                 source_statistics.update_snapshot_committed(&batch_upper);
                 source_statistics.update_rehydration_latency_ms(&batch_upper);
-
-                metrics.processed_batches.inc();
-                metrics.row_inserts.inc_by(batch_metrics.inserts);
-                metrics.row_retractions.inc_by(batch_metrics.retractions);
-                metrics.error_inserts.inc_by(batch_metrics.error_inserts);
-                metrics
-                    .error_retractions
-                    .inc_by(batch_metrics.error_retractions);
                 metrics
                     .progress
                     .set(mz_persist_client::metrics::encode_ts_metric(&batch_upper));
@@ -1220,6 +1322,18 @@ where
 
                 match result {
                     Ok(()) => {
+                        // Only update these metrics when we know that _we_ were
+                        // successful.
+                        source_statistics
+                            .inc_updates_committed_by(batch_metrics.inserts + batch_metrics.retractions);
+                        metrics.processed_batches.inc();
+                        metrics.row_inserts.inc_by(batch_metrics.inserts);
+                        metrics.row_retractions.inc_by(batch_metrics.retractions);
+                        metrics.error_inserts.inc_by(batch_metrics.error_inserts);
+                        metrics
+                            .error_retractions
+                            .inc_by(batch_metrics.error_retractions);
+
                         current_upper.borrow_mut().clone_from(&batch_upper);
                         upper_cap_set.downgrade(current_upper.borrow().iter());
                     }
