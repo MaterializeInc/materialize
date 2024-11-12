@@ -7,14 +7,13 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use mz_pgrepr::oid::NETWORK_POLICIES_DEFAULT_POLICY_OID;
-
 use crate::durable::upgrade::objects_v71::Empty;
 
 use crate::durable::upgrade::MigrationAction;
 use crate::durable::upgrade::{objects_v70 as v70, objects_v71 as v71};
 
 const DEFAULT_USER_NETWORK_POLICY_NAME: &str = "default";
+const NETWORK_POLICIES_DEFAULT_POLICY_OID: u32 = 17048;
 
 const MZ_SYSTEM_ROLE_ID: u64 = 1;
 const MZ_SUPPORT_ROLE_ID: u64 = 2;
