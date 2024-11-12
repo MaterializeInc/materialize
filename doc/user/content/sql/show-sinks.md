@@ -18,10 +18,10 @@ SHOW SINKS [ FROM <schema_name> ] [ IN CLUSTER <cluster_name> ]
 
 ## Details
 
-Option       | Description
--------------|------------
-**FROM**     | Specifies the schema to show sinks from. Defaults to first resolvable schema in the search path. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
-**IN CLUSTER** | Specifies the cluster to show sinks from. If omitted, sinks from all clusters are shown. For available clusters, see [`SHOW CLUSTERS`](../show-clusters).
+Option                        | Description
+------------------------------|------------
+**FROM** <schema_name>        | Specifies the schema to show sinks from. Defaults to first resolvable schema in the search path. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
+**IN CLUSTER** <cluster_name> | Specifies the cluster to show sinks from. If omitted, sinks from all clusters are shown. For available clusters, see [`SHOW CLUSTERS`](../show-clusters).
 
 ### Output format
 

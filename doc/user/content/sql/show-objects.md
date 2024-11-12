@@ -14,11 +14,13 @@ secrets and connections.
 
 ## Syntax
 
-{{< diagram "show-objects.svg" >}}
+```mzsql
+SHOW OBJECTS [ FROM <schema_name> ]
+```
 
-Field | Use
-------|-----
-_schema&lowbar;name_ | The schema to show objects from. Defaults to first resolvable schema in the search path. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
+Option                       | Description
+-----------------------------|------------
+**FROM** <schema_name>       | The schema to show objects from. Defaults to first resolvable schema in the search path. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
 
 ## Details
 

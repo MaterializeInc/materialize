@@ -12,13 +12,13 @@ menu:
 ## Syntax
 
 ```mzsql
-SHOW ROLES [ LIKE <pattern>  | WHERE <condition> ]
+SHOW ROLES [ LIKE <pattern>  | WHERE <condition(s)> ]
 ```
 
-Option       | Description
--------------|------------
-**LIKE**     | Specifies the pattern to filter the roles shown.
-**WHERE**    | Specifies the condition(s) to filter the roles shown.
+Option                     | Description
+---------------------------|------------
+**LIKE** \<pattern\>       | Specifies the pattern to show only the roles whose name matches the pattern.
+**WHERE** <condition(s)>   | Specifies the condition(s) to show only the roles that meet the condition(s).
 
 ## Examples
 

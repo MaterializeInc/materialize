@@ -11,14 +11,14 @@ menu:
 ## Syntax
 
 ```mzsql
-SHOW SECRETS [ FROM <schema_name> ] [ LIKE <pattern>  | WHERE <condition> ]
+SHOW SECRETS [ FROM <schema_name> ] [ LIKE <pattern>  | WHERE <condition(s)> ]
 ```
 
-Option       | Description
----------------------|------------
-**FROM**             | Specifies the schema to show secrets from. If omitted, secrets from the first schema in the search path are shown. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
-**LIKE**             | Specifies the pattern to filter the secrets shown.
-**WHERE**            | Specifies the condition(s) to filter the secrets shown.
+Option                        | Description
+------------------------------|------------
+**FROM** <schema_name>        | Specifies the schema to show secrets from. If omitted, secrets from the first schema in the search path are shown. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
+**LIKE** \<pattern\>       | Specifies the pattern to show only the secrets whose name matches the pattern.
+**WHERE** <condition(s)>      | Specifies the condition(s) to show only the secrets that meet the condition(s).
 
 ## Examples
 

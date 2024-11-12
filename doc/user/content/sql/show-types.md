@@ -15,9 +15,9 @@ are returned.
 SHOW TYPES [FROM <schema_name>]
 ```
 
-Option       | Description
--------------|------------
-**FROM**     | Specifies the schema to show types from. Defaults to first resolvable schema in the search path. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
+Option                 | Description
+-----------------------|------------
+**FROM** <schema_name> | Specifies the schema to show types from. Defaults to first resolvable schema in the search path. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
 
 ## Examples
 

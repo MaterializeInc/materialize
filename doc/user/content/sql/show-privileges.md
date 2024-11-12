@@ -12,12 +12,14 @@ menu:
 
 ## Syntax
 
-{{< diagram "show-privileges.svg" >}}
+```mzsql
+SHOW PRIVILEGES [ ON <object_type> ] [ FOR <role_name> ]
+```
 
-Field                                               | Use
-----------------------------------------------------|--------------------------------------------------
-_object_name_                                       | Only shows privileges for a specific object type.
-_role_name_                                         | Only shows privileges granted directly or indirectly to _role_name_.
+Option                       | Description
+-----------------------------|--------------------------------------------------
+**ON** <object_type>         | Specifies an object type to show privileges for a particular object type. Valid values are: <div style="display: flex;"> <ul style="margin-right: 20px;"> <li><strong>TABLES</strong></li> <li><strong>TYPES</strong></li> <li><strong>SECRETS</strong></li> <li><strong>CONNECTION</strong></li> </ul> <ul> <li><strong>DATABASES</strong></li> <li><strong>SCHEMAS</strong></li> <li><strong>CLUSTERS</strong></li> <li><strong>SYSTEM</strong></li> </ul> </div>Omit to show privileges for all object types.
+**FOR** <role_name>          | Specifies a role for which to show the membership. Omit to show role membership for all roles.
 
 [//]: # "TODO(morsapaes) Improve examples."
 

@@ -14,9 +14,9 @@ menu:
 SHOW SCHEMAS [ FROM <database_name> ]
 ```
 
-Option      | Description
-------------|------------
-**FROM**    | Specifies the database to show schemas from. Defaults to the current database. For available databases, see [`SHOW DATABASES`](../show-databases).
+Option                        | Description
+------------------------------|------------
+**FROM** <database_name>      | Specifies the database to show schemas from. Defaults to the current database. For available databases, see [`SHOW DATABASES`](../show-databases).
 
 ## Details
 
