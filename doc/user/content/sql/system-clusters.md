@@ -14,7 +14,7 @@ experience as well as support system administration tasks.
 
 ### `quickstart` cluster
 
-A cluster named `quickstart` with a size of `100cc` and a replication factor of
+A cluster named `quickstart` with a size of `25cc` and a replication factor of
 `1` will be pre-installed in every environment. You can modify or drop this
 cluster at any time.
 
