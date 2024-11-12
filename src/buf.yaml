@@ -53,6 +53,8 @@ breaking:
     - expr/src/relation.proto
     # reason: we very carefully evolve these protobuf definitions
     - persist-client/src/internal/state.proto
+    # reason: temporarily ignored by ParkMyCar
+    - repr/src/relation_and_scalar.proto
     # reason: does currently not require backward-compatibility
     - storage-client/src/client.proto
     # reason: does currently not require backward-compatibility
