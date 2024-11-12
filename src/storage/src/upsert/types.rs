@@ -1215,10 +1215,8 @@ where
                     stats.deletes += 1;
                 }
                 let entry = self.consolidate_upsert_scratch.get_mut(&key).unwrap();
-                tracing::info!("entry: {:?}", entry);
                 let val = entry.value.get_or_insert_with(Default::default);
 
-                tracing::info!("merging {:?} into {:?}", value, val);
                 if val.merge_update(value, diff, self.bincode_opts, &mut self.bincode_buffer) {
                     entry.value = None;
                 }
