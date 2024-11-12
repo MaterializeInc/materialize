@@ -2738,20 +2738,21 @@ impl Coordinator {
                             self.instance_snapshot(idx.cluster_id)
                                 .expect("compute instance exists")
                         });
+                    let global_id = idx.global_id();
 
                     // The index may already be installed on the compute instance. For example,
                     // this is the case for introspection indexes.
-                    if compute_instance.contains_collection(&idx.global_id()) {
+                    if compute_instance.contains_collection(&global_id) {
                         continue;
                     }
 
                     let (optimized_plan, physical_plan, metainfo) =
-                        match cached_global_exprs.remove(&id) {
+                        match cached_global_exprs.remove(&global_id) {
                             Some(global_expressions)
                                 if global_expressions.optimizer_features
                                     == optimizer_config.features =>
                             {
-                                info!("global expression cache hit for {id:?}");
+                                info!("global expression cache hit for {global_id:?}");
                                 (
                                     global_expressions.global_mir,
                                     global_expressions.physical_plan,
@@ -2764,7 +2765,7 @@ impl Coordinator {
                                     let mut optimizer = optimize::index::Optimizer::new(
                                         self.owned_catalog(),
                                         compute_instance.clone(),
-                                        idx.global_id(),
+                                        global_id,
                                         optimizer_config.clone(),
                                         self.optimizer_metrics(),
                                     );
@@ -2788,7 +2789,8 @@ impl Coordinator {
                                 let metainfo = {
                                     // Pre-allocate a vector of transient GlobalIds for each notice.
                                     let notice_ids =
-                                        std::iter::repeat_with(|| self.allocate_transient_id()).map(|(_item_id, gid)| gid)
+                                        std::iter::repeat_with(|| self.allocate_transient_id())
+                                            .map(|(_item_id, gid)| gid)
                                             .take(metainfo.optimizer_notices.len())
                                             .collect::<Vec<_>>();
                                     // Return a metainfo with rendered notices.
@@ -2799,7 +2801,7 @@ impl Coordinator {
                                     )
                                 };
                                 uncached_expressions.insert(
-                                    id,
+                                    global_id,
                                     GlobalExpressions {
                                         global_mir: optimized_plan.clone(),
                                         physical_plan: physical_plan.clone(),
@@ -2827,14 +2829,15 @@ impl Coordinator {
                             self.instance_snapshot(mv.cluster_id)
                                 .expect("compute instance exists")
                         });
+                    let global_id = mv.global_id();
 
                     let (optimized_plan, physical_plan, metainfo) =
-                        match cached_global_exprs.remove(&id) {
+                        match cached_global_exprs.remove(&global_id) {
                             Some(global_expressions)
                                 if global_expressions.optimizer_features
                                     == optimizer_config.features =>
                             {
-                                info!("global expression cache hit for {id:?}");
+                                info!("global expression cache hit for {global_id:?}");
                                 (
                                     global_expressions.global_mir,
                                     global_expressions.physical_plan,
@@ -2854,7 +2857,7 @@ impl Coordinator {
                                     let mut optimizer = optimize::materialized_view::Optimizer::new(
                                         self.owned_catalog().as_optimizer_catalog(),
                                         compute_instance.clone(),
-                                        mv.global_id(),
+                                        global_id,
                                         internal_view_id,
                                         mv.desc.iter_names().cloned().collect(),
                                         mv.non_null_assertions.clone(),
@@ -2880,7 +2883,8 @@ impl Coordinator {
                                 let metainfo = {
                                     // Pre-allocate a vector of transient GlobalIds for each notice.
                                     let notice_ids =
-                                        std::iter::repeat_with(|| self.allocate_transient_id()).map(|(_item_id, global_id)| global_id)
+                                        std::iter::repeat_with(|| self.allocate_transient_id())
+                                            .map(|(_item_id, global_id)| global_id)
                                             .take(metainfo.optimizer_notices.len())
                                             .collect::<Vec<_>>();
                                     // Return a metainfo with rendered notices.
@@ -2891,7 +2895,7 @@ impl Coordinator {
                                     )
                                 };
                                 uncached_expressions.insert(
-                                    id,
+                                    global_id,
                                     GlobalExpressions {
                                         global_mir: optimized_plan.clone(),
                                         physical_plan: physical_plan.clone(),
@@ -2918,14 +2922,15 @@ impl Coordinator {
                             self.instance_snapshot(ct.cluster_id)
                                 .expect("compute instance exists")
                         });
+                    let global_id = ct.global_id();
 
                     let (optimized_plan, physical_plan, metainfo) =
-                        match cached_global_exprs.remove(&id) {
+                        match cached_global_exprs.remove(&global_id) {
                             Some(global_expressions)
                                 if global_expressions.optimizer_features
                                     == optimizer_config.features =>
                             {
-                                info!("global expression cache hit for {id:?}");
+                                info!("global expression cache hit for {global_id:?}");
                                 (
                                     global_expressions.global_mir,
                                     global_expressions.physical_plan,
@@ -2940,12 +2945,12 @@ impl Coordinator {
                                 let (optimized_plan, physical_plan, metainfo) = self
                                     .optimize_create_continual_task(
                                         ct,
-                                        ct.global_id(),
+                                        global_id,
                                         self.owned_catalog(),
                                         debug_name,
                                     )?;
                                 uncached_expressions.insert(
-                                    id,
+                                    global_id,
                                     GlobalExpressions {
                                         global_mir: optimized_plan.clone(),
                                         physical_plan: physical_plan.clone(),

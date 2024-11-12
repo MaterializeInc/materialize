@@ -970,7 +970,12 @@ impl CatalogState {
                         // is still the same as the trait.
                         if retraction.create_sql() != create_sql {
                             let item = self
-                                .deserialize_item(global_id, &create_sql, &extra_versions,local_expression_cache)
+                                .deserialize_item(
+                                    global_id,
+                                    &create_sql,
+                                    &extra_versions,
+                                    local_expression_cache,
+                                )
                                 .unwrap_or_else(|e| {
                                     panic!("{e:?}: invalid persisted SQL: {create_sql}")
                                 });
@@ -986,7 +991,12 @@ impl CatalogState {
                     }
                     None => {
                         let catalog_item = self
-                            .deserialize_item(global_id, &create_sql, &extra_versions, local_expression_cache)
+                            .deserialize_item(
+                                global_id,
+                                &create_sql,
+                                &extra_versions,
+                                local_expression_cache,
+                            )
                             .unwrap_or_else(|e| {
                                 panic!("{e:?}: invalid persisted SQL: {create_sql}")
                             });
@@ -1334,7 +1344,7 @@ impl CatalogState {
                     let span = info_span!(parent: None, "parse builtin view", name = view.name);
                     OpenTelemetryContext::obtain().attach_as_parent_to(&span);
                     let task_state = Arc::clone(&spawn_state);
-                    let cached_expr = local_expression_cache.remove_cached_expression(&id);
+                    let cached_expr = local_expression_cache.remove_cached_expression(&global_id);
                     let handle = mz_ore::task::spawn(
                         || "parse view",
                         async move {
@@ -1347,7 +1357,7 @@ impl CatalogState {
                                 None,
                                 cached_expr,
                             );
-                            (id, res)
+                            (id, global_id, res)
                         }
                         .instrument(span),
                     );
@@ -1358,16 +1368,20 @@ impl CatalogState {
             // Wait for a view to be ready.
             let (handle, _idx, remaining) = future::select_all(handles).await;
             handles = remaining;
-            let (id, res) = handle.expect("must join");
+            let (id, global_id, res) = handle.expect("must join");
             let mut insert_cached_expr = |cached_expr| {
                 if let Some(cached_expr) = cached_expr {
-                    local_expression_cache.insert_cached_expression(id, cached_expr);
+                    local_expression_cache.insert_cached_expression(global_id, cached_expr);
                 }
             };
             match res {
                 Ok((item, uncached_expr)) => {
                     if let Some((uncached_expr, optimizer_features)) = uncached_expr {
-                        local_expression_cache.insert_uncached_expression(id, uncached_expr, optimizer_features);
+                        local_expression_cache.insert_uncached_expression(
+                            global_id,
+                            uncached_expr,
+                            optimizer_features,
+                        );
                     }
                     // Add item to catalog.
                     let (view, _gid) = views.remove(&id).expect("must exist");
@@ -1413,7 +1427,10 @@ impl CatalogState {
                     completed_names.insert(full_name);
                 }
                 // If we were missing a dependency, wait for it to be added.
-                Err((AdapterError::PlanError(plan::PlanError::InvalidId(missing_dep)), cached_expr)) => {
+                Err((
+                    AdapterError::PlanError(plan::PlanError::InvalidId(missing_dep)),
+                    cached_expr,
+                )) => {
                     insert_cached_expr(cached_expr);
                     if completed_ids.contains(&missing_dep) {
                         ready.push_back(id);
@@ -1425,31 +1442,41 @@ impl CatalogState {
                     }
                 }
                 // If we were missing a dependency, wait for it to be added.
-                Err((AdapterError::PlanError(plan::PlanError::Catalog(
-                    SqlCatalogError::UnknownItem(missing_dep),
-                )), cached_expr)) => match CatalogItemId::from_str(&missing_dep) {
-                    Ok(missing_dep) => {
-                        if completed_ids.contains(&missing_dep) {
-                            ready.push_back(id);
-                        } else {
-                            awaiting_id_dependencies
-                                .entry(missing_dep)
-                                .or_default()
-                                .push(id);
+                Err((
+                    AdapterError::PlanError(plan::PlanError::Catalog(
+                        SqlCatalogError::UnknownItem(missing_dep),
+                    )),
+                    cached_expr,
+                )) => {
+                    insert_cached_expr(cached_expr);
+                    match CatalogItemId::from_str(&missing_dep) {
+                        Ok(missing_dep) => {
+                            if completed_ids.contains(&missing_dep) {
+                                ready.push_back(id);
+                            } else {
+                                awaiting_id_dependencies
+                                    .entry(missing_dep)
+                                    .or_default()
+                                    .push(id);
+                            }
+                        }
+                        Err(_) => {
+                            insert_cached_expr(cached_expr);
+                            if completed_names.contains(&missing_dep) {
+                                ready.push_back(id);
+                            } else {
+                                awaiting_name_dependencies
+                                    .entry(missing_dep)
+                                    .or_default()
+                                    .push(id);
+                            }
                         }
                     }
-                    Err(_) => {
-                        if completed_names.contains(&missing_dep) {
-                            ready.push_back(id);
-                        } else {
-                            awaiting_name_dependencies
-                                .entry(missing_dep)
-                                .or_default()
-                                .push(id);
-                        }
-                    }
-                },
-                Err((AdapterError::PlanError(plan::PlanError::InvalidCast { .. }), cached_expr)) => {
+                }
+                Err((
+                    AdapterError::PlanError(plan::PlanError::InvalidCast { .. }),
+                    cached_expr,
+                )) => {
                     insert_cached_expr(cached_expr);
                     awaiting_all.push(id);
                 }

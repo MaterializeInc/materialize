@@ -39,7 +39,7 @@ use mz_controller::clusters::{
     UnmanagedReplicaLocation,
 };
 use mz_controller_types::{ClusterId, ReplicaId};
-use mz_expr::{CollectionPlan,OptimizedMirRelationExpr};
+use mz_expr::{CollectionPlan, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NOW_ZERO;
 use mz_ore::soft_assert_no_log;
@@ -943,7 +943,15 @@ impl CatalogState {
         extra_versions: &BTreeMap<RelationVersion, GlobalId>,
         local_expression_cache: &mut LocalExpressionCache,
     ) -> Result<CatalogItem, AdapterError> {
-        self.parse_item(global_id, create_sql, extra_versions, None, false, None, local_expression_cache)
+        self.parse_item(
+            global_id,
+            create_sql,
+            extra_versions,
+            None,
+            false,
+            None,
+            local_expression_cache,
+        )
     }
 
     /// Parses the given SQL string into a `CatalogItem`.
@@ -958,10 +966,11 @@ impl CatalogState {
         custom_logical_compaction_window: Option<CompactionWindow>,
         local_expression_cache: &mut LocalExpressionCache,
     ) -> Result<CatalogItem, AdapterError> {
-        let cached_expr = local_expression_cache.remove_cached_expression(&id);
+        let cached_expr = local_expression_cache.remove_cached_expression(&global_id);
         match self.parse_item_inner(
-            id,
+            global_id,
             create_sql,
+            extra_versions,
             pcx,
             is_retained_metrics_object,
             custom_logical_compaction_window,
@@ -970,7 +979,7 @@ impl CatalogState {
             Ok((item, uncached_expr)) => {
                 if let Some((uncached_expr, optimizer_features)) = uncached_expr {
                     local_expression_cache.insert_uncached_expression(
-                        id,
+                        global_id,
                         uncached_expr,
                         optimizer_features,
                     );
@@ -979,7 +988,7 @@ impl CatalogState {
             }
             Err((err, cached_expr)) => {
                 if let Some(local_expr) = cached_expr {
-                    local_expression_cache.insert_cached_expression(id, local_expr);
+                    local_expression_cache.insert_cached_expression(global_id, local_expr);
                 }
                 Err(err)
             }
@@ -995,8 +1004,9 @@ impl CatalogState {
     #[mz_ore::instrument]
     pub(crate) fn parse_item_inner(
         &self,
-        id: GlobalId,
+        global_id: GlobalId,
         create_sql: &str,
+        extra_versions: &BTreeMap<RelationVersion, GlobalId>,
         pcx: Option<&PlanContext>,
         is_retained_metrics_object: bool,
         custom_logical_compaction_window: Option<CompactionWindow>,
@@ -1055,9 +1065,12 @@ impl CatalogState {
                                 timeline,
                             },
                             _ => {
-                                return Err((AdapterError::Unstructured(anyhow::anyhow!(
-                                    "unsupported data source for table"
-                                )), cached_expr))
+                                return Err((
+                                    AdapterError::Unstructured(anyhow::anyhow!(
+                                        "unsupported data source for table"
+                                    )),
+                                    cached_expr,
+                                ))
                             }
                         },
                     },
@@ -1129,7 +1142,7 @@ impl CatalogState {
                     Some(local_expr)
                         if local_expr.optimizer_features == optimizer_config.features =>
                     {
-                        info!("local expression cache hit for {id:?}");
+                        info!("local expression cache hit for {global_id:?}");
                         (view.expr, local_expr.local_mir)
                     }
                     Some(_) | None => {
@@ -1179,7 +1192,7 @@ impl CatalogState {
                     Some(local_expr)
                         if local_expr.optimizer_features == optimizer_config.features =>
                     {
-                        info!("local expression cache hit for {id:?}");
+                        info!("local expression cache hit for {global_id:?}");
                         (materialized_view.expr, local_expr.local_mir)
                     }
                     Some(_) | None => {
@@ -1230,10 +1243,11 @@ impl CatalogState {
                 })
             }
             Plan::CreateContinualTask(plan) => {
-                let ct = match crate::continual_task::ct_item_from_plan(plan, global_id, resolved_ids) {
-                    Ok(ct) => ct,
-                    Err(err) => return Err((err, cached_expr)),
-                };
+                let ct =
+                    match crate::continual_task::ct_item_from_plan(plan, global_id, resolved_ids) {
+                        Ok(ct) => ct,
+                        Err(err) => return Err((err, cached_expr)),
+                    };
                 CatalogItem::ContinualTask(ct)
             }
             Plan::CreateIndex(CreateIndexPlan { index, .. }) => CatalogItem::Index(Index {

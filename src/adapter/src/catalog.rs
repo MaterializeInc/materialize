@@ -385,16 +385,17 @@ impl Catalog {
         let mut queue = VecDeque::new();
         let mut seen = HashSet::new();
         for on in ons {
+            let entry = self.get_entry_by_global_id(&on);
             dependencies.insert(on);
-            seen.insert(on);
-            let entry = self.get_entry(&on);
+            seen.insert(entry.id);
             let uses = entry.uses();
             queue.extend(uses.clone());
         }
 
         while let Some(cur) = queue.pop_front() {
+            let entry = self.get_entry(&cur);
             if seen.insert(cur) {
-                let entry = self.get_entry(&cur);
+                let global_ids = entry.global_ids();
                 match entry.item_type() {
                     CatalogItemType::Table
                     | CatalogItemType::Source
@@ -406,10 +407,10 @@ impl Catalog {
                     | CatalogItemType::Secret
                     | CatalogItemType::Connection
                     | CatalogItemType::ContinualTask => {
-                        dependencies.insert(cur);
+                        dependencies.extend(global_ids);
                     }
                     CatalogItemType::View => {
-                        dependencies.insert(cur);
+                        dependencies.extend(global_ids);
                         queue.extend(entry.uses());
                     }
                 }
@@ -1371,7 +1372,7 @@ impl Catalog {
                 .iter()
                 .map(|(id, _)| id)
                 .chain(new_global_expressions.iter().map(|(id, _)| id))
-                .filter_map(|id| self.get_entry(id).index())
+                .filter_map(|id| self.get_entry_by_global_id(id).index())
                 .map(|index| index.on);
             let invalidate_ids = self.invalidate_for_index(ons);
             expr_cache
@@ -2544,7 +2545,12 @@ mod tests {
                     .expect("unable to open debug catalog");
             let item = catalog
                 .state()
-                .deserialize_item(gid, &create_sql, &BTreeMap::new(), &mut LocalExpressionCache::Closed)
+                .deserialize_item(
+                    gid,
+                    &create_sql,
+                    &BTreeMap::new(),
+                    &mut LocalExpressionCache::Closed,
+                )
                 .expect("unable to parse view");
             catalog
                 .transact(
