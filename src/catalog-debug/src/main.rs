@@ -612,7 +612,7 @@ async fn upgrade_check(
             ),
             active_connection_count: Arc::new(Mutex::new(ConnectionCounter::new(0, 0))),
             builtin_item_migration_config: BuiltinItemMigrationConfig::Legacy,
-            persist_client,
+            persist_client: persist_client.clone(),
             helm_chart_version: None,
         },
         &mut storage,
@@ -631,12 +631,14 @@ async fn upgrade_check(
     println!("{msg}");
 
     // Check that we can evolve the schema for all Persist shards.
-    let storage_entries = state.get_entries().filter_map(|(id, entry)| {
-        let desc = match entry.item() {
-            CatalogItem::Table(table) => &table.desc,
-            CatalogItem::Source(source) => &source.desc,
-            CatalogItem::ContinualTask(ct) => &ct.desc,
-            CatalogItem::MaterializedView(mv) => &mv.desc,
+    let storage_entries = state
+        .get_entries()
+        .filter_map(|(_item_id, entry)| match entry.item() {
+            // TODO(alter_table): Handle multiple versions of tables.
+            CatalogItem::Table(table) => Some((table.global_id_writes(), &table.desc)),
+            CatalogItem::Source(source) => Some((source.global_id(), &source.desc)),
+            CatalogItem::ContinualTask(ct) => Some((ct.global_id(), &ct.desc)),
+            CatalogItem::MaterializedView(mv) => Some((mv.global_id(), &mv.desc)),
             CatalogItem::Log(_)
             | CatalogItem::View(_)
             | CatalogItem::Sink(_)
@@ -644,17 +646,15 @@ async fn upgrade_check(
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => return None,
-        };
-        Some((id, desc))
-    });
-    for (item_id, item_desc) in storage_entries {
+            | CatalogItem::Connection(_) => None,
+        });
+    for (gid, item_desc) in storage_entries {
         let shard_id = state
             .storage_metadata()
-            .get_collection_shard::<Timestamp>(*item_id)
+            .get_collection_shard::<Timestamp>(gid)
             .context("getting shard_id")?;
         let diagnostics = Diagnostics {
-            shard_name: item_id.to_string(),
+            shard_name: gid.to_string(),
             handle_purpose: "catalog upgrade check".to_string(),
         };
         let persisted_schema = persist_client
@@ -664,7 +664,7 @@ async fn upgrade_check(
         // We should always have schemas registered for Shards, unless their environment happened
         // to crash after running DDL and hasn't come back up yet.
         let Some((_schema_id, persisted_relation_desc, _)) = persisted_schema else {
-            anyhow::bail!("no schema found for {item_id}, did their environment crash?");
+            anyhow::bail!("no schema found for {gid}, did their environment crash?");
         };
 
         let persisted_data_type =
