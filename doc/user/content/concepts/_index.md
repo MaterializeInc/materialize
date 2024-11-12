@@ -23,5 +23,6 @@ Component                                | Use
 [Views](/concepts/views/)    | Views represent a named query that you want to save for repeated execution. You can use **indexed views** and **materialized views** to incrementally maintain the results of views.
 [Indexes](/concepts/indexes/)            | Indexes represent query results stored in memory.
 [Sinks](/concepts/sinks/)                | Sinks describe an external system you want Materialize to write data to.
+[Hydration](/concepts/hydration/)        | Hydration refers to the process of populating materialized views and indexes with a snapshot of the data from the upstream source.
 
 Refer to the individual pages for more information.
