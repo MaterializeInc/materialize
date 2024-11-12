@@ -9,18 +9,13 @@ menu:
     identifier: transform-overview
 ---
 
-With Materialize, you can use SQL to transform, deliver, and act on
-fast-changing data. Materialize follows the SQL standard
-(SQL-92) implementation, and strives for compatibility with the PostgreSQL
-dialect.
-
-You can build complex analytical workloads using [any type of
-join](/sql/select/join/) (including non-windowed joins and joins on arbitrary
-conditions). You can also leverage exciting new SQL patterns enabled by
-streaming, like [Change Data Capture
-(CDC)](/integrations/#databases), [temporal
-filters](/sql/patterns/temporal-filters/), and
-[subscriptions](/sql/subscribe/).
+Materialize follows the SQL standard (SQL-92) implementation and strives for
+compatibility with the PostgreSQL dialect rather than aiming for compatibility
+with a specific version of PostgreSQL. This allows Materialize to add the latest
+PostgreSQL features even as some features of specific versions of PostgreSQL are
+missing. Performance for supported features may differ between Materialize and
+PostgreSQL, such as with [window
+functions](/transform-data/idiomatic-materialize-sql/appendix/window-function-to-materialize).
 
 ### SELECT statement
 
