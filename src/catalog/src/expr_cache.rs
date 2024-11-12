@@ -609,11 +609,11 @@ mod tests {
                 .index_imports()
                 .next()
                 .expect("arbitrary impl always makes non-empty vecs");
-            current_ids.remove(&dependency_to_remove);
+            current_ids.remove(dependency_to_remove);
 
             // If the dependency is also tracked in the cache remove it.
-            let _removed_local_exp = local_exps.remove(&dependency_to_remove);
-            let _removed_global_exp = global_exps.remove(&dependency_to_remove);
+            let _removed_local_exp = local_exps.remove(dependency_to_remove);
+            let _removed_global_exp = global_exps.remove(dependency_to_remove);
             // Remove any other exps that depend on dependency.
             global_exps.retain(|_, exp| {
                 let index_imports: BTreeSet<_> = exp.index_imports().collect();
