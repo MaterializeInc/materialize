@@ -267,6 +267,7 @@ struct Args {
 
 #[tokio::main]
 async fn main() {
+    println!("[LOOK HERE] SANITY CHECK");
     let args: Args = cli::parse_args(CliConfig::default());
 
     tracing_subscriber::fmt()
@@ -299,7 +300,7 @@ async fn main() {
             (config, account)
         }
         None => {
-            // The user specified a a custom endpoint. We assume we're targeting
+            // The user specified a custom endpoint. We assume we're targeting
             // a stubbed-out AWS implementation.
             let endpoint = args
                 .aws_endpoint

@@ -301,11 +301,16 @@ def test_upgrade_from_version(
         metadata_store="cockroach",
     )
     with c.override(mz_to):
+        print("GOT HERE 1")
         c.up(mz_service)
+        print("GOT HERE 2")
         if zero_downtime:
             c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, mz_service)
+            print("GOT HERE 3")
             c.promote_mz(mz_service)
+            print("GOT HERE 4")
             c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, mz_service)
+            print("GOT HERE 5")
         else:
             # Restart once more, just in case
             c.kill(mz_service)
@@ -320,6 +325,7 @@ def test_upgrade_from_version(
             metadata_store="cockroach",
         )
     ):
+        print("GOT HERE 6")
         c.run_testdrive_files(
             "--no-reset",
             f"--var=upgrade-from-version={from_version}",
@@ -330,3 +336,4 @@ def test_upgrade_from_version(
             f"check-from-{version_glob}-{filter}.td",
             mz_service=mz_service,
         )
+        print("GOT HERE 7")
