@@ -2020,6 +2020,14 @@ impl SessionCatalog for ConnCatalog<'_> {
         let comment_id = self.state.get_comment_id(ObjectId::Item(*id));
         self.state.comments.get_object_comments(comment_id)
     }
+
+    fn is_cluster_size_cc(&self, size: &str) -> bool {
+        self.state
+            .cluster_replica_sizes
+            .0
+            .get(size)
+            .map_or(false, |a| a.is_cc)
+    }
 }
 
 #[cfg(test)]

@@ -19,9 +19,7 @@ use std::time::Duration;
 
 use itertools::{Either, Itertools};
 use mz_adapter_types::compaction::{CompactionWindow, DEFAULT_LOGICAL_COMPACTION_WINDOW_DURATION};
-use mz_controller_types::{
-    is_cluster_size_v2, ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL,
-};
+use mz_controller_types::{ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL};
 use mz_expr::{CollectionPlan, UnmaterializableFunc};
 use mz_interchange::avro::{AvroSchemaGenerator, DocTarget};
 use mz_ore::cast::{CastFrom, TryCastFrom};
@@ -4475,9 +4473,9 @@ pub fn plan_create_cluster_inner(
         // The long term plan is to phase out the v1 cluster sizes, at which
         // point we'll be able to remove the `DISK` option entirely and simply
         // always enable disk.
-        if is_cluster_size_v2(&size) {
+        if scx.catalog.is_cluster_size_cc(&size) {
             if disk_in == Some(false) {
-                sql_bail!("DISK option disabled is not supported for cluster sizes ending in cc or C because disk is always enabled");
+                sql_bail!("DISK option disabled is not supported for non-legacy cluster sizes because disk is always enabled");
             }
             disk_default = true;
         }
@@ -4760,9 +4758,9 @@ fn plan_replica_config(
             // The long term plan is to phase out the v1 cluster sizes, at which
             // point we'll be able to remove the `DISK` option entirely and
             // simply always enable disk.
-            if is_cluster_size_v2(&size) {
+            if scx.catalog.is_cluster_size_cc(&size) {
                 if disk_in.is_some() {
-                    sql_bail!("DISK option not supported for cluster sizes ending in cc or C because disk is always enabled");
+                    sql_bail!("DISK option not supported for non-legacy cluster sizes because disk is always enabled");
                 }
                 disk = true;
             }
@@ -5954,9 +5952,9 @@ pub fn plan_alter_cluster(
                 // The long term plan is to phase out the v1 cluster sizes, at
                 // which point we'll be able to remove the `DISK` option
                 // entirely and simply always enable disk.
-                if is_cluster_size_v2(size) {
+                if scx.catalog.is_cluster_size_cc(&size) {
                     if disk.is_some() {
-                        sql_bail!("DISK option not supported for cluster sizes ending in cc or C because disk is always enabled");
+                        sql_bail!("DISK option not supported for modern cluster sizes because disk is always enabled");
                     } else {
                         options.disk = AlterOptionParameter::Set(true);
                     }
@@ -5984,8 +5982,8 @@ pub fn plan_alter_cluster(
                 let size = size.as_deref().unwrap_or_else(|| {
                     cluster.managed_size().expect("cluster known to be managed")
                 });
-                if is_cluster_size_v2(size) {
-                    sql_bail!("DISK option not supported for cluster sizes ending in cc or C because disk is always enabled");
+                if scx.catalog.is_cluster_size_cc(&size) {
+                    sql_bail!("DISK option not supported for moern cluster sizes because disk is always enabled");
                 }
 
                 if disk {

@@ -33,7 +33,7 @@ use itertools::Itertools;
 use libc::{SIGABRT, SIGBUS, SIGILL, SIGSEGV, SIGTRAP};
 use maplit::btreemap;
 use mz_orchestrator::{
-    CpuLimit, MemoryLimit, NamespacedOrchestrator, Orchestrator, Service, ServiceConfig,
+    CpuLimit, DiskLimit, MemoryLimit, NamespacedOrchestrator, Orchestrator, Service, ServiceConfig,
     ServiceEvent, ServiceProcessMetrics, ServiceStatus,
 };
 use mz_ore::cast::{CastFrom, TryCastFrom};
@@ -550,11 +550,20 @@ impl OrchestratorWorker {
             other_replicas_selector: _,
             replicas_selector: _,
             disk,
-            disk_limit: _,
+            disk_limit,
             node_selector: _,
         }: ServiceConfig,
     ) -> Result<(), anyhow::Error> {
         let full_id = self.config.full_id(&id);
+
+        // Enable disk if 1) the user requested it when creating the service
+        // *and* 2) the size declared by the system administrator does not
+        // specify a disk limit of zero.
+        //
+        // Arguably we should not allow enabling disk for sizes with a zero disk
+        // limit, but configuring disk on a replica by replica basis is a legacy
+        // option that we hope to remove someday.
+        let disk = disk && disk_limit != Some(DiskLimit::ZERO);
 
         let run_dir = self.config.service_run_dir(&id);
         fs::create_dir_all(&run_dir)

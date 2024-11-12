@@ -25,6 +25,7 @@ use mz_ore::now::EpochMillis;
 use mz_persist_client::PersistClient;
 use mz_repr::GlobalId;
 
+use crate::config::ClusterReplicaSizeMap;
 use crate::durable::debug::{DebugCatalogState, Trace};
 pub use crate::durable::error::{CatalogError, DurableCatalogError, FenceError};
 pub use crate::durable::metrics::Metrics;
@@ -69,6 +70,7 @@ pub(crate) const CATALOG_CONTENT_VERSION_KEY: &str = "catalog_content_version";
 
 #[derive(Clone, Debug)]
 pub struct BootstrapArgs {
+    pub cluster_replica_size_map: ClusterReplicaSizeMap,
     pub default_cluster_replica_size: String,
     pub bootstrap_role: Option<String>,
 }
@@ -403,5 +405,6 @@ pub fn test_bootstrap_args() -> BootstrapArgs {
     BootstrapArgs {
         default_cluster_replica_size: "1".into(),
         bootstrap_role: None,
+        cluster_replica_size_map: ClusterReplicaSizeMap::default(),
     }
 }

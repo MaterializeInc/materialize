@@ -26,7 +26,7 @@ use mz_compute_client::controller::{
 use mz_compute_client::logging::LogVariant;
 use mz_compute_client::service::{ComputeClient, ComputeGrpcClient};
 use mz_controller_types::dyncfgs::CONTROLLER_PAST_GENERATION_REPLICA_CLEANUP_RETRY_INTERVAL;
-use mz_controller_types::{is_cluster_size_v2, ClusterId, ReplicaId};
+use mz_controller_types::{ClusterId, ReplicaId};
 use mz_orchestrator::NamespacedOrchestrator;
 use mz_orchestrator::{
     CpuLimit, DiskLimit, LabelSelectionLogic, LabelSelector, MemoryLimit, Service, ServiceConfig,
@@ -87,12 +87,20 @@ pub struct ReplicaAllocation {
     /// Whether each process has exclusive access to its CPU cores.
     #[serde(default)]
     pub cpu_exclusive: bool,
+    /// Whether this size represents a modern "cc" size rather than a legacy
+    /// T-shirt size.
+    #[serde(default = "default_true")]
+    pub is_cc: bool,
     /// Whether instances of this type can be created.
     #[serde(default)]
     pub disabled: bool,
     /// Additional node selectors.
     #[serde(default)]
     pub selectors: BTreeMap<String, String>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[mz_ore::test]
@@ -616,7 +624,6 @@ where
         let aws_connection_role_arn = self.connection_context().aws_connection_role_arn.clone();
         let persist_pubsub_url = self.persist_pubsub_url.clone();
         let secrets_args = self.secrets_args.to_flags();
-        let is_cluster_size_v2 = is_cluster_size_v2(&location.size);
         let service = self.orchestrator.ensure_service(
             &service_name,
             ServiceConfig {
@@ -659,8 +666,8 @@ where
                     if location.allocation.cpu_exclusive && enable_worker_core_affinity {
                         args.push("--worker-core-affinity".into());
                     }
-                    if is_cluster_size_v2 {
-                        args.push("--is-cluster-size-v2".into());
+                    if location.allocation.is_cc {
+                        args.push("--is-cc".into());
                     }
 
                     args.extend(secrets_args.clone());
