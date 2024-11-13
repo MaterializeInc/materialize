@@ -109,7 +109,7 @@ Create the name of the namespace to use
 {{- end }}
 
 {{/*
-Helper template to process cluster sizes based on storage class configuration 
+Helper template to process cluster sizes based on storage class configuration
 */}}
 {{- define "materialize.processClusterSizes" -}}
 {{- $result := dict }}
