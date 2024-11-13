@@ -1461,7 +1461,6 @@ impl CatalogState {
                             }
                         }
                         Err(_) => {
-                            insert_cached_expr(cached_expr);
                             if completed_names.contains(&missing_dep) {
                                 ready.push_back(id);
                             } else {
