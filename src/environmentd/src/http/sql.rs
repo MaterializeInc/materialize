@@ -33,9 +33,11 @@ use mz_adapter::{
     verify_datum_desc, AdapterError, AdapterNotice, ExecuteContextExtra, ExecuteResponse,
     ExecuteResponseKind, PeekResponseUnary, SessionClient,
 };
+use mz_catalog::memory::objects::{Cluster, ClusterReplica};
 use mz_interchange::encode::TypedDatum;
 use mz_interchange::json::{JsonNumberPolicy, ToJson};
 use mz_ore::cast::CastFrom;
+use mz_ore::metrics::{MakeCollectorOpts, MetricsRegistry};
 use mz_ore::result::ResultExt;
 use mz_repr::{Datum, RelationDesc, RowArena, RowIterator};
 use mz_sql::ast::display::AstDisplay;
@@ -43,13 +45,16 @@ use mz_sql::ast::{CopyDirection, CopyStatement, CopyTarget, Raw, Statement, Stat
 use mz_sql::parse::StatementParseResult;
 use mz_sql::plan::Plan;
 use mz_sql::session::metadata::SessionMetadata;
+use prometheus::core::{AtomicF64, GenericGaugeVec};
+use prometheus::Opts;
 use serde::{Deserialize, Serialize};
 use tokio::{select, time};
 use tokio_postgres::error::SqlState;
 use tokio_stream::wrappers::UnboundedReceiverStream;
-use tracing::debug;
+use tracing::{debug, error, info};
 use tungstenite::protocol::frame::coding::CloseCode;
 
+use crate::http::prometheus::PrometheusSqlQuery;
 use crate::http::{init_ws, AuthedClient, AuthedUser, WsState, MAX_REQUEST_SIZE};
 
 #[derive(Debug, thiserror::Error)]
@@ -99,6 +104,153 @@ impl Error {
             _ => SqlState::INTERNAL_ERROR,
         }
     }
+}
+
+static PER_REPLICA_LABELS: &[&str] = &["replica_full_name", "instance_id", "replica_id"];
+
+async fn execute_promsql_query(
+    client: &mut AuthedClient,
+    query: &PrometheusSqlQuery<'_>,
+    metrics_registry: &MetricsRegistry,
+    metrics_by_name: &mut BTreeMap<String, GenericGaugeVec<AtomicF64>>,
+    cluster: Option<(&Cluster, &ClusterReplica)>,
+) {
+    assert_eq!(query.per_replica, cluster.is_some());
+
+    let mut res = SqlResponse {
+        results: Vec::new(),
+    };
+
+    execute_request(client, query.to_sql_request(cluster), &mut res)
+        .await
+        .expect("valid SQL query");
+
+    let result = match res.results.as_slice() {
+        // Each query issued is preceded by several SET commands
+        // to make sure it is routed to the right cluster replica.
+        [SqlResult::Ok { .. }, SqlResult::Ok { .. }, SqlResult::Ok { .. }, result] => result,
+        // Transient errors are fine, like if the cluster or replica
+        // was dropped before the promsql query was executed. We
+        // should not see errors in the steady state.
+        _ => {
+            info!(
+                "error executing prometheus query {}: {:?}",
+                query.metric_name, res
+            );
+            return;
+        }
+    };
+
+    let SqlResult::Rows { desc, rows, .. } = result else {
+        info!(
+            "did not receive rows for SQL query for prometheus metric {}: {:?}, {:?}",
+            query.metric_name, result, cluster
+        );
+        return;
+    };
+
+    let gauge_vec = metrics_by_name
+        .entry(query.metric_name.to_string())
+        .or_insert_with(|| {
+            let mut label_names: Vec<String> = desc
+                .columns
+                .iter()
+                .filter(|col| col.name != query.value_column_name)
+                .map(|col| col.name.clone())
+                .collect();
+
+            if query.per_replica {
+                label_names.extend(PER_REPLICA_LABELS.iter().map(|label| label.to_string()));
+            }
+
+            metrics_registry.register::<GenericGaugeVec<AtomicF64>>(MakeCollectorOpts {
+                opts: Opts::new(query.metric_name, query.help).variable_labels(label_names),
+                buckets: None,
+            })
+        });
+
+    for row in rows {
+        let mut label_values = desc
+            .columns
+            .iter()
+            .zip(row)
+            .filter(|(col, _)| col.name != query.value_column_name)
+            .map(|(_, val)| val.as_str().expect("must be string"))
+            .collect::<Vec<_>>();
+
+        let value = desc
+            .columns
+            .iter()
+            .zip(row)
+            .find(|(col, _)| col.name == query.value_column_name)
+            .map(|(_, val)| val.as_str().unwrap_or("0").parse::<f64>().unwrap_or(0.0))
+            .unwrap_or(0.0);
+
+        match cluster {
+            Some((cluster, replica)) => {
+                let replica_full_name = format!("{}.{}", cluster.name, replica.name);
+                let cluster_id = cluster.id.to_string();
+                let replica_id = replica.replica_id.to_string();
+
+                label_values.push(&replica_full_name);
+                label_values.push(&cluster_id);
+                label_values.push(&replica_id);
+
+                gauge_vec
+                    .get_metric_with_label_values(&label_values)
+                    .expect("valid labels")
+                    .set(value);
+            }
+            None => {
+                gauge_vec
+                    .get_metric_with_label_values(&label_values)
+                    .expect("valid labels")
+                    .set(value);
+            }
+        }
+    }
+}
+
+async fn handle_promsql_query(
+    client: &mut AuthedClient,
+    query: &PrometheusSqlQuery<'_>,
+    metrics_registry: &MetricsRegistry,
+    metrics_by_name: &mut BTreeMap<String, GenericGaugeVec<AtomicF64>>,
+) {
+    if !query.per_replica {
+        execute_promsql_query(client, query, metrics_registry, metrics_by_name, None).await;
+        return;
+    }
+
+    let catalog = client.client.catalog_snapshot().await;
+    let clusters: Vec<&Cluster> = catalog.clusters().collect();
+
+    for cluster in clusters {
+        for replica in cluster.replicas() {
+            execute_promsql_query(
+                client,
+                query,
+                metrics_registry,
+                metrics_by_name,
+                Some((cluster, replica)),
+            )
+            .await;
+        }
+    }
+}
+
+pub async fn handle_promsql(
+    mut client: AuthedClient,
+    queries: &[PrometheusSqlQuery<'_>],
+) -> MetricsRegistry {
+    let metrics_registry = MetricsRegistry::new();
+    let mut metrics_by_name = BTreeMap::new();
+
+    for query in queries {
+        handle_promsql_query(&mut client, query, &metrics_registry, &mut metrics_by_name).await;
+    }
+
+    metrics_registry
 }
 
 pub async fn handle_sql(

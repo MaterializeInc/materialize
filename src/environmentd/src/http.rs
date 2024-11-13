@@ -55,6 +55,9 @@ use mz_sql::session::vars::{
     ConnectionCounter, DropConnection, Value, Var, VarInput, WELCOME_MESSAGE,
 };
 use openssl::ssl::Ssl;
+use prometheus::{
+    COMPUTE_METRIC_QUERIES, FRONTIER_METRIC_QUERIES, STORAGE_METRIC_QUERIES, USAGE_METRIC_QUERIES,
+};
 use serde::Deserialize;
 use serde_json::json;
 use thiserror::Error;
@@ -75,6 +78,7 @@ mod console;
 mod memory;
 mod metrics;
 mod probe;
+mod prometheus;
 mod root;
 mod sql;
 mod webhook;
@@ -342,6 +346,34 @@ impl InternalHttpServer {
                 "/metrics",
                 routing::get(move || async move {
                     mz_http_util::handle_prometheus(&metrics_registry).await
+                }),
+            )
+            .route(
+                "/metrics/mz_usage",
+                routing::get(|client: AuthedClient| async move {
+                    let registry = sql::handle_promsql(client, USAGE_METRIC_QUERIES).await;
+                    mz_http_util::handle_prometheus(&registry).await
+                }),
+            )
+            .route(
+                "/metrics/mz_frontier",
+                routing::get(|client: AuthedClient| async move {
+                    let registry = sql::handle_promsql(client, FRONTIER_METRIC_QUERIES).await;
+                    mz_http_util::handle_prometheus(&registry).await
+                }),
+            )
+            .route(
+                "/metrics/mz_compute",
+                routing::get(|client: AuthedClient| async move {
+                    let registry = sql::handle_promsql(client, COMPUTE_METRIC_QUERIES).await;
+                    mz_http_util::handle_prometheus(&registry).await
+                }),
+            )
+            .route(
+                "/metrics/mz_storage",
+                routing::get(|client: AuthedClient| async move {
+                    let registry = sql::handle_promsql(client, STORAGE_METRIC_QUERIES).await;
+                    mz_http_util::handle_prometheus(&registry).await
                 }),
             )
             .route(
