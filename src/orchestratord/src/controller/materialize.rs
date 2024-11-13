@@ -60,6 +60,8 @@ pub struct Args {
     enable_security_context: bool,
 
     #[clap(long)]
+    orchestratord_pod_selector_labels: Vec<KeyValueArg<String, String>>,
+    #[clap(long)]
     environmentd_node_selector: Vec<KeyValueArg<String, String>>,
     #[clap(long)]
     clusterd_node_selector: Vec<KeyValueArg<String, String>>,
@@ -380,7 +382,13 @@ impl k8s_controller::Context for Context {
 
                 trace!("applying environment resources");
                 match resources
-                    .apply(&client, &self.config, increment_generation, &mz.namespace())
+                    .apply(
+                        &client,
+                        &self.config,
+                        increment_generation,
+                        &mz.namespace(),
+                        &self.orchestratord_namespace,
+                    )
                     .await
                 {
                     Ok(Some(action)) => {
@@ -575,10 +583,23 @@ impl k8s_controller::Context for Context {
     #[instrument(fields(organization_name=mz.name_unchecked()))]
     async fn cleanup(
         &self,
-        _client: Client,
+        client: Client,
         mz: &Self::Resource,
     ) -> Result<Option<Action>, Self::Error> {
         self.set_needs_update(mz, false);
+
+        if let Some(status) = &mz.status {
+            let active_resources = resources::Resources::new(
+                &self.config,
+                &self.tracing,
+                &self.orchestratord_namespace,
+                mz,
+                status.active_generation,
+            );
+            active_resources
+                .cleanup(&client, &self.orchestratord_namespace)
+                .await?;
+        }
 
         Ok(None)
     }
