@@ -93,11 +93,7 @@
   // Scroll to our massaged offsets on a hashchange event, to override the
   // browser's automatic scroll to the unmassaged offset.
   $(window).on("hashchange", function () {
-    const id = window.location.hash.substring(1);
-    const offsets = headingOffsets();
-    const offset = offsets.find((o) => o.id == id);
-    if (offset) $(window).scrollTop(offset.offset - 10);
-    else $(window).trigger("scroll");
+   $(window).trigger("scroll");
   });
 
   // Trigger an initial hash change event to handle scrolling to the page's
