@@ -20,11 +20,12 @@ use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_persist_client::PersistClient;
 use mz_repr::CatalogItemId;
+use mz_sql::catalog::CatalogError as SqlCatalogError;
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::ConnectionCounter;
 use serde::{Deserialize, Serialize};
 
-use crate::durable::DurableCatalogState;
+use crate::durable::{CatalogError, DurableCatalogState};
 
 /// Configures a catalog.
 #[derive(Debug)]
@@ -105,6 +106,14 @@ impl ClusterReplicaSizeMap {
     /// Iterate all enabled (not disabled) replica allocations, with their name.
     pub fn enabled_allocations(&self) -> impl Iterator<Item = (&String, &ReplicaAllocation)> {
         self.0.iter().filter(|(_, a)| !a.disabled)
+    }
+
+    /// Get a replica allocation by size name. Returns a reference to the allocation, or an
+    /// error if the size is unknown.
+    pub fn get_allocation_by_name(&self, name: &str) -> Result<&ReplicaAllocation, CatalogError> {
+        self.0.get(name).ok_or_else(|| {
+            CatalogError::Catalog(SqlCatalogError::UnknownClusterReplicaSize(name.into()))
+        })
     }
 }
 

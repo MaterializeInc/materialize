@@ -1101,11 +1101,7 @@ fn add_new_builtin_clusters_migration(
     for builtin_cluster in BUILTIN_CLUSTERS {
         if !cluster_names.contains(builtin_cluster.name) {
             let cluster_size = builtin_cluster_sizes.get_size(builtin_cluster.name)?;
-            let cluster_allocation = cluster_sizes.0.get(&cluster_size).ok_or_else(|| {
-                mz_catalog::durable::CatalogError::Catalog(
-                    SqlCatalogError::UnknownClusterReplicaSize(cluster_size.clone()),
-                )
-            })?;
+            let cluster_allocation = cluster_sizes.get_allocation_by_name(&cluster_size)?;
             let id = txn.get_and_increment_id(SYSTEM_CLUSTER_ID_ALLOC_KEY.to_string())?;
             let id = ClusterId::System(id);
             txn.insert_system_cluster(
@@ -1224,11 +1220,7 @@ fn add_new_builtin_cluster_replicas_migration(
                     builtin_cluster_sizes.get_size(builtin_replica.cluster_name)?
                 }
             };
-            let replica_allocation = cluster_sizes.0.get(&replica_size).ok_or_else(|| {
-                mz_catalog::durable::CatalogError::Catalog(
-                    SqlCatalogError::UnknownClusterReplicaSize(replica_size.clone()),
-                )
-            })?;
+            let replica_allocation = cluster_sizes.get_allocation_by_name(&replica_size)?;
 
             let config = builtin_cluster_replica_config(replica_size, replica_allocation);
             txn.insert_cluster_replica(
