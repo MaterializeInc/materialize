@@ -62,7 +62,7 @@ use crate::command::{
 };
 use crate::coord::appends::PendingWriteTxn;
 use crate::coord::{
-    validate_network_with_policy, ConnMeta, Coordinator, DeferredPlanStatement, Message,
+    validate_ip_with_policy_rules, ConnMeta, Coordinator, DeferredPlanStatement, Message,
     PendingTxn, PlanStatement, PlanValidity, PurifiedStatementReady,
 };
 use crate::error::AdapterError;
@@ -406,7 +406,7 @@ impl Coordinator {
             };
 
             if let Some(ip) = client_ip {
-                match validate_network_with_policy(ip, network_policy) {
+                match validate_ip_with_policy_rules(ip, &network_policy.rules) {
                     Ok(_) => {}
                     Err(e) => return Err(AdapterError::NetworkPolicyDenied(e)),
                 }

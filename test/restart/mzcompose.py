@@ -18,7 +18,10 @@ import time
 from textwrap import dedent
 
 import requests
-from psycopg.errors import OperationalError
+from psycopg.errors import (
+    InternalError_,
+    OperationalError,
+)
 
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.kafka import Kafka
@@ -482,12 +485,30 @@ def workflow_network_policies(c: Composition) -> None:
     # ensure default network policy
     assert c.sql_query("show network_policy") == [("default",)]
     assert_can_connect()
+
     # enable network policy management
     c.sql(
         "ALTER SYSTEM SET enable_network_policies = true",
         port=6877,
         user="mz_system",
     )
+
+    # assert we can't change the network policy to one that doesn't exist.
+    try:
+        c.sql_query(
+            "ALTER SYSTEM SET network_policy='apples'",
+            port=6877,
+            user="mz_system",
+        )
+    except InternalError_ as e:
+        assert (
+            e.diag.message_primary
+            and "no network policy with such name exists" in e.diag.message_primary
+        ), e
+    else:
+        raise RuntimeError(
+            "ALTER SYSTEM SET network_policy didn't return the expected error"
+        )
 
     # close network policies
     c.sql(
@@ -501,6 +522,21 @@ def workflow_network_policies(c: Composition) -> None:
         user="mz_system",
     )
     assert_new_connection_fails()
+
+    # can't drop the actively set network policy.
+    try:
+        c.sql_query(
+            "DROP NETWORK POLICY closed",
+            port=6877,
+            user="mz_system",
+        )
+    except InternalError_ as e:
+        assert (
+            e.diag.message_primary
+            and "network policy is currently in use" in e.diag.message_primary
+        ), e
+    else:
+        raise RuntimeError("DROP NETWORK POLICY didn't return the expected error")
 
     # open the closed network policy
     c.sql(
