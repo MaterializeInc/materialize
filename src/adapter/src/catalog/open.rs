@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use futures::future::{BoxFuture, FutureExt};
 use itertools::{Either, Itertools};
 use mz_adapter_types::compaction::CompactionWindow;
-use mz_adapter_types::dyncfgs::ENABLE_CONTINUAL_TASK_BUILTINS;
+use mz_adapter_types::dyncfgs::{ENABLE_CONTINUAL_TASK_BUILTINS, ENABLE_EXPRESSION_CACHE};
 use mz_catalog::builtin::{
     Builtin, BuiltinTable, Fingerprint, BUILTINS, BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS,
     BUILTIN_PREFIXES, BUILTIN_ROLES, MZ_STORAGE_USAGE_BY_SHARD_DESCRIPTION,
@@ -30,6 +30,9 @@ use mz_catalog::durable::objects::{
 };
 use mz_catalog::durable::{
     ClusterVariant, ClusterVariantManaged, Transaction, SYSTEM_CLUSTER_ID_ALLOC_KEY,
+};
+use mz_catalog::expr_cache::{
+    ExpressionCacheConfig, ExpressionCacheHandle, GlobalExpressions, LocalExpressions,
 };
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
@@ -62,11 +65,11 @@ use mz_storage_client::controller::StorageController;
 use timely::Container;
 use tracing::{error, info, warn, Instrument};
 use uuid::Uuid;
-
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
 use crate::catalog::open::builtin_item_migration::{
     migrate_builtin_items, BuiltinItemMigrationResult,
 };
+use crate::catalog::state::LocalExpressionCache;
 use crate::catalog::{
     is_reserved_name, migrate, BuiltinTableUpdate, Catalog, CatalogPlans, CatalogState, Config,
 };
@@ -163,6 +166,7 @@ impl CatalogItemRebuilder {
                     None,
                     is_retained_metrics_object,
                     custom_logical_compaction_window,
+                    &mut LocalExpressionCache::Closed,
                 )
                 .unwrap_or_else(|error| panic!("invalid persisted create sql ({error:?}): {sql}")),
         }
@@ -182,6 +186,12 @@ pub struct InitializeStateResult {
     pub builtin_table_updates: Vec<BuiltinTableUpdate>,
     /// The version of the catalog that existed before initializing the catalog.
     pub last_seen_version: String,
+    /// A handle to the expression cache if it's enabled.
+    pub expr_cache_handle: Option<ExpressionCacheHandle>,
+    /// The global expressions that were cached in `expr_cache_handle`.
+    pub cached_global_exprs: BTreeMap<GlobalId, GlobalExpressions>,
+    /// The local expressions that were NOT cached in `expr_cache_handle`.
+    pub uncached_local_exprs: BTreeMap<GlobalId, LocalExpressions>,
 }
 
 pub struct OpenCatalogResult {
@@ -195,6 +205,10 @@ pub struct OpenCatalogResult {
     pub new_builtin_collections: BTreeSet<GlobalId>,
     /// A list of builtin table updates corresponding to the initialized state.
     pub builtin_table_updates: Vec<BuiltinTableUpdate>,
+    /// The global expressions that were cached in the expression cache.
+    pub cached_global_exprs: BTreeMap<GlobalId, GlobalExpressions>,
+    /// The local expressions that were NOT cached in the expression cache.
+    pub uncached_local_exprs: BTreeMap<GlobalId, LocalExpressions>,
 }
 
 impl Catalog {
@@ -276,6 +290,7 @@ impl Catalog {
             aws_privatelink_availability_zones: config.aws_privatelink_availability_zones,
             http_host_name: config.http_host_name,
         };
+        let deploy_generation = storage.get_deployment_generation().await?;
 
         let mut updates: Vec<_> = storage.sync_to_current_updates().await?;
         assert!(!updates.is_empty(), "initial catalog snapshot is missing");
@@ -356,6 +371,7 @@ impl Catalog {
         );
 
         let mut pre_item_updates = Vec::new();
+        let mut system_item_updates = Vec::new();
         let mut item_updates = Vec::new();
         let mut post_item_updates = Vec::new();
         for (kind, ts, diff) in updates {
@@ -368,10 +384,16 @@ impl Catalog {
                 | BootstrapStateUpdateKind::SystemConfiguration(_)
                 | BootstrapStateUpdateKind::Cluster(_)
                 | BootstrapStateUpdateKind::NetworkPolicy(_)
-                | BootstrapStateUpdateKind::IntrospectionSourceIndex(_)
-                | BootstrapStateUpdateKind::ClusterReplica(_)
-                | BootstrapStateUpdateKind::SystemObjectMapping(_) => {
+                | BootstrapStateUpdateKind::ClusterReplica(_) => {
                     pre_item_updates.push(StateUpdate {
+                        kind: kind.into(),
+                        ts,
+                        diff: diff.try_into().expect("valid diff"),
+                    })
+                }
+                BootstrapStateUpdateKind::IntrospectionSourceIndex(_)
+                | BootstrapStateUpdateKind::SystemObjectMapping(_) => {
+                    system_item_updates.push(StateUpdate {
                         kind: kind.into(),
                         ts,
                         diff: diff.try_into().expect("valid diff"),
@@ -396,7 +418,59 @@ impl Catalog {
             }
         }
 
-        let builtin_table_update = state.apply_updates_for_bootstrap(pre_item_updates).await;
+        let builtin_table_update = state
+            .apply_updates_for_bootstrap(pre_item_updates, &mut LocalExpressionCache::Closed)
+            .await;
+        builtin_table_updates.extend(builtin_table_update);
+
+        let expr_cache_start = Instant::now();
+        info!("startup: coordinator init: catalog open: expr cache open beginning");
+        // We wait until after the `pre_item_updates` to open the cache so we can get accurate
+        // dyncfgs because the `pre_item_updates` contains `SystemConfiguration` updates.
+        let expr_cache_enabled = ENABLE_EXPRESSION_CACHE.get(state.system_config().dyncfgs());
+        let (expr_cache_handle, cached_local_exprs, cached_global_exprs) = if expr_cache_enabled {
+            info!("using expression cache for startup");
+            let current_ids = txn
+                .get_items()
+                .flat_map(|item| {
+                    let gid = item.global_id.clone();
+                    let gids: Vec<_> = item.extra_versions.values().cloned().collect();
+                    std::iter::once(gid).chain(gids.into_iter())
+                })
+                .chain(
+                    txn.get_system_object_mappings()
+                        .map(|som| som.unique_identifier.global_id),
+                )
+                .collect();
+            let dyncfgs = config.persist_client.dyncfgs().clone();
+            let expr_cache_config = ExpressionCacheConfig {
+                deploy_generation,
+                persist: config.persist_client,
+                organization_id: state.config.environment_id.organization_id(),
+                current_ids,
+                remove_prior_gens: !config.read_only,
+                compact_shard: config.read_only,
+                dyncfgs,
+            };
+            let (expr_cache_handle, cached_local_exprs, cached_global_exprs) =
+                ExpressionCacheHandle::spawn_expression_cache(expr_cache_config).await;
+            (
+                Some(expr_cache_handle),
+                cached_local_exprs,
+                cached_global_exprs,
+            )
+        } else {
+            (None, BTreeMap::new(), BTreeMap::new())
+        };
+        let mut local_expr_cache = LocalExpressionCache::new(cached_local_exprs);
+        info!(
+            "startup: coordinator init: catalog open: expr cache open complete in {:?}",
+            expr_cache_start.elapsed()
+        );
+
+        let builtin_table_update = state
+            .apply_updates_for_bootstrap(system_item_updates, &mut local_expr_cache)
+            .await;
         builtin_table_updates.extend(builtin_table_update);
 
         let last_seen_version = txn
@@ -408,6 +482,7 @@ impl Catalog {
             migrate::migrate(
                 &mut state,
                 &mut txn,
+                &mut local_expr_cache,
                 item_updates,
                 config.now,
                 config.boot_ts,
@@ -421,11 +496,15 @@ impl Catalog {
                 })
             })?
         } else {
-            state.apply_updates_for_bootstrap(item_updates).await
+            state
+                .apply_updates_for_bootstrap(item_updates, &mut local_expr_cache)
+                .await
         };
         builtin_table_updates.extend(builtin_table_update);
 
-        let builtin_table_update = state.apply_updates_for_bootstrap(post_item_updates).await;
+        let builtin_table_update = state
+            .apply_updates_for_bootstrap(post_item_updates, &mut local_expr_cache)
+            .await;
         builtin_table_updates.extend(builtin_table_update);
 
         // Migrate builtin items.
@@ -437,6 +516,7 @@ impl Catalog {
         } = migrate_builtin_items(
             &mut state,
             &mut txn,
+            &mut local_expr_cache,
             migrated_builtins,
             config.builtin_item_migration_config,
         )
@@ -455,6 +535,9 @@ impl Catalog {
             new_builtin_collections: new_builtin_collections.into_iter().collect(),
             builtin_table_updates,
             last_seen_version,
+            expr_cache_handle,
+            cached_global_exprs,
+            uncached_local_exprs: local_expr_cache.into_uncached_exprs(),
         })
     }
 
@@ -472,6 +555,7 @@ impl Catalog {
     pub fn open(config: Config<'_>) -> BoxFuture<'static, Result<OpenCatalogResult, AdapterError>> {
         async move {
             let mut storage = config.storage;
+
             let InitializeStateResult {
                 state,
                 storage_collections_to_drop,
@@ -479,6 +563,9 @@ impl Catalog {
                 new_builtin_collections,
                 mut builtin_table_updates,
                 last_seen_version: _,
+                expr_cache_handle,
+                cached_global_exprs,
+                uncached_local_exprs,
             } =
                 // BOXED FUTURE: As of Nov 2023 the returned Future from this function was 7.5KB. This would
                 // get stored on the stack which is bad for runtime performance, and blow up our stack usage.
@@ -491,6 +578,7 @@ impl Catalog {
             let catalog = Catalog {
                 state,
                 plans: CatalogPlans::default(),
+                expr_cache_handle,
                 transient_revision: 1,
                 storage: Arc::new(tokio::sync::Mutex::new(storage)),
             };
@@ -524,6 +612,8 @@ impl Catalog {
                 migrated_storage_collections_0dt,
                 new_builtin_collections,
                 builtin_table_updates,
+                cached_global_exprs,
+                uncached_local_exprs,
             })
         }
         .instrument(tracing::info_span!("catalog::open"))
@@ -837,7 +927,9 @@ impl Catalog {
                 }),
         )?;
         let updates = txn.get_and_commit_op_updates();
-        let builtin_table_update = state.apply_updates_for_bootstrap(updates).await;
+        let builtin_table_update = state
+            .apply_updates_for_bootstrap(updates, &mut LocalExpressionCache::Closed)
+            .await;
         builtin_table_updates.extend(builtin_table_update);
         for CreateOp {
             id,
@@ -875,7 +967,9 @@ impl Catalog {
                 versions,
             )?;
             let updates = txn.get_and_commit_op_updates();
-            let builtin_table_update = state.apply_updates_for_bootstrap(updates).await;
+            let builtin_table_update = state
+                .apply_updates_for_bootstrap(updates, &mut LocalExpressionCache::Closed)
+                .await;
             builtin_table_updates.extend(builtin_table_update);
         }
         Ok(builtin_table_updates)

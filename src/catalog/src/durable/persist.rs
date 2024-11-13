@@ -1605,6 +1605,16 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
     }
 
     #[mz_ore::instrument(level = "debug")]
+    async fn get_deployment_generation(&mut self) -> Result<u64, CatalogError> {
+        self.sync_to_current_upper().await?;
+        Ok(self
+            .fenceable_token
+            .token()
+            .expect("opened catalogs must have a token")
+            .deploy_generation)
+    }
+
+    #[mz_ore::instrument(level = "debug")]
     async fn snapshot(&mut self) -> Result<Snapshot, CatalogError> {
         self.with_snapshot(Ok).await
     }

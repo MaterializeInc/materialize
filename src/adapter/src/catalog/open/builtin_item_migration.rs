@@ -40,6 +40,7 @@ use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tracing::{debug, error};
 
 use crate::catalog::open::builtin_item_migration::persist_schema::{TableKey, TableKeySchema};
+use crate::catalog::state::LocalExpressionCache;
 use crate::catalog::{BuiltinTableUpdate, Catalog, CatalogState};
 
 /// The results of a builtin item migration.
@@ -58,6 +59,7 @@ pub(crate) struct BuiltinItemMigrationResult {
 pub(crate) async fn migrate_builtin_items(
     state: &mut CatalogState,
     txn: &mut Transaction<'_>,
+    local_expr_cache: &mut LocalExpressionCache,
     migrated_builtins: Vec<CatalogItemId>,
     config: BuiltinItemMigrationConfig,
 ) -> Result<BuiltinItemMigrationResult, Error> {
@@ -73,6 +75,7 @@ pub(crate) async fn migrate_builtin_items(
             migrate_builtin_items_0dt(
                 state,
                 txn,
+                local_expr_cache,
                 persist_client,
                 migrated_builtins,
                 deploy_generation,
@@ -172,6 +175,7 @@ async fn migrate_builtin_items_legacy(
 async fn migrate_builtin_items_0dt(
     state: &mut CatalogState,
     txn: &mut Transaction<'_>,
+    local_expr_cache: &mut LocalExpressionCache,
     persist_client: PersistClient,
     migrated_builtins: Vec<CatalogItemId>,
     deploy_generation: u64,
@@ -439,7 +443,9 @@ async fn migrate_builtin_items_0dt(
         .collect();
 
     let updates = txn.get_and_commit_op_updates();
-    let builtin_table_updates = state.apply_updates_for_bootstrap(updates).await;
+    let builtin_table_updates = state
+        .apply_updates_for_bootstrap(updates, local_expr_cache)
+        .await;
 
     let cleanup_action = async move {
         if !read_only {

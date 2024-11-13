@@ -47,6 +47,8 @@ pub struct StateConfig {
     pub build_info: &'static BuildInfo,
     /// A persistent ID associated with the environment.
     pub environment_id: EnvironmentId,
+    /// Whether to start Materialize in read-only mode.
+    pub read_only: bool,
     /// Function to generate wall clock now; can be mocked.
     pub now: mz_ore::now::NowFn,
     /// Linearizable timestamp of when this environment booted.
@@ -67,7 +69,7 @@ pub struct StateConfig {
     pub builtin_analytics_cluster_replica_size: String,
     /// Dynamic defaults for system parameters.
     pub system_parameter_defaults: BTreeMap<String, String>,
-    /// A optional map of system parameters pulled from a remote frontend.
+    /// An optional map of system parameters pulled from a remote frontend.
     /// A `None` value indicates that the initial sync was skipped.
     pub remote_system_parameters: Option<BTreeMap<String, String>>,
     /// Valid availability zones for replicas.
@@ -85,6 +87,7 @@ pub struct StateConfig {
     /// Global connection limit and count
     pub active_connection_count: Arc<std::sync::Mutex<ConnectionCounter>>,
     pub builtin_item_migration_config: BuiltinItemMigrationConfig,
+    pub persist_client: PersistClient,
     /// Helm chart version
     pub helm_chart_version: Option<String>,
 }

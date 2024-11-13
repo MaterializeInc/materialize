@@ -231,6 +231,9 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send {
         self.get_next_id(USER_REPLICA_ID_ALLOC_KEY).await
     }
 
+    /// Get the deployment generation of this instance.
+    async fn get_deployment_generation(&mut self) -> Result<u64, CatalogError>;
+
     /// Get a snapshot of the catalog.
     async fn snapshot(&mut self) -> Result<Snapshot, CatalogError>;
 

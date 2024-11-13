@@ -49,7 +49,7 @@ use mz_ore::url::SensitiveUrl;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::PubSubClientConnection;
-use mz_persist_client::PersistLocation;
+use mz_persist_client::{PersistClient, PersistLocation};
 use mz_repr::{Diff, Timestamp};
 use mz_service::secrets::SecretsReaderCliArgs;
 use mz_sql::catalog::EnvironmentId;
@@ -200,7 +200,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     let organization_id = args.environment_id.organization_id();
     let metrics = Arc::new(mz_catalog::durable::Metrics::new(&metrics_registry));
     let openable_state = persist_backed_catalog_state(
-        persist_client,
+        persist_client.clone(),
         organization_id,
         BUILD_INFO.semver_version(),
         args.deploy_generation,
@@ -254,7 +254,15 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                 None => Default::default(),
                 Some(json) => serde_json::from_str(&json).context("parsing replica size map")?,
             };
-            upgrade_check(args, openable_state, secrets, cluster_replica_sizes, start).await
+            upgrade_check(
+                args,
+                openable_state,
+                secrets,
+                cluster_replica_sizes,
+                persist_client,
+                start,
+            )
+            .await
         }
     }
 }
@@ -530,6 +538,7 @@ async fn upgrade_check(
     openable_state: Box<dyn OpenableDurableCatalogState>,
     secrets: SecretsReaderCliArgs,
     cluster_replica_sizes: ClusterReplicaSizeMap,
+    persist_client: PersistClient,
     start: Instant,
 ) -> Result<(), anyhow::Error> {
     let secrets_reader = secrets.load().await.context("loading secrets reader")?;
@@ -567,12 +576,16 @@ async fn upgrade_check(
         new_builtin_collections: _,
         builtin_table_updates: _,
         last_seen_version,
+        expr_cache_handle: _,
+        cached_global_exprs: _,
+        uncached_local_exprs: _,
     } = Catalog::initialize_state(
         StateConfig {
             unsafe_mode: true,
             all_features: false,
             build_info: &BUILD_INFO,
             environment_id: args.environment_id.clone(),
+            read_only: true,
             now,
             boot_ts,
             skip_migrations: false,
@@ -599,6 +612,7 @@ async fn upgrade_check(
             ),
             active_connection_count: Arc::new(Mutex::new(ConnectionCounter::new(0, 0))),
             builtin_item_migration_config: BuiltinItemMigrationConfig::Legacy,
+            persist_client,
             helm_chart_version: None,
         },
         &mut storage,
