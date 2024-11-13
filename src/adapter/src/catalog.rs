@@ -638,7 +638,6 @@ impl Catalog {
                 all_features: false,
                 build_info: &DUMMY_BUILD_INFO,
                 environment_id: environment_id.unwrap_or(EnvironmentId::for_tests()),
-                deploy_generation: 0,
                 read_only: false,
                 now,
                 boot_ts: previous_ts,
