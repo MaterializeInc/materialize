@@ -492,7 +492,7 @@ where
 
 impl<T, D, Sort> Consolidator<T, D, Sort>
 where
-    T: Timestamp + Codec64 + Lattice,
+    T: Timestamp + Codec64 + Lattice + Sync,
     D: Codec64 + Semigroup + Ord,
     Sort: RowSort<T, D>,
 {

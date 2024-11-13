@@ -54,7 +54,7 @@ pub struct PersistHandle<FromTime: SourceTimestamp, IntoTime: Timestamp + Lattic
     shared_write_frontier: Rc<RefCell<Antichain<IntoTime>>>,
 }
 
-impl<FromTime: Timestamp, IntoTime: Timestamp> PersistHandle<FromTime, IntoTime>
+impl<FromTime: Timestamp, IntoTime: Timestamp + Sync> PersistHandle<FromTime, IntoTime>
 where
     FromTime: SourceTimestamp,
     IntoTime: Timestamp + Lattice + Codec64,
@@ -208,7 +208,7 @@ where
 impl<FromTime, IntoTime> RemapHandle for PersistHandle<FromTime, IntoTime>
 where
     FromTime: SourceTimestamp,
-    IntoTime: Timestamp + Lattice + Codec64,
+    IntoTime: Timestamp + Lattice + Codec64 + Sync,
 {
     async fn compare_and_append(
         &mut self,

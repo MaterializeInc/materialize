@@ -221,13 +221,11 @@ where
     let stream = arranged
         .stream
         .unary(Pipeline, "ArrangementSize", |_cap, info| {
-            let mut buffer = Default::default();
             let address = info.address;
             logger.log(ComputeEvent::ArrangementHeapSizeOperator { operator, address });
             move |input, output| {
                 while let Some((time, data)) = input.next() {
-                    data.swap(&mut buffer);
-                    output.session(&time).give_container(&mut buffer);
+                    output.session(&time).give_container(data);
                 }
                 let Some(trace) = trace.upgrade() else {
                     return;

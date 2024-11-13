@@ -779,16 +779,14 @@ where
         );
         builder.set_notify(false);
         builder.build(move |_caps| {
-            let mut buf = Vec::new();
             move |_frontiers| {
                 let mut output = output.activate();
                 while let Some((cap, data)) = input.next() {
-                    data.swap(&mut buf);
-                    for (_, ts, _) in &mut buf {
+                    for (_, ts, _) in data.iter_mut() {
                         *ts = ts.step_forward();
                     }
                     let cap = cap.delayed(&cap.time().step_forward());
-                    output.session(&cap).give_container(&mut buf);
+                    output.session(&cap).give_container(data);
                 }
             }
         });
@@ -827,19 +825,13 @@ where
         let mut input = builder.new_input(&self.inner, Pipeline);
         builder.set_notify(false);
         builder.build(|_caps| {
-            let mut passthrough_buf = Vec::new();
             move |_frontiers| {
                 let mut passthrough = passthrough.activate();
                 let mut times = times.activate();
                 while let Some((cap, data)) = input.next() {
-                    data.swap(&mut passthrough_buf);
-                    let times_iter = passthrough_buf
-                        .iter()
-                        .map(|(_data, ts, diff)| ((), *ts, diff.clone()));
+                    let times_iter = data.iter().map(|(_data, ts, diff)| ((), *ts, diff.clone()));
                     times.session_with_builder(&cap).give_iterator(times_iter);
-                    passthrough
-                        .session(&cap)
-                        .give_container(&mut passthrough_buf);
+                    passthrough.session(&cap).give_container(data);
                 }
             }
         });
@@ -867,11 +859,9 @@ where
             .unary_frontier(Pipeline, &name, |_caps, _info| {
                 let mut notificator = FrontierNotificator::new();
                 let mut stash = HashMap::<_, R>::new();
-                let mut buf = Vec::new();
                 move |input, output| {
                     while let Some((cap, data)) = input.next() {
-                        data.swap(&mut buf);
-                        for ((), ts, diff) in buf.drain(..) {
+                        for ((), ts, diff) in data.drain(..) {
                             notificator.notify_at(cap.delayed(&ts));
                             if let Some(sum) = stash.get_mut(&ts) {
                                 sum.plus_equals(&diff);

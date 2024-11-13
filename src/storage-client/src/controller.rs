@@ -168,7 +168,7 @@ pub struct SnapshotCursor<T: Codec64 + Timestamp + Lattice> {
     pub cursor: Cursor<SourceData, (), T, Diff>,
 }
 
-impl<T: Codec64 + Timestamp + Lattice> SnapshotCursor<T> {
+impl<T: Codec64 + Timestamp + Lattice + Sync> SnapshotCursor<T> {
     pub async fn next(
         &mut self,
     ) -> Option<

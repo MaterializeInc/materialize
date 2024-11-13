@@ -452,14 +452,12 @@ where
         I: IntoIterator<Item = Result<D2, E>>,
         L: for<'a> FnMut(C1::Item<'a>) -> I + 'static,
     {
-        let mut storage = C1::default();
         self.unary_fallible::<DCB, ECB, _, _>(Pipeline, name, move |_, _| {
             Box::new(move |input, ok_output, err_output| {
                 input.for_each(|time, data| {
                     let mut ok_session = ok_output.session_with_builder(&time);
                     let mut err_session = err_output.session_with_builder(&time);
-                    data.swap(&mut storage);
-                    for r in storage.drain().flat_map(|d1| logic(d1)) {
+                    for r in data.drain().flat_map(|d1| logic(d1)) {
                         match r {
                             Ok(d2) => ok_session.push_into(d2),
                             Err(e) => err_session.push_into(e),
@@ -482,7 +480,6 @@ where
             // is dropped. Else, block progress at the expiration time to prevent downstream
             // operators from making any statement about expiration time or any following time.
             let mut cap = Some(cap.delayed(&expiration));
-            let mut buffer = Default::default();
             let mut warned = false;
             move |input, output| {
                 if token.upgrade().is_none() {
@@ -501,9 +498,8 @@ where
                     }
                 }
                 input.for_each(|time, data| {
-                    data.swap(&mut buffer);
                     let mut session = output.session(&time);
-                    session.give_container(&mut buffer);
+                    session.give_container(data);
                 });
             }
         })
@@ -515,14 +511,11 @@ where
         R: Data,
     {
         self.unary::<CB, _, _, _>(Pipeline, name, move |_, _| {
-            let mut storage = C1::default();
             move |input, output| {
                 input.for_each(|cap, data| {
-                    data.swap(&mut storage);
                     let mut session = output.session_with_builder(&cap);
                     session.give_iterator(
-                        storage
-                            .drain()
+                        data.drain()
                             .map(|payload| (payload, cap.time().clone(), unit.clone())),
                     );
                 });
@@ -532,12 +525,10 @@ where
 
     fn with_token(&self, token: Weak<()>) -> StreamCore<G, C1> {
         self.unary(Pipeline, "WithToken", move |_cap, _info| {
-            let mut storage = C1::default();
             move |input, output| {
                 input.for_each(|cap, data| {
                     if token.upgrade().is_some() {
-                        data.swap(&mut storage);
-                        output.session(&cap).give_container(&mut storage);
+                        output.session(&cap).give_container(data);
                     }
                 });
             }
@@ -548,12 +539,10 @@ where
     where
         C1: ExchangeData,
     {
-        let mut storage = C1::default();
         self.unary(crate::pact::Distribute, "Distribute", move |_, _| {
             move |input, output| {
                 input.for_each(|time, data| {
-                    data.swap(&mut storage);
-                    output.session(&time).give_container(&mut storage);
+                    output.session(&time).give_container(data);
                 });
             }
         })
@@ -621,13 +610,11 @@ where
                 Pipeline,
                 "ExplodeOne",
                 move |_, _| {
-                    let mut buffer = Vec::new();
                     move |input, output| {
                         input.for_each(|time, data| {
-                            data.swap(&mut buffer);
                             output
                                 .session_with_builder(&time)
-                                .give_iterator(buffer.drain(..).map(|(x, t, d)| {
+                                .give_iterator(data.drain(..).map(|(x, t, d)| {
                                     let (x, d2) = logic(x);
                                     (x, t, d2.multiply(&d))
                                 }));
@@ -644,7 +631,6 @@ where
         IE: Fn(D1, R) -> (E, R) + 'static,
         R: num_traits::sign::Signed,
     {
-        let mut buffer = Vec::new();
         let (oks, errs) = self
             .inner
             .unary_fallible(Pipeline, "EnsureMonotonic", move |_, _| {
@@ -652,8 +638,7 @@ where
                     input.for_each(|time, data| {
                         let mut ok_session = ok_output.session(&time);
                         let mut err_session = err_output.session(&time);
-                        data.swap(&mut buffer);
-                        for (x, t, d) in buffer.drain(..) {
+                        for (x, t, d) in data.drain(..) {
                             if d.is_positive() {
                                 ok_session.give((x, t, d))
                             } else {

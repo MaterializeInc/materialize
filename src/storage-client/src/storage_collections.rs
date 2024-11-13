@@ -412,7 +412,8 @@ where
         + Codec64
         + From<EpochMillis>
         + TimestampManipulation
-        + Into<mz_repr::Timestamp>,
+        + Into<mz_repr::Timestamp>
+        + Sync,
 {
     /// Creates and returns a new [StorageCollections].
     ///
@@ -1112,7 +1113,8 @@ where
         + Codec64
         + From<EpochMillis>
         + TimestampManipulation
-        + Into<mz_repr::Timestamp>,
+        + Into<mz_repr::Timestamp>
+        + Sync,
 {
     type Timestamp = T;
 
@@ -2055,7 +2057,7 @@ where
 
 impl<T> SinceHandleWrapper<T>
 where
-    T: TimelyTimestamp + Lattice + Codec64 + TotalOrder,
+    T: TimelyTimestamp + Lattice + Codec64 + TotalOrder + Sync,
 {
     pub fn since(&self) -> &Antichain<T> {
         match self {
@@ -2272,7 +2274,8 @@ where
         + Codec64
         + From<EpochMillis>
         + TimestampManipulation
-        + Into<mz_repr::Timestamp>,
+        + Into<mz_repr::Timestamp>
+        + Sync,
 {
     async fn run(&mut self) {
         // Futures that fetch the recent upper from all other shards.
@@ -2594,7 +2597,7 @@ async fn finalize_shards_task<T>(
         read_only,
     }: FinalizeShardsTaskConfig,
 ) where
-    T: TimelyTimestamp + Lattice + Codec64,
+    T: TimelyTimestamp + Lattice + Codec64 + Sync,
 {
     if read_only {
         info!("disabling shard finalization in read only mode");

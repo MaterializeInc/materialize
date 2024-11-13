@@ -272,7 +272,6 @@ pub(super) fn construct<A: Allocate + 'static>(
         let (mut dataflow_global_ids_out, dataflow_global_ids) = demux.new_output();
 
         let mut demux_state = DemuxState::new(worker2);
-        let mut demux_buffer = Vec::new();
         demux.build(move |_capability| {
             move |_frontiers| {
                 let mut export = export_out.activate();
@@ -290,8 +289,6 @@ pub(super) fn construct<A: Allocate + 'static>(
                 let mut dataflow_global_ids = dataflow_global_ids_out.activate();
 
                 input.for_each(|cap, data| {
-                    data.swap(&mut demux_buffer);
-
                     let mut output_sessions = DemuxOutput {
                         export: export.session(&cap),
                         frontier: frontier.session(&cap),
@@ -308,7 +305,7 @@ pub(super) fn construct<A: Allocate + 'static>(
                         dataflow_global_ids: dataflow_global_ids.session(&cap),
                     };
 
-                    for (time, logger_id, event) in demux_buffer.drain(..) {
+                    for (time, logger_id, event) in data.drain(..) {
                         // We expect the logging infrastructure to not shuffle events between
                         // workers and this code relies on the assumption that each worker handles
                         // its own events.
@@ -1269,15 +1266,12 @@ where
     fn log_dataflow_errors(self, logger: Logger, export_id: GlobalId) -> Self {
         self.inner
             .unary(Pipeline, "LogDataflowErrorsCollection", |_cap, _info| {
-                let mut buffer = Vec::new();
                 move |input, output| {
                     input.for_each(|cap, data| {
-                        data.swap(&mut buffer);
-
-                        let diff = buffer.iter().map(|(_d, _t, r)| r).sum();
+                        let diff = data.iter().map(|(_d, _t, r)| r).sum();
                         logger.log(ComputeEvent::ErrorCount { export_id, diff });
 
-                        output.session(&cap).give_container(&mut buffer);
+                        output.session(&cap).give_container(data);
                     });
                 }
             })
@@ -1292,15 +1286,12 @@ where
 {
     fn log_dataflow_errors(self, logger: Logger, export_id: GlobalId) -> Self {
         self.unary(Pipeline, "LogDataflowErrorsStream", |_cap, _info| {
-            let mut buffer = Vec::new();
             move |input, output| {
                 input.for_each(|cap, data| {
-                    data.swap(&mut buffer);
-
-                    let diff = buffer.iter().map(sum_batch_diffs).sum();
+                    let diff = data.iter().map(sum_batch_diffs).sum();
                     logger.log(ComputeEvent::ErrorCount { export_id, diff });
 
-                    output.session(&cap).give_container(&mut buffer);
+                    output.session(&cap).give_container(data);
                 });
             }
         })

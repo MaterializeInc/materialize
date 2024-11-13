@@ -1226,12 +1226,10 @@ where
             let mut hydrated = false;
             logger.log(lir_id, hydrated);
 
-            let mut buffer = Vec::new();
             move |input, output| {
                 // Pass through inputs.
                 input.for_each(|cap, data| {
-                    data.swap(&mut buffer);
-                    output.session(&cap).give_container(&mut buffer);
+                    output.session(&cap).give_container(data);
                 });
 
                 if hydrated {
@@ -1425,12 +1423,11 @@ where
             signal.drop_on_fire(token);
 
             let mut stash = Vec::new();
-            let mut buffer = Vec::new();
 
             move |input, output| {
                 // Stash incoming updates as long as the start signal has not fired.
                 if !signal.has_fired() {
-                    input.for_each(|cap, data| stash.push((cap, data.take())));
+                    input.for_each(|cap, data| stash.push((cap, std::mem::take(data))));
                     return;
                 }
 
@@ -1441,8 +1438,7 @@ where
 
                 // Pass through all remaining input data.
                 input.for_each(|cap, data| {
-                    data.swap(&mut buffer);
-                    output.session(&cap).give_container(&mut buffer);
+                    output.session(&cap).give_container(data);
                 });
             }
         })
@@ -1481,17 +1477,15 @@ where
     stream.unary_frontier(Pipeline, "SuppressEarlyProgress", |default_cap, _info| {
         let mut early_cap = Some(default_cap);
 
-        let mut buffer = Default::default();
         move |input, output| {
             input.for_each(|data_cap, data| {
-                data.swap(&mut buffer);
                 let mut session = if as_of.less_than(data_cap.time()) {
                     output.session(&data_cap)
                 } else {
                     let cap = early_cap.as_ref().expect("early_cap can't be dropped yet");
                     output.session(cap)
                 };
-                session.give_container(&mut buffer);
+                session.give_container(data);
             });
 
             let frontier = input.frontier().frontier();

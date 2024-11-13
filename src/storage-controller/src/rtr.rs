@@ -44,7 +44,7 @@ use crate::Timestamp;
 ///   recency. You can avoid this panic by choosing to not call this
 ///   function on load generator sources.
 pub(super) async fn real_time_recency_ts<
-    T: Timestamp + Lattice + TotalOrder + Codec64 + From<EpochMillis>,
+    T: Timestamp + Lattice + TotalOrder + Codec64 + From<EpochMillis> + Sync,
 >(
     connection: GenericSourceConnection,
     id: GlobalId,
@@ -106,7 +106,7 @@ pub(super) async fn real_time_recency_ts<
 
 async fn decode_remap_data_until_geq_external_frontier<
     FromTime: SourceTimestamp,
-    T: Timestamp + Lattice + TotalOrder + Codec64 + From<EpochMillis>,
+    T: Timestamp + Lattice + TotalOrder + Codec64 + From<EpochMillis> + Sync,
 >(
     id: GlobalId,
     external_frontier: timely::progress::Antichain<FromTime>,

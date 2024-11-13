@@ -47,15 +47,13 @@ where
     Tr::Batch: Batch,
     for<'a> Tr::TimeGat<'a>: Ord,
 {
-    let mut rows_buf = vec![];
     let x: Stream<G, ((Option<Row>, Vec<DiffPair<Row>>), G::Timestamp, Diff)> = arranged
         .stream
         .unary(Pipeline, "combine_at_timestamp", move |_, _| {
             move |input, output| {
                 while let Some((cap, batches)) = input.next() {
                     let mut session = output.session(&cap);
-                    batches.swap(&mut rows_buf);
-                    for batch in rows_buf.drain(..) {
+                    for batch in batches.drain(..) {
                         let mut befores = vec![];
                         let mut afters = vec![];
 

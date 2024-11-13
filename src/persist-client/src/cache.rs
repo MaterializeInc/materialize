@@ -327,7 +327,7 @@ impl<K, V, T, D> DynState for LockingTypedState<K, V, T, D>
 where
     K: Codec,
     V: Codec,
-    T: Timestamp + Lattice + Codec64,
+    T: Timestamp + Lattice + Codec64 + Sync,
     D: Codec64,
 {
     fn codecs(&self) -> (String, String, String, String, Option<CodecConcreteType>) {
@@ -434,7 +434,7 @@ impl StateCache {
     where
         K: Debug + Codec,
         V: Debug + Codec,
-        T: Timestamp + Lattice + Codec64,
+        T: Timestamp + Lattice + Codec64 + Sync,
         D: Semigroup + Codec64,
         F: Future<Output = Result<TypedState<K, V, T, D>, Box<CodecMismatch>>>,
         InitFn: FnMut() -> F,

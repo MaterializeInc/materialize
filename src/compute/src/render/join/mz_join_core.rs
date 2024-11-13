@@ -213,10 +213,6 @@ where
             let mut trace1_option = Some(trace1);
             let mut trace2_option = Some(trace2);
 
-            // Swappable buffers for input extraction.
-            let mut input1_buffer = Vec::new();
-            let mut input2_buffer = Vec::new();
-
             move |input1, input2, output| {
                 // If the dataflow is shutting down, discard all existing and future work.
                 if shutdown_token.in_shutdown() {
@@ -256,8 +252,7 @@ where
                         .as_mut()
                         .expect("we only drop a trace in response to the other input emptying");
                     let capability = capability.retain();
-                    data.swap(&mut input1_buffer);
-                    for batch1 in input1_buffer.drain(..) {
+                    for batch1 in data.drain(..) {
                         // Ignore any pre-loaded data.
                         if PartialOrder::less_equal(&acknowledged1, batch1.lower()) {
                             trace!(
@@ -313,8 +308,7 @@ where
                         .as_mut()
                         .expect("we only drop a trace in response to the other input emptying");
                     let capability = capability.retain();
-                    data.swap(&mut input2_buffer);
-                    for batch2 in input2_buffer.drain(..) {
+                    for batch2 in data.drain(..) {
                         // Ignore any pre-loaded data.
                         if PartialOrder::less_equal(&acknowledged2, batch2.lower()) {
                             trace!(

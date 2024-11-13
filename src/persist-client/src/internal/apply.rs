@@ -87,7 +87,7 @@ impl<K, V, T, D> Applier<K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + Codec64,
+    T: Timestamp + Lattice + Codec64 + Sync,
     D: Semigroup + Codec64,
 {
     pub async fn new(

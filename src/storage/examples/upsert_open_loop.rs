@@ -589,7 +589,6 @@ async fn run_benchmark(
                 let rocks_options = Arc::clone(rocks_options);
                 let mut num_additions = 0;
                 let mut num_retractions = 0;
-                let mut buffer = Vec::new();
 
                 let mut frontier = Antichain::from_elem(0);
                 let mut max_lag = 0;
@@ -601,8 +600,7 @@ async fn run_benchmark(
                             return;
                         }
                         input.for_each(|_time, data| {
-                            data.swap(&mut buffer);
-                            for (_k, _v, diff) in buffer.drain(..) {
+                            for (_k, _v, diff) in data.drain(..) {
                                 if diff == 1 {
                                     num_additions += 1;
                                 } else if diff == -1 {

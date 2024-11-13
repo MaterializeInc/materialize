@@ -88,7 +88,7 @@ async fn reclock_resume_uppers<C, IntoTime>(
 ) -> BTreeMap<GlobalId, Antichain<C::Time>>
 where
     C: SourceConnection + SourceRender,
-    IntoTime: Timestamp + Lattice + Codec64 + Display,
+    IntoTime: Timestamp + Lattice + Codec64 + Display + Sync,
 {
     let metadata = &ingestion_description.ingestion_metadata;
 
@@ -199,7 +199,7 @@ where
     source_resume_uppers
 }
 
-impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
+impl<T: Timestamp + Lattice + Codec64 + Display + Sync> AsyncStorageWorker<T> {
     /// Creates a new [`AsyncStorageWorker`].
     ///
     /// IMPORTANT: The passed in `activatable` is activated when new responses

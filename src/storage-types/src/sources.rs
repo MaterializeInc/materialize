@@ -373,7 +373,9 @@ impl ProtoMapEntry<GlobalId, SourceExport<CollectionMetadata>> for ProtoSourceEx
     }
 }
 
-pub trait SourceTimestamp: Timestamp + Columnation + Refines<()> + std::fmt::Display {
+pub trait SourceTimestamp:
+    Timestamp + Columnation + Refines<()> + std::fmt::Display + Sync
+{
     fn encode_row(&self) -> Row;
     fn decode_row(row: &Row) -> Self;
 }

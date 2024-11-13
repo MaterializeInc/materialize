@@ -17,9 +17,6 @@ url = "https://raw.githubusercontent.com/google/supply-chain/main/audits.toml"
 [imports.mozilla]
 url = "https://raw.githubusercontent.com/mozilla/supply-chain/main/audits.toml"
 
-[policy.differential-dataflow]
-audit-as-crates-io = true
-
 [policy.eventsource-client]
 audit-as-crates-io = true
 
@@ -76,18 +73,6 @@ audit-as-crates-io = true
 audit-as-crates-io = true
 
 [policy.serde-value]
-audit-as-crates-io = true
-
-[policy.timely]
-audit-as-crates-io = true
-
-[policy.timely_bytes]
-audit-as-crates-io = true
-
-[policy.timely_communication]
-audit-as-crates-io = true
-
-[policy.timely_logging]
 audit-as-crates-io = true
 
 [policy.tokio-postgres]
