@@ -88,8 +88,7 @@ default = ["mz-build-tools/default"]
 normal = ["workspace-hack"]
 
 [package.metadata.cargo-gazelle.lib]
-# `num_enum` which depends on `proc-macro-crate` tries to read from the Cargo.toml at compile time.
-compile_data = ["Cargo.toml"]
+disable_pipelining = true
 
 [package.metadata.cargo-gazelle.test.lib]
 compile_data = ["src/internal/state_serde.json"]
