@@ -150,22 +150,29 @@ build:release --cxxopt=-D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_FAST
 build:release --copt=-O3
 build:release --copt=-DNDEBUG
 build:release --compilation_mode=opt
-build:release --copt=-flto=thin
-build:release --linkopt=-flto=thin
-build:release --@rules_rust//:extra_rustc_flag=-Clto=thin
 # `rules_rust` defaults to stripping debug symbols for release builds, undo that.
 build:release --strip=never
 build:release --@rules_rust//:extra_rustc_flag=-Cstrip=none
+
+# We only enable Link Time Optimization for CI builds and not local release builds.
+build:release-lto --copt=-flto=thin
+build:release-lto --linkopt=-flto=thin
+build:release-lto --@rules_rust//:extra_rustc_flag=-Clto=thin
 
 # Builds from `main` or tagged builds.
 #
 # Note: We don't use a ramdisk for tagged builds because the full debuginfo is
 # too large and we OOD/OOM.
-build:release-tagged --config=release --config=release-stamp --config=debuginfo-full
-# Local builds and from PRs in CI.
+build:release-tagged --config=release --config=release-lto --config=release-stamp --config=debuginfo-full
+# PRs in CI.
 #
 # Not doing a full stamp nor omitting full debug info, greatly speeds up compile times.
-build:release-dev --config=release --config=debuginfo-limited
+build:release-dev --config=release --config=release-lto --config=debuginfo-limited
+# Local Release Builds.
+#
+# Building with LTO can improve performance but it significantly increases compile times. The
+# tradeoff is not worth it when developing locally, but is for builds we ship to production.
+build:release-local --config=release --config=debuginfo-limited
 
 # Build with the Rust Nightly Toolchain
 build:rust-nightly --@rules_rust//rust/toolchain/channel=nightly
