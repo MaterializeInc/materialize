@@ -744,6 +744,7 @@ pub async fn dangerous_force_compaction_and_break_pushdown<K, V, T, D>(
                 req.desc.upper().elements(),
                 req.desc.since().elements(),
             );
+            machine.applier.metrics.compaction.requested.inc();
             let start = Instant::now();
             let res = Compactor::<K, V, T, D>::compact_and_apply(
                 &machine,
