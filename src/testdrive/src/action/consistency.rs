@@ -65,13 +65,18 @@ pub fn skip_consistency_checks(
 /// Runs consistency checks against multiple parts of Materialize to make sure we haven't violated
 /// our invariants or leaked resources.
 pub async fn run_consistency_checks(state: &State) -> Result<ControlFlow, anyhow::Error> {
+    println!("[LOOK HERE] STARTING CONSISTENCY CHECKS");
     // Return early if the user adhoc disabled consistency checks for the current file.
     if state.consistency_checks_adhoc_skip {
         return Ok(ControlFlow::Continue);
     }
 
+    println!("[LOOK HERE] STARTING COORD CONSISTENCY CHECKS");
     let coordinator = check_coordinator(state).await.context("coordinator");
+    println!("[LOOK HERE] FINISHED COORD CONSISTENCY CHECKS");
+    println!("[LOOK HERE] STARTING CATALOG CONSISTENCY CHECKS");
     let catalog_state = check_catalog_state(state).await.context("catalog state");
+    println!("[LOOK HERE] FINISHED CATALOG CONSISTENCY CHECKS");
     // TODO(parkmycar): Fix subsources so they don't leak their shards and then add a leaked shards
     // consistency check.
 
@@ -84,6 +89,7 @@ pub async fn run_consistency_checks(state: &State) -> Result<ControlFlow, anyhow
         writeln!(&mut msg, "catalog inconsistency: {e:?}")?;
     }
 
+    println!("[LOOK HERE] FINISHED CONSISTENCY CHECKS");
     if msg.is_empty() {
         Ok(ControlFlow::Continue)
     } else {
