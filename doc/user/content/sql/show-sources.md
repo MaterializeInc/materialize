@@ -16,8 +16,8 @@ SHOW SOURCES [ FROM <schema_name> ] [ IN CLUSTER <cluster_name> ]
 
 Option                        | Description
 ------------------------------|------------
-**FROM** <schema_name>        | Specifies the schema to show sources from. Defaults to first resolvable schema in the search path. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
-**IN CLUSTER** <cluster_name> | Specifies the cluster to show sources from. If omitted, sources from all clusters are shown. For available clusters, see [`SHOW CLUSTERS`](../show-clusters).
+**FROM** <schema_name>        | If specified, only show sources from the specified schema. Defaults to first resolvable schema in the search path. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
+**IN CLUSTER** <cluster_name> | If specified, only show sources from the specified cluster. For available clusters, see [`SHOW CLUSTERS`](../show-clusters).
 
 ## Details
 

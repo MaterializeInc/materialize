@@ -20,7 +20,7 @@ SHOW OBJECTS [ FROM <schema_name> ]
 
 Option                       | Description
 -----------------------------|------------
-**FROM** <schema_name>       | The schema to show objects from. Defaults to first resolvable schema in the search path. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
+**FROM** <schema_name>       | If specified, only show objects from the specified schema. Defaults to first resolvable schema in the search path. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
 
 ## Details
 

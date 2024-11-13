@@ -17,7 +17,7 @@ SHOW TYPES [FROM <schema_name>]
 
 Option                 | Description
 -----------------------|------------
-**FROM** <schema_name> | Specifies the schema to show types from. Defaults to first resolvable schema in the search path. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
+**FROM** <schema_name> | If specified, only show types from the specified schema. Defaults to first resolvable schema in the search path. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
 
 ## Examples
 

@@ -16,8 +16,8 @@ SHOW SUBSOURCES [ FROM <schema_name> | ON <source_name> ]
 
 Option                 | Description
 -----------------------|------------
-**FROM** <schema_name> | Specifies the schema to show subsources from. Defaults to first resolvable schema in the search path.
-**ON** <source_name>   | Specifies the name of the source whose associated subsources you want to show. If omitted, all subsources in the schema are shown.
+**FROM** <schema_name> | If specified, only show subsources from the specified schema. Defaults to first resolvable schema in the search path.
+**ON** <source_name>   | If specified, only show subsources for the specified source.
 
 ## Details
 

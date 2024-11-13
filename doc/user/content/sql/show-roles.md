@@ -17,8 +17,8 @@ SHOW ROLES [ LIKE <pattern>  | WHERE <condition(s)> ]
 
 Option                     | Description
 ---------------------------|------------
-**LIKE** \<pattern\>       | Specifies the pattern to show only the roles whose name matches the pattern.
-**WHERE** <condition(s)>   | Specifies the condition(s) to show only the roles that meet the condition(s).
+**LIKE** \<pattern\>       | If specified, only show roles whose name matches the pattern.
+**WHERE** <condition(s)>   | If specified, only show roles that meet the condition(s).
 
 ## Examples
 

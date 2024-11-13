@@ -19,7 +19,7 @@ SHOW ROLE MEMBERSHIP [ FOR <role_name> ]
 
 Option                     | Description
 ---------------------------|------------
-**FOR** <role_name>        | Specifies a role for which to show the membership. Omit to show role membership for all roles.
+**FOR** <role_name>        | If specified, only show membership for the specified role.
 
 [//]: # "TODO(morsapaes) Improve examples."
 

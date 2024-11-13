@@ -18,8 +18,8 @@ UPDATE <table_name> [ AS <table_alias> ]
 
 Option                        | Description
 ------------------------------|------------
-**AS** <table_alias>          | Specifies an alias for the table. If specified, you can only reference the table using the alias.
-**WHERE** <condition(s)>      | Specifies the condition(s) that must be met for the update to apply.
+**AS** <table_alias>          | If specified, you can only reference the table using the alias.
+**WHERE** <condition(s)>      | If specified, only update rows that meet the condition(s).
 
 ## Details
 

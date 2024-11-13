@@ -16,7 +16,7 @@ SHOW SCHEMAS [ FROM <database_name> ]
 
 Option                        | Description
 ------------------------------|------------
-**FROM** <database_name>      | Specifies the database to show schemas from. Defaults to the current database. For available databases, see [`SHOW DATABASES`](../show-databases).
+**FROM** <database_name>      | If specified, only show schemas from the specified database. Defaults to the current database. For available databases, see [`SHOW DATABASES`](../show-databases).
 
 ## Details
 

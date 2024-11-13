@@ -16,9 +16,9 @@ SHOW SECRETS [ FROM <schema_name> ] [ LIKE <pattern>  | WHERE <condition(s)> ]
 
 Option                        | Description
 ------------------------------|------------
-**FROM** <schema_name>        | Specifies the schema to show secrets from. If omitted, secrets from the first schema in the search path are shown. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
-**LIKE** \<pattern\>       | Specifies the pattern to show only the secrets whose name matches the pattern.
-**WHERE** <condition(s)>      | Specifies the condition(s) to show only the secrets that meet the condition(s).
+**FROM** <schema_name>        | If specified, only show secrets from the specified schema. If omitted, secrets from the first schema in the search path are shown. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
+**LIKE** \<pattern\>          | If specified, only show secrets whose name matches the pattern.
+**WHERE** <condition(s)>      | If specified, only show secrets that meet the condition(s).
 
 ## Examples
 
