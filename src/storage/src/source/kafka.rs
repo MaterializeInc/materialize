@@ -324,6 +324,7 @@ impl SourceRender for KafkaSourceConnection {
                 let (stats_tx, stats_rx) = crossbeam_channel::unbounded();
                 let health_status = Arc::new(Mutex::new(Default::default()));
                 let notificator = Arc::new(Notify::new());
+
                 let consumer: Result<BaseConsumer<_>, _> = connection
                     .create_with_context(
                         &config.config,
@@ -363,9 +364,29 @@ impl SourceRender for KafkaSourceConnection {
                     )
                     .await;
 
-                let consumer = match consumer {
-                    Ok(consumer) => Arc::new(consumer),
-                    Err(e) => {
+                let metadata_consumer: Result<BaseConsumer<_>, _> = connection
+                    .create_with_context(
+                        &config.config,
+                        MzClientContext::default(),
+                        &btreemap! {
+                            // Use the user-configured topic metadata refresh
+                            // interval.
+                            "topic.metadata.refresh.interval.ms" =>
+                                topic_metadata_refresh_interval
+                                .as_millis()
+                                .to_string(),
+                            "group.id" => format!("{group_id}-metadata"),
+                            // Allow Kafka monitoring tools to identify this
+                            // consumer.
+                            "client.id" => format!("{client_id}-metadata"),
+                        },
+                        InTask::Yes,
+                    )
+                    .await;
+
+                let (consumer, metadata_consumer) = match (consumer, metadata_consumer) {
+                    (Ok(consumer), Ok(metadata_consumer)) => (Arc::new(consumer), metadata_consumer),
+                    (Err(e), _) | (_, Err(e)) => {
                         let update = HealthStatusUpdate::halting(
                             format!(
                                 "failed creating kafka consumer: {}",
@@ -410,7 +431,6 @@ impl SourceRender for KafkaSourceConnection {
                 let metadata_thread_handle = {
                     let partition_info = Arc::downgrade(&partition_info);
                     let topic = topic.clone();
-                    let consumer = Arc::clone(&consumer);
 
                     // We want a fairly low ceiling on our polling frequency, since we rely
                     // on this heartbeat to determine the health of our Kafka connection.
@@ -439,7 +459,7 @@ impl SourceRender for KafkaSourceConnection {
                                 let probe_ts =
                                     mz_repr::Timestamp::try_from((now_fn)()).expect("must fit");
                                 let result = fetch_partition_info(
-                                    consumer.client(),
+                                    metadata_consumer.client(),
                                     &topic,
                                     config
                                         .config
@@ -458,11 +478,11 @@ impl SourceRender for KafkaSourceConnection {
                                     Ok(info) => {
                                         *partition_info.lock().unwrap() = Some((probe_ts, info));
                                         trace!(
-                                        source_id = config.id.to_string(),
-                                        worker_id = config.worker_id,
-                                        num_workers = config.worker_count,
-                                        "kafka metadata thread: updated partition metadata info",
-                                    );
+                                            source_id = config.id.to_string(),
+                                            worker_id = config.worker_id,
+                                            num_workers = config.worker_count,
+                                            "kafka metadata thread: updated partition metadata info",
+                                        );
 
                                         // Clear all the health namespaces we know about.
                                         // Note that many kafka sources's don't have an ssh tunnel, but
@@ -479,7 +499,7 @@ impl SourceRender for KafkaSourceConnection {
                                         ));
 
                                         let ssh_status =
-                                            consumer.client().context().tunnel_status();
+                                            metadata_consumer.client().context().tunnel_status();
                                         let ssh_status = match ssh_status {
                                             SshTunnelStatus::Running => {
                                                 Some(HealthStatusUpdate::running())
@@ -495,6 +515,7 @@ impl SourceRender for KafkaSourceConnection {
                                         }
                                     }
                                 }
+                                metadata_consumer.poll(Duration::from_millis(0));
                                 thread::park_timeout(poll_interval);
                             }
                             info!(
