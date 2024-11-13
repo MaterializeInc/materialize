@@ -68,13 +68,14 @@ SQL patterns enabled by streaming like [**Change Data Capture
 filters**](/sql/patterns/temporal-filters/), and
 [**subscriptions**](/sql/subscribe/).
 
-Materialize follows the SQL standard (SQL-92) implementation and strives for
-compatibility with the PostgreSQL dialect rather than aiming for compatibility
-with a specific version of PostgreSQL. This allows Materialize to add the latest
-PostgreSQL features even as some features of specific versions of PostgreSQL are
-missing. Performance for supported features may differ between Materialize and
-PostgreSQL, such as with [window
-functions](/transform-data/idiomatic-materialize-sql/appendix/window-function-to-materialize).
+Materialize follows the SQL standard (SQL-92) implementation and aims for
+compatibility with the PostgreSQL dialect. It **does not** aim for
+compatibility with a specific version of PostgreSQL. This means that
+Materialize might support syntax from any released PostgreSQL version, but does
+not provide full coverage of the PostgreSQL dialect. The implementation and
+performance of specific features (like [window functions](/transform-data/idiomatic-materialize-sql/appendix/window-function-to-materialize))
+might also differ, because Materialize uses an entirely different database engine
+based on [Timely and Differential Dataflow](/get-started/#incremental-updates).
 
 ### Real-time data ingestion
 
