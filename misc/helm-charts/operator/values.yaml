@@ -39,114 +39,6 @@ operator:
     consoleImageTagMapOverride: {}
   clusters:
     sizes:
-      3xsmall:
-        workers: 1
-        scale: 1
-        cpu_exclusive: false
-        cpu_limit: 0.5
-        credits_per_hour: "0.25"
-        disk_limit: "27GiB"
-        memory_limit: "4GiB"
-        is_cc: false
-      2xsmall:
-        workers: 1
-        scale: 1
-        cpu_exclusive: true
-        cpu_limit: 1
-        credits_per_hour: "0.5"
-        disk_limit: "54GiB"
-        memory_limit: "8GiB"
-        is_cc: false
-      xsmall:
-        workers: 1
-        scale: 1
-        cpu_exclusive: true
-        cpu_limit: 2
-        credits_per_hour: "1"
-        disk_limit: "109GiB"
-        memory_limit: "16GiB"
-        is_cc: false
-      small:
-        workers: 5
-        scale: 1
-        cpu_exclusive: true
-        cpu_limit: 6
-        credits_per_hour: "2"
-        disk_limit: "329GiB"
-        memory_limit: "48GiB"
-        is_cc: false
-      medium:
-        workers: 12
-        scale: 1
-        cpu_exclusive: true
-        cpu_limit: 14
-        credits_per_hour: "4"
-        disk_limit: "767GiB"
-        memory_limit: "112GiB"
-        is_cc: false
-      large:
-        workers: 27
-        scale: 1
-        cpu_exclusive: true
-        cpu_limit: 30
-        credits_per_hour: "8"
-        disk_limit: "1645GiB"
-        memory_limit: "235GiB"
-        is_cc: false
-      xlarge:
-        workers: 56
-        scale: 1
-        cpu_exclusive: true
-        cpu_limit: 62
-        credits_per_hour: "16"
-        disk_limit: "3400GiB"
-        memory_limit: "470GiB"
-        is_cc: false
-      2xlarge:
-        workers: 56
-        scale: 2
-        cpu_exclusive: true
-        cpu_limit: 62
-        credits_per_hour: "32"
-        disk_limit: "3400GiB"
-        memory_limit: "470GiB"
-        is_cc: false
-      3xlarge:
-        workers: 56
-        scale: 4
-        cpu_exclusive: true
-        cpu_limit: 62
-        credits_per_hour: "64"
-        disk_limit: "3400GiB"
-        memory_limit: "470GiB"
-        is_cc: false
-      4xlarge:
-        workers: 56
-        scale: 8
-        cpu_exclusive: true
-        cpu_limit: 62
-        credits_per_hour: "128"
-        disk_limit: "3400GiB"
-        memory_limit: "470GiB"
-        is_cc: false
-      5xlarge:
-        workers: 56
-        scale: 16
-        cpu_exclusive: true
-        cpu_limit: 62
-        credits_per_hour: "256"
-        disk_limit: "3400GiB"
-        memory_limit: "470GiB"
-        is_cc: false
-      6xlarge:
-        workers: 56
-        scale: 32
-        cpu_exclusive: true
-        cpu_limit: 62
-        credits_per_hour: "512"
-        disk_limit: "3400GiB"
-        memory_limit: "470GiB"
-        is_cc: false
       mz_probe:
         workers: 1
         scale: 1
@@ -292,12 +184,12 @@ operator:
         memory_limit: "481280MiB"
         is_cc: true
     defaultSizes:
-      default: 3xsmall
-      system: 3xsmall
+      default: 25cc
+      system: 25cc
       probe: mz_probe
-      support: 3xsmall
-      catalogServer: 2xsmall
-      analytics: 3xsmall
+      support: 25cc
+      catalogServer: 50cc
+      analytics: 25cc
   # Node selector to use for the operator pod
   nodeSelector: {}
   resources:
