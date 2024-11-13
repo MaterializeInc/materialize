@@ -107,7 +107,7 @@ impl SourceRender for MySqlSourceConnection {
         Option<Stream<G, Infallible>>,
         Stream<G, HealthStatusMessage>,
         Stream<G, ProgressStatisticsUpdate>,
-        Stream<G, Probe<GtidPartition>>,
+        Option<Stream<G, Probe<GtidPartition>>>,
         Vec<PressOnDropButton>,
     ) {
         // Collect the source outputs that we will be exporting.
@@ -218,7 +218,7 @@ impl SourceRender for MySqlSourceConnection {
             Some(uppers),
             health,
             stats_stream,
-            probe_stream,
+            Some(probe_stream),
             vec![snapshot_token, repl_token, stats_token],
         )
     }

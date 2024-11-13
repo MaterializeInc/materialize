@@ -131,7 +131,7 @@ impl SourceRender for PostgresSourceConnection {
         Option<Stream<G, Infallible>>,
         Stream<G, HealthStatusMessage>,
         Stream<G, ProgressStatisticsUpdate>,
-        Stream<G, Probe<MzOffset>>,
+        Option<Stream<G, Probe<MzOffset>>>,
         Vec<PressOnDropButton>,
     ) {
         // Collect the source outputs that we will be exporting into a per-table map.

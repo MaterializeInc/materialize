@@ -30,7 +30,7 @@ use timely::progress::Antichain;
 use tracing::info;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
-use crate::source::types::{Probe, ProgressStatisticsUpdate, SignaledFuture, StackedCollection};
+use crate::source::types::{ProgressStatisticsUpdate, SignaledFuture, StackedCollection};
 use crate::source::{RawSourceCreationConfig, SourceMessage};
 
 pub fn render<G: Scope<Timestamp = MzOffset>>(
@@ -45,7 +45,6 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
     Option<Stream<G, Infallible>>,
     Stream<G, HealthStatusMessage>,
     Stream<G, ProgressStatisticsUpdate>,
-    Stream<G, Probe<MzOffset>>,
     Vec<PressOnDropButton>,
 ) {
     let (steady_state_stats_stream, stats_button) =
@@ -56,13 +55,11 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
     let (data_output, stream) = builder.new_output::<AccountedStackBuilder<_>>();
     let (_progress_output, progress_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
     let (stats_output, stats_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
-    let (probe_output, probe_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
 
     let busy_signal = Arc::clone(&config.busy_signal);
     let button = builder.build(move |caps| {
         SignaledFuture::new(busy_signal, async move {
-            let [mut cap, mut progress_cap, stats_cap, probe_cap]: [_; 4] =
-                caps.try_into().unwrap();
+            let [mut cap, mut progress_cap, stats_cap]: [_; 3] = caps.try_into().unwrap();
 
             let resume_upper = Antichain::from_iter(
                 config
@@ -171,13 +168,6 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
                 progress_cap.downgrade(&resume_offset);
                 resume_offset.offset
             };
-            probe_output.give(
-                &probe_cap,
-                Probe {
-                    probe_ts: (config.now_fn)().try_into().expect("must fit"),
-                    upstream_frontier: Antichain::from_elem(progress_cap.time().clone()),
-                },
-            );
 
             let mut local_partitions: Vec<_> = (0..key_value.partitions)
                 .filter_map(|p| {
@@ -209,13 +199,6 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
                     }
                     cap.downgrade(&MzOffset::from(upper_offset));
                     progress_cap.downgrade(&MzOffset::from(upper_offset));
-                    probe_output.give(
-                        &probe_cap,
-                        Probe {
-                            probe_ts: (config.now_fn)().try_into().expect("must fit"),
-                            upstream_frontier: Antichain::from_elem(progress_cap.time().clone()),
-                        },
-                    );
                 }
             }
 
@@ -236,7 +219,6 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
         Some(progress_stream),
         status,
         stats_stream,
-        probe_stream,
         vec![button.press_on_drop(), stats_button],
     )
 }

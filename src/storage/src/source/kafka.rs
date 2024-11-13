@@ -184,7 +184,7 @@ impl SourceRender for KafkaSourceConnection {
         Option<Stream<G, Infallible>>,
         Stream<G, HealthStatusMessage>,
         Stream<G, ProgressStatisticsUpdate>,
-        Stream<G, Probe<KafkaTimestamp>>,
+        Option<Stream<G, Probe<KafkaTimestamp>>>,
         Vec<PressOnDropButton>,
     ) {
         let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
@@ -1020,7 +1020,7 @@ impl SourceRender for KafkaSourceConnection {
             Some(progress_stream),
             health_stream,
             stats_stream,
-            probe_stream,
+            Some(probe_stream),
             vec![button.press_on_drop()],
         )
     }
