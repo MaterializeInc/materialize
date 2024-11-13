@@ -298,6 +298,7 @@ impl Catalog {
 
         // Migrate/update durable data before we start loading the in-memory catalog.
         let (migrated_builtins, new_builtin_collections) = {
+            txn.set_system_item_ids_at_least(deploy_generation << 32)?;
             migrate::durable_migrate(&mut txn, config.boot_ts)?;
             // Overwrite and persist selected parameter values in `remote_system_parameters` that
             // was pulled from a remote frontend (e.g. LaunchDarkly) if present.

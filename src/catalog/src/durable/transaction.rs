@@ -734,6 +734,37 @@ impl<'a> Transaction<'a> {
             .collect())
     }
 
+    pub fn set_system_item_ids_at_least(
+        &mut self,
+        lower_bound: u64,
+    ) -> Result<(), CatalogError> {
+        let next_id = self
+            .id_allocator
+            .items()
+            .get(&IdAllocKey {
+                name: SYSTEM_ITEM_ALLOC_KEY.to_string(),
+            })
+            .unwrap_or_else(|| panic!("{SYSTEM_ITEM_ALLOC_KEY} id allocator missing"))
+            .next_id;
+        let new_next_id = std::cmp::max(next_id, lower_bound);
+        let prev = self.id_allocator.set(
+            IdAllocKey {
+                name: SYSTEM_ITEM_ALLOC_KEY.to_string(),
+            },
+            Some(IdAllocValue {
+                next_id: new_next_id,
+            }),
+            self.op_id,
+        )?;
+        assert_eq!(
+            prev,
+            Some(IdAllocValue {
+                next_id
+            })
+        );
+        Ok(())
+    }
+
     pub fn allocate_user_item_ids(
         &mut self,
         amount: u64,
