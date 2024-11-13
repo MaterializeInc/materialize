@@ -17,6 +17,24 @@ your machine might fail when run with Bazel because it has a different version o
 can't find some necessary file. This is a key feature though because it makes builds hermetic and
 allows Bazel to aggressively cache artifacts, which reduces build times.
 
+**Table of contents:**
+
+  * [Getting Started](#getting-started)
+    * [Installing `bazelisk`](#installing-bazelisk)
+    * [Using Bazel](#using-bazel)
+      * [Defining your own `.bazelrc` file](#defining-your-own-bazelrc-file)
+      * [Building a crate](#building-a-crate)
+      * [Running a test](#running-a-test)
+        * [Filtering tests](#filtering-tests)
+  * [How Bazel Works](#how-bazel-works)
+    * [`WORKSPACE`, `BUILD.bazel`, `*.bzl` files](#workspace-buildbazel-bzl-files)
+    * [Generating `BUILD.bazel` files](#generating-buildbazel-files)
+      * [Supported Configurations](#supported-configurations)
+    * [Platforms](#platforms)
+    * [Toolchains](#toolchains)
+  * [`rules_rust`](#rules_rust)
+    * [`crates_repository`](#crates_repository)
+
 # Getting Started
 
 ## Installing `bazelisk`
@@ -50,7 +68,29 @@ provide a thin wrapper around the `bazel` command in the form of `bin/bazel`. Th
 caching, and provides the `fmt` and `gen` subcommands. Otherwise it forwards all commands onto
 `bazel` itself.
 
-### Building a crate.
+### Defining your own `.bazelrc` file
+
+Bazel has numerous [command line options](https://bazel.build/reference/command-line-reference),
+which can be defined in a `.bazelrc` file to create different configurations that you run Bazel
+with. We have a [`.bazelrc`](../../.bazelrc) in the root of our repository that defines several
+common build configurations, but it's also recommended that you create a `.bazelrc` in your home
+directory (i.e. `~/.bazelrc`) to customize how you run Bazel locally. Options specified in your
+home RC file will override those of the workspace RC file.
+
+A good default to start with is:
+```
+# Bazel will use all but one CPU core, so your machine is still responsive.
+common --local_resources=cpu="HOST_CPUS-1"
+
+# Define a shared disk cache so builds from different Materialize repos can share artifacts.
+build --disk_cache=~/.cache/bazel
+
+# Optional. The workspace RC already sets a max disk cache size, but you can override that if you
+# have more limited disk space.
+common --experimental_disk_cache_gc_max_size=40G
+```
+
+### Building a crate
 
 All Rust crates have a `BUILD.bazel` file that define different build targets for the crate. You
 don't have to write these files, they are automatically generated from the crate's `Cargo.toml`.
@@ -89,27 +129,44 @@ crate:
 $ bin/bazel build //src/adapter
 ```
 
-### Defining your own `.bazelrc` file
+### Running a test
 
-Bazel has numerous [command line options](https://bazel.build/reference/command-line-reference),
-which can be defined in a `.bazelrc` file to create different configurations that you run Bazel
-with. We have a [`.bazelrc`](../../.bazelrc) in the root of our repository that defines several
-common build configurations, but it's also recommended that you create a `.bazelrc` in your home
-directory (i.e. `~/.bazelrc`) to customize how you run Bazel locally. Options specified in your
-home RC file will override those of the workspace RC file.
+> Note: Support for running Rust tests with Bazel is still experimental. We're waiting on
+  [#29266](https://github.com/MaterializeInc/materialize/pull/29266).
 
-A good default to start with is:
+Defined in a crate's `BUILD.bazel` are test targets. The following targets are automatically
+generated:
+
+* `<crate_name>_lib_tests`
+* `<crate_name>_doc_tests`
+* `<crate_name>_<integration_test_file_name>_tests`
+
+For example, at the time of writing the `ore` crate has three files underneath `ore/tests`,
+`future.rs`, `panic.rs`, and `task.rs`. As such the `BUILD.bazel` file for the `ore` crate has the
+following test targets:
+
+* `mz_ore_lib_tests`
+* `mz_ore_doc_tests`
+* `mz_ore_future_tests`
+* `mz_ore_panic_tests`
+* `mz_ore_task_tests`
+
+You can run the tests in `future.rs` by running the following command:
+
+```shell
+bin/bazel test //src/ore:mz_ore_future_tests
 ```
-# Bazel will use all but one CPU core, so your machine is still responsive.
-common --local_resources=cpu="HOST_CPUS-1"
 
-# Define a shared disk cache so builds from different Materialize repos can share artifacts.
-build --disk_cache=~/.cache/bazel
+#### Filtering Tests
 
-# Optional. The workspace RC already sets a max disk cache size, but you can override that if you
-# have more limited disk space.
-common --experimental_disk_cache_gc_max_size=40G
+You can provide arguments to the underlying test binary with the [`--test_arg`](https://bazel.build/reference/command-line-reference#flag--test_arg)
+command line option. This allows you to provide a filter to Rust's test framework, e.g.
+
+```shell
+bin/bazel test //src/ore:mz_ore_future_tests --test_arg=catch_panic_async
 ```
+
+Would run only the tests in `future.rs` matching the filter "catch_panic_async".
 
 # How Bazel Works
 
@@ -125,7 +182,7 @@ There are three kinds of files in our Bazel setup:
   in [Starlark](https://bazel.build/rules/language). As a general developer you should rarely if
   ever need to interact with these files.
 
-## Generating `BUILD.bazel` files.
+## Generating `BUILD.bazel` files
 
 > **tl;dr** run `bin/bazel gen` from the root of the repository.
 
