@@ -9,11 +9,10 @@
 
 import random
 import threading
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator
 from copy import copy
 from enum import Enum
 
-import psycopg
 from pg8000.native import identifier, literal
 
 from materialize.data_ingest.data_type import (
@@ -196,7 +195,7 @@ class Schema:
 
 
 class DBObject:
-    columns: Sequence[Column]
+    columns: list[Column]
     lock: threading.Lock
 
     def __init__(self):

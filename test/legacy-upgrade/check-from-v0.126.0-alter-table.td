@@ -40,17 +40,17 @@
 > SELECT * FROM alter_table_t1_v2 ORDER BY a DESC;
 <null> <null>
 600    orange
-500    apple 
-400    world 
+500    apple
+400    world
 300    <null>
-200    hello 
+200    hello
 100    <null>
 
 > SELECT * FROM alter_table_t1_mv2 ORDER BY a DESC;
 <null> <null>
 600    orange
-500    apple 
-400    world 
+500    apple
+400    world
 300    <null>
-200    hello 
+200    hello
 100    <null>
