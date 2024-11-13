@@ -118,6 +118,7 @@ Helper template to process cluster sizes based on storage class configuration
 {{- if not $.Values.storage.storageClass.name }}
 {{- $_ := set $newConfig "disk_limit" "0" }}
 {{- end }}
+{{- $_ := set $newConfig "is_cc" true }}
 {{- $_ := set $result $size $newConfig }}
 {{- end }}
 {{- $result | toYaml }}

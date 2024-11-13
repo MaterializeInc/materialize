@@ -47,7 +47,6 @@ operator:
         credits_per_hour: "0.00"
         disk_limit: "1552MiB"
         memory_limit: "776MiB"
-        is_cc: true
       25cc:
         workers: 1
         scale: 1
@@ -56,7 +55,6 @@ operator:
         credits_per_hour: "0.25"
         disk_limit: "7762MiB"
         memory_limit: "3881MiB"
-        is_cc: true
       50cc:
         workers: 1
         scale: 1
@@ -65,7 +63,6 @@ operator:
         credits_per_hour: "0.5"
         disk_limit: "15525MiB"
         memory_limit: "7762MiB"
-        is_cc: true
       100cc:
         workers: 2
         scale: 1
@@ -74,7 +71,6 @@ operator:
         credits_per_hour: "1"
         disk_limit: "31050MiB"
         memory_limit: "15525MiB"
-        is_cc: true
       200cc:
         workers: 4
         scale: 1
@@ -83,7 +79,6 @@ operator:
         credits_per_hour: "2"
         disk_limit: "62100MiB"
         memory_limit: "31050MiB"
-        is_cc: true
       300cc:
         workers: 6
         scale: 1
@@ -92,7 +87,6 @@ operator:
         credits_per_hour: "3"
         disk_limit: "93150MiB"
         memory_limit: "46575MiB"
-        is_cc: true
       400cc:
         workers: 8
         scale: 1
@@ -101,7 +95,6 @@ operator:
         credits_per_hour: "4"
         disk_limit: "124201MiB"
         memory_limit: "62100MiB"
-        is_cc: true
       600cc:
         workers: 12
         scale: 1
@@ -110,7 +103,6 @@ operator:
         credits_per_hour: "6"
         disk_limit: "186301MiB"
         memory_limit: "93150MiB"
-        is_cc: true
       800cc:
         workers: 16
         scale: 1
@@ -119,7 +111,6 @@ operator:
         credits_per_hour: "8"
         disk_limit: "248402MiB"
         memory_limit: "124201MiB"
-        is_cc: true
       1200cc:
         workers: 24
         scale: 1
@@ -128,7 +119,6 @@ operator:
         credits_per_hour: "12"
         disk_limit: "372603MiB"
         memory_limit: "186301MiB"
-        is_cc: true
       1600cc:
         workers: 31
         scale: 1
@@ -137,7 +127,6 @@ operator:
         credits_per_hour: "16"
         disk_limit: "481280MiB"
         memory_limit: "240640MiB"
-        is_cc: true
       3200cc:
         workers: 62
         scale: 1
@@ -146,7 +135,6 @@ operator:
         credits_per_hour: "32"
         disk_limit: "962560MiB"
         memory_limit: "481280MiB"
-        is_cc: true
       6400cc:
         workers: 62
         scale: 2
@@ -155,7 +143,6 @@ operator:
         credits_per_hour: "64"
         disk_limit: "962560MiB"
         memory_limit: "481280MiB"
-        is_cc: true
       128C:
         workers: 62
         scale: 4
@@ -164,7 +151,6 @@ operator:
         credits_per_hour: "128"
         disk_limit: "962560MiB"
         memory_limit: "481280MiB"
-        is_cc: true
       256C:
         workers: 62
         scale: 8
@@ -173,7 +159,6 @@ operator:
         credits_per_hour: "256"
         disk_limit: "962560MiB"
         memory_limit: "481280MiB"
-        is_cc: true
       512C:
         workers: 62
         scale: 16
@@ -182,7 +167,6 @@ operator:
         credits_per_hour: "512"
         disk_limit: "962560MiB"
         memory_limit: "481280MiB"
-        is_cc: true
     defaultSizes:
       default: 25cc
       system: 25cc

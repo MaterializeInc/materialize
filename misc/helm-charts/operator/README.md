@@ -139,7 +139,6 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.clusters.sizes.100cc.cpu_limit` |  | ``2`` |
 | `operator.clusters.sizes.100cc.credits_per_hour` |  | ``"1"`` |
 | `operator.clusters.sizes.100cc.disk_limit` |  | ``"31050MiB"`` |
-| `operator.clusters.sizes.100cc.is_cc` |  | ``true`` |
 | `operator.clusters.sizes.100cc.memory_limit` |  | ``"15525MiB"`` |
 | `operator.clusters.sizes.100cc.scale` |  | ``1`` |
 | `operator.clusters.sizes.100cc.workers` |  | ``2`` |
@@ -147,7 +146,6 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.clusters.sizes.1200cc.cpu_limit` |  | ``24`` |
 | `operator.clusters.sizes.1200cc.credits_per_hour` |  | ``"12"`` |
 | `operator.clusters.sizes.1200cc.disk_limit` |  | ``"372603MiB"`` |
-| `operator.clusters.sizes.1200cc.is_cc` |  | ``true`` |
 | `operator.clusters.sizes.1200cc.memory_limit` |  | ``"186301MiB"`` |
 | `operator.clusters.sizes.1200cc.scale` |  | ``1`` |
 | `operator.clusters.sizes.1200cc.workers` |  | ``24`` |
@@ -155,7 +153,6 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.clusters.sizes.128C.cpu_limit` |  | ``62`` |
 | `operator.clusters.sizes.128C.credits_per_hour` |  | ``"128"`` |
 | `operator.clusters.sizes.128C.disk_limit` |  | ``"962560MiB"`` |
-| `operator.clusters.sizes.128C.is_cc` |  | ``true`` |
 | `operator.clusters.sizes.128C.memory_limit` |  | ``"481280MiB"`` |
 | `operator.clusters.sizes.128C.scale` |  | ``4`` |
 | `operator.clusters.sizes.128C.workers` |  | ``62`` |
@@ -163,7 +160,6 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.clusters.sizes.1600cc.cpu_limit` |  | ``31`` |
 | `operator.clusters.sizes.1600cc.credits_per_hour` |  | ``"16"`` |
 | `operator.clusters.sizes.1600cc.disk_limit` |  | ``"481280MiB"`` |
-| `operator.clusters.sizes.1600cc.is_cc` |  | ``true`` |
 | `operator.clusters.sizes.1600cc.memory_limit` |  | ``"240640MiB"`` |
 | `operator.clusters.sizes.1600cc.scale` |  | ``1`` |
 | `operator.clusters.sizes.1600cc.workers` |  | ``31`` |
@@ -171,7 +167,6 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.clusters.sizes.200cc.cpu_limit` |  | ``4`` |
 | `operator.clusters.sizes.200cc.credits_per_hour` |  | ``"2"`` |
 | `operator.clusters.sizes.200cc.disk_limit` |  | ``"62100MiB"`` |
-| `operator.clusters.sizes.200cc.is_cc` |  | ``true`` |
 | `operator.clusters.sizes.200cc.memory_limit` |  | ``"31050MiB"`` |
 | `operator.clusters.sizes.200cc.scale` |  | ``1`` |
 | `operator.clusters.sizes.200cc.workers` |  | ``4`` |
@@ -179,7 +174,6 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.clusters.sizes.256C.cpu_limit` |  | ``62`` |
 | `operator.clusters.sizes.256C.credits_per_hour` |  | ``"256"`` |
 | `operator.clusters.sizes.256C.disk_limit` |  | ``"962560MiB"`` |
-| `operator.clusters.sizes.256C.is_cc` |  | ``true`` |
 | `operator.clusters.sizes.256C.memory_limit` |  | ``"481280MiB"`` |
 | `operator.clusters.sizes.256C.scale` |  | ``8`` |
 | `operator.clusters.sizes.256C.workers` |  | ``62`` |
@@ -187,7 +181,6 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.clusters.sizes.25cc.cpu_limit` |  | ``0.5`` |
 | `operator.clusters.sizes.25cc.credits_per_hour` |  | ``"0.25"`` |
 | `operator.clusters.sizes.25cc.disk_limit` |  | ``"7762MiB"`` |
-| `operator.clusters.sizes.25cc.is_cc` |  | ``true`` |
 | `operator.clusters.sizes.25cc.memory_limit` |  | ``"3881MiB"`` |
 | `operator.clusters.sizes.25cc.scale` |  | ``1`` |
 | `operator.clusters.sizes.25cc.workers` |  | ``1`` |
@@ -195,7 +188,6 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.clusters.sizes.300cc.cpu_limit` |  | ``6`` |
 | `operator.clusters.sizes.300cc.credits_per_hour` |  | ``"3"`` |
 | `operator.clusters.sizes.300cc.disk_limit` |  | ``"93150MiB"`` |
-| `operator.clusters.sizes.300cc.is_cc` |  | ``true`` |
 | `operator.clusters.sizes.300cc.memory_limit` |  | ``"46575MiB"`` |
 | `operator.clusters.sizes.300cc.scale` |  | ``1`` |
 | `operator.clusters.sizes.300cc.workers` |  | ``6`` |
@@ -203,7 +195,6 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.clusters.sizes.3200cc.cpu_limit` |  | ``62`` |
 | `operator.clusters.sizes.3200cc.credits_per_hour` |  | ``"32"`` |
 | `operator.clusters.sizes.3200cc.disk_limit` |  | ``"962560MiB"`` |
-| `operator.clusters.sizes.3200cc.is_cc` |  | ``true`` |
 | `operator.clusters.sizes.3200cc.memory_limit` |  | ``"481280MiB"`` |
 | `operator.clusters.sizes.3200cc.scale` |  | ``1`` |
 | `operator.clusters.sizes.3200cc.workers` |  | ``62`` |
@@ -211,7 +202,6 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.clusters.sizes.400cc.cpu_limit` |  | ``8`` |
 | `operator.clusters.sizes.400cc.credits_per_hour` |  | ``"4"`` |
 | `operator.clusters.sizes.400cc.disk_limit` |  | ``"124201MiB"`` |
-| `operator.clusters.sizes.400cc.is_cc` |  | ``true`` |
 | `operator.clusters.sizes.400cc.memory_limit` |  | ``"62100MiB"`` |
 | `operator.clusters.sizes.400cc.scale` |  | ``1`` |
 | `operator.clusters.sizes.400cc.workers` |  | ``8`` |
@@ -219,7 +209,6 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.clusters.sizes.50cc.cpu_limit` |  | ``1`` |
 | `operator.clusters.sizes.50cc.credits_per_hour` |  | ``"0.5"`` |
 | `operator.clusters.sizes.50cc.disk_limit` |  | ``"15525MiB"`` |
-| `operator.clusters.sizes.50cc.is_cc` |  | ``true`` |
 | `operator.clusters.sizes.50cc.memory_limit` |  | ``"7762MiB"`` |
 | `operator.clusters.sizes.50cc.scale` |  | ``1`` |
 | `operator.clusters.sizes.50cc.workers` |  | ``1`` |
@@ -227,7 +216,6 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.clusters.sizes.512C.cpu_limit` |  | ``62`` |
 | `operator.clusters.sizes.512C.credits_per_hour` |  | ``"512"`` |
 | `operator.clusters.sizes.512C.disk_limit` |  | ``"962560MiB"`` |
-| `operator.clusters.sizes.512C.is_cc` |  | ``true`` |
 | `operator.clusters.sizes.512C.memory_limit` |  | ``"481280MiB"`` |
 | `operator.clusters.sizes.512C.scale` |  | ``16`` |
 | `operator.clusters.sizes.512C.workers` |  | ``62`` |
@@ -235,7 +223,6 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.clusters.sizes.600cc.cpu_limit` |  | ``12`` |
 | `operator.clusters.sizes.600cc.credits_per_hour` |  | ``"6"`` |
 | `operator.clusters.sizes.600cc.disk_limit` |  | ``"186301MiB"`` |
-| `operator.clusters.sizes.600cc.is_cc` |  | ``true`` |
 | `operator.clusters.sizes.600cc.memory_limit` |  | ``"93150MiB"`` |
 | `operator.clusters.sizes.600cc.scale` |  | ``1`` |
 | `operator.clusters.sizes.600cc.workers` |  | ``12`` |
@@ -243,7 +230,6 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.clusters.sizes.6400cc.cpu_limit` |  | ``62`` |
 | `operator.clusters.sizes.6400cc.credits_per_hour` |  | ``"64"`` |
 | `operator.clusters.sizes.6400cc.disk_limit` |  | ``"962560MiB"`` |
-| `operator.clusters.sizes.6400cc.is_cc` |  | ``true`` |
 | `operator.clusters.sizes.6400cc.memory_limit` |  | ``"481280MiB"`` |
 | `operator.clusters.sizes.6400cc.scale` |  | ``2`` |
 | `operator.clusters.sizes.6400cc.workers` |  | ``62`` |
@@ -251,7 +237,6 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.clusters.sizes.800cc.cpu_limit` |  | ``16`` |
 | `operator.clusters.sizes.800cc.credits_per_hour` |  | ``"8"`` |
 | `operator.clusters.sizes.800cc.disk_limit` |  | ``"248402MiB"`` |
-| `operator.clusters.sizes.800cc.is_cc` |  | ``true`` |
 | `operator.clusters.sizes.800cc.memory_limit` |  | ``"124201MiB"`` |
 | `operator.clusters.sizes.800cc.scale` |  | ``1`` |
 | `operator.clusters.sizes.800cc.workers` |  | ``16`` |
@@ -259,7 +244,6 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.clusters.sizes.mz_probe.cpu_limit` |  | ``0.1`` |
 | `operator.clusters.sizes.mz_probe.credits_per_hour` |  | ``"0.00"`` |
 | `operator.clusters.sizes.mz_probe.disk_limit` |  | ``"1552MiB"`` |
-| `operator.clusters.sizes.mz_probe.is_cc` |  | ``true`` |
 | `operator.clusters.sizes.mz_probe.memory_limit` |  | ``"776MiB"`` |
 | `operator.clusters.sizes.mz_probe.scale` |  | ``1`` |
 | `operator.clusters.sizes.mz_probe.workers` |  | ``1`` |

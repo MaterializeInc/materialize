@@ -72,6 +72,9 @@ tests:
       - matchRegex:
           path: spec.template.spec.containers[0].args[7]  # Index of the environmentd-cluster-replica-sizes argument
           pattern: disk_limit":"0"
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[7]
+          pattern: is_cc":true
 
   - it: should have a cluster with disk limit to 1552MiB when storage class is configured
     set:
@@ -80,3 +83,6 @@ tests:
       - matchRegex:
           path: spec.template.spec.containers[0].args[7]
           pattern: disk_limit":"1552MiB"
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[7]
+          pattern: is_cc":true
