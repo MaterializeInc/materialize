@@ -1409,7 +1409,7 @@ pub enum TableDataSource {
 #[derive(Clone, Debug)]
 pub struct Table {
     pub create_sql: String,
-    pub desc: RelationDesc,
+    pub desc: VersionedRelationDesc,
     pub temporary: bool,
     pub compaction_window: Option<CompactionWindow>,
     pub data_source: TableDataSource,
