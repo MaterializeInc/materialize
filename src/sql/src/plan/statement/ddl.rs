@@ -444,7 +444,14 @@ pub fn plan_create_table(
 
     let create_sql = normalize::create_statement(scx, Statement::CreateTable(stmt.clone()))?;
 
-    let options = plan_table_options(scx, &desc, with_options.clone())?;
+    // Table options should only consider the original columns, since those
+    // were the only ones in scope when the table was created.
+    //
+    // TODO(alter_table): Will need to reconsider this when we support ALTERing
+    // the PARTITION BY columns.
+    let original_desc = desc.at_version(RelationVersionSelector::Specific(RelationVersion::root()));
+    let options = plan_table_options(scx, &original_desc, with_options.clone())?;
+
     let compaction_window = options.iter().find_map(|o| {
         #[allow(irrefutable_let_patterns)]
         if let crate::plan::TableOption::RetainHistory(lcw) = o {

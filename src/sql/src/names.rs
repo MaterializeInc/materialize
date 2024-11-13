@@ -1536,8 +1536,8 @@ impl<'a> NameResolver<'a> {
         };
         let alter_table_enabled = self.catalog.system_vars().enable_alter_table_add_column();
         let version = match version {
-            // If there isn't a version specified, and this item supports
-            // versioning, track the latest.
+            // If there isn't a version specified, and this item supports versioning, track the
+            // latest.
             None => match item.latest_version() {
                 // Only track the version of the referenced object, if the feature is enabled.
                 Some(v) if alter_table_enabled => RelationVersionSelector::Specific(v),

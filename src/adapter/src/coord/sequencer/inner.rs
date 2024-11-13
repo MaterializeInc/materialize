@@ -4781,7 +4781,8 @@ impl Coordinator {
         } = plan;
 
         // TODO(alter_table): Support allocating GlobalIds without a CatalogItemId.
-        let (_, new_global_id) = self.catalog.allocate_user_id().await?;
+        let id_ts = self.get_catalog_write_ts().await;
+        let (_, new_global_id) = self.catalog.allocate_user_id(id_ts).await?;
         let ops = vec![catalog::Op::AlterAddColumn {
             id: relation_id,
             new_global_id,
