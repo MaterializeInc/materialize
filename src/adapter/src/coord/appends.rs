@@ -65,7 +65,7 @@ impl DeferredWriteOp {
     }
 
     /// Returns an Iterator of all the required locks for current operation.
-    pub fn required_locks(&self) -> impl Iterator<Item = CatalogItemId> + use<'_> {
+    pub fn required_locks(&self) -> impl Iterator<Item = CatalogItemId> + '_ {
         match self {
             DeferredWriteOp::Plan(plan) => {
                 let iter = plan.requires_locks.iter().copied();
