@@ -49,3 +49,29 @@ def test_replica_metrics(mz: MaterializeApplication) -> None:
             """
         ),
     )
+
+
+def test_prometheus_sql_metrics(mz: MaterializeApplication) -> None:
+    # We need a source to have any metrics under `metrics/mz_storage
+    mz.testdrive.run(
+        input=dedent(
+            """
+            > CREATE SOURCE counter FROM LOAD GENERATOR COUNTER
+            """
+        ),
+    )
+
+    def check_metrics(metric_group_name: str, metric_name: str):
+        metrics = mz.environmentd.http_get(f"/metrics/{metric_group_name}")
+
+        found = False
+        for metric in metrics.splitlines():
+            if metric.startswith(metric_name):
+                found = True
+
+        assert found, "could not read metrics"
+
+    check_metrics("mz_frontier", "mz_read_frontier")
+    check_metrics("mz_usage", "mz_clusters_count")
+    check_metrics("mz_compute", "mz_compute_replica_park_duration_seconds_total")
+    check_metrics("mz_storage", "mz_storage_objects")
