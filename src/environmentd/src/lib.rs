@@ -554,6 +554,7 @@ impl Listeners {
         let bootstrap_args = BootstrapArgs {
             default_cluster_replica_size: config.bootstrap_default_cluster_replica_size.clone(),
             bootstrap_role: config.bootstrap_role,
+            cluster_replica_size_map: ClusterReplicaSizeMap::default(),
         };
 
         // Load the adapter durable storage.

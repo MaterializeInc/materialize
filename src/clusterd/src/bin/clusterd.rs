@@ -127,9 +127,10 @@ struct Args {
     #[clap(long)]
     announce_memory_limit: Option<usize>,
 
-    /// Whether the cluster is using a v2 (cc/C) size or not.
+    /// Whether this size represents a modern "cc" size rather than a legacy
+    /// T-shirt size.
     #[clap(long)]
-    is_cluster_size_v2: bool,
+    is_cc: bool,
 
     /// Set core affinity for Timely workers.
     ///
@@ -269,7 +270,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         .unwrap_or_default();
     let mut persist_cfg =
         PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone(), mz_dyncfgs::all_dyncfgs());
-    persist_cfg.is_cc_active = args.is_cluster_size_v2;
+    persist_cfg.is_cc_active = args.is_cc;
     persist_cfg.announce_memory_limit = args.announce_memory_limit;
     let persist_clients = Arc::new(PersistClientCache::new(
         persist_cfg,

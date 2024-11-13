@@ -2007,6 +2007,7 @@ impl CatalogState {
                         workers,
                         credits_per_hour,
                         cpu_exclusive: _,
+                        is_cc: _,
                         disabled: _,
                         selectors: _,
                     },
