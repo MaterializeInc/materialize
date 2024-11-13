@@ -544,7 +544,7 @@ async fn raw_stream<'a>(
     // cause errors if it happens to be the same as another replica in the mysql cluster (based on testing),
     // but by setting it to a constant value we can make it easier for users to identify Materialize connections
     let server_id = match config.id {
-        GlobalId::System(id) => id,
+        GlobalId::System(id) => id.into_raw(),
         GlobalId::User(id) => id,
         GlobalId::Transient(id) => id,
         _ => unreachable!(),

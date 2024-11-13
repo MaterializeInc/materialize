@@ -24,6 +24,7 @@ use mz_persist_types::ShardId;
 use mz_pgrepr::oid::FIRST_USER_OID;
 use mz_proto::{RustType, TryFromProtoError};
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
+use mz_repr::global_id::SystemGlobalId;
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
 use mz_repr::{CatalogItemId, Diff, GlobalId, RelationVersion};
@@ -726,12 +727,71 @@ impl<'a> Transaction<'a> {
         &mut self,
         amount: u64,
     ) -> Result<Vec<(CatalogItemId, GlobalId)>, CatalogError> {
-        Ok(self
-            .get_and_increment_id_by(SYSTEM_ITEM_ALLOC_KEY.to_string(), amount)?
-            .into_iter()
-            // TODO(alter_table): Use separate ID allocators.
-            .map(|x| (CatalogItemId::System(x), GlobalId::System(x)))
-            .collect())
+        let current_id = self
+            .id_allocator
+            .items()
+            .get(&IdAllocKey {
+                name: SYSTEM_ITEM_ALLOC_KEY.to_string(),
+            })
+            .unwrap_or_else(|| panic!("{SYSTEM_ITEM_ALLOC_KEY} id allocator missing"))
+            .next_id;
+        let current_sys_id = SystemGlobalId::from_raw(current_id);
+        let next_sys_id = current_sys_id.increment_by(amount);
+        let next_id = next_sys_id.clone().into_raw();
+        let prev = self.id_allocator.set(
+            IdAllocKey {
+                name: SYSTEM_ITEM_ALLOC_KEY.to_string(),
+            },
+            Some(IdAllocValue { next_id }),
+            self.op_id,
+        )?;
+        assert_eq!(
+            prev,
+            Some(IdAllocValue {
+                next_id: current_id
+            })
+        );
+        let ids = SystemGlobalId::range(current_sys_id..next_sys_id)
+            .map(|gid| {
+                (
+                    CatalogItemId::System(gid.clone().into_raw()),
+                    GlobalId::System(gid),
+                )
+            })
+            .collect();
+        Ok(ids)
+    }
+
+    pub fn set_system_item_ids_at_least(
+        &mut self,
+        lower_bound: SystemGlobalId,
+    ) -> Result<(), CatalogError> {
+        let next_id = self
+            .id_allocator
+            .items()
+            .get(&IdAllocKey {
+                name: SYSTEM_ITEM_ALLOC_KEY.to_string(),
+            })
+            .unwrap_or_else(|| panic!("{SYSTEM_ITEM_ALLOC_KEY} id allocator missing"))
+            .next_id;
+        let next_id = SystemGlobalId::from_raw(next_id);
+        let new_next_id = std::cmp::max(next_id, lower_bound);
+        let prev = self.id_allocator.set(
+            IdAllocKey {
+                name: SYSTEM_ITEM_ALLOC_KEY.to_string(),
+            },
+            Some(IdAllocValue {
+                next_id: new_next_id.into_raw(),
+            }),
+            self.op_id,
+        )?;
+        assert_eq!(
+            prev,
+            Some(IdAllocValue {
+                next_id: next_id.into_raw()
+            })
+        );
+        Ok(())
     }
 
     pub fn allocate_user_item_ids(

@@ -30,7 +30,7 @@ use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoE
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, GlobalId, RelationVersion, Timestamp};
+use mz_repr::{CatalogItemId, GlobalId, RelationVersion, SystemGlobalId, Timestamp};
 use mz_sql::catalog::{CatalogItemType, ObjectType, RoleAttributes, RoleMembership, RoleVars};
 use mz_sql::names::{
     CommentObjectId, DatabaseId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier,
@@ -54,7 +54,7 @@ use crate::durable::objects::{
     ItemValue, NetworkPolicyKey, NetworkPolicyValue, RoleKey, RoleValue, SchemaKey, SchemaValue,
     ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue, SourceReference,
     SourceReferencesKey, SourceReferencesValue, StorageCollectionMetadataKey,
-    StorageCollectionMetadataValue, SystemCatalogItemId, SystemGlobalId, SystemPrivilegesKey,
+    StorageCollectionMetadataValue, SystemCatalogItemId, SystemPrivilegesKey,
     SystemPrivilegesValue, TxnWalShardValue, UnfinalizedShardKey,
 };
 use crate::durable::{
@@ -1650,7 +1650,7 @@ impl RustType<proto::GlobalId> for GlobalId {
     fn into_proto(&self) -> proto::GlobalId {
         proto::GlobalId {
             value: Some(match self {
-                GlobalId::System(x) => proto::global_id::Value::System(*x),
+                GlobalId::System(x) => proto::global_id::Value::System(x.into_raw()),
                 GlobalId::User(x) => proto::global_id::Value::User(*x),
                 GlobalId::Transient(x) => proto::global_id::Value::Transient(*x),
                 GlobalId::Explain => proto::global_id::Value::Explain(Default::default()),
@@ -1660,7 +1660,9 @@ impl RustType<proto::GlobalId> for GlobalId {
 
     fn from_proto(proto: proto::GlobalId) -> Result<Self, TryFromProtoError> {
         match proto.value {
-            Some(proto::global_id::Value::System(x)) => Ok(GlobalId::System(x)),
+            Some(proto::global_id::Value::System(x)) => {
+                Ok(GlobalId::System(SystemGlobalId::from_raw(x)))
+            }
             Some(proto::global_id::Value::User(x)) => Ok(GlobalId::User(x)),
             Some(proto::global_id::Value::Transient(x)) => Ok(GlobalId::Transient(x)),
             Some(proto::global_id::Value::Explain(_)) => Ok(GlobalId::Explain),
@@ -1671,11 +1673,13 @@ impl RustType<proto::GlobalId> for GlobalId {
 
 impl RustType<proto::SystemGlobalId> for SystemGlobalId {
     fn into_proto(&self) -> proto::SystemGlobalId {
-        proto::SystemGlobalId { value: self.0 }
+        proto::SystemGlobalId {
+            value: self.clone().into_raw(),
+        }
     }
 
     fn from_proto(proto: proto::SystemGlobalId) -> Result<Self, TryFromProtoError> {
-        Ok(SystemGlobalId(proto.value))
+        Ok(SystemGlobalId::from_raw(proto.value))
     }
 }
 

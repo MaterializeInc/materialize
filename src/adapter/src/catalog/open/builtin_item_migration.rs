@@ -539,10 +539,11 @@ mod persist_schema {
     use mz_persist_types::columnar::Schema2;
     use mz_persist_types::stats::NoneStats;
     use mz_persist_types::Codec;
+    use mz_repr::SystemGlobalId;
 
     #[derive(Debug, Clone, Default, Eq, Ord, PartialEq, PartialOrd)]
     pub(super) struct TableKey {
-        pub(super) global_id: u64,
+        pub(super) global_id: SystemGlobalId,
         pub(super) deploy_generation: u64,
     }
 

@@ -12,7 +12,7 @@
 include!(concat!(env!("OUT_DIR"), "/mz_storage_types.collections.rs"));
 
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
-use mz_repr::{GlobalId as RustGlobalId, Timestamp as RustTimestamp};
+use mz_repr::{GlobalId as RustGlobalId, SystemGlobalId, Timestamp as RustTimestamp};
 use timely::progress::Antichain;
 
 use crate::controller::DurableCollectionMetadata as RustDurableCollectionMetadata;
@@ -21,7 +21,7 @@ impl RustType<GlobalId> for RustGlobalId {
     fn into_proto(&self) -> GlobalId {
         GlobalId {
             value: Some(match self {
-                RustGlobalId::System(x) => global_id::Value::System(*x),
+                RustGlobalId::System(x) => global_id::Value::System(x.into_raw()),
                 RustGlobalId::User(x) => global_id::Value::User(*x),
                 RustGlobalId::Transient(x) => global_id::Value::Transient(*x),
                 RustGlobalId::Explain => global_id::Value::Explain(Default::default()),
@@ -31,7 +31,9 @@ impl RustType<GlobalId> for RustGlobalId {
 
     fn from_proto(proto: GlobalId) -> Result<Self, TryFromProtoError> {
         match proto.value {
-            Some(global_id::Value::System(x)) => Ok(RustGlobalId::System(x)),
+            Some(global_id::Value::System(x)) => {
+                Ok(RustGlobalId::System(SystemGlobalId::from_raw(x)))
+            }
             Some(global_id::Value::User(x)) => Ok(RustGlobalId::User(x)),
             Some(global_id::Value::Transient(x)) => Ok(RustGlobalId::Transient(x)),
             Some(global_id::Value::Explain(_)) => Ok(RustGlobalId::Explain),

@@ -48,6 +48,7 @@ use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::now::to_datetime;
 use mz_ore::{instrument, soft_assert_no_log};
 use mz_repr::adt::mz_acl_item::PrivilegeMap;
+use mz_repr::global_id::SystemGlobalId;
 use mz_repr::namespaces::is_unstable_schema;
 use mz_repr::role_id::RoleId;
 use mz_repr::{CatalogItemId, Diff, GlobalId, RelationVersion, Timestamp};
@@ -298,6 +299,10 @@ impl Catalog {
 
         // Migrate/update durable data before we start loading the in-memory catalog.
         let (migrated_builtins, new_builtin_collections) = {
+            let deploy_generation: u32 = deploy_generation
+                .try_into()
+                .unwrap_or_else(|_| panic!("Materialize does not support more than {} deploy generations, current deploy generation: {}", u32::MAX, deploy_generation));
+            txn.set_system_item_ids_at_least(SystemGlobalId::new(deploy_generation))?;
             migrate::durable_migrate(&mut txn, config.boot_ts)?;
             // Overwrite and persist selected parameter values in `remote_system_parameters` that
             // was pulled from a remote frontend (e.g. LaunchDarkly) if present.

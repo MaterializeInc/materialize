@@ -302,11 +302,13 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
         &mut self,
         amount: u64,
     ) -> Result<Vec<(CatalogItemId, GlobalId)>, CatalogError> {
-        let id = self.allocate_id(SYSTEM_ITEM_ALLOC_KEY, amount).await?;
-        Ok(id
-            .into_iter()
-            .map(|id| (CatalogItemId::System(id), GlobalId::System(id)))
-            .collect())
+        if amount == 0 {
+            return Ok(Vec::new());
+        }
+        let mut txn = self.transaction().await?;
+        let ids = txn.allocate_system_item_ids(amount)?;
+        txn.commit_internal().await?;
+        Ok(ids)
     }
 
     /// Allocates and returns both a user [`CatalogItemId`] and [`GlobalId`].

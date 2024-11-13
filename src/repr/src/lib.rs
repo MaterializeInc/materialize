@@ -51,7 +51,7 @@ pub mod user;
 pub use crate::catalog_item_id::CatalogItemId;
 pub use crate::datum_vec::{DatumVec, DatumVecBorrow};
 pub use crate::diff::Diff;
-pub use crate::global_id::GlobalId;
+pub use crate::global_id::{GlobalId, SystemGlobalId};
 pub use crate::relation::{
     arb_relation_desc_diff, arb_row_for_relation, ColumnName, ColumnType, NotNullViolation,
     PropRelationDescDiff, ProtoColumnName, ProtoColumnType, ProtoRelationDesc, ProtoRelationType,

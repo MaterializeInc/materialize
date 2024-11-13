@@ -11,7 +11,7 @@ use std::fmt;
 
 use mz_lowertest::MzReflect;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
-use mz_repr::GlobalId;
+use mz_repr::{GlobalId, SystemGlobalId};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -37,7 +37,7 @@ pub enum Id {
     /// An identifier that refers to a local component of a dataflow.
     Local(LocalId),
     /// An identifier that refers to a global dataflow.
-    #[proptest(value = "Id::Global(GlobalId::System(2))")]
+    #[proptest(value = "Id::Global(GlobalId::System(SystemGlobalId::new(0).increment_by(2)))")]
     Global(GlobalId),
 }
 

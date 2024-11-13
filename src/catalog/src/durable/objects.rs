@@ -38,7 +38,7 @@ use mz_persist_types::ShardId;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, GlobalId, RelationVersion};
+use mz_repr::{CatalogItemId, GlobalId, RelationVersion, SystemGlobalId};
 use mz_sql::catalog::{
     CatalogItemType, DefaultPrivilegeAclItem, DefaultPrivilegeObject, ObjectType, RoleAttributes,
     RoleMembership, RoleVars,
@@ -612,29 +612,6 @@ impl TryFrom<CatalogItemId> for SystemCatalogItemId {
 impl From<SystemCatalogItemId> for CatalogItemId {
     fn from(val: SystemCatalogItemId) -> Self {
         CatalogItemId::System(val.0)
-    }
-}
-
-/// A newtype wrapper for [`GlobalId`] that is only for the "system" namespace.
-#[derive(Debug, Copy, Clone, Ord, PartialOrd, PartialEq, Eq)]
-pub struct SystemGlobalId(u64);
-
-impl TryFrom<GlobalId> for SystemGlobalId {
-    type Error = &'static str;
-
-    fn try_from(val: GlobalId) -> Result<Self, Self::Error> {
-        match val {
-            GlobalId::System(x) => Ok(SystemGlobalId(x)),
-            GlobalId::User(_) => Err("user"),
-            GlobalId::Transient(_) => Err("transient"),
-            GlobalId::Explain => Err("explain"),
-        }
-    }
-}
-
-impl From<SystemGlobalId> for GlobalId {
-    fn from(val: SystemGlobalId) -> Self {
-        GlobalId::System(val.0)
     }
 }
 
