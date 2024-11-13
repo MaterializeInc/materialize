@@ -9,7 +9,7 @@ menu:
 ---
 
 Hydration refers to the process of populating sources, materialized views, and
-indexes using a snapshot of the data from the upstream source. 
+indexes using a snapshot of the data from the upstream source.
 
 ## Hydration occurences
 
@@ -25,7 +25,7 @@ Hydration occurs:
   upgrades](/releases/#schedule)).
 
   - During this hydration (also referred to as rehydration),
-  
+
     - If using the default *strict serializable* isolation, queries that use the
       hydrating objects will block until the objects are hydrated.
 
@@ -47,7 +47,7 @@ Alternatively, you can query the following system catalog views:
 
 - [`mz_hydration_statuses`](/sql/system-catalog/mz_internal/#mz_hydration_statuses)
 
-- [`mz_compute_hydration_statuses`](/sql/system-catalog/#mz_compute_hydration_statuses/)
+- [`mz_compute_hydration_statuses`](/sql/system-catalog/mz_internal/#mz_compute_hydration_statuses)
 
 ## Memory considerations for hydration
 
