@@ -744,7 +744,9 @@ impl Coordinator {
         // Insert can be queued, so we need to re-verify the id exists.
         let desc = match catalog.try_get_entry(&id) {
             Some(table) => {
-                table.desc(&catalog.resolve_full_name(table.name(), Some(session.conn_id())))?
+                let full_name = catalog.resolve_full_name(table.name(), Some(session.conn_id()));
+                // Inserts always happen at the latest version of a table.
+                table.desc_latest(&full_name)?
             }
             None => {
                 return Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
