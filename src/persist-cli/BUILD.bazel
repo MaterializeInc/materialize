@@ -21,7 +21,7 @@ rust_binary(
         normal = True,
         proc_macro = True,
     ),
-    compile_data = [],
+    compile_data = ["Cargo.toml"],
     crate_root = "src/main.rs",
     data = [],
     env = {},

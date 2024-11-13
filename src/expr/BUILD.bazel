@@ -22,7 +22,7 @@ rust_library(
         normal = True,
         proc_macro = True,
     ),
-    compile_data = [],
+    compile_data = ["Cargo.toml"],
     crate_features = ["default"],
     data = [],
     disable_pipelining = True,
