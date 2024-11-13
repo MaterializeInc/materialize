@@ -1096,7 +1096,10 @@ impl Coordinator {
                             coord.set_statement_execution_timestamp(id, register_ts);
                         }
 
-                        let collection_desc = CollectionDescription::for_table(table.desc.clone());
+                        // Create the underlying collection with the latest schema from the Table.
+                        let collection_desc = CollectionDescription::for_table(
+                            table.desc.at_version(RelationVersionSelector::Latest),
+                        );
                         let storage_metadata = coord.catalog.state().storage_metadata();
                         coord
                             .controller
@@ -1147,8 +1150,9 @@ impl Coordinator {
                                 // this will always be a Source or a Table.
                                 let ingestion_id =
                                     coord.catalog().get_entry(&ingestion_id).latest_global_id();
+                                // Create the underlying collection with the latest schema from the Table.
                                 let collection_desc = CollectionDescription::<Timestamp> {
-                                    desc: table.desc.clone(),
+                                    desc: table.desc.at_version(RelationVersionSelector::Latest),
                                     data_source: DataSource::IngestionExport {
                                         ingestion_id,
                                         details,
@@ -2544,7 +2548,6 @@ impl Coordinator {
                 .resolve_full_name(&catalog_entry.name);
             let name = format!("{}", full_name);
             let relation_desc = catalog_entry
-                .item
                 .desc_opt()
                 .expect("source should have a proper desc")
                 .into_owned();
@@ -2672,14 +2675,16 @@ impl Coordinator {
             // All non-constant values must be planned as read-then-writes.
             _ => {
                 let desc_arity = match self.catalog().try_get_entry(&plan.id) {
-                    Some(table) => table
-                        .desc(
-                            &self
-                                .catalog()
-                                .resolve_full_name(table.name(), Some(ctx.session().conn_id())),
-                        )
-                        .expect("desc called on table")
-                        .arity(),
+                    Some(table) => {
+                        let fullname = self
+                            .catalog()
+                            .resolve_full_name(table.name(), Some(ctx.session().conn_id()));
+                        // Inserts always occur at the latest version of the table.
+                        table
+                            .desc_latest(&fullname)
+                            .expect("desc called on table")
+                            .arity()
+                    }
                     None => {
                         ctx.retire(Err(AdapterError::Catalog(
                             mz_catalog::memory::error::Error {
@@ -2783,14 +2788,16 @@ impl Coordinator {
 
         // Read then writes can be queued, so re-verify the id exists.
         let desc = match self.catalog().try_get_entry(&id) {
-            Some(table) => table
-                .desc(
-                    &self
-                        .catalog()
-                        .resolve_full_name(table.name(), Some(ctx.session().conn_id())),
-                )
-                .expect("desc called on table")
-                .into_owned(),
+            Some(table) => {
+                let full_name = self
+                    .catalog()
+                    .resolve_full_name(table.name(), Some(ctx.session().conn_id()));
+                // Inserts always occur at the latest version of the table.
+                table
+                    .desc_latest(&full_name)
+                    .expect("desc called on table")
+                    .into_owned()
+            }
             None => {
                 ctx.retire(Err(AdapterError::Catalog(
                     mz_catalog::memory::error::Error {

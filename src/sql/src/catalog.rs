@@ -31,7 +31,9 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, ColumnName, GlobalId, RelationDesc, RelationVersionSelector};
+use mz_repr::{
+    CatalogItemId, ColumnName, GlobalId, RelationDesc, RelationVersion, RelationVersionSelector,
+};
 use mz_sql_parser::ast::{Expr, QualifiedReplica, UnresolvedItemName};
 use mz_storage_types::connections::inline::{ConnectionResolver, ReferencedConnection};
 use mz_storage_types::connections::{Connection, ConnectionContext};
@@ -259,7 +261,10 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
     /// exist.
     ///
     /// Note: A single Catalog Item can have multiple [`GlobalId`]s associated with it.
-    fn try_get_item_by_global_id(&self, id: &GlobalId) -> Option<Box<dyn CatalogCollectionItem>>;
+    fn try_get_item_by_global_id<'a>(
+        &'a self,
+        id: &GlobalId,
+    ) -> Option<Box<dyn CatalogCollectionItem + 'a>>;
 
     /// Gets an item by its ID.
     ///
@@ -271,7 +276,7 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
     /// Panics if `id` does not specify a valid item.
     ///
     /// Note: A single Catalog Item can have multiple [`GlobalId`]s associated with it.
-    fn get_item_by_global_id(&self, id: &GlobalId) -> Box<dyn CatalogCollectionItem>;
+    fn get_item_by_global_id<'a>(&'a self, id: &GlobalId) -> Box<dyn CatalogCollectionItem + 'a>;
 
     /// Gets all items.
     fn get_items(&self) -> Vec<&dyn CatalogItem>;
@@ -718,7 +723,13 @@ pub trait CatalogItem {
 
     /// Returns the [`CatalogCollectionItem`] for a specific version of this
     /// [`CatalogItem`].
-    fn at_version(&self, version: RelationVersionSelector) -> Box<dyn CatalogCollectionItem>;
+    fn at_version(
+        &self,
+        version: RelationVersionSelector,
+    ) -> Box<dyn CatalogCollectionItem>;
+
+    /// The latest version of this item, if it's version-able.
+    fn latest_version(&self) -> Option<RelationVersion>;
 }
 
 /// An item in a [`SessionCatalog`] and the specific "collection"/pTVC that it
