@@ -59,7 +59,7 @@ spec:
         {{- range $key, $value := .Values.operator.args.consoleImageTagMapOverride }}
         - "--console-image-tag-map={{ $key }}={{ $value }}"
         {{- end }}
-        - "--console-image-tag-map=v0.125.0-dev.0--pr.g6465f9230184c3ecc9e5247a0619a5fb9ffd9343=0.1.2"
+        - "--console-image-tag-map=v0.125.0-dev.0--pr.g6d604a0a487b559ac2c7c3d1fdf87863e4691c53=0.1.2"
         {{- if .Values.operator.clusters }}
         {{- if .Values.operator.clusters.sizes }}
         - '--environmentd-cluster-replica-sizes={{ toJson .Values.operator.clusters.sizes }}'
