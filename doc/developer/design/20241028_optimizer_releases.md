@@ -34,17 +34,21 @@ We propose the following solution:
      These versions will be tracked as copies of the crate in the repo (but see ["Alternatives"](#alternatives)).
   4. Rotate versions treadmill style, in some way matching the cadence of the self-hosted release. (Likely, we will want to use the cloud release to qualify a self-hosted release.)
 
+We do not need to commit to this process up front. We can instead begin by:
+
+  - Refactoring the crates (as decribed below)
+  - Cutting a **stable**/**cold** V0 release and creating a working **unstable**/**hot** branch
+  - Creating a mechanism for dynamically selecting between the two
+
+We can aim for a six month release from **unstable**/**hot** to **testing**/**warm**, but there's no need to hold to that timeline. If things slip much past six months, though, we should consider why we slipped and try to address that in the process going forward.
+
+We will need to think very carefully about the proportion of work done on **stable**/**cold** (for customer needs) and on **unstable**/**hot** (for technical debt paydown and feature development).
+
 ## Minimal Viable Prototype
 
 ### Version names and numbering
 
-Every version of the `optimizer` crate will be numbered. Customers can run SQL like:
-
-```sql
-ALTER CLUSTER name SET (OPTIMIZER VERSION = version)
-```
-
-where `version` is a version number (or, possibly one of our three fixed names). Note that the optimizer is selected on a per cluster basis. Selecting the optimizer per cluster makes it easier to qualify optimizer releases.
+Every version of the `optimizer` crate will be numbered except for the currently active development branch in **unstable**/**hot**, which never receives a number.
 
 ### The `optimizer` and `optimizer-types` crates
 
@@ -60,6 +64,12 @@ These crates do _not_ include:
 
 The two bullets marked (\*) above are a tricky point in the interface. SQL will _always_ lowers to **unstable**/**hot** HIR; we will have methods to convert **unstable**/**hot** HIR to the other two versions. Similarly, LIR lowers to dataflow from **unstable**/**hot** LIR; we will have methods to convert the other two versions to the latest.
 
+### Versioning the `optimizer` crate
+
+To create a new version of the `optimizer` crate, we will use `git subtree`, which should preserve features.
+
+At first, there will be two versions: V0 **stable**/**cold** and **unstable**/**hot**.
+
 ### Supporting qualification
 
 A capture-and-replay mode for events that stores the events in the customer's own environment would allow for (a) customers to easily test and qualify changes, and (b) a push-button way for us to spin up unbilled clusters to evaluate these replays in read-only mode.
@@ -70,12 +80,20 @@ The thorniest thing here is the release cutting and copied code. Would it be bet
 
 ## Open questions
 
-- Does **unstable**/**hot** get a version number, or no? (Cf. Debian sid)
-
-- How precisely do we select features out of **unstable**/**hot** to cut a new **testing**/**warm**? If we literally copy the crate three times in the repo, `git cherry-pick` will not be straightfoward to use and it will be easy to lose history.
-
-- Under use-case isolation, can we say select an optimizer per `environmentd` instead of per cluster?
-
-- There are several occasions where the optimizer is called independent of the cluster: views, prepared statements, and as part of `INSERT`, `UPDATE`, and `DELETE`. (Look at `sequence_read_then_write` for an example.) Should these be moved off? Use the active cluster? Automatically optimize with all three?
+- How do we backport features? `git subtree`/`git filter-branch` makes it easy to copy the `optimizer` crate with history, but we will not be able to use `git cherry-pick`.
 
 - Which fixes will we backport? Correctness only? When do we backport a fix and when do we backport a "problem detector" with a notice?
+
+### Where do we select optimizer versions?
+
+Are optimizer versions associated to a cluster or to an environment?
+
+If the former, we'll have:
+
+```sql
+ALTER CLUSTER name SET (OPTIMIZER VERSION = version)
+```
+
+where `version` is a version number (or, possibly one of our three fixed names). Note that the optimizer is selected on a per cluster basis. Selecting the optimizer per cluster makes it easier to qualify optimizer releases, but raises questions about `CREATE VIEW`, `INSERT`,  `UPDATE`, and `DELETE`, which run (a prefix of) the optimizer not on any particular cluster. (Look at `sequence_read_then_write` for an example.) Should these be moved off? Use the active cluster? Automatically optimize with all three?
+
+If the latter, we'll have a flag to `environmentd`. Flagged environments make it easier to go mztrail in shadow environments and avoids questions about which version of the optimizer to run when not on any particular cluster, but doesn't offer a path to users for release qualification.
