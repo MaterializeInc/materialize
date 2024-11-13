@@ -389,31 +389,34 @@ fn create_environmentd_network_policies(
             ),
             ..Default::default()
         };
+        // TODO (Alex) filter to just clusterd and environmentd,
+        // once we get a consistent set of labels for both.
+        let all_pods_label_selector = LabelSelector {
+            match_labels: Some(mz.default_labels()),
+            ..Default::default()
+        };
         network_policies.extend([
-            // Allow all clusterd/environmentd traffic (within the namespace)
+            // Allow all clusterd/environmentd traffic (between pods in the
+            // same environment)
             NetworkPolicy {
-                metadata: mz.managed_resource_meta(mz.name_prefixed("allow-all-within-namespace")),
+                metadata: mz
+                    .managed_resource_meta(mz.name_prefixed("allow-all-within-environment")),
                 spec: Some(NetworkPolicySpec {
                     egress: Some(vec![NetworkPolicyEgressRule {
                         to: Some(vec![NetworkPolicyPeer {
-                            pod_selector: Some(LabelSelector::default()),
+                            pod_selector: Some(all_pods_label_selector.clone()),
                             ..Default::default()
                         }]),
                         ..Default::default()
                     }]),
                     ingress: Some(vec![NetworkPolicyIngressRule {
                         from: Some(vec![NetworkPolicyPeer {
-                            pod_selector: Some(LabelSelector::default()),
+                            pod_selector: Some(all_pods_label_selector.clone()),
                             ..Default::default()
                         }]),
                         ..Default::default()
                     }]),
-                    pod_selector: LabelSelector {
-                        // TODO (Alex) filter to just clusterd and environmentd,
-                        // once we get a consistent set of labels for both.
-                        match_expressions: None,
-                        match_labels: Some(mz.default_labels()),
-                    },
+                    pod_selector: all_pods_label_selector.clone(),
                     policy_types: Some(vec!["Ingress".to_owned(), "Egress".to_owned()]),
                     ..Default::default()
                 }),
