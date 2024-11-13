@@ -489,4 +489,3 @@ DROP TABLE t2 CASCADE;
 query TTIT
 SELECT * FROM mz_internal.mz_comments;
 ----
-

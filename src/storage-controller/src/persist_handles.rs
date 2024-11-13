@@ -289,8 +289,10 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
                     tx,
                 } => {
                     async {
-                        self.drop_handles(vec![existing_collection], forget_ts).await;
-                        self.register(register_ts, vec![(new_collection, handle)]).await;
+                        self.drop_handles(vec![existing_collection], forget_ts)
+                            .await;
+                        self.register(register_ts, vec![(new_collection, handle)])
+                            .await;
                     }
                     .instrument(span)
                     .await;
