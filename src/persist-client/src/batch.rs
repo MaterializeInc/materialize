@@ -50,6 +50,7 @@ use tracing::{debug_span, trace_span, warn, Instrument};
 use crate::async_runtime::IsolatedRuntime;
 use crate::cfg::MiB;
 use crate::error::InvalidUsage;
+use crate::internal::compact::{CompactConfig, Compactor};
 use crate::internal::encoding::{LazyInlineBatchPart, LazyPartStats, LazyProto, Schemas};
 use crate::internal::machine::retry_external;
 use crate::internal::merge::{MergeTree, Pending};
@@ -947,6 +948,9 @@ enum WritingRuns<T> {
     /// sorted and added in order. Merging a vec of parts will shift them out to a hollow run
     /// in blob, bounding the total length of a run in memory.
     Ordered(RunOrder, MergeTree<Pending<RunPart<T>>>),
+    /// Building multiple runs which may have different orders. Merging a vec of runs will cause
+    /// them to be compacted together, bounding the total number of runs we generate.
+    Compacting(MergeTree<(RunOrder, Pending<Vec<RunPart<T>>>)>),
 }
 
 // TODO: If this is dropped, cancel (and delete?) any writing parts and delete
@@ -966,6 +970,105 @@ pub(crate) struct BatchParts<T> {
 }
 
 impl<T: Timestamp + Codec64> BatchParts<T> {
+    pub(crate) fn new_compacting<K, V, D>(
+        cfg: CompactConfig,
+        desc: Description<T>,
+        metrics: Arc<Metrics>,
+        shard_metrics: Arc<ShardMetrics>,
+        shard_id: ShardId,
+        lower: Antichain<T>,
+        blob: Arc<dyn Blob>,
+        isolated_runtime: Arc<IsolatedRuntime>,
+        batch_metrics: &BatchWriteMetrics,
+        schemas: Schemas<K, V>,
+    ) -> Self
+    where
+        K: Codec + Debug,
+        V: Codec + Debug,
+        T: Lattice + Send + Sync,
+        D: Semigroup + Ord + Codec64 + Send + Sync,
+    {
+        let writing_runs = {
+            let cfg = cfg.clone();
+            let blob = Arc::clone(&blob);
+            let metrics = Arc::clone(&metrics);
+            let shard_metrics = Arc::clone(&shard_metrics);
+            let isolated_runtime = Arc::clone(&isolated_runtime);
+            // Set the level size so that our runs should fit in the compaction bound,
+            // clamping to prevent extreme values given weird configs.
+            let runs_per_compaction =
+                (cfg.compaction_memory_bound_bytes / cfg.batch.blob_target_size).clamp(2, 1024);
+
+            let merge_fn = move |parts: Vec<(RunOrder, Pending<Vec<RunPart<T>>>)>| {
+                let blob = Arc::clone(&blob);
+                let metrics = Arc::clone(&metrics);
+                let shard_metrics = Arc::clone(&shard_metrics);
+                let cfg = cfg.clone();
+                let isolated_runtime = Arc::clone(&isolated_runtime);
+                let write_schemas = schemas.clone();
+                let compact_desc = desc.clone();
+                let handle = mz_ore::task::spawn(
+                    || "batch::compact_runs",
+                    async move {
+                        let runs: Vec<_> = stream::iter(parts)
+                            .then(|(order, parts)| async move {
+                                (
+                                    RunMeta {
+                                        order: Some(order),
+                                        schema: schemas.id,
+                                    },
+                                    parts.into_result().await,
+                                )
+                            })
+                            .collect()
+                            .await;
+
+                        let run_refs: Vec<_> = runs
+                            .iter()
+                            .map(|(meta, run)| (&compact_desc, meta, run.as_slice()))
+                            .collect();
+
+                        let output_batch = Compactor::<K, V, T, D>::compact_runs(
+                            &cfg,
+                            &shard_id,
+                            &compact_desc,
+                            run_refs,
+                            blob,
+                            metrics,
+                            shard_metrics,
+                            isolated_runtime,
+                            write_schemas,
+                        )
+                        .await
+                        .expect("successful compaction");
+
+                        assert_eq!(
+                            output_batch.run_meta.len(),
+                            1,
+                            "compaction is guaranteed to emit a single run"
+                        );
+                        output_batch.parts
+                    }
+                    .instrument(debug_span!("batch::compact_runs")),
+                );
+                (RunOrder::Structured, Pending::new(handle))
+            };
+            WritingRuns::Compacting(MergeTree::new(runs_per_compaction, merge_fn))
+        };
+        BatchParts {
+            cfg: cfg.batch,
+            metrics,
+            shard_metrics,
+            shard_id,
+            lower,
+            blob,
+            isolated_runtime,
+            next_index: 0,
+            writing_runs,
+            batch_metrics: batch_metrics.clone(),
+        }
+    }
+
     pub(crate) fn new_ordered(
         cfg: BatchBuilderConfig,
         order: RunOrder,
@@ -1027,6 +1130,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
     pub(crate) fn expected_order(&self) -> RunOrder {
         match self.writing_runs {
             WritingRuns::Ordered(order, _) => order,
+            WritingRuns::Compacting(_) => RunOrder::Unordered,
         }
     }
 
@@ -1145,6 +1249,36 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                     .rev()
                     .skip(self.cfg.batch_builder_max_outstanding_parts)
                     .take_while(|p| !p.is_finished())
+                {
+                    self.batch_metrics.write_stalls.inc();
+                    part.block_until_ready().await;
+                }
+            }
+            WritingRuns::Compacting(batches) => {
+                let run = Pending::Writing(mz_ore::task::spawn(|| name, async move {
+                    vec![write_future.await]
+                }));
+                batches.push((RunOrder::Unordered, run));
+
+                // Allow up to `max_outstanding_parts` (or one compaction) to be pending, and block
+                // on the rest.
+                let mut part_budget = self.cfg.batch_builder_max_outstanding_parts;
+                let mut compaction_budget = 1;
+                for (_, part) in batches
+                    .iter_mut()
+                    .rev()
+                    .skip_while(|(order, _)| match order {
+                        RunOrder::Unordered if part_budget > 0 => {
+                            part_budget -= 1;
+                            true
+                        }
+                        RunOrder::Structured | RunOrder::Codec if compaction_budget > 0 => {
+                            compaction_budget -= 1;
+                            true
+                        }
+                        _ => false,
+                    })
+                    .take_while(|(_, p)| !p.is_finished())
                 {
                     self.batch_metrics.write_stalls.inc();
                     part.block_until_ready().await;
@@ -1325,6 +1459,15 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                     output.push(part.into_result().await);
                 }
                 vec![(order, output)]
+            }
+            WritingRuns::Compacting(batches) => {
+                let runs = batches.finish();
+                let mut output = Vec::with_capacity(runs.len());
+                for (order, run) in runs {
+                    let run = run.into_result().await;
+                    output.push((order, run))
+                }
+                output
             }
         }
     }
@@ -1524,15 +1667,19 @@ mod tests {
 
         // Manually override the number of batches it takes to spill.
         match &mut builder.parts.writing_runs {
-            WritingRuns::Ordered(_, run) => run.max_len = 3,
+            WritingRuns::Compacting(run) => run.max_len = 3,
+            _ => unreachable!(),
         };
 
         fn assert_writing(
             builder: &BatchBuilderInternal<String, String, u64, i64>,
             expected_finished: &[bool],
         ) {
-            let WritingRuns::Ordered(_, run) = &builder.parts.writing_runs;
-            let actual: Vec<_> = run.iter().map(|p| p.is_finished()).collect();
+            let WritingRuns::Compacting(run) = &builder.parts.writing_runs else {
+                unreachable!("ordered run!")
+            };
+
+            let actual: Vec<_> = run.iter().map(|(_, p)| p.is_finished()).collect();
             assert_eq!(*expected_finished, actual);
         }
 
@@ -1577,7 +1724,7 @@ mod tests {
             .await
             .expect("invalid usage");
         assert_eq!(batch.batch.runs().count(), 2);
-        assert_eq!(batch.batch.part_count(), 2);
+        assert_eq!(batch.batch.part_count(), 4);
         write
             .append_batch(batch, Antichain::from_elem(0), Antichain::from_elem(5))
             .await
