@@ -13,6 +13,7 @@ from collections.abc import Iterator, Sequence
 from copy import copy
 from enum import Enum
 
+import psycopg
 from pg8000.native import identifier, literal
 
 from materialize.data_ingest.data_type import (
@@ -900,6 +901,7 @@ class Database:
     lock: threading.Lock
     seed: str
     sqlsmith_state: str
+    flags: dict[str, str]
 
     def __init__(
         self,
@@ -973,6 +975,7 @@ class Database:
         self.kafka_sink_id = len(self.kafka_sinks)
         self.lock = threading.Lock()
         self.sqlsmith_state = ""
+        self.flags = {}
 
     def db_objects(
         self,
