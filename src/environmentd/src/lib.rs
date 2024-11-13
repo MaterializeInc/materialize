@@ -517,20 +517,22 @@ impl Listeners {
         // Preflight checks determine whether to boot in read-only mode or not.
         let mut read_only = false;
         let mut caught_up_trigger = None;
+        let bootstrap_args = BootstrapArgs {
+            default_cluster_replica_size: config.bootstrap_default_cluster_replica_size.clone(),
+            bootstrap_role: config.bootstrap_role.clone(),
+            cluster_replica_size_map: config.cluster_replica_sizes.clone(),
+        };
         let preflight_config = PreflightInput {
             boot_ts,
             environment_id: config.environment_id.clone(),
             persist_client,
-            bootstrap_default_cluster_replica_size: config
-                .bootstrap_default_cluster_replica_size
-                .clone(),
-            bootstrap_role: config.bootstrap_role.clone(),
             deploy_generation: config.controller.deploy_generation,
             deployment_state: deployment_state.clone(),
             openable_adapter_storage,
             catalog_metrics: Arc::clone(&config.catalog_config.metrics),
             caught_up_max_wait: with_0dt_deployment_max_wait,
             panic_after_timeout: enable_0dt_deployment_panic_after_timeout,
+            bootstrap_args,
         };
         if enable_0dt_deployment {
             PreflightOutput {
@@ -554,7 +556,7 @@ impl Listeners {
         let bootstrap_args = BootstrapArgs {
             default_cluster_replica_size: config.bootstrap_default_cluster_replica_size.clone(),
             bootstrap_role: config.bootstrap_role,
-            cluster_replica_size_map: ClusterReplicaSizeMap::default(),
+            cluster_replica_size_map: config.cluster_replica_sizes.clone(),
         };
 
         // Load the adapter durable storage.

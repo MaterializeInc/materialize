@@ -30,8 +30,8 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
 use mz_sql::catalog::{
-    CatalogError as SqlCatalogError, DefaultPrivilegeAclItem, DefaultPrivilegeObject, ObjectType,
-    RoleAttributes, RoleMembership, RoleVars, SystemObjectType,
+    DefaultPrivilegeAclItem, DefaultPrivilegeObject, ObjectType, RoleAttributes, RoleMembership,
+    RoleVars, SystemObjectType,
 };
 use mz_sql::names::{
     DatabaseId, ObjectId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier, PUBLIC_ROLE_NAME,
@@ -681,13 +681,7 @@ pub(crate) async fn initialize(
                 let cluster_size = options.default_cluster_replica_size.to_string();
                 let cluster_allocation = options
                     .cluster_replica_size_map
-                    .0
-                    .get(&cluster_size)
-                    .ok_or_else(|| {
-                        CatalogError::Catalog(SqlCatalogError::UnknownClusterReplicaSize(
-                            cluster_size,
-                        ))
-                    })?;
+                    .get_allocation_by_name(&cluster_size)?;
                 cluster_allocation.is_cc
             },
             billed_as: None,
@@ -769,13 +763,7 @@ fn default_cluster_config(args: &BootstrapArgs) -> Result<ClusterConfig, Catalog
     let cluster_size = args.default_cluster_replica_size.to_string();
     let cluster_allocation = args
         .cluster_replica_size_map
-        .0
-        .get(&cluster_size)
-        .ok_or_else(|| {
-            CatalogError::Catalog(SqlCatalogError::UnknownClusterReplicaSize(
-                cluster_size.clone(),
-            ))
-        })?;
+        .get_allocation_by_name(&cluster_size)?;
     Ok(ClusterConfig {
         variant: ClusterVariant::Managed(ClusterVariantManaged {
             size: cluster_size,
@@ -798,13 +786,7 @@ fn default_replica_config(args: &BootstrapArgs) -> Result<ReplicaConfig, Catalog
     let cluster_size = args.default_cluster_replica_size.to_string();
     let cluster_allocation = args
         .cluster_replica_size_map
-        .0
-        .get(&cluster_size)
-        .ok_or_else(|| {
-            CatalogError::Catalog(SqlCatalogError::UnknownClusterReplicaSize(
-                cluster_size.clone(),
-            ))
-        })?;
+        .get_allocation_by_name(&cluster_size)?;
     Ok(ReplicaConfig {
         location: ReplicaLocation::Managed {
             size: cluster_size,
