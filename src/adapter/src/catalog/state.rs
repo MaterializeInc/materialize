@@ -825,9 +825,9 @@ impl CatalogState {
     /// Returns the [`RelationDesc`] for a [`GlobalId`], if the provided [`GlobalId`] refers to an
     /// object that returns rows.
     pub fn try_get_desc_by_global_id(&self, id: &GlobalId) -> Option<Cow<RelationDesc>> {
-        let entry = self.try_get_entry_by_global_id(&id)?;
+        let entry = self.try_get_entry_by_global_id(id)?;
         let desc = match entry.item() {
-            CatalogItem::Table(table) => Cow::Owned(table.desc_for(&id)),
+            CatalogItem::Table(table) => Cow::Owned(table.desc_for(id)),
             // TODO(alter_table): Support schema evolution on sources.
             other => other.desc_opt(RelationVersionSelector::Latest)?,
         };
