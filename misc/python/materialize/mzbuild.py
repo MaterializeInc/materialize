@@ -150,8 +150,11 @@ class RepositoryDetails:
             # approach to update it.
             if ui.env_is_truthy("BUILDKITE_TAG"):
                 flags.extend(["--config=release-tagged"])
-            else:
+            elif ui.env_is_truthy("CI"):
                 flags.extend(["--config=release-dev"])
+                bazel_utils.write_git_hash()
+            else:
+                flags.extend(["--config=release-local"])
                 bazel_utils.write_git_hash()
 
         if self.bazel_remote_cache:
