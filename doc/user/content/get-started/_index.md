@@ -61,7 +61,7 @@ this exact purpose.
 ### Standard SQL support
 
 You can interact with Materialize using SQL. You can build complex analytical
-workloads using **[various types of join](/sql/select/join/)** (including
+workloads using **[any type of join](/sql/select/join/)** (including
 non-windowed joins and joins on arbitrary conditions) as well as leverage new
 SQL patterns enabled by streaming like [**Change Data Capture
 (CDC)**](/integrations/#databases), [**temporal
