@@ -737,7 +737,9 @@ impl CatalogState {
             }
         }
 
-        if let Ok(desc) = entry.desc(&self.resolve_full_name(entry.name(), entry.conn_id())) {
+        let full_name = self.resolve_full_name(entry.name(), entry.conn_id());
+        // Always report the latest for an objects columns.
+        if let Ok(desc) = entry.desc_latest(&full_name) {
             let defaults = match entry.item() {
                 CatalogItem::Table(Table {
                     data_source: TableDataSource::TableWrites { defaults },

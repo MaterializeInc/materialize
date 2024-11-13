@@ -211,7 +211,7 @@ impl<'a> DataflowBuilder<'a> {
                 let entry = self.catalog.get_entry(id);
                 match entry.item() {
                     CatalogItem::Table(table) => {
-                        dataflow.import_source(*id, table.desc.typ().clone(), monotonic);
+                        dataflow.import_source(*id, table.desc_for(&id).typ().clone(), monotonic);
                     }
                     CatalogItem::Source(source) => {
                         dataflow.import_source(*id, source.desc.typ().clone(), monotonic);
