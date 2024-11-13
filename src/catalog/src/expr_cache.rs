@@ -151,21 +151,26 @@ impl ExpressionCache {
         BTreeMap<GlobalId, LocalExpressions>,
         BTreeMap<GlobalId, GlobalExpressions>,
     ) {
+        println!("[LOOK HERE] CREATING DURABLE CACHE");
         let shard_id = expression_cache_shard_id(organization_id);
         let durable_cache = DurableCache::new(&persist, shard_id, "expressions").await;
         let mut cache = Self {
             deploy_generation,
             durable_cache,
         };
+        println!("[LOOK HERE] CREATED DURABLE CACHE");
 
+        println!("[LOOK HERE] OPENING INNER CACHE");
         const RETRIES: usize = 100;
-        for _ in 0..RETRIES {
+        for i in 0..RETRIES {
+            println!("[LOOK HERE] OPENING INNER CACHE ITERATION {i}");
             match cache
                 .try_open(&current_ids, remove_prior_gens, compact_shard, &dyncfgs)
                 .await
             {
                 Ok((local_expressions, global_expressions)) => {
-                    return (cache, local_expressions, global_expressions)
+                    println!("[LOOK HERE] OPENED INNER CACHE");
+                    return (cache, local_expressions, global_expressions);
                 }
                 Err(err) => debug!("failed to open cache: {err} ... retrying"),
             }
@@ -190,6 +195,8 @@ impl ExpressionCache {
         let mut keys_to_remove = Vec::new();
         let mut local_expressions = BTreeMap::new();
         let mut global_expressions = BTreeMap::new();
+
+        println!("[LOOK HERE] COLLECTING UPDATES");
 
         for (key, expressions) in self.durable_cache.entries_local() {
             if key.deploy_generation == self.deploy_generation {
@@ -242,12 +249,21 @@ impl ExpressionCache {
             }
         }
 
+        println!("[LOOK HERE] UPDATES COLLECTED");
+
+        println!("[LOOK HERE] SETTING UPDATES");
         let keys_to_remove: Vec<_> = keys_to_remove
             .iter()
             .map(|(key, expressions)| (key, expressions.as_ref()))
             .collect();
         self.durable_cache.try_set_many(&keys_to_remove).await?;
+        println!("[LOOK HERE] SETTED UPDATES");
 
+        println!(
+            "[LOOK HERE] COMPACTING SHARD; FUEL: {:?}; WAIT: {:?}",
+            EXPRESSION_CACHE_FORCE_COMPACTION_FUEL.handle(dyncfgs).get(),
+            EXPRESSION_CACHE_FORCE_COMPACTION_WAIT.handle(dyncfgs).get()
+        );
         if compact_shard {
             let fuel = EXPRESSION_CACHE_FORCE_COMPACTION_FUEL.handle(dyncfgs);
             let wait = EXPRESSION_CACHE_FORCE_COMPACTION_WAIT.handle(dyncfgs);
@@ -255,6 +271,7 @@ impl ExpressionCache {
                 .dangerous_compact_shard(move || fuel.get(), move || wait.get())
                 .await;
         }
+        println!("[LOOK HERE] COMPACTED SHARD");
 
         Ok((local_expressions, global_expressions))
     }

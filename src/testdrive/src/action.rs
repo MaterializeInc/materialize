@@ -381,6 +381,7 @@ impl State {
                 &self.persist_clients,
             )
             .await?;
+            println!("[LOOK HERE] OPENING DEBUG READ ONLY CATALOG");
             let catalog = Catalog::open_debug_read_only_persist_catalog_config(
                 persist_client,
                 SYSTEM_TIME.clone(),
@@ -389,6 +390,7 @@ impl State {
                 version,
             )
             .await?;
+            println!("[LOOK HERE] OPENED DEBUG READ ONLY CATALOG");
             let res = f(catalog.for_session(&Session::dummy()));
             catalog.expire().await;
             Ok(Some(res))

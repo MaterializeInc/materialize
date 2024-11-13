@@ -219,6 +219,7 @@ impl Catalog {
         config: StateConfig,
         storage: &'a mut Box<dyn mz_catalog::durable::DurableCatalogState>,
     ) -> Result<InitializeStateResult, AdapterError> {
+        println!("[LOOK HERE] DOING INITIAL STATE STUFF");
         for builtin_role in BUILTIN_ROLES {
             assert!(
                 is_reserved_name(builtin_role.name),
@@ -290,11 +291,14 @@ impl Catalog {
             aws_privatelink_availability_zones: config.aws_privatelink_availability_zones,
             http_host_name: config.http_host_name,
         };
+        let deploy_generation = storage.get_deployment_generation().await?;
 
         let mut updates: Vec<_> = storage.sync_to_current_updates().await?;
         assert!(!updates.is_empty(), "initial catalog snapshot is missing");
         let mut txn = storage.transaction().await?;
+        println!("[LOOK HERE] DID INITIAL STATE STUFF");
 
+        println!("[LOOK HERE] DOING BUILTIN MIGRATIONS");
         // Migrate/update durable data before we start loading the in-memory catalog.
         let (migrated_builtins, new_builtin_collections) = {
             migrate::durable_migrate(&mut txn, config.boot_ts)?;
@@ -330,7 +334,9 @@ impl Catalog {
 
         let op_updates = txn.get_and_commit_op_updates();
         updates.extend(op_updates);
+        println!("[LOOK HERE] DOING BUILTIN MIGRATIONS");
 
+        println!("[LOOK HERE] DOING SYSTEM PARAMETER STUFF");
         // Seed the in-memory catalog with values that don't come from the durable catalog.
         {
             // Set defaults from configuration passed in the provided `system_parameter_defaults`
@@ -360,7 +366,9 @@ impl Catalog {
             updates.iter().all(|(_, _, diff)| *diff == 1),
             "consolidated updates should be positive during startup: {updates:?}"
         );
+        println!("[LOOK HERE] DID SYSTEM PARAMETER STUFF");
 
+        println!("[LOOK HERE] DOING SORTING UPDATES");
         let mut pre_item_updates = Vec::new();
         let mut system_item_updates = Vec::new();
         let mut item_updates = Vec::new();
@@ -408,12 +416,16 @@ impl Catalog {
                 }
             }
         }
+        println!("[LOOK HERE] UPDATES SORTED");
 
+        println!("[LOOK HERE] APPLYING PRE ITEM");
         let builtin_table_update = state
             .apply_updates_for_bootstrap(pre_item_updates, &mut LocalExpressionCache::Closed)
             .await;
         builtin_table_updates.extend(builtin_table_update);
+        println!("[LOOK HERE] PRE ITEM APPLIED");
 
+        println!("[LOOK HERE] OPENING CACHE");
         let expr_cache_start = Instant::now();
         info!("startup: coordinator init: catalog open: expr cache open beginning");
         // We wait until after the `pre_item_updates` to open the cache so we can get accurate
@@ -435,7 +447,7 @@ impl Catalog {
                 .collect();
             let dyncfgs = config.persist_client.dyncfgs().clone();
             let expr_cache_config = ExpressionCacheConfig {
-                deploy_generation: config.deploy_generation,
+                deploy_generation,
                 persist: config.persist_client,
                 organization_id: state.config.environment_id.organization_id(),
                 current_ids,
@@ -443,6 +455,7 @@ impl Catalog {
                 compact_shard: config.read_only,
                 dyncfgs,
             };
+
             let (expr_cache_handle, cached_local_exprs, cached_global_exprs) =
                 ExpressionCacheHandle::spawn_expression_cache(expr_cache_config).await;
             (
@@ -458,12 +471,16 @@ impl Catalog {
             "startup: coordinator init: catalog open: expr cache open complete in {:?}",
             expr_cache_start.elapsed()
         );
+        println!("[LOOK HERE] CACHE OPENED");
 
+        println!("[LOOK HERE] APPLYING SYS OBJECTS");
         let builtin_table_update = state
             .apply_updates_for_bootstrap(system_item_updates, &mut local_expr_cache)
             .await;
         builtin_table_updates.extend(builtin_table_update);
+        println!("[LOOK HERE] SYS OBJECTS APPLIED");
 
+        println!("[LOOK HERE] DOING AST MIGRATIONS");
         let last_seen_version = txn
             .get_catalog_content_version()
             .unwrap_or_else(|| "new".to_string());
@@ -492,12 +509,16 @@ impl Catalog {
                 .await
         };
         builtin_table_updates.extend(builtin_table_update);
+        println!("[LOOK HERE] DID AST MIGRATIONS");
 
+        println!("[LOOK HERE] DOING POST ITEM UPDATES");
         let builtin_table_update = state
             .apply_updates_for_bootstrap(post_item_updates, &mut local_expr_cache)
             .await;
         builtin_table_updates.extend(builtin_table_update);
+        println!("[LOOK HERE] DID POST ITEM UPDATES");
 
+        println!("[LOOK HERE] DOING BUILTIN ITEM MIGRATIONS");
         // Migrate builtin items.
         let BuiltinItemMigrationResult {
             builtin_table_updates: builtin_table_update,
@@ -514,10 +535,15 @@ impl Catalog {
         .await?;
         builtin_table_updates.extend(builtin_table_update);
         let builtin_table_updates = state.resolve_builtin_table_updates(builtin_table_updates);
+        println!("[LOOK HERE] DID BUILTIN ITEM MIGRATIONS");
 
+        println!("[LOOK HERE] COMMITTING");
         txn.commit().await?;
+        println!("[LOOK HERE] COMMITTED");
 
+        println!("[LOOK HERE] CLEANING UP");
         cleanup_action.await;
+        println!("[LOOK HERE] CLEANED UP");
 
         Ok(InitializeStateResult {
             state,
@@ -547,6 +573,7 @@ impl Catalog {
         async move {
             let mut storage = config.storage;
 
+            println!("[LOOK HERE] INITIALIZING STATE");
             let InitializeStateResult {
                 state,
                 storage_collections_to_drop,
@@ -565,6 +592,7 @@ impl Catalog {
                     .instrument(tracing::info_span!("catalog::initialize_state"))
                     .boxed()
                     .await?;
+            println!("[LOOK HERE] INITIALIZED STATE");
 
             let catalog = Catalog {
                 state,

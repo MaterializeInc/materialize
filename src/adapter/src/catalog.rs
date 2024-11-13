@@ -616,6 +616,7 @@ impl Catalog {
         environment_id: Option<EnvironmentId>,
         system_parameter_defaults: BTreeMap<String, String>,
     ) -> Result<Catalog, anyhow::Error> {
+        println!("[LOOK HERE] OPENING DEBUG CATALOG INNER");
         let metrics_registry = &MetricsRegistry::new();
         let active_connection_count = Arc::new(std::sync::Mutex::new(ConnectionCounter::new(0, 0)));
         let secrets_reader = Arc::new(InMemorySecretsController::new());
@@ -638,7 +639,6 @@ impl Catalog {
                 all_features: false,
                 build_info: &DUMMY_BUILD_INFO,
                 environment_id: environment_id.unwrap_or(EnvironmentId::for_tests()),
-                deploy_generation: 0,
                 read_only: false,
                 now,
                 boot_ts: previous_ts,
@@ -664,6 +664,7 @@ impl Catalog {
             },
         })
         .await?;
+        println!("[LOOK HERE] OPENED DEBUG CATALOG INNER");
         Ok(catalog)
     }
 

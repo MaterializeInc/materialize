@@ -267,6 +267,7 @@ impl<C: DurableCacheCodec> DurableCache<C> {
         let mut updates = Vec::new();
         let mut seen_keys = HashSet::new();
 
+        println!("[LOOK HERE] SETTING KEY VALUES");
         for (key, val) in entries {
             // If there are duplicate keys we ignore all but the first one.
             if seen_keys.insert(key) {
@@ -278,16 +279,25 @@ impl<C: DurableCacheCodec> DurableCache<C> {
                 }
             }
         }
+        println!("[LOOK HERE] SETTED KEY VALUES");
+        println!("[LOOK HERE] CONSOLIDATING");
         consolidate(&mut updates);
+        println!("[LOOK HERE] CONSOLIDATED");
 
+        println!("[LOOK HERE] COMPARING AND APPENDING AT {expected_upper:?}");
         let ret = self.compare_and_append(updates, expected_upper).await;
+        println!("[LOOK HERE] COMPARED AND APPENED");
         match ret {
             Ok(new_upper) => {
+                println!("[LOOK HERE] SYNCING TO {new_upper:?}");
                 self.sync_to(Some(new_upper)).await;
+                println!("[LOOK HERE] SYNCED");
                 Ok(())
             }
             Err(err) => {
+                println!("[LOOK HERE] ERROR SYNCING TO {:?}", err.current);
                 self.sync_to(err.current.clone().into_option()).await;
+                println!("[LOOK HERE] ERROR SYNCED");
                 Err(Error::WriteConflict(err))
             }
         }
@@ -313,6 +323,7 @@ impl<C: DurableCacheCodec> DurableCache<C> {
         let expected_upper = write_ts;
         let new_upper = expected_upper + 1;
         let updates = updates.into_iter().map(|((k, v), d)| ((k, v), write_ts, d));
+        println!("[LOOK HERE] COMPARING AND APPENDING WITH THE WRITE HANDLE");
         self.write
             .compare_and_append(
                 updates,
@@ -321,6 +332,7 @@ impl<C: DurableCacheCodec> DurableCache<C> {
             )
             .await
             .expect("usage should be valid")?;
+        println!("[LOOK HERE] COMPARED AND APPENDED WITH THE WRITE HANDLE");
 
         // Lag the shard's upper by 1 to keep it readable.
         let downgrade_to = Antichain::from_elem(write_ts);
@@ -330,10 +342,12 @@ impl<C: DurableCacheCodec> DurableCache<C> {
         // That's not needed here, so we use the since handle's opaque token to avoid any comparison
         // failures.
         let opaque = *self.since_handle.opaque();
+        println!("[LOOK HERE] COMPARING AND DOWNGRADING");
         let ret = self
             .since_handle
             .compare_and_downgrade_since(&opaque, (&opaque, &downgrade_to))
             .await;
+        println!("[LOOK HERE] COMPARED AND DOWNGRADED");
         if let Err(e) = ret {
             soft_panic_or_log!("found opaque value {e}, but expected {opaque}");
         }

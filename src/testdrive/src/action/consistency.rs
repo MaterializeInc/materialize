@@ -161,6 +161,7 @@ async fn check_catalog_state(state: &State) -> Result<(), anyhow::Error> {
         storage_metadata: Option<StorageMetadata>,
     }
 
+    println!("[LOOK HERE] GETTING MEMORY CATALOG");
     // Dump the in-memory catalog state of the Materialize environment that we're
     // connected to.
     let memory_catalog = reqwest::get(&format!(
@@ -172,6 +173,7 @@ async fn check_catalog_state(state: &State) -> Result<(), anyhow::Error> {
     .text()
     .await
     .context("deserialize catalog")?;
+    println!("[LOOK HERE] GOT MEMORY CATALOG");
 
     // Pull out the system parameter defaults from the in-memory catalog, as we
     // need to load the disk catalog with the same defaults.
@@ -191,6 +193,7 @@ async fn check_catalog_state(state: &State) -> Result<(), anyhow::Error> {
         .and_then(|storage_metadata| storage_metadata.unfinalized_shards);
 
     // Load the on-disk catalog and dump its state.
+    println!("[LOOK HERE] GETTING DISK CATALOG");
     let version: semver::Version = state.build_info.version.parse().expect("invalid version");
     let maybe_disk_catalog = state
         .with_catalog_copy(system_parameter_defaults, version, |catalog| {
@@ -209,6 +212,7 @@ async fn check_catalog_state(state: &State) -> Result<(), anyhow::Error> {
                 .dump(unfinalized_shards)
                 .expect("state must be dumpable")
         });
+    println!("[LOOK HERE] GOT DISK CATALOG");
     let Some(disk_catalog) = maybe_disk_catalog else {
         // TODO(parkmycar, def-): Ideally this could be an error, but a lot of test suites fail. We
         // should explicitly disable consistency check in these test suites.

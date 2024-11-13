@@ -46,11 +46,6 @@ pub struct StateConfig {
     pub build_info: &'static BuildInfo,
     /// A persistent ID associated with the environment.
     pub environment_id: EnvironmentId,
-    /// A number representing the environment's generation.
-    ///
-    /// This is incremented to request that the new process perform a graceful
-    /// transition of power from the prior generation.
-    pub deploy_generation: u64,
     /// Whether to start Materialize in read-only mode.
     pub read_only: bool,
     /// Function to generate wall clock now; can be mocked.

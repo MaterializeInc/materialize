@@ -158,6 +158,7 @@ def get_default_system_parameters(
         "timestamp_oracle": "postgres",
         "wait_catalog_consolidation_on_startup": "true",
         "with_0dt_deployment_max_wait": "30s",
+        "log_filter": "mz_persist=debug,info,mz_persist_client=debug,info",
         # End of list (ordered by name)
     }
 

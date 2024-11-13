@@ -3837,7 +3837,6 @@ pub fn serve(
                 all_features,
                 build_info,
                 environment_id: environment_id.clone(),
-                deploy_generation: controller_config.deploy_generation,
                 read_only: read_only_controllers,
                 now: now.clone(),
                 boot_ts: boot_ts.clone(),

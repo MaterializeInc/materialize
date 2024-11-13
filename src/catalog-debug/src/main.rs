@@ -584,7 +584,6 @@ async fn upgrade_check(
             all_features: false,
             build_info: &BUILD_INFO,
             environment_id: args.environment_id.clone(),
-            deploy_generation: args.deploy_generation.unwrap_or(u64::MAX),
             read_only: true,
             now,
             boot_ts,
