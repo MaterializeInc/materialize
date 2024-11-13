@@ -449,8 +449,8 @@ where
                     worker_id = %source_config.worker_id,
                     source_id = %source_config.id,
                     ?cap,
-                    ?stash,
-                    "input stash");
+                    ?updates,
+                    "stashed updates");
 
                 let mut min_remaining_time = drain_staged_input::<_, G, _, _, _>(
                     &mut updates,
@@ -513,8 +513,8 @@ where
                         worker_id = %source_config.worker_id,
                         source_id = %source_config.id,
                         ?cap,
-                        ?stash,
-                        "input stash");
+                        ?updates,
+                        "stashed updates");
 
                     let mut min_remaining_time = drain_staged_input::<_, G, _, _, _>(
                         &mut updates,
