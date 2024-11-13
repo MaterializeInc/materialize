@@ -29,7 +29,9 @@ use mz_catalog::builtin::{
 use mz_catalog::config::{BuiltinItemMigrationConfig, ClusterReplicaSizeMap, Config, StateConfig};
 #[cfg(test)]
 use mz_catalog::durable::CatalogError;
-use mz_catalog::durable::{test_bootstrap_args, DurableCatalogState, TestCatalogStateBuilder};
+use mz_catalog::durable::{
+    test_bootstrap_args, BootstrapArgs, DurableCatalogState, TestCatalogStateBuilder,
+};
 use mz_catalog::expr_cache::{ExpressionCacheHandle, GlobalExpressions, LocalExpressions};
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
@@ -590,15 +592,14 @@ impl Catalog {
         environment_id: EnvironmentId,
         system_parameter_defaults: BTreeMap<String, String>,
         version: semver::Version,
+        bootstrap_args: &BootstrapArgs,
     ) -> Result<Catalog, anyhow::Error> {
         let openable_storage = TestCatalogStateBuilder::new(persist_client.clone())
             .with_organization_id(environment_id.organization_id())
             .with_version(version)
             .build()
             .await?;
-        let storage = openable_storage
-            .open_read_only(&test_bootstrap_args())
-            .await?;
+        let storage = openable_storage.open_read_only(bootstrap_args).await?;
         Self::open_debug_catalog_inner(
             persist_client,
             storage,
