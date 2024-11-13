@@ -187,9 +187,12 @@ async fn check_catalog_state(state: &State) -> Result<(), anyhow::Error> {
     // Load the on-disk catalog and dump its state.
     let version: semver::Version = state.build_info.version.parse().expect("invalid version");
     let maybe_disk_catalog = state
-        .with_catalog_copy(system_parameter_defaults, version, |catalog| {
-            catalog.state().clone()
-        })
+        .with_catalog_copy(
+            system_parameter_defaults,
+            version,
+            &state.materialize.bootstrap_args,
+            |catalog| catalog.state().clone(),
+        )
         .await
         .map_err(|e| anyhow!("failed to read on-disk catalog state: {e}"))?
         .map(|catalog| {

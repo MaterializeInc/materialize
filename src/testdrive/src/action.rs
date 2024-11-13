@@ -24,6 +24,8 @@ use itertools::Itertools;
 use mz_adapter::catalog::{Catalog, ConnCatalog};
 use mz_adapter::session::Session;
 use mz_build_info::BuildInfo;
+use mz_catalog::config::ClusterReplicaSizeMap;
+use mz_catalog::durable::BootstrapArgs;
 use mz_kafka_util::client::{create_new_client_config_simple, MzClientContext};
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
@@ -133,6 +135,8 @@ pub struct Config {
     pub materialize_catalog_config: Option<CatalogConfig>,
     /// Build information
     pub build_info: &'static BuildInfo,
+    /// Configured cluster replica sizes
+    pub materialize_cluster_replica_sizes: ClusterReplicaSizeMap,
 
     // === Persist options. ===
     /// Handle to the persist consensus system.
@@ -188,6 +192,7 @@ pub struct MaterializeState {
     user: String,
     pgclient: tokio_postgres::Client,
     environment_id: EnvironmentId,
+    bootstrap_args: BootstrapArgs,
 }
 
 pub struct State {
@@ -353,6 +358,7 @@ impl State {
         &self,
         system_parameter_defaults: BTreeMap<String, String>,
         version: semver::Version,
+        bootstrap_args: &BootstrapArgs,
         f: F,
     ) -> Result<Option<T>, anyhow::Error>
     where
@@ -387,6 +393,7 @@ impl State {
                 self.materialize.environment_id.clone(),
                 system_parameter_defaults,
                 version,
+                bootstrap_args,
             )
             .await?;
             let res = f(catalog.for_session(&Session::dummy()));
@@ -1093,6 +1100,12 @@ async fn create_materialize_state(
         .parse()
         .context("parsing environment ID")?;
 
+    let bootstrap_args = BootstrapArgs {
+        cluster_replica_size_map: config.materialize_cluster_replica_sizes.clone(),
+        default_cluster_replica_size: "ABC".to_string(),
+        bootstrap_role: None,
+    };
+
     let materialize_state = MaterializeState {
         catalog_config: materialize_catalog_config,
         sql_addr: materialize_sql_addr,
@@ -1103,6 +1116,7 @@ async fn create_materialize_state(
         user: materialize_user,
         pgclient,
         environment_id,
+        bootstrap_args,
     };
 
     Ok(materialize_state)
