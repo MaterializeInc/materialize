@@ -161,6 +161,7 @@ impl RawSourceCreationConfig {
 /// recorded which allows the ingestion to release upstream resources.
 pub fn create_raw_source<'g, G: Scope<Timestamp = ()>, C>(
     scope: &mut Child<'g, G, mz_repr::Timestamp>,
+    storage_state: &crate::storage_state::StorageState,
     committed_upper: &Stream<Child<'g, G, mz_repr::Timestamp>, ()>,
     config: RawSourceCreationConfig,
     source_connection: C,
@@ -197,6 +198,7 @@ where
 
     let (remap_collection, remap_token) = remap_operator(
         scope,
+        storage_state,
         config.clone(),
         probed_upper_rx,
         ingested_upper_rx,
@@ -449,6 +451,7 @@ where
 /// upper summaries will be exchanged to it.
 fn remap_operator<G, FromTime>(
     scope: &G,
+    storage_state: &crate::storage_state::StorageState,
     config: RawSourceCreationConfig,
     mut probed_upper: watch::Receiver<Option<Probe<FromTime>>>,
     mut ingested_upper: watch::Receiver<MutableAntichain<FromTime>>,
@@ -479,6 +482,8 @@ where
         busy_signal: _,
     } = config;
 
+    let read_only_rx = storage_state.read_only_rx.clone();
+
     let chosen_worker = usize::cast_from(id.hashed() % u64::cast_from(worker_count));
     let active_worker = chosen_worker == worker_id;
 
@@ -498,6 +503,7 @@ where
 
         let remap_handle = crate::source::reclock::compat::PersistHandle::<FromTime, _>::new(
             Arc::clone(&persist_clients),
+            read_only_rx,
             storage_metadata.clone(),
             as_of.clone(),
             shared_remap_upper,

@@ -13,6 +13,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{anyhow, Context};
 use differential_dataflow::lattice::Lattice;
@@ -34,6 +35,7 @@ use mz_storage_types::sources::{SourceData, SourceTimestamp};
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
 use timely::progress::Timestamp;
+use tokio::sync::watch;
 
 /// A handle to a persist shard that stores remap bindings
 pub struct PersistHandle<FromTime: SourceTimestamp, IntoTime: Timestamp + Lattice + Codec64> {
@@ -49,6 +51,8 @@ pub struct PersistHandle<FromTime: SourceTimestamp, IntoTime: Timestamp + Lattic
         >,
     >,
     write_handle: WriteHandle<SourceData, (), IntoTime, Diff>,
+    /// Whether or not this handle is in read-only mode.
+    read_only_rx: watch::Receiver<bool>,
     pending_batch: Vec<(FromTime, IntoTime, Diff)>,
     // Reports `self`'s write frontier.
     shared_write_frontier: Rc<RefCell<Antichain<IntoTime>>>,
@@ -61,6 +65,7 @@ where
 {
     pub async fn new(
         persist_clients: Arc<PersistClientCache>,
+        read_only_rx: watch::Receiver<bool>,
         metadata: CollectionMetadata,
         as_of: Antichain<IntoTime>,
         shared_write_frontier: Rc<RefCell<Antichain<IntoTime>>>,
@@ -159,6 +164,7 @@ where
         Ok(Self {
             events,
             write_handle,
+            read_only_rx,
             pending_batch: vec![],
             shared_write_frontier,
         })
@@ -216,6 +222,56 @@ where
         upper: Antichain<Self::IntoTime>,
         new_upper: Antichain<Self::IntoTime>,
     ) -> Result<(), UpperMismatch<Self::IntoTime>> {
+        if *self.read_only_rx.borrow() {
+            // We have to wait for either us coming out of read-only mode or
+            // someone else advancing the upper. If we just returned an
+            // `UpperMismatch` while in read-only mode, we would go into a busy
+            // loop because we'd be called over and over again. One presumes.
+
+            loop {
+                tracing::trace!(
+                    ?upper,
+                    ?new_upper,
+                    persist_upper = ?self.write_handle.upper(),
+                    "persist remap handle is in read-only mode, waiting until we come out of it or the shard upper advances");
+
+                // We don't try to be too smart here, and for example use
+                // `wait_for_upper_past()`. We'd have to use a select!, which
+                // would require cancel safety of `wait_for_upper_past()`, which
+                // it doesn't advertise.
+                let _ =
+                    tokio::time::timeout(Duration::from_secs(1), self.read_only_rx.changed()).await;
+
+                if !*self.read_only_rx.borrow() {
+                    tracing::trace!(
+                        ?upper,
+                        ?new_upper,
+                        persist_upper = ?self.write_handle.upper(),
+                        "persist remap handle has come out of read-only mode"
+                    );
+
+                    // It's okay to write now.
+                    break;
+                }
+
+                let current_upper = self.write_handle.fetch_recent_upper().await;
+
+                if PartialOrder::less_than(&upper, current_upper) {
+                    tracing::trace!(
+                        ?upper,
+                        ?new_upper,
+                        persist_upper = ?current_upper,
+                        "someone else advanced the upper, aborting write"
+                    );
+
+                    return Err(UpperMismatch {
+                        current: current_upper.clone(),
+                        expected: upper,
+                    });
+                }
+            }
+        }
+
         let row_updates = updates.into_iter().map(|(from_ts, into_ts, diff)| {
             ((SourceData(Ok(from_ts.encode_row())), ()), into_ts, diff)
         });

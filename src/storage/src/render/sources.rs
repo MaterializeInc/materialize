@@ -102,6 +102,7 @@ where
     // correct `SourceReader` implementations
     let (streams, mut health, source_tokens) = source::create_raw_source(
         scope,
+        storage_state,
         resume_stream,
         base_source_config.clone(),
         connection,

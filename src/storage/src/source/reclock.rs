@@ -621,6 +621,7 @@ mod tests {
     use mz_storage_types::sources::{MzOffset, SourceData};
     use mz_timely_util::order::Partitioned;
     use timely::progress::Timestamp as _;
+    use tokio::sync::watch;
 
     use super::*;
 
@@ -675,8 +676,11 @@ mod tests {
 
         let write_frontier = Rc::new(RefCell::new(Antichain::from_elem(Timestamp::minimum())));
 
+        // Always in read-write mode for tests.
+        let (_read_only_tx, read_only_rx) = watch::channel(false);
         let remap_handle = crate::source::reclock::compat::PersistHandle::new(
             Arc::clone(&*PERSIST_CACHE),
+            read_only_rx,
             metadata,
             as_of.clone(),
             write_frontier,
