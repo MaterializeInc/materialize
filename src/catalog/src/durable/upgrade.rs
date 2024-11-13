@@ -303,6 +303,8 @@ async fn run_versioned_upgrade<V1: IntoStateUpdateKindJson, V2: IntoStateUpdateK
     current_version: u64,
     migration_logic: impl FnOnce(Vec<V1>) -> Vec<MigrationAction<V1, V2>>,
 ) -> Result<u64, CatalogError> {
+    tracing::info!(current_version, "running versioned Catalog upgrade");
+
     // 1. Use the V1 to deserialize the contents of the current snapshot.
     let snapshot: Vec<_> = unopened_catalog_state
         .snapshot
