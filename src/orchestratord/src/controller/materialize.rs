@@ -43,6 +43,8 @@ pub struct Args {
     enable_tls: bool,
     #[clap(long)]
     helm_chart_version: Option<String>,
+    #[clap(long, default_value = "kubernetes")]
+    secrets_controller: String,
 
     #[clap(long)]
     console_image_tag_map: Vec<KeyValueArg<String, String>>,

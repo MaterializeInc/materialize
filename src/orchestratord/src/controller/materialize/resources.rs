@@ -880,14 +880,16 @@ fn create_environmentd_statefulset_object(
             .map(|origin| format!("--cors-allowed-origin={}", origin.to_str().unwrap())),
     );
 
+    args.push(format!(
+        "--secrets-controller={}",
+        config.secrets_controller
+    ));
+
     if config.local_development {
         args.extend([
-            "--secrets-controller=kubernetes".into(),
             "--system-parameter-default=cluster_enable_topology_spread=false".into(),
             "--system-parameter-default=log_filter=mz_pgwire[{conn_uuid}]=debug,mz_server_core[{conn_uuid}]=debug,info".into(),
         ]);
-    } else {
-        args.push("--secrets-controller=aws-secrets-manager".into());
     }
 
     if config.enable_tls {
