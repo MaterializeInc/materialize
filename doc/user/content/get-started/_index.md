@@ -60,7 +60,7 @@ this exact purpose.
 
 ### Standard SQL support
 
-You can interact with Materialize using SQL. You can build complex analytical
+You use SQL to interact with Materialize. You can build complex analytical
 workloads using **[any type of join](/sql/select/join/)** (including
 non-windowed joins and joins on arbitrary conditions) as well as leverage new
 SQL patterns enabled by streaming like [**Change Data Capture
@@ -68,14 +68,7 @@ SQL patterns enabled by streaming like [**Change Data Capture
 filters**](/sql/patterns/temporal-filters/), and
 [**subscriptions**](/sql/subscribe/).
 
-Materialize follows the SQL standard (SQL-92) implementation and aims for
-compatibility with the PostgreSQL dialect. It **does not** aim for
-compatibility with a specific version of PostgreSQL. This means that
-Materialize might support syntax from any released PostgreSQL version, but does
-not provide full coverage of the PostgreSQL dialect. The implementation and
-performance of specific features (like [window functions](/transform-data/idiomatic-materialize-sql/appendix/window-function-to-materialize))
-might also differ, because Materialize uses an entirely different database engine
-based on [Timely and Differential Dataflow](/get-started/#incremental-updates).
+{{% materialize-postgres-compatibility %}}
 
 ### Real-time data ingestion
 

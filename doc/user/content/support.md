@@ -89,3 +89,7 @@ ticket:
 ## Checking service status
 
 Check the current status of our services on the [status page](https://status.materialize.com), where we announce both planned and unplanned maintenance windows. You can also use the [status page API](https://status.materialize.com/api) to programmatically access the information on the status page.
+
+## Request a feature
+
+To request a new feature in Materialize, please submit a [feature request](https://github.com/MaterializeInc/materialize/discussions/new?category=feature-requests).

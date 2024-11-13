@@ -9,13 +9,10 @@ menu:
     identifier: transform-overview
 ---
 
-Materialize follows the SQL standard (SQL-92) implementation and strives for
-compatibility with the PostgreSQL dialect rather than aiming for compatibility
-with a specific version of PostgreSQL. This allows Materialize to add the latest
-PostgreSQL features even as some features of specific versions of PostgreSQL are
-missing. Performance for supported features may differ between Materialize and
-PostgreSQL, such as with [window
-functions](/transform-data/idiomatic-materialize-sql/appendix/window-function-to-materialize).
+With Materialize, you can use SQL to transform, deliver, and act on
+fast-changing data.
+
+{{% materialize-postgres-compatibility %}}
 
 ### SELECT statement
 
