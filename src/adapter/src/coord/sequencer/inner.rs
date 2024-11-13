@@ -4277,7 +4277,7 @@ impl Coordinator {
         };
         let maybe_network_policy = policy_name
             .as_ref()
-            .and_then(|name| self.catalog.get_network_policy_by_name(&name));
+            .and_then(|name| self.catalog.get_network_policy_by_name(name));
         let Some(network_policy) = maybe_network_policy else {
             return Err(AdapterError::PlanError(plan::PlanError::VarError(
                 VarError::InvalidParameterValue {
