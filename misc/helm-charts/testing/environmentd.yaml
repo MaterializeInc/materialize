@@ -29,7 +29,7 @@ metadata:
   name: 12345678-1234-1234-1234-123456789012
   namespace: materialize-environment
 spec:
-  environmentdImageRef: materialize/environmentd:v0.125.0-dev.0--pr.g38d50d921720caaf15998f30988db1aed720b2fc
+  environmentdImageRef: materialize/environmentd:v0.125.0-dev.0--pr.g6465f9230184c3ecc9e5247a0619a5fb9ffd9343
   requestRollout: 22222222-2222-2222-2222-222222222222
   forceRollout: 33333333-3333-3333-3333-333333333333
   inPlaceRollout: false
