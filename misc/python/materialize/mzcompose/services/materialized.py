@@ -10,6 +10,7 @@
 
 import json
 from enum import Enum
+from typing import Any
 
 from materialize import docker
 from materialize.mz_version import MzVersion
@@ -17,6 +18,8 @@ from materialize.mzcompose import (
     DEFAULT_CRDB_ENVIRONMENT,
     DEFAULT_MZ_ENVIRONMENT_ID,
     DEFAULT_MZ_VOLUMES,
+    bootstrap_cluster_replica_size,
+    cluster_replica_size_map,
     get_default_system_parameters,
 )
 from materialize.mzcompose.service import (
@@ -63,8 +66,8 @@ class Materialized(Service):
         publish: bool | None = None,
         stop_grace_period: str = "120s",
         metadata_store: str = METADATA_STORE,
-        cluster_replica_size: dict[str, str] | None = None,
-        bootstrap_replica_size: str = "1",
+        cluster_replica_size: dict[str, dict[str, Any]] | None = None,
+        bootstrap_replica_size: str | None = None,
     ) -> None:
         if name is None:
             name = "materialized"
@@ -76,8 +79,10 @@ class Materialized(Service):
             s: {"condition": "service_started"} for s in depends_on
         }
 
+        if bootstrap_replica_size is None:
+            bootstrap_replica_size = bootstrap_cluster_replica_size()
         if cluster_replica_size is None:
-            cluster_replica_size = cluster_replica_sizes()
+            cluster_replica_size = cluster_replica_size_map()
 
         environment = [
             "MZ_NO_TELEMETRY=1",
@@ -310,39 +315,3 @@ LEADER_STATUS_HEALTHCHECK: list[str] = [
     "-f",
     "localhost:6878/api/leader/status",
 ]
-
-
-def cluster_replica_sizes() -> dict[str, dict[str, any]]:
-    def replica_size(
-        workers: int, scale: int, memory_limit: str | None, disabled: bool = False
-    ) -> dict[str, any]:
-        return {
-            "memory_limit": memory_limit,
-            # "cpu_limit": None,
-            # "disk_limit": None,
-            "scale": scale,
-            "workers": workers,
-            "credits_per_hour": "1",
-            # "cpu_exclusive": False,
-            "disabled": disabled,
-            # "selectors": {},
-        }
-
-    replica_sizes = {}
-
-    for i in range(0, 6):
-        workers = 1 << i
-        replica_sizes[f"{workers}"] = replica_size(workers, 1, None)
-        for mem in [4, 8, 16, 32]:
-            replica_sizes[f"{workers}-{mem}G"] = replica_size(workers, 1, f"{mem} GiB")
-
-        replica_sizes[f"{workers}-1"] = replica_size(1, workers, None)
-        replica_sizes[f"{workers}-{workers}"] = replica_size(workers, workers, None)
-        replica_sizes[f"mem-{workers}"] = replica_size(workers, 1, f"{workers} GiB")
-
-    replica_sizes["2-4"] = replica_size(4, 2, None)
-    replica_sizes["free"] = replica_size(0, 0, None, True)
-    replica_sizes["1cc"] = replica_size(1, 1, None)
-    replica_sizes["1C"] = replica_size(1, 1, None)
-
-    return replica_sizes

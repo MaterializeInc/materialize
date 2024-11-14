@@ -150,7 +150,7 @@ enum Action {
         #[clap(flatten)]
         secrets: SecretsReaderCliArgs,
         /// Map of cluster name to resource specification. Check the README for latest values.
-        cluster_replica_sizes: Option<String>,
+        cluster_replica_sizes: String,
     },
 }
 
@@ -250,10 +250,8 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             secrets,
             cluster_replica_sizes,
         } => {
-            let cluster_replica_sizes: ClusterReplicaSizeMap = match cluster_replica_sizes {
-                None => Default::default(),
-                Some(json) => serde_json::from_str(&json).context("parsing replica size map")?,
-            };
+            let cluster_replica_sizes: ClusterReplicaSizeMap =
+                serde_json::from_str(&cluster_replica_sizes).context("parsing replica size map")?;
             upgrade_check(
                 args,
                 openable_state,
@@ -551,7 +549,7 @@ async fn upgrade_check(
                 default_cluster_replica_size:
                     "DEFAULT CLUSTER REPLICA SIZE IS ONLY USED FOR NEW ENVIRONMENTS".into(),
                 bootstrap_role: None,
-                cluster_replica_size_map: ClusterReplicaSizeMap::default(),
+                cluster_replica_size_map: cluster_replica_sizes.clone(),
             },
         )
         .await?;

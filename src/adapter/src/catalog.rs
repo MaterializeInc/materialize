@@ -519,12 +519,10 @@ impl Catalog {
     {
         let persist_client = PersistClient::new_for_tests().await;
         let environmentd_id = Uuid::new_v4();
-        let catalog = match Self::open_debug_catalog(persist_client, environmentd_id).await {
-            Ok(catalog) => catalog,
-            Err(err) => {
-                panic!("unable to open debug stash: {err}");
-            }
-        };
+        let bootstrap_args = test_bootstrap_args();
+        let catalog = Self::open_debug_catalog(persist_client, environmentd_id, &bootstrap_args)
+            .await
+            .expect("can open debug catalog");
         f(catalog).await
     }
 
@@ -534,6 +532,7 @@ impl Catalog {
     pub async fn open_debug_catalog(
         persist_client: PersistClient,
         organization_id: Uuid,
+        bootstrap_args: &BootstrapArgs,
     ) -> Result<Catalog, anyhow::Error> {
         let now = SYSTEM_TIME.clone();
         let environment_id = None;
@@ -542,7 +541,7 @@ impl Catalog {
             .with_default_deploy_generation()
             .build()
             .await?;
-        let storage = openable_storage.open(now(), &test_bootstrap_args()).await?;
+        let storage = openable_storage.open(now(), bootstrap_args).await?;
         let system_parameter_defaults = BTreeMap::default();
         Self::open_debug_catalog_inner(
             persist_client,
@@ -550,6 +549,7 @@ impl Catalog {
             now,
             environment_id,
             system_parameter_defaults,
+            bootstrap_args,
         )
         .await
     }
@@ -561,6 +561,7 @@ impl Catalog {
     pub async fn open_debug_read_only_catalog(
         persist_client: PersistClient,
         organization_id: Uuid,
+        bootstrap_args: &BootstrapArgs,
     ) -> Result<Catalog, anyhow::Error> {
         let now = SYSTEM_TIME.clone();
         let environment_id = None;
@@ -578,6 +579,7 @@ impl Catalog {
             now,
             environment_id,
             system_parameter_defaults,
+            bootstrap_args,
         )
         .await
     }
@@ -606,6 +608,7 @@ impl Catalog {
             now,
             Some(environment_id),
             system_parameter_defaults,
+            bootstrap_args,
         )
         .await
     }
@@ -616,6 +619,7 @@ impl Catalog {
         now: NowFn,
         environment_id: Option<EnvironmentId>,
         system_parameter_defaults: BTreeMap<String, String>,
+        bootstrap_args: &BootstrapArgs,
     ) -> Result<Catalog, anyhow::Error> {
         let metrics_registry = &MetricsRegistry::new();
         let active_connection_count = Arc::new(std::sync::Mutex::new(ConnectionCounter::new(0, 0)));
@@ -623,6 +627,7 @@ impl Catalog {
         // Used as a lower boundary of the boot_ts, but it's ok to use now() for
         // debugging/testing.
         let previous_ts = now().into();
+        let replica_size = &bootstrap_args.default_cluster_replica_size;
         let OpenCatalogResult {
             catalog,
             storage_collections_to_drop: _,
@@ -643,12 +648,12 @@ impl Catalog {
                 now,
                 boot_ts: previous_ts,
                 skip_migrations: true,
-                cluster_replica_sizes: Default::default(),
-                builtin_system_cluster_replica_size: "1".into(),
-                builtin_catalog_server_cluster_replica_size: "1".into(),
-                builtin_probe_cluster_replica_size: "1".into(),
-                builtin_support_cluster_replica_size: "1".into(),
-                builtin_analytics_cluster_replica_size: "1".into(),
+                cluster_replica_sizes: bootstrap_args.cluster_replica_size_map.clone(),
+                builtin_system_cluster_replica_size: replica_size.clone(),
+                builtin_catalog_server_cluster_replica_size: replica_size.clone(),
+                builtin_probe_cluster_replica_size: replica_size.clone(),
+                builtin_support_cluster_replica_size: replica_size.clone(),
+                builtin_analytics_cluster_replica_size: replica_size.clone(),
                 system_parameter_defaults,
                 remote_system_parameters: None,
                 availability_zones: vec![],
@@ -2204,7 +2209,7 @@ mod tests {
         Builtin, BuiltinType, UnsafeBuiltinTableFingerprintWhitespace, BUILTINS,
         UNSAFE_DO_NOT_CALL_THIS_IN_PRODUCTION_BUILTIN_TABLE_FINGERPRINT_WHITESPACE,
     };
-    use mz_catalog::durable::{CatalogError, DurableCatalogError, FenceError};
+    use mz_catalog::durable::{test_bootstrap_args, CatalogError, DurableCatalogError, FenceError};
     use mz_catalog::SYSTEM_CONN_ID;
     use mz_controller_types::{ClusterId, ReplicaId};
     use mz_expr::MirScalarExpr;
@@ -2319,11 +2324,15 @@ mod tests {
     async fn test_catalog_revision() {
         let persist_client = PersistClient::new_for_tests().await;
         let organization_id = Uuid::new_v4();
+        let bootstrap_args = test_bootstrap_args();
         {
-            let mut catalog =
-                Catalog::open_debug_catalog(persist_client.clone(), organization_id.clone())
-                    .await
-                    .expect("unable to open debug catalog");
+            let mut catalog = Catalog::open_debug_catalog(
+                persist_client.clone(),
+                organization_id.clone(),
+                &bootstrap_args,
+            )
+            .await
+            .expect("unable to open debug catalog");
             assert_eq!(catalog.transient_revision(), 1);
             catalog
                 .transact(
@@ -2341,9 +2350,10 @@ mod tests {
             catalog.expire().await;
         }
         {
-            let catalog = Catalog::open_debug_catalog(persist_client, organization_id)
-                .await
-                .expect("unable to open debug catalog");
+            let catalog =
+                Catalog::open_debug_catalog(persist_client, organization_id, &bootstrap_args)
+                    .await
+                    .expect("unable to open debug catalog");
             // Re-opening the same catalog resets the transient_revision to 1.
             assert_eq!(catalog.transient_revision(), 1);
             catalog.expire().await;
@@ -2546,11 +2556,15 @@ mod tests {
         let organization_id = Uuid::new_v4();
         let id = CatalogItemId::User(1);
         let gid = GlobalId::User(1);
+        let bootstrap_args = test_bootstrap_args();
         {
-            let mut catalog =
-                Catalog::open_debug_catalog(persist_client.clone(), organization_id.clone())
-                    .await
-                    .expect("unable to open debug catalog");
+            let mut catalog = Catalog::open_debug_catalog(
+                persist_client.clone(),
+                organization_id.clone(),
+                &bootstrap_args,
+            )
+            .await
+            .expect("unable to open debug catalog");
             let item = catalog
                 .state()
                 .deserialize_item(
@@ -2583,9 +2597,10 @@ mod tests {
             catalog.expire().await;
         }
         {
-            let catalog = Catalog::open_debug_catalog(persist_client, organization_id)
-                .await
-                .expect("unable to open debug catalog");
+            let catalog =
+                Catalog::open_debug_catalog(persist_client, organization_id, &bootstrap_args)
+                    .await
+                    .expect("unable to open debug catalog");
             let view = catalog.get_entry(&id);
             assert_eq!("v", view.name.item);
             match &view.item {
@@ -3431,13 +3446,17 @@ mod tests {
     #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_builtin_migrations() {
         let persist_client = PersistClient::new_for_tests().await;
+        let bootstrap_args = test_bootstrap_args();
         let organization_id = Uuid::new_v4();
         let mv_name = "mv";
         let (mz_tables_id, mv_id) = {
-            let mut catalog =
-                Catalog::open_debug_catalog(persist_client.clone(), organization_id.clone())
-                    .await
-                    .expect("unable to open debug catalog");
+            let mut catalog = Catalog::open_debug_catalog(
+                persist_client.clone(),
+                organization_id.clone(),
+                &bootstrap_args,
+            )
+            .await
+            .expect("unable to open debug catalog");
 
             // Create a materialized view over `mz_tables`.
             let database_id = DatabaseId::User(1);
@@ -3507,9 +3526,10 @@ mod tests {
             ));
         }
         {
-            let catalog = Catalog::open_debug_catalog(persist_client, organization_id)
-                .await
-                .expect("unable to open debug catalog");
+            let catalog =
+                Catalog::open_debug_catalog(persist_client, organization_id, &bootstrap_args)
+                    .await
+                    .expect("unable to open debug catalog");
 
             let new_mz_tables_id = catalog
                 .entries()
@@ -3535,17 +3555,24 @@ mod tests {
     #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_multi_subscriber_catalog() {
         let persist_client = PersistClient::new_for_tests().await;
+        let bootstrap_args = test_bootstrap_args();
         let organization_id = Uuid::new_v4();
         let db_name = "DB";
 
-        let mut writer_catalog =
-            Catalog::open_debug_catalog(persist_client.clone(), organization_id.clone())
-                .await
-                .expect("open_debug_catalog");
-        let mut read_only_catalog =
-            Catalog::open_debug_read_only_catalog(persist_client.clone(), organization_id.clone())
-                .await
-                .expect("open_debug_read_only_catalog");
+        let mut writer_catalog = Catalog::open_debug_catalog(
+            persist_client.clone(),
+            organization_id.clone(),
+            &bootstrap_args,
+        )
+        .await
+        .expect("open_debug_catalog");
+        let mut read_only_catalog = Catalog::open_debug_read_only_catalog(
+            persist_client.clone(),
+            organization_id.clone(),
+            &bootstrap_args,
+        )
+        .await
+        .expect("open_debug_read_only_catalog");
         assert_err!(writer_catalog.resolve_database(db_name));
         assert_err!(read_only_catalog.resolve_database(db_name));
 
@@ -3575,9 +3602,10 @@ mod tests {
 
         assert_eq!(write_db, read_db);
 
-        let writer_catalog_fencer = Catalog::open_debug_catalog(persist_client, organization_id)
-            .await
-            .expect("open_debug_catalog for fencer");
+        let writer_catalog_fencer =
+            Catalog::open_debug_catalog(persist_client, organization_id, &bootstrap_args)
+                .await
+                .expect("open_debug_catalog for fencer");
         let fencer_db = writer_catalog_fencer
             .resolve_database(db_name)
             .expect("resolve_database for fencer");

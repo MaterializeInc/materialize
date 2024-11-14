@@ -266,7 +266,7 @@ struct Args {
     fivetran_destination_files_path: String,
     /// A map from size name to resource allocations for cluster replicas.
     #[clap(long, env = "CLUSTER_REPLICA_SIZES")]
-    cluster_replica_sizes: Option<String>,
+    cluster_replica_sizes: String,
 }
 
 #[tokio::main]
@@ -356,11 +356,9 @@ async fn main() {
         arg_vars.insert(name.to_string(), val.to_string());
     }
 
-    let cluster_replica_sizes: ClusterReplicaSizeMap = match args.cluster_replica_sizes {
-        None => Default::default(),
-        Some(json) => serde_json::from_str(&json)
-            .unwrap_or_else(|e| die!("testdrive: failed to parse replica size map: {}", e)),
-    };
+    let cluster_replica_sizes: ClusterReplicaSizeMap =
+        serde_json::from_str(&args.cluster_replica_sizes)
+            .unwrap_or_else(|e| die!("testdrive: failed to parse replica size map: {}", e));
 
     let materialize_catalog_config = if args.validate_catalog_store {
         Some(CatalogConfig {

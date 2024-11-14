@@ -437,7 +437,7 @@ pub struct Args {
         env = "CLUSTER_REPLICA_SIZES",
         requires = "bootstrap-default-cluster-replica-size"
     )]
-    cluster_replica_sizes: Option<String>,
+    cluster_replica_sizes: String,
     /// An API key for Segment. Enables export of audit events to Segment.
     #[clap(long, env = "SEGMENT_API_KEY")]
     segment_api_key: Option<String>,
@@ -980,10 +980,8 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         },
     };
 
-    let cluster_replica_sizes: ClusterReplicaSizeMap = match args.cluster_replica_sizes {
-        None => Default::default(),
-        Some(json) => serde_json::from_str(&json).context("parsing replica size map")?,
-    };
+    let cluster_replica_sizes: ClusterReplicaSizeMap =
+        serde_json::from_str(&args.cluster_replica_sizes).context("parsing replica size map")?;
 
     emit_boot_diagnostics!(&BUILD_INFO);
     sys::adjust_rlimits();

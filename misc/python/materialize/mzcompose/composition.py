@@ -44,7 +44,7 @@ import yaml
 from psycopg import Connection, Cursor
 
 from materialize import MZ_ROOT, mzbuild, spawn, ui
-from materialize.mzcompose import loader
+from materialize.mzcompose import cluster_replica_size_map, loader
 from materialize.mzcompose.service import Service
 from materialize.mzcompose.services.materialized import (
     LEADER_STATUS_HEALTHCHECK,
@@ -297,6 +297,7 @@ class Composition:
         check: bool = True,
         max_tries: int = 1,
         silent: bool = False,
+        environment: dict[str, str] | None = None,
     ) -> subprocess.CompletedProcess:
         """Invoke `docker compose` on the rendered composition.
 
@@ -363,6 +364,7 @@ class Composition:
                         stderr=subprocess.PIPE,
                         text=True,
                         bufsize=1,
+                        env=environment,
                     )
                     if stdin is not None:
                         p.stdin.write(stdin)  # type: ignore
@@ -415,6 +417,7 @@ class Composition:
                         input=stdin,
                         text=True,
                         bufsize=1,
+                        env=environment,
                     )
             except subprocess.CalledProcessError as e:
                 if e.stdout and not capture_and_print:
@@ -775,7 +778,7 @@ class Composition:
         return self.invoke(
             "run",
             *(["--entrypoint", entrypoint] if entrypoint else []),
-            *(f"-e{k}={v}" for k, v in env_extra.items()),
+            *(f"-e{k}" for k in env_extra.keys()),
             *(["--detach"] if detach else []),
             *(["--rm"] if rm else []),
             service,
@@ -785,6 +788,7 @@ class Composition:
             capture_and_print=capture_and_print,
             stdin=stdin,
             check=check,
+            environment=env_extra,
         )
 
     def run_testdrive_files(
@@ -801,12 +805,14 @@ class Composition:
                     f"--materialize-internal-url=postgres://mz_system@{mz_service}:6877",
                 ]
             )
+        environment = {"CLUST_REPLICA_SIZES": json.dumps(cluster_replica_size_map())}
         return self.run(
             "testdrive",
             *args,
             rm=rm,
             # needed for sufficient error information in the junit.xml while still printing to stdout during execution
             capture_and_print=True,
+            env_extra=environment,
         )
 
     def exec(

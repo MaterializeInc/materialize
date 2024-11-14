@@ -9,6 +9,7 @@
 
 use criterion::{criterion_group, criterion_main, Criterion};
 use mz_adapter::catalog::{Catalog, Op};
+use mz_catalog::durable::test_bootstrap_args;
 use mz_persist_client::PersistClient;
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 use tokio::runtime::Runtime;
@@ -18,10 +19,15 @@ fn bench_transact(c: &mut Criterion) {
     c.bench_function("transact", |b| {
         let runtime = Runtime::new().unwrap();
 
+        let bootstrap_args = test_bootstrap_args();
         let mut catalog = runtime.block_on(async {
-            Catalog::open_debug_catalog(PersistClient::new_for_tests().await, Uuid::new_v4())
-                .await
-                .unwrap()
+            Catalog::open_debug_catalog(
+                PersistClient::new_for_tests().await,
+                Uuid::new_v4(),
+                &bootstrap_args,
+            )
+            .await
+            .unwrap()
         });
         let mut id = 0;
         b.iter(|| {

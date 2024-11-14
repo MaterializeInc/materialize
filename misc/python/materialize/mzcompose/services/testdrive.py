@@ -9,14 +9,14 @@
 
 import json
 import random
+from typing import Any
 
 from materialize import buildkite
-from materialize.mzcompose import DEFAULT_MZ_VOLUMES
+from materialize.mzcompose import DEFAULT_MZ_VOLUMES, cluster_replica_size_map
 from materialize.mzcompose.service import (
     Service,
     ServiceDependency,
 )
-from materialize.mzcompose.services.materialized import cluster_replica_sizes
 from materialize.mzcompose.services.postgres import METADATA_STORE
 
 
@@ -58,12 +58,12 @@ class Testdrive(Service):
         mz_service: str = "materialized",
         metadata_store: str = METADATA_STORE,
         stop_grace_period: str = "120s",
-        cluster_replica_size: dict[str, str] | None = None,
+        cluster_replica_size: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         depends_graph: dict[str, ServiceDependency] = {}
 
         if cluster_replica_size is None:
-            cluster_replica_size = cluster_replica_sizes()
+            cluster_replica_size = cluster_replica_size_map()
 
         if environment is None:
             environment = [
