@@ -708,6 +708,8 @@ To see the available workflows, run:
         return composition not in {
             # sqllogictest already generates a proper junit.xml file
             "sqllogictest",
+            # testdrive already generates a proper junit.xml file
+            "testdrive",
             # not a test, run as post-command, and should not overwrite an existing junit.xml from a previous test
             "get-cloud-hostname",
         }

@@ -700,9 +700,7 @@ def annotate_logged_errors(
 def get_errors(log_file_names: list[str]) -> list[ErrorLog | JunitError]:
     error_logs = []
     for log_file_name in log_file_names:
-        # junit_testdrive_* is excluded by this, but currently
-        # not more useful than junit_mzcompose anyway
-        if "junit_" in log_file_name and "junit_testdrive_" not in log_file_name:
+        if "junit_" in log_file_name:
             error_logs.extend(_get_errors_from_junit_file(log_file_name))
         else:
             error_logs.extend(_get_errors_from_log_file(log_file_name))
@@ -729,7 +727,7 @@ def _get_errors_from_junit_file(log_file_name: str) -> list[JunitError]:
                     JunitError(
                         testcase.classname,
                         testcase.name,
-                        result.message or "",
+                        result.message.replace("&#10;", "\n") or "",
                         result.text or "",
                     )
                 )
