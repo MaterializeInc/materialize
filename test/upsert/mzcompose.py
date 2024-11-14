@@ -170,6 +170,8 @@ def workflow_rehydration(c: Composition) -> None:
                     "--orchestrator-process-scratch-directory=/scratch",
                 ],
                 additional_system_parameter_defaults={
+                    "storage_statistics_collection_interval": "1000",
+                    "storage_statistics_interval": "2000",
                     "enable_unorchestrated_cluster_replicas": "true",
                     "disk_cluster_replicas_default": "true",
                     "enable_disk_cluster_replicas": "true",
@@ -199,6 +201,8 @@ def workflow_rehydration(c: Composition) -> None:
                     "--orchestrator-process-scratch-directory=/scratch",
                 ],
                 additional_system_parameter_defaults={
+                    "storage_statistics_collection_interval": "1000",
+                    "storage_statistics_interval": "2000",
                     "enable_unorchestrated_cluster_replicas": "true",
                     "disk_cluster_replicas_default": "true",
                     "enable_disk_cluster_replicas": "true",
@@ -230,6 +234,8 @@ def workflow_rehydration(c: Composition) -> None:
                     "--orchestrator-process-scratch-directory=/scratch",
                 ],
                 additional_system_parameter_defaults={
+                    "storage_statistics_collection_interval": "1000",
+                    "storage_statistics_interval": "2000",
                     "enable_unorchestrated_cluster_replicas": "true",
                     # Force backpressure to be enabled.
                     "storage_dataflow_max_inflight_bytes": "1",
