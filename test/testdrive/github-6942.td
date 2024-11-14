@@ -7,11 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-> DROP CLUSTER IF EXISTS gh_23037_cluster CASCADE;
-> CREATE CLUSTER gh_23037_cluster SIZE '1', REPLICATION FACTOR 1;
+> DROP CLUSTER IF EXISTS gh_6942_cluster CASCADE;
+> CREATE CLUSTER gh_6942_cluster SIZE '1', REPLICATION FACTOR 1;
 
 > CREATE SOURCE auction_house
-  IN CLUSTER gh_23037_cluster
+  IN CLUSTER gh_6942_cluster
   FROM LOAD GENERATOR AUCTION
   (TICK INTERVAL '0.01s', UP TO 1000)
 
