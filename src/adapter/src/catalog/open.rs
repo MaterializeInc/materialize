@@ -374,7 +374,9 @@ impl Catalog {
         let mut system_item_updates = Vec::new();
         let mut item_updates = Vec::new();
         let mut post_item_updates = Vec::new();
+        let mut audit_log_updates = Vec::new();
         for (kind, ts, diff) in updates {
+            let diff = diff.try_into().expect("valid diff");
             match kind {
                 BootstrapStateUpdateKind::Role(_)
                 | BootstrapStateUpdateKind::Database(_)
@@ -388,7 +390,7 @@ impl Catalog {
                     pre_item_updates.push(StateUpdate {
                         kind: kind.into(),
                         ts,
-                        diff: diff.try_into().expect("valid diff"),
+                        diff,
                     })
                 }
                 BootstrapStateUpdateKind::IntrospectionSourceIndex(_)
@@ -396,24 +398,30 @@ impl Catalog {
                     system_item_updates.push(StateUpdate {
                         kind: kind.into(),
                         ts,
-                        diff: diff.try_into().expect("valid diff"),
+                        diff,
                     })
                 }
                 BootstrapStateUpdateKind::Item(_) => item_updates.push(StateUpdate {
                     kind: kind.into(),
                     ts,
-                    diff: diff.try_into().expect("valid diff"),
+                    diff,
                 }),
                 BootstrapStateUpdateKind::Comment(_)
-                | BootstrapStateUpdateKind::AuditLog(_)
                 | BootstrapStateUpdateKind::StorageCollectionMetadata(_)
                 | BootstrapStateUpdateKind::SourceReferences(_)
                 | BootstrapStateUpdateKind::UnfinalizedShard(_) => {
                     post_item_updates.push(StateUpdate {
                         kind: kind.into(),
                         ts,
-                        diff: diff.try_into().expect("valid diff"),
+                        diff,
                     })
+                }
+                BootstrapStateUpdateKind::AuditLog(_) => {
+                    audit_log_updates.push(StateUpdate {
+                        kind: kind.into(),
+                        ts,
+                        diff,
+                    });
                 }
             }
         }
@@ -506,6 +514,15 @@ impl Catalog {
             .apply_updates_for_bootstrap(post_item_updates, &mut local_expr_cache)
             .await;
         builtin_table_updates.extend(builtin_table_update);
+
+        // We don't need to apply the audit logs in memory, yet apply can be expensive when the
+        // audit log grows large. Therefore, we skip the apply step and just generate the builtin
+        // updates.
+        for audit_log_update in audit_log_updates {
+            builtin_table_updates.extend(
+                state.generate_builtin_table_update(audit_log_update.kind, audit_log_update.diff),
+            );
+        }
 
         // Migrate builtin items.
         let BuiltinItemMigrationResult {

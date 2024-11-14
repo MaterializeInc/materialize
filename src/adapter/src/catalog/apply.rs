@@ -1160,7 +1160,7 @@ impl CatalogState {
     /// Generate a list of `BuiltinTableUpdate`s that correspond to a single update made to the
     /// durable catalog.
     #[instrument(level = "debug")]
-    fn generate_builtin_table_update(
+    pub(crate) fn generate_builtin_table_update(
         &self,
         kind: StateUpdateKind,
         diff: StateDiff,
