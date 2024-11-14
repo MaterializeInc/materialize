@@ -3700,6 +3700,19 @@ def workflow_test_refresh_mv_warmup(
         )
 
 
+def check_read_frontier_not_stuck(c: Composition, object_name: str):
+    query = f"""
+        SELECT f.read_frontier
+        FROM mz_internal.mz_frontiers f
+        JOIN mz_objects o ON o.id = f.object_id
+        WHERE o.name = '{object_name}';
+        """
+    before = int(c.sql_query(query)[0][0])
+    time.sleep(2)
+    after = int(c.sql_query(query)[0][0])
+    assert before < after, f"read frontier of {object_name} is stuck"
+
+
 def workflow_test_refresh_mv_restart(
     c: Composition, parser: WorkflowArgumentParser
 ) -> None:
@@ -3733,20 +3746,11 @@ def workflow_test_refresh_mv_restart(
     After each of 1., 2., and 3., check that the input table's read frontier keeps advancing.
 
     Also do some sanity checks on introspection objects related to REFRESH MVs.
-    """
 
-    def check_frontier_is_not_stuck():
-        query_t1_frontier = dedent(
-            """
-            SELECT read_frontier
-            FROM mz_internal.mz_frontiers ft JOIN mz_tables t ON (t.id = ft.object_id)
-            WHERE t.name = 't';
-            """
-        )
-        table_frontier1 = c.sql_query(query_t1_frontier)[0][0]
-        time.sleep(2)
-        table_frontier2 = c.sql_query(query_t1_frontier)[0][0]
-        assert table_frontier1 < table_frontier2
+    Other tests involving REFRESH MVs and envd restarts:
+      * workflow_test_github_8734
+      * workflow_test_refresh_mv_warmup
+    """
 
     def check_introspection():
         c.testdrive(
@@ -3972,7 +3976,7 @@ def workflow_test_refresh_mv_restart(
         c.up("materialized")
         check_introspection()
         c.testdrive(input=after_restart)
-        check_frontier_is_not_stuck()
+        check_read_frontier_not_stuck(c, "t")
         check_introspection()
 
         # Reset the testing context.
@@ -3988,7 +3992,7 @@ def workflow_test_refresh_mv_restart(
         c.up("materialized")
         check_introspection()
         c.testdrive(input=after_restart)
-        check_frontier_is_not_stuck()
+        check_read_frontier_not_stuck(c, "t")
         check_introspection()
 
         # Reset the testing context.
@@ -4139,7 +4143,7 @@ def workflow_test_refresh_mv_restart(
                 """
             )
         )
-        check_frontier_is_not_stuck()
+        check_read_frontier_not_stuck(c, "t")
         check_introspection()
 
         # Drop some MVs and check that this is reflected in the introspection objects.
@@ -4154,6 +4158,55 @@ def workflow_test_refresh_mv_restart(
             )
         )
         check_introspection()
+
+
+def workflow_test_github_8734(c: Composition) -> None:
+    """
+    Tests that REFRESH MVs on paused clusters don't unnecessarily hold back
+    compaction of their inputs after an envd restart.
+
+    Regression test for database-issues#8734.
+    """
+
+    c.down(destroy_volumes=True)
+
+    with c.override(
+        Materialized(
+            additional_system_parameter_defaults={
+                "enable_refresh_every_mvs": "true",
+            },
+        ),
+        Testdrive(no_reset=True),
+    ):
+        c.up("materialized")
+        c.up("testdrive", persistent=True)
+
+        # Create a REFRESH MV and wait for it to refresh once, then take down
+        # its cluster.
+        c.sql(
+            """
+            CREATE TABLE t (a int);
+
+            CREATE CLUSTER test SIZE '1';
+            CREATE MATERIALIZED VIEW mv
+                IN CLUSTER test
+                WITH (REFRESH EVERY '60m')
+                AS SELECT * FROM t;
+            SELECT * FROM mv;
+
+            ALTER CLUSTER test SET (REPLICATION FACTOR 0);
+            """
+        )
+
+        check_read_frontier_not_stuck(c, "t")
+
+        # Restart envd, then verify that the table's frontier still advances.
+        c.kill("materialized")
+        c.up("materialized")
+
+        c.sql("SELECT * FROM mv")
+
+        check_read_frontier_not_stuck(c, "t")
 
 
 def workflow_test_github_7798(c: Composition, parser: WorkflowArgumentParser) -> None:
