@@ -746,6 +746,25 @@ where
         level: usize,
         plan: FlatPlan,
     ) -> CollectionBundle<G> {
+        // First extract any let bindings that may wrap a letrec expression.
+        // This code allows us to handle plans that violate invariant (4).
+        // We do this here rather than in front of the recursive call below,
+        // in anticipation of recursive plans that start with let bindings,
+        // not just plans that have lets between recursive stages.
+        let (values, plan) = plan.split_lets();
+        for (id, value) in values {
+            let bundle = self
+                .scope
+                .clone()
+                .region_named(&format!("Binding({:?})", id), |region| {
+                    let depends = value.depends();
+                    self.enter_region(region, Some(&depends))
+                        .render_letfree_plan(object_id, value)
+                        .leave_region()
+                });
+            self.insert_id(Id::Local(id), bundle);
+        }
+
         if plan.is_recursive() {
             let (values, body) = plan.split_recursive();
             let ids: Vec<_> = values.iter().map(|(id, _, _)| *id).collect();
