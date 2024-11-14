@@ -539,56 +539,69 @@ where
         let mut ticker = tokio::time::interval(timestamp_interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-        let reclock_to_latest = dyncfgs::STORAGE_RECLOCK_TO_LATEST.get(&config.config.config_set());
-
-        let mut prev_probe: Option<Probe<FromTime>> = None;
+        let mut prev_probe_ts: Option<mz_repr::Timestamp> = None;
         let timestamp_interval_ms: u64 = timestamp_interval
             .as_millis()
             .try_into()
             .expect("huge duration");
 
         while !cap_set.is_empty() {
+            // Check the reclocking strategy in every iteration, to make it possible to change it
+            // without restarting the source pipeline.
+            let reclock_to_latest =
+                dyncfgs::STORAGE_RECLOCK_TO_LATEST.get(&config.config.config_set());
+
             // If we are reclocking to the latest offset then we only mint bindings after a
             // successful probe. Otherwise we fall back to the earlier behavior where we just
             // record the ingested frontier.
-            let (binding_ts, cur_source_upper) = if reclock_to_latest {
-                let new_probe = probed_upper
-                    .wait_for(|new_probe| match (&prev_probe, new_probe) {
+            let mut new_probe = None;
+            if reclock_to_latest {
+                new_probe = probed_upper
+                    .wait_for(|new_probe| match (prev_probe_ts, new_probe) {
                         (None, Some(_)) => true,
-                        (Some(prev), Some(new)) => prev.probe_ts < new.probe_ts,
+                        (Some(prev_ts), Some(new)) => prev_ts < new.probe_ts,
                         _ => false,
                     })
                     .await
                     .map(|probe| (*probe).clone())
                     .unwrap_or_else(|_| {
                         Some(Probe {
-                            probe_ts: (now_fn)().try_into().expect("must fit"),
+                            probe_ts: now_fn().into(),
                             upstream_frontier: Antichain::new(),
                         })
                     });
-                prev_probe = new_probe;
-                let probe = prev_probe.clone().unwrap();
-                (probe.probe_ts, probe.upstream_frontier)
             } else {
-                ticker.tick().await;
-                // We only proceed if the source upper frontier is not the minimum frontier. This
-                // makes it so the first binding corresponds to the snapshot of the source, and
-                // because the first binding always maps to the minimum *target* frontier we
-                // guarantee that the source will never appear empty.
-                let ingested_upper = ingested_upper
-                    .wait_for(|f| *f.frontier() != [FromTime::minimum()])
-                    .await
-                    .unwrap()
-                    .frontier()
-                    .to_owned();
+                while prev_probe_ts >= new_probe.as_ref().map(|p| p.probe_ts) {
+                    ticker.tick().await;
+                    // We only proceed if the source upper frontier is not the minimum frontier. This
+                    // makes it so the first binding corresponds to the snapshot of the source, and
+                    // because the first binding always maps to the minimum *target* frontier we
+                    // guarantee that the source will never appear empty.
+                    let upstream_frontier = ingested_upper
+                        .wait_for(|f| *f.frontier() != [FromTime::minimum()])
+                        .await
+                        .unwrap()
+                        .frontier()
+                        .to_owned();
 
-                let now = (now_fn)();
-                let mut binding_ts = now - now % timestamp_interval_ms;
-                if (now % timestamp_interval_ms) != 0 {
-                    binding_ts += timestamp_interval_ms;
+                    let now = (now_fn)();
+                    let mut probe_ts = now - now % timestamp_interval_ms;
+                    if (now % timestamp_interval_ms) != 0 {
+                        probe_ts += timestamp_interval_ms;
+                    }
+                    new_probe = Some(Probe {
+                        probe_ts: probe_ts.into(),
+                        upstream_frontier,
+                    });
                 }
-                (binding_ts.try_into().expect("must fit"), ingested_upper)
             };
+
+            let probe = new_probe.expect("known to be Some");
+            prev_probe_ts = Some(probe.probe_ts);
+
+            let binding_ts = probe.probe_ts;
+            let cur_source_upper = probe.upstream_frontier;
+
             let new_into_upper = Antichain::from_elem(binding_ts.step_forward());
 
             let mut remap_trace_batch = timestamper
