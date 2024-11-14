@@ -99,9 +99,9 @@ def workflow_retain_history(c: Composition) -> None:
     c.kill("materialized")
 
 
-def workflow_github_8021(c: Composition) -> None:
+def workflow_github_2454(c: Composition) -> None:
     c.up("materialized")
-    c.run_testdrive_files("github-8021.td")
+    c.run_testdrive_files("github-2454.td")
 
     # Ensure MZ can boot
     c.kill("materialized")
@@ -110,7 +110,7 @@ def workflow_github_8021(c: Composition) -> None:
 
 
 # Test that `mz_internal.mz_object_dependencies` re-populates.
-def workflow_github_17578(c: Composition) -> None:
+def workflow_github_5108(c: Composition) -> None:
     c.up("testdrive_no_reset", persistent=True)
     c.up("materialized")
 
