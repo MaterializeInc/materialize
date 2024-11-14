@@ -1912,7 +1912,8 @@ fn sort_updates_inner(updates: Vec<StateUpdate>, state: &CatalogState) -> Vec<St
                             name.0[2].as_str(),
                         ),
                         2 => (None, name.0[0].as_str(), name.0[1].as_str()),
-                        _ => panic!("Invalid item name: {name:?}"),
+                        // This must be a CTE.
+                        _ => continue,
                     };
                     let schema = state
                         .resolve_schema(None, db, schema, &SYSTEM_CONN_ID)
