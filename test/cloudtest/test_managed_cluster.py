@@ -27,20 +27,18 @@ def test_managed_cluster_sizing(mz: MaterializeApplication) -> None:
     """Test that a SIZE N cluster indeed creates N clusterd instances."""
     SIZE = 2
 
-    mz.environmentd.sql(f"CREATE CLUSTER sized1 SIZE '{SIZE}-1', REPLICATION FACTOR 2")
-    cluster_id = mz.environmentd.sql_query(
-        "SELECT id FROM mz_clusters WHERE name = 'sized1'"
-    )[0][0]
+    mz.sql(f"CREATE CLUSTER sized1 SIZE '{SIZE}-1', REPLICATION FACTOR 2")
+    cluster_id = mz.sql_query("SELECT id FROM mz_clusters WHERE name = 'sized1'")[0][0]
     assert cluster_id is not None
 
-    check = mz.environmentd.sql_query(
+    check = mz.sql_query(
         "SELECT availability_zones IS NULL FROM mz_clusters WHERE name = 'sized1'"
     )[0][0]
     assert check is not None
     assert check == True
 
-    mz.environmentd.sql("ALTER CLUSTER sized1 SET (AVAILABILITY ZONES ('1', '2', '3'))")
-    check = mz.environmentd.sql_query(
+    mz.sql("ALTER CLUSTER sized1 SET (AVAILABILITY ZONES ('1', '2', '3'))")
+    check = mz.sql_query(
         "SELECT list_length(availability_zones) = 3 FROM mz_clusters WHERE name = 'sized1'"
     )[0][0]
     assert check is not None
@@ -56,7 +54,7 @@ def test_managed_cluster_sizing(mz: MaterializeApplication) -> None:
         no_reset=True,
     )
 
-    replicas = mz.environmentd.sql_query(
+    replicas = mz.sql_query(
         "SELECT mz_cluster_replicas.name, mz_cluster_replicas.id FROM mz_cluster_replicas JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id WHERE mz_clusters.name = 'sized1' ORDER BY 1"
     )
     assert [replica[0] for replica in replicas] == ["r1", "r2"]
@@ -66,9 +64,9 @@ def test_managed_cluster_sizing(mz: MaterializeApplication) -> None:
             compute_pod = cluster_pod_name(cluster_id, replica[1], compute_id)
             wait(condition="condition=Ready", resource=compute_pod)
 
-    mz.environmentd.sql("ALTER CLUSTER sized1 SET (REPLICATION FACTOR 1)")
+    mz.sql("ALTER CLUSTER sized1 SET (REPLICATION FACTOR 1)")
 
-    replicas = mz.environmentd.sql_query(
+    replicas = mz.sql_query(
         "SELECT mz_cluster_replicas.name, mz_cluster_replicas.id FROM mz_cluster_replicas JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id WHERE mz_clusters.name = 'sized1' ORDER BY 1"
     )
     assert [replica[0] for replica in replicas] == ["r1"]
@@ -78,7 +76,7 @@ def test_managed_cluster_sizing(mz: MaterializeApplication) -> None:
             compute_pod = cluster_pod_name(cluster_id, replica[1], compute_id)
             wait(condition="condition=Ready", resource=compute_pod)
 
-    mz.environmentd.sql("DROP CLUSTER sized1 CASCADE")
+    mz.sql("DROP CLUSTER sized1 CASCADE")
 
     mz.testdrive.run(
         input=dedent(
@@ -90,25 +88,25 @@ def test_managed_cluster_sizing(mz: MaterializeApplication) -> None:
         no_reset=True,
     )
 
-    mz.environmentd.sql(
+    mz.sql(
         'ALTER SYSTEM SET ALLOWED_CLUSTER_REPLICA_SIZES="1"',
         port="internal",
         user="mz_system",
     )
     try:
-        mz.environmentd.sql(
+        mz.sql(
             'CREATE CLUSTER mzsizetest (SIZE="2")',
             port="internal",
             user="mz_system",
         )
 
-        mz.environmentd.sql(
+        mz.sql(
             "DROP CLUSTER mzsizetest CASCADE",
             port="internal",
             user="mz_system",
         )
     finally:
-        mz.environmentd.sql(
+        mz.sql(
             "ALTER SYSTEM RESET ALLOWED_CLUSTER_REPLICA_SIZES",
             port="internal",
             user="mz_system",
@@ -116,7 +114,7 @@ def test_managed_cluster_sizing(mz: MaterializeApplication) -> None:
 
 
 def test_graceful_reconfiguration(mz: MaterializeApplication) -> None:
-    mz.environmentd.sql(
+    mz.sql(
         """
         ALTER SYSTEM SET enable_graceful_cluster_reconfiguration = true;
         """,
@@ -125,7 +123,7 @@ def test_graceful_reconfiguration(mz: MaterializeApplication) -> None:
     )
 
     def assert_replica_names(names, allow_pending=False):
-        replicas = mz.environmentd.sql_query(
+        replicas = mz.sql_query(
             """
             SELECT mz_cluster_replicas.name
             FROM mz_cluster_replicas, mz_clusters
@@ -137,7 +135,7 @@ def test_graceful_reconfiguration(mz: MaterializeApplication) -> None:
         if not allow_pending:
             assert (
                 len(
-                    mz.environmentd.sql_query(
+                    mz.sql_query(
                         """
                         SELECT cr.name
                         FROM mz_internal.mz_pending_cluster_replicas  ur
@@ -161,13 +159,13 @@ def test_graceful_reconfiguration(mz: MaterializeApplication) -> None:
     # - names should match r# patter, not end with `-pending`
     # - cancelled statements correctly roll back
     # - timedout until ready queries take the appropriate action
-    mz.environmentd.sql(
+    mz.sql(
         'CREATE CLUSTER gracefulatlertest ( SIZE = "1" )',
         port="internal",
         user="mz_system",
     )
 
-    mz.environmentd.sql(
+    mz.sql(
         """
         ALTER CLUSTER gracefulatlertest SET ( SIZE = '2' ) WITH ( WAIT FOR '1ms' )
         """,
@@ -176,7 +174,7 @@ def test_graceful_reconfiguration(mz: MaterializeApplication) -> None:
     )
     assert_replica_names(["r1"])
 
-    mz.environmentd.sql(
+    mz.sql(
         """
         ALTER CLUSTER gracefulatlertest SET ( SIZE = '1', REPLICATION FACTOR 2 ) WITH ( WAIT FOR '1ms' )
         """,
@@ -185,7 +183,7 @@ def test_graceful_reconfiguration(mz: MaterializeApplication) -> None:
     )
     assert_replica_names(["r1", "r2"])
 
-    mz.environmentd.sql(
+    mz.sql(
         """
         ALTER CLUSTER gracefulatlertest SET ( SIZE = '1', REPLICATION FACTOR 1 ) WITH ( WAIT FOR '1ms' )
         """,
@@ -194,7 +192,7 @@ def test_graceful_reconfiguration(mz: MaterializeApplication) -> None:
     )
     assert_replica_names(["r1"])
 
-    mz.environmentd.sql(
+    mz.sql(
         """
         ALTER CLUSTER gracefulatlertest SET ( SIZE = '2', REPLICATION FACTOR 2 ) WITH ( WAIT FOR '1ms' )
         """,
@@ -203,7 +201,7 @@ def test_graceful_reconfiguration(mz: MaterializeApplication) -> None:
     )
     assert_replica_names(["r1", "r2"])
 
-    mz.environmentd.sql(
+    mz.sql(
         """
         ALTER CLUSTER gracefulatlertest SET ( SIZE = '1', REPLICATION FACTOR 1 ) WITH ( WAIT FOR '1ms' )
         """,
@@ -214,7 +212,7 @@ def test_graceful_reconfiguration(mz: MaterializeApplication) -> None:
 
     # Setup for validating cancelation and
     # replica checks during alter
-    mz.environmentd.sql(
+    mz.sql(
         """
         DROP CLUSTER IF EXISTS gracefulatlertest CASCADE;
         DROP TABLE IF EXISTS t CASCADE;
@@ -235,7 +233,7 @@ def test_graceful_reconfiguration(mz: MaterializeApplication) -> None:
 
     # Valudate replicas are correct during an ongoing alter
     def gracefully_alter():
-        mz.environmentd.sql(
+        mz.sql(
             """
             ALTER CLUSTER gracefulatlertest SET (SIZE = '2') WITH ( WAIT FOR '5s')
             """,
@@ -249,7 +247,7 @@ def test_graceful_reconfiguration(mz: MaterializeApplication) -> None:
 
     assert_replica_names(["r1", "r1-pending"], allow_pending=True)
     assert (
-        mz.environmentd.sql_query(
+        mz.sql_query(
             """
         SELECT size FROM mz_clusters WHERE name='gracefulatlertest';
         """
@@ -261,7 +259,7 @@ def test_graceful_reconfiguration(mz: MaterializeApplication) -> None:
 
     assert_replica_names(["r1"], allow_pending=False)
     assert (
-        mz.environmentd.sql_query(
+        mz.sql_query(
             """
         SELECT size FROM mz_clusters WHERE name='gracefulatlertest';
         """
@@ -270,7 +268,7 @@ def test_graceful_reconfiguration(mz: MaterializeApplication) -> None:
     ), "Cluster should use new config after alter completes"
 
     # Validate cancelation of alter cluster..with
-    mz.environmentd.sql(
+    mz.sql(
         """
         DROP CLUSTER IF EXISTS cluster1 CASCADE;
         CREATE CLUSTER cluster1 ( SIZE = '1');
@@ -280,7 +278,7 @@ def test_graceful_reconfiguration(mz: MaterializeApplication) -> None:
     )
 
     # We need persistent connection that we can later issue a cancel backend to
-    conn = mz.environmentd.sql_conn(
+    conn = mz.sql_conn(
         port="internal",
         user="mz_system",
     )
@@ -314,7 +312,7 @@ def test_graceful_reconfiguration(mz: MaterializeApplication) -> None:
     )
     thread.start()
     time.sleep(1)
-    mz.environmentd.sql(
+    mz.sql(
         f"select pg_cancel_backend({pid});",
         port="internal",
         user="mz_system",
@@ -323,7 +321,7 @@ def test_graceful_reconfiguration(mz: MaterializeApplication) -> None:
 
     assert_replica_names(["r1"], allow_pending=False)
     assert (
-        mz.environmentd.sql_query(
+        mz.sql_query(
             """
         SELECT size FROM mz_clusters WHERE name='cluster1';
         """
@@ -332,7 +330,7 @@ def test_graceful_reconfiguration(mz: MaterializeApplication) -> None:
     ), "Cluster should not have updated if canceled during alter"
 
     # Test graceful reconfig wait until ready
-    mz.environmentd.sql(
+    mz.sql(
         """
         DROP CLUSTER IF EXISTS cluster1 CASCADE;
         DROP CLUSTER IF EXISTS gracefulaltertest CASCADE;
@@ -341,7 +339,7 @@ def test_graceful_reconfiguration(mz: MaterializeApplication) -> None:
         user="mz_system",
     )
 
-    mz.environmentd.sql(
+    mz.sql(
         """
         CREATE CLUSTER slow_hydration( SIZE = "1" );
         SET CLUSTER TO slow_hydration;

@@ -52,7 +52,7 @@ def assert_notice(conn: Connection, contains: bytes) -> None:
 @pytest.mark.skip(reason="Now fails after a Buildkite upgrade database-issues#6307")
 def test_oom_clusterd(mz: MaterializeApplication) -> None:
     def verify_cluster_oomed() -> None:
-        with mz.environmentd.sql_cursor(autocommit=False) as cur:
+        with mz.sql_cursor(autocommit=False) as cur:
             cur.execute(
                 dedent(
                     """
@@ -76,7 +76,7 @@ def test_oom_clusterd(mz: MaterializeApplication) -> None:
                         return
 
     # Once we create an index on this view in a cluster limited to 2Gb, it is practically guaranteed to OOM
-    mz.environmentd.sql(
+    mz.sql(
         dedent(
             """
             CREATE CLUSTER oom REPLICAS (oom (size 'mem-2'));
@@ -93,21 +93,21 @@ def test_oom_clusterd(mz: MaterializeApplication) -> None:
     # Wait for the cluster pod to OOM
     verify_cluster_oomed()
 
-    mz.environmentd.sql("DROP CLUSTER oom CASCADE; DROP VIEW oom CASCADE")
+    mz.sql("DROP CLUSTER oom CASCADE; DROP VIEW oom CASCADE")
 
 
 # Test that a crashed (and restarted) cluster replica generates expected notice
 # events.
 def test_crash_clusterd(mz: MaterializeApplication) -> None:
-    mz.environmentd.sql("DROP TABLE IF EXISTS t1 CASCADE")
-    mz.environmentd.sql("CREATE TABLE t1 (f1 TEXT)")
+    mz.sql("DROP TABLE IF EXISTS t1 CASCADE")
+    mz.sql("CREATE TABLE t1 (f1 TEXT)")
 
     # For various query contexts, create a connection, run a query that'll never
     # finish in another thread, and examine its notices from this thread since
     # the queries block forever. The contexts here (SELECT stuck in pending,
     # direct SUBSCRIBE, SUBSCRIBE via COPY) are all separately implemented, so
     # need to be separately tested.
-    c_select = mz.environmentd.sql_conn()
+    c_select = mz.sql_conn()
     t_select = threading.Thread(
         target=query,
         args=(
@@ -117,7 +117,7 @@ def test_crash_clusterd(mz: MaterializeApplication) -> None:
     )
     t_select.start()
 
-    c_subscribe = mz.environmentd.sql_conn()
+    c_subscribe = mz.sql_conn()
     t_subscribe = threading.Thread(
         target=query,
         args=(
@@ -127,7 +127,7 @@ def test_crash_clusterd(mz: MaterializeApplication) -> None:
     )
     t_subscribe.start()
 
-    c_copy = mz.environmentd.sql_conn()
+    c_copy = mz.sql_conn()
     t_copy = threading.Thread(
         target=copy,
         args=(
@@ -166,7 +166,7 @@ def test_crash_clusterd(mz: MaterializeApplication) -> None:
     assert_notice(c_copy, msg)
 
     # Cleanup for other tests.
-    mz.environmentd.sql("DROP TABLE t1")
+    mz.sql("DROP TABLE t1")
 
     # We need all the above threads to finish for the test to succeed.Close the
     # connections from this thread because pg8000 doesn't support cancellation
