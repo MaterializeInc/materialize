@@ -38,7 +38,7 @@ use crate::batch::{
     BatchParts, ProtoBatch, BATCH_DELETE_ENABLED,
 };
 use crate::error::{InvalidUsage, UpperMismatch};
-use crate::internal::compact::Compactor;
+use crate::internal::compact::{CompactConfig, Compactor};
 use crate::internal::encoding::{check_data_version, Schemas};
 use crate::internal::machine::{CompareAndAppendRes, ExpireFn, Machine};
 use crate::internal::metrics::Metrics;
@@ -607,18 +607,38 @@ where
     /// enough that we can reasonably chunk them up: O(KB) is definitely fine,
     /// O(MB) come talk to us.
     pub fn builder(&self, lower: Antichain<T>) -> BatchBuilder<K, V, T, D> {
-        let cfg = BatchBuilderConfig::new(&self.cfg, self.shard_id());
-        let parts = BatchParts::new_ordered(
-            cfg,
-            RunOrder::Unordered,
-            Arc::clone(&self.metrics),
-            Arc::clone(&self.machine.applier.shard_metrics),
-            self.shard_id(),
-            lower.clone(),
-            Arc::clone(&self.blob),
-            Arc::clone(&self.isolated_runtime),
-            &self.metrics.user,
-        );
+        let cfg = CompactConfig::new(&self.cfg, self.shard_id());
+        let parts = if let Some(max_runs) = cfg.batch.max_runs {
+            BatchParts::new_compacting::<K, V, D>(
+                cfg,
+                Description::new(
+                    lower.clone(),
+                    Antichain::new(),
+                    Antichain::from_elem(T::minimum()),
+                ),
+                max_runs,
+                Arc::clone(&self.metrics),
+                Arc::clone(&self.machine.applier.shard_metrics),
+                self.shard_id(),
+                lower.clone(),
+                Arc::clone(&self.blob),
+                Arc::clone(&self.isolated_runtime),
+                &self.metrics.user,
+                self.write_schemas.clone(),
+            )
+        } else {
+            BatchParts::new_ordered(
+                cfg.batch,
+                RunOrder::Unordered,
+                Arc::clone(&self.metrics),
+                Arc::clone(&self.machine.applier.shard_metrics),
+                self.shard_id(),
+                lower.clone(),
+                Arc::clone(&self.blob),
+                Arc::clone(&self.isolated_runtime),
+                &self.metrics.user,
+            )
+        };
         let builder = BatchBuilderInternal::new(
             BatchBuilderConfig::new(&self.cfg, self.shard_id()),
             parts,

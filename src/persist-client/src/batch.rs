@@ -358,6 +358,7 @@ pub struct BatchBuilderConfig {
     pub(crate) preferred_order: RunOrder,
     pub(crate) structured_key_lower_len: usize,
     pub(crate) run_length_limit: usize,
+    pub(crate) max_runs: Option<usize>,
 }
 
 // TODO: Remove this once we're comfortable that there aren't any bugs.
@@ -418,6 +419,14 @@ pub(crate) const MAX_RUN_LEN: Config<usize> = Config::new(
     usize::MAX,
     "The maximum length a run can have before it will be spilled as a hollow run \
     into the blob store.",
+);
+
+pub(crate) const MAX_RUNS: Config<usize> = Config::new(
+    "persist_batch_max_runs",
+    1,
+    "The maximum number of runs a batch builder should generate for user batches. \
+    (Compaction outputs always generate a single run.) \
+    The minimum value is 2; below this, compaction is disabled.",
 );
 
 /// A target maximum size of blob payloads in bytes. If a logical "batch" is
@@ -485,6 +494,10 @@ impl BatchBuilderConfig {
             preferred_order,
             structured_key_lower_len: STRUCTURED_KEY_LOWER_LEN.get(value),
             run_length_limit: MAX_RUN_LEN.get(value).clamp(2, usize::MAX),
+            max_runs: match MAX_RUNS.get(value) {
+                limit @ 2.. => Some(limit),
+                _ => None,
+            },
         }
     }
 
@@ -973,6 +986,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
     pub(crate) fn new_compacting<K, V, D>(
         cfg: CompactConfig,
         desc: Description<T>,
+        runs_per_compaction: usize,
         metrics: Arc<Metrics>,
         shard_metrics: Arc<ShardMetrics>,
         shard_id: ShardId,
@@ -994,10 +1008,8 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             let metrics = Arc::clone(&metrics);
             let shard_metrics = Arc::clone(&shard_metrics);
             let isolated_runtime = Arc::clone(&isolated_runtime);
-            // Set the level size so that our runs should fit in the compaction bound,
-            // clamping to prevent extreme values given weird configs.
-            let runs_per_compaction =
-                (cfg.compaction_memory_bound_bytes / cfg.batch.blob_target_size).clamp(2, 1024);
+            // Clamping to prevent extreme values given weird configs.
+            let runs_per_compaction = runs_per_compaction.clamp(2, 1024);
 
             let merge_fn = move |parts: Vec<(RunOrder, Pending<Vec<RunPart<T>>>)>| {
                 let blob = Arc::clone(&blob);
@@ -1651,6 +1663,7 @@ mod tests {
         // batch. Set max_outstanding to a small value that's >1 to test various
         // edge cases below.
         cache.cfg.set_config(&BLOB_TARGET_SIZE, 0);
+        cache.cfg.set_config(&MAX_RUNS, 3);
         cache.cfg.dynamic.set_batch_builder_max_outstanding_parts(2);
 
         let client = cache
@@ -1664,12 +1677,6 @@ mod tests {
         // A new builder has no writing or finished parts.
         let builder = write.builder(Antichain::from_elem(0));
         let mut builder = builder.builder;
-
-        // Manually override the number of batches it takes to spill.
-        match &mut builder.parts.writing_runs {
-            WritingRuns::Compacting(run) => run.max_len = 3,
-            _ => unreachable!(),
-        };
 
         fn assert_writing(
             builder: &BatchBuilderInternal<String, String, u64, i64>,
