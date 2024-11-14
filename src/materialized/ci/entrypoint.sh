@@ -73,6 +73,86 @@ export MZ_ORCHESTRATOR_PROCESS_SECRETS_DIRECTORY=${MZ_ORCHESTRATOR_PROCESS_SECRE
 export MZ_ORCHESTRATOR_PROCESS_SCRATCH_DIRECTORY=${MZ_ORCHESTRATOR_PROCESS_SCRATCH_DIRECTORY:-/scratch}
 export MZ_BOOTSTRAP_ROLE=${MZ_BOOTSTRAP_ROLE:-materialize}
 
+# Supported replica sizes.
+export MZ_CLUSTER_REPLICA_SIZES=${MZ_CLUSTER_REPLICA_SIZES:-$(cat <<EOF
+{
+  "25cc": {
+    "cpu_limit": 0.5,
+    "credits_per_hour": "0.25",
+    "scale": 1,
+    "workers": 1
+  },
+  "50cc": {
+    "cpu_limit": 1,
+    "credits_per_hour": "0.5",
+    "scale": 1,
+    "workers": 1
+  },
+  "100cc": {
+    "cpu_limit": 2,
+    "credits_per_hour": "1",
+    "scale": 1,
+    "workers": 2
+  },
+  "200cc": {
+    "cpu_limit": 4,
+    "credits_per_hour": "2",
+    "scale": 1,
+    "workers": 4
+  },
+  "300cc": {
+    "cpu_limit": 6,
+    "credits_per_hour": "3",
+    "scale": 1,
+    "workers": 6
+  },
+  "400cc": {
+    "cpu_limit": 8,
+    "credits_per_hour": "4",
+    "scale": 1,
+    "workers": 8
+  },
+  "600cc": {
+    "cpu_limit": 12,
+    "credits_per_hour": "6",
+    "scale": 1,
+    "workers": 12
+  },
+  "800cc": {
+    "cpu_limit": 16,
+    "credits_per_hour": "8",
+    "scale": 1,
+    "workers": 16
+  },
+  "1200cc": {
+    "cpu_limit": 24,
+    "credits_per_hour": "12",
+    "scale": 1,
+    "workers": 24
+  },
+  "1600cc": {
+    "cpu_limit": 31,
+    "credits_per_hour": "16",
+    "scale": 1,
+    "workers": 31
+  },
+  "3200cc": {
+    "cpu_limit": 62,
+    "credits_per_hour": "32",
+    "scale": 1,
+    "workers": 62
+  }
+}
+EOF
+)}
+
+export MZ_BOOTSTRAP_DEFAULT_CLUSTER_REPLICA_SIZE="${MZ_BOOTSTRAP_DEFAULT_CLUSTER_REPLICA_SIZE:-25cc}"
+export MZ_BOOTSTRAP_BUILTIN_SYSTEM_CLUSTER_REPLICA_SIZE="${MZ_BOOTSTRAP_BUILTIN_SYSTEM_CLUSTER_REPLICA_SIZE:-${MZ_BOOTSTRAP_DEFAULT_CLUSTER_REPLICA_SIZE}}"
+export MZ_BOOTSTRAP_BUILTIN_PROBE_CLUSTER_REPLICA_SIZE="${MZ_BOOTSTRAP_BUILTIN_PROBE_CLUSTER_REPLICA_SIZE:-${MZ_BOOTSTRAP_DEFAULT_CLUSTER_REPLICA_SIZE}}"
+export MZ_BOOTSTRAP_BUILTIN_SUPPORT_CLUSTER_REPLICA_SIZE="${MZ_BOOTSTRAP_BUILTIN_SUPPORT_CLUSTER_REPLICA_SIZE:-${MZ_BOOTSTRAP_DEFAULT_CLUSTER_REPLICA_SIZE}}"
+export MZ_BOOTSTRAP_BUILTIN_CATALOG_SERVER_CLUSTER_REPLICA_SIZE="${MZ_BOOTSTRAP_BUILTIN_CATALOG_SERVER_CLUSTER_REPLICA_SIZE:-${MZ_BOOTSTRAP_DEFAULT_CLUSTER_REPLICA_SIZE}}"
+export MZ_BOOTSTRAP_BUILTIN_ANALYTICS_CLUSTER_REPLICA_SIZE="${MZ_BOOTSTRAP_BUILTIN_ANALYTICS_CLUSTER_REPLICA_SIZE:-${MZ_BOOTSTRAP_DEFAULT_CLUSTER_REPLICA_SIZE}}"
+
 if [ -z "${MZ_NO_TELEMETRY:-}" ]; then
     export MZ_SEGMENT_API_KEY=${MZ_SEGMENT_API_KEY:-hMWi3sZ17KFMjn2sPWo9UJGpOQqiba4A}
     export MZ_SEGMENT_CLIENT_SIDE=${MZ_SEGMENT_API_KEY:-true}
