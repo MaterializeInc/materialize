@@ -55,7 +55,6 @@ from materialize.scalability.result.regression_assessment import RegressionAsses
 from materialize.scalability.result.result_analyzer import ResultAnalyzer
 from materialize.scalability.result.result_analyzers import DefaultResultAnalyzer
 from materialize.scalability.result.scalability_result import BenchmarkResult
-from materialize.scalability.scalability_versioning import SCALABILITY_FRAMEWORK_VERSION
 from materialize.scalability.schema.schema import Schema, TransactionIsolation
 from materialize.scalability.workload.workload import Workload
 from materialize.scalability.workload.workload_markers import WorkloadMarker
@@ -93,6 +92,7 @@ SERVICES = [
 ]
 
 DEFAULT_REGRESSION_THRESHOLD = 0.2
+SCALABILITY_FRAMEWORK_VERSION = "1.4.0"
 
 INCLUDE_ZERO_IN_Y_AXIS = True
 

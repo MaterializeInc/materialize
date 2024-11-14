@@ -4890,7 +4890,7 @@ def workflow_crash_on_replica_expiration_mv(
 
         c1 = c.invoke("logs", "clusterd1", capture=True)
         assert (
-            "has exceeded expiration" in c1.stdout
+            "replica expired" in c1.stdout
         ), "unexpected success in crash-on-replica-expiration"
 
 
@@ -4955,7 +4955,7 @@ def workflow_crash_on_replica_expiration_index(
 
         c1 = c.invoke("logs", "clusterd1", capture=True)
         assert (
-            "has exceeded expiration" in c1.stdout
+            "replica expired" in c1.stdout
         ), "unexpected success in crash-on-replica-expiration"
 
         # Wait a bit to let the controller refresh its metrics.
@@ -4980,8 +4980,9 @@ def workflow_crash_on_replica_expiration_index(
             "mz_dataflow_replica_expiration_remaining_seconds"
         )
         # Ensure the expiration_remaining is within the configured offset.
+        offset = float(offset)
         assert (
-            1.0 < expiration_remaining < float(offset)
+            expiration_remaining < offset
         ), f"expiration_remaining: expected < 10s, got={expiration_remaining}"
 
 

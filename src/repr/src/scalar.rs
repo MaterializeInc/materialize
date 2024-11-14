@@ -46,7 +46,7 @@ pub use crate::relation_and_scalar::proto_scalar_type::ProtoRecordField;
 pub use crate::relation_and_scalar::ProtoScalarType;
 use crate::role_id::RoleId;
 use crate::row::DatumNested;
-use crate::{ColumnName, ColumnType, DatumList, DatumMap, GlobalId, Row, RowArena};
+use crate::{CatalogItemId, ColumnName, ColumnType, DatumList, DatumMap, Row, RowArena};
 
 /// A single value.
 ///
@@ -1494,7 +1494,7 @@ pub enum ScalarType {
     /// always be [`Datum::Null`].
     List {
         element_type: Box<ScalarType>,
-        custom_id: Option<GlobalId>,
+        custom_id: Option<CatalogItemId>,
     },
     /// An ordered and named sequence of datums.
     Record {
@@ -1503,7 +1503,7 @@ pub enum ScalarType {
         ///
         /// Boxed slice to reduce the size of the enum variant.
         fields: Box<[(ColumnName, ColumnType)]>,
-        custom_id: Option<GlobalId>,
+        custom_id: Option<CatalogItemId>,
     },
     /// A PostgreSQL object identifier.
     Oid,
@@ -1514,7 +1514,7 @@ pub enum ScalarType {
     /// be [`Datum::Null`].
     Map {
         value_type: Box<ScalarType>,
-        custom_id: Option<GlobalId>,
+        custom_id: Option<CatalogItemId>,
     },
     /// A PostgreSQL function name.
     RegProc,
@@ -3655,14 +3655,14 @@ impl Arbitrary for ScalarType {
         leaf.prop_recursive(2, 3, 5, |inner| {
             Union::new(vec![
                 // List
-                (inner.clone(), any::<Option<GlobalId>>())
+                (inner.clone(), any::<Option<CatalogItemId>>())
                     .prop_map(|(x, id)| ScalarType::List {
                         element_type: Box::new(x),
                         custom_id: id,
                     })
                     .boxed(),
                 // Map
-                (inner.clone(), any::<Option<GlobalId>>())
+                (inner.clone(), any::<Option<CatalogItemId>>())
                     .prop_map(|(x, id)| ScalarType::Map {
                         value_type: Box::new(x),
                         custom_id: id,
@@ -3684,7 +3684,7 @@ impl Arbitrary for ScalarType {
                         prop::collection::vec((any::<ColumnName>(), column_type_strat), 0..10);
 
                     // Now we combine it with the default strategies to get Records.
-                    (fields_strat, any::<Option<GlobalId>>())
+                    (fields_strat, any::<Option<CatalogItemId>>())
                         .prop_map(|(fields, custom_id)| ScalarType::Record {
                             fields: fields.into(),
                             custom_id,

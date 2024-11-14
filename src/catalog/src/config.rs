@@ -19,12 +19,13 @@ use mz_orchestrator::MemoryLimit;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_persist_client::PersistClient;
-use mz_repr::GlobalId;
+use mz_repr::CatalogItemId;
+use mz_sql::catalog::CatalogError as SqlCatalogError;
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::ConnectionCounter;
 use serde::{Deserialize, Serialize};
 
-use crate::durable::DurableCatalogState;
+use crate::durable::{CatalogError, DurableCatalogState};
 
 /// Configures a catalog.
 #[derive(Debug)]
@@ -46,6 +47,8 @@ pub struct StateConfig {
     pub build_info: &'static BuildInfo,
     /// A persistent ID associated with the environment.
     pub environment_id: EnvironmentId,
+    /// Whether to start Materialize in read-only mode.
+    pub read_only: bool,
     /// Function to generate wall clock now; can be mocked.
     pub now: mz_ore::now::NowFn,
     /// Linearizable timestamp of when this environment booted.
@@ -66,7 +69,7 @@ pub struct StateConfig {
     pub builtin_analytics_cluster_replica_size: String,
     /// Dynamic defaults for system parameters.
     pub system_parameter_defaults: BTreeMap<String, String>,
-    /// A optional map of system parameters pulled from a remote frontend.
+    /// An optional map of system parameters pulled from a remote frontend.
     /// A `None` value indicates that the initial sync was skipped.
     pub remote_system_parameters: Option<BTreeMap<String, String>>,
     /// Valid availability zones for replicas.
@@ -84,6 +87,9 @@ pub struct StateConfig {
     /// Global connection limit and count
     pub active_connection_count: Arc<std::sync::Mutex<ConnectionCounter>>,
     pub builtin_item_migration_config: BuiltinItemMigrationConfig,
+    pub persist_client: PersistClient,
+    /// Helm chart version
+    pub helm_chart_version: Option<String>,
 }
 
 #[derive(Debug)]
@@ -103,6 +109,14 @@ impl ClusterReplicaSizeMap {
     /// Iterate all enabled (not disabled) replica allocations, with their name.
     pub fn enabled_allocations(&self) -> impl Iterator<Item = (&String, &ReplicaAllocation)> {
         self.0.iter().filter(|(_, a)| !a.disabled)
+    }
+
+    /// Get a replica allocation by size name. Returns a reference to the allocation, or an
+    /// error if the size is unknown.
+    pub fn get_allocation_by_name(&self, name: &str) -> Result<&ReplicaAllocation, CatalogError> {
+        self.0.get(name).ok_or_else(|| {
+            CatalogError::Catalog(SqlCatalogError::UnknownClusterReplicaSize(name.into()))
+        })
     }
 }
 
@@ -154,6 +168,7 @@ impl Default for ClusterReplicaSizeMap {
                             workers: workers.into(),
                             credits_per_hour: 1.into(),
                             cpu_exclusive: false,
+                            is_cc: false,
                             disabled: false,
                             selectors: BTreeMap::default(),
                         },
@@ -174,6 +189,7 @@ impl Default for ClusterReplicaSizeMap {
                     workers: 1,
                     credits_per_hour: scale.into(),
                     cpu_exclusive: false,
+                    is_cc: false,
                     disabled: false,
                     selectors: BTreeMap::default(),
                 },
@@ -189,6 +205,7 @@ impl Default for ClusterReplicaSizeMap {
                     workers: scale.into(),
                     credits_per_hour: scale.into(),
                     cpu_exclusive: false,
+                    is_cc: false,
                     disabled: false,
                     selectors: BTreeMap::default(),
                 },
@@ -204,6 +221,7 @@ impl Default for ClusterReplicaSizeMap {
                     workers: 8,
                     credits_per_hour: 1.into(),
                     cpu_exclusive: false,
+                    is_cc: false,
                     disabled: false,
                     selectors: BTreeMap::default(),
                 },
@@ -220,6 +238,7 @@ impl Default for ClusterReplicaSizeMap {
                 workers: 4,
                 credits_per_hour: 2.into(),
                 cpu_exclusive: false,
+                is_cc: false,
                 disabled: false,
                 selectors: BTreeMap::default(),
             },
@@ -235,6 +254,7 @@ impl Default for ClusterReplicaSizeMap {
                 workers: 0,
                 credits_per_hour: 0.into(),
                 cpu_exclusive: false,
+                is_cc: true,
                 disabled: true,
                 selectors: BTreeMap::default(),
             },
@@ -251,6 +271,7 @@ impl Default for ClusterReplicaSizeMap {
                     workers: 1,
                     credits_per_hour: 1.into(),
                     cpu_exclusive: false,
+                    is_cc: true,
                     disabled: false,
                     selectors: BTreeMap::default(),
                 },
@@ -272,7 +293,7 @@ pub struct AwsPrincipalContext {
 }
 
 impl AwsPrincipalContext {
-    pub fn to_principal_string(&self, aws_external_id_suffix: GlobalId) -> String {
+    pub fn to_principal_string(&self, aws_external_id_suffix: CatalogItemId) -> String {
         format!(
             "arn:aws:iam::{}:role/mz_{}_{}",
             self.aws_account_id, self.aws_external_id_prefix, aws_external_id_suffix

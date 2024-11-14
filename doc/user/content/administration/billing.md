@@ -49,7 +49,7 @@ can process data faster and handle larger data volumes.
 {{< note >}}
 
 You can resize a cluster to respond to changes in your workload. See [Sizing
-your clusters](/concepts/clusters/#sizing-your-clusters).
+your clusters](/sql/alter-cluster/#resizing).
 
 {{</ note >}}
 

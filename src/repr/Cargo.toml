@@ -31,14 +31,13 @@ arrow = { version = "51.0.0", default-features = false }
 bitflags = "1.3.2"
 bytes = "1.3.0"
 cfg-if = "1.0.0"
-columnation = { git = "https://github.com/frankmcsherry/columnation" }
+columnation = "0.1.0"
 chrono = { version = "0.4.35", default-features = false, features = ["serde", "std"] }
 chrono-tz = { version = "0.8.1", features = ["serde", "case-insensitive"] }
 compact_bytes = "0.1.2"
 dec = "0.4.8"
-differential-dataflow = "0.12.0"
+differential-dataflow = "0.13.1"
 enum-kinds = "0.5.1"
-fast-float = "0.2.0"
 flatcontainer = "0.5.0"
 hex = "0.4.3"
 itertools = "0.10.5"
@@ -69,7 +68,7 @@ serde_json = { version = "1.0.125", features = ["arbitrary_precision", "preserve
 smallvec = { version = "1.10.0", features = ["serde", "union"] }
 static_assertions = "1.1"
 strsim = "0.10"
-timely = "0.12.0"
+timely = "0.14.1"
 tokio-postgres = { version = "0.7.8" }
 tracing-core = "0.1.30"
 url = { version = "2.3.1", features = ["serde"] }
@@ -107,9 +106,8 @@ tracing_ = ["tracing-subscriber"]
 normal = ["workspace-hack"]
 
 [package.metadata.cargo-gazelle.lib]
-# Disable pipelining because `num_enum` emits a warning to stderr that breaks
-# `rules_rust`s parsing of the Rustc output.
-disable_pipelining = true
+# `num_enum` which depends on `proc-macro-crate` tries to read from the Cargo.toml at compile time.
+compile_data = ["Cargo.toml"]
 
 [package.metadata.cargo-gazelle.test.lib]
 data = ["src/adt/snapshots/*"]

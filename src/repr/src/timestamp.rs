@@ -70,6 +70,7 @@ pub trait TimestampManipulation:
     + differential_dataflow::lattice::Lattice
     + std::fmt::Debug
     + mz_persist_types::StepForward
+    + Sync
 {
     /// Advance a timestamp by the least amount possible such that
     /// `ts.less_than(ts.step_forward())` is true. Panic if unable to do so.

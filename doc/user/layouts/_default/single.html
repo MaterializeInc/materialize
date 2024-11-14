@@ -1,7 +1,7 @@
 {{ define "main"}}
 
 {{ if not (.Params.disable_h1) }}
-  <h1>{{.Title}}</h1>
+  <h1>{{.Title | markdownify}}</h1>
 {{ end }}
 
 {{.Content}}

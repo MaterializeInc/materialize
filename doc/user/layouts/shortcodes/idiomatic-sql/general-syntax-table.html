@@ -1,0 +1,42 @@
+
+<!--
+  To render properly, keep the left-hand alignment.
+-->
+
+<table>
+<thead>
+<tr>
+<th></th>
+<th>Idiomatic Materialize SQL Pattern</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ANY()</code> Equi-join condition</td>
+<td class="copyableCode">
+
+***If no duplicates in the unnested field***
+
+```mzsql
+WITH my_expanded_values AS
+(SELECT UNNEST(array|list|map) AS fieldZ FROM tableB)
+SELECT a.fieldA, ...
+FROM tableA a
+JOIN my_expanded_values t ON a.fieldZ = t.fieldZ
+;
+```
+
+***If duplicates exist in the unnested field***
+```mzsql
+WITH my_expanded_values AS
+(SELECT DISTINCT UNNEST(array|list|map) AS fieldZ FROM tableB)
+SELECT a.fieldA, ...
+FROM tableA a
+JOIN my_expanded_values t ON a.fieldZ = t.fieldZ
+;
+```
+
+</td>
+</tr>
+</tbody>
+</table>

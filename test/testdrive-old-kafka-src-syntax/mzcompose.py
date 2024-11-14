@@ -16,6 +16,7 @@ import glob
 from pathlib import Path
 
 from materialize import ci_util, spawn
+from materialize.mzcompose import get_default_system_parameters
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.fivetran_destination import FivetranDestination
 from materialize.mzcompose.services.kafka import Kafka
@@ -129,19 +130,6 @@ def workflow_kafka(c: Composition, parser: WorkflowArgumentParser) -> None:
     else:
         dependencies += ["zookeeper", "kafka", "schema-registry"]
 
-    testdrive = Testdrive(
-        forward_buildkite_shard=True,
-        kafka_default_partitions=args.kafka_default_partitions,
-        aws_region=args.aws_region,
-        validate_catalog_store=True,
-        default_timeout=args.default_timeout,
-        volumes_extra=["mzdata:/mzdata"],
-        external_minio=True,
-        fivetran_destination=True,
-        fivetran_destination_files_path="/share/tmp",
-        entrypoint_extra=[f"--var=uses-redpanda={args.redpanda}"],
-    )
-
     sysparams = args.system_param
     if not args.system_param:
         sysparams = []
@@ -155,10 +143,36 @@ def workflow_kafka(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         additional_system_parameter_defaults[key] = val
 
+    leaves_tombstones = (
+        "true"
+        if additional_system_parameter_defaults.get(
+            "storage_use_continual_feedback_upsert",
+            get_default_system_parameters()["storage_use_continual_feedback_upsert"],
+        )
+        == "false"
+        else "false"
+    )
+
     materialized = Materialized(
         default_size=args.default_size,
         external_minio=True,
         additional_system_parameter_defaults=additional_system_parameter_defaults,
+    )
+
+    testdrive = Testdrive(
+        forward_buildkite_shard=True,
+        kafka_default_partitions=args.kafka_default_partitions,
+        aws_region=args.aws_region,
+        validate_catalog_store=True,
+        default_timeout=args.default_timeout,
+        volumes_extra=["mzdata:/mzdata"],
+        external_minio=True,
+        fivetran_destination=True,
+        fivetran_destination_files_path="/share/tmp",
+        entrypoint_extra=[
+            f"--var=uses-redpanda={args.redpanda}",
+            f"--var=leaves-tombstones={leaves_tombstones}",
+        ],
     )
 
     with c.override(testdrive, materialized):

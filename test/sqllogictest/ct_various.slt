@@ -64,6 +64,29 @@ SELECT * FROM y.z.ct;
 ----
 1
 
+# Crazy names
+statement ok
+CREATE DATABASE "--";
+
+statement ok
+CREATE SCHEMA "--"."</script><script>alert(123)</script>";
+
+statement ok
+CREATE TABLE "--"."</script><script>alert(123)</script>"."1;DROP TABLE users" (count int);
+
+statement ok
+INSERT INTO "--"."</script><script>alert(123)</script>"."1;DROP TABLE users" VALUES (1);
+
+statement ok
+CREATE CONTINUAL TASK "--"."</script><script>alert(123)</script>"."┬─┬ノ( º _ ºノ)"
+FROM TRANSFORM "--"."</script><script>alert(123)</script>"."1;DROP TABLE users"
+USING (SELECT MAX(COUNT) FROM "--"."</script><script>alert(123)</script>"."1;DROP TABLE users");
+
+query T
+SELECT * FROM "--"."</script><script>alert(123)</script>"."┬─┬ノ( º _ ºノ)";
+----
+1
+
 # Regression test for a bug where we'd panic if no CT inputs were referenced.
 statement ok
 CREATE CONTINUAL TASK no_input_refs (key INT) ON INPUT input AS (
@@ -106,3 +129,37 @@ query T
 SELECT COUNT(*) > 0 FROM input_not_monotonic;
 ----
 true
+
+# Regression test for a bug where the TRANSFORM USING sugar did not roundtrip
+# the cluster through the catalog's `create_sql`.
+statement ok
+CREATE CLUSTER c2 SIZE '1'
+
+statement ok
+SET CLUSTER TO c2
+
+statement ok
+CREATE CONTINUAL TASK ct_c2 FROM TRANSFORM input USING (SELECT * FROM input)
+
+query T
+SELECT * FROM ct_c2
+----
+1
+2
+
+# Confirm that the catalog knows the ct is in the right cluster.
+statement error cannot drop cluster "c2" because other objects depend on it
+DROP CLUSTER c2;
+
+# Regression test for constant MV (upper of empty antichain). The dataflow
+# previously hung at runtime.
+statement ok
+CREATE MATERIALIZED VIEW mv_const AS SELECT 1 AS value
+
+statement ok
+CREATE CONTINUAL TASK ct_const_mv FROM TRANSFORM mv_const USING (SELECT MIN(value) FROM mv_const)
+
+query T
+SELECT * FROM ct_const_mv
+----
+1

@@ -518,6 +518,15 @@ def _macos_codesign(path: str) -> None:
 
 
 def _connect_sql(urlstr: str) -> pg8000.native.Connection:
+    hint = """Have you correctly configured CockroachDB or PostgreSQL?
+
+For CockroachDB:
+    Follow the instructions in doc/developer/guide.md#CockroachDB
+
+For PostgreSQL:
+    1. Install PostgreSQL
+    2. Create a database: `createdb materialize`
+    3. Set the MZDEV_POSTGRES environment variable accordingly: `export MZDEV_POSTGRES=postgres://localhost/materialize`"""
     url = urlparse(urlstr)
     database = url.path.removeprefix("/")
     try:
@@ -532,15 +541,12 @@ def _connect_sql(urlstr: str) -> pg8000.native.Connection:
     except pg8000.exceptions.DatabaseError as e:
         raise UIError(
             f"unable to connect to metadata database: {e.args[0]['M']}",
-            hint="""Have you correctly configured CockroachDB or PostgreSQL?
-
-For CockroachDB:
-    Follow the instructions in doc/developer/guide.md#CockroachDB
-
-For PostgreSQL:
-    1. Install PostgreSQL
-    2. Create a database: `createdb materialize`
-    3. Set the MZDEV_POSTGRES environment variable accordingly: `export MZDEV_POSTGRES=postgres://localhost/materialize`""",
+            hint=hint,
+        )
+    except pg8000.exceptions.InterfaceError as e:
+        raise UIError(
+            f"unable to connect to metadata database: {e}",
+            hint=hint,
         )
 
     # For CockroachDB, after connecting, we can ensure the database exists. For

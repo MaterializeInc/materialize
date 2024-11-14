@@ -17,10 +17,11 @@ use k8s_openapi::{
             StatefulSetSpec, StatefulSetUpdateStrategy,
         },
         core::v1::{
-            Capabilities, Container, ContainerPort, EnvVar, EnvVarSource, HTTPGetAction, Pod,
+            Capabilities, Container, ContainerPort, EnvVar, EnvVarSource, EphemeralVolumeSource,
+            HTTPGetAction, PersistentVolumeClaimSpec, PersistentVolumeClaimTemplate, Pod,
             PodSecurityContext, PodSpec, PodTemplateSpec, Probe, SeccompProfile, SecretKeySelector,
             SecurityContext, Service, ServiceAccount, ServicePort, ServiceSpec, TCPSocketAction,
-            Toleration,
+            Toleration, Volume, VolumeMount, VolumeResourceRequirements,
         },
         networking::v1::{
             IPBlock, NetworkPolicy, NetworkPolicyEgressRule, NetworkPolicyIngressRule,
@@ -37,7 +38,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tracing::trace;
 
-use super::CloudProvider;
+use super::{matching_image_from_environmentd_image_ref, CloudProvider};
 use crate::k8s::{apply_resource, delete_resource, get_resource};
 use mz_cloud_resources::crd::materialize::v1alpha1::Materialize;
 use mz_environmentd::DeploymentStatus;
@@ -115,7 +116,6 @@ impl Resources {
         let role_api: Api<Role> = Api::namespaced(client.clone(), namespace);
         let role_binding_api: Api<RoleBinding> = Api::namespaced(client.clone(), namespace);
         let statefulset_api: Api<StatefulSet> = Api::namespaced(client.clone(), namespace);
-        let deployment_api: Api<Deployment> = Api::namespaced(client.clone(), namespace);
         let pod_api: Api<Pod> = Api::namespaced(client.clone(), namespace);
 
         for policy in &self.network_policies {
@@ -140,16 +140,6 @@ impl Resources {
 
         trace!("creating new environmentd statefulset");
         apply_resource(&statefulset_api, &*self.environmentd_statefulset).await?;
-
-        if let Some(balancerd_deployment) = &self.balancerd_deployment {
-            trace!("creating new balancerd deployment");
-            apply_resource(&deployment_api, &*balancerd_deployment).await?;
-        }
-
-        if let Some(balancerd_service) = &self.balancerd_service {
-            trace!("creating new balancerd service");
-            apply_resource(&service_api, &*balancerd_service).await?;
-        }
 
         // until we have full zero downtime upgrades, we have a tradeoff: if
         // we use the graceful upgrade mechanism, we minimize environmentd
@@ -279,9 +269,20 @@ impl Resources {
         namespace: &str,
     ) -> Result<(), anyhow::Error> {
         let service_api: Api<Service> = Api::namespaced(client.clone(), namespace);
+        let deployment_api: Api<Deployment> = Api::namespaced(client.clone(), namespace);
 
         trace!("applying environmentd public service");
         apply_resource(&service_api, &*self.public_service).await?;
+
+        if let Some(balancerd_deployment) = &self.balancerd_deployment {
+            trace!("creating new balancerd deployment");
+            apply_resource(&deployment_api, &*balancerd_deployment).await?;
+        }
+
+        if let Some(balancerd_service) = &self.balancerd_service {
+            trace!("creating new balancerd service");
+            apply_resource(&service_api, &*balancerd_service).await?;
+        }
 
         Ok(())
     }
@@ -486,9 +487,15 @@ fn create_network_policies(
 
 fn create_service_account_object(config: &super::Args, mz: &Materialize) -> ServiceAccount {
     let annotations = if config.cloud_provider == CloudProvider::Aws {
+        let role_arn = mz
+            .spec
+            .environmentd_iam_role_arn
+            .as_deref()
+            .or(config.aws_info.environmentd_iam_role_arn.as_deref())
+            .unwrap()
+            .to_string();
         Some(btreemap! {
-            "eks.amazonaws.com/role-arn".to_string()
-                => config.aws_info.environmentd_iam_role_arn.as_ref().unwrap().to_string()
+            "eks.amazonaws.com/role-arn".to_string() => role_arn
         })
     } else {
         None
@@ -779,7 +786,13 @@ fn create_environmentd_statefulset_object(
         });
     }
 
+    env.extend(mz.spec.environmentd_extra_env.iter().flatten().cloned());
+
     let mut args = vec![];
+
+    if let Some(helm_chart_version) = &config.helm_chart_version {
+        args.push(format!("--helm-chart-version={helm_chart_version}"));
+    }
 
     // Add environment ID argument.
     args.push(format!(
@@ -790,20 +803,50 @@ fn create_environmentd_statefulset_object(
     // Add clusterd image argument based on environmentd tag.
     args.push(format!(
         "--clusterd-image={}",
-        matching_image_from_environmentd_image_ref(&mz.spec.environmentd_image_ref, "clusterd")
+        matching_image_from_environmentd_image_ref(
+            &mz.spec.environmentd_image_ref,
+            "clusterd",
+            None
+        )
     ));
 
     // Add cluster and storage host size arguments.
-    args.extend([
-        format!(
-            "--cluster-replica-sizes={}",
-            &config.environmentd_cluster_replica_sizes
-        ),
-        format!(
-            "--bootstrap-default-cluster-replica-size={}",
-            &config.bootstrap_default_cluster_replica_size
-        ),
-    ]);
+    args.extend(
+        [
+            config
+                .environmentd_cluster_replica_sizes
+                .as_ref()
+                .map(|sizes| format!("--cluster-replica-sizes={sizes}")),
+            config
+                .bootstrap_default_cluster_replica_size
+                .as_ref()
+                .map(|size| format!("--bootstrap-default-cluster-replica-size={size}")),
+            config
+                .bootstrap_builtin_system_cluster_replica_size
+                .as_ref()
+                .map(|size| format!("--bootstrap-builtin-system-cluster-replica-size={size}")),
+            config
+                .bootstrap_builtin_probe_cluster_replica_size
+                .as_ref()
+                .map(|size| format!("--bootstrap-builtin-probe-cluster-replica-size={size}")),
+            config
+                .bootstrap_builtin_support_cluster_replica_size
+                .as_ref()
+                .map(|size| format!("--bootstrap-builtin-support-cluster-replica-size={size}")),
+            config
+                .bootstrap_builtin_catalog_server_cluster_replica_size
+                .as_ref()
+                .map(|size| {
+                    format!("--bootstrap-builtin-catalog-server-cluster-replica-size={size}")
+                }),
+            config
+                .bootstrap_builtin_analytics_cluster_replica_size
+                .as_ref()
+                .map(|size| format!("--bootstrap-builtin-analytics-cluster-replica-size={size}")),
+        ]
+        .into_iter()
+        .flatten(),
+    );
 
     // Add networking arguments.
     args.extend([
@@ -837,22 +880,22 @@ fn create_environmentd_statefulset_object(
             .map(|origin| format!("--cors-allowed-origin={}", origin.to_str().unwrap())),
     );
 
+    args.push(format!(
+        "--secrets-controller={}",
+        config.secrets_controller
+    ));
+
     if config.local_development {
         args.extend([
-            "--tls-mode=disable".into(),
-            "--secrets-controller=kubernetes".into(),
             "--system-parameter-default=cluster_enable_topology_spread=false".into(),
             "--system-parameter-default=log_filter=mz_pgwire[{conn_uuid}]=debug,mz_server_core[{conn_uuid}]=debug,info".into(),
         ]);
+    }
+
+    if config.enable_tls {
+        unimplemented!();
     } else {
-        // Note(evan): environmentd must have a cert for teleport
-        // connectivity over psql.
-        args.extend([
-            "--tls-mode=require".into(),
-            "--tls-cert=/etc/materialized/tls.crt".into(),
-            "--tls-key=/etc/materialized/tls.key".into(),
-            "--secrets-controller=aws-secrets-manager".into(),
-        ]);
+        args.push("--tls-mode=disable".to_string());
     }
 
     // Add persist arguments.
@@ -868,7 +911,12 @@ fn create_environmentd_statefulset_object(
             }
         }
 
-        if let Some(environmentd_connection_role_arn) = &config.aws_info.environmentd_iam_role_arn {
+        if let Some(environmentd_connection_role_arn) = mz
+            .spec
+            .environmentd_connection_role_arn
+            .as_deref()
+            .or(config.aws_info.environmentd_connection_role_arn.as_deref())
+        {
             args.push(format!(
                 "--aws-connection-role-arn={}",
                 environmentd_connection_role_arn
@@ -914,6 +962,12 @@ fn create_environmentd_statefulset_object(
             "--orchestrator-kubernetes-service-label={key}={val}"
         ));
     }
+    if let Some(status) = &mz.status {
+        args.push(format!(
+            "--orchestrator-kubernetes-name-prefix=mz{}-",
+            status.resource_id
+        ));
+    }
 
     // Add logging and tracing arguments.
     args.extend(["--log-format=json".into()]);
@@ -927,12 +981,46 @@ fn create_environmentd_statefulset_object(
         ]);
     }
 
-    args.extend([
-        "--orchestrator-kubernetes-ephemeral-volume-class=openebs-lvm-instance-store-ext4"
-            .to_string(),
-        // The `materialize` user used by clusterd always has gid 999.
-        "--orchestrator-kubernetes-service-fs-group=999".to_string(),
-    ]);
+    let mut volumes = None;
+    let mut volume_mounts = None;
+    if let Some(ephemeral_volume_class) = &config.ephemeral_volume_class {
+        args.extend([
+            format!(
+                "--orchestrator-kubernetes-ephemeral-volume-class={}",
+                ephemeral_volume_class
+            ),
+            "--scratch-directory=/scratch".to_string(),
+        ]);
+        volumes = Some(vec![Volume {
+            name: "scratch".to_string(),
+            ephemeral: Some(EphemeralVolumeSource {
+                volume_claim_template: Some(PersistentVolumeClaimTemplate {
+                    spec: PersistentVolumeClaimSpec {
+                        access_modes: Some(vec!["ReadWriteOnce".to_string()]),
+                        storage_class_name: Some(ephemeral_volume_class.to_string()),
+                        resources: Some(VolumeResourceRequirements {
+                            requests: Some(BTreeMap::from([(
+                                "storage".to_string(),
+                                mz.environmentd_scratch_volume_storage_requirement(),
+                            )])),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }]);
+        volume_mounts = Some(vec![VolumeMount {
+            name: "scratch".to_string(),
+            mount_path: "/scratch".to_string(),
+            ..Default::default()
+        }]);
+    }
+    // The `materialize` user used by clusterd always has gid 999.
+    args.push("--orchestrator-kubernetes-service-fs-group=999".to_string());
 
     // Add Sentry arguments.
     if let Some(sentry_dsn) = &tracing.sentry_dsn {
@@ -942,29 +1030,6 @@ fn create_environmentd_statefulset_object(
         }
         args.push(format!("--sentry-tag=region={}", config.region));
     }
-
-    args.extend([
-        format!(
-            "--bootstrap-builtin-system-cluster-replica-size={}",
-            &config.bootstrap_builtin_system_cluster_replica_size
-        ),
-        format!(
-            "--bootstrap-builtin-probe-cluster-replica-size={}",
-            &config.bootstrap_builtin_probe_cluster_replica_size
-        ),
-        format!(
-            "--bootstrap-builtin-support-cluster-replica-size={}",
-            &config.bootstrap_builtin_support_cluster_replica_size
-        ),
-        format!(
-            "--bootstrap-builtin-catalog-server-cluster-replica-size={}",
-            &config.bootstrap_builtin_catalog_server_cluster_replica_size
-        ),
-        format!(
-            "--bootstrap-builtin-analytics-cluster-replica-size={}",
-            &config.bootstrap_builtin_analytics_cluster_replica_size
-        ),
-    ]);
 
     // Add Persist PubSub arguments
     args.push(format!(
@@ -1066,6 +1131,7 @@ fn create_environmentd_statefulset_object(
         ports: Some(ports),
         args: Some(args),
         env: Some(env),
+        volume_mounts,
         liveness_probe: Some(probe.clone()),
         readiness_probe: Some(probe),
         resources: mz.spec.environmentd_resource_requirements.clone(),
@@ -1133,7 +1199,7 @@ fn create_environmentd_statefulset_object(
             ),
             scheduler_name: config.scheduler_name.clone(),
             service_account_name: Some(mz.service_account_name()),
-            volumes: None,
+            volumes,
             security_context: Some(PodSecurityContext {
                 fs_group: Some(999),
                 run_as_user: Some(999),
@@ -1254,7 +1320,7 @@ fn create_balancerd_deployment_object(config: &super::Args, mz: &Materialize) ->
         },
     ];
 
-    let args = vec![
+    let mut args = vec![
         "service".to_string(),
         format!("--pgwire-listen-addr=0.0.0.0:{}", config.balancerd_sql_port),
         format!("--https-listen-addr=0.0.0.0:{}", config.balancerd_http_port),
@@ -1274,8 +1340,13 @@ fn create_balancerd_deployment_object(config: &super::Args, mz: &Materialize) ->
             mz.namespace(),
             config.environmentd_balancer_sql_port
         ),
-        "--tls-mode=disable".to_string(),
     ];
+
+    if config.enable_tls {
+        unimplemented!();
+    } else {
+        args.push("--tls-mode=disable".to_string());
+    }
 
     let startup_probe = Probe {
         http_get: Some(HTTPGetAction {
@@ -1321,6 +1392,7 @@ fn create_balancerd_deployment_object(config: &super::Args, mz: &Materialize) ->
         image: Some(matching_image_from_environmentd_image_ref(
             &mz.spec.environmentd_image_ref,
             "balancerd",
+            None,
         )),
         image_pull_policy: Some(config.image_pull_policy.to_string()),
         ports: Some(ports),
@@ -1465,19 +1537,4 @@ fn environmentd_internal_http_address(
 
 fn statefulset_pod_name(statefulset: &StatefulSet, idx: u64) -> String {
     format!("{}-{}", statefulset.name_unchecked(), idx)
-}
-
-fn matching_image_from_environmentd_image_ref(
-    environmentd_image_ref: &str,
-    image_name: &str,
-) -> String {
-    let namespace = environmentd_image_ref
-        .rsplit_once('/')
-        .unwrap_or(("materialize", ""))
-        .0;
-    let tag = environmentd_image_ref
-        .rsplit_once(':')
-        .unwrap_or(("", "unstable"))
-        .1;
-    format!("{namespace}/{image_name}:{tag}")
 }

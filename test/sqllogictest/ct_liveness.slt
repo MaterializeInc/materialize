@@ -26,18 +26,30 @@ statement ok
 CREATE TABLE append_only (key INT, val STRING)
 
 statement ok
-CREATE CONTINUAL TASK upsert (key INT, val STRING) ON INPUT append_only AS (
-    DELETE FROM upsert WHERE key IN (SELECT key FROM append_only);
-    INSERT INTO upsert SELECT key, max(val) FROM append_only GROUP BY key;
+CREATE CONTINUAL TASK upsert_snap WITH (SNAPSHOT = true) ON INPUT append_only AS (
+    DELETE FROM upsert_snap WHERE key IN (SELECT key FROM append_only);
+    INSERT INTO upsert_snap SELECT key, max(val) FROM append_only GROUP BY key;
+)
+
+statement ok
+CREATE CONTINUAL TASK upsert_no_snap WITH (SNAPSHOT = false) ON INPUT append_only AS (
+    DELETE FROM upsert_no_snap WHERE key IN (SELECT key FROM append_only);
+    INSERT INTO upsert_no_snap SELECT key, max(val) FROM append_only GROUP BY key;
 )
 
 statement ok
 INSERT INTO append_only VALUES (1, 'A');
 
 query IT
-SELECT * FROM upsert
+SELECT * FROM upsert_snap
 ----
 1 A
+
+query IT
+SELECT * FROM upsert_no_snap
+----
+1 A
+
 
 # The upsert CT and restarting the dataflow repeatedly turns out to be a great
 # way to shake out liveness issues without the full overhead of testdrive.
@@ -52,7 +64,12 @@ statement ok
 INSERT INTO append_only VALUES (1, 'B');
 
 query IT
-SELECT * FROM upsert
+SELECT * FROM upsert_snap
+----
+1 B
+
+query IT
+SELECT * FROM upsert_no_snap
 ----
 1 B
 
@@ -67,7 +84,12 @@ statement ok
 INSERT INTO append_only VALUES (1, 'C');
 
 query IT
-SELECT * FROM upsert
+SELECT * FROM upsert_snap
+----
+1 C
+
+query IT
+SELECT * FROM upsert_no_snap
 ----
 1 C
 
@@ -82,7 +104,12 @@ statement ok
 INSERT INTO append_only VALUES (1, 'D');
 
 query IT
-SELECT * FROM upsert
+SELECT * FROM upsert_snap
+----
+1 D
+
+query IT
+SELECT * FROM upsert_no_snap
 ----
 1 D
 
@@ -97,7 +124,12 @@ statement ok
 INSERT INTO append_only VALUES (1, 'E');
 
 query IT
-SELECT * FROM upsert
+SELECT * FROM upsert_snap
+----
+1 E
+
+query IT
+SELECT * FROM upsert_no_snap
 ----
 1 E
 
@@ -112,7 +144,12 @@ statement ok
 INSERT INTO append_only VALUES (1, 'F');
 
 query IT
-SELECT * FROM upsert
+SELECT * FROM upsert_snap
+----
+1 F
+
+query IT
+SELECT * FROM upsert_no_snap
 ----
 1 F
 
@@ -127,7 +164,12 @@ statement ok
 INSERT INTO append_only VALUES (1, 'G');
 
 query IT
-SELECT * FROM upsert
+SELECT * FROM upsert_snap
+----
+1 G
+
+query IT
+SELECT * FROM upsert_no_snap
 ----
 1 G
 
@@ -142,7 +184,12 @@ statement ok
 INSERT INTO append_only VALUES (1, 'H');
 
 query IT
-SELECT * FROM upsert
+SELECT * FROM upsert_snap
+----
+1 H
+
+query IT
+SELECT * FROM upsert_no_snap
 ----
 1 H
 
@@ -157,6 +204,11 @@ statement ok
 INSERT INTO append_only VALUES (1, 'I');
 
 query IT
-SELECT * FROM upsert
+SELECT * FROM upsert_snap
+----
+1 I
+
+query IT
+SELECT * FROM upsert_no_snap
 ----
 1 I

@@ -64,6 +64,7 @@ pub enum Statement<T: AstInfo> {
     CreateCluster(CreateClusterStatement<T>),
     CreateClusterReplica(CreateClusterReplicaStatement<T>),
     CreateSecret(CreateSecretStatement<T>),
+    CreateNetworkPolicy(CreateNetworkPolicyStatement<T>),
     AlterCluster(AlterClusterStatement<T>),
     AlterOwner(AlterOwnerStatement<T>),
     AlterObjectRename(AlterObjectRenameStatement),
@@ -78,6 +79,7 @@ pub enum Statement<T: AstInfo> {
     AlterSystemReset(AlterSystemResetStatement),
     AlterSystemResetAll(AlterSystemResetAllStatement),
     AlterConnection(AlterConnectionStatement<T>),
+    AlterNetworkPolicy(AlterNetworkPolicyStatement<T>),
     AlterRole(AlterRoleStatement<T>),
     AlterTableAddColumn(AlterTableAddColumnStatement<T>),
     Discard(DiscardStatement),
@@ -138,7 +140,9 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::CreateType(stmt) => f.write_node(stmt),
             Statement::CreateCluster(stmt) => f.write_node(stmt),
             Statement::CreateClusterReplica(stmt) => f.write_node(stmt),
+            Statement::CreateNetworkPolicy(stmt) => f.write_node(stmt),
             Statement::AlterCluster(stmt) => f.write_node(stmt),
+            Statement::AlterNetworkPolicy(stmt) => f.write_node(stmt),
             Statement::AlterOwner(stmt) => f.write_node(stmt),
             Statement::AlterObjectRename(stmt) => f.write_node(stmt),
             Statement::AlterRetainHistory(stmt) => f.write_node(stmt),
@@ -215,11 +219,13 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
         StatementKind::CreateCluster => "create_cluster",
         StatementKind::CreateClusterReplica => "create_cluster_replica",
         StatementKind::CreateSecret => "create_secret",
+        StatementKind::CreateNetworkPolicy => "create_network_policy",
         StatementKind::AlterCluster => "alter_cluster",
         StatementKind::AlterObjectRename => "alter_object_rename",
         StatementKind::AlterRetainHistory => "alter_retain_history",
         StatementKind::AlterObjectSwap => "alter_object_swap",
         StatementKind::AlterIndex => "alter_index",
+        StatementKind::AlterNetworkPolicy => "alter_network_policy",
         StatementKind::AlterRole => "alter_role",
         StatementKind::AlterSecret => "alter_secret",
         StatementKind::AlterSetCluster => "alter_set_cluster",
@@ -1419,33 +1425,23 @@ pub enum ContinualTaskStmt<T: AstInfo> {
     Insert(InsertStatement<T>),
 }
 
+impl<T: AstInfo> AstDisplay for ContinualTaskStmt<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            ContinualTaskStmt::Delete(stmt) => f.write_node(stmt),
+            ContinualTaskStmt::Insert(stmt) => f.write_node(stmt),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CreateContinualTaskSugar<T: AstInfo> {
     Transform { transform: Query<T> },
+    Retain { retain: Expr<T> },
 }
 
 impl<T: AstInfo> AstDisplay for CreateContinualTaskStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        match &self.sugar {
-            Some(CreateContinualTaskSugar::Transform { transform }) => {
-                f.write_str("CREATE CONTINUAL TASK ");
-                f.write_node(&self.name);
-                f.write_str(" FROM TRANSFORM ");
-                f.write_node(&self.input);
-                f.write_str(" USING ");
-                f.write_str("(");
-                f.write_node(transform);
-                f.write_str(")");
-
-                if let Some(time) = &self.as_of {
-                    f.write_str(" AS OF ");
-                    f.write_str(time);
-                }
-                return;
-            }
-            None => {} // Fall-through
-        }
-
         f.write_str("CREATE CONTINUAL TASK ");
         f.write_node(&self.name);
         if let Some(columns) = &self.columns {
@@ -1459,26 +1455,42 @@ impl<T: AstInfo> AstDisplay for CreateContinualTaskStatement<T> {
             f.write_node(cluster);
         }
 
-        f.write_str(" ON INPUT ");
-        f.write_node(&self.input);
-
         if !self.with_options.is_empty() {
             f.write_str(" WITH (");
             f.write_node(&display::comma_separated(&self.with_options));
             f.write_str(")");
         }
 
-        f.write_str(" AS (");
-        for (idx, stmt) in self.stmts.iter().enumerate() {
-            if idx > 0 {
-                f.write_str("; ");
+        match &self.sugar {
+            Some(CreateContinualTaskSugar::Transform { transform }) => {
+                f.write_str(" FROM TRANSFORM ");
+                f.write_node(&self.input);
+                f.write_str(" USING ");
+                f.write_str("(");
+                f.write_node(transform);
+                f.write_str(")");
             }
-            match stmt {
-                ContinualTaskStmt::Delete(stmt) => f.write_node(stmt),
-                ContinualTaskStmt::Insert(stmt) => f.write_node(stmt),
+            Some(CreateContinualTaskSugar::Retain { retain }) => {
+                f.write_str(" FROM RETAIN ");
+                f.write_node(&self.input);
+                f.write_str(" WHILE ");
+                f.write_str("(");
+                f.write_node(retain);
+                f.write_str(")");
+            }
+            None => {
+                f.write_str(" ON INPUT ");
+                f.write_node(&self.input);
+                f.write_str(" AS (");
+                for (idx, stmt) in self.stmts.iter().enumerate() {
+                    if idx > 0 {
+                        f.write_str("; ");
+                    }
+                    f.write_node(stmt);
+                }
+                f.write_str(")");
             }
         }
-        f.write_str(")");
 
         if let Some(time) = &self.as_of {
             f.write_str(" AS OF ");
@@ -1934,6 +1946,136 @@ impl AstDisplay for SetRoleVar {
 }
 impl_display!(SetRoleVar);
 
+/// AN `ALTER NETWORK POLICY` statement.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AlterNetworkPolicyStatement<T: AstInfo> {
+    /// The specified Network Policy.
+    pub name: Ident,
+    /// Any options that were attached, in the order they were presented.
+    pub options: Vec<NetworkPolicyOption<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for AlterNetworkPolicyStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("ALTER ");
+        f.write_str("NETWORK POLICY ");
+        f.write_node(&self.name);
+        f.write_str(" SET (");
+        f.write_node(&display::comma_separated(&self.options));
+        f.write_str(" )");
+    }
+}
+impl_display_t!(AlterNetworkPolicyStatement);
+
+/// A `CREATE NETWORK POLICY` statement.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateNetworkPolicyStatement<T: AstInfo> {
+    /// The specified network policy.
+    pub name: Ident,
+    /// Any options that were attached, in the order they were presented.
+    pub options: Vec<NetworkPolicyOption<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for CreateNetworkPolicyStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("CREATE ");
+        f.write_str("NETWORK POLICY ");
+        f.write_node(&self.name);
+        f.write_str(" (");
+        f.write_node(&display::comma_separated(&self.options));
+        f.write_str(" )");
+    }
+}
+impl_display_t!(CreateNetworkPolicyStatement);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct NetworkPolicyOption<T: AstInfo> {
+    pub name: NetworkPolicyOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum NetworkPolicyOptionName {
+    Rules,
+}
+
+impl WithOptionName for NetworkPolicyOptionName {
+    /// # WARNING
+    ///
+    /// Whenever implementing this trait consider very carefully whether or not
+    /// this value could contain sensitive user data. If you're uncertain, err
+    /// on the conservative side and return `true`.
+    fn redact_value(&self) -> bool {
+        match self {
+            NetworkPolicyOptionName::Rules => false,
+        }
+    }
+}
+
+impl AstDisplay for NetworkPolicyOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            NetworkPolicyOptionName::Rules => f.write_str("RULES"),
+        }
+    }
+}
+impl_display_for_with_option!(NetworkPolicyOption);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct NetworkPolicyRuleDefinition<T: AstInfo> {
+    pub name: Ident,
+    pub options: Vec<NetworkPolicyRuleOption<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for NetworkPolicyRuleDefinition<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        f.write_str(" (");
+        f.write_node(&display::comma_separated(&self.options));
+        f.write_str(" )");
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct NetworkPolicyRuleOption<T: AstInfo> {
+    pub name: NetworkPolicyRuleOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum NetworkPolicyRuleOptionName {
+    Direction,
+    Action,
+    Address,
+}
+
+impl WithOptionName for NetworkPolicyRuleOptionName {
+    /// # WARNING
+    ///
+    /// Whenever implementing this trait consider very carefully whether or not
+    /// this value could contain sensitive user data. If you're uncertain, err
+    /// on the conservative side and return `true`.
+    fn redact_value(&self) -> bool {
+        match self {
+            NetworkPolicyRuleOptionName::Direction
+            | NetworkPolicyRuleOptionName::Action
+            | NetworkPolicyRuleOptionName::Address => false,
+        }
+    }
+}
+
+impl AstDisplay for NetworkPolicyRuleOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            NetworkPolicyRuleOptionName::Direction => f.write_str("DIRECTION"),
+            NetworkPolicyRuleOptionName::Action => f.write_str("ACTION"),
+            NetworkPolicyRuleOptionName::Address => f.write_str("ADDRESS"),
+        }
+    }
+}
+
+impl_display_for_with_option!(NetworkPolicyRuleOption);
+
 /// A `CREATE SECRET` statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateSecretStatement<T: AstInfo> {
@@ -2176,7 +2318,6 @@ pub enum ClusterFeatureName {
     EnableEagerDeltaJoins,
     EnableVariadicLeftJoinLowering,
     EnableLetrecFixpointAnalysis,
-    EnableOuterJoinNullFilter,
     EnableValueWindowFunctionFusion,
     EnableReduceUnnestListFusion,
     EnableWindowAggregationFusion,
@@ -2195,7 +2336,6 @@ impl WithOptionName for ClusterFeatureName {
             | Self::EnableEagerDeltaJoins
             | Self::EnableVariadicLeftJoinLowering
             | Self::EnableLetrecFixpointAnalysis
-            | Self::EnableOuterJoinNullFilter
             | Self::EnableValueWindowFunctionFusion
             | Self::EnableReduceUnnestListFusion
             | Self::EnableWindowAggregationFusion => false,
@@ -3249,6 +3389,7 @@ pub enum ShowObjectType<T: AstInfo> {
     ContinualTask {
         in_cluster: Option<T::ClusterName>,
     },
+    NetworkPolicy,
 }
 /// `SHOW <object>S`
 ///
@@ -3291,6 +3432,7 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
             ShowObjectType::DefaultPrivileges { .. } => "DEFAULT PRIVILEGES",
             ShowObjectType::RoleMembership { .. } => "ROLE MEMBERSHIP",
             ShowObjectType::ContinualTask { .. } => "CONTINUAL TASKS",
+            ShowObjectType::NetworkPolicy => "NETWORK POLICIES",
         });
 
         if let ShowObjectType::Index { on_object, .. } = &self.object_type {
@@ -3742,7 +3884,6 @@ pub enum ExplainPlanOptionName {
     EnableEagerDeltaJoins,
     EnableVariadicLeftJoinLowering,
     EnableLetrecFixpointAnalysis,
-    EnableOuterJoinNullFilter,
     EnableValueWindowFunctionFusion,
     EnableReduceUnnestListFusion,
     EnableWindowAggregationFusion,
@@ -3780,7 +3921,6 @@ impl WithOptionName for ExplainPlanOptionName {
             | Self::EnableEagerDeltaJoins
             | Self::EnableVariadicLeftJoinLowering
             | Self::EnableLetrecFixpointAnalysis
-            | Self::EnableOuterJoinNullFilter
             | Self::EnableValueWindowFunctionFusion
             | Self::EnableReduceUnnestListFusion
             | Self::EnableWindowAggregationFusion => false,
@@ -3898,6 +4038,7 @@ pub enum ObjectType {
     Func,
     Subsource,
     ContinualTask,
+    NetworkPolicy,
 }
 
 impl ObjectType {
@@ -3919,7 +4060,8 @@ impl ObjectType {
             | ObjectType::Schema
             | ObjectType::Cluster
             | ObjectType::ClusterReplica
-            | ObjectType::Role => false,
+            | ObjectType::Role
+            | ObjectType::NetworkPolicy => false,
         }
     }
 }
@@ -3944,6 +4086,7 @@ impl AstDisplay for ObjectType {
             ObjectType::Func => "FUNCTION",
             ObjectType::Subsource => "SUBSOURCE",
             ObjectType::ContinualTask => "CONTINUAL TASK",
+            ObjectType::NetworkPolicy => "NETWORK POLICY",
         })
     }
 }
@@ -4008,6 +4151,7 @@ pub enum WithOptionValue<T: AstInfo> {
     Refresh(RefreshOptionValue<T>),
     ClusterScheduleOptionValue(ClusterScheduleOptionValue),
     ClusterAlterStrategy(ClusterAlterOptionValue<T>),
+    NetworkPolicyRules(Vec<NetworkPolicyRuleDefinition<T>>),
 }
 
 impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
@@ -4035,7 +4179,8 @@ impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
                 | WithOptionValue::ConnectionAwsPrivatelink(_)
                 | WithOptionValue::ClusterReplicas(_)
                 | WithOptionValue::ClusterScheduleOptionValue(_)
-                | WithOptionValue::ClusterAlterStrategy(_) => {
+                | WithOptionValue::ClusterAlterStrategy(_)
+                | WithOptionValue::NetworkPolicyRules(_) => {
                     // These do not need redaction.
                 }
             }
@@ -4073,6 +4218,11 @@ impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
             WithOptionValue::ClusterReplicas(replicas) => {
                 f.write_str("(");
                 f.write_node(&display::comma_separated(replicas));
+                f.write_str(")");
+            }
+            WithOptionValue::NetworkPolicyRules(rules) => {
+                f.write_str("(");
+                f.write_node(&display::comma_separated(rules));
                 f.write_str(")");
             }
             WithOptionValue::ConnectionAwsPrivatelink(aws_privatelink) => {
@@ -4855,6 +5005,7 @@ pub enum Privilege {
     CREATEROLE,
     CREATEDB,
     CREATECLUSTER,
+    CREATENETWORKPOLICY,
 }
 
 impl AstDisplay for Privilege {
@@ -4869,6 +5020,7 @@ impl AstDisplay for Privilege {
             Privilege::CREATEROLE => "CREATEROLE",
             Privilege::CREATEDB => "CREATEDB",
             Privilege::CREATECLUSTER => "CREATECLUSTER",
+            Privilege::CREATENETWORKPOLICY => "CREATENETWORKPOLICY",
         });
     }
 }
@@ -5236,6 +5388,7 @@ pub enum CommentObjectType<T: AstInfo> {
     Cluster { name: T::ClusterName },
     ClusterReplica { name: QualifiedReplica },
     ContinualTask { name: T::ItemName },
+    NetworkPolicy { name: T::NetworkPolicyName },
 }
 
 impl<T: AstInfo> AstDisplay for CommentObjectType<T> {
@@ -5309,6 +5462,10 @@ impl<T: AstInfo> AstDisplay for CommentObjectType<T> {
             }
             ContinualTask { name } => {
                 f.write_str("CONTINUAL TASK ");
+                f.write_node(name);
+            }
+            NetworkPolicy { name } => {
+                f.write_str("NETWORK POLICY ");
                 f.write_node(name);
             }
         }

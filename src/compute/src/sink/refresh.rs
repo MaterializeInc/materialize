@@ -43,7 +43,6 @@ where
         // the empty output frontier when the last refresh is done. (We must be careful that we only
         // ever emit output updates at times that are at or beyond this capability.)
         let mut capability = capabilities.into_iter().next(); // (We have 1 one input.)
-        let mut buffer = Vec::new();
         move |frontiers| {
             let mut output_handle_core = output_buf.activate();
             input.for_each(|input_cap, data| {
@@ -63,10 +62,9 @@ where
                 };
                 let mut output_buf = output_handle_core.session_with_builder(&capability);
 
-                data.swap(&mut buffer);
                 let mut cached_ts: Option<Timestamp> = None;
                 let mut cached_rounded_up_data_ts = None;
-                for (d, ts, r) in buffer.drain(..) {
+                for (d, ts, r) in data.drain(..) {
                     let rounded_up_data_ts = {
                         // We cache the rounded up timestamp for the last seen timestamp,
                         // because the rounding up has a non-negligible cost. Caching for

@@ -23,8 +23,9 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::EpochMillis;
 use mz_persist_client::PersistClient;
-use mz_repr::GlobalId;
+use mz_repr::{CatalogItemId, GlobalId};
 
+use crate::config::ClusterReplicaSizeMap;
 use crate::durable::debug::{DebugCatalogState, Trace};
 pub use crate::durable::error::{CatalogError, DurableCatalogError, FenceError};
 pub use crate::durable::metrics::Metrics;
@@ -63,11 +64,13 @@ pub const USER_REPLICA_ID_ALLOC_KEY: &str = "replica";
 pub const SYSTEM_REPLICA_ID_ALLOC_KEY: &str = "system_replica";
 pub const AUDIT_LOG_ID_ALLOC_KEY: &str = "auditlog";
 pub const STORAGE_USAGE_ID_ALLOC_KEY: &str = "storage_usage";
+pub const USER_NETWORK_POLICY_ID_ALLOC_KEY: &str = "user_network_policy";
 pub const OID_ALLOC_KEY: &str = "oid";
 pub(crate) const CATALOG_CONTENT_VERSION_KEY: &str = "catalog_content_version";
 
 #[derive(Clone, Debug)]
 pub struct BootstrapArgs {
+    pub cluster_replica_size_map: ClusterReplicaSizeMap,
     pub default_cluster_replica_size: String,
     pub bootstrap_role: Option<String>,
 }
@@ -228,6 +231,9 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send {
         self.get_next_id(USER_REPLICA_ID_ALLOC_KEY).await
     }
 
+    /// Get the deployment generation of this instance.
+    async fn get_deployment_generation(&mut self) -> Result<u64, CatalogError>;
+
     /// Get a snapshot of the catalog.
     async fn snapshot(&mut self) -> Result<Snapshot, CatalogError>;
 
@@ -291,17 +297,23 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
         Ok(ids)
     }
 
-    /// Allocates and returns `amount` system [`GlobalId`]s.
-    async fn allocate_system_ids(&mut self, amount: u64) -> Result<Vec<GlobalId>, CatalogError> {
+    /// Allocates and returns `amount` system [`CatalogItemId`]s.
+    async fn allocate_system_ids(
+        &mut self,
+        amount: u64,
+    ) -> Result<Vec<(CatalogItemId, GlobalId)>, CatalogError> {
         let id = self.allocate_id(SYSTEM_ITEM_ALLOC_KEY, amount).await?;
-        Ok(id.into_iter().map(GlobalId::System).collect())
+        Ok(id
+            .into_iter()
+            .map(|id| (CatalogItemId::System(id), GlobalId::System(id)))
+            .collect())
     }
 
-    /// Allocates and returns a user [`GlobalId`].
-    async fn allocate_user_id(&mut self) -> Result<GlobalId, CatalogError> {
+    /// Allocates and returns both a user [`CatalogItemId`] and [`GlobalId`].
+    async fn allocate_user_id(&mut self) -> Result<(CatalogItemId, GlobalId), CatalogError> {
         let id = self.allocate_id(USER_ITEM_ALLOC_KEY, 1).await?;
         let id = id.into_element();
-        Ok(GlobalId::User(id))
+        Ok((CatalogItemId::User(id), GlobalId::User(id)))
     }
 
     /// Allocates and returns a user [`ClusterId`].
@@ -402,5 +414,6 @@ pub fn test_bootstrap_args() -> BootstrapArgs {
     BootstrapArgs {
         default_cluster_replica_size: "1".into(),
         bootstrap_role: None,
+        cluster_replica_size_map: ClusterReplicaSizeMap::default(),
     }
 }

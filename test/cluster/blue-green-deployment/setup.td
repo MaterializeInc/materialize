@@ -88,7 +88,7 @@ ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;
     ),
     -- Collect ready dataflows.
     -- For a dataflow to be ready it must be hydrated and caught up.
-    -- We define a dataflow to be caught up if its local lag is less than 1 second.
+    -- We define a dataflow to be caught up if its local lag is less than 2 seconds.
     ready_dataflows AS (
         SELECT id
         FROM dataflows d
@@ -98,7 +98,7 @@ ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;
         LEFT JOIN mz_internal.mz_materialization_lag l ON (l.object_id = d.id)
         WHERE
             h.hydrated AND
-            (l.local_lag <= '1s' OR l.local_lag IS NULL)
+            (l.local_lag <= '2s' OR l.local_lag IS NULL)
     ),
     -- Collect dataflows that are not yet ready.
     pending_dataflows AS (

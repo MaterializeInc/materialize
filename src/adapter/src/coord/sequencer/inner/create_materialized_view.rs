@@ -21,7 +21,7 @@ use mz_repr::explain::{ExprHumanizerExt, TransientItem};
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::optimize::OverrideFrom;
 use mz_repr::refresh_schedule::RefreshSchedule;
-use mz_repr::{Datum, GlobalId, Row};
+use mz_repr::{CatalogItemId, Datum, Row};
 use mz_sql::ast::ExplainStage;
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::ResolvedIds;
@@ -145,7 +145,7 @@ impl Coordinator {
         let optimizer_trace = OptimizerTrace::new(stage.paths());
 
         // Not used in the EXPLAIN path so it's OK to generate a dummy value.
-        let resolved_ids = ResolvedIds(Default::default());
+        let resolved_ids = ResolvedIds::empty();
 
         let explain_ctx = ExplainContext::Plan(ExplainPlanContext {
             broken,
@@ -180,6 +180,7 @@ impl Coordinator {
         let CatalogItem::MaterializedView(item) = self.catalog().get_entry(&id).item() else {
             unreachable!() // Asserted in `plan_explain_plan`.
         };
+        let gid = item.global_id();
 
         let create_sql = item.create_sql.clone();
         let plan_result = self
@@ -204,7 +205,7 @@ impl Coordinator {
             config,
             format,
             stage,
-            replan: Some(id),
+            replan: Some(gid),
             desc: None,
             optimizer_trace,
         });
@@ -232,8 +233,9 @@ impl Coordinator {
         let CatalogItem::MaterializedView(view) = self.catalog().get_entry(&id).item() else {
             unreachable!() // Asserted in `plan_explain_plan`.
         };
+        let gid = view.global_id();
 
-        let Some(dataflow_metainfo) = self.catalog().try_get_dataflow_metainfo(&id) else {
+        let Some(dataflow_metainfo) = self.catalog().try_get_dataflow_metainfo(&gid) else {
             if !id.is_system() {
                 tracing::error!(
                     "cannot find dataflow metainformation for materialized view {id} in catalog"
@@ -272,7 +274,7 @@ impl Coordinator {
                 Some(target_cluster.name.as_str()),
             )?,
             ExplainStage::GlobalPlan => {
-                let Some(plan) = self.catalog().try_get_optimized_plan(&id).cloned() else {
+                let Some(plan) = self.catalog().try_get_optimized_plan(&gid).cloned() else {
                     tracing::error!("cannot find {stage} for materialized view {id} in catalog");
                     coord_bail!("cannot find {stage} for materialized view in catalog");
                 };
@@ -288,8 +290,8 @@ impl Coordinator {
                 )?
             }
             ExplainStage::PhysicalPlan => {
-                let Some(plan) = self.catalog().try_get_physical_plan(&id).cloned() else {
-                    tracing::error!("cannot find {stage} for materialized view {id} in catalog");
+                let Some(plan) = self.catalog().try_get_physical_plan(&gid).cloned() else {
+                    tracing::error!("cannot find {stage} for materialized view {id} in catalog",);
                     coord_bail!("cannot find {stage} for materialized view in catalog");
                 };
                 explain_dataflow(
@@ -340,14 +342,15 @@ impl Coordinator {
         // We want to reject queries that depend on log sources, for example,
         // even if we can *technically* optimize that reference away.
         let expr_depends_on = expr.depends_on();
-        let timeline_ctx = self.validate_timeline_context(expr_depends_on.iter().cloned())?;
+        self.validate_timeline_context(expr_depends_on.iter().copied())?;
         self.validate_system_column_references(*ambiguous_columns, &expr_depends_on)?;
         // Materialized views are not allowed to depend on log sources, as replicas
         // are not producing the same definite collection for these.
         let log_names = expr_depends_on
             .iter()
-            .flat_map(|id| self.catalog().introspection_dependencies(*id))
-            .map(|id| self.catalog().get_entry(&id).name().item.clone())
+            .map(|gid| self.catalog.resolve_item_id(gid))
+            .flat_map(|item_id| self.catalog().introspection_dependencies(item_id))
+            .map(|item_id| self.catalog().get_entry(&item_id).name().item.clone())
             .collect::<Vec<_>>();
         if !log_names.is_empty() {
             return Err(AdapterError::InvalidLogDependency {
@@ -381,7 +384,7 @@ impl Coordinator {
                 // index), otherwise we might be missing some read holds.
                 let ids = self
                     .index_oracle(*cluster_id)
-                    .sufficient_collections(resolved_ids.0.iter());
+                    .sufficient_collections(resolved_ids.collections().copied());
                 if !ids.difference(&read_holds.id_bundle()).is_empty() {
                     return Err(AdapterError::ChangedPlan(
                         "the set of possible inputs changed during the creation of the \
@@ -398,7 +401,6 @@ impl Coordinator {
                 plan,
                 resolved_ids,
                 explain_ctx,
-                is_timeline_epoch_ms: timeline_ctx.is_timeline_epoch_ms(),
             },
         ))
     }
@@ -411,7 +413,6 @@ impl Coordinator {
             plan,
             resolved_ids,
             explain_ctx,
-            is_timeline_epoch_ms,
         }: CreateMaterializedViewOptimize,
     ) -> Result<StageResult<Box<CreateMaterializedViewStage>>, AdapterError> {
         let plan::CreateMaterializedViewPlan {
@@ -431,12 +432,13 @@ impl Coordinator {
         let compute_instance = self
             .instance_snapshot(*cluster_id)
             .expect("compute instance does not exist");
-        let sink_id = if let ExplainContext::None = explain_ctx {
+        let (item_id, global_id) = if let ExplainContext::None = explain_ctx {
             self.catalog_mut().allocate_user_id().await?
         } else {
             self.allocate_transient_id()
         };
-        let view_id = self.allocate_transient_id();
+
+        let (_, view_id) = self.allocate_transient_id();
         let debug_name = self.catalog().resolve_full_name(name, None).to_string();
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
             .override_from(&self.catalog.get_cluster(*cluster_id).config.features())
@@ -447,7 +449,7 @@ impl Coordinator {
         let mut optimizer = optimize::materialized_view::Optimizer::new(
             self.owned_catalog().as_optimizer_catalog(),
             compute_instance,
-            sink_id,
+            global_id,
             view_id,
             column_names.clone(),
             non_null_assertions.clone(),
@@ -455,7 +457,6 @@ impl Coordinator {
             debug_name,
             optimizer_config,
             self.optimizer_metrics(),
-            is_timeline_epoch_ms,
             force_non_monotonic,
         );
 
@@ -489,7 +490,7 @@ impl Coordinator {
                                 CreateMaterializedViewStage::Explain(
                                     CreateMaterializedViewExplain {
                                         validity,
-                                        sink_id,
+                                        global_id,
                                         plan,
                                         df_meta,
                                         explain_ctx,
@@ -497,8 +498,9 @@ impl Coordinator {
                                 )
                             } else {
                                 CreateMaterializedViewStage::Finish(CreateMaterializedViewFinish {
+                                    item_id,
+                                    global_id,
                                     validity,
-                                    sink_id,
                                     plan,
                                     resolved_ids,
                                     local_mir_plan,
@@ -522,8 +524,8 @@ impl Coordinator {
                                 tracing::error!("error while handling EXPLAIN statement: {}", err);
                                 CreateMaterializedViewStage::Explain(
                                     CreateMaterializedViewExplain {
+                                        global_id,
                                         validity,
-                                        sink_id,
                                         plan,
                                         df_meta: Default::default(),
                                         explain_ctx,
@@ -547,7 +549,8 @@ impl Coordinator {
         &mut self,
         session: &Session,
         CreateMaterializedViewFinish {
-            sink_id,
+            item_id,
+            global_id,
             plan:
                 plan::CreateMaterializedViewPlan {
                     name,
@@ -555,6 +558,7 @@ impl Coordinator {
                         plan::MaterializedView {
                             mut create_sql,
                             expr: raw_expr,
+                            dependencies,
                             cluster_id,
                             non_null_assertions,
                             compaction_window,
@@ -574,14 +578,6 @@ impl Coordinator {
     ) -> Result<StageResult<Box<CreateMaterializedViewStage>>, AdapterError> {
         // Timestamp selection
         let id_bundle = dataflow_import_id_bundle(global_lir_plan.df_desc(), cluster_id);
-
-        // Collect properties for `DataflowExpirationDesc`.
-        let transitive_upper = self.least_valid_write(&id_bundle);
-        let has_transitive_refresh_schedule = refresh_schedule.is_some()
-            || raw_expr
-                .depends_on()
-                .into_iter()
-                .any(|id| self.catalog.item_has_transitive_refresh_schedule(id));
 
         let read_holds_owned;
         let read_holds = if let Some(txn_reads) = self.txn_read_holds.get(session.conn_id()) {
@@ -632,18 +628,20 @@ impl Coordinator {
                     .collect(),
             ),
             catalog::Op::CreateItem {
-                id: sink_id,
+                id: item_id,
                 name: name.clone(),
                 item: CatalogItem::MaterializedView(MaterializedView {
                     create_sql,
                     raw_expr: raw_expr.into(),
                     optimized_expr: local_mir_plan.expr().into(),
                     desc: global_lir_plan.desc().clone(),
+                    global_id,
                     resolved_ids,
+                    dependencies,
                     cluster_id,
                     non_null_assertions,
                     custom_logical_compaction_window: compaction_window,
-                    refresh_schedule,
+                    refresh_schedule: refresh_schedule.clone(),
                     initial_as_of: Some(initial_as_of.clone()),
                 }),
                 owner_id: *session.current_role_id(),
@@ -652,34 +650,30 @@ impl Coordinator {
 
         // Pre-allocate a vector of transient GlobalIds for each notice.
         let notice_ids = std::iter::repeat_with(|| self.allocate_transient_id())
+            .map(|(_item_id, global_id)| global_id)
             .take(global_lir_plan.df_meta().optimizer_notices.len())
             .collect::<Vec<_>>();
 
         let transact_result = self
             .catalog_transact_with_side_effects(Some(session), ops, |coord| async {
-                // Save plan structures.
-                coord
-                    .catalog_mut()
-                    .set_optimized_plan(sink_id, global_mir_plan.df_desc().clone());
-                coord
-                    .catalog_mut()
-                    .set_physical_plan(sink_id, global_lir_plan.df_desc().clone());
-
                 let output_desc = global_lir_plan.desc().clone();
                 let (mut df_desc, df_meta) = global_lir_plan.unapply();
 
+                // Save plan structures.
+                coord
+                    .catalog_mut()
+                    .set_optimized_plan(global_id, global_mir_plan.df_desc().clone());
+                coord
+                    .catalog_mut()
+                    .set_physical_plan(global_id, df_desc.clone());
+
                 let notice_builtin_updates_fut = coord
-                    .process_dataflow_metainfo(df_meta, sink_id, session, notice_ids)
+                    .process_dataflow_metainfo(df_meta, global_id, session, notice_ids)
                     .await;
 
                 df_desc.set_as_of(dataflow_as_of.clone());
                 df_desc.set_initial_as_of(initial_as_of);
                 df_desc.until = until;
-
-                df_desc.dataflow_expiration_desc.transitive_upper = Some(transitive_upper);
-                df_desc
-                    .dataflow_expiration_desc
-                    .has_transitive_refresh_schedule = has_transitive_refresh_schedule;
 
                 let storage_metadata = coord.catalog.state().storage_metadata();
 
@@ -691,12 +685,13 @@ impl Coordinator {
                         storage_metadata,
                         None,
                         vec![(
-                            sink_id,
+                            global_id,
                             CollectionDescription {
                                 desc: output_desc,
                                 data_source: DataSource::Other,
                                 since: Some(storage_as_of),
                                 status_collection_id: None,
+                                timeline: None,
                             },
                         )],
                     )
@@ -705,7 +700,7 @@ impl Coordinator {
 
                 coord
                     .initialize_storage_read_policies(
-                        btreeset![sink_id],
+                        btreeset![item_id],
                         compaction_window.unwrap_or(CompactionWindow::Default),
                     )
                     .await;
@@ -816,7 +811,7 @@ impl Coordinator {
         &mut self,
         session: &Session,
         CreateMaterializedViewExplain {
-            sink_id,
+            global_id,
             plan:
                 plan::CreateMaterializedViewPlan {
                     name,
@@ -844,7 +839,7 @@ impl Coordinator {
         let expr_humanizer = {
             let full_name = self.catalog().resolve_full_name(&name, None);
             let transient_items = btreemap! {
-                sink_id => TransientItem::new(
+                global_id => TransientItem::new(
                     Some(full_name.into_parts()),
                     Some(column_names.iter().map(|c| c.to_string()).collect()),
                 )
@@ -879,20 +874,18 @@ impl Coordinator {
     pub(crate) async fn explain_pushdown_materialized_view(
         &self,
         ctx: ExecuteContext,
-        gid: GlobalId,
+        item_id: CatalogItemId,
     ) {
-        let CatalogItem::MaterializedView(mview) = self.catalog().get_entry(&gid).item() else {
+        let CatalogItem::MaterializedView(mview) = self.catalog().get_entry(&item_id).item() else {
             unreachable!() // Asserted in `sequence_explain_pushdown`.
         };
-
+        let gid = mview.global_id();
         let mview = mview.clone();
 
         let Some(plan) = self.catalog().try_get_physical_plan(&gid).cloned() else {
-            tracing::error!("cannot find plan for materialized view {gid} in catalog");
-            ctx.retire(Err(anyhow!(
-                "cannot find plan for materialized view {gid} in catalog"
-            )
-            .into()));
+            let msg = format!("cannot find plan for materialized view {item_id} in catalog");
+            tracing::error!("{msg}");
+            ctx.retire(Err(anyhow!("{msg}").into()));
             return;
         };
 

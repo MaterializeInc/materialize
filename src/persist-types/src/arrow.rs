@@ -399,6 +399,32 @@ impl ArrayOrd {
         }
     }
 
+    /// Returns the rough amount of space required for the data in this array in bytes.
+    /// (Not counting nulls, dictionary encoding, or other space optimizations.)
+    pub fn goodbytes(&self) -> usize {
+        match self {
+            ArrayOrd::Null(_) => 0,
+            // This is, strictly speaking, wrong - but consistent with `ArrayIdx::goodbytes`,
+            // which counts one byte per bool.
+            ArrayOrd::Bool(b) => b.len(),
+            ArrayOrd::Int8(a) => a.values().inner().len(),
+            ArrayOrd::Int16(a) => a.values().inner().len(),
+            ArrayOrd::Int32(a) => a.values().inner().len(),
+            ArrayOrd::Int64(a) => a.values().inner().len(),
+            ArrayOrd::UInt8(a) => a.values().inner().len(),
+            ArrayOrd::UInt16(a) => a.values().inner().len(),
+            ArrayOrd::UInt32(a) => a.values().inner().len(),
+            ArrayOrd::UInt64(a) => a.values().inner().len(),
+            ArrayOrd::Float32(a) => a.values().inner().len(),
+            ArrayOrd::Float64(a) => a.values().inner().len(),
+            ArrayOrd::String(a) => a.values().len(),
+            ArrayOrd::Binary(a) => a.values().len(),
+            ArrayOrd::FixedSizeBinary(a) => a.values().len(),
+            ArrayOrd::List(_, _, nested) => nested.goodbytes(),
+            ArrayOrd::Struct(_, nested) => nested.iter().map(|a| a.goodbytes()).sum(),
+        }
+    }
+
     /// Return a struct representing the value at a particular index in this array.
     pub fn at(&self, idx: usize) -> ArrayIdx {
         ArrayIdx { idx, array: self }

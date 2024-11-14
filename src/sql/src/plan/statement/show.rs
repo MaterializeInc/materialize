@@ -18,7 +18,7 @@ use std::fmt::Write;
 
 use mz_ore::assert_none;
 use mz_ore::collections::CollectionExt;
-use mz_repr::{Datum, GlobalId, RelationDesc, Row, ScalarType};
+use mz_repr::{CatalogItemId, Datum, RelationDesc, Row, ScalarType};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
     CreateSubsourceOptionName, ExternalReferenceExport, ExternalReferences, ObjectType,
@@ -280,6 +280,20 @@ pub fn show_roles<'a>(
     ShowSelect::new(scx, query, filter, None, Some(&["name", "comment"]))
 }
 
+pub fn show_network_policies<'a>(
+    scx: &'a StatementContext<'a>,
+    filter: Option<ShowStatementFilter<Aug>>,
+) -> Result<ShowSelect<'a>, PlanError> {
+    let query = "SELECT name, rules, comment FROM mz_internal.mz_show_network_policies".to_string();
+    ShowSelect::new(
+        scx,
+        query,
+        filter,
+        None,
+        Some(&["name", "rules", "comment"]),
+    )
+}
+
 pub fn show_objects<'a>(
     scx: &'a StatementContext<'a>,
     ShowObjectsStatement {
@@ -339,6 +353,10 @@ pub fn show_objects<'a>(
         }
         ShowObjectType::ContinualTask { in_cluster } => {
             show_continual_tasks(scx, from, in_cluster, filter)
+        }
+        ShowObjectType::NetworkPolicy => {
+            assert_none!(from, "parser should reject from");
+            show_network_policies(scx, filter)
         }
     }
 }
@@ -940,7 +958,7 @@ impl<'a> ShowSelect<'a> {
 }
 
 pub struct ShowColumnsSelect<'a> {
-    id: GlobalId,
+    id: CatalogItemId,
     new_resolved_ids: ResolvedIds,
     show_select: ShowSelect<'a>,
 }
@@ -979,7 +997,7 @@ impl<'a> ShowColumnsSelect<'a> {
 /// is more amenable to human consumption.
 fn humanize_sql_for_show_create(
     catalog: &dyn SessionCatalog,
-    id: GlobalId,
+    id: CatalogItemId,
     sql: &str,
 ) -> Result<String, PlanError> {
     use mz_sql_parser::ast::{CreateSourceConnection, MySqlConfigOptionName, PgConfigOptionName};

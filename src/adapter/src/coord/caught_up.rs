@@ -61,14 +61,18 @@ impl Coordinator {
             return;
         };
 
-        let replica_frontier_collection_id = self
+        let replica_frontier_item_id = self
             .catalog()
             .resolve_builtin_storage_collection(&MZ_CLUSTER_REPLICA_FRONTIERS);
+        let replica_frontier_gid = self
+            .catalog()
+            .get_entry(&replica_frontier_item_id)
+            .latest_global_id();
 
         let live_frontiers = self
             .controller
             .storage
-            .snapshot_latest(replica_frontier_collection_id)
+            .snapshot_latest(replica_frontier_gid)
             .await
             .expect("can't read mz_cluster_replica_frontiers");
 
@@ -230,6 +234,11 @@ impl Coordinator {
             return Ok(true);
         }
 
+        enum CollectionType {
+            Storage,
+            Compute,
+        }
+
         let mut all_caught_up = true;
 
         let storage_frontiers = self
@@ -242,7 +251,7 @@ impl Coordinator {
             .map(|id| {
                 let (_read_frontier, write_frontier) =
                     self.controller.storage.collection_frontiers(id)?;
-                Ok::<_, anyhow::Error>((id, write_frontier))
+                Ok::<_, anyhow::Error>((id, write_frontier, CollectionType::Storage))
             });
 
         let compute_frontiers = self
@@ -257,11 +266,11 @@ impl Coordinator {
                     .collection_frontiers(id, Some(cluster.id))?
                     .write_frontier
                     .to_owned();
-                Ok((id, write_frontier))
+                Ok((id, write_frontier, CollectionType::Compute))
             });
 
         for res in itertools::chain(storage_frontiers, compute_frontiers) {
-            let (id, write_frontier) = res?;
+            let (id, write_frontier, collection_type) = res?;
             let live_write_frontier = match live_frontiers.get(&id) {
                 Some(frontier) => frontier,
                 None => {
@@ -308,11 +317,18 @@ impl Coordinator {
             // things the compute/instance controller might be doing. But it's
             // okay because we only do these hydration checks when in read-only
             // mode, and only rarely.
-            let collection_hydrated = self
-                .controller
-                .compute
-                .collection_hydrated(cluster.id, id)
-                .await?;
+            let collection_hydrated = match collection_type {
+                CollectionType::Compute => {
+                    self.controller
+                        .compute
+                        .collection_hydrated(cluster.id, id)
+                        .await?
+                }
+                CollectionType::Storage => {
+                    // TODO: Hydration check for storage collections!
+                    true
+                }
+            };
 
             if within_lag && collection_hydrated {
                 // This is a bit spammy, but log caught-up collections while we

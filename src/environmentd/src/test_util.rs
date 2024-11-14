@@ -538,6 +538,7 @@ impl Listeners {
                 http_host_name: Some(host_name),
                 internal_console_redirect_url: config.internal_console_redirect_url,
                 tls_reload_certs,
+                helm_chart_version: None,
             })
             .await?;
 
@@ -722,7 +723,7 @@ impl<'s, T, H> ConnectBuilder<'s, T, H> {
     ///
     /// For example, this will change the port we connect to, and the user we connect as.
     pub fn balancer(mut self) -> Self {
-        self.port = self.server.inner.balancer_sql_local_addr().port();
+        self.port = self.server.inner.sql_local_addr().port();
         self.pg_config.user("materialize");
         self
     }
@@ -926,7 +927,7 @@ impl TestServerWithRuntime {
     /// Return a [`postgres::Config`] for connecting to the __balancer__ SQL port of the running
     /// `environmentd` server.
     pub fn pg_config_balancer(&self) -> postgres::Config {
-        let local_addr = self.server.inner.balancer_sql_local_addr();
+        let local_addr = self.server.inner.sql_local_addr();
         let mut config = postgres::Config::new();
         config
             .host(&Ipv4Addr::LOCALHOST.to_string())

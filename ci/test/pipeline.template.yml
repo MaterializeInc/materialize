@@ -53,7 +53,7 @@ steps:
         depends_on: [build-x86_64]
         timeout_in_minutes: 10
         priority: 50
-        if: build.tag != "" && build.branch =~ /^v.*\..*\$/
+        if: build.tag != null
         agents:
           queue: builder-linux-x86_64
         coverage: skip
@@ -81,7 +81,7 @@ steps:
         depends_on: [build-aarch64]
         priority: 50
         timeout_in_minutes: 10
-        if: build.tag != "" && build.branch =~ /^v.*\..*\$/
+        if: build.tag != null
         agents:
           queue: builder-linux-aarch64-mem
         coverage: skip
@@ -133,9 +133,9 @@ steps:
           - "**/Cargo.toml"
           - "**/*.rs"
         depends_on: []
-        timeout_in_minutes: 30
+        timeout_in_minutes: 45
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: hetzner-aarch64-16cpu-32gb
         if: "build.pull_request.id != null"
         coverage: skip
         sanitizer: skip
@@ -354,7 +354,7 @@ steps:
       queue: hetzner-aarch64-4cpu-8gb
 
   - id: legacy-upgrade
-    label: "Legacy upgrade tests (last version from docs)"
+    label: "Legacy upgrade tests (last version from docs) %N"
     parallelism: 2
     depends_on: build-aarch64
     timeout_in_minutes: 60

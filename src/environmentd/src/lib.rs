@@ -164,6 +164,8 @@ pub struct Config {
     /// Values to set for system parameters, if those system parameters have not
     /// already been set by the system user.
     pub system_parameter_defaults: BTreeMap<String, String>,
+    /// Helm chart version
+    pub helm_chart_version: Option<String>,
 
     // === AWS options. ===
     /// The AWS account ID, which will be used to generate ARNs for
@@ -324,6 +326,7 @@ impl Listeners {
                 metrics_registry: config.metrics_registry.clone(),
                 adapter_client_rx: internal_http_adapter_client_rx,
                 active_connection_count: Arc::clone(&active_connection_count),
+                helm_chart_version: config.helm_chart_version.clone(),
                 deployment_state_handle,
                 internal_console_redirect_url: config.internal_console_redirect_url,
             });
@@ -514,20 +517,22 @@ impl Listeners {
         // Preflight checks determine whether to boot in read-only mode or not.
         let mut read_only = false;
         let mut caught_up_trigger = None;
+        let bootstrap_args = BootstrapArgs {
+            default_cluster_replica_size: config.bootstrap_default_cluster_replica_size.clone(),
+            bootstrap_role: config.bootstrap_role.clone(),
+            cluster_replica_size_map: config.cluster_replica_sizes.clone(),
+        };
         let preflight_config = PreflightInput {
             boot_ts,
             environment_id: config.environment_id.clone(),
             persist_client,
-            bootstrap_default_cluster_replica_size: config
-                .bootstrap_default_cluster_replica_size
-                .clone(),
-            bootstrap_role: config.bootstrap_role.clone(),
             deploy_generation: config.controller.deploy_generation,
             deployment_state: deployment_state.clone(),
             openable_adapter_storage,
             catalog_metrics: Arc::clone(&config.catalog_config.metrics),
             caught_up_max_wait: with_0dt_deployment_max_wait,
             panic_after_timeout: enable_0dt_deployment_panic_after_timeout,
+            bootstrap_args,
         };
         if enable_0dt_deployment {
             PreflightOutput {
@@ -551,6 +556,7 @@ impl Listeners {
         let bootstrap_args = BootstrapArgs {
             default_cluster_replica_size: config.bootstrap_default_cluster_replica_size.clone(),
             bootstrap_role: config.bootstrap_role,
+            cluster_replica_size_map: config.cluster_replica_sizes.clone(),
         };
 
         // Load the adapter durable storage.
@@ -655,6 +661,7 @@ impl Listeners {
             read_only_controllers: read_only,
             enable_0dt_deployment,
             caught_up_trigger,
+            helm_chart_version: config.helm_chart_version.clone(),
         })
         .instrument(info_span!("adapter::serve"))
         .await?;
@@ -683,6 +690,7 @@ impl Listeners {
                 metrics: metrics.clone(),
                 internal: false,
                 active_connection_count: Arc::clone(&active_connection_count),
+                helm_chart_version: config.helm_chart_version.clone(),
             });
             mz_server_core::serve(ServeConfig {
                 conns: sql_conns,
@@ -712,6 +720,7 @@ impl Listeners {
                 metrics: metrics.clone(),
                 internal: true,
                 active_connection_count: Arc::clone(&active_connection_count),
+                helm_chart_version: config.helm_chart_version.clone(),
             });
             mz_server_core::serve(ServeConfig {
                 conns: internal_sql_conns,
@@ -732,6 +741,7 @@ impl Listeners {
                 adapter_client: adapter_client.clone(),
                 allowed_origin: config.cors_allowed_origin.clone(),
                 active_connection_count: Arc::clone(&active_connection_count),
+                helm_chart_version: config.helm_chart_version.clone(),
                 concurrent_webhook_req: webhook_concurrency_limit.semaphore(),
                 metrics: http_metrics.clone(),
             });
@@ -754,6 +764,7 @@ impl Listeners {
                 adapter_client: adapter_client.clone(),
                 allowed_origin: config.cors_allowed_origin,
                 active_connection_count: Arc::clone(&active_connection_count),
+                helm_chart_version: config.helm_chart_version.clone(),
                 concurrent_webhook_req: webhook_concurrency_limit.semaphore(),
                 metrics: http_metrics,
             });
@@ -776,6 +787,7 @@ impl Listeners {
                 metrics,
                 internal: false,
                 active_connection_count: Arc::clone(&active_connection_count),
+                helm_chart_version: config.helm_chart_version.clone(),
             });
             mz_server_core::serve(ServeConfig {
                 conns: balancer_sql_conns,

@@ -129,7 +129,7 @@ impl<K, V, T, D> BatchFetcher<K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + Codec64,
+    T: Timestamp + Lattice + Codec64 + Sync,
     D: Semigroup + Codec64 + Send + Sync,
 {
     /// Takes a [`SerdeLeasedBatchPart`] into a [`LeasedBatchPart`].
@@ -339,7 +339,7 @@ pub(crate) async fn fetch_leased_part<K, V, T, D>(
 where
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + Codec64,
+    T: Timestamp + Lattice + Codec64 + Sync,
     D: Semigroup + Codec64 + Send + Sync,
 {
     let encoded_part = EncodedPart::fetch(
@@ -1483,10 +1483,8 @@ pub enum PartDecodeFormat {
 impl PartDecodeFormat {
     /// Returns a default value for [`PartDecodeFormat`].
     pub const fn default() -> Self {
-        // IMPORTANT: By default we will not decode or validate our structured format until it's
-        // more stable.
         PartDecodeFormat::Row {
-            validate_structured: false,
+            validate_structured: true,
         }
     }
 

@@ -78,7 +78,7 @@ class Generator:
 
     EXPLAIN: str | None = None
 
-    FIND_NEW_LIMITS: bool = True
+    MAX_COUNT: int | None = None
 
     @classmethod
     def header(cls) -> None:
@@ -142,7 +142,7 @@ class Connections(Generator):
 class Tables(Generator):
     COUNT = 90  # https://github.com/MaterializeInc/database-issues/issues/3675 and https://github.com/MaterializeInc/database-issues/issues/7830
 
-    FIND_NEW_LIMITS = False  # Too long-running with 11k tables
+    MAX_COUNT = 2880  # Too long-running with 5760 tables
 
     @classmethod
     def body(cls) -> None:
@@ -190,7 +190,7 @@ class Subscribe(Generator):
 
 
 class Indexes(Generator):
-    FIND_NEW_LIMITS = False  # Too long-running with count=2562
+    MAX_COUNT = 2000  # Too long-running with count=2562
 
     @classmethod
     def body(cls) -> None:
@@ -211,6 +211,8 @@ class Indexes(Generator):
 
 class KafkaTopics(Generator):
     COUNT = min(Generator.COUNT, 20)  # CREATE SOURCE is slow
+
+    MAX_COUNT = 640  # Too long-running with count=1280
 
     @classmethod
     def body(cls) -> None:
@@ -261,7 +263,7 @@ class KafkaTopics(Generator):
 class KafkaSourcesSameTopic(Generator):
     COUNT = 500  # high memory consumption
 
-    FIND_NEW_LIMITS = False  # Too long-running with 750 sources
+    MAX_COUNT = COUNT  # Too long-running with 750 sources
 
     @classmethod
     def body(cls) -> None:
@@ -372,7 +374,7 @@ class KafkaPartitions(Generator):
 class KafkaRecordsEnvelopeNone(Generator):
     COUNT = Generator.COUNT * 10_000
 
-    FIND_NEW_LIMITS = False  # Only runs into max unsigned int size, takes a while
+    MAX_COUNT = COUNT  # Only runs into max unsigned int size, takes a while
 
     @classmethod
     def body(cls) -> None:
@@ -418,7 +420,7 @@ class KafkaRecordsEnvelopeNone(Generator):
 class KafkaRecordsEnvelopeUpsertSameValue(Generator):
     COUNT = Generator.COUNT * 10_000
 
-    FIND_NEW_LIMITS = False  # Only runs into max unsigned int size, takes a while
+    MAX_COUNT = COUNT  # Only runs into max unsigned int size, takes a while
 
     @classmethod
     def body(cls) -> None:
@@ -530,7 +532,7 @@ class KafkaRecordsEnvelopeUpsertDistinctValues(Generator):
 class KafkaSinks(Generator):
     COUNT = min(Generator.COUNT, 50)  # $ kafka-verify-data is slow
 
-    FIND_NEW_LIMITS = False  # Too long-running with 6400 sinks
+    MAX_COUNT = 3200  # Too long-running with 6400 sinks
 
     @classmethod
     def body(cls) -> None:
@@ -581,7 +583,7 @@ class KafkaSinks(Generator):
 class KafkaSinksSameSource(Generator):
     COUNT = min(Generator.COUNT, 50)  # $ kafka-verify-data is slow
 
-    FIND_NEW_LIMITS = False  # Too long-running with 6400 sinks
+    MAX_COUNT = 3200  # Too long-running with 6400 sinks
 
     @classmethod
     def body(cls) -> None:
@@ -642,7 +644,7 @@ class Columns(Generator):
 class TablesCommaJoinNoCondition(Generator):
     COUNT = 100  # https://github.com/MaterializeInc/database-issues/issues/3682
 
-    FIND_NEW_LIMITS = False  # Too long-running with 400 conditions
+    MAX_COUNT = 200  # Too long-running with 400 conditions
 
     @classmethod
     def body(cls) -> None:
@@ -656,7 +658,7 @@ class TablesCommaJoinNoCondition(Generator):
 class TablesCommaJoinWithJoinCondition(Generator):
     COUNT = 20  # Otherwise is very slow
 
-    FIND_NEW_LIMITS = False  # Too long-running with 640 conditions
+    MAX_COUNT = 320  # Too long-running with 640 conditions
 
     @classmethod
     def body(cls) -> None:
@@ -850,7 +852,7 @@ class ViewsMaterializedNested(Generator):
         Generator.COUNT, 25
     )  # https://github.com/MaterializeInc/database-issues/issues/3958
 
-    FIND_NEW_LIMITS = False  # Too long-running with 800 views
+    MAX_COUNT = 400  # Too long-running with 800 views
 
     @classmethod
     def body(cls) -> None:
@@ -877,7 +879,7 @@ class CTEs(Generator):
         Generator.COUNT, 10
     )  # https://github.com/MaterializeInc/database-issues/issues/2628
 
-    FIND_NEW_LIMITS = False  # Too long-running with count=480
+    MAX_COUNT = 240  # Too long-running with count=480
 
     @classmethod
     def body(cls) -> None:
@@ -935,7 +937,7 @@ class DerivedTables(Generator):
         Generator.COUNT, 10
     )  # https://github.com/MaterializeInc/database-issues/issues/2630
 
-    FIND_NEW_LIMITS = False  # Too long-running with count=320
+    MAX_COUNT = 320  # Too long-running with count=480
 
     @classmethod
     def body(cls) -> None:
@@ -954,7 +956,7 @@ class Lateral(Generator):
         Generator.COUNT, 10
     )  # https://github.com/MaterializeInc/database-issues/issues/2631
 
-    FIND_NEW_LIMITS = False  # Too long-running with count=320
+    MAX_COUNT = 160  # Too long-running with count=320
 
     @classmethod
     def body(cls) -> None:
@@ -1312,6 +1314,8 @@ class FilterSubqueries(Generator):
 
     COUNT = 100
 
+    MAX_COUNT = 111  # Too long-running with count=200
+
     @classmethod
     def body(cls) -> None:
         print("> CREATE TABLE t1 (f1 INTEGER);")
@@ -1527,7 +1531,7 @@ class PostgresSources(Generator):
 class MySqlSources(Generator):
     COUNT = 300  # high memory consumption, slower with source tables
 
-    FIND_NEW_LIMITS = False  # Too long-running with count=473
+    MAX_COUNT = 400  # Too long-running with count=473
 
     @classmethod
     def body(cls) -> None:
@@ -1579,7 +1583,7 @@ class MySqlSources(Generator):
 class WebhookSources(Generator):
     COUNT = 100  # TODO: Remove when database-issues#8508 is fixed
 
-    FIND_NEW_LIMITS = False  # Too long-running with count=2800
+    MAX_COUNT = 1400  # Too long-running with count=2800
 
     @classmethod
     def body(cls) -> None:
@@ -1664,13 +1668,14 @@ SERVICES = [
             "--pgwire-listen-addr=0.0.0.0:6875",
             "--https-listen-addr=0.0.0.0:6876",
             "--internal-http-listen-addr=0.0.0.0:6878",
-            "--frontegg-resolver-template=materialized:6880",
+            "--frontegg-resolver-template=materialized:6875",
             "--frontegg-jwk-file=/secrets/frontegg-mock.crt",
             f"--frontegg-api-token-url={FRONTEGG_URL}/identity/resources/auth/v1/api-token",
             f"--frontegg-admin-role={ADMIN_ROLE}",
-            "--https-resolver-template=materialized:6881",
+            "--https-resolver-template=materialized:6876",
             "--tls-key=/secrets/balancerd.key",
             "--tls-cert=/secrets/balancerd.crt",
+            "--internal-tls",
         ],
         depends_on=["test-certs"],
         volumes=[
@@ -1864,8 +1869,6 @@ def workflow_main(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     for scenario in scenarios:
         if args.find_limit:
-            if not scenario.FIND_NEW_LIMITS:
-                continue
             good_count = None
             bad_count = None
             while True:
@@ -1928,20 +1931,25 @@ def workflow_main(c: Composition, parser: WorkflowArgumentParser) -> None:
                             start_time = time.time()
                             cur.execute(scenario.EXPLAIN)
                             explain_wallclock = time.time() - start_time
+                            explain_wallclock_str = (
+                                f", explain took {explain_wallclock:.2f} s"
+                            )
                     else:
                         explain_wallclock = None
+                        explain_wallclock_str = ""
                     print(
-                        f"Scenario {scenario.__name__} with count {scenario.COUNT} took {wallclock:.2f} s"
+                        f"Scenario {scenario.__name__} with count {scenario.COUNT} took {wallclock:.2f} s{explain_wallclock_str}"
                     )
                     stats[(scenario, scenario.COUNT)] = Statistics(
                         wallclock, explain_wallclock
                     )
                 good_count = scenario.COUNT
-                scenario.COUNT = (
-                    scenario.COUNT * 2
-                    if bad_count is None
-                    else (good_count + bad_count) // 2
-                )
+                if bad_count is None:
+                    scenario.COUNT *= 2
+                else:
+                    scenario.COUNT = (good_count + bad_count) // 2
+                if scenario.MAX_COUNT is not None:
+                    scenario.COUNT = min(scenario.COUNT, scenario.MAX_COUNT)
                 if scenario.COUNT <= good_count:
                     break
             print(f"Final good count: {good_count}")

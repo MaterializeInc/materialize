@@ -117,7 +117,7 @@ impl Coordinator {
         let optimizer_trace = OptimizerTrace::new(stage.paths());
 
         // Not used in the EXPLAIN path so it's OK to generate a dummy value.
-        let resolved_ids = ResolvedIds(Default::default());
+        let resolved_ids = ResolvedIds::empty();
 
         let explain_ctx = ExplainContext::Plan(ExplainPlanContext {
             broken,
@@ -149,11 +149,12 @@ impl Coordinator {
         let plan::Explainee::ReplanIndex(id) = explainee else {
             unreachable!() // Asserted in `sequence_explain_plan`.
         };
-        let CatalogItem::Index(item) = self.catalog().get_entry(&id).item() else {
+        let CatalogItem::Index(index) = self.catalog().get_entry(&id).item() else {
             unreachable!() // Asserted in `plan_explain_plan`.
         };
+        let id = index.global_id();
 
-        let create_sql = item.create_sql.clone();
+        let create_sql = index.create_sql.clone();
         let plan_result = self
             .catalog_mut()
             .deserialize_plan_with_enable_for_item_parsing(&create_sql, true);
@@ -205,7 +206,8 @@ impl Coordinator {
             unreachable!() // Asserted in `plan_explain_plan`.
         };
 
-        let Some(dataflow_metainfo) = self.catalog().try_get_dataflow_metainfo(&id) else {
+        let Some(dataflow_metainfo) = self.catalog().try_get_dataflow_metainfo(&index.global_id())
+        else {
             if !id.is_system() {
                 tracing::error!("cannot find dataflow metainformation for index {id} in catalog");
             }
@@ -223,7 +225,11 @@ impl Coordinator {
 
         let explain = match stage {
             ExplainStage::GlobalPlan => {
-                let Some(plan) = self.catalog().try_get_optimized_plan(&id).cloned() else {
+                let Some(plan) = self
+                    .catalog()
+                    .try_get_optimized_plan(&index.global_id())
+                    .cloned()
+                else {
                     tracing::error!("cannot find {stage} for index {id} in catalog");
                     coord_bail!("cannot find {stage} for index in catalog");
                 };
@@ -240,7 +246,11 @@ impl Coordinator {
                 )?
             }
             ExplainStage::PhysicalPlan => {
-                let Some(plan) = self.catalog().try_get_physical_plan(&id).cloned() else {
+                let Some(plan) = self
+                    .catalog()
+                    .try_get_physical_plan(&index.global_id())
+                    .cloned()
+                else {
                     tracing::error!("cannot find {stage} for index {id} in catalog");
                     coord_bail!("cannot find {stage} for index in catalog");
                 };
@@ -295,7 +305,7 @@ impl Coordinator {
         }: CreateIndexOptimize,
     ) -> Result<StageResult<Box<CreateIndexStage>>, AdapterError> {
         let plan::CreateIndexPlan {
-            index: plan::Index { cluster_id, on, .. },
+            index: plan::Index { cluster_id, .. },
             ..
         } = &plan;
 
@@ -303,11 +313,12 @@ impl Coordinator {
         let compute_instance = self
             .instance_snapshot(*cluster_id)
             .expect("compute instance does not exist");
-        let exported_index_id = if let ExplainContext::None = explain_ctx {
+        let (item_id, global_id) = if let ExplainContext::None = explain_ctx {
             self.catalog_mut().allocate_user_id().await?
         } else {
             self.allocate_transient_id()
         };
+
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
             .override_from(&self.catalog.get_cluster(*cluster_id).config.features())
             .override_from(&explain_ctx);
@@ -316,12 +327,11 @@ impl Coordinator {
         let mut optimizer = optimize::index::Optimizer::new(
             self.owned_catalog(),
             compute_instance,
-            exported_index_id,
+            global_id,
             optimizer_config,
             self.optimizer_metrics(),
         );
         let span = Span::current();
-        let is_timeline_epoch_ms = self.get_timeline_context(*on).is_timeline_epoch_ms();
         Ok(StageResult::Handle(mz_ore::task::spawn_blocking(
             || "optimize create index",
             move || {
@@ -333,7 +343,7 @@ impl Coordinator {
                     let _dispatch_guard = explain_ctx.dispatch_guard();
 
                     let index_plan =
-                        optimize::index::Index::new(plan.name.clone(), plan.index.on, plan.index.keys.clone(), is_timeline_epoch_ms);
+                        optimize::index::Index::new(plan.name.clone(), plan.index.on, plan.index.keys.clone());
 
                     // MIR ⇒ MIR optimization (global)
                     let global_mir_plan = optimizer.catch_unwind_optimize(index_plan)?;
@@ -349,7 +359,7 @@ impl Coordinator {
                                 let (_, df_meta) = global_lir_plan.unapply();
                                 CreateIndexStage::Explain(CreateIndexExplain {
                                     validity,
-                                    exported_index_id,
+                                    exported_index_id: global_id,
                                     plan,
                                     df_meta,
                                     explain_ctx,
@@ -357,7 +367,8 @@ impl Coordinator {
                             } else {
                                 CreateIndexStage::Finish(CreateIndexFinish {
                                     validity,
-                                    exported_index_id,
+                                    item_id,
+                                    global_id,
                                     plan,
                                     resolved_ids,
                                     global_mir_plan,
@@ -380,7 +391,7 @@ impl Coordinator {
                                 tracing::error!("error while handling EXPLAIN statement: {}", err);
                                 CreateIndexStage::Explain(CreateIndexExplain {
                                     validity,
-                                    exported_index_id,
+                                    exported_index_id: global_id,
                                     plan,
                                     df_meta: Default::default(),
                                     explain_ctx,
@@ -402,7 +413,8 @@ impl Coordinator {
         &mut self,
         session: &Session,
         CreateIndexFinish {
-            exported_index_id,
+            item_id,
+            global_id,
             plan:
                 plan::CreateIndexPlan {
                     name,
@@ -425,10 +437,11 @@ impl Coordinator {
         let id_bundle = dataflow_import_id_bundle(global_lir_plan.df_desc(), cluster_id);
 
         let ops = vec![catalog::Op::CreateItem {
-            id: exported_index_id,
+            id: item_id,
             name: name.clone(),
             item: CatalogItem::Index(Index {
                 create_sql,
+                global_id,
                 keys: keys.into(),
                 on,
                 conn_id: None,
@@ -437,32 +450,29 @@ impl Coordinator {
                 is_retained_metrics_object: false,
                 custom_logical_compaction_window: compaction_window,
             }),
-            owner_id: *self.catalog().get_entry(&on).owner_id(),
+            owner_id: *self.catalog().get_entry_by_global_id(&on).owner_id(),
         }];
-
-        // Collect properties for `DataflowExpirationDesc`.
-        let transitive_upper = self.least_valid_write(&id_bundle);
-        let has_transitive_refresh_schedule = self.catalog.item_has_transitive_refresh_schedule(on);
 
         // Pre-allocate a vector of transient GlobalIds for each notice.
         let notice_ids = std::iter::repeat_with(|| self.allocate_transient_id())
+            .map(|(_item_id, global_id)| global_id)
             .take(global_lir_plan.df_meta().optimizer_notices.len())
             .collect::<Vec<_>>();
 
         let transact_result = self
             .catalog_transact_with_side_effects(Some(session), ops, |coord| async {
+                let (mut df_desc, df_meta) = global_lir_plan.unapply();
+
                 // Save plan structures.
                 coord
                     .catalog_mut()
-                    .set_optimized_plan(exported_index_id, global_mir_plan.df_desc().clone());
+                    .set_optimized_plan(global_id, global_mir_plan.df_desc().clone());
                 coord
                     .catalog_mut()
-                    .set_physical_plan(exported_index_id, global_lir_plan.df_desc().clone());
-
-                let (mut df_desc, df_meta) = global_lir_plan.unapply();
+                    .set_physical_plan(global_id, df_desc.clone());
 
                 let notice_builtin_updates_fut = coord
-                    .process_dataflow_metainfo(df_meta, exported_index_id, session, notice_ids)
+                    .process_dataflow_metainfo(df_meta, global_id, session, notice_ids)
                     .await;
 
                 // We're putting in place read holds, such that ship_dataflow,
@@ -475,11 +485,6 @@ impl Coordinator {
                 let read_holds = coord.acquire_read_holds(&id_bundle);
                 let since = coord.least_valid_read(&read_holds);
                 df_desc.set_as_of(since);
-
-                df_desc.dataflow_expiration_desc.transitive_upper = Some(transitive_upper);
-                df_desc
-                    .dataflow_expiration_desc
-                    .has_transitive_refresh_schedule = has_transitive_refresh_schedule;
 
                 coord
                     .ship_dataflow_and_notice_builtin_table_updates(
@@ -495,7 +500,7 @@ impl Coordinator {
 
                 coord.update_compute_read_policy(
                     cluster_id,
-                    exported_index_id,
+                    item_id,
                     compaction_window.unwrap_or_default().into(),
                 );
             })
@@ -538,7 +543,7 @@ impl Coordinator {
     ) -> Result<StageResult<Box<CreateIndexStage>>, AdapterError> {
         let session_catalog = self.catalog().for_session(session);
         let expr_humanizer = {
-            let on_entry = self.catalog.get_entry(&index.on);
+            let on_entry = self.catalog.get_entry_by_global_id(&index.on);
             let full_name = self.catalog.resolve_full_name(&name, on_entry.conn_id());
             let on_desc = on_entry
                 .desc(&full_name)

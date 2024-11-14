@@ -93,6 +93,8 @@ pub struct KubernetesOrchestratorConfig {
     pub ephemeral_volume_storage_class: Option<String>,
     /// The optional fs group for service's pods' `securityContext`.
     pub service_fs_group: Option<i64>,
+    /// The prefix to prepend to all object names
+    pub name_prefix: Option<String>,
 }
 
 /// Specifies whether Kubernetes should pull Docker images when creating pods.
@@ -176,6 +178,7 @@ impl Orchestrator for KubernetesOrchestrator {
                 pod_api: Api::default_namespaced(self.client.clone()),
                 owner_references: vec![],
                 command_rx,
+                name_prefix: self.config.name_prefix.clone().unwrap_or_default(),
             }
             .spawn(format!("kubernetes-orchestrator-worker:{namespace}"));
 
@@ -274,6 +277,7 @@ struct OrchestratorWorker {
     pod_api: Api<Pod>,
     owner_references: Vec<OwnerReference>,
     command_rx: mpsc::UnboundedReceiver<WorkerCommand>,
+    name_prefix: String,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -374,7 +378,11 @@ impl k8s_openapi::Metadata for MetricValueList {
 
 impl NamespacedKubernetesOrchestrator {
     fn service_name(&self, id: &str) -> String {
-        format!("{}-{id}", self.namespace)
+        format!(
+            "{}{}-{id}",
+            self.config.name_prefix.as_deref().unwrap_or(""),
+            self.namespace
+        )
     }
 
     /// Return a `watcher::Config` instance that limits results to the namespace
@@ -568,7 +576,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             availability_zones,
             other_replicas_selector,
             replicas_selector,
-            disk,
+            disk: disk_in,
             disk_limit,
             node_selector,
         }: ServiceConfig,
@@ -576,7 +584,26 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         // This is extremely cheap to clone, so just look into the lock once.
         let scheduling_config: ServiceSchedulingConfig =
             self.scheduling_config.read().expect("poisoned").clone();
-        let disk = scheduling_config.always_use_disk || disk;
+
+        // Determining whether to enable disk is subtle because we need to
+        // support historical sizes in the managed service and custom sizes in
+        // self hosted deployments.
+        let disk = {
+            // Whether the user specified `DISK = TRUE` when creating the
+            // replica OR whether the feature flag to force disk is enabled.
+            let user_requested_disk = disk_in || scheduling_config.always_use_disk;
+            // Whether the cluster replica size map provided by the
+            // administrator explicitly indicates that the size does not support
+            // disk.
+            let size_disables_disk = disk_limit == Some(DiskLimit::ZERO);
+            // Enable disk if the user requested it and the size does not
+            // disable it.
+            //
+            // Arguably we should not allow the user to request disk with sizes
+            // that have a zero disk limit, but configuring disk on a replica by
+            // replica basis is a legacy option that we hope to remove someday.
+            user_requested_disk && !size_disables_disk
+        };
 
         let name = self.service_name(id);
         // The match labels should be the minimal set of labels that uniquely
@@ -1690,7 +1717,7 @@ impl OrchestratorWorker {
 
     async fn list_services(&self, namespace: &str) -> Result<Vec<String>, K8sError> {
         let stateful_sets = self.stateful_set_api.list(&Default::default()).await?;
-        let name_prefix = format!("{namespace}-");
+        let name_prefix = format!("{}{namespace}-", self.name_prefix);
         Ok(stateful_sets
             .into_iter()
             .filter_map(|ss| {

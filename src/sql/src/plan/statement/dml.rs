@@ -27,7 +27,7 @@ use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::bytes::ByteSize;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::optimize::OptimizerFeatureOverrides;
-use mz_repr::{Datum, GlobalId, RelationDesc, ScalarType};
+use mz_repr::{CatalogItemId, Datum, RelationDesc, ScalarType};
 use mz_sql_parser::ast::{
     CreateSinkOption, CreateSinkOptionName, CteBlock, ExplainPlanOption, ExplainPlanOptionName,
     ExplainPushdownStatement, ExplainSinkSchemaFor, ExplainSinkSchemaStatement,
@@ -369,7 +369,6 @@ generate_extracted_config!(
     (EnableEagerDeltaJoins, Option<bool>, Default(None)),
     (EnableVariadicLeftJoinLowering, Option<bool>, Default(None)),
     (EnableLetrecFixpointAnalysis, Option<bool>, Default(None)),
-    (EnableOuterJoinNullFilter, Option<bool>, Default(None)),
     (EnableValueWindowFunctionFusion, Option<bool>, Default(None)),
     (EnableReduceUnnestListFusion, Option<bool>, Default(None)),
     (EnableWindowAggregationFusion, Option<bool>, Default(None))
@@ -420,7 +419,6 @@ impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
                 enable_letrec_fixpoint_analysis: v.enable_letrec_fixpoint_analysis,
                 enable_consolidate_after_union_negate: Default::default(),
                 enable_reduce_mfp_fusion: Default::default(),
-                enable_outer_join_null_filter: v.enable_outer_join_null_filter,
                 enable_cardinality_estimates: Default::default(),
                 persist_fast_path_limit: Default::default(),
                 reoptimize_imported_views: v.reoptimize_imported_views,
@@ -839,7 +837,11 @@ pub fn plan_subscribe(
                 _ => None,
             };
             let scope = Scope::from_source(item_name, desc.iter().map(|(name, _type)| name));
-            (SubscribeFrom::Id(entry.id()), desc.into_owned(), scope)
+            (
+                SubscribeFrom::Id(entry.global_id()),
+                desc.into_owned(),
+                scope,
+            )
         }
         SubscribeRelation::Query(query) => {
             #[allow(deprecated)] // TODO(aalexandrov): Use HirRelationExpr in Subscribe
@@ -1024,7 +1026,7 @@ fn plan_copy_to_expr(
     options: CopyOptionExtracted,
 ) -> Result<Plan, PlanError> {
     let conn_id = match options.aws_connection {
-        Some(conn_id) => GlobalId::from(conn_id),
+        Some(conn_id) => CatalogItemId::from(conn_id),
         None => sql_bail!("AWS CONNECTION is required for COPY ... TO <expr>"),
     };
     let connection = scx.get_item(&conn_id).connection()?;

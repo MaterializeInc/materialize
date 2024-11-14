@@ -135,11 +135,20 @@ pub(crate) const COMPACTION_MINIMUM_TIMEOUT: Config<Duration> = Config::new(
     before timing it out (Materialize).",
 );
 
+pub(crate) const COMPACTION_USE_MOST_RECENT_SCHEMA: Config<bool> = Config::new(
+    "persist_compaction_use_most_recent_schema",
+    true,
+    "\
+    Use the most recent schema from all the Runs that are currently being \
+    compacted, instead of the schema on the current write handle (Materialize).
+    ",
+);
+
 impl<K, V, T, D> Compactor<K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + Codec64,
+    T: Timestamp + Lattice + Codec64 + Sync,
     D: Semigroup + Ord + Codec64 + Send + Sync,
 {
     pub fn new(
@@ -294,12 +303,48 @@ where
             // or 1s per MB of input data
             Duration::from_secs(u64::cast_from(total_input_bytes / MiB)),
         );
+        // always use most recent schema from all the Runs we're compacting to prevent Compactors
+        // created before the schema was evolved, from trying to "de-evolve" a Part.
+        let compaction_schema_id = req
+            .inputs
+            .iter()
+            .flat_map(|batch| batch.run_meta.iter())
+            .filter_map(|run_meta| run_meta.schema)
+            // It's an invariant that SchemaIds are ordered.
+            .max();
+        let maybe_compaction_schema = match compaction_schema_id {
+            Some(id) => machine
+                .get_schema(id)
+                .map(|(key_schema, val_schema)| (id, key_schema, val_schema)),
+            None => None,
+        };
+        let use_most_recent_schema = COMPACTION_USE_MOST_RECENT_SCHEMA.get(&machine.applier.cfg);
+
+        let compaction_schema = match maybe_compaction_schema {
+            Some((id, key_schema, val_schema)) if use_most_recent_schema => {
+                metrics.compaction.schema_selection.recent_schema.inc();
+                Schemas {
+                    id: Some(id),
+                    key: Arc::new(key_schema),
+                    val: Arc::new(val_schema),
+                }
+            }
+            Some(_) => {
+                metrics.compaction.schema_selection.disabled.inc();
+                write_schemas
+            }
+            None => {
+                metrics.compaction.schema_selection.no_schema.inc();
+                write_schemas
+            }
+        };
 
         trace!(
-            "compaction request for {}MBs ({} bytes), with timeout of {}s.",
+            "compaction request for {}MBs ({} bytes), with timeout of {}s, and schema {:?}.",
             total_input_bytes / MiB,
             total_input_bytes,
-            timeout.as_secs_f64()
+            timeout.as_secs_f64(),
+            compaction_schema.id,
         );
 
         let compact_span = debug_span!("compact::consolidate");
@@ -317,7 +362,7 @@ where
                         Arc::clone(&machine.applier.shard_metrics),
                         Arc::clone(&machine.isolated_runtime),
                         req,
-                        write_schemas,
+                        compaction_schema,
                     )
                     .instrument(compact_span),
                 )

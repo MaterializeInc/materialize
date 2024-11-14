@@ -72,7 +72,7 @@ use mz_expr::{EvalError, MirRelationExpr, OptimizedMirRelationExpr, Unmaterializ
 use mz_ore::stack::RecursionLimitError;
 use mz_repr::adt::timestamp::TimestampError;
 use mz_repr::optimize::{OptimizerFeatureOverrides, OptimizerFeatures, OverrideFrom};
-use mz_repr::GlobalId;
+use mz_repr::{CatalogItemId, GlobalId};
 use mz_sql::names::{FullItemName, QualifiedItemName};
 use mz_sql::plan::PlanError;
 use mz_sql::session::vars::SystemVars;
@@ -122,7 +122,7 @@ where
     /// [`OptimizerError::Internal`] error.
     #[mz_ore::instrument(target = "optimizer", level = "debug", name = "optimize")]
     fn catch_unwind_optimize(&mut self, plan: From) -> Result<Self::To, OptimizerError> {
-        match mz_ore::panic::catch_unwind(AssertUnwindSafe(|| self.optimize(plan))) {
+        match mz_ore::panic::catch_unwind_str(AssertUnwindSafe(|| self.optimize(plan))) {
             Ok(result) => {
                 match result.map_err(Into::into) {
                     Err(OptimizerError::TransformError(TransformError::CallerShouldPanic(msg))) => {
@@ -135,8 +135,8 @@ where
                     result => result,
                 }
             }
-            Err(_) => {
-                let msg = "unexpected panic during query optimization".to_string();
+            Err(panic) => {
+                let msg = format!("unexpected panic during query optimization: {panic}");
                 Err(OptimizerError::Internal(msg))
             }
         }
@@ -251,7 +251,6 @@ impl From<&OptimizerConfig> for mz_sql::plan::HirToMirConfig {
         Self {
             enable_new_outer_join_lowering: config.features.enable_new_outer_join_lowering,
             enable_variadic_left_join_lowering: config.features.enable_variadic_left_join_lowering,
-            enable_outer_join_null_filter: config.features.enable_outer_join_null_filter,
             enable_value_window_function_fusion: config
                 .features
                 .enable_value_window_function_fusion,
@@ -265,6 +264,7 @@ impl From<&OptimizerConfig> for mz_sql::plan::HirToMirConfig {
 
 pub trait OptimizerCatalog: Debug + Send + Sync {
     fn get_entry(&self, id: &GlobalId) -> &CatalogEntry;
+    fn get_entry_by_item_id(&self, id: &CatalogItemId) -> &CatalogEntry;
     fn resolve_full_name(
         &self,
         name: &QualifiedItemName,

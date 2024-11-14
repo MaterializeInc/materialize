@@ -50,9 +50,8 @@ $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=2s
 
 $ kafka-create-topic topic=topic0 partitions=2
 
-# TODO: database-issues#8621
-# ! SELECT * FROM source0_tbl
-# contains:topic was recreated: partition count regressed from 4 to 2
+! SELECT * FROM source0_tbl
+contains:topic was recreated: partition count regressed from 4 to 2
 
 # We can also detect that a topic got recreated by observing the high watermark regressing
 
@@ -89,9 +88,8 @@ $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=2s
 
 $ kafka-create-topic topic=topic1 partitions=1
 
-# TODO: database-issues#8621
-# ! SELECT * FROM source1_tbl
-# contains:topic was recreated: high watermark of partition 0 regressed from 1 to 0
+! SELECT * FROM source1_tbl
+contains:topic was recreated: high watermark of partition 0 regressed from 1 to 0
 
 # Test a pathological topic recreation observed in the wild.
 # See incidents-and-escalations#98.
@@ -175,18 +173,14 @@ text
 ----
 1
 
-# wait for appropriate status values
-$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=2s
-
-# TODO: database-issues#8691: update status values
 > SELECT name, status, error FROM mz_internal.mz_source_statuses WHERE type != 'progress'
 name            status    error
 -------------------------------
 good_source_tbl running <null>
-source0_tbl starting <null>
-source1 running <null>
-source1_tbl starting <null>
-source2_tbl starting <null>
+source0_tbl stalled "kafka: Source error: source must be dropped and recreated due to failure: topic was recreated: partition count regressed from 4 to 2"
+source1 paused <null>
+source1_tbl stalled "kafka: Source error: source must be dropped and recreated due to failure: topic was recreated: high watermark of partition 0 regressed from 1 to 0"
+source2_tbl running <null>
 good_source running <null>
 source0 paused <null>
 source2 running <null>

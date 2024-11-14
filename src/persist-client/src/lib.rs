@@ -78,7 +78,7 @@ pub mod operators {
     // TODO(cfg): Move this next to the use.
     pub(crate) const STORAGE_SOURCE_DECODE_FUEL: Config<usize> = Config::new(
         "storage_source_decode_fuel",
-        1_000_000,
+        100_000,
         "\
         The maximum amount of work to do in the persist_source mfp_and_decode \
         operator before yielding.",
@@ -240,7 +240,7 @@ impl PersistClient {
     where
         K: Debug + Codec,
         V: Debug + Codec,
-        T: Timestamp + Lattice + Codec64,
+        T: Timestamp + Lattice + Codec64 + Sync,
         D: Semigroup + Codec64 + Send + Sync,
     {
         let state_versions = StateVersions::new(
@@ -292,7 +292,7 @@ impl PersistClient {
     where
         K: Debug + Codec,
         V: Debug + Codec,
-        T: Timestamp + Lattice + Codec64,
+        T: Timestamp + Lattice + Codec64 + Sync,
         D: Semigroup + Ord + Codec64 + Send + Sync,
     {
         Ok((
@@ -334,7 +334,7 @@ impl PersistClient {
     where
         K: Debug + Codec,
         V: Debug + Codec,
-        T: Timestamp + Lattice + Codec64,
+        T: Timestamp + Lattice + Codec64 + Sync,
         D: Semigroup + Codec64 + Send + Sync,
     {
         let machine = self.make_machine(shard_id, diagnostics.clone()).await?;
@@ -386,7 +386,7 @@ impl PersistClient {
     where
         K: Debug + Codec,
         V: Debug + Codec,
-        T: Timestamp + Lattice + Codec64,
+        T: Timestamp + Lattice + Codec64 + Sync,
         D: Semigroup + Codec64 + Send + Sync,
     {
         let machine = self.make_machine(shard_id, diagnostics.clone()).await?;
@@ -465,7 +465,7 @@ impl PersistClient {
     where
         K: Debug + Codec,
         V: Debug + Codec,
-        T: Timestamp + Lattice + Codec64,
+        T: Timestamp + Lattice + Codec64 + Sync,
         D: Semigroup + Codec64 + Send + Sync,
         O: Opaque + Codec64,
     {
@@ -506,7 +506,7 @@ impl PersistClient {
     where
         K: Debug + Codec,
         V: Debug + Codec,
-        T: Timestamp + Lattice + Codec64,
+        T: Timestamp + Lattice + Codec64 + Sync,
         D: Semigroup + Ord + Codec64 + Send + Sync,
     {
         let machine = self.make_machine(shard_id, diagnostics.clone()).await?;
@@ -559,7 +559,7 @@ impl PersistClient {
     where
         K: Debug + Codec,
         V: Debug + Codec,
-        T: Timestamp + Lattice + Codec64,
+        T: Timestamp + Lattice + Codec64 + Sync,
         D: Semigroup + Codec64 + Send + Sync,
     {
         let machine = self
@@ -577,7 +577,7 @@ impl PersistClient {
     where
         K: Debug + Codec,
         V: Debug + Codec,
-        T: Timestamp + Lattice + Codec64,
+        T: Timestamp + Lattice + Codec64 + Sync,
         D: Semigroup + Codec64 + Send + Sync,
     {
         let machine = self
@@ -607,7 +607,7 @@ impl PersistClient {
     where
         K: Debug + Codec,
         V: Debug + Codec,
-        T: Timestamp + Lattice + Codec64,
+        T: Timestamp + Lattice + Codec64 + Sync,
         D: Semigroup + Codec64 + Send + Sync,
     {
         if !DANGEROUS_ENABLE_SCHEMA_EVOLUTION.get(&self.cfg.configs) {
@@ -636,7 +636,7 @@ impl PersistClient {
     where
         K: Debug + Codec,
         V: Debug + Codec,
-        T: Timestamp + Lattice + Codec64,
+        T: Timestamp + Lattice + Codec64 + Sync,
         D: Semigroup + Codec64 + Send + Sync,
     {
         let machine = self
@@ -664,7 +664,7 @@ impl PersistClient {
     where
         K: Debug + Codec,
         V: Debug + Codec,
-        T: Timestamp + Lattice + Codec64,
+        T: Timestamp + Lattice + Codec64 + Sync,
         D: Semigroup + Codec64 + Send + Sync,
     {
         let machine = self
@@ -718,7 +718,7 @@ impl PersistClient {
     where
         K: Debug + Codec,
         V: Debug + Codec,
-        T: Timestamp + Lattice + Codec64,
+        T: Timestamp + Lattice + Codec64 + Sync,
         D: Semigroup + Ord + Codec64 + Send + Sync,
         K::Schema: Default,
         V::Schema: Default,

@@ -425,7 +425,7 @@ pub async fn force_compaction<K, V, T, D>(
 where
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + Codec64,
+    T: Timestamp + Lattice + Codec64 + Sync,
     D: Semigroup + Ord + Codec64 + Send + Sync,
 {
     let metrics = Arc::new(Metrics::new(&cfg, metrics_registry));
@@ -564,7 +564,7 @@ async fn make_typed_machine<K, V, T, D>(
 where
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + Codec64,
+    T: Timestamp + Lattice + Codec64 + Sync,
     D: Semigroup + Codec64,
 {
     let state_versions = Arc::new(StateVersions::new(
@@ -671,7 +671,7 @@ async fn force_gc(
 /// Exposed for `mz-catalog`.
 pub const CATALOG_FORCE_COMPACTION_FUEL: Config<usize> = Config::new(
     "persist_catalog_force_compaction_fuel",
-    0,
+    1024,
     "fuel to use in catalog dangerous_force_compaction task",
 );
 
@@ -680,6 +680,20 @@ pub const CATALOG_FORCE_COMPACTION_WAIT: Config<Duration> = Config::new(
     "persist_catalog_force_compaction_wait",
     Duration::from_secs(60),
     "wait to use in catalog dangerous_force_compaction task",
+);
+
+/// Exposed for `mz-catalog`.
+pub const EXPRESSION_CACHE_FORCE_COMPACTION_FUEL: Config<usize> = Config::new(
+    "persist_expression_cache_force_compaction_fuel",
+    131_072,
+    "fuel to use in expression cache dangerous_force_compaction",
+);
+
+/// Exposed for `mz-catalog`.
+pub const EXPRESSION_CACHE_FORCE_COMPACTION_WAIT: Config<Duration> = Config::new(
+    "persist_expression_cache_force_compaction_wait",
+    Duration::from_secs(0),
+    "wait to use in expression cache dangerous_force_compaction",
 );
 
 /// Attempts to compact all batches in a shard into a minimal number.
@@ -707,7 +721,7 @@ pub async fn dangerous_force_compaction_and_break_pushdown<K, V, T, D>(
 ) where
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + Codec64,
+    T: Timestamp + Lattice + Codec64 + Sync,
     D: Semigroup + Ord + Codec64 + Send + Sync,
 {
     let machine = write.machine.clone();
@@ -730,6 +744,7 @@ pub async fn dangerous_force_compaction_and_break_pushdown<K, V, T, D>(
                 req.desc.upper().elements(),
                 req.desc.since().elements(),
             );
+            machine.applier.metrics.compaction.requested.inc();
             let start = Instant::now();
             let res = Compactor::<K, V, T, D>::compact_and_apply(
                 &machine,

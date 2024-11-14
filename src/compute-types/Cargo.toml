@@ -10,8 +10,8 @@ publish = false
 workspace = true
 
 [dependencies]
-columnation = { git = "https://github.com/frankmcsherry/columnation" }
-differential-dataflow = "0.12.0"
+columnation = "0.1.0"
+differential-dataflow = "0.13.1"
 itertools = "0.10.5"
 mz-dyncfg = { path = "../dyncfg" }
 mz-expr = { path = "../expr" }
@@ -19,11 +19,11 @@ mz-ore = { path = "../ore", features = ["tracing_", "metrics"] }
 mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr", features = ["tracing_"] }
 mz-storage-types = { path = "../storage-types" }
-proptest = { version = "1.0.0", default-features = false, features = ["std"]}
-proptest-derive = { version = "0.3.0", features = ["boxed_union"]}
+proptest = { version = "1.0.0", default-features = false, features = ["std"] }
+proptest-derive = { version = "0.3.0", features = ["boxed_union"] }
 prost = { version = "0.13.2", features = ["no-recursion-limit"] }
 serde = { version = "1.0.152", features = ["derive"] }
-timely = "0.12.0"
+timely = "0.14.1"
 tracing = "0.1.37"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 

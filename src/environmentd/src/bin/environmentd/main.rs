@@ -73,9 +73,9 @@ use url::Url;
 
 mod sys;
 
-static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version());
+static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version(None));
 static LONG_VERSION: LazyLock<String> = LazyLock::new(|| {
-    iter::once(BUILD_INFO.human_version())
+    iter::once(BUILD_INFO.human_version(None))
         .chain(build_info())
         .join("\n")
 });
@@ -273,6 +273,9 @@ pub struct Args {
     /// The optional fs group for service's pods' `securityContext`.
     #[clap(long, env = "ORCHESTRATOR_KUBERNETES_SERVICE_FS_GROUP")]
     orchestrator_kubernetes_service_fs_group: Option<i64>,
+    /// The prefix to prepend to all kubernetes object names.
+    #[clap(long, env = "ORCHESTRATOR_KUBERNETES_NAME_PREFIX")]
+    orchestrator_kubernetes_name_prefix: Option<String>,
     #[clap(long, env = "ORCHESTRATOR_PROCESS_WRAPPER")]
     orchestrator_process_wrapper: Option<String>,
     /// Where the process orchestrator should store secrets.
@@ -376,6 +379,13 @@ pub struct Args {
         ],
     )]
     metadata_backend_url: Option<SensitiveUrl>,
+
+    /// Helm chart version for self-hosted Materialize. This version does not correspond to the
+    /// Materialize (core) version (v0.125.0), but is time-based for our twice-a-year helm chart
+    /// releases: v25.1.Z, v25.2.Z in 2025, then v26.1.Z, v26.2.Z in 2026, and so on. This version
+    /// is displayed in addition in `SELECT mz_version()` if set.
+    #[clap(long, env = "HELM_CHART_VERSION")]
+    helm_chart_version: Option<String>,
 
     // === Storage options. ===
     /// Where the persist library should store its blob data.
@@ -750,6 +760,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                             .orchestrator_kubernetes_ephemeral_volume_class
                             .clone(),
                         service_fs_group: args.orchestrator_kubernetes_service_fs_group.clone(),
+                        name_prefix: args.orchestrator_kubernetes_name_prefix.clone(),
                     }))
                     .context("creating kubernetes orchestrator")?,
             );
@@ -897,8 +908,9 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     let persist_clients = {
         // PersistClientCache may spawn tasks, so run within a tokio runtime context
         let _tokio_guard = runtime.enter();
-        PersistClientCache::new(persist_config, &metrics_registry, |_, metrics| {
+        PersistClientCache::new(persist_config, &metrics_registry, |cfg, metrics| {
             let sender: Arc<dyn PubSubSender> = Arc::new(MetricsSameProcessPubSubSender::new(
+                cfg,
                 persist_pubsub_client.sender,
                 metrics,
             ));
@@ -1052,6 +1064,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                     .into_iter()
                     .map(|kv| (kv.key, kv.value))
                     .collect(),
+                helm_chart_version: args.helm_chart_version.clone(),
                 // AWS options.
                 aws_account_id: args.aws_account_id,
                 aws_privatelink_availability_zones: args.aws_privatelink_availability_zones,
@@ -1082,7 +1095,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
 
     println!(
         "environmentd {} listening...",
-        mz_environmentd::BUILD_INFO.human_version()
+        mz_environmentd::BUILD_INFO.human_version(args.helm_chart_version)
     );
     println!(" SQL address: {}", server.sql_local_addr());
     println!(" HTTP address: {}", server.http_local_addr());

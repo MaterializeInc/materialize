@@ -114,10 +114,6 @@ skip = [
     { name = "sync_wrapper", version = "0.1.2" },
 ]
 
-# We don't want to use abomonation anymore.
-[[bans.deny]]
-name = "abomonation"
-
 # Use `tracing` instead.
 [[bans.deny]]
 name = "env_logger"
@@ -235,6 +231,11 @@ ignore = [
     "RUSTSEC-2023-0086",
     # Use standard library's IsTerminal trait instead of `atty` (unmaintained)
     "RUSTSEC-2024-0375",
+    # `derivative` is unmaintained; consider using an alternative (unmaintained)
+    "RUSTSEC-2024-0388",
+    # `instant` is unmaintained, and the author recommends using the maintained [`web-time`] crate instead.
+    "RUSTSEC-2024-0384",
+
 ]
 
 # Must be manually kept in sync with about.toml.

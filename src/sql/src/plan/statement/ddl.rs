@@ -19,9 +19,7 @@ use std::time::Duration;
 
 use itertools::{Either, Itertools};
 use mz_adapter_types::compaction::{CompactionWindow, DEFAULT_LOGICAL_COMPACTION_WINDOW_DURATION};
-use mz_controller_types::{
-    is_cluster_size_v2, ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL,
-};
+use mz_controller_types::{ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL};
 use mz_expr::{CollectionPlan, UnmaterializableFunc};
 use mz_interchange::avro::{AvroSchemaGenerator, DocTarget};
 use mz_ore::cast::{CastFrom, TryCastFrom};
@@ -34,30 +32,33 @@ use mz_postgres_util::tunnel::PostgresFlavor;
 use mz_proto::RustType;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
+use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::refresh_schedule::{RefreshEvery, RefreshSchedule};
 use mz_repr::role_id::RoleId;
 use mz_repr::{
-    strconv, ColumnName, ColumnType, GlobalId, RelationDesc, RelationType, ScalarType, Timestamp,
+    preserves_order, strconv, CatalogItemId, ColumnName, ColumnType, RelationDesc, RelationType,
+    RelationVersionSelector, ScalarType, Timestamp,
 };
 use mz_sql_parser::ast::display::comma_separated;
 use mz_sql_parser::ast::{
     self, AlterClusterAction, AlterClusterStatement, AlterConnectionAction, AlterConnectionOption,
     AlterConnectionOptionName, AlterConnectionStatement, AlterIndexAction, AlterIndexStatement,
-    AlterObjectRenameStatement, AlterObjectSwapStatement, AlterRetainHistoryStatement,
-    AlterRoleOption, AlterRoleStatement, AlterSecretStatement, AlterSetClusterStatement,
-    AlterSinkAction, AlterSinkStatement, AlterSourceAction, AlterSourceAddSubsourceOption,
-    AlterSourceAddSubsourceOptionName, AlterSourceStatement, AlterSystemResetAllStatement,
-    AlterSystemResetStatement, AlterSystemSetStatement, AlterTableAddColumnStatement, AvroSchema,
-    AvroSchemaOption, AvroSchemaOptionName, ClusterAlterOption, ClusterAlterOptionName,
-    ClusterAlterOptionValue, ClusterAlterUntilReadyOption, ClusterAlterUntilReadyOptionName,
-    ClusterFeature, ClusterFeatureName, ClusterOption, ClusterOptionName,
-    ClusterScheduleOptionValue, ColumnDef, ColumnOption, CommentObjectType, CommentStatement,
-    ConnectionOption, ConnectionOptionName, ContinualTaskOption, ContinualTaskOptionName,
-    CreateClusterReplicaStatement, CreateClusterStatement, CreateConnectionOption,
-    CreateConnectionOptionName, CreateConnectionStatement, CreateConnectionType,
-    CreateContinualTaskStatement, CreateDatabaseStatement, CreateIndexStatement,
-    CreateMaterializedViewStatement, CreateRoleStatement, CreateSchemaStatement,
+    AlterNetworkPolicyStatement, AlterObjectRenameStatement, AlterObjectSwapStatement,
+    AlterRetainHistoryStatement, AlterRoleOption, AlterRoleStatement, AlterSecretStatement,
+    AlterSetClusterStatement, AlterSinkAction, AlterSinkStatement, AlterSourceAction,
+    AlterSourceAddSubsourceOption, AlterSourceAddSubsourceOptionName, AlterSourceStatement,
+    AlterSystemResetAllStatement, AlterSystemResetStatement, AlterSystemSetStatement,
+    AlterTableAddColumnStatement, AvroSchema, AvroSchemaOption, AvroSchemaOptionName,
+    ClusterAlterOption, ClusterAlterOptionName, ClusterAlterOptionValue,
+    ClusterAlterUntilReadyOption, ClusterAlterUntilReadyOptionName, ClusterFeature,
+    ClusterFeatureName, ClusterOption, ClusterOptionName, ClusterScheduleOptionValue, ColumnDef,
+    ColumnOption, CommentObjectType, CommentStatement, ConnectionOption, ConnectionOptionName,
+    ContinualTaskOption, ContinualTaskOptionName, CreateClusterReplicaStatement,
+    CreateClusterStatement, CreateConnectionOption, CreateConnectionOptionName,
+    CreateConnectionStatement, CreateConnectionType, CreateContinualTaskStatement,
+    CreateDatabaseStatement, CreateIndexStatement, CreateMaterializedViewStatement,
+    CreateNetworkPolicyStatement, CreateRoleStatement, CreateSchemaStatement,
     CreateSecretStatement, CreateSinkConnection, CreateSinkOption, CreateSinkOptionName,
     CreateSinkStatement, CreateSourceConnection, CreateSourceOption, CreateSourceOptionName,
     CreateSourceStatement, CreateSubsourceOption, CreateSubsourceOptionName,
@@ -69,13 +70,15 @@ use mz_sql_parser::ast::{
     DropOwnedStatement, Expr, Format, FormatSpecifier, Ident, IfExistsBehavior, IndexOption,
     IndexOptionName, KafkaSinkConfigOption, KeyConstraint, LoadGeneratorOption,
     LoadGeneratorOptionName, MaterializedViewOption, MaterializedViewOptionName, MySqlConfigOption,
-    MySqlConfigOptionName, PgConfigOption, PgConfigOptionName, ProtobufSchema, QualifiedReplica,
-    RefreshAtOptionValue, RefreshEveryOptionValue, RefreshOptionValue, ReplicaDefinition,
-    ReplicaOption, ReplicaOptionName, RoleAttribute, SetRoleVar, SourceErrorPolicy,
-    SourceIncludeMetadata, Statement, TableConstraint, TableFromSourceColumns,
-    TableFromSourceOption, TableFromSourceOptionName, TableOption, TableOptionName,
-    UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value,
-    ViewDefinition, WithOptionValue,
+    MySqlConfigOptionName, NetworkPolicyOption, NetworkPolicyOptionName,
+    NetworkPolicyRuleDefinition, NetworkPolicyRuleOption, NetworkPolicyRuleOptionName,
+    PgConfigOption, PgConfigOptionName, ProtobufSchema, QualifiedReplica, RefreshAtOptionValue,
+    RefreshEveryOptionValue, RefreshOptionValue, ReplicaDefinition, ReplicaOption,
+    ReplicaOptionName, RoleAttribute, SetRoleVar, SourceErrorPolicy, SourceIncludeMetadata,
+    Statement, TableConstraint, TableFromSourceColumns, TableFromSourceOption,
+    TableFromSourceOptionName, TableOption, TableOptionName, UnresolvedDatabaseName,
+    UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value, ViewDefinition,
+    WithOptionValue,
 };
 use mz_sql_parser::ident;
 use mz_sql_parser::parser::StatementParseResult;
@@ -122,7 +125,7 @@ use crate::kafka_util::{KafkaSinkConfigOptionExtracted, KafkaSourceConfigOptionE
 use crate::names::{
     Aug, CommentObjectId, DatabaseId, ObjectId, PartialItemName, QualifiedItemName,
     ResolvedClusterName, ResolvedColumnReference, ResolvedDataType, ResolvedDatabaseSpecifier,
-    ResolvedItemName, SchemaSpecifier, SystemObjectId,
+    ResolvedItemName, ResolvedNetworkPolicyName, SchemaSpecifier, SystemObjectId,
 };
 use crate::normalize::{self, ident};
 use crate::plan::error::PlanError;
@@ -138,23 +141,25 @@ use crate::plan::with_options::{OptionalDuration, OptionalString, TryFromValue};
 use crate::plan::{
     literal, plan_utils, query, transform_ast, AlterClusterPlan, AlterClusterPlanStrategy,
     AlterClusterRenamePlan, AlterClusterReplicaRenamePlan, AlterClusterSwapPlan,
-    AlterConnectionPlan, AlterItemRenamePlan, AlterNoopPlan, AlterOptionParameter,
-    AlterRetainHistoryPlan, AlterRolePlan, AlterSchemaRenamePlan, AlterSchemaSwapPlan,
-    AlterSecretPlan, AlterSetClusterPlan, AlterSinkPlan, AlterSystemResetAllPlan,
-    AlterSystemResetPlan, AlterSystemSetPlan, AlterTablePlan, ClusterSchedule, CommentPlan,
-    ComputeReplicaConfig, ComputeReplicaIntrospectionConfig, ConnectionDetails,
-    CreateClusterManagedPlan, CreateClusterPlan, CreateClusterReplicaPlan,
+    AlterConnectionPlan, AlterItemRenamePlan, AlterNetworkPolicyPlan, AlterNoopPlan,
+    AlterOptionParameter, AlterRetainHistoryPlan, AlterRolePlan, AlterSchemaRenamePlan,
+    AlterSchemaSwapPlan, AlterSecretPlan, AlterSetClusterPlan, AlterSinkPlan,
+    AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan, AlterTablePlan,
+    ClusterSchedule, CommentPlan, ComputeReplicaConfig, ComputeReplicaIntrospectionConfig,
+    ConnectionDetails, CreateClusterManagedPlan, CreateClusterPlan, CreateClusterReplicaPlan,
     CreateClusterUnmanagedPlan, CreateClusterVariant, CreateConnectionPlan,
     CreateContinualTaskPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
-    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc, DropObjectsPlan,
-    DropOwnedPlan, Index, Ingestion, MaterializedView, Params, Plan, PlanClusterOption, PlanNotice,
-    QueryContext, ReplicaConfig, Secret, Sink, Source, Table, TableDataSource, Type, VariableValue,
-    View, WebhookBodyFormat, WebhookHeaderFilters, WebhookHeaders, WebhookValidation,
+    CreateNetworkPolicyPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
+    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc,
+    DropObjectsPlan, DropOwnedPlan, Index, Ingestion, MaterializedView, NetworkPolicyRule,
+    NetworkPolicyRuleAction, NetworkPolicyRuleDirection, Params, Plan, PlanClusterOption,
+    PlanNotice, PolicyAddress, QueryContext, ReplicaConfig, Secret, Sink, Source, Table,
+    TableDataSource, Type, VariableValue, View, WebhookBodyFormat, WebhookHeaderFilters,
+    WebhookHeaders, WebhookValidation,
 };
 use crate::session::vars::{
-    self, ENABLE_CLUSTER_SCHEDULE_REFRESH, ENABLE_KAFKA_SINK_HEADERS,
-    ENABLE_KAFKA_SINK_PARTITION_BY, ENABLE_REFRESH_EVERY_MVS,
+    self, ENABLE_CLUSTER_SCHEDULE_REFRESH, ENABLE_COLLECTION_PARTITION_BY,
+    ENABLE_KAFKA_SINK_HEADERS, ENABLE_KAFKA_SINK_PARTITION_BY, ENABLE_REFRESH_EVERY_MVS,
 };
 use crate::{names, parse};
 
@@ -168,6 +173,23 @@ const MAX_NUM_COLUMNS: usize = 256;
 
 const MANAGED_REPLICA_PATTERN: std::sync::LazyLock<regex::Regex> =
     std::sync::LazyLock::new(|| regex::Regex::new(r"^r(\d)+$").unwrap());
+
+/// Given a relation desc and a column list, checks that:
+/// - the column list is a prefix of the desc;
+/// - all the listed columns are types that have meaningful Persist-level ordering.
+fn check_partition_by(desc: &RelationDesc, partition_by: &[ColumnName]) -> Result<(), PlanError> {
+    for (idx, ((desc_name, desc_type), partition_name)) in
+        desc.iter().zip(partition_by.iter()).enumerate()
+    {
+        if desc_name != partition_name {
+            sql_bail!("PARTITION BY columns should be a prefix of the relation's columns (expected {desc_name} at index {idx}, got {partition_name})");
+        }
+        if !preserves_order(&desc_type.scalar_type) {
+            sql_bail!("PARTITION BY column {partition_name} has unsupported type");
+        }
+    }
+    Ok(())
+}
 
 pub fn describe_create_database(
     _: &StatementContext,
@@ -2406,6 +2428,11 @@ pub fn plan_view(
     assert!(finishing.is_trivial(expr.arity()));
 
     expr.bind_parameters(params)?;
+    let dependencies = expr
+        .depends_on()
+        .into_iter()
+        .map(|gid| scx.catalog.resolve_item_id(&gid))
+        .collect();
 
     let name = if temporary {
         scx.allocate_temporary_qualified_name(normalize::unresolved_item_name(name.to_owned())?)?
@@ -2427,6 +2454,7 @@ pub fn plan_view(
     let view = View {
         create_sql,
         expr,
+        dependencies,
         column_names: names,
         temporary,
     };
@@ -2453,20 +2481,29 @@ pub fn plan_create_view(
     let replace = if *if_exists == IfExistsBehavior::Replace && !ignore_if_exists_errors {
         let if_exists = true;
         let cascade = false;
-        if let Some(id) = plan_drop_item(
+        let maybe_item_to_drop = plan_drop_item(
             scx,
             ObjectType::View,
             if_exists,
             definition.name.clone(),
             cascade,
-        )? {
-            if view.expr.depends_on().contains(&id) {
+        )?;
+
+        // Check if the new View depends on the item that we would be replacing.
+        if let Some(id) = maybe_item_to_drop {
+            let dependencies = view.expr.depends_on();
+            let invalid_drop = scx
+                .get_item(&id)
+                .global_ids()
+                .any(|gid| dependencies.contains(&gid));
+            if invalid_drop {
                 let item = scx.catalog.get_item(&id);
                 sql_bail!(
                     "cannot replace view {0}: depended upon by new {0} definition",
                     scx.catalog.resolve_full_name(item.name())
                 );
             }
+
             Some(id)
         } else {
             None
@@ -2524,6 +2561,20 @@ pub fn describe_create_continual_task(
     Ok(StatementDesc::new(None))
 }
 
+pub fn describe_create_network_policy(
+    _: &StatementContext,
+    _: CreateNetworkPolicyStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn describe_alter_network_policy(
+    _: &StatementContext,
+    _: AlterNetworkPolicyStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
 pub fn plan_create_materialized_view(
     scx: &StatementContext,
     mut stmt: CreateMaterializedViewStatement<Aug>,
@@ -2562,10 +2613,20 @@ pub fn plan_create_materialized_view(
 
     let MaterializedViewOptionExtracted {
         assert_not_null,
+        partition_by,
         retain_history,
         refresh,
         seen: _,
     }: MaterializedViewOptionExtracted = stmt.with_options.try_into()?;
+
+    if let Some(partition_by) = partition_by {
+        scx.require_feature_flag(&ENABLE_COLLECTION_PARTITION_BY)?;
+        let partition_by: Vec<_> = partition_by
+            .into_iter()
+            .map(normalize::column_name)
+            .collect();
+        check_partition_by(&desc, &partition_by)?;
+    }
 
     let refresh_schedule = {
         let mut refresh_schedule = RefreshSchedule::default();
@@ -2732,8 +2793,15 @@ pub fn plan_create_materialized_view(
                 partial_name.into(),
                 cascade,
             )?;
+
+            // Check if the new Materialized View depends on the item that we would be replacing.
             if let Some(id) = replace_id {
-                if expr.depends_on().contains(&id) {
+                let dependencies = expr.depends_on();
+                let invalid_drop = scx
+                    .get_item(&id)
+                    .global_ids()
+                    .any(|gid| dependencies.contains(&gid));
+                if invalid_drop {
                     let item = scx.catalog.get_item(&id);
                     sql_bail!(
                         "cannot replace materialized view {0}: depended upon by new {0} definition",
@@ -2755,6 +2823,11 @@ pub fn plan_create_materialized_view(
                 .collect()
         })
         .unwrap_or_default();
+    let dependencies = expr
+        .depends_on()
+        .into_iter()
+        .map(|gid| scx.catalog.resolve_item_id(&gid))
+        .collect();
 
     // Check for an object in the catalog with this same name
     let full_name = scx.catalog.resolve_full_name(&name);
@@ -2775,6 +2848,7 @@ pub fn plan_create_materialized_view(
         materialized_view: MaterializedView {
             create_sql,
             expr,
+            dependencies,
             column_names,
             cluster_id,
             non_null_assertions,
@@ -2792,6 +2866,7 @@ pub fn plan_create_materialized_view(
 generate_extracted_config!(
     MaterializedViewOption,
     (AssertNotNull, Ident, AllowMultiple),
+    (PartitionBy, Vec<Ident>),
     (RetainHistory, OptionalDuration),
     (Refresh, RefreshOptionValue<Aug>, AllowMultiple)
 );
@@ -2805,6 +2880,9 @@ pub fn plan_create_continual_task(
         None => scx.require_feature_flag(&vars::ENABLE_CONTINUAL_TASK_CREATE)?,
         Some(ast::CreateContinualTaskSugar::Transform { .. }) => {
             scx.require_feature_flag(&vars::ENABLE_CONTINUAL_TASK_TRANSFORM)?
+        }
+        Some(ast::CreateContinualTaskSugar::Retain { .. }) => {
+            scx.require_feature_flag(&vars::ENABLE_CONTINUAL_TASK_RETAIN)?
         }
     };
     let cluster_id = match &stmt.in_cluster {
@@ -2968,6 +3046,11 @@ pub fn plan_create_continual_task(
         .into_iter()
         .reduce(|acc, expr| acc.union(expr))
         .ok_or_else(|| sql_err!("TODO(ct3)"))?;
+    let dependencies = expr
+        .depends_on()
+        .into_iter()
+        .map(|gid| scx.catalog.resolve_item_id(&gid))
+        .collect();
 
     let desc = desc.ok_or_else(|| sql_err!("TODO(ct3)"))?;
     let column_names: Vec<ColumnName> = desc.iter_names().cloned().collect();
@@ -3001,11 +3084,12 @@ pub fn plan_create_continual_task(
         name,
         placeholder_id,
         desc,
-        input_id: input.id(),
+        input_id: input.global_id(),
         with_snapshot: snapshot.unwrap_or(true),
         continual_task: MaterializedView {
             create_sql,
             expr,
+            dependencies,
             column_names,
             cluster_id,
             non_null_assertions: Vec::new(),
@@ -3349,7 +3433,7 @@ fn plan_sink(
         name,
         sink: Sink {
             create_sql,
-            from: from.id(),
+            from: from.global_id(),
             connection: connection_builder,
             partition_strategy,
             envelope,
@@ -3503,7 +3587,7 @@ fn kafka_sink_builder(
     headers_index: Option<usize>,
     value_desc: RelationDesc,
     envelope: SinkEnvelope,
-    sink_from: GlobalId,
+    sink_from: CatalogItemId,
 ) -> Result<StorageSinkConnection<ReferencedConnection>, PlanError> {
     // Get Kafka connection.
     let connection_item = scx.get_item_by_resolved_name(&connection)?;
@@ -3918,7 +4002,7 @@ pub fn plan_create_index(
         name: index_name,
         index: Index {
             create_sql,
-            on: on.id(),
+            on: on.global_id(),
             keys,
             cluster_id,
             compaction_window,
@@ -3946,7 +4030,7 @@ pub fn plan_create_type(
         data_type: ResolvedDataType,
         as_type: &str,
         key: &str,
-    ) -> Result<(GlobalId, Vec<i64>), PlanError> {
+    ) -> Result<(CatalogItemId, Vec<i64>), PlanError> {
         let (id, modifiers) = match data_type {
             ResolvedDataType::Named { id, modifiers, .. } => (id, modifiers),
             _ => sql_bail!(
@@ -4165,6 +4249,115 @@ pub fn plan_create_role(
     }))
 }
 
+pub fn plan_create_network_policy(
+    ctx: &StatementContext,
+    CreateNetworkPolicyStatement { name, options }: CreateNetworkPolicyStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    ctx.require_feature_flag(&vars::ENABLE_NETWORK_POLICIES)?;
+    let policy_options: NetworkPolicyOptionExtracted = options.try_into()?;
+
+    let Some(rule_defs) = policy_options.rules else {
+        sql_bail!("RULES must be specified when creating network policies.");
+    };
+
+    let mut rules = vec![];
+    for NetworkPolicyRuleDefinition { name, options } in rule_defs {
+        let NetworkPolicyRuleOptionExtracted {
+            seen: _,
+            direction,
+            action,
+            address,
+        } = options.try_into()?;
+        let (direction, action, address) = match (direction, action, address) {
+            (Some(direction), Some(action), Some(address)) => (
+                NetworkPolicyRuleDirection::try_from(direction.as_str())?,
+                NetworkPolicyRuleAction::try_from(action.as_str())?,
+                PolicyAddress::try_from(address.as_str())?,
+            ),
+            (_, _, _) => {
+                sql_bail!("Direction, Address, and Action must specified when creating a rule")
+            }
+        };
+        rules.push(NetworkPolicyRule {
+            name: normalize::ident(name),
+            direction,
+            action,
+            address,
+        });
+    }
+
+    if rules.len()
+        > ctx
+            .catalog
+            .system_vars()
+            .max_rules_per_network_policy()
+            .try_into()?
+    {
+        sql_bail!("RULES count exceeds max_rules_per_network_policy.")
+    }
+
+    Ok(Plan::CreateNetworkPolicy(CreateNetworkPolicyPlan {
+        name: normalize::ident(name),
+        rules,
+    }))
+}
+
+pub fn plan_alter_network_policy(
+    ctx: &StatementContext,
+    AlterNetworkPolicyStatement { name, options }: AlterNetworkPolicyStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    ctx.require_feature_flag(&vars::ENABLE_NETWORK_POLICIES)?;
+
+    let policy_options: NetworkPolicyOptionExtracted = options.try_into()?;
+    let policy = ctx.catalog.resolve_network_policy(&name.to_string())?;
+
+    let Some(rule_defs) = policy_options.rules else {
+        sql_bail!("RULES must be specified when creating network policies.");
+    };
+
+    let mut rules = vec![];
+    for NetworkPolicyRuleDefinition { name, options } in rule_defs {
+        let NetworkPolicyRuleOptionExtracted {
+            seen: _,
+            direction,
+            action,
+            address,
+        } = options.try_into()?;
+
+        let (direction, action, address) = match (direction, action, address) {
+            (Some(direction), Some(action), Some(address)) => (
+                NetworkPolicyRuleDirection::try_from(direction.as_str())?,
+                NetworkPolicyRuleAction::try_from(action.as_str())?,
+                PolicyAddress::try_from(address.as_str())?,
+            ),
+            (_, _, _) => {
+                sql_bail!("Direction, Address, and Action must specified when creating a rule")
+            }
+        };
+        rules.push(NetworkPolicyRule {
+            name: normalize::ident(name),
+            direction,
+            action,
+            address,
+        });
+    }
+    if rules.len()
+        > ctx
+            .catalog
+            .system_vars()
+            .max_rules_per_network_policy()
+            .try_into()?
+    {
+        sql_bail!("RULES count exceeds max_rules_per_network_policy.")
+    }
+
+    Ok(Plan::AlterNetworkPolicy(AlterNetworkPolicyPlan {
+        id: policy.id(),
+        name: normalize::ident(name),
+        rules,
+    }))
+}
+
 pub fn describe_create_cluster(
     _: &StatementContext,
     _: CreateClusterStatement<Aug>,
@@ -4191,6 +4384,18 @@ generate_extracted_config!(
     (WorkloadClass, OptionalString)
 );
 
+generate_extracted_config!(
+    NetworkPolicyOption,
+    (Rules, Vec<NetworkPolicyRuleDefinition<Aug>>)
+);
+
+generate_extracted_config!(
+    NetworkPolicyRuleOption,
+    (Direction, String),
+    (Action, String),
+    (Address, String)
+);
+
 generate_extracted_config!(ClusterAlterOption, (Wait, ClusterAlterOptionValue<Aug>));
 
 generate_extracted_config!(
@@ -4206,7 +4411,6 @@ generate_extracted_config!(
     (EnableNewOuterJoinLowering, Option<bool>, Default(None)),
     (EnableVariadicLeftJoinLowering, Option<bool>, Default(None)),
     (EnableLetrecFixpointAnalysis, Option<bool>, Default(None)),
-    (EnableOuterJoinNullFilter, Option<bool>, Default(None)),
     (EnableValueWindowFunctionFusion, Option<bool>, Default(None)),
     (EnableReduceUnnestListFusion, Option<bool>, Default(None)),
     (EnableWindowAggregationFusion, Option<bool>, Default(None))
@@ -4303,9 +4507,9 @@ pub fn plan_create_cluster_inner(
         // The long term plan is to phase out the v1 cluster sizes, at which
         // point we'll be able to remove the `DISK` option entirely and simply
         // always enable disk.
-        if is_cluster_size_v2(&size) {
+        if scx.catalog.is_cluster_size_cc(&size) {
             if disk_in == Some(false) {
-                sql_bail!("DISK option disabled is not supported for cluster sizes ending in cc or C because disk is always enabled");
+                sql_bail!("DISK option disabled is not supported for non-legacy cluster sizes because disk is always enabled");
             }
             disk_default = true;
         }
@@ -4346,7 +4550,6 @@ pub fn plan_create_cluster_inner(
             enable_new_outer_join_lowering,
             enable_variadic_left_join_lowering,
             enable_letrec_fixpoint_analysis,
-            enable_outer_join_null_filter,
             enable_value_window_function_fusion,
             enable_reduce_unnest_list_fusion,
             enable_window_aggregation_fusion,
@@ -4358,7 +4561,6 @@ pub fn plan_create_cluster_inner(
             enable_new_outer_join_lowering,
             enable_variadic_left_join_lowering,
             enable_letrec_fixpoint_analysis,
-            enable_outer_join_null_filter,
             enable_value_window_function_fusion,
             enable_reduce_unnest_list_fusion,
             enable_window_aggregation_fusion,
@@ -4456,7 +4658,6 @@ pub fn unplan_create_cluster(
                 enable_new_outer_join_lowering,
                 enable_variadic_left_join_lowering,
                 enable_letrec_fixpoint_analysis,
-                enable_outer_join_null_filter,
                 enable_value_window_function_fusion,
                 enable_reduce_unnest_list_fusion,
                 enable_window_aggregation_fusion,
@@ -4469,7 +4670,6 @@ pub fn unplan_create_cluster(
                 enable_new_outer_join_lowering,
                 enable_variadic_left_join_lowering,
                 enable_letrec_fixpoint_analysis,
-                enable_outer_join_null_filter,
                 enable_value_window_function_fusion,
                 enable_reduce_unnest_list_fusion,
                 enable_window_aggregation_fusion,
@@ -4592,9 +4792,9 @@ fn plan_replica_config(
             // The long term plan is to phase out the v1 cluster sizes, at which
             // point we'll be able to remove the `DISK` option entirely and
             // simply always enable disk.
-            if is_cluster_size_v2(&size) {
+            if scx.catalog.is_cluster_size_cc(&size) {
                 if disk_in.is_some() {
-                    sql_bail!("DISK option not supported for cluster sizes ending in cc or C because disk is always enabled");
+                    sql_bail!("DISK option not supported for non-legacy cluster sizes because disk is always enabled");
                 }
                 disk = true;
             }
@@ -4999,6 +5199,9 @@ pub fn plan_drop_objects(
                 plan_drop_item(scx, object_type, if_exists, name.clone(), cascade)?
                     .map(ObjectId::Item)
             }
+            UnresolvedObjectName::NetworkPolicy(name) => {
+                plan_drop_network_policy(scx, if_exists, name)?.map(ObjectId::NetworkPolicy)
+            }
         };
         match id {
             Some(id) => referenced_ids.push(id),
@@ -5097,6 +5300,26 @@ fn plan_drop_cluster(
     })
 }
 
+fn plan_drop_network_policy(
+    scx: &StatementContext,
+    if_exists: bool,
+    name: &Ident,
+) -> Result<Option<NetworkPolicyId>, PlanError> {
+    match scx.catalog.resolve_network_policy(name.as_str()) {
+        Ok(policy) => {
+            // TODO(network_policy): When we support role based network policies, check if any role
+            // currently has the specified policy set.
+            if scx.catalog.system_vars().default_network_policy_name() == policy.name() {
+                Err(PlanError::NetworkPolicyInUse)
+            } else {
+                Ok(Some(policy.id()))
+            }
+        }
+        Err(_) if if_exists => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
 /// Returns `true` if the cluster has any storage object. Return `false` if the cluster has no
 /// objects.
 fn contains_storage_objects(scx: &StatementContext, cluster: &dyn CatalogCluster) -> bool {
@@ -5117,13 +5340,14 @@ fn plan_drop_cluster_replica(
     Ok(cluster.map(|(cluster, replica_id)| (cluster.id(), replica_id)))
 }
 
+/// Returns the [`CatalogItemId`] of the item we should drop, if it exists.
 fn plan_drop_item(
     scx: &StatementContext,
     object_type: ObjectType,
     if_exists: bool,
     name: UnresolvedItemName,
     cascade: bool,
-) -> Result<Option<GlobalId>, PlanError> {
+) -> Result<Option<CatalogItemId>, PlanError> {
     let resolved = match resolve_item_or_type(scx, object_type, name, if_exists) {
         Ok(r) => r,
         // Return a more helpful error on `DROP VIEW <materialized-view>`.
@@ -5247,7 +5471,7 @@ pub fn plan_drop_owned(
                 let non_owned_bound_objects: Vec<_> = cluster
                     .bound_objects()
                     .into_iter()
-                    .map(|global_id| scx.catalog.get_item(global_id))
+                    .map(|item_id| scx.catalog.get_item(item_id))
                     .filter(|item| !role_ids.contains(&item.owner_id()))
                     .collect();
                 if !non_owned_bound_objects.is_empty() {
@@ -5281,18 +5505,11 @@ pub fn plan_drop_owned(
     for item in scx.catalog.get_items() {
         if role_ids.contains(&item.owner_id()) {
             if !cascade {
-                // When this item gets dropped it will also drop its progress source, so we need to
-                // check the users of those.
-                for sub_item in item
-                    .progress_id()
-                    .iter()
-                    .map(|id| scx.catalog.get_item(id))
-                    .chain(iter::once(item))
-                {
-                    let non_owned_dependencies: Vec<_> = sub_item
-                        .used_by()
+                // Checks if any items still depend on this one, returning an error if so.
+                let check_if_dependents_exist = |used_by: &[CatalogItemId]| {
+                    let non_owned_dependencies: Vec<_> = used_by
                         .into_iter()
-                        .map(|global_id| scx.catalog.get_item(global_id))
+                        .map(|item_id| scx.catalog.get_item(item_id))
                         .filter(|item| dependency_prevents_drop(item.item_type().into(), *item))
                         .filter(|item| !role_ids.contains(&item.owner_id()))
                         .collect();
@@ -5300,13 +5517,13 @@ pub fn plan_drop_owned(
                         let names: Vec<_> = non_owned_dependencies
                             .into_iter()
                             .map(|item| {
-                                (
-                                    item.item_type().to_string(),
-                                    scx.catalog.resolve_full_name(item.name()).to_string(),
-                                )
+                                let item_typ = item.item_type().to_string();
+                                let item_name =
+                                    scx.catalog.resolve_full_name(item.name()).to_string();
+                                (item_typ, item_name)
                             })
                             .collect();
-                        return Err(PlanError::DependentObjectsStillExist {
+                        Err(PlanError::DependentObjectsStillExist {
                             object_type: item.item_type().to_string(),
                             object_name: scx
                                 .catalog
@@ -5314,9 +5531,19 @@ pub fn plan_drop_owned(
                                 .to_string()
                                 .to_string(),
                             dependents: names,
-                        });
+                        })
+                    } else {
+                        Ok(())
                     }
+                };
+
+                // When this item gets dropped it will also drop its progress source, so we need to
+                // check the users of those.
+                if let Some(id) = item.progress_id() {
+                    let progress_item = scx.catalog.get_item(&id);
+                    check_if_dependents_exist(progress_item.used_by())?;
                 }
+                check_if_dependents_exist(item.used_by())?;
             }
             drop_ids.push(item.id().into());
         }
@@ -5335,7 +5562,7 @@ pub fn plan_drop_owned(
                 if !cascade {
                     let non_owned_dependencies: Vec<_> = schema
                         .item_ids()
-                        .map(|global_id| scx.catalog.get_item(&global_id))
+                        .map(|item_id| scx.catalog.get_item(&item_id))
                         .filter(|item| dependency_prevents_drop(item.item_type().into(), *item))
                         .filter(|item| !role_ids.contains(&item.owner_id()))
                         .collect();
@@ -5764,9 +5991,9 @@ pub fn plan_alter_cluster(
                 // The long term plan is to phase out the v1 cluster sizes, at
                 // which point we'll be able to remove the `DISK` option
                 // entirely and simply always enable disk.
-                if is_cluster_size_v2(size) {
+                if scx.catalog.is_cluster_size_cc(size) {
                     if disk.is_some() {
-                        sql_bail!("DISK option not supported for cluster sizes ending in cc or C because disk is always enabled");
+                        sql_bail!("DISK option not supported for modern cluster sizes because disk is always enabled");
                     } else {
                         options.disk = AlterOptionParameter::Set(true);
                     }
@@ -5794,8 +6021,8 @@ pub fn plan_alter_cluster(
                 let size = size.as_deref().unwrap_or_else(|| {
                     cluster.managed_size().expect("cluster known to be managed")
                 });
-                if is_cluster_size_v2(size) {
-                    sql_bail!("DISK option not supported for cluster sizes ending in cc or C because disk is always enabled");
+                if scx.catalog.is_cluster_size_cc(size) {
+                    sql_bail!("DISK option not supported for modern cluster sizes because disk is always enabled");
                 }
 
                 if disk {
@@ -6589,6 +6816,8 @@ pub fn plan_alter_sink(
 
         return Ok(Plan::AlterNoop(AlterNoopPlan { object_type }));
     };
+    // Always ALTER objects from their latest version.
+    let item = item.at_version(RelationVersionSelector::Latest);
 
     match action {
         AlterSinkAction::ChangeRelation(new_from) => {
@@ -6627,7 +6856,8 @@ pub fn plan_alter_sink(
             };
 
             Ok(Plan::AlterSink(AlterSinkPlan {
-                id: item.id(),
+                item_id: item.id(),
+                global_id: item.global_id(),
                 sink: plan.sink,
                 with_snapshot: plan.with_snapshot,
                 in_cluster: plan.in_cluster,
@@ -6826,8 +7056,10 @@ pub fn plan_alter_table_add_column(
     let (relation_id, item_name, desc) =
         match resolve_item_or_type(scx, object_type, name.clone(), if_exists)? {
             Some(item) => {
+                // Always add columns to the latest version of the item.
                 let item_name = scx.catalog.resolve_full_name(item.name());
-                let desc = item.desc(&item_name)?;
+                let item = item.at_version(RelationVersionSelector::Latest);
+                let desc = item.desc(&item_name)?.into_owned();
                 (item.id(), item_name, desc)
             }
             None => {
@@ -6903,37 +7135,34 @@ pub fn plan_comment(
             let item = scx.get_item_by_resolved_name(name)?;
             match (com_ty, item.item_type()) {
                 (CommentObjectType::Table { .. }, CatalogItemType::Table) => {
-                    (CommentObjectId::Table(item.id().to_item_id()), None)
+                    (CommentObjectId::Table(item.id()), None)
                 }
                 (CommentObjectType::View { .. }, CatalogItemType::View) => {
-                    (CommentObjectId::View(item.id().to_item_id()), None)
+                    (CommentObjectId::View(item.id()), None)
                 }
                 (CommentObjectType::MaterializedView { .. }, CatalogItemType::MaterializedView) => {
-                    (
-                        CommentObjectId::MaterializedView(item.id().to_item_id()),
-                        None,
-                    )
+                    (CommentObjectId::MaterializedView(item.id()), None)
                 }
                 (CommentObjectType::Index { .. }, CatalogItemType::Index) => {
-                    (CommentObjectId::Index(item.id().to_item_id()), None)
+                    (CommentObjectId::Index(item.id()), None)
                 }
                 (CommentObjectType::Func { .. }, CatalogItemType::Func) => {
-                    (CommentObjectId::Func(item.id().to_item_id()), None)
+                    (CommentObjectId::Func(item.id()), None)
                 }
                 (CommentObjectType::Connection { .. }, CatalogItemType::Connection) => {
-                    (CommentObjectId::Connection(item.id().to_item_id()), None)
+                    (CommentObjectId::Connection(item.id()), None)
                 }
                 (CommentObjectType::Source { .. }, CatalogItemType::Source) => {
-                    (CommentObjectId::Source(item.id().to_item_id()), None)
+                    (CommentObjectId::Source(item.id()), None)
                 }
                 (CommentObjectType::Sink { .. }, CatalogItemType::Sink) => {
-                    (CommentObjectId::Sink(item.id().to_item_id()), None)
+                    (CommentObjectId::Sink(item.id()), None)
                 }
                 (CommentObjectType::Secret { .. }, CatalogItemType::Secret) => {
-                    (CommentObjectId::Secret(item.id().to_item_id()), None)
+                    (CommentObjectId::Secret(item.id()), None)
                 }
                 (CommentObjectType::ContinualTask { .. }, CatalogItemType::ContinualTask) => {
-                    (CommentObjectId::ContinualTask(item.id().to_item_id()), None)
+                    (CommentObjectId::ContinualTask(item.id()), None)
                 }
                 (com_ty, cat_ty) => {
                     let expected_type = match com_ty {
@@ -6965,31 +7194,20 @@ pub fn plan_comment(
                 if !modifiers.is_empty() {
                     sql_bail!("cannot comment on type with modifiers");
                 }
-                (CommentObjectId::Type(id.to_item_id()), None)
+                (CommentObjectId::Type(*id), None)
             }
             ResolvedDataType::Error => unreachable!("should have been caught in name resolution"),
         },
         CommentObjectType::Column { name } => {
             let (item, pos) = scx.get_column_by_resolved_name(name)?;
             match item.item_type() {
-                CatalogItemType::Table => (
-                    CommentObjectId::Table(item.id().to_item_id()),
-                    Some(pos + 1),
-                ),
-                CatalogItemType::Source => (
-                    CommentObjectId::Source(item.id().to_item_id()),
-                    Some(pos + 1),
-                ),
-                CatalogItemType::View => {
-                    (CommentObjectId::View(item.id().to_item_id()), Some(pos + 1))
+                CatalogItemType::Table => (CommentObjectId::Table(item.id()), Some(pos + 1)),
+                CatalogItemType::Source => (CommentObjectId::Source(item.id()), Some(pos + 1)),
+                CatalogItemType::View => (CommentObjectId::View(item.id()), Some(pos + 1)),
+                CatalogItemType::MaterializedView => {
+                    (CommentObjectId::MaterializedView(item.id()), Some(pos + 1))
                 }
-                CatalogItemType::MaterializedView => (
-                    CommentObjectId::MaterializedView(item.id().to_item_id()),
-                    Some(pos + 1),
-                ),
-                CatalogItemType::Type => {
-                    (CommentObjectId::Type(item.id().to_item_id()), Some(pos + 1))
-                }
+                CatalogItemType::Type => (CommentObjectId::Type(item.id()), Some(pos + 1)),
                 r => {
                     return Err(PlanError::Unsupported {
                         feature: format!("Specifying comments on a column of {r}"),
@@ -7013,6 +7231,9 @@ pub fn plan_comment(
                 CommentObjectId::ClusterReplica((replica.cluster_id(), replica.replica_id())),
                 None,
             )
+        }
+        CommentObjectType::NetworkPolicy { name } => {
+            (CommentObjectId::NetworkPolicy(name.id), None)
         }
     };
 
@@ -7088,6 +7309,21 @@ pub(crate) fn resolve_schema<'a>(
         Ok(schema) => Ok(Some((schema.database().clone(), schema.id().clone()))),
         Err(_) if if_exists => Ok(None),
         Err(e) => Err(e),
+    }
+}
+
+pub(crate) fn resolve_network_policy<'a>(
+    scx: &'a StatementContext,
+    name: Ident,
+    if_exists: bool,
+) -> Result<Option<ResolvedNetworkPolicyName>, PlanError> {
+    match scx.catalog.resolve_network_policy(&name.to_string()) {
+        Ok(policy) => Ok(Some(ResolvedNetworkPolicyName {
+            id: policy.id(),
+            name: policy.name().to_string(),
+        })),
+        Err(_) if if_exists => Ok(None),
+        Err(e) => Err(e.into()),
     }
 }
 

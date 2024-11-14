@@ -200,7 +200,6 @@ mod support {
     use itertools::Itertools;
 
     use mz_expr::{Id, LetRecLimit, LocalId, MirRelationExpr};
-    use mz_ore::assert_none;
     use mz_repr::optimize::OptimizerFeatures;
 
     pub(super) fn replace_bindings_from_map(
@@ -258,146 +257,77 @@ mod support {
         expr: &mut MirRelationExpr,
         features: &OptimizerFeatures,
     ) -> Result<(), crate::TransformError> {
+        // Assemble type information once for the whole expression.
+        use crate::analysis::{DerivedBuilder, RelationType, UniqueKeys};
+        let mut builder = DerivedBuilder::new(features);
+        builder.require(RelationType);
+        builder.require(UniqueKeys);
+        let derived = builder.visit(expr);
+        let derived_view = derived.as_view();
+
+        // Collect id -> type mappings.
         let mut types = BTreeMap::new();
-
-        if features.enable_letrec_fixpoint_analysis {
-            // Assemble type information once for the whole expression.
-            use crate::analysis::{DerivedBuilder, RelationType, UniqueKeys};
-            let mut builder = DerivedBuilder::new(features);
-            builder.require(RelationType);
-            builder.require(UniqueKeys);
-            let derived = builder.visit(expr);
-            let derived_view = derived.as_view();
-
-            let mut todo = vec![(&*expr, derived_view)];
-            while let Some((expr, view)) = todo.pop() {
-                if let MirRelationExpr::LetRec { ids, .. } = expr {
-                    // The `skip(1)` skips the `body` child, and is followed by binding children.
-                    for (id, view) in ids.iter().rev().zip_eq(view.children_rev().skip(1)) {
-                        let cols = view
-                            .value::<RelationType>()
-                            .expect("RelationType required")
-                            .clone()
-                            .expect("Expression not well typed");
-                        let keys = view
-                            .value::<UniqueKeys>()
-                            .expect("UniqueKeys required")
-                            .clone();
-                        types.insert(*id, mz_repr::RelationType::new(cols).with_keys(keys));
-                    }
+        let mut todo = vec![(&*expr, derived_view)];
+        while let Some((expr, view)) = todo.pop() {
+            let ids = match expr {
+                MirRelationExpr::Let { id, .. } => std::slice::from_ref(id),
+                MirRelationExpr::LetRec { ids, .. } => ids,
+                _ => &[],
+            };
+            if !ids.is_empty() {
+                // The `skip(1)` skips the `body` child, and is followed by binding children.
+                for (id, view) in ids.iter().rev().zip_eq(view.children_rev().skip(1)) {
+                    let cols = view
+                        .value::<RelationType>()
+                        .expect("RelationType required")
+                        .clone()
+                        .expect("Expression not well typed");
+                    let keys = view
+                        .value::<UniqueKeys>()
+                        .expect("UniqueKeys required")
+                        .clone();
+                    types.insert(*id, mz_repr::RelationType::new(cols).with_keys(keys));
                 }
-                todo.extend(expr.children().rev().zip_eq(view.children_rev()));
             }
+            todo.extend(expr.children().rev().zip_eq(view.children_rev()));
         }
 
-        refresh_types_helper(expr, &mut types, features)
-    }
-
-    /// Provided some existing type refreshment information, continue
-    fn refresh_types_helper(
-        expr: &mut MirRelationExpr,
-        types: &mut BTreeMap<LocalId, mz_repr::RelationType>,
-        features: &OptimizerFeatures,
-    ) -> Result<(), crate::TransformError> {
-        if let MirRelationExpr::LetRec {
-            ids,
-            values,
-            limits: _,
-            body,
-        } = expr
-        {
-            for (id, value) in ids.iter().zip(values.iter_mut()) {
-                refresh_types_helper(value, types, features)?;
-                if features.enable_letrec_fixpoint_analysis {
-                    let mut typ = value.typ();
-                    if let Some(prior) = types.remove(id) {
-                        // TODO: Assert some relationship between `typ` and `prior`.
-                        for (new, old) in typ.column_types.iter_mut().zip(prior.column_types.iter())
-                        {
-                            new.nullable = new.nullable && old.nullable
-                        }
-                        for key in prior.keys.iter() {
-                            // antichain_insert(&mut typ.keys, key.clone());
-                            let into = &mut typ.keys;
-                            let item = key.clone();
-                            if into.iter().all(|key| !key.iter().all(|k| item.contains(k))) {
-                                into.retain(|key| !key.iter().all(|k| item.contains(k)));
-                                into.push(item);
-                            }
-                        }
-                    } else {
-                        panic!("`types` improperly prepared");
+        // Install the new types in each `Get`.
+        let mut todo = vec![&mut *expr];
+        while let Some(expr) = todo.pop() {
+            if let MirRelationExpr::Get {
+                id: Id::Local(i),
+                typ,
+                ..
+            } = expr
+            {
+                if let Some(new_type) = types.get(i) {
+                    // Assert that the column length has not changed.
+                    if !new_type.column_types.len() == typ.column_types.len() {
+                        Err(crate::TransformError::Internal(format!(
+                            "column lengths do not match: {:?} v {:?}",
+                            new_type.column_types, typ.column_types
+                        )))?;
                     }
-                    types.insert(*id, typ);
+                    // Assert that the column types have not changed.
+                    if !new_type
+                        .column_types
+                        .iter()
+                        .zip(typ.column_types.iter())
+                        .all(|(t1, t2)| t1.scalar_type.base_eq(&t2.scalar_type))
+                    {
+                        Err(crate::TransformError::Internal(format!(
+                            "scalar types do not match: {:?} v {:?}",
+                            new_type.column_types, typ.column_types
+                        )))?;
+                    }
+
+                    typ.clone_from(new_type);
                 } else {
-                    let typ = value.typ();
-                    let prior = types.insert(*id, typ);
-                    assert_none!(prior);
+                    panic!("Type not found for: {:?}", i);
                 }
             }
-            refresh_types_helper(body, types, features)?;
-            // Not strictly necessary, but good hygiene.
-            for id in ids.iter() {
-                types.remove(id);
-            }
-            Ok(())
-        } else {
-            refresh_types_effector(expr, types)
-        }
-    }
-
-    /// Applies `types` to all `Get` nodes in `expr`.
-    ///
-    /// This no longer considers new bindings, and will error if applied to expressions containing `Let` and `LetRec` stages.
-    fn refresh_types_effector(
-        expr: &mut MirRelationExpr,
-        types: &BTreeMap<LocalId, mz_repr::RelationType>,
-    ) -> Result<(), crate::TransformError> {
-        let mut worklist = vec![&mut *expr];
-        while let Some(expr) = worklist.pop() {
-            match expr {
-                MirRelationExpr::Let { .. } => {
-                    Err(crate::TransformError::Internal(
-                        "Unexpected Let encountered".to_string(),
-                    ))?;
-                }
-                MirRelationExpr::LetRec { .. } => {
-                    Err(crate::TransformError::Internal(
-                        "Unexpected LetRec encountered".to_string(),
-                    ))?;
-                }
-                MirRelationExpr::Get {
-                    id: Id::Local(id),
-                    typ,
-                    access_strategy: _,
-                } => {
-                    if let Some(new_type) = types.get(id) {
-                        // Assert that the column length has not changed.
-                        if !new_type.column_types.len() == typ.column_types.len() {
-                            Err(crate::TransformError::Internal(format!(
-                                "column lengths do not match: {:?} v {:?}",
-                                new_type.column_types, typ.column_types
-                            )))?;
-                        }
-                        // Assert that the column types have not changed.
-                        if !new_type
-                            .column_types
-                            .iter()
-                            .zip(typ.column_types.iter())
-                            .all(|(t1, t2)| t1.scalar_type.base_eq(&t2.scalar_type))
-                        {
-                            Err(crate::TransformError::Internal(format!(
-                                "scalar types do not match: {:?} v {:?}",
-                                new_type.column_types, typ.column_types
-                            )))?;
-                        }
-
-                        typ.clone_from(new_type);
-                    }
-                }
-                _ => {}
-            }
-            worklist.extend(expr.children_mut().rev());
+            todo.extend(expr.children_mut());
         }
         Ok(())
     }
@@ -521,7 +451,11 @@ mod let_motion {
                     body,
                 } => {
                     // push bindings into `bindings` as they should not be further processed.
-                    bindings.extend(ids.drain(..).zip(values.drain(..).zip(limits.drain(..))));
+                    use itertools::Itertools;
+                    bindings.extend(
+                        ids.drain(..)
+                            .zip_eq(values.drain(..).zip_eq(limits.drain(..))),
+                    );
                     *expr = body.take_dangerous();
                     // Stop at `LetRec` nodes as we cannot always lift `Let` nodes out of them.
                 }

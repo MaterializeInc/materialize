@@ -49,7 +49,7 @@ use mz_ore::url::SensitiveUrl;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::PubSubClientConnection;
-use mz_persist_client::PersistLocation;
+use mz_persist_client::{PersistClient, PersistLocation};
 use mz_repr::{Diff, Timestamp};
 use mz_service::secrets::SecretsReaderCliArgs;
 use mz_sql::catalog::EnvironmentId;
@@ -59,7 +59,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{error, Instrument};
 
 pub const BUILD_INFO: BuildInfo = build_info!();
-pub static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version());
+pub static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version(None));
 
 #[derive(Parser, Debug)]
 #[clap(name = "catalog", next_line_help = true, version = VERSION.as_str())]
@@ -200,7 +200,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     let organization_id = args.environment_id.organization_id();
     let metrics = Arc::new(mz_catalog::durable::Metrics::new(&metrics_registry));
     let openable_state = persist_backed_catalog_state(
-        persist_client,
+        persist_client.clone(),
         organization_id,
         BUILD_INFO.semver_version(),
         args.deploy_generation,
@@ -254,7 +254,15 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                 None => Default::default(),
                 Some(json) => serde_json::from_str(&json).context("parsing replica size map")?,
             };
-            upgrade_check(args, openable_state, secrets, cluster_replica_sizes, start).await
+            upgrade_check(
+                args,
+                openable_state,
+                secrets,
+                cluster_replica_sizes,
+                persist_client,
+                start,
+            )
+            .await
         }
     }
 }
@@ -530,6 +538,7 @@ async fn upgrade_check(
     openable_state: Box<dyn OpenableDurableCatalogState>,
     secrets: SecretsReaderCliArgs,
     cluster_replica_sizes: ClusterReplicaSizeMap,
+    persist_client: PersistClient,
     start: Instant,
 ) -> Result<(), anyhow::Error> {
     let secrets_reader = secrets.load().await.context("loading secrets reader")?;
@@ -542,6 +551,7 @@ async fn upgrade_check(
                 default_cluster_replica_size:
                     "DEFAULT CLUSTER REPLICA SIZE IS ONLY USED FOR NEW ENVIRONMENTS".into(),
                 bootstrap_role: None,
+                cluster_replica_size_map: ClusterReplicaSizeMap::default(),
             },
         )
         .await?;
@@ -563,15 +573,19 @@ async fn upgrade_check(
         state: _state,
         storage_collections_to_drop: _,
         migrated_storage_collections_0dt: _,
-        new_builtins: _,
+        new_builtin_collections: _,
         builtin_table_updates: _,
         last_seen_version,
+        expr_cache_handle: _,
+        cached_global_exprs: _,
+        uncached_local_exprs: _,
     } = Catalog::initialize_state(
         StateConfig {
             unsafe_mode: true,
             all_features: false,
             build_info: &BUILD_INFO,
             environment_id: args.environment_id.clone(),
+            read_only: true,
             now,
             boot_ts,
             skip_migrations: false,
@@ -598,6 +612,8 @@ async fn upgrade_check(
             ),
             active_connection_count: Arc::new(Mutex::new(ConnectionCounter::new(0, 0))),
             builtin_item_migration_config: BuiltinItemMigrationConfig::Legacy,
+            persist_client,
+            helm_chart_version: None,
         },
         &mut storage,
     )
@@ -609,7 +625,7 @@ async fn upgrade_check(
     let msg = format!(
         "catalog upgrade from {} to {} would succeed in about {} ms",
         last_seen_version,
-        &BUILD_INFO.human_version(),
+        &BUILD_INFO.human_version(None),
         dur.as_millis(),
     );
     println!("{msg}");

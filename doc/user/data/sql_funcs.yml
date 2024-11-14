@@ -463,8 +463,13 @@
       value of `s` evaluates to `true`."
 
   - signature: 'expression bool_op ANY(s: Scalars) -> bool'
-    description: "`true` if applying [bool_op](#boolean-operators) to `expression` and any value
-      of `s` evaluates to `true`."
+    description: |
+
+      `true` if applying [bool_op](#boolean-operators) to `expression` and any
+      value of `s` evaluates to `true`. Avoid using in equi-join conditions as
+      its use in the equi-join condition can lead to a significant increase in
+      memory usage. See [idiomatic Materialize
+      SQL](/transform-data/idiomatic-materialize-sql/any) for the alternative.
 
   - signature: 'expression IN(s: Scalars) -> bool'
     description: "`true` for each value in `expression` if it matches at least one

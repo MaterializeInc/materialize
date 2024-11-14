@@ -18,14 +18,14 @@ use k8s_openapi::api::core::v1::Secret;
 use k8s_openapi::ByteString;
 use kube::api::{DeleteParams, ListParams, ObjectMeta, Patch, PatchParams};
 use kube::Api;
-use mz_repr::GlobalId;
+use mz_repr::CatalogItemId;
 use mz_secrets::{SecretsController, SecretsReader};
 
 use crate::{util, KubernetesOrchestrator, FIELD_MANAGER};
 
 #[async_trait]
 impl SecretsController for KubernetesOrchestrator {
-    async fn ensure(&self, id: GlobalId, contents: &[u8]) -> Result<(), anyhow::Error> {
+    async fn ensure(&self, id: CatalogItemId, contents: &[u8]) -> Result<(), anyhow::Error> {
         let name = secret_name(id);
         let data = iter::once(("contents".into(), ByteString(contents.into())));
         let secret = Secret {
@@ -46,7 +46,7 @@ impl SecretsController for KubernetesOrchestrator {
         Ok(())
     }
 
-    async fn delete(&self, id: GlobalId) -> Result<(), anyhow::Error> {
+    async fn delete(&self, id: CatalogItemId) -> Result<(), anyhow::Error> {
         // We intentionally don't wait for the secret to be deleted; our
         // obligation is only to initiate the deletion. Garbage collecting
         // secrets that fail to delete will be the responsibility of a future
@@ -63,7 +63,7 @@ impl SecretsController for KubernetesOrchestrator {
         }
     }
 
-    async fn list(&self) -> Result<Vec<GlobalId>, anyhow::Error> {
+    async fn list(&self) -> Result<Vec<CatalogItemId>, anyhow::Error> {
         let objs = self.secret_api.list(&ListParams::default()).await?;
         let mut ids = Vec::new();
         for item in objs.items {
@@ -107,7 +107,7 @@ impl KubernetesSecretsReader {
 
 #[async_trait]
 impl SecretsReader for KubernetesSecretsReader {
-    async fn read(&self, id: GlobalId) -> Result<Vec<u8>, anyhow::Error> {
+    async fn read(&self, id: CatalogItemId) -> Result<Vec<u8>, anyhow::Error> {
         let secret = self.secret_api.get(&secret_name(id)).await?;
         let mut data = secret
             .data
@@ -121,11 +121,11 @@ impl SecretsReader for KubernetesSecretsReader {
 
 const SECRET_NAME_PREFIX: &str = "user-managed-";
 
-fn secret_name(id: GlobalId) -> String {
+fn secret_name(id: CatalogItemId) -> String {
     format!("{SECRET_NAME_PREFIX}{id}")
 }
 
-fn from_secret_name(name: &str) -> Option<GlobalId> {
+fn from_secret_name(name: &str) -> Option<CatalogItemId> {
     name.strip_prefix(SECRET_NAME_PREFIX)
         .and_then(|id| id.parse().ok())
 }

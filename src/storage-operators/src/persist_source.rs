@@ -442,13 +442,11 @@ where
         let activator = Activator::new(operator_info.address, activations);
         // Maintain a list of work to do
         let mut pending_work = std::collections::VecDeque::new();
-        let mut buffer = Default::default();
 
         move |_frontier| {
             fetched_input.for_each(|time, data| {
-                data.swap(&mut buffer);
                 let capability = time.retain();
-                for fetched_blob in buffer.drain(..) {
+                for fetched_blob in data.drain(..) {
                     pending_work.push_back(PendingWork {
                         capability: capability.clone(),
                         part: PendingPart::Unparsed(fetched_blob),

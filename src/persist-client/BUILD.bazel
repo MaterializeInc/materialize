@@ -25,10 +25,11 @@ rust_library(
     compile_data = [],
     crate_features = ["default"],
     data = [],
+    disable_pipelining = True,
     proc_macro_deps = ["//src/persist-proc:mz_persist_proc"] + all_crate_deps(proc_macro = True),
     rustc_env = {},
     rustc_flags = [],
-    version = "0.123.0-dev.0",
+    version = "0.125.0-dev.0",
     deps = [
         ":mz_persist_client_build_script",
         "//src/build-info:mz_build_info",
@@ -40,6 +41,11 @@ rust_library(
         "//src/proto:mz_proto",
         "//src/timely-util:mz_timely_util",
     ] + all_crate_deps(normal = True),
+)
+
+alias(
+    name = "persist-client",
+    actual = "mz_persist_client",
 )
 
 rust_test(
@@ -62,7 +68,7 @@ rust_test(
     ),
     rustc_env = {},
     rustc_flags = [],
-    version = "0.123.0-dev.0",
+    version = "0.125.0-dev.0",
     deps = [
         "//src/build-info:mz_build_info",
         "//src/dyncfg:mz_dyncfg",

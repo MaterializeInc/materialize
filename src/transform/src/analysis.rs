@@ -545,11 +545,20 @@ mod arity {
 /// Expression types
 mod types {
 
-    use super::{Analysis, Derived};
+    use super::{Analysis, Derived, Lattice};
     use mz_expr::MirRelationExpr;
     use mz_repr::ColumnType;
 
     /// Analysis that determines the type of relation expressions.
+    ///
+    /// The value is `Some` when it discovers column types, and `None` in the case that
+    /// it has discovered no constraining information on the column types. The `None`
+    /// variant should only occur in the course of iteration, and should not be revealed
+    /// as an output of the analysis. One can `unwrap()` the result, and if it errors then
+    /// either the expression is malformed or the analysis has a bug.
+    ///
+    /// The analysis will panic if an expression is not well typed (i.e. if `try_col_with_input_cols`
+    /// returns an error).
     #[derive(Debug)]
     pub struct RelationType;
 
@@ -568,12 +577,81 @@ mod types {
                 .map(|child| &results[child])
                 .collect::<Vec<_>>();
 
-            if offsets.iter().all(|o| o.is_some()) {
-                let input_cols = offsets.into_iter().rev().map(|o| o.as_ref().unwrap());
-                let subtree_column_types = expr.try_col_with_input_cols(input_cols);
-                subtree_column_types.ok()
-            } else {
-                None
+            // For most expressions we'll apply `try_col_with_input_cols`, but for `Get` expressions
+            // we'll want to combine what we know (iteratively) with the stated `Get::typ`.
+            match expr {
+                MirRelationExpr::Get {
+                    id: mz_expr::Id::Local(i),
+                    typ,
+                    ..
+                } => {
+                    let mut result = typ.column_types.clone();
+                    if let Some(o) = depends.bindings().get(i) {
+                        if let Some(t) = results.get(*o) {
+                            if let Some(rec_typ) = t {
+                                // Reconcile nullability statements.
+                                // Unclear if we should trust `typ`.
+                                assert_eq!(result.len(), rec_typ.len());
+                                result.clone_from(rec_typ);
+                                for (res, col) in result.iter_mut().zip(typ.column_types.iter()) {
+                                    if !col.nullable {
+                                        res.nullable = false;
+                                    }
+                                }
+                            } else {
+                                // Our `None` information indicates that we are optimistically
+                                // assuming the best, including that all columns are non-null.
+                                // This should only happen in the first visit to a `Get` expr.
+                                // Use `typ`, but flatten nullability.
+                                for col in result.iter_mut() {
+                                    col.nullable = false;
+                                }
+                            }
+                        }
+                    }
+                    Some(result)
+                }
+                _ => {
+                    // Every expression with inputs should have non-`None` inputs at this point.
+                    let input_cols = offsets.into_iter().rev().map(|o| {
+                        o.as_ref()
+                            .expect("RelationType analysis discovered type-less expression")
+                    });
+                    Some(expr.try_col_with_input_cols(input_cols).unwrap())
+                }
+            }
+        }
+
+        fn lattice() -> Option<Box<dyn Lattice<Self::Value>>> {
+            Some(Box::new(RTLattice))
+        }
+    }
+
+    struct RTLattice;
+
+    impl Lattice<Option<Vec<ColumnType>>> for RTLattice {
+        fn top(&self) -> Option<Vec<ColumnType>> {
+            None
+        }
+        fn meet_assign(&self, a: &mut Option<Vec<ColumnType>>, b: Option<Vec<ColumnType>>) -> bool {
+            match (a, b) {
+                (_, None) => false,
+                (Some(a), Some(b)) => {
+                    let mut changed = false;
+                    assert_eq!(a.len(), b.len());
+                    for (at, bt) in a.iter_mut().zip(b.iter()) {
+                        assert_eq!(at.scalar_type, bt.scalar_type);
+                        if !at.nullable && bt.nullable {
+                            at.nullable = true;
+                            changed = true;
+                        }
+                    }
+                    changed
+                }
+                (a, b) => {
+                    *a = b;
+                    true
+                }
             }
         }
     }
@@ -738,6 +816,8 @@ mod non_negative {
                 MirRelationExpr::Negate { .. } => false,
                 // Threshold ensures non-negativity.
                 MirRelationExpr::Threshold { .. } => true,
+                // Reduce errors on negative input.
+                MirRelationExpr::Reduce { .. } => true,
                 MirRelationExpr::Join { .. } => {
                     // If all inputs are non-negative, the join is non-negative.
                     depends

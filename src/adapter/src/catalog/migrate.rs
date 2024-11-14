@@ -9,14 +9,13 @@
 
 use std::collections::BTreeMap;
 
-use futures::future::BoxFuture;
 use mz_catalog::builtin::BuiltinTable;
 use mz_catalog::durable::Transaction;
 use mz_catalog::memory::objects::BootstrapStateUpdateKind;
 use mz_catalog::memory::objects::StateUpdate;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NowFn;
-use mz_repr::{GlobalId, Timestamp};
+use mz_repr::{CatalogItemId, Timestamp};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::names::FullItemName;
 use mz_sql_parser::ast::{Raw, Statement};
@@ -24,31 +23,32 @@ use semver::Version;
 use tracing::info;
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
 use crate::catalog::open::into_consolidatable_updates_startup;
+use crate::catalog::state::LocalExpressionCache;
 use crate::catalog::{BuiltinTableUpdate, CatalogState, ConnCatalog};
 
-async fn rewrite_ast_items<F>(tx: &mut Transaction<'_>, mut f: F) -> Result<(), anyhow::Error>
+fn rewrite_ast_items<F>(tx: &mut Transaction<'_>, mut f: F) -> Result<(), anyhow::Error>
 where
     F: for<'a> FnMut(
         &'a mut Transaction<'_>,
-        GlobalId,
+        CatalogItemId,
         &'a mut Statement<Raw>,
-    ) -> BoxFuture<'a, Result<(), anyhow::Error>>,
+    ) -> Result<(), anyhow::Error>,
 {
     let mut updated_items = BTreeMap::new();
 
     for mut item in tx.get_items() {
         let mut stmt = mz_sql::parse::parse(&item.create_sql)?.into_element().ast;
-        // TODO(alter_table): Switch this to CatalogItemId.
-        f(tx, item.global_id, &mut stmt).await?;
+        f(tx, item.id, &mut stmt)?;
+
         item.create_sql = stmt.to_ast_string_stable();
 
-        updated_items.insert(item.global_id, item);
+        updated_items.insert(item.id, item);
     }
     tx.update_items(updated_items)?;
     Ok(())
 }
 
-async fn rewrite_items<F>(
+fn rewrite_items<F>(
     tx: &mut Transaction<'_>,
     cat: &ConnCatalog<'_>,
     mut f: F,
@@ -57,20 +57,20 @@ where
     F: for<'a> FnMut(
         &'a mut Transaction<'_>,
         &'a &ConnCatalog<'_>,
-        GlobalId,
+        CatalogItemId,
         &'a mut Statement<Raw>,
-    ) -> BoxFuture<'a, Result<(), anyhow::Error>>,
+    ) -> Result<(), anyhow::Error>,
 {
     let mut updated_items = BTreeMap::new();
     let items = tx.get_items();
     for mut item in items {
         let mut stmt = mz_sql::parse::parse(&item.create_sql)?.into_element().ast;
-        // TODO(alter_table): Switch this to CatalogItemId.
-        f(tx, &cat, item.global_id, &mut stmt).await?;
+
+        f(tx, &cat, item.id, &mut stmt)?;
 
         item.create_sql = stmt.to_ast_string_stable();
 
-        updated_items.insert(item.global_id, item);
+        updated_items.insert(item.id, item);
     }
     tx.update_items(updated_items)?;
     Ok(())
@@ -87,6 +87,7 @@ pub(crate) struct MigrateResult {
 pub(crate) async fn migrate(
     state: &mut CatalogState,
     tx: &mut Transaction<'_>,
+    local_expr_cache: &mut LocalExpressionCache,
     item_updates: Vec<StateUpdate>,
     now: NowFn,
     _boot_ts: Timestamp,
@@ -109,20 +110,17 @@ pub(crate) async fn migrate(
     }
 
     rewrite_ast_items(tx, |_tx, _id, _stmt| {
-        Box::pin(async move {
-            // Add per-item AST migrations below.
-            //
-            // Each migration should be a function that takes `stmt` (the AST
-            // representing the creation SQL for the item) as input. Any
-            // mutations to `stmt` will be staged for commit to the catalog.
-            //
-            // Migration functions may also take `tx` as input to stage
-            // arbitrary changes to the catalog.
+        // Add per-item AST migrations below.
+        //
+        // Each migration should be a function that takes `stmt` (the AST
+        // representing the creation SQL for the item) as input. Any
+        // mutations to `stmt` will be staged for commit to the catalog.
+        //
+        // Migration functions may also take `tx` as input to stage
+        // arbitrary changes to the catalog.
 
-            Ok(())
-        })
-    })
-    .await?;
+        Ok(())
+    })?;
 
     // Load items into catalog. We make sure to consolidate the old updates with the new updates to
     // avoid trying to apply unmigrated items.
@@ -152,7 +150,9 @@ pub(crate) async fn migrate(
             diff: diff.try_into().expect("valid diff"),
         })
         .collect();
-    let mut ast_builtin_table_updates = state.apply_updates_for_bootstrap(item_updates).await;
+    let mut ast_builtin_table_updates = state
+        .apply_updates_for_bootstrap(item_updates, local_expr_cache)
+        .await;
 
     info!("migrating from catalog version {:?}", catalog_version);
 
@@ -160,25 +160,22 @@ pub(crate) async fn migrate(
 
     rewrite_items(tx, &conn_cat, |_tx, _conn_cat, _id, _stmt| {
         let _catalog_version = catalog_version.clone();
-        Box::pin(async move {
-            // Add per-item, post-planning AST migrations below. Most
-            // migrations should be in the above `rewrite_ast_items` block.
-            //
-            // Each migration should be a function that takes `item` (the AST
-            // representing the creation SQL for the item) as input. Any
-            // mutations to `item` will be staged for commit to the catalog.
-            //
-            // Be careful if you reference `conn_cat`. Doing so is *weird*,
-            // as you'll be rewriting the catalog while looking at it. If
-            // possible, make your migration independent of `conn_cat`, and only
-            // consider a single item at a time.
-            //
-            // Migration functions may also take `tx` as input to stage
-            // arbitrary changes to the catalog.
-            Ok(())
-        })
-    })
-    .await?;
+        // Add per-item, post-planning AST migrations below. Most
+        // migrations should be in the above `rewrite_ast_items` block.
+        //
+        // Each migration should be a function that takes `item` (the AST
+        // representing the creation SQL for the item) as input. Any
+        // mutations to `item` will be staged for commit to the catalog.
+        //
+        // Be careful if you reference `conn_cat`. Doing so is *weird*,
+        // as you'll be rewriting the catalog while looking at it. If
+        // possible, make your migration independent of `conn_cat`, and only
+        // consider a single item at a time.
+        //
+        // Migration functions may also take `tx` as input to stage
+        // arbitrary changes to the catalog.
+        Ok(())
+    })?;
 
     // Add whole-catalog migrations below.
     //
@@ -186,7 +183,9 @@ pub(crate) async fn migrate(
     // input and stages arbitrary transformations to the catalog on `tx`.
 
     let op_item_updates = tx.get_and_commit_op_updates();
-    let item_builtin_table_updates = state.apply_updates_for_bootstrap(op_item_updates).await;
+    let item_builtin_table_updates = state
+        .apply_updates_for_bootstrap(op_item_updates, local_expr_cache)
+        .await;
 
     ast_builtin_table_updates.extend(item_builtin_table_updates);
 

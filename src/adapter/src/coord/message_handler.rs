@@ -26,7 +26,6 @@ use mz_ore::{soft_assert_or_log, task};
 use mz_persist_client::usage::ShardsUsageReferenced;
 use mz_repr::{Datum, Row};
 use mz_sql::ast::Statement;
-use mz_sql::names::ResolvedIds;
 use mz_sql::pure::PurifiedStatement;
 use mz_storage_client::controller::IntrospectionType;
 use mz_storage_types::controller::CollectionMetadata;
@@ -39,7 +38,6 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReason};
 use crate::catalog::{BuiltinTableUpdate, Op};
 use crate::command::Command;
-use crate::coord::appends::Deferred;
 use crate::coord::{
     AlterConnectionValidationReady, ClusterReplicaStatuses, Coordinator,
     CreateConnectionValidationReady, Message, PurifiedStatementReady, WatchSetResponse,
@@ -92,11 +90,10 @@ impl Coordinator {
                     .boxed_local()
                     .await
             }
-            Message::WriteLockGrant(write_lock_guard) => {
-                self.message_write_lock_grant(write_lock_guard)
-                    .boxed_local()
-                    .await;
-            }
+            Message::TryDeferred {
+                conn_id,
+                acquired_lock,
+            } => self.try_deferred(conn_id, acquired_lock).await,
             Message::GroupCommitInitiate(span, permit) => {
                 // Add an OpenTelemetry link to our current span.
                 tracing::Span::current().add_link(span.context().span().span_context().clone());
@@ -561,7 +558,8 @@ impl Coordinator {
 
                 // Determine all dependencies, not just those in the statement
                 // itself.
-                let resolved_ids = mz_sql::names::visit_dependencies(&stmt);
+                let catalog = self.catalog().for_session(ctx.session());
+                let resolved_ids = mz_sql::names::visit_dependencies(&catalog, &stmt);
                 self.plan_statement(ctx.session(), stmt, &params, &resolved_ids)
                     .map(|plan| (plan, resolved_ids))
             }
@@ -579,10 +577,11 @@ impl Coordinator {
         CreateConnectionValidationReady {
             mut ctx,
             result,
+            connection_id,
             connection_gid,
             mut plan_validity,
             otel_ctx,
-            dependency_ids,
+            resolved_ids,
         }: CreateConnectionValidationReady,
     ) {
         otel_ctx.attach_as_parent();
@@ -593,14 +592,14 @@ impl Coordinator {
         // WARNING: If we support `ALTER SECRET`, we'll need to also check
         // for connectors that were altered while we were purifying.
         if let Err(e) = plan_validity.check(self.catalog()) {
-            let _ = self.secrets_controller.delete(connection_gid).await;
+            let _ = self.secrets_controller.delete(connection_id).await;
             return ctx.retire(Err(e));
         }
 
         let plan = match result {
             Ok(ok) => ok,
             Err(e) => {
-                let _ = self.secrets_controller.delete(connection_gid).await;
+                let _ = self.secrets_controller.delete(connection_id).await;
                 return ctx.retire(Err(e));
             }
         };
@@ -608,9 +607,10 @@ impl Coordinator {
         let result = self
             .sequence_create_connection_stage_finish(
                 ctx.session_mut(),
+                connection_id,
                 connection_gid,
                 plan,
-                ResolvedIds(dependency_ids),
+                resolved_ids,
             )
             .await;
         ctx.retire(result);
@@ -622,10 +622,11 @@ impl Coordinator {
         AlterConnectionValidationReady {
             mut ctx,
             result,
-            connection_gid,
+            connection_id,
+            connection_gid: _,
             mut plan_validity,
             otel_ctx,
-            dependency_ids: _,
+            resolved_ids: _,
         }: AlterConnectionValidationReady,
     ) {
         otel_ctx.attach_as_parent();
@@ -647,39 +648,9 @@ impl Coordinator {
         };
 
         let result = self
-            .sequence_alter_connection_stage_finish(ctx.session_mut(), connection_gid, conn)
+            .sequence_alter_connection_stage_finish(ctx.session_mut(), connection_id, conn)
             .await;
         ctx.retire(result);
-    }
-
-    #[mz_ore::instrument(level = "debug")]
-    async fn message_write_lock_grant(
-        &mut self,
-        write_lock_guard: tokio::sync::OwnedMutexGuard<()>,
-    ) {
-        // It's possible to have more incoming write lock grants
-        // than pending writes because of cancellations.
-        if let Some(ready) = self.write_lock_wait_group.pop_front() {
-            match ready {
-                Deferred::Plan(mut ready) => {
-                    ready.ctx.session_mut().grant_write_lock(write_lock_guard);
-                    if let Err(e) = ready.validity.check(self.catalog()) {
-                        ready.ctx.retire(Err(e))
-                    } else {
-                        // Write statements never need to track resolved IDs (NOTE: This is not the
-                        // same thing as plan dependencies, which we do need to re-validate).
-                        let resolved_ids = ResolvedIds(BTreeSet::new());
-                        self.sequence_plan(ready.ctx, ready.plan, resolved_ids)
-                            .await;
-                    }
-                }
-                Deferred::GroupCommit => {
-                    self.group_commit(Some(write_lock_guard), None).await;
-                }
-            }
-        }
-        // N.B. if no deferred plans, write lock is released by drop
-        // here.
     }
 
     #[mz_ore::instrument(level = "debug")]

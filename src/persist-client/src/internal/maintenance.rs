@@ -57,7 +57,7 @@ impl RoutineMaintenance {
     ) where
         K: Debug + Codec,
         V: Debug + Codec,
-        T: Timestamp + Lattice + Codec64,
+        T: Timestamp + Lattice + Codec64 + Sync,
         D: Semigroup + Codec64 + Send + Sync,
     {
         let _ = self.perform_in_background(machine, gc);
@@ -75,7 +75,7 @@ impl RoutineMaintenance {
     ) where
         K: Debug + Codec,
         V: Debug + Codec,
-        T: Timestamp + Lattice + Codec64,
+        T: Timestamp + Lattice + Codec64 + Sync,
         D: Semigroup + Codec64 + Send + Sync,
     {
         let mut more_maintenance = RoutineMaintenance::default();
@@ -103,7 +103,7 @@ impl RoutineMaintenance {
     where
         K: Debug + Codec,
         V: Debug + Codec,
-        T: Timestamp + Lattice + Codec64,
+        T: Timestamp + Lattice + Codec64 + Sync,
         D: Semigroup + Codec64 + Send + Sync,
     {
         let mut futures = vec![];
@@ -184,7 +184,7 @@ impl<T> Default for WriterMaintenance<T> {
 
 impl<T> WriterMaintenance<T>
 where
-    T: Timestamp + Lattice + Codec64,
+    T: Timestamp + Lattice + Codec64 + Sync,
 {
     /// Initiates any writer maintenance necessary in background tasks
     pub(crate) fn start_performing<K, V, D>(

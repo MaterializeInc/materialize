@@ -774,22 +774,22 @@ WITH MUTUALLY RECURSIVE
 SELECT * FROM c0;
 ----
 Explained Query:
-  Return // { arity: 3, types: "(integer, integer?, integer?)" }
-    Get l1 // { arity: 3, types: "(integer, integer?, integer?)" }
+  Return // { arity: 3, types: "(integer, integer, integer?)" }
+    Get l1 // { arity: 3, types: "(integer, integer, integer?)" }
   With Mutually Recursive
     cte l1 =
-      Project (#2, #0, #1) // { arity: 3, types: "(integer, integer?, integer?)" }
-        Map (2) // { arity: 3, types: "(integer?, integer?, integer)" }
-          Distinct project=[#0, #1] // { arity: 2, types: "(integer?, integer?)" }
-            Union // { arity: 2, types: "(integer?, integer?)" }
+      Project (#2, #0, #1) // { arity: 3, types: "(integer, integer, integer?)" }
+        Map (2) // { arity: 3, types: "(integer, integer?, integer)" }
+          Distinct project=[#0, #1] // { arity: 2, types: "(integer, integer?)" }
+            Union // { arity: 2, types: "(integer, integer?)" }
               CrossJoin type=differential // { arity: 2, types: "(integer, integer?)" }
                 ArrangeBy keys=[[]] // { arity: 0, types: "()" }
                   Project () // { arity: 0, types: "()" }
                     Get l0 // { arity: 1, types: "(integer)" }
                 ArrangeBy keys=[[]] // { arity: 2, types: "(integer, integer?)" }
                   ReadStorage materialize.public.t1 // { arity: 2, types: "(integer, integer?)" }
-              Project (#1, #2) // { arity: 2, types: "(integer?, integer?)" }
-                Get l1 // { arity: 3, types: "(integer, integer?, integer?)" }
+              Project (#1, #2) // { arity: 2, types: "(integer, integer?)" }
+                Get l1 // { arity: 3, types: "(integer, integer, integer?)" }
     cte l0 =
       Map (1) // { arity: 1, types: "(integer)" }
         Distinct project=[] monotonic // { arity: 0, types: "()" }
@@ -827,22 +827,22 @@ WITH MUTUALLY RECURSIVE
 SELECT * FROM c0;
 ----
 Explained Query:
-  Return // { arity: 3, types: "(boolean, integer?, integer?)" }
-    Get l1 // { arity: 3, types: "(boolean, integer?, integer?)" }
+  Return // { arity: 3, types: "(boolean, integer, integer?)" }
+    Get l1 // { arity: 3, types: "(boolean, integer, integer?)" }
   With Mutually Recursive
     cte l1 =
-      Project (#2, #0, #1) // { arity: 3, types: "(boolean, integer?, integer?)" }
-        Map (false) // { arity: 3, types: "(integer?, integer?, boolean)" }
-          Distinct project=[#0, #1] // { arity: 2, types: "(integer?, integer?)" }
-            Union // { arity: 2, types: "(integer?, integer?)" }
+      Project (#2, #0, #1) // { arity: 3, types: "(boolean, integer, integer?)" }
+        Map (false) // { arity: 3, types: "(integer, integer?, boolean)" }
+          Distinct project=[#0, #1] // { arity: 2, types: "(integer, integer?)" }
+            Union // { arity: 2, types: "(integer, integer?)" }
               CrossJoin type=differential // { arity: 2, types: "(integer, integer?)" }
                 ArrangeBy keys=[[]] // { arity: 0, types: "()" }
                   Project () // { arity: 0, types: "()" }
                     Get l0 // { arity: 1, types: "(integer)" }
                 ArrangeBy keys=[[]] // { arity: 2, types: "(integer, integer?)" }
                   ReadStorage materialize.public.t1 // { arity: 2, types: "(integer, integer?)" }
-              Project (#1, #2) // { arity: 2, types: "(integer?, integer?)" }
-                Get l1 // { arity: 3, types: "(boolean, integer?, integer?)" }
+              Project (#1, #2) // { arity: 2, types: "(integer, integer?)" }
+                Get l1 // { arity: 3, types: "(boolean, integer, integer?)" }
     cte l0 =
       Map (1) // { arity: 1, types: "(integer)" }
         Distinct project=[] monotonic // { arity: 0, types: "()" }

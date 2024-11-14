@@ -37,6 +37,8 @@ use mz_repr::{
     ColumnName, ColumnType, Datum, Diff, GlobalId, IntoRowIterator, RelationType, Row,
     RowCollection, RowIterator, RowRef, ScalarType, SortedRowCollectionIter,
 };
+use proptest::prelude::{any, Arbitrary, BoxedStrategy};
+use proptest::strategy::{Strategy, Union};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::container::columnation::{Columnation, CopyRegion};
@@ -321,6 +323,190 @@ impl PartialEq for MirRelationExpr {
     }
 }
 impl Eq for MirRelationExpr {}
+
+impl Arbitrary for MirRelationExpr {
+    type Parameters = ();
+
+    fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
+        const VEC_LEN: usize = 4;
+
+        // A strategy for generating the leaf cases.
+        let leaf = Union::new([
+            (
+                any::<Result<Vec<(Row, Diff)>, EvalError>>(),
+                any::<RelationType>(),
+            )
+                .prop_map(|(rows, typ)| MirRelationExpr::Constant { rows, typ })
+                .boxed(),
+            (any::<Id>(), any::<RelationType>(), any::<AccessStrategy>())
+                .prop_map(|(id, typ, access_strategy)| MirRelationExpr::Get {
+                    id,
+                    typ,
+                    access_strategy,
+                })
+                .boxed(),
+        ])
+        .boxed();
+
+        leaf.prop_recursive(2, 3, 5, |inner| {
+            Union::new([
+                // Let
+                (any::<LocalId>(), inner.clone(), inner.clone())
+                    .prop_map(|(id, value, body)| MirRelationExpr::Let {
+                        id,
+                        value: Box::new(value),
+                        body: Box::new(body),
+                    })
+                    .boxed(),
+                // LetRec
+                (
+                    any::<Vec<LocalId>>(),
+                    proptest::collection::vec(inner.clone(), 1..VEC_LEN),
+                    any::<Vec<Option<LetRecLimit>>>(),
+                    inner.clone(),
+                )
+                    .prop_map(|(ids, values, limits, body)| MirRelationExpr::LetRec {
+                        ids,
+                        values,
+                        limits,
+                        body: Box::new(body),
+                    })
+                    .boxed(),
+                // Project
+                (inner.clone(), any::<Vec<usize>>())
+                    .prop_map(|(input, outputs)| MirRelationExpr::Project {
+                        input: Box::new(input),
+                        outputs,
+                    })
+                    .boxed(),
+                // Map
+                (inner.clone(), any::<Vec<MirScalarExpr>>())
+                    .prop_map(|(input, scalars)| MirRelationExpr::Map {
+                        input: Box::new(input),
+                        scalars,
+                    })
+                    .boxed(),
+                // FlatMap
+                (
+                    inner.clone(),
+                    any::<TableFunc>(),
+                    any::<Vec<MirScalarExpr>>(),
+                )
+                    .prop_map(|(input, func, exprs)| MirRelationExpr::FlatMap {
+                        input: Box::new(input),
+                        func,
+                        exprs,
+                    })
+                    .boxed(),
+                // Filter
+                (inner.clone(), any::<Vec<MirScalarExpr>>())
+                    .prop_map(|(input, predicates)| MirRelationExpr::Filter {
+                        input: Box::new(input),
+                        predicates,
+                    })
+                    .boxed(),
+                // Join
+                (
+                    proptest::collection::vec(inner.clone(), 1..VEC_LEN),
+                    any::<Vec<Vec<MirScalarExpr>>>(),
+                    any::<JoinImplementation>(),
+                )
+                    .prop_map(
+                        |(inputs, equivalences, implementation)| MirRelationExpr::Join {
+                            inputs,
+                            equivalences,
+                            implementation,
+                        },
+                    )
+                    .boxed(),
+                // Reduce
+                (
+                    inner.clone(),
+                    any::<Vec<MirScalarExpr>>(),
+                    any::<Vec<AggregateExpr>>(),
+                    any::<bool>(),
+                    any::<Option<u64>>(),
+                )
+                    .prop_map(
+                        |(input, group_key, aggregates, monotonic, expected_group_size)| {
+                            MirRelationExpr::Reduce {
+                                input: Box::new(input),
+                                group_key,
+                                aggregates,
+                                monotonic,
+                                expected_group_size,
+                            }
+                        },
+                    )
+                    .boxed(),
+                // TopK
+                (
+                    inner.clone(),
+                    any::<Vec<usize>>(),
+                    any::<Vec<ColumnOrder>>(),
+                    any::<Option<MirScalarExpr>>(),
+                    any::<usize>(),
+                    any::<bool>(),
+                    any::<Option<u64>>(),
+                )
+                    .prop_map(
+                        |(
+                            input,
+                            group_key,
+                            order_key,
+                            limit,
+                            offset,
+                            monotonic,
+                            expected_group_size,
+                        )| MirRelationExpr::TopK {
+                            input: Box::new(input),
+                            group_key,
+                            order_key,
+                            limit,
+                            offset,
+                            monotonic,
+                            expected_group_size,
+                        },
+                    )
+                    .boxed(),
+                // Negate
+                inner
+                    .clone()
+                    .prop_map(|input| MirRelationExpr::Negate {
+                        input: Box::new(input),
+                    })
+                    .boxed(),
+                // Threshold
+                inner
+                    .clone()
+                    .prop_map(|input| MirRelationExpr::Threshold {
+                        input: Box::new(input),
+                    })
+                    .boxed(),
+                // Union
+                (
+                    inner.clone(),
+                    proptest::collection::vec(inner.clone(), 1..VEC_LEN),
+                )
+                    .prop_map(|(base, inputs)| MirRelationExpr::Union {
+                        base: Box::new(base),
+                        inputs,
+                    })
+                    .boxed(),
+                // ArrangeBy
+                (inner.clone(), any::<Vec<Vec<MirScalarExpr>>>())
+                    .prop_map(|(input, keys)| MirRelationExpr::ArrangeBy {
+                        input: Box::new(input),
+                        keys,
+                    })
+                    .boxed(),
+            ])
+        })
+        .boxed()
+    }
+
+    type Strategy = BoxedStrategy<Self>;
+}
 
 impl MirRelationExpr {
     /// Reports the schema of the relation.
@@ -1535,36 +1721,8 @@ impl MirRelationExpr {
         *self = logic(expr);
     }
 
-    /// Store `self` in a `Let` and pass the corresponding `Get` to `body`
-    pub fn let_in<Body>(self, id_gen: &mut IdGen, body: Body) -> MirRelationExpr
-    where
-        Body: FnOnce(&mut IdGen, MirRelationExpr) -> MirRelationExpr,
-    {
-        if let MirRelationExpr::Get { .. } = self {
-            // already done
-            body(id_gen, self)
-        } else {
-            let id = LocalId::new(id_gen.allocate_id());
-            let get = MirRelationExpr::Get {
-                id: Id::Local(id),
-                typ: self.typ(),
-                access_strategy: AccessStrategy::UnknownOrLocal,
-            };
-            let body = (body)(id_gen, get);
-            MirRelationExpr::Let {
-                id,
-                value: Box::new(self),
-                body: Box::new(body),
-            }
-        }
-    }
-
-    /// Like [MirRelationExpr::let_in], but with a fallible return type.
-    pub fn let_in_fallible<Body, E>(
-        self,
-        id_gen: &mut IdGen,
-        body: Body,
-    ) -> Result<MirRelationExpr, E>
+    /// Store `self` in a `Let` and pass the corresponding `Get` to `body`.
+    pub fn let_in<Body, E>(self, id_gen: &mut IdGen, body: Body) -> Result<MirRelationExpr, E>
     where
         Body: FnOnce(&mut IdGen, MirRelationExpr) -> Result<MirRelationExpr, E>,
     {
@@ -1589,19 +1747,19 @@ impl MirRelationExpr {
 
     /// Return every row in `self` that does not have a matching row in the first columns of `keys_and_values`, using `default` to fill in the remaining columns
     /// (If `default` is a row of nulls, this is the 'outer' part of LEFT OUTER JOIN)
-    pub fn anti_lookup(
+    pub fn anti_lookup<E>(
         self,
         id_gen: &mut IdGen,
         keys_and_values: MirRelationExpr,
         default: Vec<(Datum, ScalarType)>,
-    ) -> MirRelationExpr {
+    ) -> Result<MirRelationExpr, E> {
         let (data, column_types): (Vec<_>, Vec<_>) = default
             .into_iter()
             .map(|(datum, scalar_type)| (datum, scalar_type.nullable(datum.is_null())))
             .unzip();
         assert_eq!(keys_and_values.arity() - self.arity(), data.len());
         self.let_in(id_gen, |_id_gen, get_keys| {
-            MirRelationExpr::join(
+            Ok(MirRelationExpr::join(
                 vec![
                     // all the missing keys (with count 1)
                     keys_and_values
@@ -1624,7 +1782,7 @@ impl MirRelationExpr {
             .product(MirRelationExpr::constant(
                 vec![data],
                 RelationType::new(column_types),
-            ))
+            )))
         })
     }
 
@@ -1635,18 +1793,18 @@ impl MirRelationExpr {
     /// (This is LEFT OUTER JOIN if:
     /// 1) `default` is a row of null
     /// 2) matching rows in `keys_and_values` and `self` have the same multiplicity.)
-    pub fn lookup(
+    pub fn lookup<E>(
         self,
         id_gen: &mut IdGen,
         keys_and_values: MirRelationExpr,
         default: Vec<(Datum<'static>, ScalarType)>,
-    ) -> MirRelationExpr {
+    ) -> Result<MirRelationExpr, E> {
         keys_and_values.let_in(id_gen, |id_gen, get_keys_and_values| {
-            get_keys_and_values.clone().union(self.anti_lookup(
+            Ok(get_keys_and_values.clone().union(self.anti_lookup(
                 id_gen,
                 get_keys_and_values,
                 default,
-            ))
+            )?))
         })
     }
 
@@ -1682,9 +1840,9 @@ impl MirRelationExpr {
                 }
             }
             Join {
+                inputs: _,
                 equivalences,
                 implementation,
-                ..
             } => {
                 for equivalence in equivalences {
                     for expr in equivalence {
@@ -1810,11 +1968,44 @@ impl MirRelationExpr {
                     f(expr)?;
                 }
             }
-            Join { equivalences, .. } => {
+            Join {
+                inputs: _,
+                equivalences,
+                implementation,
+            } => {
                 for equivalence in equivalences {
                     for expr in equivalence {
                         f(expr)?;
                     }
+                }
+                match implementation {
+                    JoinImplementation::Differential((_, start_key, _), order) => {
+                        if let Some(start_key) = start_key {
+                            for k in start_key {
+                                f(k)?;
+                            }
+                        }
+                        for (_, lookup_key, _) in order {
+                            for k in lookup_key {
+                                f(k)?;
+                            }
+                        }
+                    }
+                    JoinImplementation::DeltaQuery(paths) => {
+                        for path in paths {
+                            for (_, lookup_key, _) in path {
+                                for k in lookup_key {
+                                    f(k)?;
+                                }
+                            }
+                        }
+                    }
+                    JoinImplementation::IndexedFilter(_coll_id, _idx_id, index_key, _) => {
+                        for k in index_key {
+                            f(k)?;
+                        }
+                    }
+                    JoinImplementation::Unimplemented => {} // No scalar exprs
                 }
             }
             ArrangeBy { keys, .. } => {
@@ -3131,7 +3322,9 @@ impl AggregateExpr {
 }
 
 /// Describe a join implementation in dataflow.
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect, Arbitrary,
+)]
 pub enum JoinImplementation {
     /// Perform a sequence of binary differential dataflow joins.
     ///
@@ -3211,7 +3404,9 @@ impl JoinImplementation {
 /// that concerns us greatly. Additionally the candidate may be unarranged, and we would
 /// prefer candidates that do not require additional memory. Finally, we prefer lower id
 /// collections in the interest of consistent tie-breaking.
-#[derive(Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Serialize, Deserialize, Hash, MzReflect, Arbitrary,
+)]
 pub struct JoinInputCharacteristics {
     /// An excellent indication that record count will not increase.
     pub unique_key: bool,
@@ -3667,7 +3862,7 @@ impl RustType<proto_window_frame::ProtoWindowFrameBound> for WindowFrameBound {
 }
 
 /// Maximum iterations for a LetRec.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Arbitrary)]
 pub struct LetRecLimit {
     /// Maximum number of iterations to evaluate.
     pub max_iters: NonZeroU64,
@@ -3702,7 +3897,7 @@ impl Display for LetRecLimit {
 
 /// For a global Get, this indicates whether we are going to read from Persist or from an index.
 /// (See comment in MirRelationExpr::Get.)
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, Arbitrary)]
 pub enum AccessStrategy {
     /// It's either a local Get (a CTE), or unknown at the time.
     /// `prune_and_annotate_dataflow_index_imports` decides it for global Gets, and thus switches to

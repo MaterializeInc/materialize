@@ -23,10 +23,9 @@ use crate::coord::{
     SubscribeStage, SubscribeTimestampOptimizeLir, TargetCluster,
 };
 use crate::error::AdapterError;
-use crate::optimize::dataflows::dataflow_import_id_bundle;
 use crate::optimize::Optimize;
 use crate::session::{Session, TransactionOps};
-use crate::{optimize, AdapterNotice, ExecuteContext, TimelineContext, TimestampProvider};
+use crate::{optimize, AdapterNotice, ExecuteContext, TimelineContext};
 
 impl Staged for SubscribeStage {
     type Ctx = ExecuteContext;
@@ -138,16 +137,20 @@ impl Coordinator {
         session.add_notices(notices);
 
         // Determine timeline.
-        let mut timeline = self.validate_timeline_context(depends_on.clone())?;
+        let mut timeline = self.validate_timeline_context(depends_on.iter().copied())?;
         if matches!(timeline, TimelineContext::TimestampIndependent) && from.contains_temporal() {
             // If the from IDs are timestamp independent but the query contains temporal functions
             // then the timeline context needs to be upgraded to timestamp dependent.
             timeline = TimelineContext::TimestampDependent;
         }
 
+        let dependencies = depends_on
+            .iter()
+            .map(|id| self.catalog().resolve_item_id(id))
+            .collect();
         let validity = PlanValidity::new(
             self.catalog().transient_revision(),
-            depends_on.clone(),
+            dependencies,
             Some(cluster_id),
             replica_id,
             session.role_metadata().clone(),
@@ -186,8 +189,8 @@ impl Coordinator {
         let compute_instance = self
             .instance_snapshot(cluster_id)
             .expect("compute instance does not exist");
-        let view_id = self.allocate_transient_id();
-        let sink_id = self.allocate_transient_id();
+        let (_, view_id) = self.allocate_transient_id();
+        let (_, sink_id) = self.allocate_transient_id();
         let conn_id = session.conn_id().clone();
         let up_to = up_to
             .as_ref()
@@ -210,6 +213,7 @@ impl Coordinator {
             optimizer_config,
             self.optimizer_metrics(),
         );
+        let catalog = self.owned_catalog();
 
         let span = Span::current();
         Ok(StageResult::Handle(mz_ore::task::spawn_blocking(
@@ -220,7 +224,10 @@ impl Coordinator {
                     let global_mir_plan = optimizer.catch_unwind_optimize(plan.from.clone())?;
                     // Add introduced indexes as validity dependencies.
                     validity.extend_dependencies(
-                        global_mir_plan.id_bundle(optimizer.cluster_id()).iter(),
+                        global_mir_plan
+                            .id_bundle(optimizer.cluster_id())
+                            .iter()
+                            .map(|id| catalog.resolve_item_id(&id)),
                     );
 
                     let stage =
@@ -284,12 +291,7 @@ impl Coordinator {
 
         self.store_transaction_read_holds(ctx.session(), read_holds);
 
-        let is_timeline_epoch_ms = self
-            .validate_timeline_context(plan.from.depends_on().iter().cloned())?
-            .is_timeline_epoch_ms();
-
-        let global_mir_plan =
-            global_mir_plan.resolve(Antichain::from_elem(as_of), is_timeline_epoch_ms);
+        let global_mir_plan = global_mir_plan.resolve(Antichain::from_elem(as_of));
 
         // Optimize LIR
         let span = Span::current();
@@ -324,7 +326,6 @@ impl Coordinator {
             cluster_id,
             plan:
                 plan::SubscribePlan {
-                    from,
                     copy_to,
                     emit_progress,
                     output,
@@ -335,15 +336,6 @@ impl Coordinator {
             replica_id,
         }: SubscribeFinish,
     ) -> Result<StageResult<Box<SubscribeStage>>, AdapterError> {
-        let id_bundle = dataflow_import_id_bundle(global_lir_plan.df_desc(), cluster_id);
-
-        // Collect properties for `DataflowExpirationDesc`.
-        let transitive_upper = self.least_valid_write(&id_bundle);
-        let has_transitive_refresh_schedule = from
-            .depends_on()
-            .into_iter()
-            .any(|id| self.catalog.item_has_transitive_refresh_schedule(id));
-
         let sink_id = global_lir_plan.sink_id();
 
         let (tx, rx) = mpsc::unbounded_channel();
@@ -363,12 +355,7 @@ impl Coordinator {
         };
         active_subscribe.initialize();
 
-        let (mut df_desc, df_meta) = global_lir_plan.unapply();
-
-        df_desc.dataflow_expiration_desc.transitive_upper = Some(transitive_upper);
-        df_desc
-            .dataflow_expiration_desc
-            .has_transitive_refresh_schedule = has_transitive_refresh_schedule;
+        let (df_desc, df_meta) = global_lir_plan.unapply();
 
         // Emit notices.
         self.emit_optimizer_notices(ctx.session(), &df_meta.optimizer_notices);

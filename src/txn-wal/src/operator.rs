@@ -107,7 +107,7 @@ pub fn txns_progress<K, V, T, D, P, C, F, G>(
 where
     K: Debug + Codec + Send + Sync,
     V: Debug + Codec + Send + Sync,
-    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
+    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
     D: Debug + Data + Semigroup + Ord + Codec64 + Send + Sync,
     P: Debug + Data,
     C: TxnsCodec + 'static,
@@ -171,7 +171,7 @@ fn txns_progress_source_local<K, V, T, D, P, C, G>(
 where
     K: Debug + Codec + Send + Sync,
     V: Debug + Codec + Send + Sync,
-    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
+    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
     D: Debug + Data + Semigroup + Ord + Codec64 + Send + Sync,
     P: Debug + Data,
     C: TxnsCodec + 'static,
@@ -287,7 +287,7 @@ fn txns_progress_source_global<K, V, T, D, P, C, G>(
 where
     K: Debug + Codec + Send + Sync,
     V: Debug + Codec + Send + Sync,
-    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
+    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
     D: Debug + Data + Semigroup + Ord + Codec64 + Send + Sync,
     P: Debug + Data,
     C: TxnsCodec + 'static,
@@ -536,7 +536,7 @@ pub struct TxnsContext {
 impl TxnsContext {
     async fn get_or_init<T, C>(&self, client: &PersistClient, txns_id: ShardId) -> TxnsRead<T>
     where
-        T: Timestamp + Lattice + Codec64 + TotalOrder + StepForward,
+        T: Timestamp + Lattice + Codec64 + TotalOrder + StepForward + Sync,
         C: TxnsCodec + 'static,
     {
         let read = self
@@ -887,7 +887,7 @@ mod tests {
     where
         K: Debug + Codec,
         V: Debug + Codec,
-        T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
+        T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
         D: Debug + Semigroup + Ord + Codec64 + Send + Sync,
         O: Opaque + Debug + Codec64,
         C: TxnsCodec,

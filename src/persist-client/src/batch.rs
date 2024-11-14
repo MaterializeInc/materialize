@@ -351,7 +351,6 @@ pub struct BatchBuilderConfig {
     pub(crate) stats_untrimmable_columns: Arc<UntrimmableColumns>,
     pub(crate) write_diffs_sum: bool,
     pub(crate) encoding_config: EncodingConfig,
-    pub(crate) record_run_meta: bool,
     pub(crate) expected_order: RunOrder,
     pub(crate) structured_key_lower_len: usize,
     pub(crate) run_length_limit: usize,
@@ -386,12 +385,6 @@ pub(crate) const ENCODING_COMPRESSION_FORMAT: Config<&'static str> = Config::new
     "persist_encoding_compression_format",
     "none",
     "A feature flag to enable compression of Parquet data (Materialize).",
-);
-
-pub(crate) const RECORD_RUN_META: Config<bool> = Config::new(
-    "persist_batch_record_run_meta",
-    false,
-    "If set, record actual run-level metadata like schema and ordering instead of defaults (Materialize).",
 );
 
 pub(crate) const STRUCTURED_ORDER: Config<bool> = Config::new(
@@ -437,13 +430,13 @@ pub(crate) const BLOB_TARGET_SIZE: Config<usize> = Config::new(
 
 pub(crate) const INLINE_WRITES_SINGLE_MAX_BYTES: Config<usize> = Config::new(
     "persist_inline_writes_single_max_bytes",
-    0,
+    4096,
     "The (exclusive) maximum size of a write that persist will inline in metadata.",
 );
 
 pub(crate) const INLINE_WRITES_TOTAL_MAX_BYTES: Config<usize> = Config::new(
     "persist_inline_writes_total_max_bytes",
-    0,
+    1 * MiB,
     "\
     The (exclusive) maximum total size of inline writes in metadata before \
     persist will backpressure them by flushing out to s3.",
@@ -458,14 +451,11 @@ impl BatchBuilderConfig {
             BatchColumnarFormat::from_str(&BATCH_COLUMNAR_FORMAT.get(value));
         let batch_columnar_format_percent = BATCH_COLUMNAR_FORMAT_PERCENT.get(value);
 
-        let record_run_meta = RECORD_RUN_META.get(value);
         let structured_order = STRUCTURED_ORDER.get(value) && {
             shard_id.to_string() < STRUCTURED_ORDER_UNTIL_SHARD.get(value)
         };
         let expected_order = if expect_consolidated {
-            // We never generate structured-order runs when we're not also generating metadata,
-            // or the reader couldn't recognize them.
-            if record_run_meta && structured_order {
+            if structured_order {
                 RunOrder::Structured
             } else {
                 RunOrder::Codec
@@ -492,7 +482,6 @@ impl BatchBuilderConfig {
                 use_dictionary: ENCODING_ENABLE_DICTIONARY.get(value),
                 compression: CompressionFormat::from_str(&ENCODING_COMPRESSION_FORMAT.get(value)),
             },
-            record_run_meta,
             expected_order,
             structured_key_lower_len: STRUCTURED_KEY_LOWER_LEN.get(value),
             run_length_limit: MAX_RUN_LEN.get(value).clamp(2, usize::MAX),
@@ -506,13 +495,9 @@ impl BatchBuilderConfig {
     }
 
     fn run_meta(&self, order: RunOrder, schema: Option<SchemaId>) -> RunMeta {
-        if self.record_run_meta {
-            RunMeta {
-                order: Some(order),
-                schema,
-            }
-        } else {
-            RunMeta::default()
+        RunMeta {
+            order: Some(order),
+            schema,
         }
     }
 }
@@ -1058,7 +1043,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         &mut self,
         write_schemas: &Schemas<K, V>,
         key_lower: Vec<u8>,
-        updates: BlobTraceUpdates,
+        mut updates: BlobTraceUpdates,
         upper: Antichain<T>,
         since: Antichain<T>,
         diffs_sum: D,
@@ -1090,35 +1075,29 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             mz_ore::task::spawn(
                 || "batch::inline_part",
                 async move {
-                    let structured_ext = if part_write_columnar_data {
-                        let result = metrics
+                    let updates = if part_write_columnar_data {
+                        let records = updates.records().clone();
+                        let structured = metrics
                             .columnar
                             .arrow()
-                            .measure_part_build(|| encode_updates(&write_schemas, &updates));
-                        match result {
-                            Ok((struct_ext, _stats)) => struct_ext,
-                            Err(err) => {
-                                soft_panic_or_log!(
-                                    "failed to encode in columnar format! {:?}",
-                                    err
-                                );
-                                None
-                            }
-                        }
+                            .measure_part_build(|| {
+                                updates.get_or_make_structured::<K, V>(
+                                    write_schemas.key.as_ref(),
+                                    write_schemas.val.as_ref(),
+                                )
+                            })
+                            .clone();
+                        BlobTraceUpdates::Both(records, structured)
                     } else {
-                        None
-                    };
-
-                    // Take our updates back out.
-                    let BlobTraceUpdates::Row(updates) = updates else {
-                        panic!("programming error, checked above");
+                        let records = updates.records().clone();
+                        BlobTraceUpdates::Row(records)
                     };
 
                     let start = Instant::now();
                     let updates = LazyInlineBatchPart::from(&ProtoInlineBatchPart {
                         desc: Some(desc.into_proto()),
                         index: index.into_proto(),
-                        updates: Some(updates.into_proto(structured_ext)),
+                        updates: Some(updates.into_proto()),
                     });
                     batch_metrics
                         .step_inline
@@ -1678,6 +1657,10 @@ mod tests {
         let cache = PersistClientCache::new_no_metrics();
         // Set blob_target_size to 0 so that each row gets forced into its own batch part
         cache.cfg.set_config(&BLOB_TARGET_SIZE, 0);
+        // Otherwise fails: expected hollow part!
+        cache.cfg.set_config(&STRUCTURED_KEY_LOWER_LEN, 0);
+        cache.cfg.set_config(&INLINE_WRITES_SINGLE_MAX_BYTES, 0);
+        cache.cfg.set_config(&INLINE_WRITES_TOTAL_MAX_BYTES, 0);
         let client = cache
             .open(PersistLocation::new_in_mem())
             .await
@@ -1718,6 +1701,10 @@ mod tests {
         let cache = PersistClientCache::new_no_metrics();
         // Set blob_target_size to 0 so that each row gets forced into its own batch part
         cache.cfg.set_config(&BLOB_TARGET_SIZE, 0);
+        // Otherwise fails: expected hollow part!
+        cache.cfg.set_config(&STRUCTURED_KEY_LOWER_LEN, 0);
+        cache.cfg.set_config(&INLINE_WRITES_SINGLE_MAX_BYTES, 0);
+        cache.cfg.set_config(&INLINE_WRITES_TOTAL_MAX_BYTES, 0);
         let client = cache
             .open(PersistLocation::new_in_mem())
             .await
@@ -1817,6 +1804,9 @@ mod tests {
         cache.cfg().set_config(&BATCH_COLUMNAR_FORMAT, "both_v2");
         cache.cfg().set_config(&BATCH_COLUMNAR_FORMAT_PERCENT, 100);
         cache.cfg().set_config(&STRUCTURED_KEY_LOWER_LEN, 1024);
+        // Otherwise fails: expected hollow part!
+        cache.cfg().set_config(&INLINE_WRITES_SINGLE_MAX_BYTES, 0);
+        cache.cfg().set_config(&INLINE_WRITES_TOTAL_MAX_BYTES, 0);
         let client = cache
             .open(PersistLocation::new_in_mem())
             .await

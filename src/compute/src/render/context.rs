@@ -21,7 +21,7 @@ use differential_dataflow::trace::cursor::IntoOwned;
 use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
 use differential_dataflow::{Collection, Data};
 use mz_compute_types::dataflows::DataflowDescription;
-use mz_compute_types::plan::AvailableCollections;
+use mz_compute_types::plan::{AvailableCollections, LirId};
 use mz_expr::{Id, MapFilterProject, MirScalarExpr};
 use mz_repr::fixed_length::{FromDatumIter, ToDatumIter};
 use mz_repr::{DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena, SharedRow};
@@ -85,6 +85,8 @@ where
     ///
     /// `None` if no hydration events should be logged in this context.
     pub(super) hydration_logger: Option<HydrationLogger>,
+    /// The logger, from Timely's logging framework, if logs are enabled.
+    pub(super) compute_logger: Option<crate::logging::compute::Logger>,
     /// Specification for rendering linear joins.
     pub(super) linear_join_spec: LinearJoinSpec,
     /// The expiration time for dataflows in this context. The output's frontier should never advance
@@ -114,13 +116,18 @@ where
         // Skip operator hydration logging for transient dataflows. We do this to avoid overhead
         // for slow-path peeks, but it also affects subscribes. For now that seems fine, but we may
         // want to reconsider in the future.
-        let hydration_logger = if dataflow.is_transient() {
-            None
+        //
+        // Similarly, we won't capture a compute_logger for logging LIR->address mappings for transient dataflows.
+        let (hydration_logger, compute_logger) = if dataflow.is_transient() {
+            (None, None)
         } else {
-            Some(HydrationLogger {
-                export_ids: dataflow.export_ids().collect(),
-                tx: compute_state.hydration_tx.clone(),
-            })
+            (
+                Some(HydrationLogger {
+                    export_ids: dataflow.export_ids().collect(),
+                    tx: compute_state.hydration_tx.clone(),
+                }),
+                compute_state.compute_logger.clone(),
+            )
         };
 
         Self {
@@ -132,6 +139,7 @@ where
             bindings: BTreeMap::new(),
             shutdown_token: Default::default(),
             hydration_logger,
+            compute_logger,
             linear_join_spec: compute_state.linear_join_spec,
             dataflow_expiration,
         }
@@ -213,6 +221,7 @@ where
             until: self.until.clone(),
             shutdown_token: self.shutdown_token.clone(),
             hydration_logger: self.hydration_logger.clone(),
+            compute_logger: self.compute_logger.clone(),
             linear_join_spec: self.linear_join_spec.clone(),
             bindings,
             dataflow_expiration: self.dataflow_expiration.clone(),
@@ -269,7 +278,7 @@ impl HydrationLogger {
     /// The expectation is that rendering code arranges for `hydrated = false` to be logged for
     /// each LIR node when a dataflow is first created. Then `hydrated = true` should be logged as
     /// operators become hydrated.
-    pub fn log(&self, lir_id: u64, hydrated: bool) {
+    pub fn log(&self, lir_id: LirId, hydrated: bool) {
         for &export_id in &self.export_ids {
             let event = HydrationEvent {
                 export_id,
@@ -307,10 +316,10 @@ where
     }
 
     /// Panic if the frontier of the underlying arrangement's stream exceeds `expiration` time.
-    pub fn expire_arrangement_at(&mut self, expiration: S::Timestamp) {
+    pub fn expire_arrangement_at(&mut self, name: &str, expiration: S::Timestamp, token: Weak<()>) {
         match self {
             MzArrangement::RowRow(inner) => {
-                inner.stream = inner.stream.expire_stream_at(expiration);
+                inner.stream = inner.stream.expire_stream_at(name, expiration, token);
             }
         }
     }

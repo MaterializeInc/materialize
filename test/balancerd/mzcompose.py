@@ -91,14 +91,15 @@ SERVICES = [
             "--pgwire-listen-addr=0.0.0.0:6875",
             "--https-listen-addr=0.0.0.0:6876",
             "--internal-http-listen-addr=0.0.0.0:6878",
-            "--frontegg-resolver-template=materialized:6880",
+            "--frontegg-resolver-template=materialized:6875",
             "--frontegg-jwk-file=/secrets/frontegg-mock.crt",
             f"--frontegg-api-token-url={FRONTEGG_URL}/identity/resources/auth/v1/api-token",
             f"--frontegg-admin-role={ADMIN_ROLE}",
-            "--https-resolver-template=materialized:6881",
+            "--https-resolver-template=materialized:6876",
             "--tls-key=/secrets/balancerd.key",
             "--tls-cert=/secrets/balancerd.crt",
             "--default-config=balancerd_inject_proxy_protocol_header_http=true",
+            "--internal-tls",
         ],
         depends_on=["test-certs"],
         volumes=[
@@ -182,11 +183,44 @@ def pg8000_sql_cursor(
 def workflow_default(c: Composition) -> None:
     c.down(destroy_volumes=True)
 
-    for i, name in enumerate(c.workflows):
-        if name == "default":
+    for name in c.workflows:
+        if name in ["default", "plaintext"]:
             continue
         with c.test_case(name):
             c.workflow(name)
+    with c.test_case("plaintext"):
+        c.workflow("plaintext")
+
+
+def workflow_plaintext(c: Composition) -> None:
+    """Test plaintext internal connections"""
+    c.down(destroy_volumes=True)
+    with c.override(
+        Balancerd(
+            command=[
+                "service",
+                "--pgwire-listen-addr=0.0.0.0:6875",
+                "--https-listen-addr=0.0.0.0:6876",
+                "--internal-http-listen-addr=0.0.0.0:6878",
+                "--frontegg-resolver-template=materialized:6880",
+                "--frontegg-jwk-file=/secrets/frontegg-mock.crt",
+                f"--frontegg-api-token-url={FRONTEGG_URL}/identity/resources/auth/v1/api-token",
+                f"--frontegg-admin-role={ADMIN_ROLE}",
+                "--https-resolver-template=materialized:6881",
+                "--tls-key=/secrets/balancerd.key",
+                "--tls-cert=/secrets/balancerd.crt",
+                "--default-config=balancerd_inject_proxy_protocol_header_http=true",
+            ],
+            depends_on=["test-certs"],
+            volumes=[
+                "secrets:/secrets",
+            ],
+        ),
+    ):
+        with c.test_case("plaintext_http"):
+            c.workflow("http")
+        with c.test_case("plaintext_wide_result"):
+            c.workflow("wide-result")
 
 
 def workflow_http(c: Composition) -> None:

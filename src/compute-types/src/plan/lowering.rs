@@ -45,7 +45,7 @@ impl Context {
     pub fn new(debug_name: String, features: &OptimizerFeatures) -> Self {
         Self {
             arrangements: Default::default(),
-            next_lir_id: 0,
+            next_lir_id: LirId(std::num::NonZero::<u64>::MIN),
             debug_info: LirDebugInfo {
                 debug_name,
                 id: GlobalId::Transient(0),
@@ -57,7 +57,12 @@ impl Context {
 
     fn allocate_lir_id(&mut self) -> LirId {
         let id = self.next_lir_id;
-        self.next_lir_id += 1;
+        self.next_lir_id = LirId(
+            self.next_lir_id
+                .0
+                .checked_add(1)
+                .expect("No LirId overflow"),
+        );
         id
     }
 
@@ -117,7 +122,7 @@ impl Context {
             initial_storage_as_of: desc.initial_storage_as_of,
             refresh_schedule: desc.refresh_schedule,
             debug_name: desc.debug_name,
-            dataflow_expiration_desc: desc.dataflow_expiration_desc,
+            time_dependence: desc.time_dependence,
         })
     }
 
@@ -773,13 +778,6 @@ This is not expected to cause incorrect results, but could indicate a performanc
             MirRelationExpr::Threshold { input } => {
                 let arity = input.arity();
                 let (plan, keys) = self.lower_mir_expr(input)?;
-                // We don't have an MFP here -- install an operator to permute the
-                // input, if necessary.
-                let plan = if !keys.raw {
-                    self.arrange_by(plan, AvailableCollections::new_raw(), &keys, arity)
-                } else {
-                    plan
-                };
                 let (threshold_plan, required_arrangement) = ThresholdPlan::create_from(arity);
                 let mut types = keys.types.clone();
                 let plan = if !keys

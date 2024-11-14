@@ -26,7 +26,7 @@ use mz_proto::{RustType, TryFromProtoError};
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
-use mz_repr::{Diff, GlobalId};
+use mz_repr::{CatalogItemId, Diff, GlobalId, RelationVersion};
 use mz_sql::catalog::{
     CatalogError as SqlCatalogError, CatalogItemType, ObjectType, RoleAttributes, RoleMembership,
     RoleVars,
@@ -58,10 +58,10 @@ use crate::durable::objects::{
 };
 use crate::durable::{
     CatalogError, DefaultPrivilege, DurableCatalogError, DurableCatalogState, NetworkPolicy,
-    Snapshot, AUDIT_LOG_ID_ALLOC_KEY, CATALOG_CONTENT_VERSION_KEY, DATABASE_ID_ALLOC_KEY,
-    OID_ALLOC_KEY, SCHEMA_ID_ALLOC_KEY, STORAGE_USAGE_ID_ALLOC_KEY, SYSTEM_ITEM_ALLOC_KEY,
-    SYSTEM_REPLICA_ID_ALLOC_KEY, USER_ITEM_ALLOC_KEY, USER_REPLICA_ID_ALLOC_KEY,
-    USER_ROLE_ID_ALLOC_KEY,
+    Snapshot, SystemConfiguration, AUDIT_LOG_ID_ALLOC_KEY, CATALOG_CONTENT_VERSION_KEY,
+    DATABASE_ID_ALLOC_KEY, OID_ALLOC_KEY, SCHEMA_ID_ALLOC_KEY, STORAGE_USAGE_ID_ALLOC_KEY,
+    SYSTEM_ITEM_ALLOC_KEY, SYSTEM_REPLICA_ID_ALLOC_KEY, USER_ITEM_ALLOC_KEY,
+    USER_NETWORK_POLICY_ID_ALLOC_KEY, USER_REPLICA_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
 };
 use crate::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
 
@@ -190,10 +190,8 @@ impl<'a> Transaction<'a> {
         })
     }
 
-    pub fn get_item(&self, id: &GlobalId) -> Option<Item> {
-        let key = ItemKey {
-            id: id.to_item_id(),
-        };
+    pub fn get_item(&self, id: &CatalogItemId) -> Option<Item> {
+        let key = ItemKey { id: *id };
         self.items
             .get(&key)
             .map(|v| DurableType::from_key_value(key, v.clone()))
@@ -374,7 +372,7 @@ impl<'a> Transaction<'a> {
         &mut self,
         cluster_id: ClusterId,
         cluster_name: &str,
-        introspection_source_indexes: Vec<(&'static BuiltinLog, GlobalId)>,
+        introspection_source_indexes: Vec<(&'static BuiltinLog, CatalogItemId, GlobalId)>,
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
         config: ClusterConfig,
@@ -396,7 +394,7 @@ impl<'a> Transaction<'a> {
         &mut self,
         cluster_id: ClusterId,
         cluster_name: &str,
-        introspection_source_indexes: Vec<(&'static BuiltinLog, GlobalId)>,
+        introspection_source_indexes: Vec<(&'static BuiltinLog, CatalogItemId, GlobalId)>,
         privileges: Vec<MzAclItem>,
         owner_id: RoleId,
         config: ClusterConfig,
@@ -417,7 +415,7 @@ impl<'a> Transaction<'a> {
         &mut self,
         cluster_id: ClusterId,
         cluster_name: &str,
-        introspection_source_indexes: Vec<(&'static BuiltinLog, GlobalId)>,
+        introspection_source_indexes: Vec<(&'static BuiltinLog, CatalogItemId, GlobalId)>,
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
         config: ClusterConfig,
@@ -441,13 +439,13 @@ impl<'a> Transaction<'a> {
         let introspection_source_indexes: Vec<_> = introspection_source_indexes
             .into_iter()
             .zip(oids)
-            .map(|((builtin, index_id), oid)| (builtin, index_id, oid))
+            .map(|((builtin, item_id, index_id), oid)| (builtin, item_id, index_id, oid))
             .collect();
-        for (builtin, index_id, oid) in introspection_source_indexes {
+        for (builtin, item_id, index_id, oid) in introspection_source_indexes {
             let introspection_source_index = IntrospectionSourceIndex {
                 cluster_id,
                 name: builtin.name.to_string(),
-                item_id: index_id.to_item_id(),
+                item_id,
                 index_id,
                 oid,
             };
@@ -567,7 +565,6 @@ impl<'a> Transaction<'a> {
 
     pub fn insert_user_network_policy(
         &mut self,
-        id: NetworkPolicyId,
         name: String,
         rules: Vec<NetworkPolicyRule>,
         privileges: Vec<MzAclItem>,
@@ -575,6 +572,8 @@ impl<'a> Transaction<'a> {
         temporary_oids: &HashSet<u32>,
     ) -> Result<NetworkPolicyId, CatalogError> {
         let oid = self.allocate_oid(temporary_oids)?;
+        let id = self.get_and_increment_id(USER_NETWORK_POLICY_ID_ALLOC_KEY.to_string())?;
+        let id = NetworkPolicyId::User(id);
         self.insert_network_policy(id, name, rules, privileges, owner_id, oid)
     }
 
@@ -609,14 +608,19 @@ impl<'a> Transaction<'a> {
     /// Panics if provided id is not a system id.
     pub fn update_introspection_source_index_gids(
         &mut self,
-        mappings: impl Iterator<Item = (ClusterId, impl Iterator<Item = (String, GlobalId, u32)>)>,
+        mappings: impl Iterator<
+            Item = (
+                ClusterId,
+                impl Iterator<Item = (String, CatalogItemId, GlobalId, u32)>,
+            ),
+        >,
     ) -> Result<(), CatalogError> {
         for (cluster_id, updates) in mappings {
-            for (name, index_id, oid) in updates {
+            for (name, item_id, index_id, oid) in updates {
                 let introspection_source_index = IntrospectionSourceIndex {
                     cluster_id,
                     name,
-                    item_id: index_id.to_item_id(),
+                    item_id,
                     index_id,
                     oid,
                 };
@@ -638,35 +642,37 @@ impl<'a> Transaction<'a> {
 
     pub fn insert_user_item(
         &mut self,
-        id: GlobalId,
+        id: CatalogItemId,
+        global_id: GlobalId,
         schema_id: SchemaId,
         item_name: &str,
         create_sql: String,
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
         temporary_oids: &HashSet<u32>,
+        versions: BTreeMap<RelationVersion, GlobalId>,
     ) -> Result<u32, CatalogError> {
         let oid = self.allocate_oid(temporary_oids)?;
         self.insert_item(
-            id, oid, schema_id, item_name, create_sql, owner_id, privileges,
+            id, oid, global_id, schema_id, item_name, create_sql, owner_id, privileges, versions,
         )?;
         Ok(oid)
     }
 
     pub fn insert_item(
         &mut self,
-        id: GlobalId,
+        id: CatalogItemId,
         oid: u32,
+        global_id: GlobalId,
         schema_id: SchemaId,
         item_name: &str,
         create_sql: String,
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
+        extra_versions: BTreeMap<RelationVersion, GlobalId>,
     ) -> Result<(), CatalogError> {
         match self.items.insert(
-            ItemKey {
-                id: id.to_item_id(),
-            },
+            ItemKey { id },
             ItemValue {
                 schema_id,
                 name: item_name.to_string(),
@@ -674,8 +680,8 @@ impl<'a> Transaction<'a> {
                 owner_id,
                 privileges,
                 oid,
-                global_id: id,
-                extra_versions: BTreeMap::new(),
+                global_id,
+                extra_versions,
             },
             self.op_id,
         ) {
@@ -716,19 +722,27 @@ impl<'a> Transaction<'a> {
         Ok((current_id..next_id).collect())
     }
 
-    pub fn allocate_system_item_ids(&mut self, amount: u64) -> Result<Vec<GlobalId>, CatalogError> {
+    pub fn allocate_system_item_ids(
+        &mut self,
+        amount: u64,
+    ) -> Result<Vec<(CatalogItemId, GlobalId)>, CatalogError> {
         Ok(self
             .get_and_increment_id_by(SYSTEM_ITEM_ALLOC_KEY.to_string(), amount)?
             .into_iter()
-            .map(GlobalId::System)
+            // TODO(alter_table): Use separate ID allocators.
+            .map(|x| (CatalogItemId::System(x), GlobalId::System(x)))
             .collect())
     }
 
-    pub fn allocate_user_item_ids(&mut self, amount: u64) -> Result<Vec<GlobalId>, CatalogError> {
+    pub fn allocate_user_item_ids(
+        &mut self,
+        amount: u64,
+    ) -> Result<Vec<(CatalogItemId, GlobalId)>, CatalogError> {
         Ok(self
             .get_and_increment_id_by(USER_ITEM_ALLOC_KEY.to_string(), amount)?
             .into_iter()
-            .map(GlobalId::User)
+            // TODO(alter_table): Use separate ID allocators.
+            .map(|x| (CatalogItemId::User(x), GlobalId::User(x)))
             .collect())
     }
 
@@ -990,15 +1004,13 @@ impl<'a> Transaction<'a> {
         Ok(())
     }
 
-    pub fn remove_source_references(&mut self, source_id: GlobalId) -> Result<(), CatalogError> {
+    pub fn remove_source_references(
+        &mut self,
+        source_id: CatalogItemId,
+    ) -> Result<(), CatalogError> {
         let deleted = self
             .source_references
-            .delete_by_key(
-                SourceReferencesKey {
-                    source_id: source_id.to_item_id(),
-                },
-                self.op_id,
-            )
+            .delete_by_key(SourceReferencesKey { source_id }, self.op_id)
             .is_some();
         if deleted {
             Ok(())
@@ -1147,14 +1159,8 @@ impl<'a> Transaction<'a> {
     ///
     /// Runtime is linear with respect to the total number of items in the catalog.
     /// DO NOT call this function in a loop, use [`Self::remove_items`] instead.
-    pub fn remove_item(&mut self, id: GlobalId) -> Result<(), CatalogError> {
-        let prev = self.items.set(
-            ItemKey {
-                id: id.to_item_id(),
-            },
-            None,
-            self.op_id,
-        )?;
+    pub fn remove_item(&mut self, id: CatalogItemId) -> Result<(), CatalogError> {
+        let prev = self.items.set(ItemKey { id }, None, self.op_id)?;
         if prev.is_some() {
             Ok(())
         } else {
@@ -1168,29 +1174,18 @@ impl<'a> Transaction<'a> {
     ///
     /// NOTE: On error, there still may be some items removed from the transaction. It is
     /// up to the caller to either abort the transaction or commit.
-    pub fn remove_items(&mut self, ids: &BTreeSet<GlobalId>) -> Result<(), CatalogError> {
+    pub fn remove_items(&mut self, ids: &BTreeSet<CatalogItemId>) -> Result<(), CatalogError> {
         if ids.is_empty() {
             return Ok(());
         }
 
-        let ks: Vec<_> = ids
-            .clone()
-            .into_iter()
-            .map(|id| ItemKey {
-                id: id.to_item_id(),
-            })
-            .collect();
+        let ks: Vec<_> = ids.clone().into_iter().map(|id| ItemKey { id }).collect();
         let n = self.items.delete_by_keys(ks, self.op_id).len();
         if n == ids.len() {
             Ok(())
         } else {
-            let item_gids = self
-                .items
-                .items()
-                .keys()
-                .map(|k| k.id.to_global_id())
-                .collect();
-            let mut unknown = ids.difference(&item_gids);
+            let item_ids = self.items.items().keys().map(|k| k.id).collect();
+            let mut unknown = ids.difference(&item_ids);
             Err(SqlCatalogError::UnknownItem(unknown.join(", ")).into())
         }
     }
@@ -1288,14 +1283,10 @@ impl<'a> Transaction<'a> {
     ///
     /// Runtime is linear with respect to the total number of items in the catalog.
     /// DO NOT call this function in a loop, use [`Self::update_items`] instead.
-    pub fn update_item(&mut self, id: GlobalId, item: Item) -> Result<(), CatalogError> {
-        let updated = self.items.update_by_key(
-            ItemKey {
-                id: id.to_item_id(),
-            },
-            item.into_key_value().1,
-            self.op_id,
-        )?;
+    pub fn update_item(&mut self, id: CatalogItemId, item: Item) -> Result<(), CatalogError> {
+        let updated =
+            self.items
+                .update_by_key(ItemKey { id }, item.into_key_value().1, self.op_id)?;
         if updated {
             Ok(())
         } else {
@@ -1310,7 +1301,10 @@ impl<'a> Transaction<'a> {
     ///
     /// NOTE: On error, there still may be some items updated in the transaction. It is
     /// up to the caller to either abort the transaction or commit.
-    pub fn update_items(&mut self, items: BTreeMap<GlobalId, Item>) -> Result<(), CatalogError> {
+    pub fn update_items(
+        &mut self,
+        items: BTreeMap<CatalogItemId, Item>,
+    ) -> Result<(), CatalogError> {
         if items.is_empty() {
             return Ok(());
         }
@@ -1319,26 +1313,14 @@ impl<'a> Transaction<'a> {
         let kvs: Vec<_> = items
             .clone()
             .into_iter()
-            .map(|(id, item)| {
-                (
-                    ItemKey {
-                        id: id.to_item_id(),
-                    },
-                    item.into_key_value().1,
-                )
-            })
+            .map(|(id, item)| (ItemKey { id }, item.into_key_value().1))
             .collect();
         let n = self.items.update_by_keys(kvs, self.op_id)?;
         let n = usize::try_from(n).expect("Must be positive and fit in usize");
         if n == update_ids.len() {
             Ok(())
         } else {
-            let item_ids: BTreeSet<_> = self
-                .items
-                .items()
-                .keys()
-                .map(|k| k.id.to_global_id())
-                .collect();
+            let item_ids: BTreeSet<_> = self.items.items().keys().map(|k| k.id).collect();
             let mut unknown = update_ids.difference(&item_ids);
             Err(SqlCatalogError::UnknownItem(unknown.join(", ")).into())
         }
@@ -1397,7 +1379,7 @@ impl<'a> Transaction<'a> {
     /// Panics if provided id is not a system id.
     pub fn update_system_object_mappings(
         &mut self,
-        mappings: BTreeMap<GlobalId, SystemObjectMapping>,
+        mappings: BTreeMap<CatalogItemId, SystemObjectMapping>,
     ) -> Result<(), CatalogError> {
         if mappings.is_empty() {
             return Ok(());
@@ -1405,7 +1387,7 @@ impl<'a> Transaction<'a> {
 
         let n = self.system_gid_mapping.update(
             |_k, v| {
-                if let Some(mapping) = mappings.get(&GlobalId::from(v.global_id)) {
+                if let Some(mapping) = mappings.get(&CatalogItemId::from(v.catalog_id)) {
                     let (_, new_value) = mapping.clone().into_key_value();
                     Some(new_value)
                 } else {
@@ -1533,7 +1515,38 @@ impl<'a> Transaction<'a> {
             Err(SqlCatalogError::UnknownNetworkPolicy(id.to_string()).into())
         }
     }
+    /// Removes all network policies in `network policies` from the transaction.
+    ///
+    /// Returns an error if any id in `network policy` is not found.
+    ///
+    /// NOTE: On error, there still may be some roles removed from the transaction. It
+    /// is up to the caller to either abort the transaction or commit.
+    pub fn remove_network_policies(
+        &mut self,
+        network_policies: &BTreeSet<NetworkPolicyId>,
+    ) -> Result<(), CatalogError> {
+        if network_policies.is_empty() {
+            return Ok(());
+        }
 
+        let to_remove = network_policies
+            .iter()
+            .map(|policy_id| (NetworkPolicyKey { id: *policy_id }, None))
+            .collect();
+        let mut prev = self.network_policies.set_many(to_remove, self.op_id)?;
+        assert!(
+            prev.iter().all(|(k, _)| k.id.is_user()),
+            "cannot delete non-user network policy"
+        );
+
+        prev.retain(|_k, v| v.is_none());
+        if !prev.is_empty() {
+            let err = prev.keys().map(|k| k.id.to_string()).join(", ");
+            return Err(SqlCatalogError::UnknownNetworkPolicy(err).into());
+        }
+
+        Ok(())
+    }
     /// Set persisted default privilege.
     ///
     /// DO NOT call this function in a loop, use [`Self::set_default_privileges`] instead.
@@ -1636,7 +1649,7 @@ impl<'a> Transaction<'a> {
     /// Insert persisted introspection source index.
     pub fn insert_introspection_source_indexes(
         &mut self,
-        introspection_source_indexes: Vec<(ClusterId, String, GlobalId)>,
+        introspection_source_indexes: Vec<(ClusterId, String, CatalogItemId, GlobalId)>,
         temporary_oids: &HashSet<u32>,
     ) -> Result<(), CatalogError> {
         if introspection_source_indexes.is_empty() {
@@ -1649,10 +1662,10 @@ impl<'a> Transaction<'a> {
             .into_iter()
             .zip(oids)
             .map(
-                |((cluster_id, name, index_id), oid)| IntrospectionSourceIndex {
+                |((cluster_id, name, item_id, index_id), oid)| IntrospectionSourceIndex {
                     cluster_id,
                     name,
-                    item_id: index_id.to_item_id(),
+                    item_id,
                     index_id,
                     oid,
                 },
@@ -1829,13 +1842,11 @@ impl<'a> Transaction<'a> {
 
     pub fn update_source_references(
         &mut self,
-        source_id: GlobalId,
+        source_id: CatalogItemId,
         references: Vec<SourceReference>,
         updated_at: u64,
     ) -> Result<(), CatalogError> {
-        let key = SourceReferencesKey {
-            source_id: source_id.to_item_id(),
-        };
+        let key = SourceReferencesKey { source_id };
         let value = SourceReferencesValue {
             references,
             updated_at,
@@ -1934,6 +1945,14 @@ impl<'a> Transaction<'a> {
         self.schemas
             .get(&key)
             .map(|v| DurableType::from_key_value(key, v.clone()))
+    }
+
+    pub fn get_system_configurations(&self) -> impl Iterator<Item = SystemConfiguration> {
+        self.system_configurations
+            .items()
+            .clone()
+            .into_iter()
+            .map(|(k, v)| DurableType::from_key_value(k, v))
     }
 
     pub fn get_introspection_source_indexes(
@@ -2174,6 +2193,7 @@ impl<'a> Transaction<'a> {
             roles: self.roles.pending(),
             clusters: self.clusters.pending(),
             cluster_replicas: self.cluster_replicas.pending(),
+            network_policies: self.network_policies.pending(),
             introspection_sources: self.introspection_sources.pending(),
             id_allocator: self.id_allocator.pending(),
             configs: self.configs.pending(),
@@ -2211,6 +2231,7 @@ impl<'a> Transaction<'a> {
             roles,
             clusters,
             cluster_replicas,
+            network_policies,
             introspection_sources,
             id_allocator,
             configs,
@@ -2235,6 +2256,7 @@ impl<'a> Transaction<'a> {
         differential_dataflow::consolidation::consolidate_updates(roles);
         differential_dataflow::consolidation::consolidate_updates(clusters);
         differential_dataflow::consolidation::consolidate_updates(cluster_replicas);
+        differential_dataflow::consolidation::consolidate_updates(network_policies);
         differential_dataflow::consolidation::consolidate_updates(introspection_sources);
         differential_dataflow::consolidation::consolidate_updates(id_allocator);
         differential_dataflow::consolidation::consolidate_updates(configs);
@@ -2414,6 +2436,7 @@ pub struct TransactionBatch {
     pub(crate) roles: Vec<(proto::RoleKey, proto::RoleValue, Diff)>,
     pub(crate) clusters: Vec<(proto::ClusterKey, proto::ClusterValue, Diff)>,
     pub(crate) cluster_replicas: Vec<(proto::ClusterReplicaKey, proto::ClusterReplicaValue, Diff)>,
+    pub(crate) network_policies: Vec<(proto::NetworkPolicyKey, proto::NetworkPolicyValue, Diff)>,
     pub(crate) introspection_sources: Vec<(
         proto::ClusterIntrospectionSourceIndexKey,
         proto::ClusterIntrospectionSourceIndexValue,
@@ -2465,6 +2488,7 @@ impl TransactionBatch {
             roles,
             clusters,
             cluster_replicas,
+            network_policies,
             introspection_sources,
             id_allocator,
             configs,
@@ -2487,6 +2511,7 @@ impl TransactionBatch {
             && roles.is_empty()
             && clusters.is_empty()
             && cluster_replicas.is_empty()
+            && network_policies.is_empty()
             && introspection_sources.is_empty()
             && id_allocator.is_empty()
             && configs.is_empty()

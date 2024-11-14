@@ -127,7 +127,7 @@ pub struct TxnsCache<T, C: TxnsCodec = TxnsCodecDefault> {
     state: TxnsCacheState<T>,
 }
 
-impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState<T> {
+impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync> TxnsCacheState<T> {
     /// Creates a new empty [`TxnsCacheState`].
     ///
     /// `init_ts` must be == the critical handle's since of the txn shard.
@@ -786,7 +786,11 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
     }
 }
 
-impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> TxnsCache<T, C> {
+impl<T, C> TxnsCache<T, C>
+where
+    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
+    C: TxnsCodec,
+{
     /// Initialize the txn shard at `init_ts` and returns a [TxnsCache] reading
     /// from that shard.
     pub(crate) async fn init(

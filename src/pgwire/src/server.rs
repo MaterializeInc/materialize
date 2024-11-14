@@ -57,6 +57,8 @@ pub struct Config {
     pub internal: bool,
     /// Global connection limit and count
     pub active_connection_count: Arc<Mutex<ConnectionCounter>>,
+    /// Helm chart version
+    pub helm_chart_version: Option<String>,
 }
 
 /// A server that communicates with clients via the pgwire protocol.
@@ -67,6 +69,7 @@ pub struct Server {
     metrics: Metrics,
     internal: bool,
     active_connection_count: Arc<Mutex<ConnectionCounter>>,
+    helm_chart_version: Option<String>,
 }
 
 #[async_trait]
@@ -91,6 +94,7 @@ impl Server {
             metrics: Metrics::new(config.metrics, config.label),
             internal: config.internal,
             active_connection_count: config.active_connection_count,
+            helm_chart_version: config.helm_chart_version,
         }
     }
 
@@ -105,6 +109,7 @@ impl Server {
         let internal = self.internal;
         let metrics = self.metrics.clone();
         let active_connection_count = Arc::clone(&self.active_connection_count);
+        let helm_chart_version = self.helm_chart_version.clone();
         // TODO(guswynn): remove this redundant_closure_call
         #[allow(clippy::redundant_closure_call)]
         async move {
@@ -174,6 +179,7 @@ impl Server {
                                     frontegg: frontegg.as_ref(),
                                     internal,
                                     active_connection_count,
+                                    helm_chart_version,
                                 })
                                 .await?;
                                 conn.flush().await?;

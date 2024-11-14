@@ -123,7 +123,7 @@ Explained Query:
                               Filter (#2 <= 21) AND (#1) IS NOT NULL AND (#2 > #3) AND (0 != (coalesce(#0, 0) - 0))
                                 Get l3
                             ArrangeBy keys=[[#0, #2, #1]]
-                              Get l1
+                              Get l2
                       Filter (#2 <= 21) AND (#2 > #3) AND (0 != (coalesce(#0, 0) - 0))
                         Get l3
                 Map (null, null, null, null)
@@ -134,33 +134,32 @@ Explained Query:
                           ArrangeBy keys=[[#1, #3, (#2 + 1)]]
                             Project (#0..=#3)
                               Filter (#4 <= 21) AND (#1) IS NOT NULL AND (#4 > #3) AND (0 != (0 - coalesce(#0, 0)))
-                                Get l2
+                                Get l0
                           ArrangeBy keys=[[#0..=#2]]
-                            Get l1
+                            Get l2
                     Project (#0..=#3)
                       Filter (#4 <= 21) AND (#4 > #3) AND (0 != (0 - coalesce(#0, 0)))
-                        Get l2
+                        Get l0
                 Project (#0..=#4, #1, #5, #3)
                   Filter (0 != (coalesce(#4, 0) - coalesce(#0, 0)))
-                    Get l0
+                    Get l1
     cte l2 =
-      Map ((#2 + 1))
-        Get l3
-    cte l1 =
       Distinct project=[#0..=#2]
         Project (#1, #3, #5)
-          Get l0
-    cte l0 =
+          Get l1
+    cte l1 =
       Project (#0..=#4, #6)
         Join on=(#1 = #5 AND #3 = #7 AND #6 = (#2 + 1)) type=differential
           ArrangeBy keys=[[#1, (#2 + 1), #3]]
             Project (#0..=#3)
               Filter (#4 <= 21) AND (#1) IS NOT NULL AND (#4 > #3)
-                Map ((#2 + 1))
-                  Get l3
+                Get l0
           ArrangeBy keys=[[#1..=#3]]
             Filter (#2 <= 21) AND (#1) IS NOT NULL AND (#2 > #3)
               Get l3
+    cte l0 =
+      Map ((#2 + 1))
+        Get l3
 
 Source materialize.public.input
 

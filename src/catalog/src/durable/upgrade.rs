@@ -19,7 +19,6 @@
 //!
 //!   - Config
 //!   - Setting
-//!   - Epoch
 //!   - FenceToken
 //!
 //! When you want to make a change to the `Catalog` you need to follow these steps:
@@ -181,14 +180,14 @@ macro_rules! objects {
     }
 }
 
-objects!(v67, v68, v69);
+objects!(v67, v68, v69, v70, v71, v72);
 
 /// The current version of the `Catalog`.
 ///
 /// We will initialize new `Catalog`es with this version, and migrate existing `Catalog`es to this
 /// version. Whenever the `Catalog` changes, e.g. the protobufs we serialize in the `Catalog`
 /// change, we need to bump this version.
-pub const CATALOG_VERSION: u64 = 69;
+pub const CATALOG_VERSION: u64 = 72;
 
 /// The minimum `Catalog` version number that we support migrating from.
 ///
@@ -202,6 +201,9 @@ const FUTURE_VERSION: u64 = CATALOG_VERSION + 1;
 
 mod v67_to_v68;
 mod v68_to_v69;
+mod v69_to_v70;
+mod v70_to_v71;
+mod v71_to_v72;
 
 /// Describes a single action to take during a migration from `V1` to `V2`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -282,6 +284,9 @@ async fn run_upgrade(
 
         67 => run_versioned_upgrade(unopened_catalog_state, version, v67_to_v68::upgrade).await,
         68 => run_versioned_upgrade(unopened_catalog_state, version, v68_to_v69::upgrade).await,
+        69 => run_versioned_upgrade(unopened_catalog_state, version, v69_to_v70::upgrade).await,
+        70 => run_versioned_upgrade(unopened_catalog_state, version, v70_to_v71::upgrade).await,
+        71 => run_versioned_upgrade(unopened_catalog_state, version, v71_to_v72::upgrade).await,
 
         // Up-to-date, no migration needed!
         CATALOG_VERSION => Ok(CATALOG_VERSION),
@@ -298,6 +303,8 @@ async fn run_versioned_upgrade<V1: IntoStateUpdateKindJson, V2: IntoStateUpdateK
     current_version: u64,
     migration_logic: impl FnOnce(Vec<V1>) -> Vec<MigrationAction<V1, V2>>,
 ) -> Result<u64, CatalogError> {
+    tracing::info!(current_version, "running versioned Catalog upgrade");
+
     // 1. Use the V1 to deserialize the contents of the current snapshot.
     let snapshot: Vec<_> = unopened_catalog_state
         .snapshot

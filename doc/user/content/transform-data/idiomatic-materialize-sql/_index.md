@@ -33,6 +33,20 @@ Idiomatic Materialize
 <tr>
 <td>
 
+[`ANY()` Equi-join condition](/transform-data/idiomatic-materialize-sql/any/)
+
+</td>
+<td>
+
+[Use `UNNEST()` or `DISTINCT UNNEST()` to expand the values and
+join](/transform-data/idiomatic-materialize-sql/any/).
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 [First value within groups](/transform-data/idiomatic-materialize-sql/first-value/)
 
 </td>

@@ -1147,3 +1147,5 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 17039  mz_continual_tasks_ind
 17040  mz_network_policies
 17041  mz_network_policy_rules
+17042  mz_index_advice
+17043  mz_show_network_policies

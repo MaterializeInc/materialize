@@ -100,14 +100,12 @@ where
                 .inner
                 .unary_frontier(Pipeline, "COPY TO S3 error filtering", |_cap, _info| {
                     let up_to = sink.up_to.clone();
-                    let mut vector = Vec::new();
                     let mut received_one = false;
                     move |input, output| {
                         while let Some((time, data)) = input.next() {
                             if !up_to.less_equal(time.time()) && !received_one {
                                 received_one = true;
-                                data.swap(&mut vector);
-                                output.session(&time).give_iterator(vector.drain(..1));
+                                output.session(&time).give_iterator(data.drain(..1));
                             }
                         }
                     }

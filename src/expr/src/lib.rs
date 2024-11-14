@@ -15,6 +15,7 @@ use std::collections::BTreeSet;
 use std::ops::Deref;
 
 use mz_repr::GlobalId;
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 mod id;
@@ -55,7 +56,7 @@ pub use scalar::{
 
 /// A [`MirRelationExpr`] that claims to have been optimized, e.g., by an
 /// `transform::Optimizer`.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
 pub struct OptimizedMirRelationExpr(pub MirRelationExpr);
 
 impl OptimizedMirRelationExpr {

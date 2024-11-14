@@ -26,7 +26,7 @@ use mz_repr::adt::mz_acl_item::AclMode;
 use mz_repr::adt::numeric::InvalidNumericMaxScaleError;
 use mz_repr::adt::timestamp::InvalidTimestampPrecisionError;
 use mz_repr::adt::varchar::InvalidVarCharMaxLengthError;
-use mz_repr::{strconv, ColumnName, GlobalId};
+use mz_repr::{strconv, CatalogItemId, ColumnName};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{IdentError, UnresolvedItemName};
 use mz_sql_parser::parser::{ParserError, ParserStatementError};
@@ -110,7 +110,7 @@ pub enum PlanError {
     InvalidWmrRecursionLimit(String),
     InvalidNumericMaxScale(InvalidNumericMaxScaleError),
     InvalidCharLength(InvalidCharLengthError),
-    InvalidId(GlobalId),
+    InvalidId(CatalogItemId),
     InvalidIdent(IdentError),
     InvalidObject(Box<ResolvedItemName>),
     InvalidObjectType {
@@ -270,6 +270,8 @@ pub enum PlanError {
     UntilReadyTimeoutRequired,
     SubsourceResolutionError(ExternalReferenceResolutionError),
     Replan(String),
+    NetworkPolicyLockoutError,
+    NetworkPolicyInUse,
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -453,6 +455,9 @@ impl PlanError {
             }
             Self::RetainHistoryLow { .. } | Self::RetainHistoryRequired => {
                 Some("Use ALTER ... RESET (RETAIN HISTORY) to set the retain history to its default and lowest value.".into())
+            }
+            Self::NetworkPolicyInUse => {
+                Some("Use ALTER SYSTEM SET 'network_policy' to change the default network policy.".into())
             }
             _ => None,
         }
@@ -765,6 +770,8 @@ impl fmt::Display for PlanError {
             },
             Self::SubsourceResolutionError(e) => write!(f, "{}", e),
             Self::Replan(msg) => write!(f, "internal error while replanning, please contact support: {msg}"),
+            Self::NetworkPolicyLockoutError => write!(f, "policy would block current session IP"),
+            Self::NetworkPolicyInUse => write!(f, "network policy is currently in use"),
             Self::UntilReadyTimeoutRequired => {
                 write!(f, "TIMEOUT=<duration> option is required for ALTER CLUSTER ... WITH (WAIT UNTIL READY ( ... ))")
             },

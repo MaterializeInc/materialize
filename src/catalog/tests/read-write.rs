@@ -238,13 +238,15 @@ async fn test_items(state_builder: TestCatalogStateBuilder) {
     let mut txn = state.transaction().await.unwrap();
     for item in &items {
         txn.insert_item(
-            item.global_id,
+            item.id,
             item.oid,
+            item.global_id,
             item.schema_id,
             &item.name,
             item.create_sql.clone(),
             item.owner_id,
             item.privileges.clone(),
+            item.extra_versions.clone(),
         )
         .unwrap();
     }

@@ -23,7 +23,7 @@ use mz_ore::soft_assert_no_log;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::role_id::RoleId;
-use mz_repr::{GlobalId, RowIterator};
+use mz_repr::{CatalogItemId, RowIterator};
 use mz_sql::ast::{FetchDirection, Raw, Statement};
 use mz_sql::catalog::ObjectType;
 use mz_sql::plan::{ExecuteTimeout, Plan, PlanKind};
@@ -282,7 +282,7 @@ pub enum ExecuteResponse {
         resp: Box<ExecuteResponse>,
     },
     CopyFrom {
-        id: GlobalId,
+        id: CatalogItemId,
         columns: Vec<usize>,
         params: CopyFormatParams<'static>,
         ctx_extra: ExecuteContextExtra,
@@ -321,6 +321,8 @@ pub enum ExecuteResponse {
     CreatedContinualTask,
     /// The requested type was created.
     CreatedType,
+    /// The requested network policy was created.
+    CreatedNetworkPolicy,
     /// The requested prepared statement was removed.
     Deallocate { all: bool },
     /// The requested cursor was declared.
@@ -486,6 +488,7 @@ impl TryInto<ExecuteResponse> for ExecuteResponseKind {
             ExecuteResponseKind::CreatedMaterializedView => {
                 Ok(ExecuteResponse::CreatedMaterializedView)
             }
+            ExecuteResponseKind::CreatedNetworkPolicy => Ok(ExecuteResponse::CreatedNetworkPolicy),
             ExecuteResponseKind::CreatedContinualTask => Ok(ExecuteResponse::CreatedContinualTask),
             ExecuteResponseKind::CreatedType => Ok(ExecuteResponse::CreatedType),
             ExecuteResponseKind::Deallocate => Err(()),
@@ -550,6 +553,7 @@ impl ExecuteResponse {
             CreatedMaterializedView { .. } => Some("CREATE MATERIALIZED VIEW".into()),
             CreatedContinualTask { .. } => Some("CREATE CONTINUAL TASK".into()),
             CreatedType => Some("CREATE TYPE".into()),
+            CreatedNetworkPolicy => Some("CREATE NETWORKPOLICY".into()),
             Deallocate { all } => Some(format!("DEALLOCATE{}", if *all { " ALL" } else { "" })),
             DeclaredCursor => Some("DECLARE CURSOR".into()),
             Deleted(n) => Some(format!("DELETE {}", n)),
@@ -612,7 +616,8 @@ impl ExecuteResponse {
             | AlterConnection
             | AlterSource
             | AlterSink
-            | AlterTableAddColumn => &[AlteredObject],
+            | AlterTableAddColumn
+            | AlterNetworkPolicy => &[AlteredObject],
             AlterDefaultPrivileges => &[AlteredDefaultPrivileges],
             AlterSetCluster => &[AlteredObject],
             AlterRole => &[AlteredRole],
@@ -640,6 +645,7 @@ impl ExecuteResponse {
             CreateIndex => &[CreatedIndex],
             CreateType => &[CreatedType],
             PlanKind::Deallocate => &[ExecuteResponseKind::Deallocate],
+            CreateNetworkPolicy => &[CreatedNetworkPolicy],
             Declare => &[DeclaredCursor],
             DiscardTemp => &[DiscardedTemp],
             DiscardAll => &[DiscardedAll],

@@ -231,12 +231,15 @@ impl Analysis for Equivalences {
             MirRelationExpr::Negate { .. } => results.get(index - 1).unwrap().clone(),
             MirRelationExpr::Threshold { .. } => results.get(index - 1).unwrap().clone(),
             MirRelationExpr::Union { .. } => {
-                // TODO: `EquivalenceClasses::union` takes references, and we could probably skip much of this cloning.
                 let expr_index = index;
-                depends
+                let mut child_equivs = depends
                     .children_of_rev(expr_index, expr.children().count())
-                    .flat_map(|c| results[c].clone())
-                    .reduce(|e1, e2| e1.union(&e2))
+                    .flat_map(|c| &results[c]);
+                if let Some(first) = child_equivs.next() {
+                    Some(first.union_many(child_equivs))
+                } else {
+                    None
+                }
             }
             MirRelationExpr::ArrangeBy { .. } => results.get(index - 1).unwrap().clone(),
         };
@@ -554,27 +557,56 @@ impl EquivalenceClasses {
 
     /// Produce the equivalences present in both inputs.
     pub fn union(&self, other: &Self) -> Self {
-        // TODO: seems like this could be extended, with similar concepts to localization:
-        //       We may removed non-shared constraints, but ones that remain could take over
-        //       and substitute in to retain more equivalences.
+        self.union_many([other])
+    }
 
-        // For each pair of equivalence classes, their intersection.
+    /// The equivalence classes of terms equivalent in all inputs.
+    ///
+    /// This method relies on the `remap` member of each input, and bases the intersection on these rather than `classes`.
+    /// This means one should ensure `minimize()` has been called on all inputs, or risk getting a stale, but conservatively
+    /// correct, result.
+    ///
+    /// This method currently misses opportunities, because it only looks for exactly matches in expressions,
+    /// which may not include all possible matches. For example, `f(#1) == g(#1)` may exist in one class, but
+    /// in another class where `#0 == #1` it may exist as `f(#0) == g(#0)`.
+    pub fn union_many<'a, I>(&self, others: I) -> Self
+    where
+        I: IntoIterator<Item = &'a Self>,
+    {
+        // List of expressions in the intersection, and a proxy equivalence class identifier.
+        let mut intersection: Vec<(&MirScalarExpr, usize)> = Default::default();
+        // Map from expression to a proxy equivalence class identifier.
+        let mut rekey: BTreeMap<&MirScalarExpr, usize> = Default::default();
+        for (key, val) in self.remap.iter() {
+            if !rekey.contains_key(val) {
+                rekey.insert(val, rekey.len());
+            }
+            intersection.push((key, rekey[val]));
+        }
+        for other in others {
+            // Map from proxy equivalence class identifier and equivalence class expr to a new proxy identifier.
+            let mut rekey: BTreeMap<(usize, &MirScalarExpr), usize> = Default::default();
+            intersection.retain_mut(|(key, idx)| {
+                if let Some(val) = other.remap.get(key) {
+                    if !rekey.contains_key(&(*idx, val)) {
+                        rekey.insert((*idx, val), rekey.len());
+                    }
+                    *idx = rekey[&(*idx, val)];
+                    true
+                } else {
+                    false
+                }
+            });
+        }
+        let mut classes: BTreeMap<_, Vec<MirScalarExpr>> = Default::default();
+        for (key, vals) in intersection {
+            classes.entry(vals).or_default().push(key.clone())
+        }
+        let classes = classes.into_values().collect::<Vec<_>>();
         let mut equivalences = EquivalenceClasses {
-            classes: Vec::new(),
+            classes,
             remap: Default::default(),
         };
-        for class1 in self.classes.iter() {
-            for class2 in other.classes.iter() {
-                let class = class1
-                    .iter()
-                    .filter(|e1| class2.iter().any(|e2| e1 == &e2))
-                    .cloned()
-                    .collect::<Vec<_>>();
-                if class.len() > 1 {
-                    equivalences.classes.push(class);
-                }
-            }
-        }
         equivalences.minimize(&None);
         equivalences
     }

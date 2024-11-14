@@ -563,7 +563,7 @@ impl std::fmt::Display for MissingBlob {
 
 impl std::error::Error for MissingBlob {}
 
-impl<T: Timestamp + Codec64> RunPart<T> {
+impl<T: Timestamp + Codec64 + Sync> RunPart<T> {
     pub fn part_stream<'a>(
         &'a self,
         shard_id: ShardId,
@@ -806,7 +806,7 @@ impl<T: Ord> Ord for HollowBatch<T> {
     }
 }
 
-impl<T: Timestamp + Codec64> HollowBatch<T> {
+impl<T: Timestamp + Codec64 + Sync> HollowBatch<T> {
     pub fn part_stream<'a>(
         &'a self,
         shard_id: ShardId,

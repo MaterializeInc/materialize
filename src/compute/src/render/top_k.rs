@@ -657,7 +657,6 @@ where
     let mut datum_vec = mz_repr::DatumVec::new();
 
     let mut aggregates = BTreeMap::new();
-    let mut vector = Vec::new();
     let shared = Rc::new(RefCell::new(monoids::Top1MonoidShared {
         order_key,
         left: DatumVec::new(),
@@ -671,11 +670,10 @@ where
             [],
             move |input, output, notificator| {
                 while let Some((time, data)) = input.next() {
-                    data.swap(&mut vector);
                     let agg_time = aggregates
                         .entry(time.time().clone())
                         .or_insert_with(BTreeMap::new);
-                    for ((grp_row, row), record_time, diff) in vector.drain(..) {
+                    for ((grp_row, row), record_time, diff) in data.drain(..) {
                         let monoid = monoids::Top1MonoidLocal {
                             row,
                             shared: Rc::clone(&shared),

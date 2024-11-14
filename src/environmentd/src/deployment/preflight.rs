@@ -29,14 +29,13 @@ pub struct PreflightInput {
     pub boot_ts: u64,
     pub environment_id: EnvironmentId,
     pub persist_client: PersistClient,
-    pub bootstrap_default_cluster_replica_size: String,
-    pub bootstrap_role: Option<String>,
     pub deploy_generation: u64,
     pub deployment_state: DeploymentState,
     pub openable_adapter_storage: Box<dyn OpenableDurableCatalogState>,
     pub catalog_metrics: Arc<Metrics>,
     pub caught_up_max_wait: Duration,
     pub panic_after_timeout: bool,
+    pub bootstrap_args: BootstrapArgs,
 }
 
 /// Output of preflight checks.
@@ -52,12 +51,11 @@ pub async fn preflight_legacy(
         boot_ts,
         environment_id,
         persist_client,
-        bootstrap_default_cluster_replica_size,
-        bootstrap_role,
         deploy_generation,
         deployment_state,
         mut openable_adapter_storage,
         catalog_metrics,
+        bootstrap_args,
         caught_up_max_wait: _,
         panic_after_timeout: _,
     }: PreflightInput,
@@ -73,13 +71,7 @@ pub async fn preflight_legacy(
     if catalog_generation < deploy_generation {
         tracing::info!("Catalog generation {catalog_generation:?} is less than deploy generation {deploy_generation}. Performing pre-flight checks");
         match openable_adapter_storage
-            .open_savepoint(
-                boot_ts.clone(),
-                &BootstrapArgs {
-                    default_cluster_replica_size: bootstrap_default_cluster_replica_size,
-                    bootstrap_role,
-                },
-            )
+            .open_savepoint(boot_ts.clone(), &bootstrap_args)
             .await
         {
             Ok(adapter_storage) => Box::new(adapter_storage).expire().await,
@@ -136,14 +128,13 @@ pub async fn preflight_0dt(
         boot_ts,
         environment_id,
         persist_client,
-        bootstrap_default_cluster_replica_size,
-        bootstrap_role,
         deploy_generation,
         deployment_state,
         mut openable_adapter_storage,
         catalog_metrics,
         caught_up_max_wait,
         panic_after_timeout,
+        bootstrap_args,
     }: PreflightInput,
 ) -> Result<PreflightOutput, CatalogError> {
     info!(%deploy_generation, ?caught_up_max_wait, "performing 0dt preflight checks");
@@ -209,14 +200,7 @@ pub async fn preflight_0dt(
             .expect("incompatible catalog/persist version");
 
             openable_adapter_storage
-                .open(
-                    boot_ts,
-                    &BootstrapArgs {
-                        default_cluster_replica_size: bootstrap_default_cluster_replica_size
-                            .clone(),
-                        bootstrap_role: bootstrap_role.clone(),
-                    },
-                )
+                .open(boot_ts, &bootstrap_args)
                 .await
                 .unwrap_or_terminate("unexpected error while fencing out old deployment");
 

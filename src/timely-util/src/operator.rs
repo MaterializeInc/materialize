@@ -27,9 +27,7 @@ use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as Operato
 use timely::dataflow::operators::generic::operator::{self, Operator};
 use timely::dataflow::operators::generic::{InputHandleCore, OperatorInfo, OutputHandleCore};
 use timely::dataflow::operators::Capability;
-use timely::dataflow::operators::InspectCore;
 use timely::dataflow::{Scope, StreamCore};
-use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, Timestamp};
 use timely::{Container, Data, ExchangeData, PartialOrder};
 
@@ -161,8 +159,13 @@ where
         I: IntoIterator<Item = Result<D2, E>>,
         L: for<'a> FnMut(C1::Item<'a>) -> I + 'static;
 
-    /// Panic if the frontier of a [`StreamCore`] exceeds `expiration` time.
-    fn expire_stream_at(&self, expiration: G::Timestamp) -> StreamCore<G, C1>;
+    /// Block progress of the frontier at `expiration` time, unless the token is dropped.
+    fn expire_stream_at(
+        &self,
+        name: &str,
+        expiration: G::Timestamp,
+        token: Weak<()>,
+    ) -> StreamCore<G, C1>;
 
     /// Take a Timely stream and convert it to a Differential stream, where each diff is "1"
     /// and each time is the current Timely timestamp.
@@ -235,8 +238,13 @@ where
         I: IntoIterator<Item = Result<D2, E>>,
         L: FnMut(D1) -> I + 'static;
 
-    /// Panic if the frontier of a [`Collection`] exceeds `expiration` time.
-    fn expire_collection_at(&self, expiration: G::Timestamp) -> Collection<G, D1, R>;
+    /// Block progress of the frontier at `expiration` time, unless the token is dropped.
+    fn expire_collection_at(
+        &self,
+        name: &str,
+        expiration: G::Timestamp,
+        token: Weak<()>,
+    ) -> Collection<G, D1, R>;
 
     /// Replaces each record with another, with a new difference type.
     ///
@@ -444,14 +452,12 @@ where
         I: IntoIterator<Item = Result<D2, E>>,
         L: for<'a> FnMut(C1::Item<'a>) -> I + 'static,
     {
-        let mut storage = C1::default();
         self.unary_fallible::<DCB, ECB, _, _>(Pipeline, name, move |_, _| {
             Box::new(move |input, ok_output, err_output| {
                 input.for_each(|time, data| {
                     let mut ok_session = ok_output.session_with_builder(&time);
                     let mut err_session = err_output.session_with_builder(&time);
-                    data.swap(&mut storage);
-                    for r in storage.drain().flat_map(|d1| logic(d1)) {
+                    for r in data.drain().flat_map(|d1| logic(d1)) {
                         match r {
                             Ok(d2) => ok_session.push_into(d2),
                             Err(e) => err_session.push_into(e),
@@ -462,13 +468,39 @@ where
         })
     }
 
-    fn expire_stream_at(&self, expiration: G::Timestamp) -> StreamCore<G, C1> {
-        self.inspect_container(move |data_or_frontier| {
-            if let Err(frontier) = data_or_frontier {
-                assert!(
-                    frontier.is_empty() || AntichainRef::new(frontier).less_than(&expiration),
-                    "frontier {frontier:?} has exceeded expiration {expiration:?}!",
-                );
+    fn expire_stream_at(
+        &self,
+        name: &str,
+        expiration: G::Timestamp,
+        token: Weak<()>,
+    ) -> StreamCore<G, C1> {
+        let name = format!("expire_stream_at({name})");
+        self.unary_frontier(Pipeline, &name.clone(), move |cap, _| {
+            // Retain a capability for the expiration time, which we'll only drop if the token
+            // is dropped. Else, block progress at the expiration time to prevent downstream
+            // operators from making any statement about expiration time or any following time.
+            let mut cap = Some(cap.delayed(&expiration));
+            let mut warned = false;
+            move |input, output| {
+                if token.upgrade().is_none() {
+                    // In shutdown, allow to propagate.
+                    drop(cap.take());
+                } else {
+                    let frontier = input.frontier().frontier();
+                    if !frontier.less_than(&expiration) && !warned {
+                        tracing::error!(
+                            name = name,
+                            frontier = ?frontier,
+                            expiration = ?expiration,
+                            "frontier not less than expiration"
+                        );
+                        warned = true;
+                    }
+                }
+                input.for_each(|time, data| {
+                    let mut session = output.session(&time);
+                    session.give_container(data);
+                });
             }
         })
     }
@@ -479,14 +511,11 @@ where
         R: Data,
     {
         self.unary::<CB, _, _, _>(Pipeline, name, move |_, _| {
-            let mut storage = C1::default();
             move |input, output| {
                 input.for_each(|cap, data| {
-                    data.swap(&mut storage);
                     let mut session = output.session_with_builder(&cap);
                     session.give_iterator(
-                        storage
-                            .drain()
+                        data.drain()
                             .map(|payload| (payload, cap.time().clone(), unit.clone())),
                     );
                 });
@@ -496,12 +525,10 @@ where
 
     fn with_token(&self, token: Weak<()>) -> StreamCore<G, C1> {
         self.unary(Pipeline, "WithToken", move |_cap, _info| {
-            let mut storage = C1::default();
             move |input, output| {
                 input.for_each(|cap, data| {
                     if token.upgrade().is_some() {
-                        data.swap(&mut storage);
-                        output.session(&cap).give_container(&mut storage);
+                        output.session(&cap).give_container(data);
                     }
                 });
             }
@@ -512,12 +539,10 @@ where
     where
         C1: ExchangeData,
     {
-        let mut storage = C1::default();
         self.unary(crate::pact::Distribute, "Distribute", move |_, _| {
             move |input, output| {
                 input.for_each(|time, data| {
-                    data.swap(&mut storage);
-                    output.session(&time).give_container(&mut storage);
+                    output.session(&time).give_container(data);
                 });
             }
         })
@@ -561,8 +586,15 @@ where
         (ok_stream.as_collection(), err_stream.as_collection())
     }
 
-    fn expire_collection_at(&self, expiration: G::Timestamp) -> Collection<G, D1, R> {
-        self.inner.expire_stream_at(expiration).as_collection()
+    fn expire_collection_at(
+        &self,
+        name: &str,
+        expiration: G::Timestamp,
+        token: Weak<()>,
+    ) -> Collection<G, D1, R> {
+        self.inner
+            .expire_stream_at(name, expiration, token)
+            .as_collection()
     }
 
     fn explode_one<D2, R2, L>(&self, mut logic: L) -> Collection<G, D2, <R2 as Multiply<R>>::Output>
@@ -578,13 +610,11 @@ where
                 Pipeline,
                 "ExplodeOne",
                 move |_, _| {
-                    let mut buffer = Vec::new();
                     move |input, output| {
                         input.for_each(|time, data| {
-                            data.swap(&mut buffer);
                             output
                                 .session_with_builder(&time)
-                                .give_iterator(buffer.drain(..).map(|(x, t, d)| {
+                                .give_iterator(data.drain(..).map(|(x, t, d)| {
                                     let (x, d2) = logic(x);
                                     (x, t, d2.multiply(&d))
                                 }));
@@ -601,7 +631,6 @@ where
         IE: Fn(D1, R) -> (E, R) + 'static,
         R: num_traits::sign::Signed,
     {
-        let mut buffer = Vec::new();
         let (oks, errs) = self
             .inner
             .unary_fallible(Pipeline, "EnsureMonotonic", move |_, _| {
@@ -609,8 +638,7 @@ where
                     input.for_each(|time, data| {
                         let mut ok_session = ok_output.session(&time);
                         let mut err_session = err_output.session(&time);
-                        data.swap(&mut buffer);
-                        for (x, t, d) in buffer.drain(..) {
+                        for (x, t, d) in data.drain(..) {
                             if d.is_positive() {
                                 ok_session.give((x, t, d))
                             } else {

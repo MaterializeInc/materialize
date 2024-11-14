@@ -84,7 +84,7 @@ comment_on ::=
   'COMMENT ON' (
     'CLUSTER' | 'CLUSTER REPLICA' | 'COLUMN' | 'CONNECTION' | 'DATABASE' | 'FUNCTION' |
     'INDEX' | 'MATERIALIZED VIEW' | 'ROLE' | 'SCHEMA' | 'SECRET' | 'SINK' | 'SOURCE' |
-    'TABLE' | 'TYPE' | 'VIEW'
+    'TABLE' | 'TYPE' | 'VIEW' | 'NETWORK POLICY'
   ) object_name 'IS' ( string_literal | 'NULL' )
 commit ::=
   'COMMIT'
@@ -142,8 +142,6 @@ create_connection_kafka_default_aws_privatelink ::=
   'AWS' 'PRIVATELINK' aws_connection ( '(' 'PORT' port ')' )?
 create_connection_kafka_broker_ssh_tunnel ::=
   "'host:port'" 'USING' 'SSH' 'TUNNEL' ssh_connection
-validate_connection ::=
-  'VALIDATE' 'CONNECTION' connection_name
 broker_option ::= 'PORT' number | 'AVAILABILITY ZONE' az
 create_database ::=
     'CREATE' 'DATABASE' ('IF NOT EXISTS')? database_name
@@ -293,8 +291,6 @@ drop_cluster_replica ::=
   'DROP' 'CLUSTER' 'REPLICA' ('IF EXISTS')? cluster_name.replica_name
 drop_database ::=
     'DROP' 'DATABASE' ('IF EXISTS')? database_name ('CASCADE' | 'RESTRICT')?
-drop_index ::=
-    'DROP' 'INDEX' ('IF EXISTS')? index_name ('CASCADE' | 'RESTRICT')?
 drop_materialized_view ::=
   'DROP' 'MATERIALIZED VIEW' 'IF EXISTS'? view_name ('RESTRICT' | 'CASCADE')?
 drop_owned ::=
@@ -459,7 +455,7 @@ simple_select_stmt ::=
   ( 'OPTIONS' '(' ( option '=' val ) ( ( ',' option '=' val ) )* ')' )?
   ( 'HAVING' expr )?
   ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? ( ',' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? )* )?
-  ( 'LIMIT' integer )?
+  ( 'LIMIT' expr )?
   ( 'OFFSET' integer )?
   ( ( 'UNION' | 'INTERSECT' | 'EXCEPT' ) ( 'ALL' | 'DISTINCT' )? another_select_stmt )?
 set_stmt ::=
@@ -518,12 +514,6 @@ show_sources ::=
   'SHOW' 'SOURCES' ('FROM' schema_name)? ('IN CLUSTER' cluster_name)?
 show_subsources ::=
   'SHOW' 'SUBSOURCES' ('FROM' schema_name | 'ON' on_name)?
-show_tables ::=
-  'SHOW' 'TABLES' ('FROM' schema_name)?
-show_types ::=
-  'SHOW' 'TYPES' ('FROM' schema_name)?
-show_views ::=
-  'SHOW' 'VIEWS' ('FROM' schema_name)?
 show_objects ::=
   'SHOW' 'OBJECTS' ('FROM' schema_name)?
 show_privileges ::=
@@ -550,7 +540,6 @@ table_ref ::=
     | 'LATERAL'? table_func_call
     | '(' join_expr ')'
   ) ('AS'? table_alias ('(' col_alias (',' col_alias)* ')'))?
-table_expr ::= 'TABLE' table_name
 time_unit ::=
   'MILLENNIUM' | 'CENTURY' | 'DECADE' | 'YEAR' | 'MONTH' | 'DAY' | 'HOUR' | 'MINUTE' | 'SECOND' | 'MILLISECONDS' | 'MICROSECONDS'
 type_bool ::=
@@ -597,11 +586,6 @@ type_timestamp ::=
   "'" date_str
     ( (' ' | 'T') time_str)? ( ('+' | '-' ) tz_offset )?
   "'"
-update_stmt ::=
-  'UPDATE' table_name ('AS'? alias)?
-  'SET' ( column_name '=' expr ) ( ( ',' column_name '=' expr ) )*
-  'WHERE' condition
-values_expr ::= 'VALUES' '(' expr (',' expr)* ')' (',' '(' expr (',' expr)* ')')*
 with_ctes ::=
   'WITH'
     cte_binding ( ',' cte_binding )*

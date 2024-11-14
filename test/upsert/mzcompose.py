@@ -41,6 +41,7 @@ SERVICES = [
             "disk_cluster_replicas_default": "true",
             "enable_unorchestrated_cluster_replicas": "true",
             "storage_dataflow_delay_sources_past_rehydration": "true",
+            "upsert_rocksdb_auto_spill_to_disk": "false",
         },
         environment_extra=materialized_environment_extra,
     ),

@@ -150,8 +150,11 @@ class RepositoryDetails:
             # approach to update it.
             if ui.env_is_truthy("BUILDKITE_TAG"):
                 flags.extend(["--config=release-tagged"])
-            else:
+            elif ui.env_is_truthy("CI"):
                 flags.extend(["--config=release-dev"])
+                bazel_utils.write_git_hash()
+            else:
+                flags.extend(["--config=release-local"])
                 bazel_utils.write_git_hash()
 
         if self.bazel_remote_cache:
@@ -887,23 +890,32 @@ class ResolvedImage:
             return True
         return False
 
-    def run(self, args: list[str] = [], docker_args: list[str] = []) -> None:
+    def run(
+        self,
+        args: list[str] = [],
+        docker_args: list[str] = [],
+        env: dict[str, str] = {},
+    ) -> None:
         """Run a command in the image.
 
         Creates a container from the image and runs the command described by
         `args` in the image.
         """
+        envs = []
+        for key, val in env.items():
+            envs.extend(["--env", f"{key}={val}"])
         spawn.runv(
             [
                 "docker",
                 "run",
                 "--tty",
                 "--rm",
+                *envs,
                 "--init",
                 *docker_args,
                 self.spec(),
                 *args,
-            ]
+            ],
         )
 
     def list_dependencies(self, transitive: bool = False) -> set[str]:

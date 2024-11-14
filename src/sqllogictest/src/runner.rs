@@ -812,7 +812,7 @@ impl<'a> Runner<'a> {
             let name: &str = row.get("name");
             inner
                 .system_client
-                .batch_execute(&format!("DROP DATABASE {name}"))
+                .batch_execute(&format!("DROP DATABASE \"{name}\""))
                 .await?;
         }
         inner
@@ -1008,8 +1008,9 @@ impl<'a> RunnerInner<'a> {
                 .expect("success")
         });
         let persist_clients =
-            PersistClientCache::new(persist_config, &metrics_registry, |_, metrics| {
+            PersistClientCache::new(persist_config, &metrics_registry, |cfg, metrics| {
                 let sender: Arc<dyn PubSubSender> = Arc::new(MetricsSameProcessPubSubSender::new(
+                    cfg,
                     persist_pubsub_client.sender,
                     metrics,
                 ));
@@ -1102,6 +1103,7 @@ impl<'a> RunnerInner<'a> {
             http_host_name: Some(host_name),
             internal_console_redirect_url: None,
             tls_reload_certs: mz_server_core::cert_reload_never_reload(),
+            helm_chart_version: None,
         };
         // We need to run the server on its own Tokio runtime, which in turn
         // requires its own thread, so that we can wait for any tasks spawned

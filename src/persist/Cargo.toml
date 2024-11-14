@@ -28,12 +28,12 @@ async-trait = "0.1.68"
 async-stream = "0.3.3"
 aws-config = { version = "1.2.0", default-features = false }
 aws-credential-types = { version = "1.1.1", features = ["hardcoded-credentials"] }
-aws-sdk-s3 = { version = "1.23.0", default-features = false, features = ["rt-tokio"]  }
+aws-sdk-s3 = { version = "1.23.0", default-features = false, features = ["rt-tokio"] }
 aws-types = "1.1.1"
 base64 = "0.13.1"
 bytes = "1.3.0"
 deadpool-postgres = "0.10.3"
-differential-dataflow = "0.12.0"
+differential-dataflow = "0.13.1"
 fail = { version = "0.5.1", features = ["failpoints"] }
 futures-util = "0.3.25"
 md-5 = "0.10.5"
@@ -50,11 +50,11 @@ postgres-openssl = { version = "0.5.0" }
 postgres-protocol = { version = "0.6.5" }
 prometheus = { version = "0.13.3", default-features = false }
 proptest = { version = "1.0.0", default-features = false, features = ["std"] }
-proptest-derive = { version = "0.3.0", features = ["boxed_union"]}
+proptest-derive = { version = "0.3.0", features = ["boxed_union"] }
 prost = { version = "0.13.2", features = ["no-recursion-limit"] }
 rand = { version = "0.8.5", features = ["small_rng"] }
 serde = { version = "1.0.152", features = ["derive"] }
-timely = "0.12.0"
+timely = "0.14.1"
 tokio = { version = "1.38.0", default-features = false, features = ["fs", "macros", "sync", "rt", "rt-multi-thread"] }
 tokio-postgres = { version = "0.7.8" }
 tracing = "0.1.37"

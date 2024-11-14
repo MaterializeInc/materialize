@@ -97,8 +97,6 @@ fn subscribe<G>(
         let mut rows_to_emit = Vec::new();
         let mut errors_to_emit = Vec::new();
         let mut finished = false;
-        let mut ok_buf = Default::default();
-        let mut err_buf = Default::default();
 
         move |frontiers| {
             if finished {
@@ -124,16 +122,14 @@ fn subscribe<G>(
             };
 
             ok_input.for_each(|_, data| {
-                data.swap(&mut ok_buf);
-                for (row, time, diff) in ok_buf.drain(..) {
+                for (row, time, diff) in data.drain(..) {
                     if should_emit(&time) {
                         rows_to_emit.push((time, row, diff));
                     }
                 }
             });
             err_input.for_each(|_, data| {
-                data.swap(&mut err_buf);
-                for (error, time, diff) in err_buf.drain(..) {
+                for (error, time, diff) in data.drain(..) {
                     if should_emit(&time) {
                         errors_to_emit.push((time, error, diff));
                     }

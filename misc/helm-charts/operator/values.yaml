@@ -13,7 +13,7 @@ operator:
     # The Docker repository for the operator image
     repository: materialize/orchestratord
     # The tag/version of the operator image to be used
-    tag: v0.122.0-dev.0--pr.g47923ddb1bb4f3fb38d152b8aa86a77514599b29
+    tag: v0.125.0-dev.0--pr.gd3deb07aa502a84ebd024517344f0aa861f857df
     # Policy for pulling the image: "IfNotPresent" avoids unnecessary re-pulling of images
     pullPolicy: IfNotPresent
   args:
@@ -27,6 +27,153 @@ operator:
     localDevelopment: true
     # Flag to indicate whether to create balancerd pods for the environments
     createBalancers: true
+    # Flag to indicate whether to create console pods for the environments
+    createConsole: true
+    # ARN of the IAM role for environmentd
+    environmentdIAMRoleARN: ""
+    # ARN of the IAM role for the CREATE CONNECTION feature
+    environmentdConnectionRoleARN: ""
+    # awsAccountID is required when cloudProvider is "aws"
+    awsAccountID: ""
+    # override the mapping of environmentd versions to console versions
+    consoleImageTagMapOverride: {}
+  clusters:
+    sizes:
+      mz_probe:
+        workers: 1
+        scale: 1
+        cpu_exclusive: false
+        cpu_limit: 0.1
+        credits_per_hour: "0.00"
+        disk_limit: "1552MiB"
+        memory_limit: "776MiB"
+      25cc:
+        workers: 1
+        scale: 1
+        cpu_exclusive: false
+        cpu_limit: 0.5
+        credits_per_hour: "0.25"
+        disk_limit: "7762MiB"
+        memory_limit: "3881MiB"
+      50cc:
+        workers: 1
+        scale: 1
+        cpu_exclusive: true
+        cpu_limit: 1
+        credits_per_hour: "0.5"
+        disk_limit: "15525MiB"
+        memory_limit: "7762MiB"
+      100cc:
+        workers: 2
+        scale: 1
+        cpu_exclusive: true
+        cpu_limit: 2
+        credits_per_hour: "1"
+        disk_limit: "31050MiB"
+        memory_limit: "15525MiB"
+      200cc:
+        workers: 4
+        scale: 1
+        cpu_exclusive: true
+        cpu_limit: 4
+        credits_per_hour: "2"
+        disk_limit: "62100MiB"
+        memory_limit: "31050MiB"
+      300cc:
+        workers: 6
+        scale: 1
+        cpu_exclusive: true
+        cpu_limit: 6
+        credits_per_hour: "3"
+        disk_limit: "93150MiB"
+        memory_limit: "46575MiB"
+      400cc:
+        workers: 8
+        scale: 1
+        cpu_exclusive: true
+        cpu_limit: 8
+        credits_per_hour: "4"
+        disk_limit: "124201MiB"
+        memory_limit: "62100MiB"
+      600cc:
+        workers: 12
+        scale: 1
+        cpu_exclusive: true
+        cpu_limit: 12
+        credits_per_hour: "6"
+        disk_limit: "186301MiB"
+        memory_limit: "93150MiB"
+      800cc:
+        workers: 16
+        scale: 1
+        cpu_exclusive: true
+        cpu_limit: 16
+        credits_per_hour: "8"
+        disk_limit: "248402MiB"
+        memory_limit: "124201MiB"
+      1200cc:
+        workers: 24
+        scale: 1
+        cpu_exclusive: true
+        cpu_limit: 24
+        credits_per_hour: "12"
+        disk_limit: "372603MiB"
+        memory_limit: "186301MiB"
+      1600cc:
+        workers: 31
+        scale: 1
+        cpu_exclusive: true
+        cpu_limit: 31
+        credits_per_hour: "16"
+        disk_limit: "481280MiB"
+        memory_limit: "240640MiB"
+      3200cc:
+        workers: 62
+        scale: 1
+        cpu_exclusive: true
+        cpu_limit: 62
+        credits_per_hour: "32"
+        disk_limit: "962560MiB"
+        memory_limit: "481280MiB"
+      6400cc:
+        workers: 62
+        scale: 2
+        cpu_exclusive: true
+        cpu_limit: 62
+        credits_per_hour: "64"
+        disk_limit: "962560MiB"
+        memory_limit: "481280MiB"
+      128C:
+        workers: 62
+        scale: 4
+        cpu_exclusive: true
+        cpu_limit: 62
+        credits_per_hour: "128"
+        disk_limit: "962560MiB"
+        memory_limit: "481280MiB"
+      256C:
+        workers: 62
+        scale: 8
+        cpu_exclusive: true
+        cpu_limit: 62
+        credits_per_hour: "256"
+        disk_limit: "962560MiB"
+        memory_limit: "481280MiB"
+      512C:
+        workers: 62
+        scale: 16
+        cpu_exclusive: true
+        cpu_limit: 62
+        credits_per_hour: "512"
+        disk_limit: "962560MiB"
+        memory_limit: "481280MiB"
+    defaultSizes:
+      default: 25cc
+      system: 25cc
+      probe: mz_probe
+      support: 25cc
+      catalogServer: 50cc
+      analytics: 25cc
   # Node selector to use for the operator pod
   nodeSelector: {}
   resources:
@@ -90,3 +237,25 @@ namespace:
   create: false
   # Name of the namespace where the operator and environment will be deployed
   name: "materialize"
+
+# Storage configuration
+storage:
+  storageClass:
+    # Set to false to use an existing StorageClass instead
+    create: false
+
+    # Name of the StorageClass to create/use: eg "openebs-lvm-instance-store-ext4"
+    name: ""
+
+    # CSI driver to use, eg "local.csi.openebs.io"
+    provisioner: ""
+
+    # Parameters for the CSI driver
+    parameters:
+      storage: "lvm"
+      fsType: "ext4"
+      volgroup: "instance-store-vg"
+
+    allowVolumeExpansion: false
+    reclaimPolicy: Delete
+    volumeBindingMode: WaitForFirstConsumer

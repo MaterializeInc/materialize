@@ -324,7 +324,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                         debug_name: dataflow.debug_name.clone(),
                         initial_storage_as_of: dataflow.initial_storage_as_of.clone(),
                         refresh_schedule: dataflow.refresh_schedule.clone(),
-                        dataflow_expiration_desc: dataflow.dataflow_expiration_desc.clone(),
+                        time_dependence: dataflow.time_dependence.clone(),
                     })
                     .map(ComputeCommand::CreateDataflow)
                     .collect()
@@ -352,7 +352,6 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
             let cmd_queue = Rc::clone(&cmd_queue);
 
             move |scope| {
-                let mut container = Default::default();
                 source(scope, "CmdSource", |capability, info| {
                     // Send activator for this operator back.
                     let activator = scope.sync_activator_for(info.address.to_vec());
@@ -418,8 +417,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                             queue.push_back(Err(TryRecvError::Disconnected))
                         }
                         while let Some((_, data)) = input.next() {
-                            data.swap(&mut container);
-                            for (_, cmd) in container.drain(..) {
+                            for (_, cmd) in data.drain(..) {
                                 queue.push_back(Ok(cmd));
                             }
                         }
@@ -471,6 +469,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                     compute_state.report_frontiers();
                     compute_state.report_dropped_collections();
                     compute_state.report_metrics();
+                    compute_state.check_expiration();
                 }
 
                 self.metrics

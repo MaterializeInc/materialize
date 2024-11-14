@@ -1,0 +1,68 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+suite: test storageclass
+templates:
+  - storageclass.yaml
+tests:
+  - it: should render storage class with correct values
+    set:
+      storage.storageClass.create: true
+      storage.storageClass.name: openebs-lvm-instance-store-ext4
+      storage.storageClass.allowVolumeExpansion: false
+      storage.storageClass.provisioner: local.csi.openebs.io
+      storage.storageClass.parameters.storage: lvm
+      storage.storageClass.parameters.fsType: ext4
+      storage.storageClass.parameters.volgroup: instance-store-vg
+      storage.storageClass.reclaimPolicy: Delete
+      storage.storageClass.volumeBindingMode: WaitForFirstConsumer
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: StorageClass
+      - equal:
+          path: metadata.name
+          value: openebs-lvm-instance-store-ext4
+      - equal:
+          path: allowVolumeExpansion
+          value: false
+      - equal:
+          path: provisioner
+          value: local.csi.openebs.io
+      - equal:
+          path: parameters.storage
+          value: lvm
+      - equal:
+          path: parameters.fsType
+          value: ext4
+      - equal:
+          path: parameters.volgroup
+          value: instance-store-vg
+      - equal:
+          path: reclaimPolicy
+          value: Delete
+      - equal:
+          path: volumeBindingMode
+          value: WaitForFirstConsumer
+
+  - it: should not render when storage class creation is disabled
+    set:
+      storage.storageClass.create: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should render if storage class creation is enabled and name is set
+    set:
+      storage.storageClass.create: true
+      storage.storageClass.name: openebs-lvm-instance-store-ext4
+    asserts:
+      - hasDocuments:
+          count: 1

@@ -32,12 +32,14 @@ fn main() {
         .extern_path(".mz_expr.linear", "::mz_expr")
         .extern_path(".mz_expr.relation", "::mz_expr")
         .extern_path(".mz_expr.scalar", "::mz_expr")
+        .extern_path(".mz_repr.refresh_schedule", "::mz_repr::refresh_schedule")
         .extern_path(".mz_kafka_util.addr", "::mz_kafka_util")
         .extern_path(".mz_postgres_util.desc", "::mz_postgres_util::desc")
         .extern_path(".mz_mysql_util", "::mz_mysql_util")
         .extern_path(".mz_repr.adt.regex", "::mz_repr::adt::regex")
         .extern_path(".mz_repr.antichain", "::mz_repr::antichain")
         .extern_path(".mz_repr.global_id", "::mz_repr::global_id")
+        .extern_path(".mz_repr.catalog_item_id", "::mz_repr::catalog_item_id")
         .extern_path(".mz_orchestrator", "::mz_orchestrator")
         .extern_path(".mz_pgcopy.copy", "::mz_pgcopy")
         .extern_path(".mz_postgres_util.tunnel", "::mz_postgres_util::tunnel")
@@ -69,6 +71,7 @@ fn main() {
                 "storage-types/src/sources/mysql.proto",
                 "storage-types/src/sources/postgres.proto",
                 "storage-types/src/sources/load_generator.proto",
+                "storage-types/src/time_dependence.proto",
             ],
             &[PathBuf::from(".."), mz_build_tools::protoc_include()],
         )

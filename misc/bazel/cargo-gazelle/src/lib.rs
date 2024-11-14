@@ -429,6 +429,38 @@ impl ToBazelDefinition for FileGroup {
     }
 }
 
+/// A Bazel [`alias`](https://bazel.build/reference/be/general#alias)
+#[derive(Debug)]
+pub struct Alias {
+    name: Field<QuotedString>,
+    actual: Field<QuotedString>,
+}
+
+impl Alias {
+    pub fn new<N: Into<String>, A: Into<String>>(name: N, actual: A) -> Self {
+        let name = Field::new("name", QuotedString::new(name.into()));
+        let actual = Field::new("actual", QuotedString::new(actual.into()));
+
+        Alias { name, actual }
+    }
+}
+
+impl ToBazelDefinition for Alias {
+    fn format(&self, writer: &mut dyn fmt::Write) -> Result<(), fmt::Error> {
+        let mut w = AutoIndentingWriter::new(writer);
+
+        writeln!(w, "alias(")?;
+        {
+            let mut w = w.indent();
+            self.name.format(&mut w)?;
+            self.actual.format(&mut w)?;
+        }
+        writeln!(w, ")")?;
+
+        Ok(())
+    }
+}
+
 /// A Bazel [`glob`](https://bazel.build/reference/be/functions#glob)
 ///
 /// TODO(parkmcar): Support `excludes`.

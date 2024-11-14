@@ -17,7 +17,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use futures::future;
-use itertools::Itertools;
+use itertools::{Either, Itertools};
 use mz_adapter_types::connection::ConnectionId;
 use mz_catalog::builtin::{
     Builtin, BuiltinLog, BuiltinTable, BuiltinView, BUILTIN_LOG_LOOKUP, BUILTIN_LOOKUP,
@@ -25,7 +25,7 @@ use mz_catalog::builtin::{
 use mz_catalog::durable::objects::{
     ClusterKey, DatabaseKey, DurableType, ItemKey, NetworkPolicyKey, RoleKey, SchemaKey,
 };
-use mz_catalog::durable::CatalogError;
+use mz_catalog::durable::{CatalogError, SystemObjectMapping};
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, Cluster, ClusterReplica, DataSourceDesc, Database, Func, Index, Log,
@@ -43,11 +43,9 @@ use mz_ore::{instrument, soft_assert_no_log};
 use mz_pgrepr::oid::INVALID_OID;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::role_id::RoleId;
-use mz_repr::{GlobalId, Timestamp};
+use mz_repr::{CatalogItemId, GlobalId, RelationVersion, Timestamp};
 use mz_sql::catalog::CatalogError as SqlCatalogError;
-use mz_sql::catalog::{
-    CatalogItem as SqlCatalogItem, CatalogItemType, CatalogSchema, CatalogType, NameReference,
-};
+use mz_sql::catalog::{CatalogItem as SqlCatalogItem, CatalogItemType, CatalogSchema, CatalogType};
 use mz_sql::names::{
     FullItemName, ItemQualifiers, QualifiedItemName, RawDatabaseSpecifier,
     ResolvedDatabaseSpecifier, ResolvedIds, SchemaSpecifier,
@@ -59,6 +57,7 @@ use mz_sql_parser::ast::Expr;
 use mz_storage_types::sources::Timeline;
 use tracing::{info_span, warn, Instrument};
 
+use crate::catalog::state::LocalExpressionCache;
 use crate::catalog::{BuiltinTableUpdate, CatalogState};
 use crate::util::index_sql;
 use crate::AdapterError;
@@ -82,9 +81,9 @@ struct InProgressRetractions {
     clusters: BTreeMap<ClusterKey, Cluster>,
     network_policies: BTreeMap<NetworkPolicyKey, NetworkPolicy>,
     items: BTreeMap<ItemKey, CatalogEntry>,
-    temp_items: BTreeMap<GlobalId, CatalogEntry>,
-    introspection_source_indexes: BTreeMap<GlobalId, CatalogEntry>,
-    system_object_mappings: BTreeMap<GlobalId, CatalogEntry>,
+    temp_items: BTreeMap<CatalogItemId, CatalogEntry>,
+    introspection_source_indexes: BTreeMap<CatalogItemId, CatalogEntry>,
+    system_object_mappings: BTreeMap<CatalogItemId, CatalogEntry>,
 }
 
 impl CatalogState {
@@ -99,6 +98,7 @@ impl CatalogState {
     pub(crate) async fn apply_updates_for_bootstrap(
         &mut self,
         updates: Vec<StateUpdate>,
+        local_expression_cache: &mut LocalExpressionCache,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
         let mut builtin_table_updates = Vec::with_capacity(updates.len());
         let updates = sort_updates(updates);
@@ -114,14 +114,21 @@ impl CatalogState {
             for update in updates {
                 let next_apply_state = BootstrapApplyState::new(update);
                 let (next_apply_state, builtin_table_update) = apply_state
-                    .step(next_apply_state, self, &mut retractions)
+                    .step(
+                        next_apply_state,
+                        self,
+                        &mut retractions,
+                        local_expression_cache,
+                    )
                     .await;
                 apply_state = next_apply_state;
                 builtin_table_updates.extend(builtin_table_update);
             }
 
             // Apply remaining state.
-            let builtin_table_update = apply_state.apply(self, &mut retractions).await;
+            let builtin_table_update = apply_state
+                .apply(self, &mut retractions, local_expression_cache)
+                .await;
             builtin_table_updates.extend(builtin_table_update);
         }
         builtin_table_updates
@@ -140,20 +147,23 @@ impl CatalogState {
 
         for (_, updates) in &updates.into_iter().group_by(|update| update.ts) {
             let mut retractions = InProgressRetractions::default();
-            let builtin_table_update =
-                self.apply_updates_inner(updates.collect(), &mut retractions)?;
+            let builtin_table_update = self.apply_updates_inner(
+                updates.collect(),
+                &mut retractions,
+                &mut LocalExpressionCache::Closed,
+            )?;
             builtin_table_updates.extend(builtin_table_update);
         }
 
         Ok(builtin_table_updates)
     }
 
-    #[must_use]
     #[instrument(level = "debug")]
     fn apply_updates_inner(
         &mut self,
         updates: Vec<StateUpdate>,
         retractions: &mut InProgressRetractions,
+        local_expression_cache: &mut LocalExpressionCache,
     ) -> Result<Vec<BuiltinTableUpdate<&'static BuiltinTable>>, CatalogError> {
         soft_assert_no_log!(
             updates.iter().map(|update| update.ts).all_equal(),
@@ -168,10 +178,10 @@ impl CatalogState {
                     // before applying the update.
                     builtin_table_updates
                         .extend(self.generate_builtin_table_update(kind.clone(), diff));
-                    self.apply_update(kind, diff, retractions)?;
+                    self.apply_update(kind, diff, retractions, local_expression_cache)?;
                 }
                 StateDiff::Addition => {
-                    self.apply_update(kind.clone(), diff, retractions)?;
+                    self.apply_update(kind.clone(), diff, retractions, local_expression_cache)?;
                     // We want the builtin table addition to match the state of the catalog
                     // after applying the update.
                     builtin_table_updates
@@ -188,6 +198,7 @@ impl CatalogState {
         kind: StateUpdateKind,
         diff: StateDiff,
         retractions: &mut InProgressRetractions,
+        local_expression_cache: &mut LocalExpressionCache,
     ) -> Result<(), CatalogError> {
         match kind {
             StateUpdateKind::Role(role) => {
@@ -225,13 +236,18 @@ impl CatalogState {
                 self.apply_cluster_replica_update(cluster_replica, diff, retractions);
             }
             StateUpdateKind::SystemObjectMapping(system_object_mapping) => {
-                self.apply_system_object_mapping_update(system_object_mapping, diff, retractions);
+                self.apply_system_object_mapping_update(
+                    system_object_mapping,
+                    diff,
+                    retractions,
+                    local_expression_cache,
+                );
             }
             StateUpdateKind::TemporaryItem(item) => {
                 self.apply_temporary_item_update(item, diff, retractions);
             }
             StateUpdateKind::Item(item) => {
-                self.apply_item_update(item, diff, retractions)?;
+                self.apply_item_update(item, diff, retractions, local_expression_cache)?;
             }
             StateUpdateKind::Comment(comment) => {
                 self.apply_comment_update(comment, diff, retractions);
@@ -448,7 +464,7 @@ impl CatalogState {
             StateDiff::Addition => {
                 if let Some(entry) = retractions
                     .introspection_source_indexes
-                    .remove(&introspection_source_index.index_id)
+                    .remove(&introspection_source_index.item_id)
                 {
                     // Introspection source indexes can only be updated through the builtin
                     // migration process, which allocates new IDs for each index.
@@ -461,12 +477,13 @@ impl CatalogState {
                 self.insert_introspection_source_index(
                     introspection_source_index.cluster_id,
                     log,
+                    introspection_source_index.item_id,
                     introspection_source_index.index_id,
                     introspection_source_index.oid,
                 );
             }
             StateDiff::Retraction => {
-                let entry = self.drop_item(introspection_source_index.index_id);
+                let entry = self.drop_item(introspection_source_index.item_id);
                 retractions
                     .introspection_source_indexes
                     .insert(entry.id, entry);
@@ -542,8 +559,10 @@ impl CatalogState {
         system_object_mapping: mz_catalog::durable::SystemObjectMapping,
         diff: StateDiff,
         retractions: &mut InProgressRetractions,
+        local_expression_cache: &mut LocalExpressionCache,
     ) {
-        let id = system_object_mapping.unique_identifier.global_id;
+        let item_id = system_object_mapping.unique_identifier.catalog_id;
+        let global_id = system_object_mapping.unique_identifier.global_id;
 
         if system_object_mapping.unique_identifier.runtime_alterable() {
             // Runtime-alterable system objects have real entries in the items
@@ -553,12 +572,12 @@ impl CatalogState {
         }
 
         if let StateDiff::Retraction = diff {
-            let entry = self.drop_item(id);
-            retractions.system_object_mappings.insert(id, entry);
+            let entry = self.drop_item(item_id);
+            retractions.system_object_mappings.insert(item_id, entry);
             return;
         }
 
-        if let Some(entry) = retractions.system_object_mappings.remove(&id) {
+        if let Some(entry) = retractions.system_object_mappings.remove(&item_id) {
             // This implies that we updated the fingerprint for some builtin item. The retraction
             // was parsed, planned, and optimized using the compiled in definition, not the
             // definition from a previous version. So we can just stick the old entry back into the
@@ -591,11 +610,12 @@ impl CatalogState {
                 )];
                 acl_items.extend_from_slice(&log.access);
                 self.insert_item(
-                    id,
+                    item_id,
                     log.oid,
                     name.clone(),
                     CatalogItem::Log(Log {
                         variant: log.variant,
+                        global_id,
                     }),
                     MZ_SYSTEM_ROLE_ID,
                     PrivilegeMap::from_mz_acl_items(acl_items),
@@ -610,14 +630,15 @@ impl CatalogState {
                 acl_items.extend_from_slice(&table.access);
 
                 self.insert_item(
-                    id,
+                    item_id,
                     table.oid,
                     name.clone(),
                     CatalogItem::Table(Table {
                         create_sql: None,
                         desc: table.desc.clone(),
+                        collections: [(RelationVersion::root(), global_id)].into_iter().collect(),
                         conn_id: None,
-                        resolved_ids: ResolvedIds(BTreeSet::new()),
+                        resolved_ids: ResolvedIds::empty(),
                         custom_logical_compaction_window: table.is_retained_metrics_object.then(
                             || {
                                 self.system_config()
@@ -636,13 +657,24 @@ impl CatalogState {
                 );
             }
             Builtin::Index(index) => {
-                let mut item = self
+                let custom_logical_compaction_window =
+                    index.is_retained_metrics_object.then(|| {
+                        self.system_config()
+                            .metrics_retention()
+                            .try_into()
+                            .expect("invalid metrics retention")
+                    });
+                // Indexes can't be versioned.
+                let versions = BTreeMap::new();
+
+                let item = self
                     .parse_item(
-                        id,
+                        global_id,
                         &index.create_sql(),
+                        &versions,
                         None,
                         index.is_retained_metrics_object,
-                        if index.is_retained_metrics_object { Some(self.system_config().metrics_retention().try_into().expect("invalid metrics retention")) } else { None },
+                        custom_logical_compaction_window,local_expression_cache,
                     )
                     .unwrap_or_else(|e| {
                         panic!(
@@ -654,12 +686,12 @@ impl CatalogState {
                             index.name, e
                         )
                     });
-                let CatalogItem::Index(_) = &mut item else {
+                let CatalogItem::Index(_) = item else {
                     panic!("internal error: builtin index {}'s SQL does not begin with \"CREATE INDEX\".", index.name);
                 };
 
                 self.insert_item(
-                    id,
+                    item_id,
                     index.oid,
                     name,
                     item,
@@ -681,7 +713,7 @@ impl CatalogState {
                         CatalogItem::Type(item_type) => item_type,
                         _ => unreachable!("types can only reference other types"),
                     };
-                    item_type.details.array_id = Some(id);
+                    item_type.details.array_id = Some(item_id);
                 }
 
                 // Assert that no built-in types are record types so that we don't
@@ -692,7 +724,7 @@ impl CatalogState {
                 let schema_id = self.resolve_system_schema(typ.schema);
 
                 self.insert_item(
-                    id,
+                    item_id,
                     typ.oid,
                     QualifiedItemName {
                         qualifiers: ItemQualifiers {
@@ -703,9 +735,10 @@ impl CatalogState {
                     },
                     CatalogItem::Type(Type {
                         create_sql: None,
+                        global_id,
                         details: typ.details.clone(),
                         desc,
-                        resolved_ids: ResolvedIds(BTreeSet::new()),
+                        resolved_ids: ResolvedIds::empty(),
                     }),
                     MZ_SYSTEM_ROLE_ID,
                     PrivilegeMap::from_mz_acl_items(vec![
@@ -721,10 +754,13 @@ impl CatalogState {
                 // actually used by the system.
                 let oid = INVALID_OID;
                 self.insert_item(
-                    id,
+                    item_id,
                     oid,
                     name.clone(),
-                    CatalogItem::Func(Func { inner: func.inner }),
+                    CatalogItem::Func(Func {
+                        inner: func.inner,
+                        global_id,
+                    }),
                     MZ_SYSTEM_ROLE_ID,
                     PrivilegeMap::default(),
                 );
@@ -738,15 +774,16 @@ impl CatalogState {
                 acl_items.extend_from_slice(&coll.access);
 
                 self.insert_item(
-                    id,
+                    item_id,
                     coll.oid,
                     name.clone(),
                     CatalogItem::Source(Source {
                         create_sql: None,
                         data_source: DataSourceDesc::Introspection(coll.data_source),
                         desc: coll.desc.clone(),
+                        global_id,
                         timeline: Timeline::EpochMilliseconds,
-                        resolved_ids: ResolvedIds(BTreeSet::new()),
+                        resolved_ids: ResolvedIds::empty(),
                         custom_logical_compaction_window: coll.is_retained_metrics_object.then(
                             || {
                                 self.system_config()
@@ -767,14 +804,18 @@ impl CatalogState {
                     MZ_SYSTEM_ROLE_ID,
                 )];
                 acl_items.extend_from_slice(&ct.access);
+                // Continual Tasks can't be versioned.
+                let versions = BTreeMap::new();
 
                 let item = self
                     .parse_item(
-                        id,
+                        global_id,
                         &ct.create_sql(),
+                        &versions,
                         None,
                         false,
                         None,
+                        local_expression_cache,
                     )
                     .unwrap_or_else(|e| {
                         panic!(
@@ -791,7 +832,7 @@ impl CatalogState {
                 };
 
                 self.insert_item(
-                    id,
+                    item_id,
                     ct.oid,
                     name,
                     item,
@@ -800,13 +841,17 @@ impl CatalogState {
                 );
             }
             Builtin::Connection(connection) => {
+                // Connections can't be versioned.
+                let versions = BTreeMap::new();
                 let mut item = self
                     .parse_item(
-                        id,
+                        global_id,
                         connection.sql,
+                        &versions,
                         None,
                         false,
                         None,
+                        local_expression_cache,
                     )
                     .unwrap_or_else(|e| {
                         panic!(
@@ -829,7 +874,7 @@ impl CatalogState {
                 acl_items.extend_from_slice(connection.access);
 
                 self.insert_item(
-                    id,
+                    item_id,
                     connection.oid,
                     name.clone(),
                     item,
@@ -893,20 +938,21 @@ impl CatalogState {
         item: mz_catalog::durable::Item,
         diff: StateDiff,
         retractions: &mut InProgressRetractions,
+        local_expression_cache: &mut LocalExpressionCache,
     ) -> Result<(), CatalogError> {
         match diff {
             StateDiff::Addition => {
                 let key = item.key();
                 let mz_catalog::durable::Item {
-                    id: _,
+                    id,
                     oid,
+                    global_id,
                     schema_id,
                     name,
                     create_sql,
                     owner_id,
                     privileges,
-                    global_id,
-                    extra_versions: _,
+                    extra_versions,
                 } = item;
                 let schema = self.find_non_temp_schema(&schema_id);
                 let name = QualifiedItemName {
@@ -918,23 +964,25 @@ impl CatalogState {
                 };
                 let entry = match retractions.items.remove(&key) {
                     Some(mut retraction) => {
-                        // TODO(alter_table): Switch this to CatalogItemId.
-                        assert_eq!(retraction.id, item.global_id);
+                        assert_eq!(retraction.id, item.id);
                         // We only reparse the SQL if it's changed. Otherwise, we use the existing
                         // item. This is a performance optimization and not needed for correctness.
                         // This makes it difficult to use the `UpdateFrom` trait, but the structure
                         // is still the same as the trait.
-                        //
-                        // TODO(alter_table): Switch this to CatalogItemId.
                         if retraction.create_sql() != create_sql {
                             let item = self
-                                .deserialize_item(global_id, &create_sql)
+                                .deserialize_item(
+                                    global_id,
+                                    &create_sql,
+                                    &extra_versions,
+                                    local_expression_cache,
+                                )
                                 .unwrap_or_else(|e| {
                                     panic!("{e:?}: invalid persisted SQL: {create_sql}")
                                 });
                             retraction.item = item;
                         }
-                        retraction.id = global_id;
+                        retraction.id = id;
                         retraction.oid = oid;
                         retraction.name = name;
                         retraction.owner_id = owner_id;
@@ -943,9 +991,13 @@ impl CatalogState {
                         retraction
                     }
                     None => {
-                        // TODO(alter_table): Switch this to CatalogItemId.
                         let catalog_item = self
-                            .deserialize_item(global_id, &create_sql)
+                            .deserialize_item(
+                                global_id,
+                                &create_sql,
+                                &extra_versions,
+                                local_expression_cache,
+                            )
                             .unwrap_or_else(|e| {
                                 panic!("{e:?}: invalid persisted SQL: {create_sql}")
                             });
@@ -953,7 +1005,7 @@ impl CatalogState {
                             item: catalog_item,
                             referenced_by: Vec::new(),
                             used_by: Vec::new(),
-                            id: global_id,
+                            id,
                             oid,
                             name,
                             owner_id,
@@ -965,8 +1017,7 @@ impl CatalogState {
                 self.insert_entry(entry);
             }
             StateDiff::Retraction => {
-                // TODO(alter_table): Switch this to CatalogItemId.
-                let entry = self.drop_item(item.global_id);
+                let entry = self.drop_item(item.id);
                 let key = item.into_key_value().0;
                 retractions.items.insert(key, entry);
             }
@@ -1017,19 +1068,16 @@ impl CatalogState {
     ) {
         match diff {
             StateDiff::Addition => {
-                let prev = self.source_references.insert(
-                    source_references.source_id.to_global_id(),
-                    source_references.into(),
-                );
+                let prev = self
+                    .source_references
+                    .insert(source_references.source_id, source_references.into());
                 assert!(
                     prev.is_none(),
                     "values must be explicitly retracted before inserting a new value: {prev:?}"
                 );
             }
             StateDiff::Retraction => {
-                let prev = self
-                    .source_references
-                    .remove(&source_references.source_id.to_global_id());
+                let prev = self.source_references.remove(&source_references.source_id);
                 assert!(
                     prev.is_some(),
                     "retraction for a non-existent existing value: {source_references:?}"
@@ -1139,7 +1187,7 @@ impl CatalogState {
             StateUpdateKind::SystemConfiguration(_) => Vec::new(),
             StateUpdateKind::Cluster(cluster) => self.pack_cluster_update(&cluster.name, diff),
             StateUpdateKind::IntrospectionSourceIndex(introspection_source_index) => {
-                self.pack_item_update(introspection_source_index.index_id, diff)
+                self.pack_item_update(introspection_source_index.item_id, diff)
             }
             StateUpdateKind::ClusterReplica(cluster_replica) => self.pack_cluster_replica_update(
                 cluster_replica.cluster_id,
@@ -1151,13 +1199,13 @@ impl CatalogState {
                 // items collection and so get handled through the normal
                 // `StateUpdateKind::Item`.`
                 if !system_object_mapping.unique_identifier.runtime_alterable() {
-                    self.pack_item_update(system_object_mapping.unique_identifier.global_id, diff)
+                    self.pack_item_update(system_object_mapping.unique_identifier.catalog_id, diff)
                 } else {
                     vec![]
                 }
             }
             StateUpdateKind::TemporaryItem(item) => self.pack_item_update(item.id, diff),
-            StateUpdateKind::Item(item) => self.pack_item_update(item.global_id, diff),
+            StateUpdateKind::Item(item) => self.pack_item_update(item.id, diff),
             StateUpdateKind::Comment(comment) => vec![self.pack_comment_update(
                 comment.object_id,
                 comment.sub_component,
@@ -1180,7 +1228,7 @@ impl CatalogState {
         }
     }
 
-    fn get_entry_mut(&mut self, id: &GlobalId) -> &mut CatalogEntry {
+    fn get_entry_mut(&mut self, id: &CatalogItemId) -> &mut CatalogEntry {
         self.entry_by_id
             .get_mut(id)
             .unwrap_or_else(|| panic!("catalog out of sync, missing id {id}"))
@@ -1227,27 +1275,47 @@ impl CatalogState {
     #[instrument(name = "catalog::parse_views")]
     async fn parse_builtin_views(
         state: &mut CatalogState,
-        builtin_views: Vec<(&Builtin<NameReference>, GlobalId)>,
+        builtin_views: Vec<(&'static BuiltinView, CatalogItemId, GlobalId)>,
+        retractions: &mut InProgressRetractions,
+        local_expression_cache: &mut LocalExpressionCache,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
+        let (updates, additions): (Vec<_>, Vec<_>) =
+            builtin_views
+                .into_iter()
+                .partition_map(|(view, item_id, gid)| {
+                    match retractions.system_object_mappings.remove(&item_id) {
+                        Some(entry) => Either::Left(entry),
+                        None => Either::Right((view, item_id, gid)),
+                    }
+                });
+
+        for entry in updates {
+            // This implies that we updated the fingerprint for some builtin view. The retraction
+            // was parsed, planned, and optimized using the compiled in definition, not the
+            // definition from a previous version. So we can just stick the old entry back into the
+            // catalog.
+            state.insert_entry(entry);
+        }
+
         let mut handles = Vec::new();
-        let mut awaiting_id_dependencies: BTreeMap<GlobalId, Vec<GlobalId>> = BTreeMap::new();
-        let mut awaiting_name_dependencies: BTreeMap<String, Vec<GlobalId>> = BTreeMap::new();
+        let mut awaiting_id_dependencies: BTreeMap<CatalogItemId, Vec<CatalogItemId>> =
+            BTreeMap::new();
+        let mut awaiting_name_dependencies: BTreeMap<String, Vec<CatalogItemId>> = BTreeMap::new();
         // Some errors are due to the implementation of casts or SQL functions that depend on some
         // view. Instead of figuring out the exact view dependency, delay these until the end.
         let mut awaiting_all = Vec::new();
         // Completed views, needed to avoid race conditions.
-        let mut completed_ids: BTreeSet<GlobalId> = BTreeSet::new();
+        let mut completed_ids: BTreeSet<CatalogItemId> = BTreeSet::new();
         let mut completed_names: BTreeSet<String> = BTreeSet::new();
+
         // Avoid some reference lifetime issues by not passing `builtin` into the spawned task.
-        let mut views: BTreeMap<GlobalId, &BuiltinView> =
-            BTreeMap::from_iter(builtin_views.into_iter().map(|(builtin, id)| {
-                let Builtin::View(view) = builtin else {
-                    unreachable!("handled elsewhere");
-                };
-                (id, *view)
-            }));
-        let ids: Vec<_> = views.keys().copied().collect();
-        let mut ready: VecDeque<GlobalId> = views.keys().cloned().collect();
+        let mut views: BTreeMap<CatalogItemId, (&BuiltinView, GlobalId)> = additions
+            .into_iter()
+            .map(|(view, item_id, gid)| (item_id, (view, gid)))
+            .collect();
+        let item_ids: Vec<_> = views.keys().copied().collect();
+
+        let mut ready: VecDeque<CatalogItemId> = views.keys().cloned().collect();
         while !handles.is_empty() || !ready.is_empty() || !awaiting_all.is_empty() {
             if handles.is_empty() && ready.is_empty() {
                 // Enqueue the views that were waiting for all the others.
@@ -1258,30 +1326,56 @@ impl CatalogState {
             if !ready.is_empty() {
                 let spawn_state = Arc::new(state.clone());
                 while let Some(id) = ready.pop_front() {
-                    let view = views.get(&id).expect("must exist");
+                    let (view, global_id) = views.get(&id).expect("must exist");
+                    let global_id = *global_id;
                     let create_sql = view.create_sql();
+                    // Views can't be versioned.
+                    let versions = BTreeMap::new();
+
                     let span = info_span!(parent: None, "parse builtin view", name = view.name);
                     OpenTelemetryContext::obtain().attach_as_parent_to(&span);
                     let task_state = Arc::clone(&spawn_state);
+                    let cached_expr = local_expression_cache.remove_cached_expression(&global_id);
                     let handle = mz_ore::task::spawn(
                         || "parse view",
                         async move {
-                            let res = task_state.parse_item(id, &create_sql, None, false, None);
-                            (id, res)
+                            let res = task_state.parse_item_inner(
+                                global_id,
+                                &create_sql,
+                                &versions,
+                                None,
+                                false,
+                                None,
+                                cached_expr,
+                            );
+                            (id, global_id, res)
                         }
                         .instrument(span),
                     );
                     handles.push(handle);
                 }
             }
+
             // Wait for a view to be ready.
             let (handle, _idx, remaining) = future::select_all(handles).await;
             handles = remaining;
-            let (id, res) = handle.expect("must join");
+            let (id, global_id, res) = handle.expect("must join");
+            let mut insert_cached_expr = |cached_expr| {
+                if let Some(cached_expr) = cached_expr {
+                    local_expression_cache.insert_cached_expression(global_id, cached_expr);
+                }
+            };
             match res {
-                Ok(item) => {
+                Ok((item, uncached_expr)) => {
+                    if let Some((uncached_expr, optimizer_features)) = uncached_expr {
+                        local_expression_cache.insert_uncached_expression(
+                            global_id,
+                            uncached_expr,
+                            optimizer_features,
+                        );
+                    }
                     // Add item to catalog.
-                    let view = views.remove(&id).expect("must exist");
+                    let (view, _gid) = views.remove(&id).expect("must exist");
                     let schema_id = state
                         .ambient_schemas_by_name
                         .get(view.schema)
@@ -1324,7 +1418,11 @@ impl CatalogState {
                     completed_names.insert(full_name);
                 }
                 // If we were missing a dependency, wait for it to be added.
-                Err(AdapterError::PlanError(plan::PlanError::InvalidId(missing_dep))) => {
+                Err((
+                    AdapterError::PlanError(plan::PlanError::InvalidId(missing_dep)),
+                    cached_expr,
+                )) => {
+                    insert_cached_expr(cached_expr);
                     if completed_ids.contains(&missing_dep) {
                         ready.push_back(id);
                     } else {
@@ -1335,42 +1433,55 @@ impl CatalogState {
                     }
                 }
                 // If we were missing a dependency, wait for it to be added.
-                Err(AdapterError::PlanError(plan::PlanError::Catalog(
-                                                SqlCatalogError::UnknownItem(missing_dep),
-                                            ))) => match GlobalId::from_str(&missing_dep) {
-                    Ok(missing_dep) => {
-                        if completed_ids.contains(&missing_dep) {
-                            ready.push_back(id);
-                        } else {
-                            awaiting_id_dependencies
-                                .entry(missing_dep)
-                                .or_default()
-                                .push(id);
+                Err((
+                    AdapterError::PlanError(plan::PlanError::Catalog(
+                        SqlCatalogError::UnknownItem(missing_dep),
+                    )),
+                    cached_expr,
+                )) => {
+                    insert_cached_expr(cached_expr);
+                    match CatalogItemId::from_str(&missing_dep) {
+                        Ok(missing_dep) => {
+                            if completed_ids.contains(&missing_dep) {
+                                ready.push_back(id);
+                            } else {
+                                awaiting_id_dependencies
+                                    .entry(missing_dep)
+                                    .or_default()
+                                    .push(id);
+                            }
+                        }
+                        Err(_) => {
+                            if completed_names.contains(&missing_dep) {
+                                ready.push_back(id);
+                            } else {
+                                awaiting_name_dependencies
+                                    .entry(missing_dep)
+                                    .or_default()
+                                    .push(id);
+                            }
                         }
                     }
-                    Err(_) => {
-                        if completed_names.contains(&missing_dep) {
-                            ready.push_back(id);
-                        } else {
-                            awaiting_name_dependencies
-                                .entry(missing_dep)
-                                .or_default()
-                                .push(id);
-                        }
-                    }
-                },
-                Err(AdapterError::PlanError(plan::PlanError::InvalidCast { .. })) => {
+                }
+                Err((
+                    AdapterError::PlanError(plan::PlanError::InvalidCast { .. }),
+                    cached_expr,
+                )) => {
+                    insert_cached_expr(cached_expr);
                     awaiting_all.push(id);
                 }
-                Err(e) => panic!(
-                    "internal error: failed to load bootstrap view:\n\
-                        {name}\n\
-                        error:\n\
-                        {e:?}\n\n\
-                        Make sure that the schema name is specified in the builtin view's create sql statement.
-                        ",
-                    name = views.get(&id).expect("must exist").name,
-                ),
+                Err((e, _)) => {
+                    let (bad_view, _gid) = views.get(&id).expect("must exist");
+                    panic!(
+                        "internal error: failed to load bootstrap view:\n\
+                            {name}\n\
+                            error:\n\
+                            {e:?}\n\n\
+                            Make sure that the schema name is specified in the builtin view's create sql statement.
+                            ",
+                        name = bad_view.name,
+                    )
+                }
             }
         }
 
@@ -1382,12 +1493,13 @@ impl CatalogState {
         assert!(awaiting_all.is_empty());
         assert!(views.is_empty());
 
-        ids.into_iter()
+        item_ids
+            .into_iter()
             .flat_map(|id| state.pack_item_update(id, 1))
             .collect()
     }
 
-    /// Associates a name, `GlobalId`, and entry.
+    /// Associates a name, `CatalogItemId`, and entry.
     fn insert_entry(&mut self, entry: CatalogEntry) {
         if !entry.id.is_system() {
             if let Some(cluster_id) = entry.item.cluster_id() {
@@ -1399,7 +1511,7 @@ impl CatalogState {
             };
         }
 
-        for u in &entry.references().0 {
+        for u in entry.references().items() {
             match self.entry_by_id.get_mut(u) {
                 Some(metadata) => metadata.referenced_by.push(entry.id()),
                 None => panic!(
@@ -1423,6 +1535,9 @@ impl CatalogState {
                     self.resolve_full_name(entry.name(), entry.conn_id())
                 ),
             }
+        }
+        for gid in entry.item.global_ids() {
+            self.entry_by_global_id.insert(gid, entry.id());
         }
         let conn_id = entry.item().conn_id().unwrap_or(&SYSTEM_CONN_ID);
         let schema = self.get_schema_mut(
@@ -1448,10 +1563,10 @@ impl CatalogState {
         self.entry_by_id.insert(entry.id(), entry.clone());
     }
 
-    /// Associates a name, `GlobalId`, and entry.
+    /// Associates a name, [`CatalogItemId`], and entry.
     fn insert_item(
         &mut self,
-        id: GlobalId,
+        id: CatalogItemId,
         oid: u32,
         name: QualifiedItemName,
         item: CatalogItem,
@@ -1473,9 +1588,9 @@ impl CatalogState {
     }
 
     #[mz_ore::instrument(level = "trace")]
-    fn drop_item(&mut self, id: GlobalId) -> CatalogEntry {
+    fn drop_item(&mut self, id: CatalogItemId) -> CatalogEntry {
         let metadata = self.entry_by_id.remove(&id).expect("catalog out of sync");
-        for u in &metadata.references().0 {
+        for u in metadata.references().items() {
             if let Some(dep_metadata) = self.entry_by_id.get_mut(u) {
                 dep_metadata.referenced_by.retain(|u| *u != metadata.id())
             }
@@ -1484,6 +1599,9 @@ impl CatalogState {
             if let Some(dep_metadata) = self.entry_by_id.get_mut(&u) {
                 dep_metadata.used_by.retain(|u| *u != metadata.id())
             }
+        }
+        for gid in metadata.global_ids() {
+            self.entry_by_global_id.remove(&gid);
         }
 
         let conn_id = metadata.item().conn_id().unwrap_or(&SYSTEM_CONN_ID);
@@ -1528,7 +1646,8 @@ impl CatalogState {
         &mut self,
         cluster_id: ClusterId,
         log: &'static BuiltinLog,
-        index_id: GlobalId,
+        item_id: CatalogItemId,
+        global_id: GlobalId,
         oid: u32,
     ) {
         let source_name = FullItemName {
@@ -1546,13 +1665,14 @@ impl CatalogState {
         };
         index_name = self.find_available_name(index_name, &SYSTEM_CONN_ID);
         let index_item_name = index_name.item.clone();
-        let log_id = self.resolve_builtin_log(log);
+        let (log_item_id, log_global_id) = self.resolve_builtin_log(log);
         self.insert_item(
-            index_id,
+            item_id,
             oid,
             index_name,
             CatalogItem::Index(Index {
-                on: log_id,
+                global_id,
+                on: log_global_id,
                 keys: log
                     .variant
                     .index_by()
@@ -1567,7 +1687,7 @@ impl CatalogState {
                     &log.variant.index_by(),
                 ),
                 conn_id: None,
-                resolved_ids: ResolvedIds(BTreeSet::from_iter([log_id])),
+                resolved_ids: [(log_item_id, log_global_id)].into_iter().collect(),
                 cluster_id,
                 is_retained_metrics_object: false,
                 custom_logical_compaction_window: None,
@@ -1740,7 +1860,7 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
         }
     }
 
-    /// Sort item updates by parsing statements to identify any id-based dependencies within
+    /// Sort item updates by parsing statements to identify any [`CatalogItemId`]-based dependencies within
     /// this set of updates and then performing a topological sort.
     fn sort_item_updates(
         item_updates: Vec<(mz_catalog::durable::Item, Timestamp, StateDiff)>,
@@ -1811,7 +1931,7 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
             // and can never depend upon one another, to fix the topological sort,
             // we can just always move sinks to the end.
             .sorted_by_key(|(item, _ts, _diff)| match item.item.typ() {
-                CatalogItemType::Sink => GlobalId::User(u64::MAX),
+                CatalogItemType::Sink => CatalogItemId::User(u64::MAX),
                 _ => item.id,
             })
             .collect()
@@ -1829,16 +1949,14 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
         while let (Some((item, _, _)), Some((temp_item, _, _))) =
             (item_updates.front(), temp_item_updates.front())
         {
-            // TODO(alter_table): Switch this to CatalogItemId.
-            if item.global_id < temp_item.id {
+            if item.id < temp_item.id {
                 let (item, ts, diff) = item_updates.pop_front().expect("non-empty");
                 state_updates.push(StateUpdate {
                     kind: StateUpdateKind::Item(item),
                     ts,
                     diff,
                 });
-            // TODO(alter_table): Switch this to CatalogItemId.
-            } else if item.global_id > temp_item.id {
+            } else if item.id > temp_item.id {
                 let (temp_item, ts, diff) = temp_item_updates.pop_front().expect("non-empty");
                 state_updates.push(StateUpdate {
                     kind: StateUpdateKind::TemporaryItem(temp_item),
@@ -1896,7 +2014,7 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
 /// order. This process is modeled as a state machine that batches then applies groups of updates.
 enum BootstrapApplyState {
     /// Additions of builtin views.
-    BuiltinViewAdditions(Vec<(&'static Builtin<NameReference>, GlobalId)>),
+    BuiltinViewAdditions(Vec<(&'static BuiltinView, CatalogItemId, GlobalId)>),
     /// Item updates that aren't builtin view additions.
     Items(Vec<StateUpdate>),
     /// All other updates.
@@ -1943,23 +2061,29 @@ impl BootstrapApplyState {
         self,
         state: &mut CatalogState,
         retractions: &mut InProgressRetractions,
+        local_expression_cache: &mut LocalExpressionCache,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
         match self {
             BootstrapApplyState::BuiltinViewAdditions(builtin_view_additions) => {
                 let restore = state.system_configuration.clone();
                 state.system_configuration.enable_for_item_parsing();
-                let builtin_table_updates =
-                    CatalogState::parse_builtin_views(state, builtin_view_additions).await;
+                let builtin_table_updates = CatalogState::parse_builtin_views(
+                    state,
+                    builtin_view_additions,
+                    retractions,
+                    local_expression_cache,
+                )
+                .await;
                 state.system_configuration = restore;
                 builtin_table_updates
             }
             BootstrapApplyState::Items(updates) => state.with_enable_for_item_parsing(|state| {
                 state
-                    .apply_updates_inner(updates, retractions)
+                    .apply_updates_inner(updates, retractions, local_expression_cache)
                     .expect("corrupt catalog")
             }),
             BootstrapApplyState::Updates(updates) => state
-                .apply_updates_inner(updates, retractions)
+                .apply_updates_inner(updates, retractions, local_expression_cache)
                 .expect("corrupt catalog"),
         }
     }
@@ -1969,6 +2093,7 @@ impl BootstrapApplyState {
         next: BootstrapApplyState,
         state: &mut CatalogState,
         retractions: &mut InProgressRetractions,
+        local_expression_cache: &mut LocalExpressionCache,
     ) -> (
         BootstrapApplyState,
         Vec<BuiltinTableUpdate<&'static BuiltinTable>>,
@@ -2000,7 +2125,9 @@ impl BootstrapApplyState {
             }
             (apply_state, next_apply_state) => {
                 // Apply the current batch and start batching new apply state.
-                let builtin_table_update = apply_state.apply(state, retractions).await;
+                let builtin_table_update = apply_state
+                    .apply(state, retractions, local_expression_cache)
+                    .await;
                 (next_apply_state, builtin_table_update)
             }
         }
@@ -2077,11 +2204,20 @@ fn apply_with_update<K, V, D>(
     }
 }
 
+/// Looks up a [`BuiltinView`] from a [`SystemObjectMapping`].
 fn lookup_builtin_view_addition(
-    system_object_mapping: mz_catalog::durable::SystemObjectMapping,
-) -> (&'static Builtin<NameReference>, GlobalId) {
+    mapping: SystemObjectMapping,
+) -> (&'static BuiltinView, CatalogItemId, GlobalId) {
     let (_, builtin) = BUILTIN_LOOKUP
-        .get(&system_object_mapping.description)
+        .get(&mapping.description)
         .expect("missing builtin view");
-    (*builtin, system_object_mapping.unique_identifier.global_id)
+    let Builtin::View(view) = builtin else {
+        unreachable!("programming error, expected BuiltinView found {builtin:?}");
+    };
+
+    (
+        view,
+        mapping.unique_identifier.catalog_id,
+        mapping.unique_identifier.global_id,
+    )
 }

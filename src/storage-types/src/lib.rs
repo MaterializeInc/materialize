@@ -23,6 +23,7 @@ pub mod shim;
 pub mod sinks;
 pub mod sources;
 pub mod stats;
+pub mod time_dependence;
 
 /// Explicitly states the contract between storage and higher levels of
 /// Materialize w/r/t which facets of objects managed by storage (e.g. sources,
@@ -45,3 +46,4 @@ pub trait AlterCompatible: std::fmt::Debug + PartialEq {
 }
 
 impl AlterCompatible for mz_repr::GlobalId {}
+impl AlterCompatible for mz_repr::CatalogItemId {}

@@ -20,9 +20,7 @@ use maplit::{btreemap, btreeset};
 use mz_adapter_types::compaction::SINCE_GRANULARITY;
 use mz_adapter_types::connection::ConnectionId;
 use mz_audit_log::VersionedEvent;
-use mz_catalog::memory::objects::{
-    CatalogItem, Connection, ContinualTask, DataSourceDesc, Index, MaterializedView, Sink,
-};
+use mz_catalog::memory::objects::{CatalogItem, Connection, DataSourceDesc, Sink};
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_compute_client::protocol::response::PeekResponse;
 use mz_controller::clusters::ReplicaLocation;
@@ -36,7 +34,7 @@ use mz_ore::str::StrExt;
 use mz_ore::task;
 use mz_postgres_util::tunnel::PostgresFlavor;
 use mz_repr::adt::numeric::Numeric;
-use mz_repr::{GlobalId, Timestamp};
+use mz_repr::{CatalogItemId, GlobalId, Timestamp};
 use mz_sql::catalog::{CatalogCluster, CatalogClusterReplica, CatalogSchema};
 use mz_sql::names::ResolvedDatabaseSpecifier;
 use mz_sql::plan::ConnectionDetails;
@@ -195,8 +193,8 @@ impl Coordinator {
 
         let mut sources_to_drop = vec![];
         let mut webhook_sources_to_restart = BTreeSet::new();
-        let mut tables_to_drop = vec![];
-        let mut storage_sinks_to_drop = vec![];
+        let mut table_gids_to_drop = vec![];
+        let mut storage_sink_gids_to_drop = vec![];
         let mut indexes_to_drop = vec![];
         let mut materialized_views_to_drop = vec![];
         let mut continual_tasks_to_drop = vec![];
@@ -227,11 +225,11 @@ impl Coordinator {
                         match &drop_object_info {
                             catalog::DropObjectInfo::Item(id) => {
                                 match self.catalog().get_entry(id).item() {
-                                    CatalogItem::Table(_) => {
-                                        tables_to_drop.push(*id);
+                                    CatalogItem::Table(table) => {
+                                        table_gids_to_drop.extend(table.global_ids());
                                     }
                                     CatalogItem::Source(source) => {
-                                        sources_to_drop.push(*id);
+                                        sources_to_drop.push((*id, source.global_id()));
                                         if let DataSourceDesc::Ingestion {
                                             ingestion_desc, ..
                                         } = &source.data_source
@@ -251,25 +249,26 @@ impl Coordinator {
                                             }
                                         }
                                     }
-                                    CatalogItem::Sink(Sink { .. }) => {
-                                        storage_sinks_to_drop.push(*id);
+                                    CatalogItem::Sink(sink) => {
+                                        storage_sink_gids_to_drop.push(sink.global_id());
                                     }
-                                    CatalogItem::Index(Index { cluster_id, .. }) => {
-                                        indexes_to_drop.push((*cluster_id, *id));
+                                    CatalogItem::Index(index) => {
+                                        indexes_to_drop.push((index.cluster_id, index.global_id()));
                                     }
-                                    CatalogItem::MaterializedView(MaterializedView {
-                                        cluster_id,
-                                        ..
-                                    }) => {
-                                        materialized_views_to_drop.push((*cluster_id, *id));
+                                    CatalogItem::MaterializedView(mv) => {
+                                        materialized_views_to_drop
+                                            .push((mv.cluster_id, mv.global_id()));
                                     }
-                                    CatalogItem::ContinualTask(ContinualTask {
-                                        cluster_id,
-                                        ..
-                                    }) => {
-                                        continual_tasks_to_drop.push((*cluster_id, *id));
+                                    CatalogItem::View(view) => {
+                                        views_to_drop.push((*id, view.clone()))
                                     }
-                                    CatalogItem::View(_) => views_to_drop.push(*id),
+                                    CatalogItem::ContinualTask(ct) => {
+                                        continual_tasks_to_drop.push((
+                                            *id,
+                                            ct.cluster_id,
+                                            ct.global_id(),
+                                        ));
+                                    }
                                     CatalogItem::Secret(_) => {
                                         secrets_to_drop.push(*id);
                                     }
@@ -388,14 +387,15 @@ impl Coordinator {
             }
         }
 
-        let relations_to_drop: BTreeSet<_> = sources_to_drop
+        let collections_to_drop: BTreeSet<GlobalId> = sources_to_drop
             .iter()
-            .chain(tables_to_drop.iter())
-            .chain(storage_sinks_to_drop.iter())
-            .chain(indexes_to_drop.iter().map(|(_, id)| id))
-            .chain(materialized_views_to_drop.iter().map(|(_, id)| id))
-            .chain(continual_tasks_to_drop.iter().map(|(_, id)| id))
-            .chain(views_to_drop.iter())
+            .map(|(_, gid)| *gid)
+            .chain(table_gids_to_drop.iter().copied())
+            .chain(storage_sink_gids_to_drop.iter().copied())
+            .chain(indexes_to_drop.iter().map(|(_, gid)| *gid))
+            .chain(materialized_views_to_drop.iter().map(|(_, gid)| *gid))
+            .chain(continual_tasks_to_drop.iter().map(|(_, _, gid)| *gid))
+            .chain(views_to_drop.iter().map(|(_id, view)| view.global_id()))
             .collect();
 
         // Clean up any active compute sinks like subscribes or copy to-s that rely on dropped relations or clusters.
@@ -405,9 +405,9 @@ impl Coordinator {
             if let Some(id) = sink
                 .depends_on()
                 .iter()
-                .find(|id| relations_to_drop.contains(id))
+                .find(|id| collections_to_drop.contains(id))
             {
-                let entry = self.catalog().get_entry(id);
+                let entry = self.catalog().get_entry_by_global_id(id);
                 let name = self
                     .catalog()
                     .resolve_full_name(entry.name(), Some(conn_id))
@@ -436,9 +436,9 @@ impl Coordinator {
             if let Some(id) = pending_peek
                 .depends_on
                 .iter()
-                .find(|id| relations_to_drop.contains(id))
+                .find(|id| collections_to_drop.contains(id))
             {
-                let entry = self.catalog().get_entry(id);
+                let entry = self.catalog().get_entry_by_global_id(id);
                 let name = self
                     .catalog()
                     .resolve_full_name(entry.name(), Some(&pending_peek.conn_id));
@@ -454,16 +454,20 @@ impl Coordinator {
 
         let storage_ids_to_drop = sources_to_drop
             .iter()
-            .chain(storage_sinks_to_drop.iter())
-            .chain(tables_to_drop.iter())
-            .chain(materialized_views_to_drop.iter().map(|(_, id)| id))
-            .chain(continual_tasks_to_drop.iter().map(|(_, id)| id))
-            .cloned();
+            .map(|(_, gid)| *gid)
+            .chain(storage_sink_gids_to_drop.iter().copied())
+            .chain(table_gids_to_drop.iter().copied())
+            .chain(materialized_views_to_drop.iter().map(|(_, gid)| *gid))
+            .chain(continual_tasks_to_drop.iter().map(|(_, _, gid)| *gid));
         let compute_ids_to_drop = indexes_to_drop
             .iter()
-            .chain(materialized_views_to_drop.iter())
-            .chain(continual_tasks_to_drop.iter())
-            .cloned();
+            .copied()
+            .chain(materialized_views_to_drop.iter().copied())
+            .chain(
+                continual_tasks_to_drop
+                    .iter()
+                    .map(|(_, cluster_id, gid)| (*cluster_id, *gid)),
+            );
 
         // Check if any Timelines would become empty, if we dropped the specified storage or
         // compute resources.
@@ -617,9 +621,9 @@ impl Coordinator {
                     assert_eq!(should_be_empty, became_empty, "emptiness did not match!");
                 }
             }
-            if !tables_to_drop.is_empty() {
+            if !table_gids_to_drop.is_empty() {
                 let ts = self.get_local_write_ts().await;
-                self.drop_tables(tables_to_drop, ts.timestamp);
+                self.drop_tables(table_gids_to_drop, ts.timestamp);
             }
             // Note that we drop tables before sources since there can be a weak dependency
             // on sources from tables in the storage controller that will result in error
@@ -632,8 +636,8 @@ impl Coordinator {
             if !webhook_sources_to_restart.is_empty() {
                 self.restart_webhook_sources(webhook_sources_to_restart);
             }
-            if !storage_sinks_to_drop.is_empty() {
-                self.drop_storage_sinks(storage_sinks_to_drop);
+            if !storage_sink_gids_to_drop.is_empty() {
+                self.drop_storage_sinks(storage_sink_gids_to_drop);
             }
             if !compute_sinks_to_drop.is_empty() {
                 self.retire_compute_sinks(compute_sinks_to_drop).await;
@@ -850,26 +854,27 @@ impl Coordinator {
     }
 
     /// A convenience method for dropping sources.
-    fn drop_sources(&mut self, sources: Vec<GlobalId>) {
-        for id in &sources {
-            self.active_webhooks.remove(id);
+    fn drop_sources(&mut self, sources: Vec<(CatalogItemId, GlobalId)>) {
+        for (item_id, _gid) in &sources {
+            self.active_webhooks.remove(item_id);
         }
         let storage_metadata = self.catalog.state().storage_metadata();
+        let source_gids = sources.into_iter().map(|(_id, gid)| gid).collect();
         self.controller
             .storage
-            .drop_sources(storage_metadata, sources)
+            .drop_sources(storage_metadata, source_gids)
             .unwrap_or_terminate("cannot fail to drop sources");
     }
 
-    fn drop_tables(&mut self, tables: Vec<GlobalId>, ts: Timestamp) {
+    fn drop_tables(&mut self, table_gids: Vec<GlobalId>, ts: Timestamp) {
         let storage_metadata = self.catalog.state().storage_metadata();
         self.controller
             .storage
-            .drop_tables(storage_metadata, tables, ts)
+            .drop_tables(storage_metadata, table_gids, ts)
             .unwrap_or_terminate("cannot fail to drop tables");
     }
 
-    fn restart_webhook_sources(&mut self, sources: impl IntoIterator<Item = GlobalId>) {
+    fn restart_webhook_sources(&mut self, sources: impl IntoIterator<Item = CatalogItemId>) {
         for id in sources {
             self.active_webhooks.remove(&id);
         }
@@ -1040,24 +1045,24 @@ impl Coordinator {
             .clear();
     }
 
-    pub(crate) fn drop_storage_sinks(&mut self, sinks: Vec<GlobalId>) {
+    pub(crate) fn drop_storage_sinks(&mut self, sink_gids: Vec<GlobalId>) {
         self.controller
             .storage
-            .drop_sinks(sinks)
+            .drop_sinks(sink_gids)
             .unwrap_or_terminate("cannot fail to drop sinks");
     }
 
     pub(crate) fn drop_indexes(&mut self, indexes: Vec<(ClusterId, GlobalId)>) {
         let mut by_cluster: BTreeMap<_, Vec<_>> = BTreeMap::new();
-        for (cluster_id, id) in indexes {
-            by_cluster.entry(cluster_id).or_default().push(id);
+        for (cluster_id, gid) in indexes {
+            by_cluster.entry(cluster_id).or_default().push(gid);
         }
-        for (cluster_id, ids) in by_cluster {
+        for (cluster_id, gids) in by_cluster {
             let compute = &mut self.controller.compute;
             // A cluster could have been dropped, so verify it exists.
             if compute.instance_exists(cluster_id) {
                 compute
-                    .drop_collections(cluster_id, ids)
+                    .drop_collections(cluster_id, gids)
                     .unwrap_or_terminate("cannot fail to drop collections");
             }
         }
@@ -1066,10 +1071,10 @@ impl Coordinator {
     /// A convenience method for dropping materialized views.
     fn drop_materialized_views(&mut self, mviews: Vec<(ClusterId, GlobalId)>) {
         let mut by_cluster: BTreeMap<_, Vec<_>> = BTreeMap::new();
-        let mut source_ids = Vec::new();
-        for (cluster_id, id) in mviews {
-            by_cluster.entry(cluster_id).or_default().push(id);
-            source_ids.push(id);
+        let mut mv_gids = Vec::new();
+        for (cluster_id, gid) in mviews {
+            by_cluster.entry(cluster_id).or_default().push(gid);
+            mv_gids.push(gid);
         }
 
         // Drop compute sinks.
@@ -1083,17 +1088,21 @@ impl Coordinator {
             }
         }
 
-        // Drop storage sources.
-        self.drop_sources(source_ids)
+        // Drop storage resources.
+        let storage_metadata = self.catalog.state().storage_metadata();
+        self.controller
+            .storage
+            .drop_sources(storage_metadata, mv_gids)
+            .unwrap_or_terminate("cannot fail to drop sources");
     }
 
     /// A convenience method for dropping continual tasks.
-    fn drop_continual_tasks(&mut self, cts: Vec<(ClusterId, GlobalId)>) {
+    fn drop_continual_tasks(&mut self, cts: Vec<(CatalogItemId, ClusterId, GlobalId)>) {
         let mut by_cluster: BTreeMap<_, Vec<_>> = BTreeMap::new();
         let mut source_ids = Vec::new();
-        for (cluster_id, id) in cts {
-            by_cluster.entry(cluster_id).or_default().push(id);
-            source_ids.push(id);
+        for (item_id, cluster_id, gid) in cts {
+            by_cluster.entry(cluster_id).or_default().push(gid);
+            source_ids.push((item_id, gid));
         }
 
         // Drop compute sinks.
@@ -1111,7 +1120,7 @@ impl Coordinator {
         self.drop_sources(source_ids)
     }
 
-    fn drop_vpc_endpoints_in_background(&self, vpc_endpoints: Vec<GlobalId>) {
+    fn drop_vpc_endpoints_in_background(&self, vpc_endpoints: Vec<CatalogItemId>) {
         let cloud_resource_controller = Arc::clone(self.cloud_resource_controller
             .as_ref()
             .ok_or(AdapterError::Unsupported("AWS PrivateLink connections"))
@@ -1270,10 +1279,10 @@ impl Coordinator {
         // Validate `sink.from` is in fact a storage collection
         self.controller.storage.check_exists(sink.from)?;
 
-        let status_id = Some(
-            self.catalog()
-                .resolve_builtin_storage_collection(&mz_catalog::builtin::MZ_SINK_STATUS_HISTORY),
-        );
+        let status_id = self
+            .catalog()
+            .resolve_builtin_storage_collection(&mz_catalog::builtin::MZ_SINK_STATUS_HISTORY);
+        let status_id = Some(self.catalog().get_entry(&status_id).latest_global_id());
 
         // The AsOf is used to determine at what time to snapshot reading from
         // the persist collection.  This is primarily relevant when we do _not_
@@ -1296,7 +1305,7 @@ impl Coordinator {
         let read_holds = self.acquire_read_holds(&id_bundle);
         let as_of = self.least_valid_read(&read_holds);
 
-        let storage_sink_from_entry = self.catalog().get_entry(&sink.from);
+        let storage_sink_from_entry = self.catalog().get_entry_by_global_id(&sink.from);
         let storage_sink_desc = mz_storage_types::sinks::StorageSinkDesc {
             from: sink.from,
             from_desc: storage_sink_from_entry
@@ -1375,6 +1384,9 @@ impl Coordinator {
                 }
                 Op::CreateRole { .. } => {
                     new_roles += 1;
+                }
+                Op::CreateNetworkPolicy { .. } => {
+                    new_network_policies += 1;
                 }
                 Op::CreateCluster { .. } => {
                     // TODO(benesch): having deprecated linked clusters, remove
@@ -1548,6 +1560,7 @@ impl Coordinator {
                 },
                 Op::AlterRole { .. }
                 | Op::AlterRetainHistory { .. }
+                | Op::AlterNetworkPolicy { .. }
                 | Op::UpdatePrivilege { .. }
                 | Op::UpdateDefaultPrivilege { .. }
                 | Op::GrantRole { .. }
@@ -1565,8 +1578,7 @@ impl Coordinator {
                 | Op::ResetAllSystemConfiguration { .. }
                 | Op::Comment { .. }
                 | Op::WeirdStorageUsageUpdates { .. }
-                | Op::TransactionDryRun
-                | Op::CreateNetworkPolicy { .. } => {}
+                | Op::TransactionDryRun => {}
             }
         }
 

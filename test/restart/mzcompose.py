@@ -18,7 +18,10 @@ import time
 from textwrap import dedent
 
 import requests
-from psycopg.errors import OperationalError
+from psycopg.errors import (
+    InternalError_,
+    OperationalError,
+)
 
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.kafka import Kafka
@@ -455,70 +458,116 @@ def workflow_network_policies(c: Composition) -> None:
     c.up("materialized")
     http_port = c.port("materialized", 6876)
 
-    # Ensure new user sessions are allowed.
+    # ensure default network policy
+    def assert_can_connect():
+        assert c.sql_query("SELECT 1") == [(1,)]
+        assert requests.post(
+            f"http://localhost:{http_port}/api/sql", json={"query": "select 1"}
+        ).json()["results"][0]["rows"] == [["1"]]
+
+    def assert_new_connection_fails():
+        # New SQL and HTTP user sessions should now fail.
+        try:
+            c.sql_query("SELECT 1")
+        except OperationalError as e:
+            # assert e.pgcode == "MZ010" # Not exposed by psycopg
+            assert "session denied" in str(e)
+            assert "DETAIL:  Access denied for address" in e.args[0], e.args
+
+        res = requests.post(
+            f"http://localhost:{http_port}/api/sql", json={"query": "select 1"}
+        )
+        assert res.status_code == 403
+        assert res.json()["message"] == "session denied"
+        assert res.json()["code"] == "MZ011"
+        assert "Access denied for address" in res.json()["detail"]
+
+    # ensure default network policy
+    assert c.sql_query("show network_policy") == [("default",)]
+    assert_can_connect()
+
+    # enable network policy management
     c.sql(
-        "ALTER SYSTEM SET allow_user_sessions = true",
-        port=6877,
-        user="mz_system",
-    )
-    c.sql(
-        "ALTER SYSTEM SET default_network_policy_allow_list = '0.0.0.0/0'",
+        "ALTER SYSTEM SET enable_network_policies = true",
         port=6877,
         user="mz_system",
     )
 
-    # SQL and HTTP user sessions should work.
-    assert c.sql_query("SELECT 1") == [(1,)]
-    assert requests.post(
-        f"http://localhost:{http_port}/api/sql", json={"query": "select 1"}
-    ).json()["results"][0]["rows"] == [["1"]]
+    # assert we can't change the network policy to one that doesn't exist.
+    try:
+        c.sql_query(
+            "ALTER SYSTEM SET network_policy='apples'",
+            port=6877,
+            user="mz_system",
+        )
+    except InternalError_ as e:
+        assert (
+            e.diag.message_primary
+            and "no network policy with such name exists" in e.diag.message_primary
+        ), e
+    else:
+        raise RuntimeError(
+            "ALTER SYSTEM SET network_policy didn't return the expected error"
+        )
 
-    # Save a cursor for later.
+    # close network policies
+    c.sql(
+        "CREATE NETWORK POLICY closed (RULES ())",
+        port=6877,
+        user="mz_system",
+    )
+    c.sql(
+        "ALTER SYSTEM SET network_policy='closed'",
+        port=6877,
+        user="mz_system",
+    )
+    assert_new_connection_fails()
+
+    # can't drop the actively set network policy.
+    try:
+        c.sql_query(
+            "DROP NETWORK POLICY closed",
+            port=6877,
+            user="mz_system",
+        )
+    except InternalError_ as e:
+        assert (
+            e.diag.message_primary
+            and "network policy is currently in use" in e.diag.message_primary
+        ), e
+    else:
+        raise RuntimeError("DROP NETWORK POLICY didn't return the expected error")
+
+    # open the closed network policy
+    c.sql(
+        "ALTER NETWORK POLICY closed SET (RULES (open (ACTION='allow', DIRECTION='ingress', ADDRESS='0.0.0.0/0')))",
+        port=6877,
+        user="mz_system",
+    )
+    assert_can_connect()
     cursor = c.sql_cursor()
 
-    # Block external user session by ip.
+    # shut down the closed network policy
     c.sql(
-        "ALTER SYSTEM SET default_network_policy_allow_list = '0.0.0.0/32'",
+        "ALTER NETWORK POLICY closed SET (RULES (closed (ACTION='allow', DIRECTION='ingress', ADDRESS='0.0.0.0/32')))",
         port=6877,
         user="mz_system",
     )
+    assert_new_connection_fails()
 
-    # New SQL and HTTP user sessions should now fail.
-    try:
-        c.sql_query("SELECT 1")
-    except OperationalError as e:
-        # assert e.pgcode == "MZ010" # Not exposed by psycopg
-        assert "session denied" in str(e)
-        assert "DETAIL:  Access denied for address" in e.args[0], e.args
+    # validate that the cursor from the beginning of the test still works.
+    assert cursor.execute("SELECT 1").fetchall() == [(1,)]
 
-    res = requests.post(
-        f"http://localhost:{http_port}/api/sql", json={"query": "select 1"}
-    )
-    assert res.status_code == 403
-    assert res.json()["message"] == "session denied"
-    assert res.json()["code"] == "MZ011"
-    assert "Access denied for address" in res.json()["detail"]
-
-    # The cursor from the beginning of the test should still work.
-    cursor.execute("SELECT 1")
-    assert cursor.fetchall() == [(1,)]
-
-    # Re-allow new user sessions.
     c.sql(
-        "ALTER SYSTEM SET default_network_policy_allow_list = '0.0.0.0/0'",
+        "ALTER SYSTEM SET network_policy='default'",
         port=6877,
         user="mz_system",
     )
-
-    # SQL and HTTP user sessions should work again.
-    assert c.sql_query("SELECT 1") == [(1,)]
-    assert requests.post(
-        f"http://localhost:{http_port}/api/sql", json={"query": "select 1"}
-    ).json()["results"][0]["rows"] == [["1"]]
-
-    # The cursor from the beginning of the test should still work.
-    cursor.execute("SELECT 1")
-    assert cursor.fetchall() == [(1,)]
+    c.sql(
+        "DROP NETWORK POLICY closed",
+        port=6877,
+        user="mz_system",
+    )
 
 
 def workflow_drop_materialize_database(c: Composition) -> None:
@@ -616,14 +665,14 @@ def workflow_bound_size_mz_status_history(c: Composition) -> None:
     c.up("materialized")
 
     # Verify that we have fewer events now
-    # 13 resp. because the truncation default is 5, and the restarted
+    # 14 resp. because the truncation default is 5, and the restarted
     # objects produce a new starting and running event.
     c.testdrive(
         service="testdrive_no_reset",
         input=dedent(
             """
             > SELECT COUNT(*) FROM mz_internal.mz_source_status_history
-            13
+            14
 
             > SELECT COUNT(*) FROM mz_internal.mz_sink_status_history
             7

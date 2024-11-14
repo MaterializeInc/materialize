@@ -47,6 +47,7 @@ use crate::healthcheck::HealthStatusUpdate;
 use crate::metrics::upsert::UpsertMetrics;
 use crate::render::sources::OutputIndex;
 use crate::storage_state::StorageInstanceContext;
+use crate::upsert_continual_feedback;
 use autospill::AutoSpillBackend;
 use memory::InMemoryHashMap;
 use types::{
@@ -57,7 +58,8 @@ use types::{
 mod autospill;
 mod memory;
 mod rocksdb;
-mod types;
+// TODO(aljoscha): Move next to upsert module, rename to upsert_types.
+pub(crate) mod types;
 
 pub type UpsertValue = Result<Row, UpsertError>;
 
@@ -189,7 +191,9 @@ pub fn rehydration_finished<G, T>(
             }
         }
         tracing::info!(
-            "timely-{worker_id} upsert source {id} has downgraded past the resume upper ({resume_upper:?}) across all workers",
+            %worker_id,
+            source_id = %id,
+            "upsert source has downgraded past the resume upper ({resume_upper:?}) across all workers",
         );
         drop(token);
     });
@@ -218,8 +222,8 @@ pub(crate) fn upsert<G: Scope, FromTime>(
     PressOnDropButton,
 )
 where
-    G::Timestamp: TotalOrder,
-    FromTime: Timestamp,
+    G::Timestamp: TotalOrder + Sync,
+    FromTime: Timestamp + Sync,
 {
     let upsert_metrics = source_config.metrics.get_upsert_metrics(
         source_config.id,
@@ -264,12 +268,12 @@ where
             .spill_to_disk_threshold_bytes;
 
         tracing::info!(
+            worker_id = %source_config.worker_id,
+            source_id = %source_config.id,
             ?tuning,
             ?storage_configuration.parameters.upsert_auto_spill_config,
             ?rocksdb_use_native_merge_operator,
-            "timely-{} rendering {} with rocksdb-backed upsert state",
-            source_config.worker_id,
-            source_config.id
+            "rendering upsert source with rocksdb-backed upsert state"
         );
         let rocksdb_shared_metrics = Arc::clone(&upsert_metrics.rocksdb_shared);
         let rocksdb_instance_metrics = Arc::clone(&upsert_metrics.rocksdb_instance_metrics);
@@ -315,8 +319,11 @@ where
             )
         };
 
+        // TODO(aljoscha): I don't like how we have basically the same call
+        // three times here, but it's hard working around those impl Futures
+        // that return an impl Trait. Oh well...
         if allow_auto_spill {
-            upsert_inner(
+            upsert_operator(
                 &thin_input,
                 upsert_envelope.key_indices,
                 resume_upper,
@@ -328,11 +335,12 @@ where
                     AutoSpillBackend::new(rocksdb_init_fn, spill_threshold, rocksdb_in_use_metric)
                 },
                 upsert_config,
+                storage_configuration,
                 prevent_snapshot_buffering,
                 snapshot_buffering_max,
             )
         } else {
-            upsert_inner(
+            upsert_operator(
                 &thin_input,
                 upsert_envelope.key_indices,
                 resume_upper,
@@ -342,17 +350,18 @@ where
                 source_config,
                 rocksdb_init_fn,
                 upsert_config,
+                storage_configuration,
                 prevent_snapshot_buffering,
                 snapshot_buffering_max,
             )
         }
     } else {
         tracing::info!(
-            "timely-{} rendering {} with memory-backed upsert state",
-            source_config.worker_id,
-            source_config.id
+            worker_id = %source_config.worker_id,
+            source_id = %source_config.id,
+            "rendering upsert source with memory-backed upsert state",
         );
-        upsert_inner(
+        upsert_operator(
             &thin_input,
             upsert_envelope.key_indices,
             resume_upper,
@@ -361,6 +370,71 @@ where
             upsert_metrics,
             source_config,
             || async { InMemoryHashMap::default() },
+            upsert_config,
+            storage_configuration,
+            prevent_snapshot_buffering,
+            snapshot_buffering_max,
+        )
+    }
+}
+
+// A shim so we can dispatch based on the dyncfg that tells us which upsert
+// operator to use.
+fn upsert_operator<G: Scope, FromTime, F, Fut, US>(
+    input: &Collection<G, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
+    key_indices: Vec<usize>,
+    resume_upper: Antichain<G::Timestamp>,
+    persist_input: Collection<G, Result<Row, DataflowError>, Diff>,
+    persist_token: Option<Vec<PressOnDropButton>>,
+    upsert_metrics: UpsertMetrics,
+    source_config: crate::source::RawSourceCreationConfig,
+    state: F,
+    upsert_config: UpsertConfig,
+    storage_configuration: &StorageConfiguration,
+    prevent_snapshot_buffering: bool,
+    snapshot_buffering_max: Option<usize>,
+) -> (
+    Collection<G, Result<Row, DataflowError>, Diff>,
+    Stream<G, (OutputIndex, HealthStatusUpdate)>,
+    Stream<G, Infallible>,
+    PressOnDropButton,
+)
+where
+    G::Timestamp: TotalOrder + Sync,
+    F: FnOnce() -> Fut + 'static,
+    Fut: std::future::Future<Output = US>,
+    US: UpsertStateBackend<Option<FromTime>>,
+    FromTime: Debug + timely::ExchangeData + Ord + Sync,
+{
+    let use_continual_feedback_upsert =
+        dyncfgs::STORAGE_USE_CONTINUAL_FEEDBACK_UPSERT.get(storage_configuration.config_set());
+
+    tracing::info!(id = %source_config.id, %use_continual_feedback_upsert, "upsert operator implementation");
+
+    if use_continual_feedback_upsert {
+        upsert_continual_feedback::upsert_inner(
+            input,
+            key_indices,
+            resume_upper,
+            persist_input,
+            persist_token,
+            upsert_metrics,
+            source_config,
+            state,
+            upsert_config,
+            prevent_snapshot_buffering,
+            snapshot_buffering_max,
+        )
+    } else {
+        upsert_classic(
+            input,
+            key_indices,
+            resume_upper,
+            persist_input,
+            persist_token,
+            upsert_metrics,
+            source_config,
+            state,
             upsert_config,
             prevent_snapshot_buffering,
             snapshot_buffering_max,
@@ -389,15 +463,13 @@ where
             let mut capability: Option<InputCapability<G::Timestamp>> = None;
             // A batch of received updates
             let mut updates = Vec::new();
-            let mut tmp = Vec::new();
             move |input, output| {
                 while let Some((cap, data)) = input.next() {
                     assert!(
                         data.iter().all(|(_, _, diff)| *diff > 0),
                         "invalid upsert input"
                     );
-                    data.swap(&mut tmp);
-                    updates.append(&mut tmp);
+                    updates.append(data);
                     match capability.as_mut() {
                         Some(capability) => {
                             if cap.time() <= capability.time() {
@@ -430,8 +502,8 @@ where
         .as_collection()
 }
 
-/// Helper method for `upsert_inner` used to stage `data` updates
-/// from the input timely edge.
+/// Helper method for `upsert_classic` used to stage `data` updates
+/// from the input/source timely edge.
 fn stage_input<T, FromTime>(
     stash: &mut Vec<(T, UpsertKey, Reverse<FromTime>, Option<UpsertValue>)>,
     data: &mut Vec<((UpsertKey, Option<UpsertValue>, FromTime), T, Diff)>,
@@ -481,7 +553,7 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
     S: UpsertStateBackend<Option<FromTime>>,
     G: Scope,
     T: PartialOrder + Ord + Clone + Debug,
-    FromTime: timely::ExchangeData + Ord,
+    FromTime: timely::ExchangeData + Ord + Sync,
     E: UpsertErrorEmitter<G>,
 {
     stash.sort_unstable();
@@ -613,11 +685,11 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
 
 // Created a struct to hold the configs for upserts.
 // So that new configs don't require a new method parameter.
-struct UpsertConfig {
-    shrink_upsert_unused_buffers_by_ratio: usize,
+pub(crate) struct UpsertConfig {
+    pub shrink_upsert_unused_buffers_by_ratio: usize,
 }
 
-fn upsert_inner<G: Scope, FromTime, F, Fut, US>(
+fn upsert_classic<G: Scope, FromTime, F, Fut, US>(
     input: &Collection<G, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
     key_indices: Vec<usize>,
     resume_upper: Antichain<G::Timestamp>,
@@ -636,11 +708,11 @@ fn upsert_inner<G: Scope, FromTime, F, Fut, US>(
     PressOnDropButton,
 )
 where
-    G::Timestamp: TotalOrder,
+    G::Timestamp: TotalOrder + Sync,
     F: FnOnce() -> Fut + 'static,
     Fut: std::future::Future<Output = US>,
     US: UpsertStateBackend<Option<FromTime>>,
-    FromTime: timely::ExchangeData + Ord,
+    FromTime: timely::ExchangeData + Ord + Sync,
 {
     let mut builder = AsyncOperatorBuilder::new("Upsert".to_string(), input.scope());
 
@@ -939,7 +1011,7 @@ where
 }
 
 #[async_trait::async_trait(?Send)]
-trait UpsertErrorEmitter<G> {
+pub(crate) trait UpsertErrorEmitter<G> {
     async fn emit(&mut self, context: String, e: anyhow::Error);
 }
 

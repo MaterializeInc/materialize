@@ -63,6 +63,7 @@ pub mod semijoin_idempotence;
 pub mod threshold_elision;
 pub mod typecheck;
 pub mod union_cancel;
+pub mod will_distinct;
 
 use crate::dataflow::DataflowMetainfo;
 use crate::typecheck::SharedContext;
@@ -480,6 +481,7 @@ impl Default for FuseAndCollapse {
                 Box::new(fusion::join::Join),
                 Box::new(normalize_lets::NormalizeLets::new(false)),
                 Box::new(fusion::reduce::Reduce),
+                Box::new(crate::will_distinct::WillDistinct),
                 Box::new(compound::UnionNegateFusion),
                 // This goes after union fusion so we can cancel out
                 // more branches at a time.

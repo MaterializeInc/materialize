@@ -20,7 +20,7 @@ use mz_avro::Schema;
 use mz_ore::cast::CastFrom;
 use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::adt::numeric::{self, NUMERIC_AGG_MAX_PRECISION, NUMERIC_DATUM_MAX_PRECISION};
-use mz_repr::{ColumnName, ColumnType, Datum, GlobalId, RelationDesc, Row, ScalarType};
+use mz_repr::{CatalogItemId, ColumnName, ColumnType, Datum, RelationDesc, Row, ScalarType};
 use serde_json::json;
 
 use crate::encode::{column_names_and_types, Encode, TypedDatum};
@@ -108,15 +108,15 @@ fn encode_message_unchecked(
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
 pub enum DocTarget {
-    Type(GlobalId),
+    Type(CatalogItemId),
     Field {
-        object_id: GlobalId,
+        object_id: CatalogItemId,
         column_name: ColumnName,
     },
 }
 
 impl DocTarget {
-    fn id(&self) -> GlobalId {
+    fn id(&self) -> CatalogItemId {
         match self {
             DocTarget::Type(object_id) => *object_id,
             DocTarget::Field { object_id, .. } => *object_id,
@@ -145,7 +145,7 @@ impl AvroSchemaGenerator {
         mut doc_options: BTreeMap<DocTarget, String>,
         avro_fullname: &str,
         set_null_defaults: bool,
-        sink_from: Option<GlobalId>,
+        sink_from: Option<CatalogItemId>,
         use_custom_envelope_names: bool,
     ) -> Result<Self, anyhow::Error> {
         let mut columns = column_names_and_types(desc);

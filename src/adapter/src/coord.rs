@@ -66,16 +66,6 @@
 //! ```
 //!
 
-use anyhow::Context;
-use chrono::{DateTime, Utc};
-use ipnet::IpNet;
-use mz_adapter_types::dyncfgs::WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL;
-use mz_compute_client::as_of_selection;
-use mz_ore::channel::trigger::Trigger;
-use mz_ore::url::SensitiveUrl;
-use mz_sql::names::{ResolvedIds, SchemaSpecifier};
-use mz_sql::session::user::User;
-use mz_storage_types::read_holds::ReadHold;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
@@ -87,26 +77,31 @@ use std::sync::LazyLock;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
-use thiserror::Error;
 
+use anyhow::Context;
+use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use fail::fail_point;
 use futures::future::{BoxFuture, FutureExt, LocalBoxFuture};
 use futures::StreamExt;
 use http::Uri;
+use ipnet::IpNet;
 use itertools::{Either, Itertools};
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
+use mz_adapter_types::dyncfgs::WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL;
 use mz_build_info::BuildInfo;
 use mz_catalog::builtin::{BUILTINS, BUILTINS_STATIC, MZ_STORAGE_USAGE_BY_SHARD};
 use mz_catalog::config::{AwsPrincipalContext, BuiltinItemMigrationConfig, ClusterReplicaSizeMap};
 use mz_catalog::durable::OpenableDurableCatalogState;
+use mz_catalog::expr_cache::{GlobalExpressions, LocalExpressions};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, ClusterReplicaProcessStatus, ClusterVariantManaged, Connection,
-    DataSourceDesc, TableDataSource,
+    DataSourceDesc, Table, TableDataSource,
 };
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig, VpcEndpointEvent};
+use mz_compute_client::as_of_selection;
 use mz_compute_client::controller::error::InstanceMissing;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::Plan;
@@ -117,28 +112,35 @@ use mz_controller_types::{ClusterId, ReplicaId, WatchSetId};
 use mz_expr::{MapFilterProject, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_orchestrator::{OfflineReason, ServiceProcessMetrics};
 use mz_ore::cast::{CastFrom, CastLossy};
+use mz_ore::channel::trigger::Trigger;
 use mz_ore::future::TimeoutError;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::task::{spawn, JoinHandle};
 use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
+use mz_ore::url::SensitiveUrl;
 use mz_ore::vec::VecExt;
-use mz_ore::{assert_none, instrument, soft_assert_or_log, soft_panic_or_log, stack};
+use mz_ore::{
+    assert_none, instrument, soft_assert_eq_or_log, soft_assert_or_log, soft_panic_or_log, stack,
+};
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::global_id::TransientIdGen;
+use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::role_id::RoleId;
-use mz_repr::{Diff, GlobalId, RelationDesc, Row, Timestamp};
+use mz_repr::{CatalogItemId, Diff, GlobalId, RelationDesc, Row, Timestamp};
 use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::{SecretsController, SecretsReader};
 use mz_sql::ast::{Raw, Statement};
 use mz_sql::catalog::{CatalogCluster, EnvironmentId};
+use mz_sql::names::{QualifiedItemName, ResolvedIds, SchemaSpecifier};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::{
-    self, AlterSinkPlan, ConnectionDetails, CreateConnectionPlan, OnTimeoutAction, Params,
-    QueryWhen,
+    self, AlterSinkPlan, ConnectionDetails, CreateConnectionPlan, NetworkPolicyRule,
+    OnTimeoutAction, Params, QueryWhen,
 };
+use mz_sql::session::user::User;
 use mz_sql::session::vars::{ConnectionCounter, SystemVars};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::ExplainStage;
@@ -147,6 +149,7 @@ use mz_storage_client::controller::{CollectionDescription, DataSource};
 use mz_storage_types::connections::inline::{IntoInlineConnection, ReferencedConnection};
 use mz_storage_types::connections::Connection as StorageConnection;
 use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::sinks::S3SinkFormat;
 use mz_storage_types::sources::Timeline;
 use mz_timestamp_oracle::postgres_oracle::{
@@ -156,6 +159,7 @@ use mz_timestamp_oracle::WriteTimestamp;
 use mz_transform::dataflow::DataflowMetainfo;
 use opentelemetry::trace::TraceContextExt;
 use serde::Serialize;
+use thiserror::Error;
 use timely::progress::{Antichain, Timestamp as _};
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
@@ -171,13 +175,14 @@ use crate::client::{Client, Handle};
 use crate::command::{Command, ExecuteResponse};
 use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncConfig};
 use crate::coord::appends::{
-    BuiltinTableAppendNotify, Deferred, GroupCommitPermit, PendingWriteTxn,
+    BuiltinTableAppendNotify, DeferredWriteOp, GroupCommitPermit, PendingWriteTxn,
 };
 use crate::coord::caught_up::CaughtUpCheckContext;
 use crate::coord::cluster_scheduling::SchedulingDecision;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::introspection::IntrospectionSubscribe;
 use crate::coord::peek::PendingPeek;
+use crate::coord::statement_logging::{StatementLogging, StatementLoggingId};
 use crate::coord::timeline::{TimelineContext, TimelineState};
 use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination};
 use crate::coord::validity::PlanValidity;
@@ -194,8 +199,6 @@ use crate::statement_logging::{StatementEndedExecutionReason, StatementLifecycle
 use crate::util::{ClientTransmitter, ResultExt};
 use crate::webhook::{WebhookAppenderInvalidator, WebhookConcurrencyLimiter};
 use crate::{flags, AdapterNotice, ReadHolds};
-
-use self::statement_logging::{StatementLogging, StatementLoggingId};
 
 pub(crate) mod id_bundle;
 pub(crate) mod in_memory_oracle;
@@ -227,7 +230,20 @@ pub enum Message {
     PurifiedStatementReady(PurifiedStatementReady),
     CreateConnectionValidationReady(CreateConnectionValidationReady),
     AlterConnectionValidationReady(AlterConnectionValidationReady),
-    WriteLockGrant(tokio::sync::OwnedMutexGuard<()>),
+    TryDeferred {
+        /// The connection that created this op.
+        conn_id: ConnectionId,
+        /// The write lock that notified us our deferred op might be able to run.
+        ///
+        /// Note: While we never want to hold a partial set of locks, it can be important to hold
+        /// onto the _one_ that notified us our op might be ready. If there are multiple operations
+        /// waiting on a single collection, and we don't hold this lock through retyring the op,
+        /// then everything waiting on this collection will get retried causing traffic in the
+        /// Coordinator's message queue.
+        ///
+        /// See [`DeferredWriteOp::can_be_optimistically_retried`] for more detail.
+        acquired_lock: Option<(CatalogItemId, tokio::sync::OwnedMutexGuard<()>)>,
+    },
     /// Initiates a group commit.
     GroupCommitInitiate(Span, Option<GroupCommitPermit>),
     DeferredStatementReady,
@@ -331,7 +347,7 @@ impl Message {
             Message::ControllerReady => "controller_ready",
             Message::PurifiedStatementReady(_) => "purified_statement_ready",
             Message::CreateConnectionValidationReady(_) => "create_connection_validation_ready",
-            Message::WriteLockGrant(_) => "write_lock_grant",
+            Message::TryDeferred { .. } => "try_deferred",
             Message::GroupCommitInitiate(..) => "group_commit_initiate",
             Message::AdvanceTimelines => "advance_timelines",
             Message::ClusterEvent(_) => "cluster_event",
@@ -388,7 +404,8 @@ pub struct ValidationReady<T> {
     #[derivative(Debug = "ignore")]
     pub ctx: ExecuteContext,
     pub result: Result<T, AdapterError>,
-    pub dependency_ids: BTreeSet<GlobalId>,
+    pub resolved_ids: ResolvedIds,
+    pub connection_id: CatalogItemId,
     pub connection_gid: GlobalId,
     pub plan_validity: PlanValidity,
     pub otel_ctx: OpenTelemetryContext,
@@ -422,7 +439,7 @@ pub struct CopyToContext {
     /// Connection information required to connect to the external service to copy the data.
     pub connection: StorageConnection<ReferencedConnection>,
     /// The ID of the CONNECTION object to be used for copying the data.
-    pub connection_id: GlobalId,
+    pub connection_id: CatalogItemId,
     /// Format params to format the data.
     pub format: S3SinkFormat,
     /// Approximate max file size of each uploaded file.
@@ -558,7 +575,8 @@ pub struct CreateIndexOptimize {
 #[derive(Debug)]
 pub struct CreateIndexFinish {
     validity: PlanValidity,
-    exported_index_id: GlobalId,
+    item_id: CatalogItemId,
+    global_id: GlobalId,
     plan: plan::CreateIndexPlan,
     resolved_ids: ResolvedIds,
     global_mir_plan: optimize::index::GlobalMirPlan,
@@ -594,8 +612,12 @@ pub struct CreateViewOptimize {
 #[derive(Debug)]
 pub struct CreateViewFinish {
     validity: PlanValidity,
-    id: GlobalId,
+    /// ID of this item in the Catalog.
+    item_id: CatalogItemId,
+    /// ID by with Compute will reference this View.
+    global_id: GlobalId,
     plan: plan::CreateViewPlan,
+    /// IDs of objects resolved during name resolution.
     resolved_ids: ResolvedIds,
     optimized_expr: OptimizedMirRelationExpr,
 }
@@ -743,16 +765,15 @@ pub struct CreateMaterializedViewOptimize {
     /// An optional context set iff the state machine is initiated from
     /// sequencing an EXPLAIN for this statement.
     explain_ctx: ExplainContext,
-    /// Whether the timeline is [`mz_storage_types::sources::Timeline::EpochMilliseconds`].
-    ///
-    /// Used to determine if it is safe to enable dataflow expiration.
-    is_timeline_epoch_ms: bool,
 }
 
 #[derive(Debug)]
 pub struct CreateMaterializedViewFinish {
+    /// The ID of this Materialized View in the Catalog.
+    item_id: CatalogItemId,
+    /// The ID of the durable pTVC backing this Materialized View.
+    global_id: GlobalId,
     validity: PlanValidity,
-    sink_id: GlobalId,
     plan: plan::CreateMaterializedViewPlan,
     resolved_ids: ResolvedIds,
     local_mir_plan: optimize::materialized_view::LocalMirPlan,
@@ -762,8 +783,8 @@ pub struct CreateMaterializedViewFinish {
 
 #[derive(Debug)]
 pub struct CreateMaterializedViewExplain {
+    global_id: GlobalId,
     validity: PlanValidity,
-    sink_id: GlobalId,
     plan: plan::CreateMaterializedViewPlan,
     df_meta: DataflowMetainfo,
     explain_ctx: ExplainPlanContext,
@@ -859,14 +880,15 @@ pub struct CreateSecretEnsure {
 #[derive(Debug)]
 pub struct CreateSecretFinish {
     validity: PlanValidity,
-    id: GlobalId,
+    item_id: CatalogItemId,
+    global_id: GlobalId,
     plan: plan::CreateSecretPlan,
 }
 
 #[derive(Debug)]
 pub struct RotateKeysSecretEnsure {
     validity: PlanValidity,
-    id: GlobalId,
+    id: CatalogItemId,
 }
 
 #[derive(Debug)]
@@ -996,6 +1018,8 @@ pub struct Config {
     /// previous deployment. Only used during 0dt deployment, while in read-only
     /// mode.
     pub caught_up_trigger: Option<Trigger>,
+
+    pub helm_chart_version: Option<String>,
 }
 
 /// Soft-state metadata about a compute replica
@@ -1630,17 +1654,21 @@ pub struct Coordinator {
     /// A map from the compute sink ID to it's state description.
     active_compute_sinks: BTreeMap<GlobalId, ActiveComputeSink>,
     /// A map from active webhooks to their invalidation handle.
-    active_webhooks: BTreeMap<GlobalId, WebhookAppenderInvalidator>,
+    active_webhooks: BTreeMap<CatalogItemId, WebhookAppenderInvalidator>,
     /// A map from connection ids to a watch channel that is set to `true` if the connection
     /// received a cancel request.
     staged_cancellation: BTreeMap<ConnectionId, (watch::Sender<bool>, watch::Receiver<bool>)>,
     /// Active introspection subscribes.
     introspection_subscribes: BTreeMap<GlobalId, IntrospectionSubscribe>,
 
-    /// Holds plans deferred due to write lock.
-    write_lock_wait_group: LockedVecDeque<Deferred>,
+    /// Locks that grant access to a specific object, populated lazily as objects are written to.
+    write_locks: BTreeMap<CatalogItemId, Arc<tokio::sync::Mutex<()>>>,
+    /// Plans that are currently deferred and waiting on a write lock.
+    deferred_write_ops: BTreeMap<ConnectionId, DeferredWriteOp>,
+
     /// Pending writes waiting for a group commit.
     pending_writes: Vec<PendingWriteTxn>,
+
     /// For the realtime timeline, an explicit SELECT or INSERT on a table will bump the
     /// table's timestamps, but there are cases where timestamps are not bumped but
     /// we expect the closed timestamps to advance (`AS OF X`, SUBSCRIBing views over
@@ -1755,8 +1783,10 @@ impl Coordinator {
     pub(crate) async fn bootstrap(
         &mut self,
         boot_ts: Timestamp,
-        migrated_storage_collections_0dt: BTreeSet<GlobalId>,
+        migrated_storage_collections_0dt: BTreeSet<CatalogItemId>,
         mut builtin_table_updates: Vec<BuiltinTableUpdate>,
+        cached_global_exprs: BTreeMap<GlobalId, GlobalExpressions>,
+        uncached_local_exprs: BTreeMap<GlobalId, LocalExpressions>,
     ) -> Result<(), AdapterError> {
         let bootstrap_start = Instant::now();
         info!("startup: coordinator init: bootstrap beginning");
@@ -1864,10 +1894,16 @@ impl Coordinator {
         let optimize_dataflows_start = Instant::now();
         info!("startup: coordinator init: bootstrap: optimize dataflow plans beginning");
         let entries: Vec<_> = self.catalog().entries().cloned().collect();
-        self.bootstrap_dataflow_plans(&entries)?;
+        let uncached_global_exps = self.bootstrap_dataflow_plans(&entries, cached_global_exprs)?;
         info!(
             "startup: coordinator init: bootstrap: optimize dataflow plans complete in {:?}",
             optimize_dataflows_start.elapsed()
+        );
+
+        // We don't need to wait for the cache to update.
+        let _fut = self.catalog().update_expression_cache(
+            uncached_local_exprs.into_iter().collect(),
+            uncached_global_exps.into_iter().collect(),
         );
 
         // Select dataflow as-ofs. This step relies on the storage collections created by
@@ -1886,6 +1922,7 @@ impl Coordinator {
 
         let logs: BTreeSet<_> = BUILTINS::logs()
             .map(|log| self.catalog().resolve_builtin_log(log))
+            .flat_map(|item_id| self.catalog().get_global_ids(&item_id))
             .collect();
 
         let mut privatelink_connections = BTreeMap::new();
@@ -1923,14 +1960,14 @@ impl Coordinator {
                         .entry(policy.expect("sources have a compaction window"))
                         .or_insert_with(Default::default)
                         .storage_ids
-                        .insert(entry.id());
+                        .insert(source.global_id());
                 }
-                CatalogItem::Table(_) => {
+                CatalogItem::Table(table) => {
                     policies_to_set
                         .entry(policy.expect("tables have a compaction window"))
                         .or_insert_with(Default::default)
                         .storage_ids
-                        .insert(entry.id());
+                        .extend(table.global_ids());
                 }
                 CatalogItem::Index(idx) => {
                     let policy_entry = policies_to_set
@@ -1942,17 +1979,17 @@ impl Coordinator {
                             .compute_ids
                             .entry(idx.cluster_id)
                             .or_insert_with(BTreeSet::new)
-                            .insert(entry.id());
+                            .insert(idx.global_id());
                     } else {
                         let df_desc = self
                             .catalog()
-                            .try_get_physical_plan(&entry.id())
+                            .try_get_physical_plan(&idx.global_id())
                             .expect("added in `bootstrap_dataflow_plans`")
                             .clone();
 
                         let df_meta = self
                             .catalog()
-                            .try_get_dataflow_metainfo(&entry.id())
+                            .try_get_dataflow_metainfo(&idx.global_id())
                             .expect("added in `bootstrap_dataflow_plans`");
 
                         if self.catalog().state().system_config().enable_mz_notices() {
@@ -1984,11 +2021,11 @@ impl Coordinator {
                         .entry(policy.expect("materialized views have a compaction window"))
                         .or_insert_with(Default::default)
                         .storage_ids
-                        .insert(entry.id());
+                        .insert(mview.global_id());
 
                     let mut df_desc = self
                         .catalog()
-                        .try_get_physical_plan(&entry.id())
+                        .try_get_physical_plan(&mview.global_id())
                         .expect("added in `bootstrap_dataflow_plans`")
                         .clone();
 
@@ -2008,7 +2045,7 @@ impl Coordinator {
 
                     let df_meta = self
                         .catalog()
-                        .try_get_dataflow_metainfo(&entry.id())
+                        .try_get_dataflow_metainfo(&mview.global_id())
                         .expect("added in `bootstrap_dataflow_plans`");
 
                     if self.catalog().state().system_config().enable_mz_notices() {
@@ -2023,8 +2060,7 @@ impl Coordinator {
                     self.ship_dataflow(df_desc, mview.cluster_id, None).await;
                 }
                 CatalogItem::Sink(sink) => {
-                    let id = entry.id();
-                    self.create_storage_export(id, sink)
+                    self.create_storage_export(sink.global_id(), sink)
                         .await
                         .unwrap_or_terminate("cannot fail to create exports");
                 }
@@ -2044,11 +2080,11 @@ impl Coordinator {
                         .entry(policy.expect("continual tasks have a compaction window"))
                         .or_insert_with(Default::default)
                         .storage_ids
-                        .insert(entry.id());
+                        .insert(ct.global_id());
 
                     let mut df_desc = self
                         .catalog()
-                        .try_get_physical_plan(&entry.id())
+                        .try_get_physical_plan(&ct.global_id())
                         .expect("added in `bootstrap_dataflow_plans`")
                         .clone();
 
@@ -2058,7 +2094,7 @@ impl Coordinator {
 
                     let df_meta = self
                         .catalog()
-                        .try_get_dataflow_metainfo(&entry.id())
+                        .try_get_dataflow_metainfo(&ct.global_id())
                         .expect("added in `bootstrap_dataflow_plans`");
 
                     if self.catalog().state().system_config().enable_mz_notices() {
@@ -2123,11 +2159,12 @@ impl Coordinator {
             let min_timestamp = Timestamp::minimum();
             let migrated_builtin_table_updates: Vec<_> = builtin_table_updates
                 .drain_filter_swapping(|update| {
+                    let gid = self.catalog().get_entry(&update.id).latest_global_id();
                     migrated_storage_collections_0dt.contains(&update.id)
                         && self
                             .controller
                             .storage_collections
-                            .collection_frontiers(update.id)
+                            .collection_frontiers(gid)
                             .expect("all tables are registered")
                             .write_frontier
                             .elements()
@@ -2139,8 +2176,9 @@ impl Coordinator {
             } else {
                 let mut appends: BTreeMap<GlobalId, Vec<(Row, Diff)>> = BTreeMap::new();
                 for update in migrated_builtin_table_updates {
+                    let gid = self.catalog().get_entry(&update.id).latest_global_id();
                     appends
-                        .entry(update.id)
+                        .entry(gid)
                         .or_default()
                         .push((update.row, update.diff));
                 }
@@ -2220,7 +2258,7 @@ impl Coordinator {
             // things using secrets. Today, SECRET and CONNECTION objects use
             // secrets_controller.ensure, but more things could in the future
             // that would be easy to miss adding here.
-            let catalog_ids: BTreeSet<GlobalId> =
+            let catalog_ids: BTreeSet<CatalogItemId> =
                 catalog.entries().map(|entry| entry.id()).collect();
             let secrets_controller = Arc::clone(secrets_controller);
 
@@ -2233,14 +2271,14 @@ impl Coordinator {
 
                 match secrets_controller.list().await {
                     Ok(controller_secrets) => {
-                        let controller_secrets: BTreeSet<GlobalId> =
+                        let controller_secrets: BTreeSet<CatalogItemId> =
                             controller_secrets.into_iter().collect();
                         let orphaned = controller_secrets.difference(&catalog_ids);
                         for id in orphaned {
                             let id_too_large = match id {
-                                GlobalId::System(id) => *id >= next_system_item_id,
-                                GlobalId::User(id) => *id >= next_user_item_id,
-                                GlobalId::Transient(_) | GlobalId::Explain => false,
+                                CatalogItemId::System(id) => *id >= next_system_item_id,
+                                CatalogItemId::User(id) => *id >= next_user_item_id,
+                                CatalogItemId::Transient(_) => false,
                             };
                             if id_too_large {
                                 info!(
@@ -2306,16 +2344,34 @@ impl Coordinator {
         entries: &[CatalogEntry],
         mut builtin_table_updates: Vec<BuiltinTableUpdate>,
     ) {
-        // Advance all tables to the current timestamp
+        /// Smaller helper struct of metadata for bootstrapping tables.
+        struct TableMetadata<'a> {
+            id: CatalogItemId,
+            name: &'a QualifiedItemName,
+            table: &'a Table,
+        }
+
+        // Filter our entries down to just tables.
+        let table_metas: Vec<_> = entries
+            .into_iter()
+            .filter_map(|entry| {
+                entry.table().map(|table| TableMetadata {
+                    id: entry.id(),
+                    name: entry.name(),
+                    table,
+                })
+            })
+            .collect();
+
+        // Append empty batches to advance the timestamp of all tables.
         debug!("coordinator init: advancing all tables to current timestamp");
         let WriteTimestamp {
             timestamp: write_ts,
             advance_to,
         } = self.get_local_write_ts().await;
-        let appends = entries
+        let appends = table_metas
             .iter()
-            .filter(|entry| entry.is_table())
-            .map(|entry| (entry.id(), Vec::new()))
+            .map(|meta| (meta.table.global_id_writes(), Vec::new()))
             .collect();
         // Append the tables in the background. We apply the write timestamp before getting a read
         // timestamp and reading a snapshot of each table, so the snapshots will block on their own
@@ -2331,38 +2387,46 @@ impl Coordinator {
         // Add builtin table updates the clear the contents of all system tables
         debug!("coordinator init: resetting system tables");
         let read_ts = self.get_local_read_ts().await;
+
+        // Filter out the 'mz_storage_usage_by_shard' table since we need to retain that info for
+        // billing purposes.
         let mz_storage_usage_by_shard_schema: SchemaSpecifier = self
             .catalog()
             .resolve_system_schema(MZ_STORAGE_USAGE_BY_SHARD.schema)
             .into();
-        let is_storage_usage_by_shard = |entry: &CatalogEntry| -> bool {
-            entry.name.item == MZ_STORAGE_USAGE_BY_SHARD.name
-                && entry.name.qualifiers.schema_spec == mz_storage_usage_by_shard_schema
+        let is_storage_usage_by_shard = |meta: &TableMetadata| -> bool {
+            meta.name.item == MZ_STORAGE_USAGE_BY_SHARD.name
+                && meta.name.qualifiers.schema_spec == mz_storage_usage_by_shard_schema
         };
+
         let mut retraction_tasks = Vec::new();
-        for system_table in entries.iter().filter(|entry| {
-            entry.is_table() && entry.id().is_system() && !is_storage_usage_by_shard(entry)
-        }) {
-            let id = system_table.id();
-            debug!(
-                "coordinator init: resetting system table {} ({})",
-                self.catalog().resolve_full_name(system_table.name(), None),
-                id,
-            );
-            let current_contents_fut = self.controller.storage.snapshot(id, read_ts);
-            let task = spawn(|| format!("snapshot-{}", id), async move {
+        let system_tables = table_metas
+            .iter()
+            .filter(|meta| meta.id.is_system() && !is_storage_usage_by_shard(meta));
+
+        for system_table in system_tables {
+            let table_id = system_table.id;
+            let full_name = self.catalog().resolve_full_name(system_table.name, None);
+            debug!("coordinator init: resetting system table {full_name} ({table_id})");
+
+            // Fetch the current contents of the table for retraction.
+            let current_contents_fut = self
+                .controller
+                .storage
+                .snapshot(system_table.table.global_id_writes(), read_ts);
+            // Fetch a snapshot of the current tables concurrently.
+            let task = spawn(|| format!("snapshot-{table_id}"), async move {
                 let current_contents = current_contents_fut
                     .await
                     .unwrap_or_terminate("cannot fail to fetch snapshot");
-                debug!(
-                    "coordinator init: table ({}) size {}",
-                    id,
-                    current_contents.len()
-                );
+                let contents_len = current_contents.len();
+                debug!("coordinator init: table ({table_id}) size {contents_len}",);
+
+                // Retract the current contents.
                 current_contents
                     .into_iter()
                     .map(|(row, diff)| BuiltinTableUpdate {
-                        id,
+                        id: table_id,
                         row,
                         diff: diff.neg(),
                     })
@@ -2408,83 +2472,108 @@ impl Coordinator {
     #[instrument]
     async fn bootstrap_storage_collections(
         &mut self,
-        migrated_storage_collections: &BTreeSet<GlobalId>,
+        migrated_storage_collections: &BTreeSet<CatalogItemId>,
     ) {
         let catalog = self.catalog();
         let source_status_collection_id = catalog
             .resolve_builtin_storage_collection(&mz_catalog::builtin::MZ_SOURCE_STATUS_HISTORY);
+        let source_status_collection_id = catalog
+            .get_entry(&source_status_collection_id)
+            .latest_global_id();
 
-        let source_desc = |data_source: &DataSourceDesc, desc: &RelationDesc| {
-            let (data_source, status_collection_id) = match data_source.clone() {
-                // Re-announce the source description.
-                DataSourceDesc::Ingestion {
-                    ingestion_desc:
-                        mz_sql::plan::Ingestion {
-                            desc,
-                            progress_subsource,
-                        },
-                    cluster_id,
-                } => {
-                    let desc = desc.into_inline_connection(catalog.state());
-                    let ingestion = mz_storage_types::sources::IngestionDescription::new(
-                        desc,
+        let source_desc =
+            |data_source: &DataSourceDesc, desc: &RelationDesc, timeline: &Timeline| {
+                let (data_source, status_collection_id) = match data_source.clone() {
+                    // Re-announce the source description.
+                    DataSourceDesc::Ingestion {
+                        ingestion_desc:
+                            mz_sql::plan::Ingestion {
+                                desc,
+                                progress_subsource,
+                            },
                         cluster_id,
-                        progress_subsource,
-                    );
+                    } => {
+                        let desc = desc.into_inline_connection(catalog.state());
+                        // TODO(parkmycar): We should probably check the type here, but I'm not sure if
+                        // this will always be a Source or a Table.
+                        let progress_subsource =
+                            catalog.get_entry(&progress_subsource).latest_global_id();
+                        let ingestion = mz_storage_types::sources::IngestionDescription::new(
+                            desc,
+                            cluster_id,
+                            progress_subsource,
+                        );
 
-                    (
-                        DataSource::Ingestion(ingestion.clone()),
-                        Some(source_status_collection_id),
-                    )
-                }
-                DataSourceDesc::IngestionExport {
-                    ingestion_id,
-                    external_reference: _,
-                    details,
-                    data_config,
-                } => (
-                    DataSource::IngestionExport {
+                        (
+                            DataSource::Ingestion(ingestion.clone()),
+                            Some(source_status_collection_id),
+                        )
+                    }
+                    DataSourceDesc::IngestionExport {
                         ingestion_id,
+                        external_reference: _,
                         details,
-                        data_config: data_config.into_inline_connection(catalog.state()),
-                    },
-                    Some(source_status_collection_id),
-                ),
-                DataSourceDesc::Webhook { .. } => {
-                    (DataSource::Webhook, Some(source_status_collection_id))
-                }
-                DataSourceDesc::Progress => (DataSource::Progress, None),
-                DataSourceDesc::Introspection(introspection) => {
-                    (DataSource::Introspection(introspection), None)
+                        data_config,
+                    } => {
+                        // TODO(parkmycar): We should probably check the type here, but I'm not sure if
+                        // this will always be a Source or a Table.
+                        let ingestion_id = catalog.get_entry(&ingestion_id).latest_global_id();
+                        (
+                            DataSource::IngestionExport {
+                                ingestion_id,
+                                details,
+                                data_config: data_config.into_inline_connection(catalog.state()),
+                            },
+                            Some(source_status_collection_id),
+                        )
+                    }
+                    DataSourceDesc::Webhook { .. } => {
+                        (DataSource::Webhook, Some(source_status_collection_id))
+                    }
+                    DataSourceDesc::Progress => (DataSource::Progress, None),
+                    DataSourceDesc::Introspection(introspection) => {
+                        (DataSource::Introspection(introspection), None)
+                    }
+                };
+                CollectionDescription {
+                    desc: desc.clone(),
+                    data_source,
+                    since: None,
+                    status_collection_id,
+                    timeline: Some(timeline.clone()),
                 }
             };
-            CollectionDescription {
-                desc: desc.clone(),
-                data_source,
-                since: None,
-                status_collection_id,
-            }
-        };
 
         let mut collections = vec![];
         let mut new_builtin_continual_tasks = vec![];
         for entry in catalog.entries() {
-            let id = entry.id();
             match entry.item() {
                 CatalogItem::Source(source) => {
-                    collections.push((id, source_desc(&source.data_source, &source.desc)));
+                    collections.push((
+                        source.global_id(),
+                        source_desc(&source.data_source, &source.desc, &source.timeline),
+                    ));
                 }
                 CatalogItem::Table(table) => {
-                    let collection_desc = match &table.data_source {
+                    match &table.data_source {
                         TableDataSource::TableWrites { defaults: _ } => {
-                            CollectionDescription::for_table(table.desc.clone())
+                            let collections_descs = table.collection_descs().map(|(gid, desc)| {
+                                (gid, CollectionDescription::for_table(desc.clone()))
+                            });
+                            collections.extend(collections_descs);
                         }
                         TableDataSource::DataSource {
                             desc: data_source_desc,
-                            timeline: _,
-                        } => source_desc(data_source_desc, &table.desc),
+                            timeline,
+                        } => {
+                            // TODO(alter_table): Support versioning tables that read from sources.
+                            soft_assert_eq_or_log!(table.collections.len(), 1);
+                            let collection_descs = table.collection_descs().map(|(gid, desc)| {
+                                (gid, source_desc(data_source_desc, &desc, timeline))
+                            });
+                            collections.extend(collection_descs);
+                        }
                     };
-                    collections.push((id, collection_desc));
                 }
                 CatalogItem::MaterializedView(mv) => {
                     let collection_desc = CollectionDescription {
@@ -2492,8 +2581,9 @@ impl Coordinator {
                         data_source: DataSource::Other,
                         since: mv.initial_as_of.clone(),
                         status_collection_id: None,
+                        timeline: None,
                     };
-                    collections.push((id, collection_desc));
+                    collections.push((mv.global_id(), collection_desc));
                 }
                 CatalogItem::ContinualTask(ct) => {
                     let collection_desc = CollectionDescription {
@@ -2501,14 +2591,15 @@ impl Coordinator {
                         data_source: DataSource::Other,
                         since: ct.initial_as_of.clone(),
                         status_collection_id: None,
+                        timeline: None,
                     };
-                    if id.is_system() && collection_desc.since.is_none() {
+                    if ct.global_id().is_system() && collection_desc.since.is_none() {
                         // We need a non-0 since to make as_of selection work. Fill it in below with
                         // the `bootstrap_builtin_continual_tasks` call, which can only be run after
                         // `create_collections_for_bootstrap`.
-                        new_builtin_continual_tasks.push((id, collection_desc));
+                        new_builtin_continual_tasks.push((ct.global_id(), collection_desc));
                     } else {
-                        collections.push((id, collection_desc));
+                        collections.push((ct.global_id(), collection_desc));
                     }
                 }
                 _ => (),
@@ -2524,6 +2615,10 @@ impl Coordinator {
         };
 
         let storage_metadata = self.catalog.state().storage_metadata();
+        let migrated_storage_collections = migrated_storage_collections
+            .into_iter()
+            .flat_map(|item_id| self.catalog.get_entry(item_id).global_ids())
+            .collect();
 
         self.controller
             .storage
@@ -2531,7 +2626,7 @@ impl Coordinator {
                 storage_metadata,
                 Some(register_ts),
                 collections,
-                migrated_storage_collections,
+                &migrated_storage_collections,
             )
             .await
             .unwrap_or_terminate("cannot fail to create collections");
@@ -2552,10 +2647,11 @@ impl Coordinator {
     /// this since.
     async fn bootstrap_builtin_continual_tasks(
         &mut self,
+        // TODO(alter_table): Switch to CatalogItemId.
         mut collections: Vec<(GlobalId, CollectionDescription<Timestamp>)>,
     ) {
         for (id, collection) in &mut collections {
-            let entry = self.catalog.get_entry(id);
+            let entry = self.catalog.get_entry_by_global_id(id);
             let ct = match &entry.item {
                 CatalogItem::ContinualTask(ct) => ct.clone(),
                 _ => unreachable!("only called with continual task builtins"),
@@ -2564,15 +2660,8 @@ impl Coordinator {
                 .catalog()
                 .resolve_full_name(entry.name(), None)
                 .to_string();
-            let is_timeline_epoch_ms = self.get_timeline_context(*id).is_timeline_epoch_ms();
             let (_optimized_plan, physical_plan, _metainfo) = self
-                .optimize_create_continual_task(
-                    &ct,
-                    *id,
-                    self.owned_catalog(),
-                    debug_name,
-                    is_timeline_epoch_ms,
-                )
+                .optimize_create_continual_task(&ct, *id, self.owned_catalog(), debug_name)
                 .expect("builtin CT should optimize successfully");
 
             // Determine an as of for the new continual task.
@@ -2599,23 +2688,25 @@ impl Coordinator {
     ///
     /// This method does not perform timestamp selection for the dataflows, nor does it create them
     /// in the compute controller. Both of these steps happen later during bootstrapping.
+    ///
+    /// Returns a map of expressions that were not cached.
     #[instrument]
     fn bootstrap_dataflow_plans(
         &mut self,
         ordered_catalog_entries: &[CatalogEntry],
-    ) -> Result<(), AdapterError> {
+        mut cached_global_exprs: BTreeMap<GlobalId, GlobalExpressions>,
+    ) -> Result<BTreeMap<GlobalId, GlobalExpressions>, AdapterError> {
         // The optimizer expects to be able to query its `ComputeInstanceSnapshot` for
         // collections the current dataflow can depend on. But since we don't yet install anything
         // on compute instances, the snapshot information is incomplete. We fix that by manually
         // updating `ComputeInstanceSnapshot` objects to ensure they contain collections previously
         // optimized.
         let mut instance_snapshots = BTreeMap::new();
+        let mut uncached_expressions = BTreeMap::new();
 
         let optimizer_config = OptimizerConfig::from(self.catalog().system_config());
 
         for entry in ordered_catalog_entries {
-            let id = entry.id();
-            let is_timeline_epoch_ms = self.get_timeline_context(id).is_timeline_epoch_ms();
             match entry.item() {
                 CatalogItem::Index(idx) => {
                     // Collect optimizer parameters.
@@ -2624,56 +2715,89 @@ impl Coordinator {
                             self.instance_snapshot(idx.cluster_id)
                                 .expect("compute instance exists")
                         });
+                    let global_id = idx.global_id();
 
                     // The index may already be installed on the compute instance. For example,
                     // this is the case for introspection indexes.
-                    if compute_instance.contains_collection(&id) {
+                    if compute_instance.contains_collection(&global_id) {
                         continue;
                     }
 
-                    let (optimized_plan, global_lir_plan) = {
-                        // Build an optimizer for this INDEX.
-                        let mut optimizer = optimize::index::Optimizer::new(
-                            self.owned_catalog(),
-                            compute_instance.clone(),
-                            entry.id(),
-                            optimizer_config.clone(),
-                            self.optimizer_metrics(),
-                        );
+                    let (optimized_plan, physical_plan, metainfo) =
+                        match cached_global_exprs.remove(&global_id) {
+                            Some(global_expressions)
+                                if global_expressions.optimizer_features
+                                    == optimizer_config.features =>
+                            {
+                                info!("global expression cache hit for {global_id:?}");
+                                (
+                                    global_expressions.global_mir,
+                                    global_expressions.physical_plan,
+                                    global_expressions.dataflow_metainfos,
+                                )
+                            }
+                            Some(_) | None => {
+                                let (optimized_plan, global_lir_plan) = {
+                                    // Build an optimizer for this INDEX.
+                                    let mut optimizer = optimize::index::Optimizer::new(
+                                        self.owned_catalog(),
+                                        compute_instance.clone(),
+                                        global_id,
+                                        optimizer_config.clone(),
+                                        self.optimizer_metrics(),
+                                    );
 
-                        // MIR ⇒ MIR optimization (global)
-                        let index_plan = optimize::index::Index::new(
-                            entry.name().clone(),
-                            idx.on,
-                            idx.keys.to_vec(),
-                            is_timeline_epoch_ms,
-                        );
-                        let global_mir_plan = optimizer.optimize(index_plan)?;
-                        let optimized_plan = global_mir_plan.df_desc().clone();
+                                    // MIR ⇒ MIR optimization (global)
+                                    let index_plan = optimize::index::Index::new(
+                                        entry.name().clone(),
+                                        idx.on,
+                                        idx.keys.to_vec(),
+                                    );
+                                    let global_mir_plan = optimizer.optimize(index_plan)?;
+                                    let optimized_plan = global_mir_plan.df_desc().clone();
 
-                        // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
-                        let global_lir_plan = optimizer.optimize(global_mir_plan)?;
+                                    // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
+                                    let global_lir_plan = optimizer.optimize(global_mir_plan)?;
 
-                        (optimized_plan, global_lir_plan)
-                    };
+                                    (optimized_plan, global_lir_plan)
+                                };
 
-                    let (physical_plan, metainfo) = global_lir_plan.unapply();
-                    let metainfo = {
-                        // Pre-allocate a vector of transient GlobalIds for each notice.
-                        let notice_ids = std::iter::repeat_with(|| self.allocate_transient_id())
-                            .take(metainfo.optimizer_notices.len())
-                            .collect::<Vec<_>>();
-                        // Return a metainfo with rendered notices.
-                        self.catalog()
-                            .render_notices(metainfo, notice_ids, Some(entry.id()))
-                    };
+                                let (physical_plan, metainfo) = global_lir_plan.unapply();
+                                let metainfo = {
+                                    // Pre-allocate a vector of transient GlobalIds for each notice.
+                                    let notice_ids =
+                                        std::iter::repeat_with(|| self.allocate_transient_id())
+                                            .map(|(_item_id, gid)| gid)
+                                            .take(metainfo.optimizer_notices.len())
+                                            .collect::<Vec<_>>();
+                                    // Return a metainfo with rendered notices.
+                                    self.catalog().render_notices(
+                                        metainfo,
+                                        notice_ids,
+                                        Some(idx.global_id()),
+                                    )
+                                };
+                                uncached_expressions.insert(
+                                    global_id,
+                                    GlobalExpressions {
+                                        global_mir: optimized_plan.clone(),
+                                        physical_plan: physical_plan.clone(),
+                                        dataflow_metainfos: metainfo.clone(),
+                                        optimizer_features: OptimizerFeatures::from(
+                                            self.catalog().system_config(),
+                                        ),
+                                    },
+                                );
+                                (optimized_plan, physical_plan, metainfo)
+                            }
+                        };
 
                     let catalog = self.catalog_mut();
-                    catalog.set_optimized_plan(id, optimized_plan);
-                    catalog.set_physical_plan(id, physical_plan);
-                    catalog.set_dataflow_metainfo(id, metainfo);
+                    catalog.set_optimized_plan(idx.global_id(), optimized_plan);
+                    catalog.set_physical_plan(idx.global_id(), physical_plan);
+                    catalog.set_dataflow_metainfo(idx.global_id(), metainfo);
 
-                    compute_instance.insert_collection(id);
+                    compute_instance.insert_collection(idx.global_id());
                 }
                 CatalogItem::MaterializedView(mv) => {
                     // Collect optimizer parameters.
@@ -2682,58 +2806,92 @@ impl Coordinator {
                             self.instance_snapshot(mv.cluster_id)
                                 .expect("compute instance exists")
                         });
-                    let internal_view_id = self.allocate_transient_id();
-                    let debug_name = self
-                        .catalog()
-                        .resolve_full_name(entry.name(), None)
-                        .to_string();
-                    let force_non_monotonic = Default::default();
+                    let global_id = mv.global_id();
 
-                    let (optimized_plan, global_lir_plan) = {
-                        // Build an optimizer for this MATERIALIZED VIEW.
-                        let mut optimizer = optimize::materialized_view::Optimizer::new(
-                            self.owned_catalog().as_optimizer_catalog(),
-                            compute_instance.clone(),
-                            entry.id(),
-                            internal_view_id,
-                            mv.desc.iter_names().cloned().collect(),
-                            mv.non_null_assertions.clone(),
-                            mv.refresh_schedule.clone(),
-                            debug_name,
-                            optimizer_config.clone(),
-                            self.optimizer_metrics(),
-                            is_timeline_epoch_ms,
-                            force_non_monotonic,
-                        );
+                    let (optimized_plan, physical_plan, metainfo) =
+                        match cached_global_exprs.remove(&global_id) {
+                            Some(global_expressions)
+                                if global_expressions.optimizer_features
+                                    == optimizer_config.features =>
+                            {
+                                info!("global expression cache hit for {global_id:?}");
+                                (
+                                    global_expressions.global_mir,
+                                    global_expressions.physical_plan,
+                                    global_expressions.dataflow_metainfos,
+                                )
+                            }
+                            Some(_) | None => {
+                                let (_, internal_view_id) = self.allocate_transient_id();
+                                let debug_name = self
+                                    .catalog()
+                                    .resolve_full_name(entry.name(), None)
+                                    .to_string();
+                                let force_non_monotonic = Default::default();
 
-                        // MIR ⇒ MIR optimization (global)
-                        let global_mir_plan =
-                            optimizer.optimize(mv.optimized_expr.as_ref().clone())?;
-                        let optimized_plan = global_mir_plan.df_desc().clone();
+                                let (optimized_plan, global_lir_plan) = {
+                                    // Build an optimizer for this MATERIALIZED VIEW.
+                                    let mut optimizer = optimize::materialized_view::Optimizer::new(
+                                        self.owned_catalog().as_optimizer_catalog(),
+                                        compute_instance.clone(),
+                                        global_id,
+                                        internal_view_id,
+                                        mv.desc.iter_names().cloned().collect(),
+                                        mv.non_null_assertions.clone(),
+                                        mv.refresh_schedule.clone(),
+                                        debug_name,
+                                        optimizer_config.clone(),
+                                        self.optimizer_metrics(),
+                                        force_non_monotonic,
+                                    );
 
-                        // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
-                        let global_lir_plan = optimizer.optimize(global_mir_plan)?;
+                                    // MIR ⇒ MIR optimization (global)
+                                    let global_mir_plan =
+                                        optimizer.optimize(mv.optimized_expr.as_ref().clone())?;
+                                    let optimized_plan = global_mir_plan.df_desc().clone();
 
-                        (optimized_plan, global_lir_plan)
-                    };
+                                    // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
+                                    let global_lir_plan = optimizer.optimize(global_mir_plan)?;
 
-                    let (physical_plan, metainfo) = global_lir_plan.unapply();
-                    let metainfo = {
-                        // Pre-allocate a vector of transient GlobalIds for each notice.
-                        let notice_ids = std::iter::repeat_with(|| self.allocate_transient_id())
-                            .take(metainfo.optimizer_notices.len())
-                            .collect::<Vec<_>>();
-                        // Return a metainfo with rendered notices.
-                        self.catalog()
-                            .render_notices(metainfo, notice_ids, Some(entry.id()))
-                    };
+                                    (optimized_plan, global_lir_plan)
+                                };
+
+                                let (physical_plan, metainfo) = global_lir_plan.unapply();
+                                let metainfo = {
+                                    // Pre-allocate a vector of transient GlobalIds for each notice.
+                                    let notice_ids =
+                                        std::iter::repeat_with(|| self.allocate_transient_id())
+                                            .map(|(_item_id, global_id)| global_id)
+                                            .take(metainfo.optimizer_notices.len())
+                                            .collect::<Vec<_>>();
+                                    // Return a metainfo with rendered notices.
+                                    self.catalog().render_notices(
+                                        metainfo,
+                                        notice_ids,
+                                        Some(mv.global_id()),
+                                    )
+                                };
+                                uncached_expressions.insert(
+                                    global_id,
+                                    GlobalExpressions {
+                                        global_mir: optimized_plan.clone(),
+                                        physical_plan: physical_plan.clone(),
+                                        dataflow_metainfos: metainfo.clone(),
+                                        optimizer_features: OptimizerFeatures::from(
+                                            self.catalog().system_config(),
+                                        ),
+                                    },
+                                );
+                                (optimized_plan, physical_plan, metainfo)
+                            }
+                        };
 
                     let catalog = self.catalog_mut();
-                    catalog.set_optimized_plan(id, optimized_plan);
-                    catalog.set_physical_plan(id, physical_plan);
-                    catalog.set_dataflow_metainfo(id, metainfo);
+                    catalog.set_optimized_plan(mv.global_id(), optimized_plan);
+                    catalog.set_physical_plan(mv.global_id(), physical_plan);
+                    catalog.set_dataflow_metainfo(mv.global_id(), metainfo);
 
-                    compute_instance.insert_collection(id);
+                    compute_instance.insert_collection(mv.global_id());
                 }
                 CatalogItem::ContinualTask(ct) => {
                     let compute_instance =
@@ -2741,32 +2899,60 @@ impl Coordinator {
                             self.instance_snapshot(ct.cluster_id)
                                 .expect("compute instance exists")
                         });
+                    let global_id = ct.global_id();
 
-                    let debug_name = self
-                        .catalog()
-                        .resolve_full_name(entry.name(), None)
-                        .to_string();
-                    let (optimized_plan, physical_plan, metainfo) = self
-                        .optimize_create_continual_task(
-                            ct,
-                            id,
-                            self.owned_catalog(),
-                            debug_name,
-                            is_timeline_epoch_ms,
-                        )?;
+                    let (optimized_plan, physical_plan, metainfo) =
+                        match cached_global_exprs.remove(&global_id) {
+                            Some(global_expressions)
+                                if global_expressions.optimizer_features
+                                    == optimizer_config.features =>
+                            {
+                                info!("global expression cache hit for {global_id:?}");
+                                (
+                                    global_expressions.global_mir,
+                                    global_expressions.physical_plan,
+                                    global_expressions.dataflow_metainfos,
+                                )
+                            }
+                            Some(_) | None => {
+                                let debug_name = self
+                                    .catalog()
+                                    .resolve_full_name(entry.name(), None)
+                                    .to_string();
+                                let (optimized_plan, physical_plan, metainfo) = self
+                                    .optimize_create_continual_task(
+                                        ct,
+                                        global_id,
+                                        self.owned_catalog(),
+                                        debug_name,
+                                    )?;
+                                uncached_expressions.insert(
+                                    global_id,
+                                    GlobalExpressions {
+                                        global_mir: optimized_plan.clone(),
+                                        physical_plan: physical_plan.clone(),
+                                        dataflow_metainfos: metainfo.clone(),
+                                        optimizer_features: OptimizerFeatures::from(
+                                            self.catalog().system_config(),
+                                        ),
+                                    },
+                                );
+                                (optimized_plan, physical_plan, metainfo)
+                            }
+                        };
 
                     let catalog = self.catalog_mut();
-                    catalog.set_optimized_plan(id, optimized_plan);
-                    catalog.set_physical_plan(id, physical_plan);
-                    catalog.set_dataflow_metainfo(id, metainfo);
+                    catalog.set_optimized_plan(ct.global_id(), optimized_plan);
+                    catalog.set_physical_plan(ct.global_id(), physical_plan);
+                    catalog.set_dataflow_metainfo(ct.global_id(), metainfo);
 
-                    compute_instance.insert_collection(id);
+                    compute_instance.insert_collection(ct.global_id());
                 }
                 _ => (),
             }
         }
 
-        Ok(())
+        Ok(uncached_expressions)
     }
 
     /// Selects for each compute dataflow an as-of suitable for bootstrapping it.
@@ -2783,15 +2969,28 @@ impl Coordinator {
         let mut dataflows = Vec::new();
         let mut read_policies = BTreeMap::new();
         for entry in self.catalog.entries() {
-            let id = entry.id();
-            if let Some(plan) = self.catalog.try_get_physical_plan(&id) {
-                catalog_ids.push(id);
+            let gid = match entry.item() {
+                CatalogItem::Index(idx) => idx.global_id(),
+                CatalogItem::MaterializedView(mv) => mv.global_id(),
+                CatalogItem::ContinualTask(ct) => ct.global_id(),
+                CatalogItem::Table(_)
+                | CatalogItem::Source(_)
+                | CatalogItem::Log(_)
+                | CatalogItem::View(_)
+                | CatalogItem::Sink(_)
+                | CatalogItem::Type(_)
+                | CatalogItem::Func(_)
+                | CatalogItem::Secret(_)
+                | CatalogItem::Connection(_) => continue,
+            };
+            if let Some(plan) = self.catalog.try_get_physical_plan(&gid) {
+                catalog_ids.push(gid);
                 dataflows.push(plan.clone());
 
                 if let Some(compaction_window) = entry.item().initial_logical_compaction_window() {
-                    read_policies.insert(id, compaction_window.into());
+                    read_policies.insert(gid, compaction_window.into());
                 }
-            };
+            }
         }
 
         let read_ts = self.get_local_read_ts().await;
@@ -3344,11 +3543,12 @@ impl Coordinator {
     /// never commit retractions to [`MZ_STORAGE_USAGE_BY_SHARD`] outside of this method, which is
     /// only called once during startup. So we don't have to worry about double/invalid retractions.
     async fn prune_storage_usage_events_on_startup(&self, retention_period: Duration) {
-        let id = self
+        let item_id = self
             .catalog()
             .resolve_builtin_table(&MZ_STORAGE_USAGE_BY_SHARD);
+        let global_id = self.catalog.get_entry(&item_id).latest_global_id();
         let read_ts = self.get_local_read_ts().await;
-        let current_contents_fut = self.controller.storage.snapshot(id, read_ts);
+        let current_contents_fut = self.controller.storage.snapshot(global_id, read_ts);
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         spawn(|| "storage_usage_prune", async move {
             let mut current_contents = current_contents_fut
@@ -3375,7 +3575,11 @@ impl Coordinator {
                     .expect("all collections happen after Jan 1 1970");
                 if collection_timestamp < cutoff_ts {
                     debug!("pruning storage event {row:?}");
-                    let builtin_update = BuiltinTableUpdate { id, row, diff: -1 };
+                    let builtin_update = BuiltinTableUpdate {
+                        id: item_id,
+                        row,
+                        diff: -1,
+                    };
                     expired.push(builtin_update);
                 }
             }
@@ -3487,6 +3691,7 @@ pub fn serve(
         read_only_controllers,
         enable_0dt_deployment,
         caught_up_trigger: clusters_caught_up_trigger,
+        helm_chart_version,
     }: Config,
 ) -> BoxFuture<'static, Result<(Handle, Client), AdapterError>> {
     async move {
@@ -3579,14 +3784,14 @@ pub fn serve(
 
         let catalog_open_start = Instant::now();
         info!("startup: coordinator init: catalog open beginning");
+        let persist_client = controller_config
+            .persist_clients
+            .open(controller_config.persist_location.clone())
+            .await
+            .context("opening persist client")?;
         let builtin_item_migration_config = if enable_0dt_deployment {
-            let persist_client = controller_config
-                .persist_clients
-                .open(controller_config.persist_location.clone())
-                .await
-                .context("opening builtin migration client")?;
             BuiltinItemMigrationConfig::ZeroDownTime {
-                persist_client,
+                persist_client: persist_client.clone(),
                 deploy_generation: controller_config.deploy_generation,
                 read_only: read_only_controllers,
             }
@@ -3597,8 +3802,10 @@ pub fn serve(
             mut catalog,
             storage_collections_to_drop,
             migrated_storage_collections_0dt,
-            new_builtins,
+            new_builtin_collections,
             builtin_table_updates,
+            cached_global_exprs,
+            uncached_local_exprs,
         } = Catalog::open(mz_catalog::config::Config {
             storage,
             metrics_registry: &metrics_registry,
@@ -3607,6 +3814,7 @@ pub fn serve(
                 all_features,
                 build_info,
                 environment_id: environment_id.clone(),
+                read_only: read_only_controllers,
                 now: now.clone(),
                 boot_ts: boot_ts.clone(),
                 skip_migrations: false,
@@ -3626,6 +3834,8 @@ pub fn serve(
                 active_connection_count,
                 http_host_name,
                 builtin_item_migration_config,
+                persist_client: persist_client.clone(),
+                helm_chart_version,
             },
         })
         .await?;
@@ -3687,7 +3897,7 @@ pub fn serve(
         let clusters_caught_up_check =
             clusters_caught_up_trigger.map(|trigger| CaughtUpCheckContext {
                 trigger,
-                exclude_collections: new_builtins,
+                exclude_collections: new_builtin_collections.into_iter().collect(),
             });
 
         if let Some(config) = pg_timestamp_oracle_config.as_ref() {
@@ -3740,7 +3950,8 @@ pub fn serve(
                     active_webhooks: BTreeMap::new(),
                     staged_cancellation: BTreeMap::new(),
                     introspection_subscribes: BTreeMap::new(),
-                    write_lock_wait_group: LockedVecDeque::new(),
+                    write_locks: BTreeMap::new(),
+                    deferred_write_ops: BTreeMap::new(),
                     pending_writes: Vec::new(),
                     advance_timelines_interval,
                     secrets_controller,
@@ -3772,6 +3983,8 @@ pub fn serve(
                             boot_ts,
                             migrated_storage_collections_0dt,
                             builtin_table_updates,
+                            cached_global_exprs,
+                            uncached_local_exprs,
                         )
                         .await?;
                     coord
@@ -4032,10 +4245,6 @@ impl<T> LockedVecDeque<T> {
         }
     }
 
-    pub fn mutex(&self) -> Arc<tokio::sync::Mutex<()>> {
-        Arc::clone(&self.lock)
-    }
-
     pub fn try_lock_owned(&self) -> Result<OwnedMutexGuard<()>, tokio::sync::TryLockError> {
         Arc::clone(&self.lock).try_lock_owned()
     }
@@ -4087,24 +4296,15 @@ pub enum NetworkPolicyError {
     MissingIp,
 }
 
-// TODO @jubrad this will be moved to a catalog resource in v1
-// of network policies.
-/// Represents a basic network policy.
-#[derive(Debug, Clone)]
-pub struct NetworkPolicy {
-    allow_list: Vec<IpNet>,
-}
-
-impl NetworkPolicy {
-    pub fn new(allow_list: Vec<IpNet>) -> Self {
-        NetworkPolicy { allow_list }
-    }
-
-    /// Validate the provided IP is allowed by the network policy.
-    pub fn validate(&self, ip: &IpAddr) -> Result<(), NetworkPolicyError> {
-        match self.allow_list.iter().any(|net| net.contains(ip)) {
-            true => Ok(()),
-            false => Err(NetworkPolicyError::AddressDenied(ip.clone())),
-        }
+pub(crate) fn validate_ip_with_policy_rules(
+    ip: &IpAddr,
+    rules: &Vec<NetworkPolicyRule>,
+) -> Result<(), NetworkPolicyError> {
+    // At the moment we're not handling action or direction
+    // as those are only able to be "allow" and "ingress" respectively
+    if rules.iter().any(|r| r.address.0.contains(ip)) {
+        Ok(())
+    } else {
+        Err(NetworkPolicyError::AddressDenied(ip.clone()))
     }
 }

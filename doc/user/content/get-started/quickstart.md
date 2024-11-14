@@ -52,7 +52,7 @@ Emulator](/get-started/install-materialize-emulator/) to test locally. However,
 the Materialize Emulator does not provide the full experience of using
 Materialize.
 
-## Step 0. Open the SQL Shell or a SQL client.
+## Step 0. Open the SQL Shell or a SQL client
 
 - If you have a Materialize account, navigate to the [Materialize
   Console](https://console.materialize.com/) and sign in. By default, you should
@@ -62,7 +62,7 @@ Materialize.
   Emulator](/get-started/install-materialize-emulator/#materialize-emulator-connect-client)
   using your preferred SQL client.
 
-## Step 1. Create a schema.
+## Step 1. Create a schema
 
 By default, you are using the `quickstart` cluster, working in the
 `materialize.public` [namespace](/sql/namespaces/), where:
@@ -98,7 +98,7 @@ See also [Naming restrictions](/sql/identifiers/#naming-restrictions).
 
 {{</ tabs >}}
 
-{{< tab "Other Clients" >}}
+{{< tab "Other SQL clients" >}}
 
 1. Use [`CREATE SCHEMA`](/sql/create-schema/) to create your schema.
 
@@ -118,7 +118,7 @@ See also [Naming restrictions](/sql/identifiers/#naming-restrictions).
 {{</ tabs >}}
 
 
-## Step 2. Create the source.
+## Step 2. Create the source
 
 [Sources](/concepts/sources/) are external systems from which Materialize reads
 in data. This tutorial uses Materialize's [sample `Auction` load
@@ -232,7 +232,7 @@ generator](/sql/create-source/load-generator/#auction) to create the source.
       auctions to show how Materialize uses views and indexes to provide
       immediately available up-to-date results for various queries.
 
-## Step 3. Create a view to find winning bids.
+## Step 3. Create a view to find winning bids
 
 A [view](/concepts/views/) is a saved name for the underlying `SELECT`
 statement, providing an alias/shorthand when referencing the query. The
@@ -245,8 +245,8 @@ auction ended. As new auction and bid data appears, the query must be rerun to
 get up-to-date results.
 
 1. Using the [`CREATE VIEW`](/sql/create-view/) command, create a
-   [**view**](/concepts/views/ "Saved name/alias for a query") `winning_bids`
-   for the query that finds winning bids for auctions that have ended.
+   [**view**](/concepts/views/ "Saved name/alias for a query") to find the
+   winning (highest) bids.
 
    ```mzsql
    CREATE VIEW winning_bids AS
@@ -262,10 +262,10 @@ get up-to-date results.
      b.buyer;
    ```
 
-   [`SELECT DISTINCT ON
-   (...)`](https://www.postgresql.org/docs/current/sql-select.html#SQL-DISTINCT)
-   is a PostgreSQL expression that keeps only the first row of each set of
-   matching rows.
+   Materialize provides an idiomatic way to perform [Top-K queries](/transform-data/idiomatic-materialize-sql/top-k/)
+   using the [`DISTINCT ON`](/transform-data/idiomatic-materialize-sql/top-k/#for-k--1-1)
+   clause. This clause is used to group by account `id` and return the first
+   element within that group according to the specified ordering.
 
 1. [`SELECT`](/sql/select/) from the view to execute the underlying query.
    For example:
@@ -298,7 +298,7 @@ get up-to-date results.
 
    In the next step, you will create an index on `winning_bids`.
 
-## Step 4. Create an index to provide up-to-date results.
+## Step 4. Create an index to provide up-to-date results
 
 Indexes in Materialize represents query results stored in memory within a
 cluster. In Materialize, you can create [indexes](/concepts/indexes/) on views
@@ -347,7 +347,7 @@ point lookups and joins.
    The queries should be faster since they use the in-memory, already up-to-date
    results computed by the index.
 
-## Step 5. Create views and a table to find flippers in real time.
+## Step 5. Create views and a table to find flippers in real time
 
 For this quickstart, auction flipping activities are defined as when a user buys
 an item in one auction and resells the same item at a higher price within an
@@ -431,7 +431,7 @@ you will serve results may be preferred.
 
 {{</ note >}}
 
-## Step 6. Subscribe to see results change.
+## Step 6. Subscribe to see results change
 
 [`SUBSCRIBE`](/sql/subscribe/) to `flippers` to see new flippers appear as new
 data arrives (either from the known_flippers table or the flip_activities view).
@@ -473,7 +473,7 @@ data arrives (either from the known_flippers table or the flip_activities view).
    1. To cancel out of the `SUBSCRIBE`, click the **Stop streaming** button.
 
    {{< /tab >}}
-   {{< tab "Other Clients" >}}
+   {{< tab "Other SQL clients" >}}
 
    If running Materialize in a Docker container, run the following command in
    your preferred SQL client:
@@ -519,7 +519,7 @@ data arrives (either from the known_flippers table or the flip_activities view).
    {{< /tab >}}
    {{< /tabs >}}
 
-## Step 7. Create views to verify that Materialize returns consistent data.
+## Step 7. Create views to verify that Materialize returns consistent data
 
 To verify that Materialize serves **consistent results**, even as new
 data comes in, this step creates the following views for completed auctions:
@@ -592,7 +592,7 @@ data comes in, this step creates the following views for completed auctions:
      remain `0`.
    - To cancel out of the `SUBSCRIBE`, click the **Stop streaming** button.
    {{< /tab >}}
-   {{< tab "Other Clients" >}}
+   {{< tab "Other SQL clients" >}}
    If running Materialize in a Docker container, run the following command in
    your preferred SQL client:
    ```mzsql
@@ -609,7 +609,7 @@ data comes in, this step creates the following views for completed auctions:
    {{< /tabs >}}
 
 
-## Step 8. Clean up.
+## Step 8. Clean up
 
 To clean up the quickstart environment:
 
@@ -655,7 +655,7 @@ The quickstart used an index since:
 - Although used, `SUBSCRIBE` operations were for illustrative/validation
   purposes and were not the final consumer of the views.
 
-### Considerations
+### Best practices
 
 Before creating an index (which represents query results stored in memory),
 consider its memory usage as well as its [compute cost
@@ -668,6 +668,8 @@ creating indexes, see [Index Best Practices](/concepts/indexes/#best-practices).
 - [Indexes](/concepts/indexes)
 - [Sources](/concepts/sources)
 - [Views](/concepts/views/)
+- [Idiomatic Materialize SQL
+  chart](/transform-data/idiomatic-materialize-sql/appendix/idiomatic-sql-chart/)
 - [Usage & Billing](/administration/billing/#compute)
 - [`CREATE INDEX`](/sql/create-index/)
 - [`CREATE SCHEMA`](/sql/create-schema/)

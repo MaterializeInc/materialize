@@ -15,7 +15,6 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
-use ipnet::IpNet;
 use mz_adapter_types::timestamp_oracle::{
     DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_MAX_SIZE, DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_MAX_WAIT,
     DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_TTL, DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_TTL_STAGGER,
@@ -364,7 +363,7 @@ pub static SEARCH_PATH: VarDefinition = VarDefinition::new_lazy(
 
 pub static STATEMENT_TIMEOUT: VarDefinition = VarDefinition::new(
     "statement_timeout",
-    value!(Duration; Duration::from_secs(10)),
+    value!(Duration; Duration::from_secs(60)),
     "Sets the maximum allowed duration of INSERT...SELECT, UPDATE, and DELETE operations. \
     If this value is specified without units, it is taken as milliseconds.",
     true,
@@ -460,14 +459,14 @@ pub static MAX_AWS_PRIVATELINK_CONNECTIONS: VarDefinition = VarDefinition::new(
 
 pub static MAX_TABLES: VarDefinition = VarDefinition::new(
     "max_tables",
-    value!(u32; 25),
+    value!(u32; 200),
     "The maximum number of tables in the region, across all schemas (Materialize).",
     true,
 );
 
 pub static MAX_SOURCES: VarDefinition = VarDefinition::new(
     "max_sources",
-    value!(u32; 25),
+    value!(u32; 200),
     "The maximum number of sources in the region, across all schemas (Materialize).",
     true,
 );
@@ -557,11 +556,18 @@ pub static MAX_NETWORK_POLICIES: VarDefinition = VarDefinition::new(
     true,
 );
 
+pub static MAX_RULES_PER_NETWORK_POLICY: VarDefinition = VarDefinition::new(
+    "max_rules_per_network_policy",
+    value!(u32; 25),
+    "The maximum number of rules per network policies.",
+    true,
+);
+
 // Cloud environmentd is configured with 4 GiB of RAM, so 1 GiB is a good heuristic for a single
 // query.
 //
 // We constrain this parameter to a minimum of 1MB, to avoid accidental usage of values that will
-// interfer with queries executed by the system itself.
+// interfere with queries executed by the system itself.
 //
 // TODO(jkosh44) Eventually we want to be able to return arbitrary sized results.
 pub static MAX_RESULT_SIZE: VarDefinition = VarDefinition::new(
@@ -773,7 +779,7 @@ pub mod upsert_rocksdb {
     /// Controls whether automatic spill to disk should be turned on when using `DISK`.
     pub static UPSERT_ROCKSDB_AUTO_SPILL_TO_DISK: VarDefinition = VarDefinition::new(
         "upsert_rocksdb_auto_spill_to_disk",
-        value!(bool; false),
+        value!(bool; true),
         "Controls whether automatic spill to disk should be turned on when using `DISK`",
         false,
     );
@@ -1112,7 +1118,7 @@ pub static KAFKA_TRANSACTION_TIMEOUT: VarDefinition = VarDefinition::new(
     "kafka_transaction_timeout",
     value!(Duration; mz_kafka_util::client::DEFAULT_TRANSACTION_TIMEOUT),
     "Controls `transaction.timeout.ms` for rdkafka \
-        client connections. Defaults to the rdkafka default (60000ms). \
+        client connections. Defaults to the 10min. \
         Cannot be greater than `i32::MAX` or less than 1000ms.",
     false,
 );
@@ -1330,7 +1336,7 @@ pub static OPTIMIZER_STATS_TIMEOUT: VarDefinition = VarDefinition::new(
 
 pub static OPTIMIZER_ONESHOT_STATS_TIMEOUT: VarDefinition = VarDefinition::new(
     "optimizer_oneshot_stats_timeout",
-    value!(Duration; Duration::from_millis(20)),
+    value!(Duration; Duration::from_millis(10)),
     "Sets the timeout applied to the optimizer's statistics collection from storage; \
         applied to oneshot queries, like SELECT (Materialize).",
     false,
@@ -1384,7 +1390,7 @@ pub static STATEMENT_LOGGING_TARGET_DATA_RATE: VarDefinition = VarDefinition::ne
 
 pub static STATEMENT_LOGGING_MAX_SAMPLE_RATE: VarDefinition = VarDefinition::new_lazy(
     "statement_logging_max_sample_rate",
-    lazy_value!(Numeric; || 0.0.into()),
+    lazy_value!(Numeric; || 0.99.into()),
     "The maximum rate at which statements may be logged. If this value is less than \
         that of `statement_logging_sample_rate`, the latter is ignored (Materialize).",
     true,
@@ -1393,7 +1399,7 @@ pub static STATEMENT_LOGGING_MAX_SAMPLE_RATE: VarDefinition = VarDefinition::new
 
 pub static STATEMENT_LOGGING_DEFAULT_SAMPLE_RATE: VarDefinition = VarDefinition::new_lazy(
     "statement_logging_default_sample_rate",
-    lazy_value!(Numeric; || 0.0.into()),
+    lazy_value!(Numeric; || 0.99.into()),
     "The default value of `statement_logging_sample_rate` for new sessions (Materialize).",
     true,
 )
@@ -1496,10 +1502,12 @@ pub static USER_STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION: VarDefinition = VarD
     false,
 );
 
-pub static DEFAULT_NETWORK_POLICY_ALLOW_LIST: VarDefinition = VarDefinition::new_lazy(
-    "default_network_policy_allow_list",
-    lazy_value!(Vec<IpNet>; || vec![IpNet::from_str("0.0.0.0/0").expect("this is a valid IpNet")]),
-    "Network policy allow list that external user connections will be validated against.",
+// This system var will need to point to the name of an existing network policy
+// this will be enforced on alter_system_set
+pub static NETWORK_POLICY: VarDefinition = VarDefinition::new_lazy(
+    "network_policy",
+    lazy_value!(String; || "default".to_string()),
+    "Sets the fallback network policy applied to all users without an explicit policy.",
     true,
 );
 
@@ -1644,6 +1652,19 @@ pub mod cluster_scheduling {
         "cluster_security_context_enabled",
         value!(bool; DEFAULT_SECURITY_CONTEXT_ENABLED),
         "Enables SecurityContext for clusterd instances, restricting capabilities to improve security.",
+        false,
+    );
+
+    const DEFAULT_CLUSTER_REFRESH_MV_COMPACTION_ESTIMATE: Duration = Duration::from_secs(60);
+
+    pub static CLUSTER_REFRESH_MV_COMPACTION_ESTIMATE: VarDefinition = VarDefinition::new(
+        "cluster_refresh_mv_compaction_estimate",
+        value!(Duration; DEFAULT_CLUSTER_REFRESH_MV_COMPACTION_ESTIMATE),
+        "How much time to wait for compaction after a REFRESH MV completes a refresh \
+            before turning off the refresh cluster. This is needed because Persist does compaction \
+            only after a write, but refresh MVs do writes only at their refresh times. \
+            (In the long term, we'd like to remove this configuration and instead wait exactly \
+            until compaction has settled. We'd need some new Persist API for this.)",
         false,
     );
 }
@@ -1806,7 +1827,7 @@ feature_flags!(
     {
         name: enable_explain_pushdown,
         desc: "EXPLAIN FILTER PUSHDOWN",
-        default: false,
+        default: true,
         enable_for_item_parsing: true,
     },
     {
@@ -1843,6 +1864,12 @@ feature_flags!(
     {
         name: enable_primary_key_not_enforced,
         desc: "PRIMARY KEY NOT ENFORCED",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_collection_partition_by,
+        desc: "PARTITION BY",
         default: false,
         enable_for_item_parsing: true,
     },
@@ -2005,7 +2032,7 @@ feature_flags!(
     {
         name: enable_expressions_in_limit_syntax,
         desc: "LIMIT <expr> syntax",
-        default: false,
+        default: true,
         enable_for_item_parsing: true,
     },
     {
@@ -2042,7 +2069,7 @@ feature_flags!(
     {
         name: enable_reduce_mfp_fusion,
         desc: "fusion of MFPs in reductions",
-        default: false,
+        default: true,
         enable_for_item_parsing: false,
     },
     {
@@ -2054,7 +2081,7 @@ feature_flags!(
     {
         name: enable_copy_to_expr,
         desc: "COPY ... TO 's3://...'",
-        default: false,
+        default: true,
         enable_for_item_parsing: false,
     },
     {
@@ -2104,12 +2131,6 @@ feature_flags!(
         desc: "The VALUE DECODING ERRORS = INLINE option on ENVELOPE UPSERT",
         default: false,
         enable_for_item_parsing: true,
-    },
-    {
-        name: enable_outer_join_null_filter,
-        desc: "Add an extra null filter to the semi-join part of outer join lowering",
-        default: true,
-        enable_for_item_parsing: false,
     },
     {
         name: enable_alter_table_add_column,
@@ -2171,6 +2192,18 @@ feature_flags!(
         default: false,
         enable_for_item_parsing: true,
     },
+    {
+        name: enable_continual_task_retain,
+        desc: "CREATE CONTINUAL TASK .. FROM RETAIN .. WHILE",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_network_policies,
+        desc: "ENABLE NETWORK POLICIES",
+        default: false,
+        enable_for_item_parsing: true,
+    },
 );
 
 impl From<&super::SystemVars> for OptimizerFeatures {
@@ -2183,7 +2216,6 @@ impl From<&super::SystemVars> for OptimizerFeatures {
             enable_variadic_left_join_lowering: vars.enable_variadic_left_join_lowering(),
             enable_letrec_fixpoint_analysis: vars.enable_letrec_fixpoint_analysis(),
             enable_cardinality_estimates: vars.enable_cardinality_estimates(),
-            enable_outer_join_null_filter: vars.enable_outer_join_null_filter(),
             enable_value_window_function_fusion: vars.enable_value_window_function_fusion(),
             enable_reduce_unnest_list_fusion: vars.enable_reduce_unnest_list_fusion(),
             enable_window_aggregation_fusion: vars.enable_window_aggregation_fusion(),

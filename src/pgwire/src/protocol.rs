@@ -34,7 +34,7 @@ use mz_ore::{assert_none, assert_ok, instrument};
 use mz_pgcopy::{CopyCsvFormatParams, CopyFormatParams, CopyTextFormatParams};
 use mz_pgwire_common::{ErrorResponse, Format, FrontendMessage, Severity, VERSIONS, VERSION_3};
 use mz_repr::{
-    Datum, GlobalId, RelationDesc, RelationType, RowArena, RowIterator, RowRef, ScalarType,
+    CatalogItemId, Datum, RelationDesc, RelationType, RowArena, RowIterator, RowRef, ScalarType,
 };
 use mz_server_core::TlsMode;
 use mz_sql::ast::display::AstDisplay;
@@ -97,6 +97,8 @@ pub struct RunParams<'a, A> {
     pub internal: bool,
     /// Global connection limit and count
     pub active_connection_count: Arc<Mutex<ConnectionCounter>>,
+    /// Helm chart version
+    pub helm_chart_version: Option<String>,
 }
 
 /// Runs a pgwire connection to completion.
@@ -120,6 +122,7 @@ pub async fn run<'a, A>(
         frontegg,
         internal,
         active_connection_count,
+        helm_chart_version,
     }: RunParams<'a, A>,
 ) -> Result<(), io::Error>
 where
@@ -190,6 +193,7 @@ where
                     user: auth_session.user().into(),
                     client_ip: conn.peer_addr().clone(),
                     external_metadata_rx: Some(auth_session.external_metadata_rx()),
+                    helm_chart_version,
                 });
                 let expired = async move { auth_session.expired().await };
                 (session, expired.left_future())
@@ -211,6 +215,7 @@ where
             user,
             client_ip: conn.peer_addr().clone(),
             external_metadata_rx: None,
+            helm_chart_version,
         });
         // No frontegg check, so auth session lasts indefinitely.
         let auth_session = pending().right_future();
@@ -1746,6 +1751,7 @@ where
             | ExecuteResponse::CreatedType
             | ExecuteResponse::CreatedView { .. }
             | ExecuteResponse::CreatedViews { .. }
+            | ExecuteResponse::CreatedNetworkPolicy
             | ExecuteResponse::Comment
             | ExecuteResponse::Deallocate { .. }
             | ExecuteResponse::Deleted(..)
@@ -2060,7 +2066,7 @@ where
     #[instrument(level = "debug")]
     async fn copy_from(
         &mut self,
-        id: GlobalId,
+        id: CatalogItemId,
         columns: Vec<usize>,
         params: CopyFormatParams<'_>,
         row_desc: RelationDesc,
@@ -2096,7 +2102,7 @@ where
 
     async fn copy_from_inner(
         &mut self,
-        id: GlobalId,
+        id: CatalogItemId,
         columns: Vec<usize>,
         params: CopyFormatParams<'_>,
         row_desc: RelationDesc,

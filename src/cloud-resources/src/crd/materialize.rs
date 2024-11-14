@@ -10,11 +10,16 @@
 use std::collections::BTreeMap;
 
 use k8s_openapi::{
-    api::core::v1::ResourceRequirements,
-    apimachinery::pkg::apis::meta::v1::{Condition, OwnerReference, Time},
+    api::core::v1::{EnvVar, ResourceRequirements},
+    apimachinery::pkg::{
+        api::resource::Quantity,
+        apis::meta::v1::{Condition, OwnerReference, Time},
+    },
 };
 use kube::{api::ObjectMeta, CustomResource, Resource, ResourceExt};
 
+use rand::distributions::Uniform;
+use rand::Rng;
 use schemars::JsonSchema;
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -47,10 +52,22 @@ pub mod v1alpha1 {
         pub environmentd_image_ref: String,
         // Extra args to pass to the environmentd binary
         pub environmentd_extra_args: Option<Vec<String>>,
+        // Extra environment variables to pass to the environmentd binary
+        pub environmentd_extra_env: Option<Vec<EnvVar>>,
+        // If running in AWS, override the IAM role to use to give
+        // environmentd access to the persist S3 bucket
+        pub environmentd_iam_role_arn: Option<String>,
+        // If running in AWS, override the IAM role to use to support
+        // the CREATE CONNECTION feature
+        pub environmentd_connection_role_arn: Option<String>,
         // Resource requirements for the environmentd pod
         pub environmentd_resource_requirements: Option<ResourceRequirements>,
+        // Amount of disk to allocate, if a storage class is provided
+        pub environmentd_scratch_volume_storage_requirement: Option<Quantity>,
         // Resource requirements for the balancerd pod
         pub balancerd_resource_requirements: Option<ResourceRequirements>,
+        // Resource requirements for the console pod
+        pub console_resource_requirements: Option<ResourceRequirements>,
 
         // When changes are made to the environmentd resources (either via
         // modifying fields in the spec here or by deploying a new
@@ -77,11 +94,13 @@ pub mod v1alpha1 {
         // it will just kill the environmentd pod directly.
         #[serde(default)]
         pub in_place_rollout: bool,
+        // The name of a secret containing metadata_backend_url and persist_backend_url.
+        pub backend_secret_name: String,
     }
 
     impl Materialize {
         pub fn backend_secret_name(&self) -> String {
-            format!("materialize-backend-{}", self.name_unchecked())
+            self.spec.backend_secret_name.clone()
         }
 
         pub fn namespace(&self) -> String {
@@ -101,31 +120,67 @@ pub mod v1alpha1 {
         }
 
         pub fn environmentd_statefulset_name(&self, generation: u64) -> String {
-            format!("environmentd-{}-{generation}", self.name_unchecked())
+            self.name_prefixed(&format!("environmentd-{generation}"))
         }
 
         pub fn environmentd_service_name(&self) -> String {
-            format!("environmentd-{}", self.name_unchecked())
+            self.name_prefixed("environmentd")
         }
 
         pub fn environmentd_generation_service_name(&self, generation: u64) -> String {
-            format!("environmentd-{}-{generation}", self.name_unchecked())
+            self.name_prefixed(&format!("environmentd-{generation}"))
         }
 
         pub fn balancerd_deployment_name(&self) -> String {
-            format!("balancerd-{}", self.name_unchecked())
+            self.name_prefixed("balancerd")
         }
 
         pub fn balancerd_service_name(&self) -> String {
-            format!("balancerd-{}", self.name_unchecked())
+            self.name_prefixed("balancerd")
+        }
+
+        pub fn console_deployment_name(&self) -> String {
+            self.name_prefixed("console")
+        }
+
+        pub fn console_service_name(&self) -> String {
+            self.name_prefixed("console")
         }
 
         pub fn persist_pubsub_service_name(&self, generation: u64) -> String {
-            format!("persist-pubsub-{}-{generation}", self.name_unchecked())
+            self.name_prefixed(&format!("persist-pubsub-{generation}"))
         }
 
         pub fn name_prefixed(&self, suffix: &str) -> String {
-            format!("{}-{}", self.name_unchecked(), suffix)
+            format!("mz{}-{}", self.resource_id(), suffix)
+        }
+
+        pub fn resource_id(&self) -> &str {
+            &self.status.as_ref().unwrap().resource_id
+        }
+
+        pub fn environmentd_scratch_volume_storage_requirement(&self) -> Quantity {
+            self.spec
+                .environmentd_scratch_volume_storage_requirement
+                .clone()
+                .unwrap_or_else(|| {
+                    self.spec
+                        .environmentd_resource_requirements
+                        .as_ref()
+                        .and_then(|requirements| {
+                            requirements
+                                .requests
+                                .as_ref()
+                                .or(requirements.limits.as_ref())
+                        })
+                        // TODO: in cloud, we've been defaulting to twice the
+                        // memory limit, but k8s-openapi doesn't seem to
+                        // provide any way to parse Quantity values, so there
+                        // isn't an easy way to do arithmetic on it
+                        .and_then(|requirements| requirements.get("memory").cloned())
+                        // TODO: is there a better default to use here?
+                        .unwrap_or(Quantity("4096Mi".to_string()))
+                })
         }
 
         pub fn default_labels(&self) -> BTreeMap<String, String> {
@@ -137,6 +192,10 @@ pub mod v1alpha1 {
                 (
                     "materialize.cloud/organization-namespace".to_owned(),
                     self.namespace(),
+                ),
+                (
+                    "materialize.cloud/mz-resource-id".to_owned(),
+                    self.resource_id().to_owned(),
                 ),
             ])
         }
@@ -220,6 +279,16 @@ pub mod v1alpha1 {
         pub fn status(&self) -> MaterializeStatus {
             self.status.clone().unwrap_or_else(|| {
                 let mut status = MaterializeStatus::default();
+                // DNS-1035 names are supposed to be case insensitive,
+                // so we define our own character set, rather than use the
+                // built-in Alphanumeric distribution from rand, which
+                // includes both upper and lowercase letters.
+                const CHARSET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
+                status.resource_id = rand::thread_rng()
+                    .sample_iter(Uniform::new(0, CHARSET.len()))
+                    .take(10)
+                    .map(|i| char::from(CHARSET[i]))
+                    .collect();
 
                 // If we're creating the initial status on an un-soft-deleted
                 // Environment we need to ensure that the last active generation
@@ -242,6 +311,7 @@ pub mod v1alpha1 {
     #[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq)]
     #[serde(rename_all = "camelCase")]
     pub struct MaterializeStatus {
+        pub resource_id: String,
         pub active_generation: u64,
         pub last_completed_rollout_request: Uuid,
         pub resources_hash: String,

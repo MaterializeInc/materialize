@@ -18,18 +18,21 @@ use std::time::{Duration, Instant};
 use futures::future::{BoxFuture, FutureExt};
 use itertools::{Either, Itertools};
 use mz_adapter_types::compaction::CompactionWindow;
-use mz_adapter_types::dyncfgs::ENABLE_CONTINUAL_TASK_BUILTINS;
+use mz_adapter_types::dyncfgs::{ENABLE_CONTINUAL_TASK_BUILTINS, ENABLE_EXPRESSION_CACHE};
 use mz_catalog::builtin::{
     Builtin, BuiltinTable, Fingerprint, BUILTINS, BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS,
     BUILTIN_PREFIXES, BUILTIN_ROLES, MZ_STORAGE_USAGE_BY_SHARD_DESCRIPTION,
     RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
 };
-use mz_catalog::config::StateConfig;
+use mz_catalog::config::{ClusterReplicaSizeMap, StateConfig};
 use mz_catalog::durable::objects::{
     SystemObjectDescription, SystemObjectMapping, SystemObjectUniqueIdentifier,
 };
 use mz_catalog::durable::{
     ClusterVariant, ClusterVariantManaged, Transaction, SYSTEM_CLUSTER_ID_ALLOC_KEY,
+};
+use mz_catalog::expr_cache::{
+    ExpressionCacheConfig, ExpressionCacheHandle, GlobalExpressions, LocalExpressions,
 };
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
@@ -38,8 +41,8 @@ use mz_catalog::memory::objects::{
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_compute_client::logging::LogVariant;
-use mz_controller::clusters::ReplicaLogging;
-use mz_controller_types::{is_cluster_size_v2, ClusterId};
+use mz_controller::clusters::{ReplicaAllocation, ReplicaLogging};
+use mz_controller_types::ClusterId;
 use mz_ore::cast::usize_to_u64;
 use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::now::to_datetime;
@@ -47,7 +50,7 @@ use mz_ore::{instrument, soft_assert_no_log};
 use mz_repr::adt::mz_acl_item::PrivilegeMap;
 use mz_repr::namespaces::is_unstable_schema;
 use mz_repr::role_id::RoleId;
-use mz_repr::{Diff, GlobalId, Timestamp};
+use mz_repr::{CatalogItemId, Diff, GlobalId, RelationVersion, Timestamp};
 use mz_sql::catalog::{
     BuiltinsConfig, CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem,
     CatalogItemType, RoleMembership, RoleVars,
@@ -62,11 +65,11 @@ use mz_storage_client::controller::StorageController;
 use timely::Container;
 use tracing::{error, info, warn, Instrument};
 use uuid::Uuid;
-
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
 use crate::catalog::open::builtin_item_migration::{
     migrate_builtin_items, BuiltinItemMigrationResult,
 };
+use crate::catalog::state::LocalExpressionCache;
 use crate::catalog::{
     is_reserved_name, migrate, BuiltinTableUpdate, Catalog, CatalogPlans, CatalogState, Config,
 };
@@ -75,19 +78,20 @@ use crate::AdapterError;
 #[derive(Debug)]
 pub struct BuiltinMigrationMetadata {
     // Used to drop objects on STORAGE nodes
-    pub previous_storage_collection_ids: BTreeSet<GlobalId>,
+    pub previous_storage_collection_ids: BTreeSet<CatalogItemId>,
     // Used to update persisted on disk catalog state
-    pub migrated_system_object_mappings: BTreeMap<GlobalId, SystemObjectMapping>,
+    pub migrated_system_object_mappings: BTreeMap<CatalogItemId, SystemObjectMapping>,
     pub introspection_source_index_updates:
-        BTreeMap<ClusterId, Vec<(LogVariant, String, GlobalId, u32)>>,
-    pub user_item_drop_ops: Vec<GlobalId>,
+        BTreeMap<ClusterId, Vec<(LogVariant, String, CatalogItemId, GlobalId, u32)>>,
+    pub user_item_drop_ops: Vec<CatalogItemId>,
     pub user_item_create_ops: Vec<CreateOp>,
 }
 
 #[derive(Debug)]
 pub struct CreateOp {
-    id: GlobalId,
+    id: CatalogItemId,
     oid: u32,
+    global_id: GlobalId,
     schema_id: SchemaId,
     name: String,
     owner_id: RoleId,
@@ -120,8 +124,8 @@ pub enum CatalogItemRebuilder {
 impl CatalogItemRebuilder {
     fn new(
         entry: &CatalogEntry,
-        id: GlobalId,
-        ancestor_ids: &BTreeMap<GlobalId, GlobalId>,
+        id: CatalogItemId,
+        ancestor_ids: &BTreeMap<CatalogItemId, CatalogItemId>,
     ) -> Self {
         if id.is_system()
             && (entry.is_table() || entry.is_introspection_source() || entry.is_source())
@@ -142,7 +146,12 @@ impl CatalogItemRebuilder {
         }
     }
 
-    fn build(self, id: GlobalId, state: &CatalogState) -> CatalogItem {
+    fn build(
+        self,
+        global_id: GlobalId,
+        state: &CatalogState,
+        versions: &BTreeMap<RelationVersion, GlobalId>,
+    ) -> CatalogItem {
         match self {
             Self::SystemSource(item) => item,
             Self::Object {
@@ -151,11 +160,13 @@ impl CatalogItemRebuilder {
                 custom_logical_compaction_window,
             } => state
                 .parse_item(
-                    id,
+                    global_id,
                     &sql,
+                    versions,
                     None,
                     is_retained_metrics_object,
                     custom_logical_compaction_window,
+                    &mut LocalExpressionCache::Closed,
                 )
                 .unwrap_or_else(|error| panic!("invalid persisted create sql ({error:?}): {sql}")),
         }
@@ -166,28 +177,38 @@ pub struct InitializeStateResult {
     /// An initialized [`CatalogState`].
     pub state: CatalogState,
     /// A set of storage collections to drop (only used by legacy migrations).
-    pub storage_collections_to_drop: BTreeSet<GlobalId>,
+    pub storage_collections_to_drop: BTreeSet<CatalogItemId>,
     /// A set of new shards that may need to be initialized (only used by 0dt migration).
-    pub migrated_storage_collections_0dt: BTreeSet<GlobalId>,
+    pub migrated_storage_collections_0dt: BTreeSet<CatalogItemId>,
     /// A set of new builtin items.
-    pub new_builtins: BTreeSet<GlobalId>,
+    pub new_builtin_collections: BTreeSet<GlobalId>,
     /// A list of builtin table updates corresponding to the initialized state.
     pub builtin_table_updates: Vec<BuiltinTableUpdate>,
     /// The version of the catalog that existed before initializing the catalog.
     pub last_seen_version: String,
+    /// A handle to the expression cache if it's enabled.
+    pub expr_cache_handle: Option<ExpressionCacheHandle>,
+    /// The global expressions that were cached in `expr_cache_handle`.
+    pub cached_global_exprs: BTreeMap<GlobalId, GlobalExpressions>,
+    /// The local expressions that were NOT cached in `expr_cache_handle`.
+    pub uncached_local_exprs: BTreeMap<GlobalId, LocalExpressions>,
 }
 
 pub struct OpenCatalogResult {
     /// An opened [`Catalog`].
     pub catalog: Catalog,
     /// A set of storage collections to drop (only used by legacy migrations).
-    pub storage_collections_to_drop: BTreeSet<GlobalId>,
+    pub storage_collections_to_drop: BTreeSet<CatalogItemId>,
     /// A set of new shards that may need to be initialized (only used by 0dt migration).
-    pub migrated_storage_collections_0dt: BTreeSet<GlobalId>,
+    pub migrated_storage_collections_0dt: BTreeSet<CatalogItemId>,
     /// A set of new builtin items.
-    pub new_builtins: BTreeSet<GlobalId>,
+    pub new_builtin_collections: BTreeSet<GlobalId>,
     /// A list of builtin table updates corresponding to the initialized state.
     pub builtin_table_updates: Vec<BuiltinTableUpdate>,
+    /// The global expressions that were cached in the expression cache.
+    pub cached_global_exprs: BTreeMap<GlobalId, GlobalExpressions>,
+    /// The local expressions that were NOT cached in the expression cache.
+    pub uncached_local_exprs: BTreeMap<GlobalId, LocalExpressions>,
 }
 
 impl Catalog {
@@ -217,6 +238,7 @@ impl Catalog {
             database_by_name: BTreeMap::new(),
             database_by_id: BTreeMap::new(),
             entry_by_id: BTreeMap::new(),
+            entry_by_global_id: BTreeMap::new(),
             ambient_schemas_by_name: BTreeMap::new(),
             ambient_schemas_by_id: BTreeMap::new(),
             clusters_by_name: BTreeMap::new(),
@@ -259,6 +281,7 @@ impl Catalog {
                         &ENABLE_CONTINUAL_TASK_BUILTINS,
                     ),
                 },
+                helm_chart_version: config.helm_chart_version,
             },
             cluster_replica_sizes: config.cluster_replica_sizes,
             availability_zones: config.availability_zones,
@@ -267,13 +290,14 @@ impl Catalog {
             aws_privatelink_availability_zones: config.aws_privatelink_availability_zones,
             http_host_name: config.http_host_name,
         };
+        let deploy_generation = storage.get_deployment_generation().await?;
 
         let mut updates: Vec<_> = storage.sync_to_current_updates().await?;
         assert!(!updates.is_empty(), "initial catalog snapshot is missing");
         let mut txn = storage.transaction().await?;
 
         // Migrate/update durable data before we start loading the in-memory catalog.
-        let (migrated_builtins, new_builtins) = {
+        let (migrated_builtins, new_builtin_collections) = {
             migrate::durable_migrate(&mut txn, config.boot_ts)?;
             // Overwrite and persist selected parameter values in `remote_system_parameters` that
             // was pulled from a remote frontend (e.g. LaunchDarkly) if present.
@@ -284,7 +308,7 @@ impl Catalog {
                 txn.set_system_config_synced_once()?;
             }
             // Add any new builtin objects and remove old ones.
-            let (migrated_builtins, new_builtins) =
+            let (migrated_builtins, new_builtin_collections) =
                 add_new_remove_old_builtin_items_migration(&state.config().builtins_cfg, &mut txn)?;
             let cluster_sizes = BuiltinBootstrapClusterSizes {
                 system_cluster: config.builtin_system_cluster_replica_size,
@@ -296,12 +320,20 @@ impl Catalog {
             // TODO(jkosh44) These functions should clean up old clusters, replicas, and
             // roles like they do for builtin items and introspection sources, but they
             // don't.
-            add_new_builtin_clusters_migration(&mut txn, &cluster_sizes)?;
+            add_new_builtin_clusters_migration(
+                &mut txn,
+                &cluster_sizes,
+                &state.cluster_replica_sizes,
+            )?;
             add_new_remove_old_builtin_introspection_source_migration(&mut txn)?;
-            add_new_builtin_cluster_replicas_migration(&mut txn, &cluster_sizes)?;
+            add_new_builtin_cluster_replicas_migration(
+                &mut txn,
+                &cluster_sizes,
+                &state.cluster_replica_sizes,
+            )?;
             add_new_builtin_roles_migration(&mut txn)?;
             remove_invalid_config_param_role_defaults_migration(&mut txn)?;
-            (migrated_builtins, new_builtins)
+            (migrated_builtins, new_builtin_collections)
         };
         remove_pending_cluster_replicas_migration(&mut txn)?;
 
@@ -339,6 +371,7 @@ impl Catalog {
         );
 
         let mut pre_item_updates = Vec::new();
+        let mut system_item_updates = Vec::new();
         let mut item_updates = Vec::new();
         let mut post_item_updates = Vec::new();
         for (kind, ts, diff) in updates {
@@ -351,10 +384,16 @@ impl Catalog {
                 | BootstrapStateUpdateKind::SystemConfiguration(_)
                 | BootstrapStateUpdateKind::Cluster(_)
                 | BootstrapStateUpdateKind::NetworkPolicy(_)
-                | BootstrapStateUpdateKind::IntrospectionSourceIndex(_)
-                | BootstrapStateUpdateKind::ClusterReplica(_)
-                | BootstrapStateUpdateKind::SystemObjectMapping(_) => {
+                | BootstrapStateUpdateKind::ClusterReplica(_) => {
                     pre_item_updates.push(StateUpdate {
+                        kind: kind.into(),
+                        ts,
+                        diff: diff.try_into().expect("valid diff"),
+                    })
+                }
+                BootstrapStateUpdateKind::IntrospectionSourceIndex(_)
+                | BootstrapStateUpdateKind::SystemObjectMapping(_) => {
+                    system_item_updates.push(StateUpdate {
                         kind: kind.into(),
                         ts,
                         diff: diff.try_into().expect("valid diff"),
@@ -375,7 +414,59 @@ impl Catalog {
             }
         }
 
-        let builtin_table_update = state.apply_updates_for_bootstrap(pre_item_updates).await;
+        let builtin_table_update = state
+            .apply_updates_for_bootstrap(pre_item_updates, &mut LocalExpressionCache::Closed)
+            .await;
+        builtin_table_updates.extend(builtin_table_update);
+
+        let expr_cache_start = Instant::now();
+        info!("startup: coordinator init: catalog open: expr cache open beginning");
+        // We wait until after the `pre_item_updates` to open the cache so we can get accurate
+        // dyncfgs because the `pre_item_updates` contains `SystemConfiguration` updates.
+        let expr_cache_enabled = ENABLE_EXPRESSION_CACHE.get(state.system_config().dyncfgs());
+        let (expr_cache_handle, cached_local_exprs, cached_global_exprs) = if expr_cache_enabled {
+            info!("using expression cache for startup");
+            let current_ids = txn
+                .get_items()
+                .flat_map(|item| {
+                    let gid = item.global_id.clone();
+                    let gids: Vec<_> = item.extra_versions.values().cloned().collect();
+                    std::iter::once(gid).chain(gids.into_iter())
+                })
+                .chain(
+                    txn.get_system_object_mappings()
+                        .map(|som| som.unique_identifier.global_id),
+                )
+                .collect();
+            let dyncfgs = config.persist_client.dyncfgs().clone();
+            let expr_cache_config = ExpressionCacheConfig {
+                deploy_generation,
+                persist: config.persist_client,
+                organization_id: state.config.environment_id.organization_id(),
+                current_ids,
+                remove_prior_gens: !config.read_only,
+                compact_shard: config.read_only,
+                dyncfgs,
+            };
+            let (expr_cache_handle, cached_local_exprs, cached_global_exprs) =
+                ExpressionCacheHandle::spawn_expression_cache(expr_cache_config).await;
+            (
+                Some(expr_cache_handle),
+                cached_local_exprs,
+                cached_global_exprs,
+            )
+        } else {
+            (None, BTreeMap::new(), BTreeMap::new())
+        };
+        let mut local_expr_cache = LocalExpressionCache::new(cached_local_exprs);
+        info!(
+            "startup: coordinator init: catalog open: expr cache open complete in {:?}",
+            expr_cache_start.elapsed()
+        );
+
+        let builtin_table_update = state
+            .apply_updates_for_bootstrap(system_item_updates, &mut local_expr_cache)
+            .await;
         builtin_table_updates.extend(builtin_table_update);
 
         let last_seen_version = txn
@@ -387,6 +478,7 @@ impl Catalog {
             let migrate_result = migrate::migrate(
                 &mut state,
                 &mut txn,
+                &mut local_expr_cache,
                 item_updates,
                 config.now,
                 config.boot_ts,
@@ -408,7 +500,9 @@ impl Catalog {
 
             migrate_result.builtin_table_updates
         } else {
-            state.apply_updates_for_bootstrap(item_updates).await
+            state
+                .apply_updates_for_bootstrap(item_updates, &mut local_expr_cache)
+                .await
         };
         builtin_table_updates.extend(builtin_table_update);
 
@@ -420,7 +514,7 @@ impl Catalog {
                 diff: diff.try_into().expect("valid diff"),
             })
             .collect();
-        let builtin_table_update = state.apply_updates_for_bootstrap(post_item_updates).await;
+        let builtin_table_update = state.apply_updates_for_bootstrap(post_item_updates, &mut local_expr_cache).await;
         builtin_table_updates.extend(builtin_table_update);
 
         // Migrate builtin items.
@@ -432,6 +526,7 @@ impl Catalog {
         } = migrate_builtin_items(
             &mut state,
             &mut txn,
+            &mut local_expr_cache,
             migrated_builtins,
             config.builtin_item_migration_config,
         )
@@ -447,9 +542,12 @@ impl Catalog {
             state,
             storage_collections_to_drop,
             migrated_storage_collections_0dt,
-            new_builtins: new_builtins.into_iter().collect(),
+            new_builtin_collections: new_builtin_collections.into_iter().collect(),
             builtin_table_updates,
             last_seen_version,
+            expr_cache_handle,
+            cached_global_exprs,
+            uncached_local_exprs: local_expr_cache.into_uncached_exprs(),
         })
     }
 
@@ -467,13 +565,17 @@ impl Catalog {
     pub fn open(config: Config<'_>) -> BoxFuture<'static, Result<OpenCatalogResult, AdapterError>> {
         async move {
             let mut storage = config.storage;
+
             let InitializeStateResult {
                 state,
                 storage_collections_to_drop,
                 migrated_storage_collections_0dt,
-                new_builtins,
+                new_builtin_collections,
                 mut builtin_table_updates,
                 last_seen_version: _,
+                expr_cache_handle,
+                cached_global_exprs,
+                uncached_local_exprs,
             } =
                 // BOXED FUTURE: As of Nov 2023 the returned Future from this function was 7.5KB. This would
                 // get stored on the stack which is bad for runtime performance, and blow up our stack usage.
@@ -486,6 +588,7 @@ impl Catalog {
             let catalog = Catalog {
                 state,
                 plans: CatalogPlans::default(),
+                expr_cache_handle,
                 transient_revision: 1,
                 storage: Arc::new(tokio::sync::Mutex::new(storage)),
             };
@@ -517,8 +620,10 @@ impl Catalog {
                 catalog,
                 storage_collections_to_drop,
                 migrated_storage_collections_0dt,
-                new_builtins,
+                new_builtin_collections,
                 builtin_table_updates,
+                cached_global_exprs,
+                uncached_local_exprs,
             })
         }
         .instrument(tracing::info_span!("catalog::open"))
@@ -534,12 +639,16 @@ impl Catalog {
     async fn initialize_storage_controller_state(
         &mut self,
         storage_controller: &mut dyn StorageController<Timestamp = mz_repr::Timestamp>,
-        storage_collections_to_drop: BTreeSet<GlobalId>,
+        storage_collections_to_drop: BTreeSet<CatalogItemId>,
     ) -> Result<(), mz_catalog::durable::CatalogError> {
         let collections = self
             .entries()
             .filter(|entry| entry.item().is_storage_collection())
-            .map(|entry| entry.id())
+            .flat_map(|entry| entry.global_ids())
+            .collect();
+        let collections_to_drop = storage_collections_to_drop
+            .into_iter()
+            .flat_map(|item_id| self.get_entry(&item_id).global_ids())
             .collect();
 
         // Clone the state so that any errors that occur do not leak any
@@ -550,7 +659,7 @@ impl Catalog {
         let mut txn = storage.transaction().await?;
 
         storage_controller
-            .initialize_state(&mut txn, collections, storage_collections_to_drop)
+            .initialize_state(&mut txn, collections, collections_to_drop)
             .await
             .map_err(mz_catalog::durable::DurableCatalogError::from)?;
 
@@ -572,7 +681,7 @@ impl Catalog {
         config: mz_controller::ControllerConfig,
         envd_epoch: core::num::NonZeroI64,
         read_only: bool,
-        storage_collections_to_drop: BTreeSet<GlobalId>,
+        storage_collections_to_drop: BTreeSet<CatalogItemId>,
     ) -> Result<mz_controller::Controller<mz_repr::Timestamp>, mz_catalog::durable::CatalogError>
     {
         let controller_start = Instant::now();
@@ -612,24 +721,24 @@ impl Catalog {
     /// The objects in the catalog form one or more DAGs (directed acyclic graph) via object
     /// dependencies. To migrate a builtin object we must drop that object along with all of its
     /// descendants, and then recreate that object along with all of its descendants using new
-    /// GlobalId`s. To achieve this we perform a DFS (depth first search) on the catalog items
-    /// starting with the nodes that correspond to builtin objects that have changed schemas.
+    /// [`CatalogItemId`]s. To achieve this we perform a DFS (depth first search) on the catalog
+    /// items starting with the nodes that correspond to builtin objects that have changed schemas.
     ///
     /// Objects need to be dropped starting from the leafs of the DAG going up towards the roots,
     /// and they need to be recreated starting at the roots of the DAG and going towards the leafs.
     fn generate_builtin_migration_metadata(
         state: &CatalogState,
         txn: &mut Transaction<'_>,
-        migrated_ids: Vec<GlobalId>,
-        id_fingerprint_map: BTreeMap<GlobalId, String>,
+        migrated_ids: Vec<CatalogItemId>,
+        id_fingerprint_map: BTreeMap<CatalogItemId, String>,
     ) -> Result<BuiltinMigrationMetadata, Error> {
         // First obtain a topological sorting of all migrated objects and their children.
         let mut visited_set = BTreeSet::new();
         let mut sorted_entries = Vec::new();
-        for id in migrated_ids {
-            if !visited_set.contains(&id) {
+        for item_id in migrated_ids {
+            if !visited_set.contains(&item_id) {
                 let migrated_topological_sort =
-                    Catalog::topological_sort(state, id, &mut visited_set);
+                    Catalog::topological_sort(state, item_id, &mut visited_set);
                 sorted_entries.extend(migrated_topological_sort);
             }
         }
@@ -645,14 +754,14 @@ impl Catalog {
         for entry in sorted_entries {
             let id = entry.id();
 
-            let new_id = match id {
-                GlobalId::System(_) => txn.allocate_system_item_ids(1)?.into_element(),
-                GlobalId::User(_) => txn.allocate_user_item_ids(1)?.into_element(),
+            let (new_item_id, new_global_id) = match id {
+                CatalogItemId::System(_) => txn.allocate_system_item_ids(1)?.into_element(),
+                CatalogItemId::User(_) => txn.allocate_user_item_ids(1)?.into_element(),
                 _ => unreachable!("can't migrate id: {id}"),
             };
 
             let name = state.resolve_full_name(entry.name(), None);
-            info!("migrating {name} from {id} to {new_id}");
+            info!("migrating {name} from {id} to {new_item_id}");
 
             // Generate value to update fingerprint and global ID persisted mapping for system objects.
             // Not every system object has a fingerprint, like introspection source indexes.
@@ -679,15 +788,15 @@ impl Catalog {
                             object_name: entry.name().item.clone(),
                         },
                         unique_identifier: SystemObjectUniqueIdentifier {
-                            catalog_id: new_id.to_item_id(),
-                            global_id: new_id,
+                            catalog_id: new_item_id,
+                            global_id: new_global_id,
                             fingerprint: fingerprint.clone(),
                         },
                     },
                 );
             }
 
-            ancestor_ids.insert(id, new_id);
+            ancestor_ids.insert(id, new_item_id);
 
             if entry.item().is_storage_collection() {
                 migration_metadata
@@ -698,7 +807,7 @@ impl Catalog {
             // Push drop commands.
             match entry.item() {
                 CatalogItem::Log(log) => {
-                    migrated_log_ids.insert(id, log.variant.clone());
+                    migrated_log_ids.insert(log.global_id(), log.variant.clone());
                 }
                 CatalogItem::Index(index) => {
                     if id.is_system() {
@@ -713,7 +822,8 @@ impl Catalog {
                                         .get(variant)
                                         .expect("all variants have a name")
                                         .to_string(),
-                                    new_id,
+                                    new_item_id,
+                                    new_global_id,
                                     entry.oid(),
                                 ));
                         }
@@ -749,10 +859,11 @@ impl Catalog {
             let name = entry.name().clone();
             if id.is_user() {
                 let schema_id = name.qualifiers.schema_spec.clone().into();
-                let item_rebuilder = CatalogItemRebuilder::new(entry, new_id, &ancestor_ids);
+                let item_rebuilder = CatalogItemRebuilder::new(entry, new_item_id, &ancestor_ids);
                 migration_metadata.user_item_create_ops.push(CreateOp {
-                    id: new_id,
+                    id: new_item_id,
                     oid: entry.oid(),
+                    global_id: new_global_id,
                     schema_id,
                     name: name.item.clone(),
                     owner_id: entry.owner_id().clone(),
@@ -770,8 +881,8 @@ impl Catalog {
 
     fn topological_sort<'a, 'b>(
         state: &'a CatalogState,
-        id: GlobalId,
-        visited_set: &'b mut BTreeSet<GlobalId>,
+        id: CatalogItemId,
+        visited_set: &'b mut BTreeSet<CatalogItemId>,
     ) -> Vec<&'a CatalogEntry> {
         let mut sorted_entries = Vec::new();
         visited_set.insert(id);
@@ -819,16 +930,21 @@ impl Catalog {
                         cluster_id,
                         updates
                             .into_iter()
-                            .map(|(_variant, name, index_id, oid)| (name, index_id, oid)),
+                            .map(|(_variant, name, item_id, index_id, oid)| {
+                                (name, item_id, index_id, oid)
+                            }),
                     )
                 }),
         )?;
         let updates = txn.get_and_commit_op_updates();
-        let builtin_table_update = state.apply_updates_for_bootstrap(updates).await;
+        let builtin_table_update = state
+            .apply_updates_for_bootstrap(updates, &mut LocalExpressionCache::Closed)
+            .await;
         builtin_table_updates.extend(builtin_table_update);
         for CreateOp {
             id,
             oid,
+            global_id,
             schema_id,
             name,
             owner_id,
@@ -836,19 +952,34 @@ impl Catalog {
             item_rebuilder,
         } in migration_metadata.user_item_create_ops.drain(..)
         {
-            let item = item_rebuilder.build(id, state);
-            let serialized_item = item.to_serialized();
+            // Builtin Items can't be versioned.
+            let versions = BTreeMap::new();
+            let item = item_rebuilder.build(global_id, state, &versions);
+            let (create_sql, expect_gid, expect_versions) = item.to_serialized();
+            assert_eq!(
+                global_id, expect_gid,
+                "serializing a CatalogItem changed the GlobalId"
+            );
+            assert_eq!(
+                versions, expect_versions,
+                "serializing a CatalogItem changed the Versions"
+            );
+
             txn.insert_item(
                 id,
                 oid,
+                global_id,
                 schema_id,
                 &name,
-                serialized_item,
+                create_sql,
                 owner_id.clone(),
                 privileges.all_values_owned().collect(),
+                versions,
             )?;
             let updates = txn.get_and_commit_op_updates();
-            let builtin_table_update = state.apply_updates_for_bootstrap(updates).await;
+            let builtin_table_update = state
+                .apply_updates_for_bootstrap(updates, &mut LocalExpressionCache::Closed)
+                .await;
             builtin_table_updates.extend(builtin_table_update);
         }
         Ok(builtin_table_updates)
@@ -883,7 +1014,7 @@ impl CatalogState {
 fn add_new_remove_old_builtin_items_migration(
     builtins_cfg: &BuiltinsConfig,
     txn: &mut mz_catalog::durable::Transaction<'_>,
-) -> Result<(Vec<GlobalId>, Vec<GlobalId>), mz_catalog::durable::CatalogError> {
+) -> Result<(Vec<CatalogItemId>, Vec<GlobalId>), mz_catalog::durable::CatalogError> {
     let mut new_builtin_mappings = Vec::new();
     let mut migrated_builtin_ids = Vec::new();
     // Used to validate unique descriptions.
@@ -965,12 +1096,12 @@ fn add_new_remove_old_builtin_items_migration(
                 !builtin.runtime_alterable(),
                 "setting the runtime alterable flag on an existing object is not permitted"
             );
-            migrated_builtin_ids.push(system_object_mapping.unique_identifier.global_id);
+            migrated_builtin_ids.push(system_object_mapping.unique_identifier.catalog_id);
         }
     }
 
     // Add new builtin items to catalog.
-    for ((builtin, fingerprint), id) in new_builtins {
+    for ((builtin, fingerprint), (catalog_id, global_id)) in new_builtins {
         new_builtin_mappings.push(SystemObjectMapping {
             description: SystemObjectDescription {
                 schema_name: builtin.schema().to_string(),
@@ -978,8 +1109,8 @@ fn add_new_remove_old_builtin_items_migration(
                 object_name: builtin.name().to_string(),
             },
             unique_identifier: SystemObjectUniqueIdentifier {
-                catalog_id: id.to_item_id(),
-                global_id: id,
+                catalog_id,
+                global_id,
                 fingerprint,
             },
         });
@@ -996,14 +1127,19 @@ fn add_new_remove_old_builtin_items_migration(
                     c.owner_id.clone(),
                 )];
                 acl_items.extend_from_slice(c.access);
+                // Builtin Connections cannot be versioned.
+                let versions = BTreeMap::new();
+
                 txn.insert_item(
-                    id,
+                    catalog_id,
                     c.oid,
+                    global_id,
                     mz_catalog::durable::initialize::resolve_system_schema(c.schema).id,
                     c.name,
                     c.sql.into(),
                     *c.owner_id,
                     acl_items,
+                    versions,
                 )?;
                 true
             }
@@ -1024,7 +1160,7 @@ fn add_new_remove_old_builtin_items_migration(
     for (_, mapping) in system_object_mappings {
         deleted_system_objects.insert(mapping.description);
         if mapping.unique_identifier.fingerprint == RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL {
-            deleted_runtime_alterable_system_ids.insert(mapping.unique_identifier.global_id);
+            deleted_runtime_alterable_system_ids.insert(mapping.unique_identifier.catalog_id);
         }
     }
     // If you are 100% positive that it is safe to delete a system object outside any of the
@@ -1051,17 +1187,25 @@ fn add_new_remove_old_builtin_items_migration(
     txn.remove_items(&deleted_runtime_alterable_system_ids)?;
     txn.remove_system_object_mappings(deleted_system_objects)?;
 
-    Ok((migrated_builtin_ids, new_builtin_ids))
+    // Filter down to just the GlobalIds which are used to track the underlying collections.
+    let new_builtin_collections = new_builtin_ids
+        .into_iter()
+        .map(|(_catalog_id, global_id)| global_id)
+        .collect();
+
+    Ok((migrated_builtin_ids, new_builtin_collections))
 }
 
 fn add_new_builtin_clusters_migration(
     txn: &mut mz_catalog::durable::Transaction<'_>,
     builtin_cluster_sizes: &BuiltinBootstrapClusterSizes,
+    cluster_sizes: &ClusterReplicaSizeMap,
 ) -> Result<(), mz_catalog::durable::CatalogError> {
     let cluster_names: BTreeSet<_> = txn.get_clusters().map(|cluster| cluster.name).collect();
     for builtin_cluster in BUILTIN_CLUSTERS {
         if !cluster_names.contains(builtin_cluster.name) {
             let cluster_size = builtin_cluster_sizes.get_size(builtin_cluster.name)?;
+            let cluster_allocation = cluster_sizes.get_allocation_by_name(&cluster_size)?;
             let id = txn.get_and_increment_id(SYSTEM_CLUSTER_ID_ALLOC_KEY.to_string())?;
             let id = ClusterId::System(id);
             txn.insert_system_cluster(
@@ -1072,10 +1216,10 @@ fn add_new_builtin_clusters_migration(
                 builtin_cluster.owner_id.to_owned(),
                 mz_catalog::durable::ClusterConfig {
                     variant: mz_catalog::durable::ClusterVariant::Managed(ClusterVariantManaged {
-                        size: cluster_size.clone(),
+                        size: cluster_size,
                         availability_zones: vec![],
                         replication_factor: builtin_cluster.replication_factor,
-                        disk: is_cluster_size_v2(&cluster_size),
+                        disk: cluster_allocation.is_cc,
                         logging: default_logging_config(),
                         optimizer_feature_overrides: Default::default(),
                         schedule: Default::default(),
@@ -1106,9 +1250,13 @@ fn add_new_remove_old_builtin_introspection_source_migration(
         }
 
         let new_ids = txn.allocate_system_item_ids(usize_to_u64(new_logs.len()))?;
-        assert_eq!(new_logs.len(), new_ids.len());
-        for (log, index_id) in new_logs.into_iter().zip(new_ids) {
-            new_indexes.push((cluster.id, log.name.to_string(), index_id));
+        let new_entries = new_logs
+            .into_iter()
+            .zip_eq(new_ids)
+            .map(|(log, (item_id, gid))| (log, item_id, gid));
+
+        for (log, item_id, gid) in new_entries {
+            new_indexes.push((cluster.id, log.name.to_string(), item_id, gid));
         }
 
         // Anything left in `introspection_source_index_ids` must have been deleted and should be
@@ -1146,6 +1294,7 @@ fn add_new_builtin_roles_migration(
 fn add_new_builtin_cluster_replicas_migration(
     txn: &mut Transaction<'_>,
     builtin_cluster_sizes: &BuiltinBootstrapClusterSizes,
+    cluster_sizes: &ClusterReplicaSizeMap,
 ) -> Result<(), AdapterError> {
     let cluster_lookup: BTreeMap<_, _> = txn
         .get_clusters()
@@ -1175,8 +1324,9 @@ fn add_new_builtin_cluster_replicas_migration(
                     builtin_cluster_sizes.get_size(builtin_replica.cluster_name)?
                 }
             };
+            let replica_allocation = cluster_sizes.get_allocation_by_name(&replica_size)?;
 
-            let config = builtin_cluster_replica_config(replica_size);
+            let config = builtin_cluster_replica_config(replica_size, replica_allocation);
             txn.insert_cluster_replica(
                 cluster.id,
                 builtin_replica.name,
@@ -1207,7 +1357,7 @@ fn remove_invalid_config_param_role_defaults_migration(
             //
             // TODO(parkmycar): This is a bit hacky, instead we should have a static list of all
             // session variables.
-            let session_vars = SessionVars::new_unchecked(&BUILD_INFO, SYSTEM_USER.clone());
+            let session_vars = SessionVars::new_unchecked(&BUILD_INFO, SYSTEM_USER.clone(), None);
 
             // Iterate over all of the variable defaults for this role.
             let mut invalid_roles_vars = BTreeMap::new();
@@ -1258,12 +1408,13 @@ fn remove_pending_cluster_replicas_migration(tx: &mut Transaction) -> Result<(),
 
 pub(crate) fn builtin_cluster_replica_config(
     replica_size: String,
+    replica_allocation: &ReplicaAllocation,
 ) -> mz_catalog::durable::ReplicaConfig {
     mz_catalog::durable::ReplicaConfig {
         location: mz_catalog::durable::ReplicaLocation::Managed {
             availability_zone: None,
             billed_as: None,
-            disk: is_cluster_size_v2(&replica_size),
+            disk: replica_allocation.is_cc,
             pending: false,
             internal: false,
             size: replica_size,
@@ -1379,10 +1530,13 @@ mod builtin_migration_tests {
     use mz_catalog::SYSTEM_CONN_ID;
     use mz_controller_types::ClusterId;
     use mz_expr::MirRelationExpr;
-    use mz_repr::{GlobalId, RelationDesc, RelationType, ScalarType};
+    use mz_ore::id_gen::Gen;
+    use mz_repr::{
+        CatalogItemId, GlobalId, RelationDesc, RelationType, RelationVersion, ScalarType,
+    };
     use mz_sql::catalog::CatalogDatabase;
     use mz_sql::names::{
-        ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds,
+        DependencyIds, ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds,
     };
     use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
     use mz_sql::DEFAULT_SCHEMA;
@@ -1413,7 +1567,9 @@ mod builtin_migration_tests {
         // values.
         fn to_catalog_item(
             self,
-            id_mapping: &BTreeMap<String, GlobalId>,
+            item_id_mapping: &BTreeMap<String, CatalogItemId>,
+            global_id_mapping: &BTreeMap<String, GlobalId>,
+            global_id_gen: &mut Gen<u64>,
         ) -> (String, ItemNamespace, CatalogItem) {
             let item = match self.item {
                 SimplifiedItem::Table => CatalogItem::Table(Table {
@@ -1422,8 +1578,14 @@ mod builtin_migration_tests {
                         .with_column("a", ScalarType::Int32.nullable(true))
                         .with_key(vec![0])
                         .finish(),
+                    collections: [(
+                        RelationVersion::root(),
+                        GlobalId::User(global_id_gen.allocate_id()),
+                    )]
+                    .into_iter()
+                    .collect(),
                     conn_id: None,
-                    resolved_ids: ResolvedIds(BTreeSet::new()),
+                    resolved_ids: ResolvedIds::empty(),
                     custom_logical_compaction_window: None,
                     is_retained_metrics_object: false,
                     data_source: TableDataSource::TableWrites {
@@ -1440,8 +1602,11 @@ mod builtin_migration_tests {
                         .enumerate()
                         .map(|(idx, _)| format!("a{idx}"))
                         .join(",");
-                    let resolved_ids = convert_names_to_ids(referenced_names, id_mapping);
+                    let resolved_ids =
+                        convert_names_to_ids(referenced_names, item_id_mapping, global_id_mapping);
+
                     CatalogItem::MaterializedView(MaterializedView {
+                        global_id: GlobalId::User(global_id_gen.allocate_id()),
                         create_sql: format!(
                             "CREATE MATERIALIZED VIEW materialize.public.mv ({column_list}) AS SELECT * FROM {table_list}"
                         ),
@@ -1452,6 +1617,7 @@ mod builtin_migration_tests {
                                 keys: Vec::new(),
                             },
                         ).into(),
+                        dependencies: DependencyIds(Default::default()),
                         optimized_expr: OptimizedMirRelationExpr(MirRelationExpr::Constant {
                             rows: Ok(Vec::new()),
                             typ: RelationType {
@@ -1463,7 +1629,7 @@ mod builtin_migration_tests {
                             .with_column("a", ScalarType::Int32.nullable(true))
                             .with_key(vec![0])
                             .finish(),
-                        resolved_ids: ResolvedIds(resolved_ids),
+                        resolved_ids: resolved_ids.into_iter().collect(),
                         cluster_id: ClusterId::User(1),
                         non_null_assertions: vec![],
                         custom_logical_compaction_window: None,
@@ -1472,13 +1638,15 @@ mod builtin_migration_tests {
                     })
                 }
                 SimplifiedItem::Index { on } => {
-                    let on_id = id_mapping[&on];
+                    let on_item_id = item_id_mapping[&on];
+                    let on_gid = global_id_mapping[&on];
                     CatalogItem::Index(Index {
                         create_sql: format!("CREATE INDEX idx ON materialize.public.{on} (a)"),
-                        on: on_id,
+                        global_id: GlobalId::User(global_id_gen.allocate_id()),
+                        on: on_gid,
                         keys: Default::default(),
                         conn_id: None,
-                        resolved_ids: ResolvedIds(BTreeSet::from_iter([on_id])),
+                        resolved_ids: [(on_item_id, on_gid)].into_iter().collect(),
                         cluster_id: ClusterId::User(1),
                         custom_logical_compaction_window: None,
                         is_retained_metrics_object: false,
@@ -1504,8 +1672,8 @@ mod builtin_migration_tests {
         name: String,
         item: CatalogItem,
         item_namespace: ItemNamespace,
-    ) -> GlobalId {
-        let id = match item_namespace {
+    ) -> (CatalogItemId, GlobalId) {
+        let (item_id, global_id) = match item_namespace {
             ItemNamespace::User => catalog
                 .allocate_user_id()
                 .await
@@ -1525,13 +1693,14 @@ mod builtin_migration_tests {
             .expect("failed to resolve default schemas")
             .id
             .clone();
+
         catalog
             .transact(
                 None,
                 mz_repr::Timestamp::MIN,
                 None,
                 vec![Op::CreateItem {
-                    id,
+                    id: item_id,
                     name: QualifiedItemName {
                         qualifiers: ItemQualifiers {
                             database_spec,
@@ -1545,40 +1714,57 @@ mod builtin_migration_tests {
             )
             .await
             .expect("failed to transact");
-        id
+
+        (item_id, global_id)
     }
 
     fn convert_names_to_ids(
         name_vec: Vec<String>,
-        id_lookup: &BTreeMap<String, GlobalId>,
-    ) -> BTreeSet<GlobalId> {
-        name_vec.into_iter().map(|name| id_lookup[&name]).collect()
+        item_id_lookup: &BTreeMap<String, CatalogItemId>,
+        global_id_lookup: &BTreeMap<String, GlobalId>,
+    ) -> BTreeMap<CatalogItemId, GlobalId> {
+        name_vec
+            .into_iter()
+            .map(|name| {
+                let item_id = item_id_lookup[&name];
+                let global_id = global_id_lookup[&name];
+                (item_id, global_id)
+            })
+            .collect()
     }
 
-    fn convert_ids_to_names<I: IntoIterator<Item = GlobalId>>(
+    fn convert_ids_to_names<I: IntoIterator<Item = CatalogItemId>>(
         ids: I,
-        name_lookup: &BTreeMap<GlobalId, String>,
+        name_lookup: &BTreeMap<CatalogItemId, String>,
     ) -> BTreeSet<String> {
         ids.into_iter().map(|id| name_lookup[&id].clone()).collect()
     }
 
     async fn run_test_case(test_case: BuiltinMigrationTestCase) {
         Catalog::with_debug(|mut catalog| async move {
-            let mut id_mapping = BTreeMap::new();
+            let mut item_id_mapping = BTreeMap::new();
             let mut name_mapping = BTreeMap::new();
+
+            let mut global_id_gen = Gen::<u64>::default();
+            let mut global_id_mapping = BTreeMap::new();
+
             for entry in test_case.initial_state {
-                let (name, namespace, item) = entry.to_catalog_item(&id_mapping);
-                let id = add_item(&mut catalog, name.clone(), item, namespace).await;
-                id_mapping.insert(name.clone(), id);
-                name_mapping.insert(id, name);
+                let (name, namespace, item) =
+                    entry.to_catalog_item(&item_id_mapping, &global_id_mapping, &mut global_id_gen);
+                let (item_id, global_id) =
+                    add_item(&mut catalog, name.clone(), item, namespace).await;
+
+                item_id_mapping.insert(name.clone(), item_id);
+                global_id_mapping.insert(name.clone(), global_id);
+                name_mapping.insert(item_id, name);
             }
 
             let migrated_ids = test_case
                 .migrated_names
                 .into_iter()
-                .map(|name| id_mapping[&name])
+                .map(|name| item_id_mapping[&name])
                 .collect();
-            let id_fingerprint_map: BTreeMap<GlobalId, String> = id_mapping
+            let id_fingerprint_map: BTreeMap<CatalogItemId, String> = item_id_mapping
                 .iter()
                 .filter(|(_name, id)| id.is_system())
                 // We don't use the new fingerprint in this test, so we can just hard code it
@@ -1606,7 +1792,9 @@ mod builtin_migration_tests {
 
             assert_eq!(
                 convert_ids_to_names(
-                    migration_metadata.previous_storage_collection_ids,
+                    migration_metadata
+                        .previous_storage_collection_ids
+                        .into_iter(),
                     &name_mapping
                 ),
                 test_case
@@ -1630,7 +1818,10 @@ mod builtin_migration_tests {
                 test_case.test_name
             );
             assert_eq!(
-                convert_ids_to_names(migration_metadata.user_item_drop_ops, &name_mapping),
+                convert_ids_to_names(
+                    migration_metadata.user_item_drop_ops.into_iter(),
+                    &name_mapping
+                ),
                 test_case.expected_user_item_drop_ops.into_iter().collect(),
                 "{} test failed with wrong user drop ops",
                 test_case.test_name

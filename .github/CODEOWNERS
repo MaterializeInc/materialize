@@ -8,9 +8,9 @@
 #
 # See: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
 
-/.cargo                             @benesch
-/.config                            @benesch
-/.github                            @benesch
+/.cargo                             @MaterializeInc/testing @parkmycar
+/.config                            @MaterializeInc/testing
+/.github                            @MaterializeInc/testing
 /bin
 /bin/lint-versions                  @MaterializeInc/testing
 /ci                                 @MaterializeInc/testing
@@ -51,10 +51,10 @@
 /src/avro                           @MaterializeInc/cluster
 /src/avro-derive                    @MaterializeInc/cluster
 /src/build-id                       @teskje
-/src/build-info                     @benesch
+/src/build-info                     @MaterializeInc/testing @parkmycar
 /src/catalog                        @MaterializeInc/adapter
 /src/catalog-debug                  @MaterializeInc/adapter
-/src/ccsr                           @benesch
+/src/ccsr                           @MaterializeInc/adapter @MaterializeInc/cluster
 /src/cloud-resources                @MaterializeInc/cloud
 /src/cluster                        @MaterializeInc/cluster
 /src/cluster-client                 @MaterializeInc/cluster
@@ -82,10 +82,10 @@
 /src/mysql-util                     @MaterializeInc/cluster
 /src/mz                             @MaterializeInc/integrations
 /src/npm                            @benesch
-/src/orchestrator                   @benesch
-/src/orchestrator-kubernetes        @benesch
-/src/orchestrator-process           @benesch
-/src/orchestrator-tracing           @benesch
+/src/orchestrator                   @MaterializeInc/cloud
+/src/orchestrator-kubernetes        @MaterializeInc/cloud
+/src/orchestrator-process           @MaterializeInc/cloud
+/src/orchestrator-tracing           @MaterializeInc/cloud
 /src/ore                            @benesch
 /src/persist                        @MaterializeInc/persist
 /src/persist-cli                    @MaterializeInc/persist
@@ -133,8 +133,8 @@
 /src/timely-util                    @MaterializeInc/cluster
 /src/transform                      @MaterializeInc/cluster
 /src/txn-wal                        @aljoscha @danhhz @jkosh44
-/src/walkabout                      @benesch
-/src/workspace-hack                 @benesch
+/src/walkabout                      @MaterializeInc/adapter
+/src/workspace-hack                 @MaterializeInc/testing
 /test
 /MODULE.bazel                       @parkmycar
 /WORKSPACE                          @parkmycar

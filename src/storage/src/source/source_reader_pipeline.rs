@@ -161,6 +161,7 @@ impl RawSourceCreationConfig {
 /// recorded which allows the ingestion to release upstream resources.
 pub fn create_raw_source<'g, G: Scope<Timestamp = ()>, C>(
     scope: &mut Child<'g, G, mz_repr::Timestamp>,
+    storage_state: &crate::storage_state::StorageState,
     committed_upper: &Stream<Child<'g, G, mz_repr::Timestamp>, ()>,
     config: RawSourceCreationConfig,
     source_connection: C,
@@ -197,6 +198,7 @@ where
 
     let (remap_collection, remap_token) = remap_operator(
         scope,
+        storage_state,
         config.clone(),
         probed_upper_rx,
         ingested_upper_rx,
@@ -332,6 +334,8 @@ where
     let source_id = config.id;
     let worker_id = config.worker_id;
     let source_statistics = config.source_statistics.clone();
+    let now_fn = config.now_fn.clone();
+    let timestamp_interval = config.timestamp_interval;
 
     let resume_uppers = resume_uppers.inspect(move |upper| {
         let upper = upper.pretty();
@@ -340,14 +344,6 @@ where
 
     let (input_data, progress, health, stats, probes, tokens) =
         source_connection.render(scope, config, resume_uppers, start_signal);
-
-    // Broadcasting does more work than necessary, which would be to exchange the probes to the
-    // worker that will be the one minting the bindings but we'd have to thread this information
-    // through and couple the two functions enough that it's not worth the optimization (I think).
-    probes.broadcast().inspect(move |probe| {
-        // We don't care if the receiver is gone
-        let _ = probed_upper_tx.send(Some(probe.clone()));
-    });
 
     crate::source::statistics::process_statistics(
         scope.clone(),
@@ -425,9 +421,24 @@ where
         }
     });
 
+    let progress = progress.unwrap_or(derived_progress);
+
+    let probe_stream = match probes {
+        Some(stream) => stream,
+        None => synthesize_probes(source_id, &progress, timestamp_interval, now_fn),
+    };
+
+    // Broadcasting does more work than necessary, which would be to exchange the probes to the
+    // worker that will be the one minting the bindings but we'd have to thread this information
+    // through and couple the two functions enough that it's not worth the optimization (I think).
+    probe_stream.broadcast().inspect(move |probe| {
+        // We don't care if the receiver is gone
+        let _ = probed_upper_tx.send(Some(probe.clone()));
+    });
+
     (
         data.as_collection(),
-        progress.unwrap_or(derived_progress),
+        progress,
         health.concat(&derived_health),
         tokens,
     )
@@ -440,6 +451,7 @@ where
 /// upper summaries will be exchanged to it.
 fn remap_operator<G, FromTime>(
     scope: &G,
+    storage_state: &crate::storage_state::StorageState,
     config: RawSourceCreationConfig,
     mut probed_upper: watch::Receiver<Option<Probe<FromTime>>>,
     mut ingested_upper: watch::Receiver<MutableAntichain<FromTime>>,
@@ -470,6 +482,8 @@ where
         busy_signal: _,
     } = config;
 
+    let read_only_rx = storage_state.read_only_rx.clone();
+
     let chosen_worker = usize::cast_from(id.hashed() % u64::cast_from(worker_count));
     let active_worker = chosen_worker == worker_id;
 
@@ -489,6 +503,7 @@ where
 
         let remap_handle = crate::source::reclock::compat::PersistHandle::<FromTime, _>::new(
             Arc::clone(&persist_clients),
+            read_only_rx,
             storage_metadata.clone(),
             as_of.clone(),
             shared_remap_upper,
@@ -524,56 +539,69 @@ where
         let mut ticker = tokio::time::interval(timestamp_interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-        let reclock_to_latest = dyncfgs::STORAGE_RECLOCK_TO_LATEST.get(&config.config.config_set());
-
-        let mut prev_probe: Option<Probe<FromTime>> = None;
+        let mut prev_probe_ts: Option<mz_repr::Timestamp> = None;
         let timestamp_interval_ms: u64 = timestamp_interval
             .as_millis()
             .try_into()
             .expect("huge duration");
 
         while !cap_set.is_empty() {
+            // Check the reclocking strategy in every iteration, to make it possible to change it
+            // without restarting the source pipeline.
+            let reclock_to_latest =
+                dyncfgs::STORAGE_RECLOCK_TO_LATEST.get(&config.config.config_set());
+
             // If we are reclocking to the latest offset then we only mint bindings after a
             // successful probe. Otherwise we fall back to the earlier behavior where we just
             // record the ingested frontier.
-            let (binding_ts, cur_source_upper) = if reclock_to_latest {
-                let new_probe = probed_upper
-                    .wait_for(|new_probe| match (&prev_probe, new_probe) {
+            let mut new_probe = None;
+            if reclock_to_latest {
+                new_probe = probed_upper
+                    .wait_for(|new_probe| match (prev_probe_ts, new_probe) {
                         (None, Some(_)) => true,
-                        (Some(prev), Some(new)) => prev.probe_ts < new.probe_ts,
+                        (Some(prev_ts), Some(new)) => prev_ts < new.probe_ts,
                         _ => false,
                     })
                     .await
                     .map(|probe| (*probe).clone())
                     .unwrap_or_else(|_| {
                         Some(Probe {
-                            probe_ts: (now_fn)().try_into().expect("must fit"),
+                            probe_ts: now_fn().into(),
                             upstream_frontier: Antichain::new(),
                         })
                     });
-                prev_probe = new_probe;
-                let probe = prev_probe.clone().unwrap();
-                (probe.probe_ts, probe.upstream_frontier)
             } else {
-                ticker.tick().await;
-                // We only proceed if the source upper frontier is not the minimum frontier. This
-                // makes it so the first binding corresponds to the snapshot of the source, and
-                // because the first binding always maps to the minimum *target* frontier we
-                // guarantee that the source will never appear empty.
-                let ingested_upper = ingested_upper
-                    .wait_for(|f| *f.frontier() != [FromTime::minimum()])
-                    .await
-                    .unwrap()
-                    .frontier()
-                    .to_owned();
+                while prev_probe_ts >= new_probe.as_ref().map(|p| p.probe_ts) {
+                    ticker.tick().await;
+                    // We only proceed if the source upper frontier is not the minimum frontier. This
+                    // makes it so the first binding corresponds to the snapshot of the source, and
+                    // because the first binding always maps to the minimum *target* frontier we
+                    // guarantee that the source will never appear empty.
+                    let upstream_frontier = ingested_upper
+                        .wait_for(|f| *f.frontier() != [FromTime::minimum()])
+                        .await
+                        .unwrap()
+                        .frontier()
+                        .to_owned();
 
-                let now = (now_fn)();
-                let mut binding_ts = now - now % timestamp_interval_ms;
-                if (now % timestamp_interval_ms) != 0 {
-                    binding_ts += timestamp_interval_ms;
+                    let now = (now_fn)();
+                    let mut probe_ts = now - now % timestamp_interval_ms;
+                    if (now % timestamp_interval_ms) != 0 {
+                        probe_ts += timestamp_interval_ms;
+                    }
+                    new_probe = Some(Probe {
+                        probe_ts: probe_ts.into(),
+                        upstream_frontier,
+                    });
                 }
-                (binding_ts.try_into().expect("must fit"), ingested_upper)
             };
+
+            let probe = new_probe.expect("known to be Some");
+            prev_probe_ts = Some(probe.probe_ts);
+
+            let binding_ts = probe.probe_ts;
+            let cur_source_upper = probe.upstream_frontier;
+
             let new_into_upper = Antichain::from_elem(binding_ts.step_forward());
 
             let mut remap_trace_batch = timestamper
@@ -1071,12 +1099,10 @@ where
         let mut ready_times = VecDeque::new();
         let mut source_upper = MutableAntichain::new();
 
-        let mut vector = Vec::new();
         move |frontiers| {
             // Accept new bindings
             while let Some((_, data)) = bindings.next() {
-                data.swap(&mut vector);
-                accepted_times.extend(vector.drain(..).map(|(from, mut into, diff)| {
+                accepted_times.extend(data.drain(..).map(|(from, mut into, diff)| {
                     into.advance_by(as_of.borrow());
                     (from, into, diff)
                 }));
@@ -1084,12 +1110,13 @@ where
             // Extract ready bindings
             let new_upper = frontiers[0].frontier();
             if PartialOrder::less_than(&upper.borrow(), &new_upper) {
+                upper = new_upper.to_owned();
+
                 accepted_times.sort_unstable_by(|a, b| a.1.cmp(&b.1));
                 // The times are totally ordered so we can binary search to find the prefix that is
                 // not beyond the upper and extract it into a batch.
                 let idx = accepted_times.partition_point(|(_, t, _)| !upper.less_equal(t));
                 ready_times.extend(accepted_times.drain(0..idx));
-                upper = new_upper.to_owned();
             }
 
             // The received times only accumulate correctly for times beyond the as_of.
@@ -1163,4 +1190,70 @@ where
     });
 
     WatchStream::from_changes(rx)
+}
+
+/// Synthesizes a probe stream that produces the frontier of the given progress stream at the given
+/// interval.
+///
+/// This is used as a fallback for sources that don't support probing the frontier of the upstream
+/// system.
+fn synthesize_probes<G>(
+    source_id: GlobalId,
+    progress: &Stream<G, Infallible>,
+    interval: Duration,
+    now_fn: NowFn,
+) -> Stream<G, Probe<G::Timestamp>>
+where
+    G: Scope,
+{
+    let scope = progress.scope();
+
+    let active_worker = usize::cast_from(source_id.hashed()) % scope.peers();
+    let is_active_worker = active_worker == scope.index();
+
+    let mut ticker = tokio::time::interval(interval);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+    let mut op = AsyncOperatorBuilder::new("synthesize_probes".into(), scope);
+    let (output, output_stream) = op.new_output();
+    let mut input = op.new_input_for(progress, Pipeline, &output);
+
+    op.build(|caps| async move {
+        if !is_active_worker {
+            return;
+        }
+
+        let [cap] = caps.try_into().expect("one capability per output");
+
+        let minimum_frontier = Antichain::from_elem(Timestamp::minimum());
+        let mut frontier = minimum_frontier.clone();
+        loop {
+            tokio::select! {
+                event = input.next() => match event {
+                    Some(AsyncEvent::Progress(progress)) => frontier = progress,
+                    Some(AsyncEvent::Data(..)) => unreachable!(),
+                    None => break,
+                },
+                // We only report a probe if the source upper frontier is not the minimum frontier.
+                // This makes it so the first remap binding corresponds to the snapshot of the
+                // source, and because the first binding always maps to the minimum *target*
+                // frontier we guarantee that the source will never appear empty.
+                _ = ticker.tick(), if frontier != minimum_frontier => {
+                    let probe = Probe {
+                        probe_ts: now_fn().into(),
+                        upstream_frontier: frontier.clone(),
+                    };
+                    output.give(&cap, probe);
+                }
+            }
+        }
+
+        let probe = Probe {
+            probe_ts: now_fn().into(),
+            upstream_frontier: Antichain::new(),
+        };
+        output.give(&cap, probe);
+    });
+
+    output_stream
 }

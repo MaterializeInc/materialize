@@ -32,7 +32,7 @@ use mz_ore::result::ResultExt;
 use mz_ore::task::AbortOnDropHandle;
 use mz_ore::thread::JoinOnDropHandle;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::{GlobalId, Row, RowIterator, ScalarType};
+use mz_repr::{CatalogItemId, Row, RowIterator, ScalarType};
 use mz_sql::ast::{Raw, Statement};
 use mz_sql::catalog::{EnvironmentId, SessionCatalog};
 use mz_sql::session::hint::ApplicationNameHint;
@@ -364,6 +364,7 @@ Issue a SQL query to get started. Need help?
             user: SUPPORT_USER.name.clone(),
             client_ip: None,
             external_metadata_rx: None,
+            helm_chart_version: None,
         });
         let mut session_client = self.startup(session).await?;
 
@@ -726,7 +727,7 @@ impl SessionClient {
     /// ones.
     pub async fn insert_rows(
         &mut self,
-        id: GlobalId,
+        id: CatalogItemId,
         columns: Vec<usize>,
         rows: Vec<Row>,
         ctx_extra: ExecuteContextExtra,

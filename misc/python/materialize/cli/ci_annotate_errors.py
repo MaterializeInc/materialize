@@ -127,7 +127,7 @@ IGNORE_RE = re.compile(
     | restart-materialized-1\ *|\ thread\ 'coordinator'\ panicked\ at\ 'external\ operation\ .*\ failed\ unrecoverably.*
     # Expected in cluster test
     | cluster-clusterd[12]-1\ .*\ halting\ process:\ new\ timely\ configuration\ does\ not\ match\ existing\ timely\ configuration
-    | cluster-clusterd1-1\ .*\ has\ exceeded\ expiration
+    | cluster-clusterd1-1\ .*\ replica\ expired
     # Emitted by tests employing explicit mz_panic()
     | forced\ panic
     # Emitted by broken_statements.slt in order to stop panic propagation, as 'forced panic' will unwantedly panic the `environmentd` thread.
@@ -162,11 +162,11 @@ IGNORE_RE = re.compile(
     | zippy-materialized.* \| .* halting\ process:\ Server\ started\ with\ requested\ generation
     # Don't care for ssh problems
     | fatal:\ userauth_pubkey
-    # TODO(def-) Remove in ~3 weeks
-    | .* incompatible\ persist\ version\ \d+\.\d+\.\d+(-dev\.\d+)?,\ current:\ \d+\.\d+\.\d+(-dev\.\d+)?,\ make\ sure\ to\ upgrade\ the\ catalog\ one\ version\ forward\ at\ a\ time
     # Fences without incrementing deploy generation
-    | txn-wal-fencing-mz_first-.* \| .*unable\ to\ confirm\ leadership
-    | txn-wal-fencing-mz_first-.* \| .*fenced\ by\ envd
+    | txn-wal-fencing-mz_first-.* \| .* unable\ to\ confirm\ leadership
+    | txn-wal-fencing-mz_first-.* \| .* fenced\ by\ envd
+    # 0dt platform-checks have two envds running in parallel, thus high load, tests still succeed, so ignore noise
+    | platform-checks-mz_.* \| .* was\ expired\ due\ to\ inactivity\.\ Did\ the\ machine\ go\ to\ sleep\?
     )
     """,
     re.VERBOSE | re.MULTILINE,

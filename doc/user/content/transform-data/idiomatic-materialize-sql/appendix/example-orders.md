@@ -92,4 +92,14 @@ SELECT date_trunc('day',order_date) AS order_date,
        sum(subtotal) AS daily_total
 FROM orders_view
 GROUP BY date_trunc('day',order_date);
+
+
+CREATE TABLE sales_items (
+  week_of date NOT NULL,
+  items text[]
+);
+
+INSERT INTO sales_items VALUES
+(date_trunc('week', current_timestamp),ARRAY['brownie','chocolate chip cookie','chocolate cake']),
+(date_trunc('week', current_timestamp + (1* interval '7 day')),ARRAY['chocolate chip cookie','donut','cupcake']);
 ```

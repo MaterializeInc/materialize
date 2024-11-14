@@ -1425,35 +1425,35 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
 SELECT x * 5 FROM cte WHERE x = 5
 ----
 Explained Query:
-  Mfp // { node_id: 9 }
+  Mfp // { node_id: LirId(10) }
     project=(#1)
     map=(25)
     input_key=#0
-    Threshold::Basic ensure_arrangement={ key=[#0], permutation=id, thinning=() } // { node_id: 8 }
-      ArrangeBy // { node_id: 7 }
+    Threshold::Basic ensure_arrangement={ key=[#0], permutation=id, thinning=() } // { node_id: LirId(9) }
+      ArrangeBy // { node_id: LirId(8) }
         raw=false
         arrangements[0]={ key=[#0], permutation=id, thinning=() }
         types=[integer]
-        Union consolidate_output=true // { node_id: 6 }
-          Join::Linear // { node_id: 3 }
+        Union consolidate_output=true // { node_id: LirId(7) }
+          Join::Linear // { node_id: LirId(4) }
             linear_stage[0]
               closure
                 project=(#0)
               lookup={ relation=0, key=[#0] }
               stream={ key=[#0], thinning=() }
             source={ relation=1, key=[#0] }
-            Get::PassArrangements materialize.public.t // { node_id: 0 }
+            Get::PassArrangements materialize.public.t // { node_id: LirId(1) }
               raw=false
               arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
               types=[integer?, integer?]
-            ArrangeBy // { node_id: 2 }
+            ArrangeBy // { node_id: LirId(3) }
               raw=true
               arrangements[0]={ key=[#0], permutation=id, thinning=() }
               types=[integer]
-              Constant // { node_id: 1 }
+              Constant // { node_id: LirId(2) }
                 - (5)
-          Negate // { node_id: 5 }
-            Get::Collection materialize.public.mv // { node_id: 4 }
+          Negate // { node_id: LirId(6) }
+            Get::Collection materialize.public.mv // { node_id: LirId(5) }
               raw=true
 
 Source materialize.public.mv

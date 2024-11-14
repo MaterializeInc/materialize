@@ -116,7 +116,7 @@ impl<K, V, T, D, O, C> TxnsHandle<K, V, T, D, O, C>
 where
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
+    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
     D: Debug + Semigroup + Ord + Codec64 + Send + Sync,
     O: Opaque + Debug + Codec64,
     C: TxnsCodec,
@@ -706,7 +706,7 @@ impl<K, V, T, D> DataHandles<K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + TotalOrder + Codec64,
+    T: Timestamp + Lattice + TotalOrder + Codec64 + Sync,
     D: Semigroup + Ord + Codec64 + Send + Sync,
 {
     async fn open_data_write_for_apply(&self, data_id: ShardId) -> DataWriteApply<K, V, T, D> {
@@ -847,7 +847,7 @@ impl<K, V, T, D> DataWriteApply<K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + TotalOrder + Codec64,
+    T: Timestamp + Lattice + TotalOrder + Codec64 + Sync,
     D: Semigroup + Ord + Codec64 + Send + Sync,
 {
     pub(crate) async fn maybe_replace_with_batch_schema(&mut self, batches: &[Batch<K, V, T, D>]) {

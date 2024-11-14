@@ -307,12 +307,6 @@ who = "Parker Timmerman <parker.timmerman@materialize.com>"
 criteria = "safe-to-deploy"
 version = "1.0.5"
 
-[[audits.differential-dataflow]]
-who = "Moritz Hoffmann <mh@materialize.com>"
-criteria = "safe-to-deploy"
-version = "0.12.0@git:ea2e3e13bbd5cdd31f60f091a3625d954d7347f8"
-importable = false
-
 [[audits.domain]]
 who = "Matt Jibson <matt.jibson@gmail.com>"
 criteria = "safe-to-deploy"
@@ -1216,30 +1210,6 @@ who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.6.0"
 
-[[audits.timely]]
-who = "Moritz Hoffmann <mh@materialize.com>"
-criteria = "safe-to-deploy"
-version = "0.12.0@git:14e2e994b99905e18dca4852e57d153a81f9f02e"
-importable = false
-
-[[audits.timely_bytes]]
-who = "Moritz Hoffmann <mh@materialize.com>"
-criteria = "safe-to-deploy"
-version = "0.12.0@git:14e2e994b99905e18dca4852e57d153a81f9f02e"
-importable = false
-
-[[audits.timely_communication]]
-who = "Moritz Hoffmann <mh@materialize.com>"
-criteria = "safe-to-deploy"
-version = "0.12.0@git:14e2e994b99905e18dca4852e57d153a81f9f02e"
-importable = false
-
-[[audits.timely_logging]]
-who = "Moritz Hoffmann <mh@materialize.com>"
-criteria = "safe-to-deploy"
-version = "0.12.0@git:14e2e994b99905e18dca4852e57d153a81f9f02e"
-importable = false
-
 [[audits.tokio]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "safe-to-deploy"
@@ -1511,12 +1481,6 @@ who = "Parker Timmerman <parker.timmerman@materialize.com>"
 criteria = "safe-to-deploy"
 delta = "6.0.6 -> 7.0.0"
 
-[[trusted.abomonation]]
-criteria = "safe-to-deploy"
-user-id = 704
-start = "2019-05-27"
-end = "2024-11-21"
-
 [[trusted.aho-corasick]]
 criteria = "safe-to-deploy"
 user-id = 189 # Andrew Gallant (BurntSushi)
@@ -1715,6 +1679,18 @@ user-id = 1 # Alex Crichton (alexcrichton)
 start = "2019-03-26"
 end = "2024-11-16"
 
+[[trusted.columnation]]
+criteria = "safe-to-deploy"
+user-id = 704 # Frank McSherry (frankmcsherry)
+start = "2019-03-31"
+end = "2024-11-21"
+
+[[trusted.columnation]]
+criteria = "safe-to-deploy"
+user-id = 704 # Frank McSherry (frankmcsherry)
+start = "2024-10-29"
+end = "2029-10-28"
+
 [[trusted.compact_bytes]]
 criteria = "safe-to-deploy"
 user-id = 75844 # Parker Timmerman (ParkMyCar)
@@ -1759,9 +1735,15 @@ end = "2024-11-16"
 
 [[trusted.differential-dataflow]]
 criteria = "safe-to-deploy"
-user-id = 704
+user-id = 704 # Frank McSherry (frankmcsherry)
 start = "2019-03-31"
-end = "2024-11-21"
+end = "2025-12-31"
+
+[[trusted.differential-dogs3]]
+criteria = "safe-to-deploy"
+user-id = 704 # Frank McSherry (frankmcsherry)
+start = "2019-03-31"
+end = "2025-12-31"
 
 [[trusted.dyn-clone]]
 criteria = "safe-to-deploy"
@@ -2173,27 +2155,33 @@ end = "2024-11-16"
 
 [[trusted.timely]]
 criteria = "safe-to-deploy"
-user-id = 704
+user-id = 704 # Frank McSherry (frankmcsherry)
 start = "2019-03-31"
-end = "2024-11-21"
+end = "2025-12-31"
 
 [[trusted.timely_bytes]]
 criteria = "safe-to-deploy"
-user-id = 704
+user-id = 704 # Frank McSherry (frankmcsherry)
 start = "2019-03-31"
-end = "2024-11-21"
+end = "2025-12-31"
 
 [[trusted.timely_communication]]
 criteria = "safe-to-deploy"
-user-id = 704
+user-id = 704 # Frank McSherry (frankmcsherry)
 start = "2019-03-31"
-end = "2024-11-21"
+end = "2025-12-31"
+
+[[trusted.timely_container]]
+criteria = "safe-to-deploy"
+user-id = 704 # Frank McSherry (frankmcsherry)
+start = "2024-10-29"
+end = "2025-12-31"
 
 [[trusted.timely_logging]]
 criteria = "safe-to-deploy"
-user-id = 704
+user-id = 704 # Frank McSherry (frankmcsherry)
 start = "2019-03-31"
-end = "2024-11-21"
+end = "2025-12-31"
 
 [[trusted.tokio-macros]]
 criteria = "safe-to-deploy"

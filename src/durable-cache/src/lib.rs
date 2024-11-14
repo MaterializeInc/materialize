@@ -13,9 +13,12 @@ use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
 use std::hash::Hash;
 use std::sync::Arc;
+use std::time::Duration;
 
-use differential_dataflow::consolidation::consolidate_updates;
+use differential_dataflow::consolidation::{consolidate, consolidate_updates};
 use mz_ore::collections::{AssociativeExt, HashSet};
+use mz_ore::soft_panic_or_log;
+use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::error::UpperMismatch;
 use mz_persist_client::read::{ListenEvent, Subscribe};
 use mz_persist_client::write::WriteHandle;
@@ -24,18 +27,18 @@ use mz_persist_types::{Codec, ShardId};
 use timely::progress::Antichain;
 use tracing::debug;
 
-pub trait DurableCacheCodec {
+pub trait DurableCacheCodec: Debug + Eq {
     type Key: Ord + Hash + Clone + Debug;
     type Val: Eq + Debug;
-    type KeyCodec: Codec + Ord + Debug;
-    type ValCodec: Codec + Ord + Debug;
+    type KeyCodec: Codec + Ord + Debug + Clone;
+    type ValCodec: Codec + Ord + Debug + Clone;
 
     fn schemas() -> (
         <Self::KeyCodec as Codec>::Schema,
         <Self::ValCodec as Codec>::Schema,
     );
     fn encode(key: &Self::Key, val: &Self::Val) -> (Self::KeyCodec, Self::ValCodec);
-    fn decode(key: Self::KeyCodec, val: Self::ValCodec) -> (Self::Key, Self::Val);
+    fn decode(key: &Self::KeyCodec, val: &Self::ValCodec) -> (Self::Key, Self::Val);
 }
 
 #[derive(Debug)]
@@ -51,30 +54,50 @@ impl std::fmt::Display for Error {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct LocalVal<C: DurableCacheCodec> {
+    encoded_key: C::KeyCodec,
+    decoded_val: C::Val,
+    encoded_val: C::ValCodec,
+}
+
 #[derive(Debug)]
 pub struct DurableCache<C: DurableCacheCodec> {
+    since_handle: SinceHandle<C::KeyCodec, C::ValCodec, u64, i64, i64>,
     write: WriteHandle<C::KeyCodec, C::ValCodec, u64, i64>,
     subscribe: Subscribe<C::KeyCodec, C::ValCodec, u64, i64>,
 
-    local: BTreeMap<C::Key, C::Val>,
+    local: BTreeMap<C::Key, LocalVal<C>>,
     local_progress: u64,
 }
+
+const USE_CRITICAL_SINCE: bool = true;
 
 impl<C: DurableCacheCodec> DurableCache<C> {
     /// Opens a [`DurableCache`] using shard `shard_id`.
     pub async fn new(persist: &PersistClient, shard_id: ShardId, purpose: &str) -> Self {
-        let use_critical_since = true;
+        let diagnostics = Diagnostics {
+            shard_name: format!("{purpose}_cache"),
+            handle_purpose: format!("durable persist cache: {purpose}"),
+        };
+        let since_handle = persist
+            .open_critical_since(
+                shard_id,
+                // TODO: We may need to use a different critical reader
+                // id for this if we want to be able to introspect it via SQL.
+                PersistClient::CONTROLLER_CRITICAL_SINCE,
+                diagnostics.clone(),
+            )
+            .await
+            .expect("invalid usage");
         let (key_schema, val_schema) = C::schemas();
         let (mut write, read) = persist
             .open(
                 shard_id,
                 Arc::new(key_schema),
                 Arc::new(val_schema),
-                Diagnostics {
-                    shard_name: format!("{purpose}_cache"),
-                    handle_purpose: format!("durable persist cache: {purpose}"),
-                },
-                use_critical_since,
+                diagnostics,
+                USE_CRITICAL_SINCE,
             )
             .await
             .expect("shard codecs should not change");
@@ -96,6 +119,7 @@ impl<C: DurableCacheCodec> DurableCache<C> {
             .await
             .expect("capability should be held at this since");
         let mut ret = DurableCache {
+            since_handle,
             write,
             subscribe,
             local: BTreeMap::new(),
@@ -111,16 +135,32 @@ impl<C: DurableCacheCodec> DurableCache<C> {
             let events = self.subscribe.fetch_next().await;
             for event in events {
                 match event {
-                    ListenEvent::Updates(x) => {
+                    ListenEvent::Updates(mut x) => {
+                        consolidate_updates(&mut x);
+                        x.sort_by(|(_, ts1, d1), (_, ts2, d2)| ts1.cmp(ts2).then(d1.cmp(d2)));
                         for ((k, v), t, d) in x {
-                            let (key, val) = C::decode(k.unwrap(), v.unwrap());
+                            let encoded_key = k.unwrap();
+                            let encoded_val = v.unwrap();
+                            let (decoded_key, decoded_val) = C::decode(&encoded_key, &encoded_val);
+                            let val = LocalVal {
+                                encoded_key,
+                                decoded_val,
+                                encoded_val,
+                            };
+
                             if d == 1 {
-                                self.local.expect_insert(key, val, "duplicate cache entry");
+                                self.local
+                                    .expect_insert(decoded_key, val, "duplicate cache entry");
                             } else if d == -1 {
-                                let prev = self.local.expect_remove(&key, "entry does not exist");
+                                let prev = self
+                                    .local
+                                    .expect_remove(&decoded_key, "entry does not exist");
                                 assert_eq!(val, prev, "removed val does not match expected val");
                             } else {
-                                panic!("unexpected diff: (({key:?}, {val:?}), {t}, {d})");
+                                panic!(
+                                    "unexpected diff: (({:?}, {:?}), {}, {})",
+                                    decoded_key, val.decoded_val, t, d
+                                );
                             }
                         }
                     }
@@ -137,7 +177,7 @@ impl<C: DurableCacheCodec> DurableCache<C> {
     /// Get and return the value associated with `key` if it exists, without syncing with the
     /// durable store.
     pub fn get_local(&self, key: &C::Key) -> Option<&C::Val> {
-        self.local.get(key)
+        self.local.get(key).map(|val| &val.decoded_val)
     }
 
     /// Get and return the value associated with `key`, syncing with the durable store if
@@ -148,40 +188,33 @@ impl<C: DurableCacheCodec> DurableCache<C> {
         // N.B. This pattern of calling `contains_key` followed by `expect` is required to appease
         // the borrow checker.
         if self.local.contains_key(key) {
-            return self.local.get(key).expect("checked above");
+            return self.get_local(key).expect("checked above");
         }
 
         // Reduce wasted work by ensuring we're caught up to at least the
         // pubsub-updated shared_upper, and then trying again.
         self.sync_to(self.write.shared_upper().into_option()).await;
         if self.local.contains_key(key) {
-            return self.local.get(key).expect("checked above");
+            return self.get_local(key).expect("checked above");
         }
 
         // Okay compute it and write it durably to the cache.
         let val = val_fn();
         let mut expected_upper = self.local_progress;
+        let update = (C::encode(key, &val), 1);
         loop {
-            let update = (C::encode(key, &val), expected_upper, 1);
-            let new_upper = expected_upper + 1;
             let ret = self
-                .write
-                .compare_and_append(
-                    &[update],
-                    Antichain::from_elem(expected_upper),
-                    Antichain::from_elem(new_upper),
-                )
-                .await
-                .expect("usage should be valid");
+                .compare_and_append([update.clone()], expected_upper)
+                .await;
             match ret {
-                Ok(()) => {
+                Ok(new_upper) => {
                     self.sync_to(Some(new_upper)).await;
                     return self.get_local(key).expect("just inserted");
                 }
                 Err(err) => {
                     expected_upper = self.sync_to(err.current.into_option()).await;
                     if self.local.contains_key(key) {
-                        return self.local.get(key).expect("checked above");
+                        return self.get_local(key).expect("checked above");
                     }
                     continue;
                 }
@@ -191,7 +224,7 @@ impl<C: DurableCacheCodec> DurableCache<C> {
 
     /// Return all entries stored in the cache, without syncing with the durable store.
     pub fn entries_local(&self) -> impl Iterator<Item = (&C::Key, &C::Val)> {
-        self.local.iter()
+        self.local.iter().map(|(key, val)| (key, &val.decoded_val))
     }
 
     /// Durably set `key` to `value`. A `value` of `None` deletes the entry from the cache.
@@ -238,27 +271,18 @@ impl<C: DurableCacheCodec> DurableCache<C> {
             // If there are duplicate keys we ignore all but the first one.
             if seen_keys.insert(key) {
                 if let Some(prev) = self.local.get(key) {
-                    updates.push((C::encode(key, prev), expected_upper, -1));
+                    updates.push(((prev.encoded_key.clone(), prev.encoded_val.clone()), -1));
                 }
                 if let Some(val) = val {
-                    updates.push((C::encode(key, val), expected_upper, 1));
+                    updates.push((C::encode(key, val), 1));
                 }
             }
         }
-        consolidate_updates(&mut updates);
+        consolidate(&mut updates);
 
-        let new_upper = expected_upper + 1;
-        let ret = self
-            .write
-            .compare_and_append(
-                updates,
-                Antichain::from_elem(expected_upper),
-                Antichain::from_elem(new_upper),
-            )
-            .await
-            .expect("usage should be valid");
+        let ret = self.compare_and_append(updates, expected_upper).await;
         match ret {
-            Ok(()) => {
+            Ok(new_upper) => {
                 self.sync_to(Some(new_upper)).await;
                 Ok(())
             }
@@ -267,6 +291,69 @@ impl<C: DurableCacheCodec> DurableCache<C> {
                 Err(Error::WriteConflict(err))
             }
         }
+    }
+
+    /// Applies `updates` to the cache at `write_ts`. See [`WriteHandle::compare_and_append`] for
+    /// more details.
+    ///
+    /// This method will also downgrade the critical since of the underlying persist shard on
+    /// success.
+    async fn compare_and_append<I>(
+        &mut self,
+        updates: I,
+        write_ts: u64,
+    ) -> Result<u64, UpperMismatch<u64>>
+    where
+        // TODO(jkosh44) With the proper lifetime incantations, we might be able to accept
+        // references to `C::KeyCodec` and `C::ValCodec`, since that's what
+        // `WriteHandle::compare_and_append` wants. That would avoid some clones from callers of
+        // this method.i
+        I: IntoIterator<Item = ((C::KeyCodec, C::ValCodec), i64)>,
+    {
+        let expected_upper = write_ts;
+        let new_upper = expected_upper + 1;
+        let updates = updates.into_iter().map(|((k, v), d)| ((k, v), write_ts, d));
+        self.write
+            .compare_and_append(
+                updates,
+                Antichain::from_elem(expected_upper),
+                Antichain::from_elem(new_upper),
+            )
+            .await
+            .expect("usage should be valid")?;
+
+        // Lag the shard's upper by 1 to keep it readable.
+        let downgrade_to = Antichain::from_elem(write_ts);
+
+        // The since handle gives us the ability to fence out other downgraders using an opaque token.
+        // (See the method documentation for details.)
+        // That's not needed here, so we use the since handle's opaque token to avoid any comparison
+        // failures.
+        let opaque = *self.since_handle.opaque();
+        let ret = self
+            .since_handle
+            .compare_and_downgrade_since(&opaque, (&opaque, &downgrade_to))
+            .await;
+        if let Err(e) = ret {
+            soft_panic_or_log!("found opaque value {e}, but expected {opaque}");
+        }
+
+        Ok(new_upper)
+    }
+
+    /// Forcibly compacts the shard backing this cache. See
+    /// [`mz_persist_client::cli::admin::dangerous_force_compaction_and_break_pushdown`].
+    pub async fn dangerous_compact_shard(
+        &self,
+        fuel: impl Fn() -> usize,
+        wait: impl Fn() -> Duration,
+    ) {
+        mz_persist_client::cli::admin::dangerous_force_compaction_and_break_pushdown(
+            &self.write,
+            fuel,
+            wait,
+        )
+        .await
     }
 }
 
@@ -279,6 +366,7 @@ mod tests {
 
     use super::*;
 
+    #[derive(Debug, PartialEq, Eq)]
     struct TestCodec;
 
     impl DurableCacheCodec for TestCodec {
@@ -298,8 +386,8 @@ mod tests {
             (key.clone(), val.clone())
         }
 
-        fn decode(key: Self::KeyCodec, val: Self::ValCodec) -> (Self::Key, Self::Val) {
-            (key, val)
+        fn decode(key: &Self::KeyCodec, val: &Self::ValCodec) -> (Self::Key, Self::Val) {
+            (key.clone(), val.clone())
         }
     }
 
@@ -397,5 +485,10 @@ mod tests {
                 (&"k5".into(), &"v50".into()),
             ]
         );
+
+        // Test that compaction actually completes.
+        let fuel = || 131_072;
+        let wait = || Duration::from_millis(0);
+        cache1.dangerous_compact_shard(fuel, wait).await
     }
 }

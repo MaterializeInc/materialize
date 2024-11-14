@@ -92,7 +92,7 @@ impl<T: Timestamp + Lattice + Codec64> PersistTableWriteCmd<T> {
     }
 }
 
-async fn append_work<T2: Timestamp + Lattice + Codec64>(
+async fn append_work<T2: Timestamp + Lattice + Codec64 + Sync>(
     write_handles: &mut BTreeMap<GlobalId, WriteHandle<SourceData, (), T2, Diff>>,
     mut commands: BTreeMap<
         GlobalId,

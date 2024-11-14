@@ -28,6 +28,12 @@ def get_ancestor_overrides_for_performance_regressions(
 
     min_ancestor_mz_version_per_commit = dict()
 
+    if scenario_class_name == "KafkaUpsertUnique":
+        # PR#29718 (storage: continual feedback upsert operator) increases CPU and memory
+        min_ancestor_mz_version_per_commit[
+            "b16b6a2c71f6e52adcbe37988cb262c15074a63f"
+        ] = MzVersion.parse_mz("v0.125.0")
+
     if scenario_class_name in (
         "SmallClusters",
         "AccumulateReductions",
@@ -141,6 +147,8 @@ _MIN_ANCESTOR_MZ_VERSION_PER_COMMIT_TO_ACCOUNT_FOR_SCALABILITY_REGRESSIONS: dict
     str, MzVersion
 ] = {
     # insert newer commits at the top
+    # PR#30238 (adapter: Remove the global write lock) introduces regressions against v0.123.0
+    "98678454a334a470ceea46b126586c7e60a0d8a5": MzVersion.parse_mz("v0.124.0"),
     # PR#28307 (Render regions for object build and let bindings) introduces regressions against v0.112.0
     "ffcafa5b5c3e83845a868cf6103048c045b4f155": MzVersion.parse_mz("v0.113.0"),
     # PR#23659 (txn-wal: enable in CI with "eager uppers") introduces regressions against v0.79.0

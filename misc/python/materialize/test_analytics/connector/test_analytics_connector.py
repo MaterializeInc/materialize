@@ -42,8 +42,87 @@ class TestAnalyticsSettings:
 
 
 class DatabaseConnector:
-    def __init__(self, config: MzDbConfig, current_data_version: int, log_sql: bool):
+
+    def __init__(self, config: MzDbConfig):
         self.config = config
+
+    def get_or_create_connection(self, autocommit: bool = False) -> Connection:
+        raise NotImplementedError
+
+    def create_connection(
+        self,
+        autocommit: bool = False,
+        timeout_in_seconds: int = 60,
+        remaining_retries: int = 1,
+    ) -> Connection:
+        raise NotImplementedError
+
+    def create_cursor(
+        self,
+        connection: Connection | None = None,
+        autocommit: bool = False,
+        allow_reusing_connection: bool = False,
+        statement_timeout: str | None = None,
+    ) -> Cursor:
+        raise NotImplementedError
+
+    def set_read_only(self) -> None:
+        raise NotImplementedError
+
+    def try_get_or_query_settings(self) -> TestAnalyticsSettings | None:
+        raise NotImplementedError
+
+    def add_update_statements(self, sql_statements: list[str]) -> None:
+        raise NotImplementedError
+
+    def submit_update_statements(self) -> None:
+        raise NotImplementedError
+
+    def to_short_printable_sql(self, sql: str) -> str:
+        return re.sub(r"^\s+", "", sql, flags=re.MULTILINE).replace("\n", " ").strip()
+
+
+class DummyDatabaseConnector(DatabaseConnector):
+
+    def __init__(self, config: MzDbConfig):
+        super().__init__(config)
+
+    def get_or_create_connection(self, autocommit: bool = False) -> Connection:
+        raise RuntimeError("Forbidden")
+
+    def create_connection(
+        self,
+        autocommit: bool = False,
+        timeout_in_seconds: int = 60,
+        remaining_retries: int = 1,
+    ) -> Connection:
+        raise RuntimeError("Forbidden")
+
+    def create_cursor(
+        self,
+        connection: Connection | None = None,
+        autocommit: bool = False,
+        allow_reusing_connection: bool = False,
+        statement_timeout: str | None = None,
+    ) -> Cursor:
+        raise RuntimeError("Forbidden")
+
+    def set_read_only(self) -> None:
+        pass
+
+    def try_get_or_query_settings(self) -> TestAnalyticsSettings | None:
+        return None
+
+    def add_update_statements(self, sql_statements: list[str]) -> None:
+        pass
+
+    def submit_update_statements(self) -> None:
+        print("Not submitting update statements in dummy mode")
+
+
+class DatabaseConnectorImpl(DatabaseConnector):
+    def __init__(self, config: MzDbConfig, current_data_version: int, log_sql: bool):
+        super().__init__(config)
         self.current_data_version = current_data_version
         self.update_statements = []
         self._log_sql = log_sql
@@ -267,6 +346,3 @@ class DatabaseConnector:
                 f"Uploading test_analytics data is not supported from this data version ({self.current_data_version})"
             )
             self.set_read_only()
-
-    def to_short_printable_sql(self, sql: str) -> str:
-        return re.sub(r"^\s+", "", sql, flags=re.MULTILINE).replace("\n", " ").strip()

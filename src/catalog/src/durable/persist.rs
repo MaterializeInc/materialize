@@ -16,7 +16,7 @@ use std::fmt::Debug;
 use std::str::FromStr;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
@@ -44,7 +44,7 @@ use mz_storage_types::sources::SourceData;
 use sha2::Digest;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use timely::Container;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::durable::debug::{Collection, DebugCatalogState, Trace};
@@ -508,7 +508,7 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
 
         // The since handle gives us the ability to fence out other downgraders using an opaque token.
         // (See the method documentation for details.)
-        // That's not needed here, so we the since handle's opaque token to avoid any comparison
+        // That's not needed here, so we use the since handle's opaque token to avoid any comparison
         // failures.
         let opaque = *self.since_handle.opaque();
         let downgrade = self
@@ -897,12 +897,8 @@ impl ApplyUpdate<StateUpdateKindJson> for UnopenedCatalogStateInner {
         current_fence_token: &mut FenceableToken,
         _metrics: &Arc<Metrics>,
     ) -> Result<Option<StateUpdate<StateUpdateKindJson>>, FenceError> {
-        // TODO(jkosh44) It's a bit unfortunate that we have to clone all updates to attempt to
-        // convert them into a `StateUpdateKind` and cache a very small subset of them. It would
-        // be better if we could figure out a way not to clone everything.
-        if let Ok(kind) =
-            <StateUpdateKindJson as TryIntoStateUpdateKind>::try_into(update.kind.clone())
-        {
+        if update.kind.is_always_deserializable() {
+            let kind = TryInto::try_into(&update.kind).expect("kind is known to be deserializable");
             match (kind, update.diff) {
                 (StateUpdateKind::Config(key, value), 1) => {
                     let prev = self.configs.insert(key.key, value.value);
@@ -991,6 +987,8 @@ impl UnopenedPersistCatalogState {
             }
         }
 
+        let open_handles_start = Instant::now();
+        info!("startup: envd serve: catalog init: open handles beginning");
         let since_handle = persist_client
             .open_critical_since(
                 catalog_shard_id,
@@ -1017,6 +1015,10 @@ impl UnopenedPersistCatalogState {
             )
             .await
             .expect("invalid usage");
+        info!(
+            "startup: envd serve: catalog init: open handles complete in {:?}",
+            open_handles_start.elapsed()
+        );
 
         // Commit an empty write at the minimum timestamp so the catalog is always readable.
         let upper = {
@@ -1033,6 +1035,8 @@ impl UnopenedPersistCatalogState {
             }
         };
 
+        let snapshot_start = Instant::now();
+        info!("startup: envd serve: catalog init: snapshot beginning");
         let as_of = as_of(&read_handle, upper);
         let snapshot: Vec<_> = snapshot_binary(&mut read_handle, as_of, &metrics)
             .await
@@ -1042,6 +1046,10 @@ impl UnopenedPersistCatalogState {
             .listen(Antichain::from_elem(as_of))
             .await
             .expect("invalid usage");
+        info!(
+            "startup: envd serve: catalog init: snapshot complete in {:?}",
+            snapshot_start.elapsed()
+        );
 
         let mut handle = UnopenedPersistCatalogState {
             // Unopened catalogs are always writeable until they're opened in an explicit mode.
@@ -1065,10 +1073,17 @@ impl UnopenedPersistCatalogState {
             snapshot.iter().all(|(_, _, diff)| *diff == 1),
             "snapshot should be consolidated: {snapshot:#?}"
         );
+
+        let apply_start = Instant::now();
+        info!("startup: envd serve: catalog init: apply updates beginning");
         let updates = snapshot
             .into_iter()
             .map(|(kind, ts, diff)| StateUpdate { kind, ts, diff });
         handle.apply_updates(updates)?;
+        info!(
+            "startup: envd serve: catalog init: apply updates complete in {:?}",
+            apply_start.elapsed()
+        );
 
         // Validate that the binary version of the current process is not less than any binary
         // version that has written to the catalog.
@@ -1590,6 +1605,16 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
     }
 
     #[mz_ore::instrument(level = "debug")]
+    async fn get_deployment_generation(&mut self) -> Result<u64, CatalogError> {
+        self.sync_to_current_upper().await?;
+        Ok(self
+            .fenceable_token
+            .token()
+            .expect("opened catalogs must have a token")
+            .deploy_generation)
+    }
+
+    #[mz_ore::instrument(level = "debug")]
     async fn snapshot(&mut self) -> Result<Snapshot, CatalogError> {
         self.with_snapshot(Ok).await
     }
@@ -1652,15 +1677,6 @@ impl DurableCatalogState for PersistCatalogState {
             catalog: &mut PersistCatalogState,
             txn_batch: TransactionBatch,
         ) -> Result<Timestamp, CatalogError> {
-            // If the transaction is empty then we don't error, even in read-only mode. This matches the
-            // semantics that the stash uses.
-            if !txn_batch.is_empty() && catalog.is_read_only() {
-                return Err(DurableCatalogError::NotWritable(format!(
-                    "cannot commit a transaction in a read-only catalog: {txn_batch:#?}"
-                ))
-                .into());
-            }
-
             // If the current upper does not match the transaction's commit timestamp, then the
             // catalog must have changed since the transaction was started, making the transaction
             // invalid. When/if we want a multi-writer catalog, this will likely have to change
@@ -1688,7 +1704,18 @@ impl DurableCatalogState for PersistCatalogState {
                     catalog.upper = catalog.upper.step_forward();
                     catalog.upper
                 }
-                Mode::Readonly => catalog.upper,
+                Mode::Readonly => {
+                    // If the transaction is empty then we don't error, even in read-only mode.
+                    // This is mostly for legacy reasons (i.e. with enough elbow grease this
+                    // behavior can be changed without breaking any fundamental assumptions).
+                    if !updates.is_empty() {
+                        return Err(DurableCatalogError::NotWritable(format!(
+                            "cannot commit a transaction in a read-only catalog: {updates:#?}"
+                        ))
+                        .into());
+                    }
+                    catalog.upper
+                }
             };
 
             Ok(next_upper)

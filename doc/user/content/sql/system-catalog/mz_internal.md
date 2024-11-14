@@ -390,6 +390,55 @@ inputs.
 | `replica_id` | [`text`]    | The ID of a cluster replica. |
 | `hydrated`   | [`boolean`] | Whether the object is hydrated on the replica. |
 
+## `mz_index_advice`
+
+{{< warning >}}
+Following the advice in this view might not always yield resource usage
+optimizations. You should test any changes in a development environment
+before deploying the changes to production.
+{{< /warning >}}
+
+The `mz_index_advice` view provides advice on opportunities to optimize resource
+usage (memory and CPU) in Materialize. The advice provided suggests either
+creating indexes or materialized views to precompute intermediate results that
+can be reused across several objects, or removing unnecessary indexes or
+materialized views.
+
+
+### Known limitations
+
+The suggestions are based on the graph of dependencies between objects and do
+not take into account other important factors, like the actual usage patterns
+and execution plans. This means that following the advice in this view **might
+not always lead to resource usage optimizations**. In some cases, the provided
+advice might even lead to suboptimal execution plans or even increased resource
+usage. For example:
+
+- If a materialized view or an index has been created for direct querying, the
+  dependency graph will not reflect this nuance and `mz_index_advice` might
+  recommend using and unindexed view instead. In this case, you should refer to
+  the the reference documentation for [query optimization](/transform-data/optimization/#indexes)
+  instead.
+- If a view is depended on by multiple objects that use very selective filters,
+  or a multiple projections that can be pushed into or even beyond the view,
+  adding an index may increase resource usage.
+- If an index has been created to [enable delta joins](/transform-data/optimization/#optimize-multi-way-joins-with-delta-joins),
+  removing it may lead to lower memory utilization, but the delta join
+  optimization will no longer be used in the join implementation.
+
+To guarantee that there are no regressions given your specific usage patterns,
+it's important to test any changes in a development environment before
+deploying the changes to production.
+
+
+<!-- RELATION_SPEC mz_internal.mz_index_advice -->
+| Field                    | Type        | Meaning  |
+| ------------------------ | ----------- | -------- |
+| `object_id`              | [`text`]    | The ID of the object. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), or [`mz_catalog.mz_views.id`](../mz_catalog#mz_views). |
+| `hint`                   | [`text`]    | A suggestion to either change the object (e.g. create an index, turn a materialized view into an indexed view) or keep the object unchanged. |
+| `details`                | [`text`]    | Additional details on why the `hint` was proposed based on the dependencies of the object. |
+| `referenced_object_ids`  | [`list`]    | The IDs of objects referenced by `details`. Corresponds to [mz_objects.id](https://materialize.com/docs/sql/system-catalog/mz_catalog/#mz_objects). |
+
 ## `mz_materialization_dependencies`
 
 The `mz_materialization_dependencies` view describes the dependency structure between each materialization (materialized view, index, or sink) and the sources of its data.
@@ -695,6 +744,10 @@ The `mz_network_policy_rules` table contains a row for each network policy rule.
 | `action`         | [`text`]   | The action of the rule. `allow` is the only action.                                                    |
 | `address`        | [`text`]   | The address the rule will take action on.                                                              |
 | `direction`      | [`text`]   | The direction of traffic the rule applies to. `ingress` is the only supported direction.               |
+
+## `mz_show_network_policies`
+
+The `mz_show_show_network_policies` view contains a row for each network policy in the system.
 
 ## `mz_show_all_privileges`
 
@@ -1217,6 +1270,7 @@ The `mz_webhook_sources` table contains a row for each webhook source in the sys
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_databases -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_indexes -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_materialized_views -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_network_policies -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_roles -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_schemas -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_secrets -->

@@ -6,7 +6,10 @@ menu:
     parent: commands
 ---
 
-`SHOW SECRETS` lists the names of the secrets securely stored in Materialize's secret management system. There is no way to show the contents of an existing secret, though you can override it using the [`ALTER SECRET`](../alter-secret) statement.
+`SHOW SECRETS` lists the names of the secrets securely stored in Materialize's
+secret management system. There is no way to show the contents of an existing
+secret, though you can override it using the [`ALTER SECRET`](../alter-secret)
+statement.
 
 ## Syntax
 
@@ -25,9 +28,9 @@ SHOW SECRETS;
 ```nofmt
          name
 -----------------------
- upstash_kafka_ca_cert
- upstash_sasl_password
- upstash_sasl_username
+ kafka_ca_cert
+ kafka_sasl_password
+ kafka_sasl_username
 ```
 
 ```mzsql
@@ -37,7 +40,7 @@ SHOW SECRETS FROM public LIKE '%cert%';
 ```nofmt
          name
 -----------------------
- upstash_kafka_ca_cert
+ kafka_ca_cert
 ```
 
 ## Related pages

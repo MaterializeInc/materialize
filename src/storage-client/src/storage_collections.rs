@@ -26,7 +26,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::task::AbortOnDropHandle;
-use mz_ore::{assert_none, instrument};
+use mz_ore::{assert_none, instrument, soft_assert_or_log};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
 use mz_persist_client::critical::SinceHandle;
@@ -48,8 +48,9 @@ use mz_storage_types::read_holds::{ReadHold, ReadHoldError};
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sources::{
     GenericSourceConnection, IngestionDescription, SourceData, SourceDesc, SourceExport,
-    SourceExportDataConfig,
+    SourceExportDataConfig, Timeline,
 };
+use mz_storage_types::time_dependence::{TimeDependence, TimeDependenceError};
 use mz_txn_wal::metrics::Metrics as TxnMetrics;
 use mz_txn_wal::txn_read::{DataSnapshot, TxnsRead};
 use mz_txn_wal::txns::TxnsHandle;
@@ -302,6 +303,13 @@ pub trait StorageCollections: Debug {
         &self,
         desired_holds: Vec<GlobalId>,
     ) -> Result<Vec<ReadHold<Self::Timestamp>>, ReadHoldError>;
+
+    /// Get the time dependence for a storage collection. Returns no value if unknown or if
+    /// the object isn't managed by storage.
+    fn determine_time_dependence(
+        &self,
+        id: GlobalId,
+    ) -> Result<Option<TimeDependence>, TimeDependenceError>;
 }
 
 /// Frontiers of the collection identified by `id`.
@@ -404,7 +412,8 @@ where
         + Codec64
         + From<EpochMillis>
         + TimestampManipulation
-        + Into<mz_repr::Timestamp>,
+        + Into<mz_repr::Timestamp>
+        + Sync,
 {
     /// Creates and returns a new [StorageCollections].
     ///
@@ -1104,7 +1113,8 @@ where
         + Codec64
         + From<EpochMillis>
         + TimestampManipulation
-        + Into<mz_repr::Timestamp>,
+        + Into<mz_repr::Timestamp>
+        + Sync,
 {
     type Timestamp = T;
 
@@ -1980,6 +1990,54 @@ where
 
         Ok(acquired_holds)
     }
+
+    /// Determine time dependence information for the object.
+    fn determine_time_dependence(
+        &self,
+        id: GlobalId,
+    ) -> Result<Option<TimeDependence>, TimeDependenceError> {
+        use TimeDependenceError::CollectionMissing;
+        let collections = self.collections.lock().expect("lock poisoned");
+        let mut collection = Some(collections.get(&id).ok_or(CollectionMissing(id))?);
+
+        let mut result = None;
+
+        while let Some(c) = collection.take() {
+            use DataSource::*;
+            if let Some(timeline) = &c.description.timeline {
+                // Only the epoch timeline follows wall-clock.
+                if *timeline != Timeline::EpochMilliseconds {
+                    break;
+                }
+            }
+            match &c.description.data_source {
+                Ingestion(ingestion) => {
+                    use GenericSourceConnection::*;
+                    match ingestion.desc.connection {
+                        // Kafka, Postgres, MySql sources follow wall clock.
+                        Kafka(_) | Postgres(_) | MySql(_) => {
+                            result = Some(TimeDependence::default())
+                        }
+                        // Load generators not further specified.
+                        LoadGenerator(_) => {}
+                    }
+                }
+                IngestionExport { ingestion_id, .. } => {
+                    let c = collections
+                        .get(ingestion_id)
+                        .ok_or(CollectionMissing(*ingestion_id))?;
+                    collection = Some(c);
+                }
+                // Introspection, other, progress, table, and webhook sources follow wall clock.
+                Introspection(_) | Progress | Table | Webhook { .. } => {
+                    result = Some(TimeDependence::default())
+                }
+                // Materialized views, continual tasks, etc, aren't managed by storage.
+                Other => {}
+            };
+        }
+        Ok(result)
+    }
 }
 
 /// Wraps either a "critical" [SinceHandle] or a leased [ReadHandle].
@@ -1999,7 +2057,7 @@ where
 
 impl<T> SinceHandleWrapper<T>
 where
-    T: TimelyTimestamp + Lattice + Codec64 + TotalOrder,
+    T: TimelyTimestamp + Lattice + Codec64 + TotalOrder + Sync,
 {
     pub fn since(&self) -> &Antichain<T> {
         match self {
@@ -2216,7 +2274,8 @@ where
         + Codec64
         + From<EpochMillis>
         + TimestampManipulation
-        + Into<mz_repr::Timestamp>,
+        + Into<mz_repr::Timestamp>
+        + Sync,
 {
     async fn run(&mut self) {
         // Futures that fetch the recent upper from all other shards.
@@ -2230,20 +2289,26 @@ where
             >,
         > = FuturesUnordered::new();
 
-        let gen_upper_future = |id: GlobalId, mut handle: WriteHandle<SourceData, (), T, i64>| {
-            let fut = async move {
-                let current_upper = handle.shared_upper();
-                handle.wait_for_upper_past(&current_upper).await;
-                let new_upper = handle.shared_upper();
-                (id, handle, new_upper)
-            };
+        let gen_upper_future =
+            |id, mut handle: WriteHandle<_, _, _, _>, prev_upper: Antichain<T>| {
+                let fut = async move {
+                    soft_assert_or_log!(
+                        !prev_upper.is_empty(),
+                        "cannot await progress when upper is already empty"
+                    );
+                    handle.wait_for_upper_past(&prev_upper).await;
+                    let new_upper = handle.shared_upper();
+                    (id, handle, new_upper)
+                };
 
-            fut
-        };
+                fut
+            };
 
         let mut txns_upper_future = match self.txns_handle.take() {
             Some(txns_handle) => {
-                let txns_upper_future = gen_upper_future(GlobalId::Transient(1), txns_handle);
+                let upper = txns_handle.upper().clone();
+                let txns_upper_future =
+                    gen_upper_future(GlobalId::Transient(1), txns_handle, upper);
                 txns_upper_future.boxed()
             }
             None => async { std::future::pending().await }.boxed(),
@@ -2259,7 +2324,7 @@ where
                     }
                     self.update_write_frontiers(&uppers).await;
 
-                    let fut = gen_upper_future(id, handle);
+                    let fut = gen_upper_future(id, handle, upper);
                     txns_upper_future = fut.boxed();
                 }
                 Some((id, handle, upper)) = upper_futures.next() => {
@@ -2271,10 +2336,12 @@ where
                         if shard_id == &handle.shard_id() {
                             // Still current, so process the update and enqueue
                             // again!
-                            let uppers = vec![(id, upper)];
+                            let uppers = vec![(id, upper.clone())];
                             self.update_write_frontiers(&uppers).await;
-                            let fut = gen_upper_future(id, handle);
-                            upper_futures.push(fut.boxed());
+                            if !upper.is_empty() {
+                                let fut = gen_upper_future(id, handle, upper);
+                                upper_futures.push(fut.boxed());
+                            }
                         } else {
                             // Be polite and expire the write handle. This can
                             // happen when we get an upper update for a write
@@ -2307,8 +2374,11 @@ where
                             if is_in_txns {
                                 self.txns_shards.insert(id);
                             } else {
-                                let fut = gen_upper_future(id, write_handle);
-                                upper_futures.push(fut.boxed());
+                                let upper = write_handle.upper().clone();
+                                if !upper.is_empty() {
+                                    let fut = gen_upper_future(id, write_handle, upper);
+                                    upper_futures.push(fut.boxed());
+                                }
                             }
 
                         }
@@ -2527,7 +2597,7 @@ async fn finalize_shards_task<T>(
         read_only,
     }: FinalizeShardsTaskConfig,
 ) where
-    T: TimelyTimestamp + Lattice + Codec64,
+    T: TimelyTimestamp + Lattice + Codec64 + Sync,
 {
     if read_only {
         info!("disabling shard finalization in read only mode");

@@ -10,19 +10,19 @@
 //! Parallelization contracts, describing requirements for data movement along dataflow edges.
 
 use std::rc::Rc;
-use timely::communication::{Data, Pull, Push};
+use timely::communication::{Pull, Push};
 use timely::dataflow::channels::pact::{LogPuller, LogPusher, ParallelizationContract};
-use timely::dataflow::channels::{Bundle, Message};
+use timely::dataflow::channels::Bundle;
 use timely::logging::TimelyLogger;
 use timely::progress::Timestamp;
 use timely::worker::AsWorker;
-use timely::Container;
+use timely::{Container, ExchangeData};
 
 /// A connection that distributes containers to all workers in a round-robin fashion
 #[derive(Debug)]
 pub struct Distribute;
 
-impl<T: Timestamp, C: Container + Data> ParallelizationContract<T, C> for Distribute {
+impl<T: Timestamp, C: Container + ExchangeData> ParallelizationContract<T, C> for Distribute {
     type Pusher = DistributePusher<LogPusher<T, C, Box<dyn Push<Bundle<T, C>>>>>;
     type Puller = LogPuller<T, C, Box<dyn Pull<Bundle<T, C>>>>;
 
@@ -33,7 +33,7 @@ impl<T: Timestamp, C: Container + Data> ParallelizationContract<T, C> for Distri
         address: Rc<[usize]>,
         logging: Option<TimelyLogger>,
     ) -> (Self::Pusher, Self::Puller) {
-        let (senders, receiver) = allocator.allocate::<Message<T, C>>(identifier, address);
+        let (senders, receiver) = allocator.allocate::<Bundle<T, C>>(identifier, address);
         let senders = senders
             .into_iter()
             .enumerate()
@@ -61,7 +61,12 @@ impl<P> DistributePusher<P> {
     }
 }
 
-impl<T: Eq + Data, C: Container, P: Push<Bundle<T, C>>> Push<Bundle<T, C>> for DistributePusher<P> {
+impl<T, C, P> Push<Bundle<T, C>> for DistributePusher<P>
+where
+    T: Eq + ExchangeData,
+    C: Container,
+    P: Push<Bundle<T, C>>,
+{
     fn push(&mut self, message: &mut Option<Bundle<T, C>>) {
         let worker_idx = self.next;
         self.next = (self.next + 1) % self.pushers.len();

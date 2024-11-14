@@ -123,6 +123,7 @@ use mz_compute_types::plan::flat_plan::{FlatPlan, FlatPlanNode};
 use mz_compute_types::plan::LirId;
 use mz_expr::{EvalError, Id};
 use mz_persist_client::operators::shard_source::SnapshotMode;
+use mz_repr::explain::DummyHumanizer;
 use mz_repr::{Datum, GlobalId, Row, SharedRow};
 use mz_storage_operators::persist_source;
 use mz_storage_types::controller::CollectionMetadata;
@@ -146,7 +147,7 @@ use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
 use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
-use crate::logging::compute::LogDataflowErrors;
+use crate::logging::compute::{ComputeEvent, LirMetadata, LogDataflowErrors};
 use crate::render::context::{
     ArrangementFlavor, Context, MzArrangement, MzArrangementImport, ShutdownToken,
 };
@@ -226,9 +227,12 @@ pub fn build_compute_dataflow<A: Allocate>(
                     });
 
                     let mut snapshot_mode = SnapshotMode::Include;
+                    let mut suppress_early_progress_as_of = dataflow.as_of.clone();
                     let ct_source_transformer = ct_ctx.get_ct_source_transformer(*source_id);
                     if let Some(x) = ct_source_transformer.as_ref() {
                         snapshot_mode = x.snapshot_mode();
+                        suppress_early_progress_as_of = suppress_early_progress_as_of
+                            .map(|as_of| x.suppress_early_progress_as_of(as_of));
                     }
 
                     // Note: For correctness, we require that sources only emit times advanced by
@@ -256,7 +260,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                     // To avoid a memory spike during arrangement hydration (database-issues#6368), need to
                     // ensure that the first frontier we report into the dataflow is beyond the
                     // `as_of`.
-                    if let Some(as_of) = dataflow.as_of.clone() {
+                    if let Some(as_of) = suppress_early_progress_as_of {
                         ok_stream = suppress_early_progress(ok_stream, as_of);
                     }
 
@@ -340,9 +344,19 @@ pub fn build_compute_dataflow<A: Allocate>(
                             let depends = object.plan.depends();
                             context
                                 .enter_region(region, Some(&depends))
-                                .render_recursive_plan(0, object.plan)
+                                .render_recursive_plan(object.id, 0, object.plan)
                                 .leave_region()
                         },
+                    );
+                    let global_id = object.id;
+
+                    context.log_dataflow_global_id(
+                        *bundle
+                            .scope()
+                            .addr()
+                            .first()
+                            .expect("Dataflow root id must exist"),
+                        global_id,
                     );
                     context.insert_id(Id::Global(object.id), bundle);
                 }
@@ -415,9 +429,18 @@ pub fn build_compute_dataflow<A: Allocate>(
                             let depends = object.plan.depends();
                             context
                                 .enter_region(region, Some(&depends))
-                                .render_plan(object.plan)
+                                .render_plan(object.id, object.plan)
                                 .leave_region()
                         },
+                    );
+                    let global_id = object.id;
+                    context.log_dataflow_global_id(
+                        *bundle
+                            .scope()
+                            .addr()
+                            .first()
+                            .expect("Dataflow root id must exist"),
+                        global_id,
                     );
                     context.insert_id(Id::Global(object.id), bundle);
                 }
@@ -543,8 +566,19 @@ where
                 // Ensure that the frontier does not advance past the expiration time, if set.
                 // Otherwise, we might write down incorrect data.
                 if let Some(&expiration) = self.dataflow_expiration.as_option() {
-                    oks.expire_arrangement_at(expiration);
-                    errs.stream = errs.stream.expire_stream_at(expiration);
+                    let token = Rc::new(());
+                    let shutdown_token = Rc::downgrade(&token);
+                    oks.expire_arrangement_at(
+                        &format!("{}_export_index_oks", self.debug_name),
+                        expiration,
+                        Weak::clone(&shutdown_token),
+                    );
+                    errs.stream = errs.stream.expire_stream_at(
+                        &format!("{}_export_index_errs", self.debug_name),
+                        expiration,
+                        shutdown_token,
+                    );
+                    needed_tokens.push(token);
                 }
 
                 // Obtain a specialized handle matching the specialized arrangement.
@@ -623,8 +657,19 @@ where
                 // Ensure that the frontier does not advance past the expiration time, if set.
                 // Otherwise, we might write down incorrect data.
                 if let Some(&expiration) = self.dataflow_expiration.as_option() {
-                    oks.expire_arrangement_at(expiration);
-                    errs.stream = errs.stream.expire_stream_at(expiration);
+                    let token = Rc::new(());
+                    let shutdown_token = Rc::downgrade(&token);
+                    oks.expire_arrangement_at(
+                        &format!("{}_export_index_iterative_oks", self.debug_name),
+                        expiration,
+                        Weak::clone(&shutdown_token),
+                    );
+                    errs.stream = errs.stream.expire_stream_at(
+                        &format!("{}_export_index_iterative_err", self.debug_name),
+                        expiration,
+                        shutdown_token,
+                    );
+                    needed_tokens.push(token);
                 }
 
                 let oks_trace = oks.trace_handle();
@@ -695,7 +740,12 @@ where
     ///
     /// The method requires that all variables conclude with a physical representation that
     /// contains a collection (i.e. a non-arrangement), and it will panic otherwise.
-    pub fn render_recursive_plan(&mut self, level: usize, plan: FlatPlan) -> CollectionBundle<G> {
+    pub fn render_recursive_plan(
+        &mut self,
+        object_id: GlobalId,
+        level: usize,
+        plan: FlatPlan,
+    ) -> CollectionBundle<G> {
         if plan.is_recursive() {
             let (values, body) = plan.split_recursive();
             let ids: Vec<_> = values.iter().map(|(id, _, _)| *id).collect();
@@ -721,7 +771,7 @@ where
             }
             // Now render each of the bindings.
             for (id, value, limit) in values {
-                let bundle = self.render_recursive_plan(level + 1, value);
+                let bundle = self.render_recursive_plan(object_id, level + 1, value);
                 // We need to ensure that the raw collection exists, but do not have enough information
                 // here to cause that to happen.
                 let (oks, mut err) = bundle.collection.clone().unwrap();
@@ -787,9 +837,9 @@ where
                 );
             }
 
-            self.render_recursive_plan(level, body)
+            self.render_recursive_plan(object_id, level, body)
         } else {
-            self.render_plan(plan)
+            self.render_plan(object_id, plan)
         }
     }
 }
@@ -806,7 +856,7 @@ where
     ///
     /// The return type reflects the uncertainty about the data representation, perhaps
     /// as a stream of data, perhaps as an arrangement, perhaps as a stream of batches.
-    pub fn render_plan(&mut self, plan: FlatPlan) -> CollectionBundle<G> {
+    pub fn render_plan(&mut self, object_id: GlobalId, plan: FlatPlan) -> CollectionBundle<G> {
         let (values, body) = plan.split_lets();
         for (id, value) in values {
             let bundle = self
@@ -815,7 +865,7 @@ where
                 .region_named(&format!("Binding({:?})", id), |region| {
                     let depends = value.depends();
                     self.enter_region(region, Some(&depends))
-                        .render_letfree_plan(value)
+                        .render_letfree_plan(object_id, value)
                         .leave_region()
                 });
             self.insert_id(Id::Local(id), bundle);
@@ -824,7 +874,7 @@ where
         self.scope.clone().region_named("Main Body", |region| {
             let depends = body.depends();
             self.enter_region(region, Some(&depends))
-                .render_letfree_plan(body)
+                .render_letfree_plan(object_id, body)
                 .leave_region()
         })
     }
@@ -832,19 +882,60 @@ where
     /// Renders a plan to a differential dataflow, producing the collection of results.
     ///
     /// The plan must _not_ contain any `Let` or `LetRec` nodes.
-    fn render_letfree_plan(&mut self, plan: FlatPlan) -> CollectionBundle<G> {
-        let (mut nodes, root_id, topological_order) = plan.destruct();
+    fn render_letfree_plan(&mut self, object_id: GlobalId, plan: FlatPlan) -> CollectionBundle<G> {
+        let (mut steps, root_id, topological_order) = plan.destruct();
 
         // Rendered collections by their `LirId`.
         let mut collections = BTreeMap::new();
 
-        for id in topological_order {
-            let node = nodes.remove(&id).unwrap();
-            let mut bundle = self.render_plan_node(node, &collections);
+        // Mappings to send along.
+        // To save overhead, we'll only compute mappings when we need to,
+        // which means things get gated behind options. Unfortuantely, that means we
+        // have several `Option<...>` types that are _all_ `Some` or `None` together,
+        // but there's no convenient way to express the invariant.
+        let should_compute_lir_metadata = self.compute_logger.is_some();
+        let mut lir_mapping_metadata = if should_compute_lir_metadata {
+            Some(Vec::with_capacity(steps.len()))
+        } else {
+            None
+        };
 
-            self.log_operator_hydration(&mut bundle, id);
+        for lir_id in topological_order {
+            let step = steps.remove(&lir_id).unwrap();
 
-            collections.insert(id, bundle);
+            // TODO(mgree) need ExprHumanizer in DataflowDescription to get nice column names
+            // ActiveComputeState can't have a catalog reference, so we'll need to capture the names
+            // in some other structure and have that structure impl ExprHumanizer
+            let metadata = if should_compute_lir_metadata {
+                let operator: Box<str> = step.node.humanize(&DummyHumanizer).into();
+                let operator_id_start = self.scope.peek_identifier();
+                Some((operator, operator_id_start))
+            } else {
+                None
+            };
+
+            let mut bundle = self.render_plan_node(step.node, &collections);
+
+            if let Some((operator, operator_id_start)) = metadata {
+                let operator_id_end = self.scope.peek_identifier();
+                let operator_span = (operator_id_start, operator_id_end);
+
+                if let Some(lir_mapping_metadata) = &mut lir_mapping_metadata {
+                    lir_mapping_metadata.push((
+                        lir_id,
+                        LirMetadata::new(operator, step.parent, step.nesting, operator_span),
+                    ))
+                }
+            }
+
+            self.log_operator_hydration(&mut bundle, lir_id);
+
+            collections.insert(lir_id, bundle);
+        }
+
+        if let Some(lir_mapping_metadata) = lir_mapping_metadata {
+            let mapping: Box<[(LirId, LirMetadata)]> = lir_mapping_metadata.into();
+            self.log_lir_mapping(object_id, mapping);
         }
 
         collections
@@ -1050,7 +1141,19 @@ where
         }
     }
 
-    fn log_operator_hydration(&self, bundle: &mut CollectionBundle<G>, lir_id: u64) {
+    fn log_dataflow_global_id(&self, id: usize, global_id: GlobalId) {
+        if let Some(logger) = &self.compute_logger {
+            logger.log(ComputeEvent::DataflowGlobal { id, global_id });
+        }
+    }
+
+    fn log_lir_mapping(&self, global_id: GlobalId, mapping: Box<[(LirId, LirMetadata)]>) {
+        if let Some(logger) = &self.compute_logger {
+            logger.log(ComputeEvent::LirMapping { global_id, mapping });
+        }
+    }
+
+    fn log_operator_hydration(&self, bundle: &mut CollectionBundle<G>, lir_id: LirId) {
         // A `CollectionBundle` can contain more than one collection, which makes it not obvious to
         // which we should attach the logging operator.
         //
@@ -1096,7 +1199,7 @@ where
         }
     }
 
-    fn log_operator_hydration_inner<D>(&self, stream: &Stream<G, D>, lir_id: u64) -> Stream<G, D>
+    fn log_operator_hydration_inner<D>(&self, stream: &Stream<G, D>, lir_id: LirId) -> Stream<G, D>
     where
         D: Clone + 'static,
     {
@@ -1123,12 +1226,10 @@ where
             let mut hydrated = false;
             logger.log(lir_id, hydrated);
 
-            let mut buffer = Vec::new();
             move |input, output| {
                 // Pass through inputs.
                 input.for_each(|cap, data| {
-                    data.swap(&mut buffer);
-                    output.session(&cap).give_container(&mut buffer);
+                    output.session(&cap).give_container(data);
                 });
 
                 if hydrated {
@@ -1322,12 +1423,11 @@ where
             signal.drop_on_fire(token);
 
             let mut stash = Vec::new();
-            let mut buffer = Vec::new();
 
             move |input, output| {
                 // Stash incoming updates as long as the start signal has not fired.
                 if !signal.has_fired() {
-                    input.for_each(|cap, data| stash.push((cap, data.take())));
+                    input.for_each(|cap, data| stash.push((cap, std::mem::take(data))));
                     return;
                 }
 
@@ -1338,8 +1438,7 @@ where
 
                 // Pass through all remaining input data.
                 input.for_each(|cap, data| {
-                    data.swap(&mut buffer);
-                    output.session(&cap).give_container(&mut buffer);
+                    output.session(&cap).give_container(data);
                 });
             }
         })
@@ -1378,17 +1477,15 @@ where
     stream.unary_frontier(Pipeline, "SuppressEarlyProgress", |default_cap, _info| {
         let mut early_cap = Some(default_cap);
 
-        let mut buffer = Default::default();
         move |input, output| {
             input.for_each(|data_cap, data| {
-                data.swap(&mut buffer);
                 let mut session = if as_of.less_than(data_cap.time()) {
                     output.session(&data_cap)
                 } else {
                     let cap = early_cap.as_ref().expect("early_cap can't be dropped yet");
                     output.session(cap)
                 };
-                session.give_container(&mut buffer);
+                session.give_container(data);
             });
 
             let frontier = input.frontier().frontier();

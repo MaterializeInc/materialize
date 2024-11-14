@@ -17,7 +17,7 @@ use futures::FutureExt;
 use inner::return_if_err;
 use mz_expr::{MirRelationExpr, RowSetFinishing};
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::{Diff, GlobalId, RowCollection};
+use mz_repr::{CatalogItemId, Diff, GlobalId, RowCollection};
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{
@@ -140,13 +140,14 @@ impl Coordinator {
 
             match plan {
                 Plan::CreateSource(plan) => {
-                    let source_id =
+                    let (item_id, global_id) =
                         return_if_err!(self.catalog_mut().allocate_user_id().await, ctx);
                     let result = self
                         .sequence_create_source(
                             ctx.session_mut(),
                             vec![CreateSourcePlanBundle {
-                                source_id,
+                                item_id,
+                                global_id,
                                 plan,
                                 resolved_ids,
                                 available_source_references: None,
@@ -157,7 +158,7 @@ impl Coordinator {
                 }
                 Plan::CreateSources(plans) => {
                     assert!(
-                        resolved_ids.0.is_empty(),
+                        resolved_ids.is_empty(),
                         "each plan has separate resolved_ids"
                     );
                     let result = self.sequence_create_source(ctx.session_mut(), plans).await;
@@ -227,6 +228,12 @@ impl Coordinator {
                         .sequence_create_type(ctx.session(), plan, resolved_ids)
                         .await;
                     ctx.retire(result);
+                }
+                Plan::CreateNetworkPolicy(plan) => {
+                    let res = self
+                        .sequence_create_network_policy(ctx.session(), plan)
+                        .await;
+                    ctx.retire(res);
                 }
                 Plan::Comment(plan) => {
                     let result = self.sequence_comment_on(ctx.session(), plan).await;
@@ -470,6 +477,12 @@ impl Coordinator {
                     let result = self.sequence_alter_table(ctx.session(), plan).await;
                     ctx.retire(result);
                 }
+                Plan::AlterNetworkPolicy(plan) => {
+                    let res = self
+                        .sequence_alter_network_policy(ctx.session(), plan)
+                        .await;
+                    ctx.retire(res);
+                }
                 Plan::DiscardTemp => {
                     self.drop_temp_items(ctx.session().conn_id()).await;
                     ctx.retire(Ok(ExecuteResponse::DiscardedTemp));
@@ -708,7 +721,7 @@ impl Coordinator {
         self.sequence_create_role(None, plan).await
     }
 
-    pub(crate) fn allocate_transient_id(&self) -> GlobalId {
+    pub(crate) fn allocate_transient_id(&self) -> (CatalogItemId, GlobalId) {
         self.transient_id_gen.allocate_id()
     }
 
@@ -723,7 +736,7 @@ impl Coordinator {
     pub(crate) fn insert_constant(
         catalog: &Catalog,
         session: &mut Session,
-        id: GlobalId,
+        id: CatalogItemId,
         constants: MirRelationExpr,
     ) -> Result<ExecuteResponse, AdapterError> {
         // Insert can be queued, so we need to re-verify the id exists.

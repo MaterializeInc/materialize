@@ -84,6 +84,57 @@ mod fixed_binary_sizes {
 }
 use fixed_binary_sizes::*;
 
+/// Returns true iff the ordering of the "raw" and Persist-encoded versions of this columm would match:
+/// ie. `sort(encode(column)) == encode(sort(column))`. This encoding has been designed so that this
+/// is true for many types.
+pub fn preserves_order(scalar_type: &ScalarType) -> bool {
+    match scalar_type {
+        // These types have short, fixed-length encodings that are designed to sort identically.
+        ScalarType::Bool
+        | ScalarType::Int16
+        | ScalarType::Int32
+        | ScalarType::Int64
+        | ScalarType::UInt16
+        | ScalarType::UInt32
+        | ScalarType::UInt64
+        | ScalarType::Numeric { .. }
+        | ScalarType::Date
+        | ScalarType::Time
+        | ScalarType::Timestamp { .. }
+        | ScalarType::TimestampTz { .. }
+        | ScalarType::Interval
+        | ScalarType::Bytes
+        | ScalarType::String
+        | ScalarType::Uuid
+        | ScalarType::MzTimestamp
+        | ScalarType::MzAclItem
+        | ScalarType::AclItem => true,
+        // We sort records lexicographically; a record has a meaningful sort if all its fields do.
+        ScalarType::Record { fields, .. } => fields
+            .iter()
+            .all(|(_, field_type)| preserves_order(&field_type.scalar_type)),
+        // Our floating-point encoding preserves order generally, but differs when comparing
+        // -0 and 0. Opt these out for now.
+        ScalarType::Float32 | ScalarType::Float64 => false,
+        // For all other types: either the encoding is known to not preserve ordering, or we
+        // don't yet care to make strong guarantees one way or the other.
+        ScalarType::PgLegacyChar
+        | ScalarType::PgLegacyName
+        | ScalarType::Char { .. }
+        | ScalarType::VarChar { .. }
+        | ScalarType::Jsonb
+        | ScalarType::Array(_)
+        | ScalarType::List { .. }
+        | ScalarType::Oid
+        | ScalarType::Map { .. }
+        | ScalarType::RegProc
+        | ScalarType::RegType
+        | ScalarType::RegClass
+        | ScalarType::Int2Vector
+        | ScalarType::Range { .. } => false,
+    }
+}
+
 /// An encoder for a column of [`Datum`]s.
 #[derive(Debug)]
 struct DatumEncoder {
@@ -2092,6 +2143,7 @@ mod tests {
     use crate::adt::interval::Interval;
     use crate::adt::numeric::Numeric;
     use crate::adt::timestamp::CheckedTimestamp;
+    use crate::fixed_length::ToDatumIter;
     use crate::relation::arb_relation_desc;
     use crate::{arb_datum_for_column, arb_row_for_relation, ColumnName, ColumnType, RowArena};
     use crate::{Datum, RelationDesc, Row, ScalarType};
@@ -2231,6 +2283,36 @@ mod tests {
         let indices = UInt64Array::from(indices);
         let ord_col = ::arrow::compute::take(&col, &indices, None).expect("takeable");
         assert_eq!(row_col.as_ref(), ord_col.as_ref());
+
+        // Check that our order matches the datum-native order when `preserves_order` is true.
+        let ordered_prefix_len = desc
+            .iter()
+            .take_while(|(_, c)| preserves_order(&c.scalar_type))
+            .count();
+        let decoder = <RelationDesc as Schema2<Row>>::decoder_any(desc, ord_col.as_ref()).unwrap();
+        let rows = (0..ord_col.len()).map(|i| {
+            let mut row = Row::default();
+            decoder.decode(i, &mut row);
+            row
+        });
+        for (a, b) in rows.tuple_windows() {
+            let a_prefix = a.iter().take(ordered_prefix_len);
+            let b_prefix = b.iter().take(ordered_prefix_len);
+            assert!(
+                a_prefix.cmp(b_prefix).is_le(),
+                "ordering should be consistent on preserves_order columns: {:#?}\n{:?}\n{:?}",
+                desc.iter().take(ordered_prefix_len).collect_vec(),
+                a.to_datum_iter().take(ordered_prefix_len).collect_vec(),
+                b.to_datum_iter().take(ordered_prefix_len).collect_vec()
+            );
+        }
+
+        // Check that our size estimates are consistent.
+        assert_eq!(
+            ord.goodbytes(),
+            (0..col.len()).map(|i| ord.at(i).goodbytes()).sum::<usize>(),
+            "total size should match the sum of the sizes at each index"
+        );
 
         // Check that our lower bounds work as expected.
         if !ord_col.is_empty() {

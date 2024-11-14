@@ -732,9 +732,9 @@ pub const DEFAULT_KEEPALIVE: bool = true;
 /// The `rdkafka` default.
 /// - <https://github.com/confluentinc/librdkafka/blob/master/CONFIGURATION.md>
 pub const DEFAULT_SOCKET_TIMEOUT: Duration = Duration::from_secs(60);
-/// The `rdkafka` default.
+/// Increased from the rdkafka default
 /// - <https://github.com/confluentinc/librdkafka/blob/master/CONFIGURATION.md>
-pub const DEFAULT_TRANSACTION_TIMEOUT: Duration = Duration::from_secs(60);
+pub const DEFAULT_TRANSACTION_TIMEOUT: Duration = Duration::from_secs(600);
 /// The `rdkafka` default.
 /// - <https://github.com/confluentinc/librdkafka/blob/master/CONFIGURATION.md>
 pub const DEFAULT_SOCKET_CONNECTION_SETUP_TIMEOUT: Duration = Duration::from_secs(30);

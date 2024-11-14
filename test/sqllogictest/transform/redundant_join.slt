@@ -151,11 +151,9 @@ Explained Query:
     cte l1 =
       Distinct project=[#0..=#2] // { arity: 3 }
         Union // { arity: 3 }
-          Distinct project=[#0..=#2] // { arity: 3 }
-            Union // { arity: 3 }
-              Get l1 // { arity: 3 }
-              Project (#0, #0, #0) // { arity: 3 }
-                Get l0 // { arity: 1 }
+          Get l1 // { arity: 3 }
+          Project (#0, #0, #0) // { arity: 3 }
+            Get l0 // { arity: 1 }
           Join on=(#2 = (#0 % 2)) type=differential // { arity: 3 }
             implementation
               %1:l0[#0]UK » %0:t2[(#0 % 2)]K

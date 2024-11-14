@@ -20,12 +20,11 @@ use std::fmt::{self, Debug};
 use std::hash::Hash;
 
 use serde::{Deserialize, Serialize};
-use timely::communication::Data;
 use timely::container::columnation::CopyRegion;
 use timely::order::Product;
 use timely::progress::timestamp::{PathSummary, Refines, Timestamp};
 use timely::progress::Antichain;
-use timely::PartialOrder;
+use timely::{ExchangeData, PartialOrder};
 use uuid::Uuid;
 
 use mz_ore::cast::CastFrom;
@@ -104,7 +103,7 @@ impl<P: fmt::Display, T: fmt::Display> fmt::Display for Partitioned<P, T> {
 
 impl<P, T: Timestamp> Timestamp for Partitioned<P, T>
 where
-    P: Extrema + Clone + Debug + Data + Hash + Ord,
+    P: Extrema + Clone + Debug + ExchangeData + Hash + Ord,
 {
     type Summary = ();
     fn minimum() -> Self {
@@ -113,7 +112,7 @@ where
 }
 impl<P, T: Timestamp> Refines<()> for Partitioned<P, T>
 where
-    P: Extrema + Clone + Debug + Data + Hash + Ord,
+    P: Extrema + Clone + Debug + ExchangeData + Hash + Ord,
 {
     fn to_inner(_other: ()) -> Self {
         Self::minimum()
@@ -272,7 +271,7 @@ impl<P: Clone> PathSummary<Interval<P>> for () {
 
 impl<P> Timestamp for Interval<P>
 where
-    P: Extrema + Clone + Debug + Data + Hash + Ord,
+    P: Extrema + Clone + Debug + ExchangeData + Hash + Ord,
 {
     type Summary = ();
 

@@ -61,3 +61,9 @@ def create_test_analytics_config_with_credentials(
         enabled=enabled,
         application_name="test-analytics",
     )
+
+
+def create_dummy_test_analytics_config() -> MzDbConfig:
+    config = create_test_analytics_config_with_credentials("<none>", "local", None)
+    config.enabled = False
+    return config

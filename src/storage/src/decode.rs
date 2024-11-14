@@ -62,18 +62,16 @@ pub fn render_decode_cdcv2<G: Scope<Timestamp = mz_repr::Timestamp>, FromTime: T
     let activator_set: Rc<RefCell<Option<SyncActivator>>> = Rc::new(RefCell::new(None));
 
     let mut row_buf = Row::default();
-    let mut vector = vec![];
     let channel_tx = Rc::clone(&channel_rx);
     let activator_get = Rc::clone(&activator_set);
     let pact = Exchange::new(|(x, _, _): &(DecodeResult<FromTime>, _, _)| x.key.hashed());
     input.inner.sink(pact, "CDCv2Unpack", move |input| {
         while let Some((_, data)) = input.next() {
-            data.swap(&mut vector);
             // The inputs are rows containing two columns that encode an enum, i.e only one of them
             // is ever set while the other is unset. This is the convention we follow in our Avro
             // decoder. When the first field of the record is set then we have a data message.
             // Otherwise we have a progress message.
-            for (row, _time, _diff) in vector.drain(..) {
+            for (row, _time, _diff) in data.drain(..) {
                 let mut record = match &row.value {
                     Some(Ok(row)) => row.iter(),
                     Some(Err(err)) => {

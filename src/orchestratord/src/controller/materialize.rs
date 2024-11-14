@@ -16,7 +16,6 @@ use std::{
 use http::HeaderValue;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
 use kube::{api::PostParams, runtime::controller::Action, Api, Client, Resource, ResourceExt};
-use serde_json::json;
 use tracing::{debug, trace};
 
 use crate::metrics::Metrics;
@@ -25,6 +24,7 @@ use mz_orchestrator_kubernetes::KubernetesImagePullPolicy;
 use mz_orchestrator_tracing::TracingCliArgs;
 use mz_ore::{cast::CastFrom, cli::KeyValueArg, instrument};
 
+mod console;
 mod resources;
 
 #[derive(clap::Parser)]
@@ -37,10 +37,23 @@ pub struct Args {
     local_development: bool,
     #[clap(long)]
     create_balancers: bool,
+    #[clap(long)]
+    create_console: bool,
+    #[clap(long)]
+    enable_tls: bool,
+    #[clap(long)]
+    helm_chart_version: Option<String>,
+    #[clap(long, default_value = "kubernetes")]
+    secrets_controller: String,
+
+    #[clap(long)]
+    console_image_tag_map: Vec<KeyValueArg<String, String>>,
 
     #[clap(flatten)]
     aws_info: AwsInfo,
 
+    #[clap(long)]
+    ephemeral_volume_class: Option<String>,
     #[clap(long)]
     scheduler_name: Option<String>,
     #[clap(long)]
@@ -52,25 +65,27 @@ pub struct Args {
     clusterd_node_selector: Vec<KeyValueArg<String, String>>,
     #[clap(long)]
     balancerd_node_selector: Vec<KeyValueArg<String, String>>,
+    #[clap(long)]
+    console_node_selector: Vec<KeyValueArg<String, String>>,
     #[clap(long, default_value = "always", arg_enum)]
     image_pull_policy: KubernetesImagePullPolicy,
     #[clap(flatten)]
     network_policies: NetworkPolicyConfig,
 
-    #[clap(long, default_value_t = default_cluster_replica_sizes())]
-    environmentd_cluster_replica_sizes: String,
-    #[clap(long, default_value = "25cc")]
-    bootstrap_default_cluster_replica_size: String,
-    #[clap(long, default_value = "25cc")]
-    bootstrap_builtin_system_cluster_replica_size: String,
-    #[clap(long, default_value = "mz_probe")]
-    bootstrap_builtin_probe_cluster_replica_size: String,
-    #[clap(long, default_value = "25cc")]
-    bootstrap_builtin_support_cluster_replica_size: String,
-    #[clap(long, default_value = "50cc")]
-    bootstrap_builtin_catalog_server_cluster_replica_size: String,
-    #[clap(long, default_value = "25cc")]
-    bootstrap_builtin_analytics_cluster_replica_size: String,
+    #[clap(long)]
+    environmentd_cluster_replica_sizes: Option<String>,
+    #[clap(long)]
+    bootstrap_default_cluster_replica_size: Option<String>,
+    #[clap(long)]
+    bootstrap_builtin_system_cluster_replica_size: Option<String>,
+    #[clap(long)]
+    bootstrap_builtin_probe_cluster_replica_size: Option<String>,
+    #[clap(long)]
+    bootstrap_builtin_support_cluster_replica_size: Option<String>,
+    #[clap(long)]
+    bootstrap_builtin_catalog_server_cluster_replica_size: Option<String>,
+    #[clap(long)]
+    bootstrap_builtin_analytics_cluster_replica_size: Option<String>,
 
     #[clap(
         long,
@@ -103,6 +118,9 @@ pub struct Args {
     balancerd_http_port: i32,
     #[clap(long, default_value = "8080")]
     balancerd_internal_http_port: i32,
+
+    #[clap(long, default_value = "9000")]
+    console_http_port: i32,
 }
 
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
@@ -143,6 +161,8 @@ pub struct AwsInfo {
     #[clap(long)]
     environmentd_iam_role_arn: Option<String>,
     #[clap(long)]
+    environmentd_connection_role_arn: Option<String>,
+    #[clap(long)]
     aws_secrets_controller_tags: Vec<String>,
     #[clap(long)]
     environmentd_availability_zones: Option<Vec<String>>,
@@ -181,15 +201,6 @@ impl Display for Error {
     }
 }
 
-fn default_cluster_replica_sizes() -> String {
-    json!({
-        "25cc": {"workers": 1, "scale": 1, "credits_per_hour": "0.25"},
-        "50cc": {"workers": 1, "scale": 1, "credits_per_hour": "0.5"},
-        "mz_probe": {"workers": 1, "scale": 1, "credits_per_hour": "0.00"},
-    })
-    .to_string()
-}
-
 pub struct Context {
     config: Args,
     tracing: TracingCliArgs,
@@ -215,6 +226,8 @@ impl Context {
                 "--environmentd-iam-role-arn is required when using --cloud-provider=aws"
             );
         }
+
+        assert!(!config.enable_tls, "--enable-tls is not yet implemented");
 
         Self {
             config,
@@ -282,6 +295,12 @@ impl k8s_controller::Context for Context {
         let mz_api: Api<Materialize> = Api::namespaced(client.clone(), &mz.namespace());
 
         let status = mz.status();
+        if mz.status.is_none() {
+            self.update_status(&mz_api, mz, status, true).await?;
+            // Updating the status should trigger a reconciliation
+            // which will include a status this time.
+            return Ok(None);
+        }
 
         // we compare the hash against the environment resources generated
         // for the current active generation, since that's what we expect to
@@ -340,6 +359,7 @@ impl k8s_controller::Context for Context {
                             // we fail later on, we want to ensure that the
                             // rollout gets retried.
                             last_completed_rollout_request: status.last_completed_rollout_request,
+                            resource_id: status.resource_id,
                             resources_hash: String::new(),
                             conditions: vec![Condition {
                                 type_: "UpToDate".into(),
@@ -383,6 +403,7 @@ impl k8s_controller::Context for Context {
                             MaterializeStatus {
                                 active_generation: desired_generation,
                                 last_completed_rollout_request: mz.requested_reconciliation_id(),
+                                resource_id: status.resource_id,
                                 resources_hash,
                                 conditions: vec![Condition {
                                     type_: "UpToDate".into(),
@@ -414,6 +435,7 @@ impl k8s_controller::Context for Context {
                                 // the rollout and we want to ensure it gets
                                 // retried.
                                 last_completed_rollout_request: status.last_completed_rollout_request,
+                                resource_id: status.resource_id,
                                 resources_hash: status.resources_hash,
                                 conditions: vec![Condition {
                                     type_: "UpToDate".into(),
@@ -447,6 +469,7 @@ impl k8s_controller::Context for Context {
                         MaterializeStatus {
                             active_generation,
                             last_completed_rollout_request: mz.requested_reconciliation_id(),
+                            resource_id: status.resource_id,
                             resources_hash: status.resources_hash,
                             conditions: vec![Condition {
                                 type_: "UpToDate".into(),
@@ -485,6 +508,7 @@ impl k8s_controller::Context for Context {
                     MaterializeStatus {
                         active_generation,
                         last_completed_rollout_request: mz.requested_reconciliation_id(),
+                        resource_id: status.resource_id,
                         resources_hash: status.resources_hash,
                         conditions: vec![Condition {
                             type_: "UpToDate".into(),
@@ -505,6 +529,46 @@ impl k8s_controller::Context for Context {
             Ok(None)
         };
 
+        // console resources don't need to block on an explicit rollout, but
+        // we do want to wait to deploy the console until the environmentd is
+        // successfully up and running, or else it will crashloop trying to
+        // contact the service
+        if let Ok(None) = result {
+            if self.config.create_console {
+                let Some((_, environmentd_image_tag)) =
+                    mz.spec.environmentd_image_ref.rsplit_once(':')
+                else {
+                    return Err(Error::Anyhow(anyhow::anyhow!(
+                        "failed to parse environmentd image ref: {}",
+                        mz.spec.environmentd_image_ref
+                    )));
+                };
+                let Some(console_image_tag) = self
+                    .config
+                    .console_image_tag_map
+                    .iter()
+                    .find(|kv| kv.key == environmentd_image_tag)
+                    .map(|kv| kv.value.clone())
+                else {
+                    return Err(Error::Anyhow(anyhow::anyhow!(
+                        "no console image ref found for environmentd image ref: {}",
+                        mz.spec.environmentd_image_ref
+                    )));
+                };
+                console::Resources::new(
+                    &self.config,
+                    mz,
+                    &matching_image_from_environmentd_image_ref(
+                        &mz.spec.environmentd_image_ref,
+                        "console",
+                        Some(&console_image_tag),
+                    ),
+                )
+                .apply(&client, &mz.namespace())
+                .await?;
+            }
+        }
+
         result.map_err(Error::Anyhow)
     }
 
@@ -518,4 +582,22 @@ impl k8s_controller::Context for Context {
 
         Ok(None)
     }
+}
+
+fn matching_image_from_environmentd_image_ref(
+    environmentd_image_ref: &str,
+    image_name: &str,
+    image_tag: Option<&str>,
+) -> String {
+    let namespace = environmentd_image_ref
+        .rsplit_once('/')
+        .unwrap_or(("materialize", ""))
+        .0;
+    let tag = image_tag.unwrap_or_else(|| {
+        environmentd_image_ref
+            .rsplit_once(':')
+            .unwrap_or(("", "unstable"))
+            .1
+    });
+    format!("{namespace}/{image_name}:{tag}")
 }

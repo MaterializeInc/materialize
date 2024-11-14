@@ -45,6 +45,10 @@ ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS = {
     "persist_catalog_force_compaction_fuel": "0",
     "statement_logging_default_sample_rate": "0",
     "statement_logging_max_sample_rate": "0",
+    # Default of 128 MB increases memory usage by a lot for some small
+    # performance in benchmarks, see for example FastPathLimit scenario: 55%
+    # more memory, 5% faster
+    "persist_blob_cache_mem_limit_bytes": "1048576",
 }
 
 
@@ -93,6 +97,7 @@ def get_default_system_parameters(
         "enable_connection_validation_syntax": "true",
         "enable_continual_task_builtins": "true",
         "enable_continual_task_create": "true",
+        "enable_continual_task_retain": "true",
         "enable_continual_task_transform": "true",
         "enable_copy_to_expr": "true",
         "enable_create_continual_task": "true",
@@ -121,9 +126,6 @@ def get_default_system_parameters(
         ),
         "persist_batch_columnar_format_percent": "100",
         "persist_batch_delete_enabled": "true",
-        "persist_batch_record_run_meta": (
-            "true" if version >= MzVersion.parse_mz("v0.115.0-dev") else "false"
-        ),
         "persist_batch_structured_order": (
             "true" if version >= MzVersion.parse_mz("v0.119.0-dev") else "false"
         ),
@@ -141,7 +143,6 @@ def get_default_system_parameters(
         "persist_pubsub_client_enabled": "true",
         "persist_pubsub_push_diff_enabled": "true",
         "persist_record_compactions": "true",
-        "persist_roundtrip_spine": "true",
         "persist_schema_register": (
             "false" if version < MzVersion.parse_mz("v0.111.0-dev") else "true"
         ),
@@ -155,6 +156,7 @@ def get_default_system_parameters(
         "statement_logging_default_sample_rate": "0.01",
         "statement_logging_max_sample_rate": "0.01",
         "storage_source_decode_fuel": "100000",
+        "storage_use_continual_feedback_upsert": "true",
         "storage_use_reclock_v2": "true",
         "timestamp_oracle": "postgres",
         "wait_catalog_consolidation_on_startup": "true",

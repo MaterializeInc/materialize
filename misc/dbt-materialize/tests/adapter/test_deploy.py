@@ -461,6 +461,21 @@ class TestTargetDeploy:
         assert before_schemas["prod"] == after_schemas["prod_dbt_deploy"]
         assert before_schemas["prod"] == after_schemas["prod_dbt_deploy"]
 
+        # Verify that the 'prod' schema is tagged correctly
+        tagged_schema_comment = project.run_sql(
+            """
+            SELECT c.comment
+            FROM mz_internal.mz_comments c
+            JOIN mz_schemas s USING (id)
+            WHERE s.name = 'prod';
+            """,
+            fetch="one",
+        )
+
+        assert tagged_schema_comment is not None
+        assert "Deployment by" in tagged_schema_comment[0]
+        assert "on" in tagged_schema_comment[0]
+
     def test_dbt_deploy_with_force(self, project):
         project.run_sql("CREATE CLUSTER prod SIZE = '1'")
         project.run_sql("CREATE CLUSTER prod_dbt_deploy SIZE = '1'")
@@ -695,6 +710,7 @@ class TestEndToEndDeployment:
 
     @pytest.fixture(autouse=True)
     def cleanup(self, project):
+        project.run_sql("DROP ROLE IF EXISTS test_role")
         project.run_sql("DROP CLUSTER IF EXISTS quickstart_dbt_deploy CASCADE")
         project.run_sql("DROP SCHEMA IF EXISTS public_dbt_deploy CASCADE")
         project.run_sql("DROP CLUSTER IF EXISTS sinks_cluster CASCADE")
@@ -703,6 +719,10 @@ class TestEndToEndDeployment:
         project.run_sql("DROP SOURCE IF EXISTS sink_validation_source")
 
     def test_full_deploy_process(self, project):
+        # Create test role and grant it to materialize
+        project.run_sql("CREATE ROLE test_role")
+        project.run_sql("GRANT test_role TO materialize")
+
         # Prepare the source table, the sink cluster and schema
         project.run_sql("CREATE TABLE source_table (val INTEGER)")
         project.run_sql("CREATE CLUSTER sinks_cluster SIZE = '1'")
@@ -712,6 +732,62 @@ class TestEndToEndDeployment:
         run_dbt(["run"])
 
         created_schema = project.created_schemas[0]
+
+        # Set up initial grants on the production schema and cluster
+        project.run_sql(f"GRANT USAGE ON SCHEMA {created_schema} TO test_role")
+        project.run_sql(f"GRANT CREATE ON SCHEMA {created_schema} TO test_role")
+        project.run_sql(
+            f"ALTER DEFAULT PRIVILEGES FOR ROLE test_role IN SCHEMA {created_schema} GRANT SELECT ON TABLES TO test_role"
+        )
+        project.run_sql("GRANT USAGE ON CLUSTER quickstart TO test_role")
+        project.run_sql("GRANT CREATE ON CLUSTER quickstart TO test_role")
+
+        # Store initial grants for later comparison
+        initial_schema_grants = project.run_sql(
+            f"""
+            WITH schema_privilege AS (
+                SELECT mz_internal.mz_aclexplode(s.privileges).*
+                FROM mz_schemas s
+                JOIN mz_databases d ON s.database_id = d.id
+                WHERE d.name = current_database()
+                    AND s.name = '{created_schema}'
+            )
+            SELECT privilege_type, grantee.name as grantee
+            FROM schema_privilege
+            JOIN mz_roles grantee ON grantee = grantee.id
+            WHERE grantee.name = 'test_role'
+            ORDER BY privilege_type, grantee
+        """,
+            fetch="all",
+        )
+
+        initial_cluster_grants = project.run_sql(
+            """
+            WITH cluster_privilege AS (
+                SELECT mz_internal.mz_aclexplode(privileges).*
+                FROM mz_clusters
+                WHERE name = 'quickstart'
+            )
+            SELECT privilege_type, grantee.name as grantee
+            FROM cluster_privilege
+            JOIN mz_roles grantee ON grantee = grantee.id
+            WHERE grantee.name = 'test_role'
+            ORDER BY privilege_type, grantee
+        """,
+            fetch="all",
+        )
+
+        initial_default_privs = project.run_sql(
+            f"""
+            SELECT privilege_type, grantee, object_type
+            FROM mz_internal.mz_show_default_privileges
+            WHERE database = current_database()
+                AND schema = '{created_schema}'
+                AND grantee = 'test_role'
+            ORDER BY privilege_type, grantee, object_type
+        """,
+            fetch="all",
+        )
 
         project_config = f"{{deployment: {{default: {{clusters: ['quickstart'], schemas: ['{created_schema}']}}}}}}"
         project_config_deploy = f"{{deployment: {{default: {{clusters: ['quickstart'], schemas: ['{created_schema}']}}}}, deploy: True}}"
@@ -732,6 +808,65 @@ class TestEndToEndDeployment:
 
         # Initialize the deployment environment
         run_dbt(["run-operation", "deploy_init", "--vars", project_config])
+
+        # Verify grants were copied to deployment schema
+        deploy_schema_grants = project.run_sql(
+            f"""
+            WITH schema_privilege AS (
+                SELECT mz_internal.mz_aclexplode(s.privileges).*
+                FROM mz_schemas s
+                JOIN mz_databases d ON s.database_id = d.id
+                WHERE d.name = current_database()
+                    AND s.name = '{created_schema}_dbt_deploy'
+            )
+            SELECT privilege_type, grantee.name as grantee
+            FROM schema_privilege
+            JOIN mz_roles grantee ON grantee = grantee.id
+            WHERE grantee.name = 'test_role'
+            ORDER BY privilege_type, grantee
+        """,
+            fetch="all",
+        )
+
+        # Verify grants were copied to deployment cluster
+        deploy_cluster_grants = project.run_sql(
+            """
+            WITH cluster_privilege AS (
+                SELECT mz_internal.mz_aclexplode(privileges).*
+                FROM mz_clusters
+                WHERE name = 'quickstart_dbt_deploy'
+            )
+            SELECT privilege_type, grantee.name as grantee
+            FROM cluster_privilege
+            JOIN mz_roles grantee ON grantee = grantee.id
+            WHERE grantee.name = 'test_role'
+            ORDER BY privilege_type, grantee
+        """,
+            fetch="all",
+        )
+
+        deploy_default_privs = project.run_sql(
+            f"""
+            SELECT privilege_type, grantee, object_type
+            FROM mz_internal.mz_show_default_privileges
+            WHERE database = current_database()
+                AND schema = '{created_schema}_dbt_deploy'
+                AND grantee = 'test_role'
+            ORDER BY privilege_type, grantee, object_type
+        """,
+            fetch="all",
+        )
+
+        # Assert grants match between production and deployment environments
+        assert (
+            initial_schema_grants == deploy_schema_grants
+        ), "Schema grants do not match between production and deployment"
+        assert (
+            initial_cluster_grants == deploy_cluster_grants
+        ), "Cluster grants do not match between production and deployment"
+        assert (
+            initial_default_privs == deploy_default_privs
+        ), "Default privileges do not match between production and deployment"
 
         # Run the deploy with the deploy flag set to True and exclude the sink creation
         run_dbt(

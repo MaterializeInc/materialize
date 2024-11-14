@@ -41,7 +41,7 @@ COPY (SUBSCRIBE some_view) TO STDOUT WITH (FORMAT binary);
 
 ## Copy to Amazon S3 {#copy-to-s3}
 
-{{< private-preview />}}
+{{< public-preview />}}
 
 Copying results to Amazon S3 (or S3-compatible services) is useful to perform
 tasks like periodic backups for auditing, or downstream processing in

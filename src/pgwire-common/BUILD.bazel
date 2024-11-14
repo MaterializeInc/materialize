@@ -34,6 +34,11 @@ rust_library(
     ] + all_crate_deps(normal = True),
 )
 
+alias(
+    name = "pgwire-common",
+    actual = "mz_pgwire_common",
+)
+
 rust_test(
     name = "mz_pgwire_common_lib_tests",
     size = "medium",

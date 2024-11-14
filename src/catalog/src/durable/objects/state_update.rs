@@ -34,7 +34,9 @@
 //! upgrades to get us to a valid [`proto::StateUpdateKind`].
 
 use std::fmt::Debug;
+use std::sync::LazyLock;
 
+use mz_ore::collections::HashSet;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::Diff;
@@ -135,6 +137,7 @@ impl StateUpdate {
             roles,
             clusters,
             cluster_replicas,
+            network_policies,
             introspection_sources,
             id_allocator,
             configs,
@@ -157,6 +160,7 @@ impl StateUpdate {
         let roles = from_batch(roles, StateUpdateKind::Role);
         let clusters = from_batch(clusters, StateUpdateKind::Cluster);
         let cluster_replicas = from_batch(cluster_replicas, StateUpdateKind::ClusterReplica);
+        let network_policies = from_batch(network_policies, StateUpdateKind::NetworkPolicy);
         let introspection_sources = from_batch(
             introspection_sources,
             StateUpdateKind::IntrospectionSourceIndex,
@@ -186,6 +190,7 @@ impl StateUpdate {
             .chain(roles)
             .chain(clusters)
             .chain(cluster_replicas)
+            .chain(network_policies)
             .chain(introspection_sources)
             .chain(id_allocators)
             .chain(configs)
@@ -281,20 +286,61 @@ pub struct StateUpdateKindJson(Jsonb);
 impl StateUpdateKindJson {
     pub(crate) fn from_serde<S: serde::Serialize>(s: S) -> Self {
         let serde_value = serde_json::to_value(s).expect("valid json");
-        let row =
-            Jsonb::from_serde_json(serde_value).expect("contained integers should fit in f64");
+        let row = Jsonb::from_serde_json(serde_value).expect("valid json");
         StateUpdateKindJson(row)
     }
 
-    pub(crate) fn to_serde<D: serde::de::DeserializeOwned>(self) -> D {
+    pub(crate) fn to_serde<D: serde::de::DeserializeOwned>(&self) -> D {
         self.try_to_serde().expect("jsonb should roundtrip")
     }
 
     pub(crate) fn try_to_serde<D: serde::de::DeserializeOwned>(
-        self,
+        &self,
     ) -> Result<D, serde_json::error::Error> {
         let serde_value = self.0.as_ref().to_serde_json();
         serde_json::from_value::<D>(serde_value)
+    }
+
+    fn kind(&self) -> &str {
+        let row = self.0.row();
+        let mut iter = row.unpack_first().unwrap_map().iter();
+        let datum = iter
+            .find_map(|(field, datum)| if field == "kind" { Some(datum) } else { None })
+            .expect("kind field must exist");
+        datum.unwrap_str()
+    }
+
+    /// Returns true if this is an update kind that is always deserializable, even before migrations. Otherwise, returns false.
+    pub(crate) fn is_always_deserializable(&self) -> bool {
+        // Construct some fake update kinds so we can extract exactly what the kind field will
+        // serialize as.
+        static DESERIALIZABLE_KINDS: LazyLock<HashSet<String>> = LazyLock::new(|| {
+            [
+                StateUpdateKind::FenceToken(FenceToken {
+                    deploy_generation: 1,
+                    epoch: Epoch::new(1).expect("non-zero"),
+                }),
+                StateUpdateKind::Config(
+                    proto::ConfigKey { key: String::new() },
+                    proto::ConfigValue { value: 1 },
+                ),
+                StateUpdateKind::Setting(
+                    proto::SettingKey {
+                        name: String::new(),
+                    },
+                    proto::SettingValue {
+                        value: String::new(),
+                    },
+                ),
+            ]
+            .into_iter()
+            .map(|kind| {
+                let json_kind: StateUpdateKindJson = kind.into();
+                json_kind.kind().to_string()
+            })
+            .collect()
+        });
+        DESERIALIZABLE_KINDS.contains(self.kind())
     }
 }
 
@@ -449,6 +495,17 @@ impl TryFrom<StateUpdateKindJson> for StateUpdateKind {
     type Error = String;
 
     fn try_from(value: StateUpdateKindJson) -> Result<Self, Self::Error> {
+        let kind: proto::state_update_kind::Kind =
+            value.try_to_serde().map_err(|err| err.to_string())?;
+        let kind = proto::StateUpdateKind { kind: Some(kind) };
+        StateUpdateKind::from_proto(kind).map_err(|err| err.to_string())
+    }
+}
+
+impl TryFrom<&StateUpdateKindJson> for StateUpdateKind {
+    type Error = String;
+
+    fn try_from(value: &StateUpdateKindJson) -> Result<Self, Self::Error> {
         let kind: proto::state_update_kind::Kind =
             value.try_to_serde().map_err(|err| err.to_string())?;
         let kind = proto::StateUpdateKind { kind: Some(kind) };

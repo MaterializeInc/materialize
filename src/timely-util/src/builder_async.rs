@@ -20,7 +20,7 @@ use std::task::{ready, Context, Poll, Waker};
 
 use futures_util::task::ArcWake;
 use futures_util::Stream;
-use timely::communication::{Message, Pull, Push};
+use timely::communication::{Pull, Push};
 use timely::container::columnation::Columnation;
 use timely::container::{CapacityContainerBuilder, ContainerBuilder, PushInto};
 use timely::dataflow::channels::pact::ParallelizationContract;
@@ -34,6 +34,7 @@ use timely::dataflow::operators::{Capability, CapabilitySet, InputCapability};
 use timely::dataflow::{Scope, StreamCore};
 use timely::progress::{Antichain, Timestamp};
 use timely::scheduling::{Activator, SyncActivator};
+use timely::Message;
 use timely::{Container, PartialOrder};
 
 use crate::containers::stack::{AccountedStackBuilder, StackWrapper};
@@ -84,7 +85,7 @@ where
         while let Some((cap, data)) = self.handle.next() {
             new_data = true;
             let cap = self.connection.accept(cap);
-            queue.push_back(Event::Data(cap, data.take()));
+            queue.push_back(Event::Data(cap, std::mem::take(data)));
         }
         if new_data {
             if let Some(waker) = self.waker.take() {

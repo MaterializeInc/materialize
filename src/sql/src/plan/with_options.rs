@@ -14,10 +14,10 @@ use std::time::Duration;
 
 use mz_repr::adt::interval::Interval;
 use mz_repr::bytes::ByteSize;
-use mz_repr::{strconv, GlobalId, RelationVersionSelector};
+use mz_repr::{strconv, CatalogItemId, RelationVersionSelector};
 use mz_sql_parser::ast::{
     ClusterAlterOptionValue, ClusterScheduleOptionValue, ConnectionDefaultAwsPrivatelink, Expr,
-    Ident, KafkaBroker, RefreshOptionValue, ReplicaDefinition,
+    Ident, KafkaBroker, NetworkPolicyRuleDefinition, RefreshOptionValue, ReplicaDefinition,
 };
 use mz_storage_types::connections::string_or_secret::StringOrSecret;
 use serde::{Deserialize, Serialize};
@@ -40,9 +40,9 @@ pub trait ImpliedValue: Sized {
 }
 
 #[derive(Copy, Clone, Debug)]
-pub struct Secret(GlobalId);
+pub struct Secret(CatalogItemId);
 
-impl From<Secret> for GlobalId {
+impl From<Secret> for CatalogItemId {
     fn from(secret: Secret) -> Self {
         secret.0
     }
@@ -80,15 +80,15 @@ impl ImpliedValue for Secret {
 }
 
 #[derive(Copy, Clone, Debug)]
-pub struct Object(GlobalId);
+pub struct Object(CatalogItemId);
 
-impl From<Object> for GlobalId {
+impl From<Object> for CatalogItemId {
     fn from(obj: Object) -> Self {
         obj.0
     }
 }
 
-impl From<&Object> for GlobalId {
+impl From<&Object> for CatalogItemId {
     fn from(obj: &Object) -> Self {
         obj.0
     }
@@ -663,7 +663,8 @@ impl<V: TryFromValue<Value>, T: AstInfo + std::fmt::Debug> TryFromValue<WithOpti
             | WithOptionValue::ConnectionAwsPrivatelink(_)
             | WithOptionValue::ClusterAlterStrategy(_)
             | WithOptionValue::Refresh(_)
-            | WithOptionValue::ClusterScheduleOptionValue(_) => sql_bail!(
+            | WithOptionValue::ClusterScheduleOptionValue(_)
+            | WithOptionValue::NetworkPolicyRules(_) => sql_bail!(
                 "incompatible value types: cannot convert {} to {}",
                 match v {
                     // The first few are unreachable because they are handled at the top of the outer match.
@@ -683,6 +684,7 @@ impl<V: TryFromValue<Value>, T: AstInfo + std::fmt::Debug> TryFromValue<WithOpti
                     WithOptionValue::ConnectionAwsPrivatelink(_) => "connection kafka brokers",
                     WithOptionValue::Refresh(_) => "refresh option values",
                     WithOptionValue::ClusterScheduleOptionValue(_) => "cluster schedule",
+                    WithOptionValue::NetworkPolicyRules(_) => "network policy rules",
                 },
                 V::name()
             ),
@@ -902,5 +904,28 @@ impl TryFromValue<WithOptionValue<Aug>> for ClusterAlterOptionValue<Aug> {
 
     fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<WithOptionValue<Aug>> {
         Some(WithOptionValue::ClusterAlterStrategy(self))
+    }
+}
+
+impl TryFromValue<WithOptionValue<Aug>> for Vec<NetworkPolicyRuleDefinition<Aug>> {
+    fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
+        match v {
+            WithOptionValue::NetworkPolicyRules(rules) => Ok(rules),
+            _ => sql_bail!("cannot use value as cluster replicas"),
+        }
+    }
+
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<WithOptionValue<Aug>> {
+        Some(WithOptionValue::NetworkPolicyRules(self))
+    }
+
+    fn name() -> String {
+        "network policy rules".to_string()
+    }
+}
+
+impl ImpliedValue for Vec<NetworkPolicyRuleDefinition<Aug>> {
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide a set of network policy rules")
     }
 }

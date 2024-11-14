@@ -1893,6 +1893,9 @@ impl<'a> Parser<'a> {
             if self.peek_keywords_lookahead(&[FROM, TRANSFORM]) {
                 self.parse_create_continual_task_from_transform()
                     .map_parser_err(StatementKind::CreateContinualTask)
+            } else if self.peek_keywords_lookahead(&[FROM, RETAIN]) {
+                self.parse_create_continual_task_from_retain()
+                    .map_parser_err(StatementKind::CreateContinualTask)
             } else {
                 self.parse_create_continual_task()
                     .map_parser_err(StatementKind::CreateContinualTask)
@@ -1903,6 +1906,9 @@ impl<'a> Parser<'a> {
                 self.peek_pos(),
                 "CREATE USER is not supported, for more information consult the documentation at https://materialize.com/docs/sql/create-role/#details"
             ).map_parser_err(StatementKind::CreateRole)
+        } else if self.peek_keywords(&[NETWORK, POLICY]) {
+            self.parse_create_network_policy()
+                .map_parser_err(StatementKind::CreateNetworkPolicy)
         } else {
             let index = self.index;
 
@@ -3604,6 +3610,7 @@ impl<'a> Parser<'a> {
             false => None,
         };
         let in_cluster = self.parse_optional_in_cluster()?;
+        let with_options = self.parse_create_continual_task_with_options()?;
 
         // TODO(ct3): Multiple inputs.
         self.expect_keywords(&[ON, INPUT])?;
@@ -3611,13 +3618,20 @@ impl<'a> Parser<'a> {
         // TODO(ct3): Allow renaming the inserts/deletes so that we can use
         // something as both an "input" and a "reference".
 
-        let with_options = if self.parse_keyword(WITH) {
-            self.expect_token(&Token::LParen)?;
-            let options = self.parse_comma_separated(Parser::parse_continual_task_option)?;
-            self.expect_token(&Token::RParen)?;
-            options
-        } else {
-            vec![]
+        // Also try to parse WITH options in the old location. We never exposed
+        // this to users, so this can be removed once the CI upgrade tests have
+        // moved past these old versions.
+        let legacy_with_options = self.parse_create_continual_task_with_options()?;
+        let with_options = match (!with_options.is_empty(), !legacy_with_options.is_empty()) {
+            (_, false) => with_options,
+            (false, true) => legacy_with_options,
+            (true, true) => {
+                return parser_err!(
+                    self,
+                    self.peek_prev_pos(),
+                    "CREATE CONTINUAL TASK with options in both new and legacy locations"
+                )
+            }
         };
 
         self.expect_keyword(AS)?;
@@ -3674,15 +3688,8 @@ impl<'a> Parser<'a> {
     ) -> Result<Statement<Raw>, ParserError> {
         self.expect_keywords(&[CONTINUAL, TASK])?;
         let name = RawItemName::Name(self.parse_item_name()?);
-
-        let with_options = if self.parse_keyword(WITH) {
-            self.expect_token(&Token::LParen)?;
-            let options = self.parse_comma_separated(Parser::parse_continual_task_option)?;
-            self.expect_token(&Token::RParen)?;
-            options
-        } else {
-            vec![]
-        };
+        let in_cluster = self.parse_optional_in_cluster()?;
+        let with_options = self.parse_create_continual_task_with_options()?;
 
         self.expect_keywords(&[FROM, TRANSFORM])?;
         let input = self.parse_raw_name()?;
@@ -3694,19 +3701,22 @@ impl<'a> Parser<'a> {
 
         let as_of = self.parse_optional_internal_as_of()?;
 
-        // Desugar into a normal CT body.
-        let stmts = vec![ContinualTaskStmt::Insert(InsertStatement {
+        // `INSERT INTO name SELECT * FROM <transform>`
+        let insert = InsertStatement {
             table_name: name.clone(),
             columns: Vec::new(),
             source: InsertSource::Query(transform.clone()),
             returning: Vec::new(),
-        })];
+        };
+
+        // Desugar into a normal CT body.
+        let stmts = vec![ContinualTaskStmt::Insert(insert)];
 
         Ok(Statement::CreateContinualTask(
             CreateContinualTaskStatement {
                 name,
                 columns: None,
-                in_cluster: None,
+                in_cluster,
                 with_options,
                 input,
                 stmts,
@@ -3716,14 +3726,90 @@ impl<'a> Parser<'a> {
         ))
     }
 
+    fn parse_create_continual_task_from_retain(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keywords(&[CONTINUAL, TASK])?;
+        let name = RawItemName::Name(self.parse_item_name()?);
+        let in_cluster = self.parse_optional_in_cluster()?;
+        let with_options = self.parse_create_continual_task_with_options()?;
+
+        self.expect_keywords(&[FROM, RETAIN])?;
+        let input = self.parse_raw_name()?;
+
+        self.expect_keyword(WHILE)?;
+        self.expect_token(&Token::LParen)?;
+        let retain = self.parse_expr()?;
+        self.expect_token(&Token::RParen)?;
+
+        let as_of = self.parse_optional_internal_as_of()?;
+
+        // `INSERT INTO name SELECT * FROM input WHERE <retain>`
+        let insert = InsertStatement {
+            table_name: name.clone(),
+            columns: Vec::new(),
+            source: InsertSource::Query(Query {
+                ctes: CteBlock::Simple(Vec::new()),
+                body: SetExpr::Select(Box::new(Select {
+                    from: vec![TableWithJoins {
+                        relation: TableFactor::Table {
+                            name: input.clone(),
+                            alias: None,
+                        },
+                        joins: Vec::new(),
+                    }],
+                    selection: Some(retain.clone()),
+                    distinct: None,
+                    projection: vec![SelectItem::Wildcard],
+                    group_by: Vec::new(),
+                    having: None,
+                    options: Vec::new(),
+                })),
+                order_by: Vec::new(),
+                limit: None,
+                offset: None,
+            }),
+            returning: Vec::new(),
+        };
+
+        // `DELETE FROM name WHERE NOT <retain>`
+        let delete = DeleteStatement {
+            table_name: name.clone(),
+            alias: None,
+            using: Vec::new(),
+            selection: Some(retain.clone().negate()),
+        };
+
+        // Desugar into a normal CT body.
+        let stmts = vec![
+            ContinualTaskStmt::Insert(insert),
+            ContinualTaskStmt::Delete(delete),
+        ];
+
+        Ok(Statement::CreateContinualTask(
+            CreateContinualTaskStatement {
+                name,
+                columns: None,
+                in_cluster,
+                with_options,
+                input,
+                stmts,
+                as_of,
+                sugar: Some(CreateContinualTaskSugar::Retain { retain }),
+            },
+        ))
+    }
+
     fn parse_materialized_view_option_name(
         &mut self,
     ) -> Result<MaterializedViewOptionName, ParserError> {
-        let option = self.expect_one_of_keywords(&[ASSERT, RETAIN, REFRESH])?;
+        let option = self.expect_one_of_keywords(&[ASSERT, PARTITION, RETAIN, REFRESH])?;
         let name = match option {
             ASSERT => {
                 self.expect_keywords(&[NOT, NULL])?;
                 MaterializedViewOptionName::AssertNotNull
+            }
+            PARTITION => {
+                self.expect_keyword(BY)?;
+                MaterializedViewOptionName::PartitionBy
             }
             RETAIN => {
                 self.expect_keyword(HISTORY)?;
@@ -3796,6 +3882,19 @@ impl<'a> Parser<'a> {
                 )))
             }
             _ => unreachable!(),
+        }
+    }
+
+    fn parse_create_continual_task_with_options(
+        &mut self,
+    ) -> Result<Vec<ContinualTaskOption<Raw>>, ParserError> {
+        if self.parse_keyword(WITH) {
+            self.expect_token(&Token::LParen)?;
+            let options = self.parse_comma_separated(Parser::parse_continual_task_option)?;
+            self.expect_token(&Token::RParen)?;
+            Ok(options)
+        } else {
+            Ok(vec![])
         }
     }
 
@@ -3910,15 +4009,29 @@ impl<'a> Parser<'a> {
 
     fn parse_raw_ident(&mut self) -> Result<RawClusterName, ParserError> {
         if self.consume_token(&Token::LBracket) {
-            let id = match self.next_token() {
-                Some(Token::Ident(id)) => id.into_inner(),
-                Some(Token::Number(n)) => n,
-                _ => return parser_err!(self, self.peek_prev_pos(), "expected id"),
-            };
+            let id = self.parse_raw_ident_str()?;
             self.expect_token(&Token::RBracket)?;
             Ok(RawClusterName::Resolved(id))
         } else {
             Ok(RawClusterName::Unresolved(self.parse_identifier()?))
+        }
+    }
+
+    fn parse_raw_network_policy_name(&mut self) -> Result<RawNetworkPolicyName, ParserError> {
+        if self.consume_token(&Token::LBracket) {
+            let id = self.parse_raw_ident_str()?;
+            self.expect_token(&Token::RBracket)?;
+            Ok(RawNetworkPolicyName::Resolved(id))
+        } else {
+            Ok(RawNetworkPolicyName::Unresolved(self.parse_identifier()?))
+        }
+    }
+
+    fn parse_raw_ident_str(&mut self) -> Result<String, ParserError> {
+        match self.next_token() {
+            Some(Token::Ident(id)) => Ok(id.into_inner()),
+            Some(Token::Number(n)) => Ok(n),
+            _ => parser_err!(self, self.peek_prev_pos(), "expected id"),
         }
     }
 
@@ -4434,6 +4547,19 @@ impl<'a> Parser<'a> {
                     cascade: false,
                 }))
             }
+            ObjectType::NetworkPolicy => {
+                let names = self.parse_comma_separated(|parser| {
+                    Ok(UnresolvedObjectName::NetworkPolicy(
+                        parser.parse_identifier()?,
+                    ))
+                })?;
+                Ok(Statement::DropObjects(DropObjectsStatement {
+                    object_type: ObjectType::NetworkPolicy,
+                    if_exists,
+                    names,
+                    cascade: false,
+                }))
+            }
             ObjectType::Cluster => self.parse_drop_clusters(if_exists),
             ObjectType::ClusterReplica => self.parse_drop_cluster_replicas(if_exists),
             ObjectType::Table
@@ -4522,6 +4648,77 @@ impl<'a> Parser<'a> {
         self.expect_token(&Token::Dot)?;
         let replica = self.parse_identifier()?;
         Ok(QualifiedReplica { cluster, replica })
+    }
+
+    fn parse_alter_network_policy(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let name = self.parse_identifier()?;
+        self.expect_keyword(SET)?;
+        self.expect_token(&Token::LParen)?;
+        let options = self.parse_comma_separated(Parser::parse_network_policy_option)?;
+        self.expect_token(&Token::RParen)?;
+        Ok(Statement::AlterNetworkPolicy(AlterNetworkPolicyStatement {
+            name,
+            options,
+        }))
+    }
+
+    fn parse_create_network_policy(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keywords(&[NETWORK, POLICY])?;
+        let name = self.parse_identifier()?;
+        self.expect_token(&Token::LParen)?;
+        let options = self.parse_comma_separated(Parser::parse_network_policy_option)?;
+        self.expect_token(&Token::RParen)?;
+        Ok(Statement::CreateNetworkPolicy(
+            CreateNetworkPolicyStatement { name, options },
+        ))
+    }
+
+    fn parse_network_policy_option(&mut self) -> Result<NetworkPolicyOption<Raw>, ParserError> {
+        let name = match self.expect_one_of_keywords(&[RULES])? {
+            RULES => NetworkPolicyOptionName::Rules,
+            v => panic!("found unreachable keyword {}", v),
+        };
+        match name {
+            NetworkPolicyOptionName::Rules => self.parse_network_policy_option_rules(),
+        }
+    }
+
+    fn parse_network_policy_option_rules(
+        &mut self,
+    ) -> Result<NetworkPolicyOption<Raw>, ParserError> {
+        let _ = self.consume_token(&Token::Eq);
+        self.expect_token(&Token::LParen)?;
+        let rules = if self.consume_token(&Token::RParen) {
+            vec![]
+        } else {
+            let rules = self.parse_comma_separated(|parser| {
+                let name = parser.parse_identifier()?;
+                parser.expect_token(&Token::LParen)?;
+                let options =
+                    parser.parse_comma_separated(Parser::parse_network_policy_rule_option)?;
+                parser.expect_token(&Token::RParen)?;
+                Ok(NetworkPolicyRuleDefinition { name, options })
+            })?;
+            self.expect_token(&Token::RParen)?;
+            rules
+        };
+        Ok(NetworkPolicyOption {
+            name: NetworkPolicyOptionName::Rules,
+            value: Some(WithOptionValue::NetworkPolicyRules(rules)),
+        })
+    }
+
+    fn parse_network_policy_rule_option(
+        &mut self,
+    ) -> Result<NetworkPolicyRuleOption<Raw>, ParserError> {
+        let name = match self.expect_one_of_keywords(&[ACTION, ADDRESS, DIRECTION])? {
+            ACTION => NetworkPolicyRuleOptionName::Action,
+            ADDRESS => NetworkPolicyRuleOptionName::Address,
+            DIRECTION => NetworkPolicyRuleOptionName::Direction,
+            v => panic!("found unreachable keyword {}", v),
+        };
+        let value = self.parse_optional_option_value()?;
+        Ok(NetworkPolicyRuleOption { name, value })
     }
 
     fn parse_create_table(&mut self) -> Result<Statement<Raw>, ParserError> {
@@ -5160,6 +5357,9 @@ impl<'a> Parser<'a> {
                 }))
             }
             ObjectType::Schema => self.parse_alter_schema(object_type),
+            ObjectType::NetworkPolicy => self
+                .parse_alter_network_policy()
+                .map_parser_err(StatementKind::AlterNetworkPolicy),
             ObjectType::Func | ObjectType::Subsource => parser_err!(
                 self,
                 self.peek_prev_pos(),
@@ -6699,6 +6899,9 @@ impl<'a> Parser<'a> {
             }
             ObjectType::Database => UnresolvedObjectName::Database(self.parse_database_name()?),
             ObjectType::Schema => UnresolvedObjectName::Schema(self.parse_schema_name()?),
+            ObjectType::NetworkPolicy => {
+                UnresolvedObjectName::NetworkPolicy(self.parse_identifier()?)
+            }
         })
     }
 
@@ -7467,6 +7670,7 @@ impl<'a> Parser<'a> {
                 ObjectType::Secret => ShowObjectType::Secret,
                 ObjectType::Connection => ShowObjectType::Connection,
                 ObjectType::Cluster => ShowObjectType::Cluster,
+                ObjectType::NetworkPolicy => ShowObjectType::NetworkPolicy,
                 ObjectType::MaterializedView => {
                     let in_cluster = self.parse_optional_in_cluster()?;
                     ShowObjectType::MaterializedView { in_cluster }
@@ -8831,7 +9035,8 @@ impl<'a> Parser<'a> {
             | ObjectType::Secret
             | ObjectType::Connection
             | ObjectType::Database
-            | ObjectType::Schema => Ok(object_type),
+            | ObjectType::Schema
+            | ObjectType::NetworkPolicy => Ok(object_type),
         }
     }
 
@@ -8855,6 +9060,7 @@ impl<'a> Parser<'a> {
                 SCHEMA,
                 FUNCTION,
                 CONTINUAL,
+                NETWORK,
             ])? {
                 TABLE => ObjectType::Table,
                 VIEW => ObjectType::View,
@@ -8888,6 +9094,13 @@ impl<'a> Parser<'a> {
                         return Err(e);
                     }
                     ObjectType::ContinualTask
+                }
+                NETWORK => {
+                    if let Err(e) = self.expect_keyword(POLICY) {
+                        self.prev_token();
+                        return Err(e);
+                    }
+                    ObjectType::NetworkPolicy
                 }
                 _ => unreachable!(),
             },
@@ -8965,6 +9178,7 @@ impl<'a> Parser<'a> {
                 CONNECTIONS,
                 DATABASES,
                 SCHEMAS,
+                POLICIES,
             ])? {
                 TABLES => ObjectType::Table,
                 VIEWS => ObjectType::View,
@@ -8992,6 +9206,7 @@ impl<'a> Parser<'a> {
                 CONNECTIONS => ObjectType::Connection,
                 DATABASES => ObjectType::Database,
                 SCHEMAS => ObjectType::Schema,
+                POLICIES => ObjectType::NetworkPolicy,
                 _ => unreachable!(),
             },
         )
@@ -9018,6 +9233,7 @@ impl<'a> Parser<'a> {
                 SCHEMAS,
                 SUBSOURCES,
                 CONTINUAL,
+                NETWORK,
             ])? {
                 TABLES => ObjectType::Table,
                 VIEWS => ObjectType::View,
@@ -9051,6 +9267,14 @@ impl<'a> Parser<'a> {
                 CONTINUAL => {
                     if self.parse_keyword(TASKS) {
                         ObjectType::ContinualTask
+                    } else {
+                        self.prev_token();
+                        return None;
+                    }
+                }
+                NETWORK => {
+                    if self.parse_keyword(POLICIES) {
+                        ObjectType::NetworkPolicy
                     } else {
                         self.prev_token();
                         return None;
@@ -9160,6 +9384,7 @@ impl<'a> Parser<'a> {
                 CREATEROLE,
                 CREATEDB,
                 CREATECLUSTER,
+                CREATENETWORKPOLICY,
             ])? {
                 INSERT => Privilege::INSERT,
                 SELECT => Privilege::SELECT,
@@ -9170,6 +9395,7 @@ impl<'a> Parser<'a> {
                 CREATEROLE => Privilege::CREATEROLE,
                 CREATEDB => Privilege::CREATEDB,
                 CREATECLUSTER => Privilege::CREATECLUSTER,
+                CREATENETWORKPOLICY => Privilege::CREATENETWORKPOLICY,
                 _ => unreachable!(),
             },
         )
@@ -9236,6 +9462,7 @@ impl<'a> Parser<'a> {
             SCHEMA,
             CLUSTER,
             CONTINUAL,
+            NETWORK,
         ])? {
             TABLE => {
                 let name = self.parse_raw_name()?;
@@ -9307,6 +9534,11 @@ impl<'a> Parser<'a> {
                 self.expect_keyword(TASK)?;
                 let name = self.parse_raw_name()?;
                 CommentObjectType::ContinualTask { name }
+            }
+            NETWORK => {
+                self.expect_keyword(POLICY)?;
+                let name = self.parse_raw_network_policy_name()?;
+                CommentObjectType::NetworkPolicy { name }
             }
             _ => unreachable!(),
         };

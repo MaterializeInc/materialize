@@ -9,21 +9,25 @@
 
 use std::collections::BTreeMap;
 use std::iter;
+use std::str::FromStr;
 use std::sync::LazyLock;
 use std::time::Duration;
 
+use ipnet::IpNet;
 use itertools::max;
 use mz_audit_log::{CreateOrDropClusterReplicaReasonV1, EventV1, VersionedEvent};
 use mz_controller::clusters::ReplicaLogging;
-use mz_controller_types::{is_cluster_size_v2, ClusterId, ReplicaId};
+use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::collections::HashSet;
 use mz_ore::now::EpochMillis;
 use mz_pgrepr::oid::{
-    FIRST_USER_OID, ROLE_PUBLIC_OID, SCHEMA_INFORMATION_SCHEMA_OID, SCHEMA_MZ_CATALOG_OID,
-    SCHEMA_MZ_CATALOG_UNSTABLE_OID, SCHEMA_MZ_INTERNAL_OID, SCHEMA_MZ_INTROSPECTION_OID,
-    SCHEMA_MZ_UNSAFE_OID, SCHEMA_PG_CATALOG_OID,
+    FIRST_USER_OID, NETWORK_POLICIES_DEFAULT_POLICY_OID, ROLE_PUBLIC_OID,
+    SCHEMA_INFORMATION_SCHEMA_OID, SCHEMA_MZ_CATALOG_OID, SCHEMA_MZ_CATALOG_UNSTABLE_OID,
+    SCHEMA_MZ_INTERNAL_OID, SCHEMA_MZ_INTROSPECTION_OID, SCHEMA_MZ_UNSAFE_OID,
+    SCHEMA_PG_CATALOG_OID,
 };
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
+use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
 use mz_sql::catalog::{
     DefaultPrivilegeAclItem, DefaultPrivilegeObject, ObjectType, RoleAttributes, RoleMembership,
@@ -32,6 +36,7 @@ use mz_sql::catalog::{
 use mz_sql::names::{
     DatabaseId, ObjectId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier, PUBLIC_ROLE_NAME,
 };
+use mz_sql::plan::{NetworkPolicyRule, PolicyAddress};
 use mz_sql::rbac;
 use mz_sql::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID};
 
@@ -42,8 +47,8 @@ use crate::durable::{
     DefaultPrivilege, ReplicaConfig, ReplicaLocation, Role, Schema, Transaction,
     AUDIT_LOG_ID_ALLOC_KEY, CATALOG_CONTENT_VERSION_KEY, DATABASE_ID_ALLOC_KEY, OID_ALLOC_KEY,
     SCHEMA_ID_ALLOC_KEY, STORAGE_USAGE_ID_ALLOC_KEY, SYSTEM_CLUSTER_ID_ALLOC_KEY,
-    SYSTEM_REPLICA_ID_ALLOC_KEY, USER_CLUSTER_ID_ALLOC_KEY, USER_REPLICA_ID_ALLOC_KEY,
-    USER_ROLE_ID_ALLOC_KEY,
+    SYSTEM_REPLICA_ID_ALLOC_KEY, USER_CLUSTER_ID_ALLOC_KEY, USER_NETWORK_POLICY_ID_ALLOC_KEY,
+    USER_REPLICA_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
 };
 
 /// The key within the "config" Collection that stores the version of the catalog.
@@ -95,6 +100,31 @@ pub const MZ_CATALOG_UNSTABLE_SCHEMA_ID: u64 = 7;
 pub const MZ_INTROSPECTION_SCHEMA_ID: u64 = 8;
 
 const DEFAULT_ALLOCATOR_ID: u64 = 1;
+
+pub const DEFAULT_USER_NETWORK_POLICY_ID: NetworkPolicyId = NetworkPolicyId::User(1);
+pub const DEFAULT_USER_NETWORK_POLICY_NAME: &str = "default";
+pub const DEFAULT_USER_NETWORK_POLICY_RULES: LazyLock<
+    Vec<(
+        &str,
+        mz_sql::plan::NetworkPolicyRuleAction,
+        mz_sql::plan::NetworkPolicyRuleDirection,
+        &str,
+    )>,
+> = LazyLock::new(|| {
+    vec![(
+        "open_ingress",
+        mz_sql::plan::NetworkPolicyRuleAction::Allow,
+        mz_sql::plan::NetworkPolicyRuleDirection::Ingress,
+        "0.0.0.0/0",
+    )]
+});
+
+static DEFAULT_USER_NETWORK_POLICY_PRIVILEGES: LazyLock<Vec<MzAclItem>> = LazyLock::new(|| {
+    vec![rbac::owner_privilege(
+        ObjectType::NetworkPolicy,
+        MZ_SYSTEM_ROLE_ID,
+    )]
+});
 
 static SYSTEM_SCHEMA_PRIVILEGES: LazyLock<Vec<MzAclItem>> = LazyLock::new(|| {
     vec![
@@ -227,6 +257,10 @@ pub(crate) async fn initialize(
         ),
         (
             SYSTEM_REPLICA_ID_ALLOC_KEY.to_string(),
+            DEFAULT_ALLOCATOR_ID,
+        ),
+        (
+            USER_NETWORK_POLICY_ID_ALLOC_KEY.to_string(),
             DEFAULT_ALLOCATOR_ID,
         ),
         (AUDIT_LOG_ID_ALLOC_KEY.to_string(), DEFAULT_ALLOCATOR_ID),
@@ -545,13 +579,47 @@ pub(crate) async fn initialize(
         });
     };
 
+    tx.insert_network_policy(
+        DEFAULT_USER_NETWORK_POLICY_ID,
+        DEFAULT_USER_NETWORK_POLICY_NAME.to_string(),
+        DEFAULT_USER_NETWORK_POLICY_RULES
+            .clone()
+            .into_iter()
+            .map(|(name, action, direction, ip_str)| NetworkPolicyRule {
+                name: name.to_string(),
+                action: action.clone(),
+                direction: direction.clone(),
+                address: PolicyAddress(
+                    IpNet::from_str(ip_str).expect("default policy must provide valid ip"),
+                ),
+            })
+            .collect::<Vec<NetworkPolicyRule>>(),
+        DEFAULT_USER_NETWORK_POLICY_PRIVILEGES.clone(),
+        MZ_SYSTEM_ROLE_ID,
+        NETWORK_POLICIES_DEFAULT_POLICY_OID,
+    )?;
+    // We created a network policy with a prefined ID user(1) and OID. We need
+    // to increment the id alloc key. It should be safe to assume that there's
+    // no user(1), as a sanity check, we'll assert this is the case.
+    let id = tx.get_and_increment_id(USER_NETWORK_POLICY_ID_ALLOC_KEY.to_string())?;
+    assert!(DEFAULT_USER_NETWORK_POLICY_ID == NetworkPolicyId::User(id));
+
+    audit_events.extend([(
+        mz_audit_log::EventType::Create,
+        mz_audit_log::ObjectType::NetworkPolicy,
+        mz_audit_log::EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
+            id: DEFAULT_USER_NETWORK_POLICY_ID.to_string(),
+            name: DEFAULT_USER_NETWORK_POLICY_NAME.to_string(),
+        }),
+    )]);
+
     tx.insert_user_cluster(
         DEFAULT_USER_CLUSTER_ID,
         DEFAULT_USER_CLUSTER_NAME,
         Vec::new(),
         MZ_SYSTEM_ROLE_ID,
         cluster_privileges,
-        default_cluster_config(options),
+        default_cluster_config(options)?,
         &HashSet::new(),
     )?;
     audit_events.extend([
@@ -574,6 +642,7 @@ pub(crate) async fn initialize(
             }),
         ),
     ]);
+
     // Optionally add a privilege for the bootstrap role.
     if let Some(role) = &bootstrap_role {
         let role_id: RoleId = role.id.clone();
@@ -596,7 +665,7 @@ pub(crate) async fn initialize(
         DEFAULT_USER_CLUSTER_ID,
         DEFAULT_USER_REPLICA_ID,
         DEFAULT_USER_REPLICA_NAME,
-        default_replica_config(options),
+        default_replica_config(options)?,
         MZ_SYSTEM_ROLE_ID,
     )?;
     audit_events.push((
@@ -608,7 +677,13 @@ pub(crate) async fn initialize(
             replica_name: DEFAULT_USER_REPLICA_NAME.to_string(),
             replica_id: Some(DEFAULT_USER_REPLICA_ID.to_string()),
             logical_size: options.default_cluster_replica_size.to_string(),
-            disk: is_cluster_size_v2(&options.default_cluster_replica_size),
+            disk: {
+                let cluster_size = options.default_cluster_replica_size.to_string();
+                let cluster_allocation = options
+                    .cluster_replica_size_map
+                    .get_allocation_by_name(&cluster_size)?;
+                cluster_allocation.is_cc
+            },
             billed_as: None,
             internal: false,
             reason: CreateOrDropClusterReplicaReasonV1::System,
@@ -684,31 +759,39 @@ pub fn resolve_system_schema(name: &str) -> &Schema {
 }
 
 /// Defines the default config for a Cluster.
-fn default_cluster_config(args: &BootstrapArgs) -> ClusterConfig {
-    ClusterConfig {
+fn default_cluster_config(args: &BootstrapArgs) -> Result<ClusterConfig, CatalogError> {
+    let cluster_size = args.default_cluster_replica_size.to_string();
+    let cluster_allocation = args
+        .cluster_replica_size_map
+        .get_allocation_by_name(&cluster_size)?;
+    Ok(ClusterConfig {
         variant: ClusterVariant::Managed(ClusterVariantManaged {
-            size: args.default_cluster_replica_size.to_string(),
+            size: cluster_size,
             replication_factor: 1,
             availability_zones: vec![],
             logging: ReplicaLogging {
                 log_logging: false,
                 interval: Some(Duration::from_secs(1)),
             },
-            disk: is_cluster_size_v2(&args.default_cluster_replica_size),
+            disk: cluster_allocation.is_cc,
             optimizer_feature_overrides: Default::default(),
             schedule: Default::default(),
         }),
         workload_class: None,
-    }
+    })
 }
 
 /// Defines the default config for a Cluster Replica.
-fn default_replica_config(args: &BootstrapArgs) -> ReplicaConfig {
-    ReplicaConfig {
+fn default_replica_config(args: &BootstrapArgs) -> Result<ReplicaConfig, CatalogError> {
+    let cluster_size = args.default_cluster_replica_size.to_string();
+    let cluster_allocation = args
+        .cluster_replica_size_map
+        .get_allocation_by_name(&cluster_size)?;
+    Ok(ReplicaConfig {
         location: ReplicaLocation::Managed {
-            size: args.default_cluster_replica_size.to_string(),
+            size: cluster_size,
             availability_zone: None,
-            disk: is_cluster_size_v2(&args.default_cluster_replica_size),
+            disk: cluster_allocation.is_cc,
             internal: false,
             billed_as: None,
             pending: false,
@@ -717,5 +800,5 @@ fn default_replica_config(args: &BootstrapArgs) -> ReplicaConfig {
             log_logging: false,
             interval: Some(Duration::from_secs(1)),
         },
-    }
+    })
 }

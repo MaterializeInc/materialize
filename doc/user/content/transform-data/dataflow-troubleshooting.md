@@ -381,14 +381,15 @@ ORDER BY mas.size DESC;
  16318559 | ArrangeBy[[Column(0)]]-errors   | Dataflow: materialize.public.num_bids_idx |       0 | 0 bytes
 ```
 
-We've also bundled an interactive, web-based memory usage visualization tool to
-aid in debugging. The memory visualization tool shows all user-created
-arrangements, grouped by dataflow. The amount of memory used by Materialize
-should correlate with the number of arrangement records that are displayed by
-either the visual interface or the SQL queries.
+In the [Materialize Console](https://console.materialize.com),
 
-You can access the memory usage visualization for your Materialize region at
-`https://<region host>/memory`.
+- The [**Cluster Overview**](/console/clusters/) page displays the cluster
+  resource utilization for a selected cluster as well as the resource intensive
+  objects in the cluster.
+
+- The [**Environment Overview**](/console/monitoring/) page displays the
+  resource utilization for all your clusters. You can select a specific cluster
+  to view its **Overview** page.
 
 ## Is work distributed equally across workers?
 

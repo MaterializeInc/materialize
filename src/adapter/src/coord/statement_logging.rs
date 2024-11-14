@@ -739,7 +739,12 @@ impl Coordinator {
                 .inner()
                 .expect("Every statement runs in an explicit or implicit transaction")
                 .id,
-            mz_version: self.catalog().state().config().build_info.human_version(),
+            mz_version: self
+                .catalog()
+                .state()
+                .config()
+                .build_info
+                .human_version(None),
             // These are not known yet; we'll fill them in later.
             cluster_id: None,
             cluster_name: None,

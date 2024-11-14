@@ -32,7 +32,7 @@ use mz_postgres_util::desc::PostgresTableDesc;
 use mz_postgres_util::replication::WalLevel;
 use mz_postgres_util::tunnel::PostgresFlavor;
 use mz_proto::RustType;
-use mz_repr::{strconv, GlobalId, RelationDesc, RelationVersionSelector, Timestamp};
+use mz_repr::{strconv, CatalogItemId, RelationDesc, RelationVersionSelector, Timestamp};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit::{visit_function, Visit};
 use mz_sql_parser::ast::visit_mut::{visit_expr_mut, VisitMut};
@@ -295,17 +295,16 @@ pub async fn purify_statement(
 /// underlying materialized view).
 pub(crate) fn purify_create_sink_avro_doc_on_options(
     catalog: &dyn SessionCatalog,
-    from_id: GlobalId,
+    from_id: CatalogItemId,
     format: &mut Option<FormatSpecifier<Aug>>,
 ) -> Result<(), PlanError> {
     // Collect all objects referenced by the sink.
     let from = catalog.get_item(&from_id);
     let object_ids = from
         .references()
-        .0
-        .iter()
-        .chain_one(&from.id())
+        .items()
         .copied()
+        .chain_one(from.id())
         .collect::<Vec<_>>();
 
     // Collect all Avro formats that use a schema registry, as well as a set of
@@ -337,8 +336,12 @@ pub(crate) fn purify_create_sink_avro_doc_on_options(
             })
             .collect::<BTreeSet<_>>();
 
+        // Adding existing comments if not already provided by user
         for object_id in &object_ids {
-            let item = catalog.get_item(object_id);
+            // Always add comments to the latest version of the item.
+            let item = catalog
+                .get_item(object_id)
+                .at_version(RelationVersionSelector::Latest);
             let full_name = catalog.resolve_full_name(item.name());
             let full_resolved_name = ResolvedItemName::Item {
                 id: *object_id,
@@ -2434,7 +2437,7 @@ pub fn purify_create_materialized_view_options(
     // - added references to `mz_timestamp`;
     // - removed references to `mz_now`.
     if introduced_mz_timestamp {
-        resolved_ids.0.insert(mz_timestamp_id);
+        resolved_ids.add_item(mz_timestamp_id);
     }
     // Even though we always remove `mz_now()` from the `with_options`, there might be `mz_now()`
     // remaining in the main query expression of the MV, so let's visit the entire statement to look
@@ -2442,7 +2445,7 @@ pub fn purify_create_materialized_view_options(
     let mut visitor = ExprContainsTemporalVisitor::new();
     visitor.visit_create_materialized_view_statement(cmvs);
     if !visitor.contains_temporal {
-        resolved_ids.0.remove(&mz_now_id);
+        resolved_ids.remove_item(&mz_now_id);
     }
 }
 

@@ -13,6 +13,6 @@ name: materialize-operator
 description: Materialize Kubernetes Operator Helm Chart
 type: application
 version: 0.1.0
-appVersion: "0.1.0"
+appVersion: "v0.125.0-dev.0--pr.gd3deb07aa502a84ebd024517344f0aa861f857df"
 icon: https://materialize.com/favicon.ico
 home: https://materialize.com

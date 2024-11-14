@@ -53,6 +53,7 @@ use mz_repr::{Datum, Diff, GlobalId, Row, TimestampManipulation};
 use mz_storage_client::controller::{IntrospectionType, StorageController, StorageWriteOp};
 use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::read_policy::ReadPolicy;
+use mz_storage_types::time_dependence::{TimeDependence, TimeDependenceError};
 use prometheus::proto::LabelPair;
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
@@ -88,7 +89,7 @@ type StorageCollections<T> = Arc<
 
 /// A composite trait for types that serve as timestamps in the Compute Controller.
 /// `Into<Datum<'a>>` is needed for writing timestamps to introspection collections.
-pub trait ComputeControllerTimestamp: TimestampManipulation + Into<Datum<'static>> {}
+pub trait ComputeControllerTimestamp: TimestampManipulation + Into<Datum<'static>> + Sync {}
 
 impl ComputeControllerTimestamp for mz_repr::Timestamp {}
 
@@ -778,7 +779,7 @@ where
     pub fn create_dataflow(
         &mut self,
         instance_id: ComputeInstanceId,
-        dataflow: DataflowDescription<mz_compute_types::plan::Plan<T>, (), T>,
+        mut dataflow: DataflowDescription<mz_compute_types::plan::Plan<T>, (), T>,
         subscribe_target_replica: Option<ReplicaId>,
     ) -> Result<(), DataflowCreationError> {
         use DataflowCreationError::*;
@@ -820,6 +821,9 @@ where
                 return Err(CollectionMissing(id));
             }
         }
+        let time_dependence = self
+            .determine_time_dependence(instance_id, &dataflow)
+            .expect("must exist");
 
         let instance = self.instance_mut(instance_id).expect("validated");
 
@@ -830,10 +834,13 @@ where
                 write_only: dataflow.sink_exports.contains_key(&id),
                 compute_dependencies: dataflow.imported_index_ids().collect(),
                 shared: shared.clone(),
+                time_dependence: time_dependence.clone(),
             };
             instance.collections.insert(id, collection);
             shared_collection_state.insert(id, shared);
         }
+
+        dataflow.time_dependence = time_dependence;
 
         instance.call(move |i| {
             i.create_dataflow(
@@ -991,6 +998,51 @@ where
         Ok(read_hold)
     }
 
+    /// Determine the time dependence for a dataflow.
+    fn determine_time_dependence(
+        &self,
+        instance_id: ComputeInstanceId,
+        dataflow: &DataflowDescription<mz_compute_types::plan::Plan<T>, (), T>,
+    ) -> Result<Option<TimeDependence>, TimeDependenceError> {
+        // TODO(ct3): Continual tasks don't support replica expiration
+        let is_continual_task = dataflow.continual_task_ids().next().is_some();
+        if is_continual_task {
+            return Ok(None);
+        }
+
+        let instance = self
+            .instance(instance_id)
+            .map_err(|err| TimeDependenceError::InstanceMissing(err.0))?;
+        let mut time_dependencies = Vec::new();
+
+        for id in dataflow.imported_index_ids() {
+            let dependence = instance
+                .get_time_dependence(id)
+                .map_err(|err| TimeDependenceError::CollectionMissing(err.0))?;
+            time_dependencies.push(dependence);
+        }
+
+        'source: for id in dataflow.imported_source_ids() {
+            // We first check whether the id is backed by a compute object, in which case we use
+            // the time dependence we know. This is true for materialized views, continual tasks,
+            // etc.
+            for instance in self.instances.values() {
+                if let Ok(dependence) = instance.get_time_dependence(id) {
+                    time_dependencies.push(dependence);
+                    continue 'source;
+                }
+            }
+
+            // Not a compute object: Consult the storage collections controller.
+            time_dependencies.push(self.storage_collections.determine_time_dependence(id)?);
+        }
+
+        Ok(TimeDependence::merge(
+            time_dependencies,
+            dataflow.refresh_schedule.as_ref(),
+        ))
+    }
+
     #[mz_ore::instrument(level = "debug")]
     fn record_introspection_updates(&mut self, storage: &mut dyn StorageController<Timestamp = T>) {
         use IntrospectionType::*;
@@ -1040,7 +1092,6 @@ where
         // Perform periodic maintenance work.
         if self.maintenance_scheduled {
             self.maintain(storage);
-            self.maintenance_ticker.reset();
             self.maintenance_scheduled = false;
         }
 
@@ -1147,6 +1198,14 @@ impl<T: ComputeControllerTimestamp> InstanceState<T> {
         Ok(hold)
     }
 
+    /// Return the stored time dependence for a collection.
+    fn get_time_dependence(
+        &self,
+        id: GlobalId,
+    ) -> Result<Option<TimeDependence>, CollectionMissing> {
+        Ok(self.collection(id)?.time_dependence.clone())
+    }
+
     /// Returns the [`InstanceState`] formatted as JSON.
     pub async fn dump(&self) -> Result<serde_json::Value, anyhow::Error> {
         // Destructure `self` here so we don't forget to consider dumping newly added fields.
@@ -1186,6 +1245,9 @@ struct Collection<T> {
     write_only: bool,
     compute_dependencies: BTreeSet<GlobalId>,
     shared: SharedCollectionState<T>,
+    /// The computed time dependence for this collection. None indicates no specific information,
+    /// a value describes how the collection relates to wall-clock time.
+    time_dependence: Option<TimeDependence>,
 }
 
 impl<T: Timestamp> Collection<T> {
@@ -1195,6 +1257,7 @@ impl<T: Timestamp> Collection<T> {
             write_only: false,
             compute_dependencies: Default::default(),
             shared: SharedCollectionState::new(as_of),
+            time_dependence: Some(TimeDependence::default()),
         }
     }
 

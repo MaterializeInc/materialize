@@ -72,6 +72,7 @@ pub fn auto_run_on_catalog_server<'a, 's, 'p>(
         | Plan::CreateDatabase(_)
         | Plan::CreateSchema(_)
         | Plan::CreateRole(_)
+        | Plan::CreateNetworkPolicy(_)
         | Plan::CreateCluster(_)
         | Plan::CreateClusterReplica(_)
         | Plan::CreateContinualTask(_)
@@ -106,6 +107,7 @@ pub fn auto_run_on_catalog_server<'a, 's, 'p>(
         | Plan::ExplainPushdown(_)
         | Plan::ExplainSinkSchema(_)
         | Plan::Insert(_)
+        | Plan::AlterNetworkPolicy(_)
         | Plan::AlterNoop(_)
         | Plan::AlterClusterRename(_)
         | Plan::AlterClusterSwap(_)
@@ -155,7 +157,10 @@ pub fn auto_run_on_catalog_server<'a, 's, 'p>(
     }
 
     // These dependencies are just existing dataflows that are referenced in the plan.
-    let mut depends_on = depends_on.into_iter().peekable();
+    let mut depends_on = depends_on
+        .into_iter()
+        .map(|gid| catalog.resolve_item_id(&gid))
+        .peekable();
     let has_dependencies = depends_on.peek().is_some();
 
     // Make sure we only depend on the system catalog, and nothing we depend on is a
@@ -220,7 +225,7 @@ pub fn check_cluster_restrictions(
     // Collect any items that are not allowed to be run on the catalog server cluster.
     let unallowed_dependents: SmallVec<[String; 2]> = depends_on
         .filter_map(|id| {
-            let item = catalog.get_item(&id);
+            let item = catalog.get_item_by_global_id(&id);
             let full_name = catalog.resolve_full_name(item.name());
 
             if !is_system_schema(&full_name.schema) {

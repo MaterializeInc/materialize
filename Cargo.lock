@@ -1473,7 +1473,8 @@ dependencies = [
 [[package]]
 name = "columnation"
 version = "0.1.0"
-source = "git+https://github.com/MaterializeInc/columnation.git#2cd6d86e5ffabf98aef5cbef09a57f515eae7c55"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "21ca68e419cae36821f2e1c9d62a25de900aad72e96b79c6f76eb47c65816d25"
 dependencies = [
  "paste",
 ]
@@ -2038,10 +2039,22 @@ dependencies = [
 
 [[package]]
 name = "differential-dataflow"
-version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/differential-dataflow.git#ea2e3e13bbd5cdd31f60f091a3625d954d7347f8"
+version = "0.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c437c8688c813b36da4823af3562607dca0bface950206afccec6bb8ef7f762b"
 dependencies = [
  "fnv",
+ "serde",
+ "timely",
+]
+
+[[package]]
+name = "differential-dogs3"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a4c2c8d32c7fc5ac4f0412d45ec8b019478a69e82e570f8f892156ae542d95e"
+dependencies = [
+ "differential-dataflow",
  "serde",
  "timely",
 ]
@@ -2089,17 +2102,6 @@ name = "doc-comment"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "923dea538cea0aa3025e8685b20d6ee21ef99c4f77e954a30febbaac5ec73a97"
-
-[[package]]
-name = "dogsdogsdogs"
-version = "0.1.0"
-source = "git+https://github.com/MaterializeInc/differential-dataflow.git#ea2e3e13bbd5cdd31f60f091a3625d954d7347f8"
-dependencies = [
- "differential-dataflow",
- "serde",
- "serde_derive",
- "timely",
-]
 
 [[package]]
 name = "domain"
@@ -2393,12 +2395,6 @@ dependencies = [
  "bit-set",
  "regex",
 ]
-
-[[package]]
-name = "fast-float"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "95765f67b4b18863968b4a1bd5bb576f732b29a4a28c7cd84c09fa3e2875f33c"
 
 [[package]]
 name = "fastrand"
@@ -4344,7 +4340,7 @@ dependencies = [
 
 [[package]]
 name = "mz-balancerd"
-version = "0.123.0-dev.0"
+version = "0.125.0-dev.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4420,6 +4416,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "base64 0.13.1",
+ "bincode",
  "bytes",
  "bytesize",
  "chrono",
@@ -4442,6 +4439,7 @@ dependencies = [
  "mz-controller",
  "mz-controller-types",
  "mz-durable-cache",
+ "mz-dyncfg",
  "mz-expr",
  "mz-orchestrator",
  "mz-ore",
@@ -4486,7 +4484,7 @@ dependencies = [
 
 [[package]]
 name = "mz-catalog-debug"
-version = "0.123.0-dev.0"
+version = "0.125.0-dev.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -4565,6 +4563,7 @@ dependencies = [
  "kube",
  "mz-ore",
  "mz-repr",
+ "rand",
  "schemars",
  "semver",
  "serde",
@@ -4641,7 +4640,7 @@ dependencies = [
 
 [[package]]
 name = "mz-clusterd"
-version = "0.123.0-dev.0"
+version = "0.125.0-dev.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -4690,7 +4689,7 @@ dependencies = [
  "crossbeam-channel",
  "dec",
  "differential-dataflow",
- "dogsdogsdogs",
+ "differential-dogs3",
  "futures",
  "itertools 0.10.5",
  "lgalloc",
@@ -4921,7 +4920,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "0.123.0-dev.0"
+version = "0.125.0-dev.0"
 dependencies = [
  "anyhow",
  "askama",
@@ -5559,7 +5558,7 @@ dependencies = [
 
 [[package]]
 name = "mz-orchestratord"
-version = "0.120.0-dev.0"
+version = "0.125.0-dev.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5721,7 +5720,7 @@ dependencies = [
 
 [[package]]
 name = "mz-persist-client"
-version = "0.123.0-dev.0"
+version = "0.125.0-dev.0"
 dependencies = [
  "anyhow",
  "arrayvec 0.7.4",
@@ -6088,7 +6087,6 @@ dependencies = [
  "dec",
  "differential-dataflow",
  "enum-kinds",
- "fast-float",
  "flatcontainer",
  "hex",
  "insta",
@@ -6354,7 +6352,6 @@ dependencies = [
  "mz-storage-types",
  "mz-tracing",
  "mz-txn-wal",
- "num_enum",
  "paste",
  "prometheus",
  "proptest",
@@ -6768,7 +6765,6 @@ dependencies = [
  "mz-tls-util",
  "mz-tracing",
  "native-tls",
- "num_enum",
  "openssl",
  "proptest",
  "proptest-derive",
@@ -6808,7 +6804,7 @@ dependencies = [
 
 [[package]]
 name = "mz-testdrive"
-version = "0.123.0-dev.0"
+version = "0.125.0-dev.0"
 dependencies = [
  "anyhow",
  "arrow",
@@ -6901,6 +6897,7 @@ dependencies = [
  "serde",
  "timely",
  "tokio",
+ "tracing",
  "uuid",
  "workspace-hack",
 ]
@@ -9785,8 +9782,9 @@ dependencies = [
 
 [[package]]
 name = "timely"
-version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#14e2e994b99905e18dca4852e57d153a81f9f02e"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7a4794ec27c59ae109928ce1273a16633d324268bca4538c7e40e6c4608b40a3"
 dependencies = [
  "bincode",
  "crossbeam-channel",
@@ -9802,14 +9800,15 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#14e2e994b99905e18dca4852e57d153a81f9f02e"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1f8a545b35b019b8b63afb913214695f542cbbf39032c7b7349e1a15b7f2a2cf"
 
 [[package]]
 name = "timely_communication"
-version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#14e2e994b99905e18dca4852e57d153a81f9f02e"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0dad90c2eb029d4ed8d8c7f26c326b1ec86a5104d38e3ec94fdefdd995a944a5"
 dependencies = [
- "bincode",
  "byteorder",
  "crossbeam-channel",
  "getopts",
@@ -9821,7 +9820,8 @@ dependencies = [
 [[package]]
 name = "timely_container"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#14e2e994b99905e18dca4852e57d153a81f9f02e"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2ddfa4639c9390c6fac4ff66e47aa1bcfbc5f5bba6d520d5a7c55978165e7b14"
 dependencies = [
  "columnation",
  "flatcontainer",
@@ -9830,8 +9830,9 @@ dependencies = [
 
 [[package]]
 name = "timely_logging"
-version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/timely-dataflow.git#14e2e994b99905e18dca4852e57d153a81f9f02e"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b73a034d62792b507397701ee660001c8ba3e9dbffce29bc7a25319a36ebaa86"
 
 [[package]]
 name = "tiny-keccak"
