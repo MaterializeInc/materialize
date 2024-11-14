@@ -101,7 +101,7 @@ impl CatalogState {
         local_expression_cache: &mut LocalExpressionCache,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
         let mut builtin_table_updates = Vec::with_capacity(updates.len());
-        let updates = sort_updates(updates, &self);
+        let updates = sort_updates(updates, self);
 
         let mut groups: Vec<Vec<_>> = Vec::new();
         for (_, updates) in &updates.into_iter().group_by(|update| update.ts) {
@@ -1888,7 +1888,7 @@ fn sort_updates_inner(updates: Vec<StateUpdate>, state: &CatalogState) -> Vec<St
         for (item, _, _) in &item_updates {
             item_id_lookup
                 .entry(item.schema_id)
-                .or_insert_with(|| HashMap::new())
+                .or_insert_with(HashMap::new)
                 .insert(item.name.clone(), item.global_id);
         }
 
@@ -1911,7 +1911,7 @@ fn sort_updates_inner(updates: Vec<StateUpdate>, state: &CatalogState) -> Vec<St
                             name.0[1].as_str(),
                             name.0[2].as_str(),
                         ),
-                        2 => (None, name.0[1].as_str(), name.0[2].as_str()),
+                        2 => (None, name.0[0].as_str(), name.0[1].as_str()),
                         _ => panic!("Invalid item name: {name:?}"),
                     };
                     let schema = state
