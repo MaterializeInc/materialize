@@ -38,6 +38,9 @@ spec:
         - "--startup-log-filter={{ .Values.operator.args.startupLogFilter }}"
         - "--cloud-provider={{ .Values.operator.args.cloudProvider }}"
         - "--region={{ .Values.operator.args.region }}"
+        {{- range $key, $value := include "materialize-operator.selectorLabels" . | fromYaml }}
+        - "--orchestratord-pod-selector-labels={{ $key }}={{ $value }}"
+        {{- end }}
         {{- if .Values.operator.args.awsAccountID }}
         - "--aws-account-id={{ .Values.operator.args.awsAccountID }}"
         {{- end }}

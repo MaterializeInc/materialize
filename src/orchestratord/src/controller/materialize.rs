@@ -60,6 +60,8 @@ pub struct Args {
     enable_security_context: bool,
 
     #[clap(long)]
+    orchestratord_pod_selector_labels: Vec<KeyValueArg<String, String>>,
+    #[clap(long)]
     environmentd_node_selector: Vec<KeyValueArg<String, String>>,
     #[clap(long)]
     clusterd_node_selector: Vec<KeyValueArg<String, String>>,

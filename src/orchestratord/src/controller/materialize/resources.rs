@@ -48,7 +48,7 @@ use mz_ore::instrument;
 #[derive(Debug, Serialize)]
 pub struct Resources {
     generation: u64,
-    network_policies: Vec<NetworkPolicy>,
+    environmentd_network_policies: Vec<NetworkPolicy>,
     service_account: Box<ServiceAccount>,
     role: Box<Role>,
     role_binding: Box<RoleBinding>,
@@ -68,7 +68,8 @@ impl Resources {
         mz: &Materialize,
         generation: u64,
     ) -> Self {
-        let network_policies = create_network_policies(config, mz, orchestratord_namespace);
+        let environmentd_network_policies =
+            create_environmentd_network_policies(config, mz, orchestratord_namespace);
 
         let service_account = Box::new(create_service_account_object(config, mz));
         let role = Box::new(create_role_object(mz));
@@ -89,7 +90,7 @@ impl Resources {
 
         Self {
             generation,
-            network_policies,
+            environmentd_network_policies,
             service_account,
             role,
             role_binding,
@@ -110,7 +111,8 @@ impl Resources {
         increment_generation: bool,
         namespace: &str,
     ) -> Result<Option<Action>, anyhow::Error> {
-        let network_policy_api: Api<NetworkPolicy> = Api::namespaced(client.clone(), namespace);
+        let environmentd_network_policy_api: Api<NetworkPolicy> =
+            Api::namespaced(client.clone(), namespace);
         let service_api: Api<Service> = Api::namespaced(client.clone(), namespace);
         let service_account_api: Api<ServiceAccount> = Api::namespaced(client.clone(), namespace);
         let role_api: Api<Role> = Api::namespaced(client.clone(), namespace);
@@ -118,9 +120,9 @@ impl Resources {
         let statefulset_api: Api<StatefulSet> = Api::namespaced(client.clone(), namespace);
         let pod_api: Api<Pod> = Api::namespaced(client.clone(), namespace);
 
-        for policy in &self.network_policies {
+        for policy in &self.environmentd_network_policies {
             trace!("applying network policy {}", policy.name_unchecked());
-            apply_resource(&network_policy_api, policy).await?;
+            apply_resource(&environmentd_network_policy_api, policy).await?;
         }
 
         trace!("applying environmentd service account");
@@ -326,43 +328,64 @@ impl Resources {
     }
 }
 
-fn create_network_policies(
+fn create_environmentd_network_policies(
     config: &super::Args,
     mz: &Materialize,
     orchestratord_namespace: &str,
 ) -> Vec<NetworkPolicy> {
     let mut network_policies = Vec::new();
     if config.network_policies.internal_enabled {
-        let mut environmentd_label_selector = mz.default_labels();
-        environmentd_label_selector.insert(
-            "materialize.cloud/app".to_owned(),
-            mz.environmentd_service_name(),
-        );
+        let environmentd_label_selector = LabelSelector {
+            match_labels: Some(
+                mz.default_labels()
+                    .into_iter()
+                    .chain([(
+                        "materialize.cloud/app".to_owned(),
+                        mz.environmentd_app_name(),
+                    )])
+                    .collect(),
+            ),
+            ..Default::default()
+        };
+        let orchestratord_label_selector = LabelSelector {
+            match_labels: Some(
+                config
+                    .orchestratord_pod_selector_labels
+                    .iter()
+                    .cloned()
+                    .map(|kv| (kv.key, kv.value))
+                    .collect(),
+            ),
+            ..Default::default()
+        };
+        // TODO (Alex) filter to just clusterd and environmentd,
+        // once we get a consistent set of labels for both.
+        let all_pods_label_selector = LabelSelector {
+            match_labels: Some(mz.default_labels()),
+            ..Default::default()
+        };
         network_policies.extend([
-            // Allow all clusterd/environmentd traffic (within the namespace)
+            // Allow all clusterd/environmentd traffic (between pods in the
+            // same environment)
             NetworkPolicy {
-                metadata: mz.managed_resource_meta(mz.name_prefixed("allow-all-within-namespace")),
+                metadata: mz
+                    .managed_resource_meta(mz.name_prefixed("allow-all-within-environment")),
                 spec: Some(NetworkPolicySpec {
                     egress: Some(vec![NetworkPolicyEgressRule {
                         to: Some(vec![NetworkPolicyPeer {
-                            pod_selector: Some(LabelSelector::default()),
+                            pod_selector: Some(all_pods_label_selector.clone()),
                             ..Default::default()
                         }]),
                         ..Default::default()
                     }]),
                     ingress: Some(vec![NetworkPolicyIngressRule {
                         from: Some(vec![NetworkPolicyPeer {
-                            pod_selector: Some(LabelSelector::default()),
+                            pod_selector: Some(all_pods_label_selector.clone()),
                             ..Default::default()
                         }]),
                         ..Default::default()
                     }]),
-                    pod_selector: LabelSelector {
-                        // TODO (Alex) filter to just clusterd and environmentd,
-                        // once we get a consistent set of labels for both.
-                        match_expressions: None,
-                        match_labels: Some(mz.default_labels()),
-                    },
+                    pod_selector: all_pods_label_selector.clone(),
                     policy_types: Some(vec!["Ingress".to_owned(), "Egress".to_owned()]),
                     ..Default::default()
                 }),
@@ -376,16 +399,12 @@ fn create_network_policies(
                         from: Some(vec![NetworkPolicyPeer {
                             namespace_selector: Some(LabelSelector {
                                 match_labels: Some(btreemap! {
-                                    "kubernetes.io/metadata.name".into() => orchestratord_namespace.into(),
+                                    "kubernetes.io/metadata.name".into()
+                                        => orchestratord_namespace.into(),
                                 }),
                                 ..Default::default()
                             }),
-                            pod_selector: Some(LabelSelector {
-                                match_labels: Some(btreemap! {
-                                    "materialize.cloud/app".into() => "orchestratord".into(),
-                                }),
-                                ..Default::default()
-                            }),
+                            pod_selector: Some(orchestratord_label_selector),
                             ..Default::default()
                         }]),
                         ports: Some(vec![NetworkPolicyPort {
@@ -395,10 +414,7 @@ fn create_network_policies(
                         }]),
                         ..Default::default()
                     }]),
-                    pod_selector: LabelSelector {
-                        match_expressions: None,
-                        match_labels: Some(environmentd_label_selector),
-                    },
+                    pod_selector: environmentd_label_selector,
                     policy_types: Some(vec!["Ingress".to_owned()]),
                     ..Default::default()
                 }),
@@ -407,10 +423,7 @@ fn create_network_policies(
     }
     if config.network_policies.ingress_enabled {
         let mut ingress_label_selector = mz.default_labels();
-        ingress_label_selector.insert(
-            "materialize.cloud/app".to_owned(),
-            mz.balancerd_service_name(),
-        );
+        ingress_label_selector.insert("materialize.cloud/app".to_owned(), mz.balancerd_app_name());
         network_policies.extend([NetworkPolicy {
             metadata: mz.managed_resource_meta(mz.name_prefixed("sql-and-http-ingress")),
             spec: Some(NetworkPolicySpec {
@@ -1146,7 +1159,7 @@ fn create_environmentd_statefulset_object(
     );
     pod_template_labels.insert(
         "materialize.cloud/app".to_owned(),
-        mz.environmentd_service_name(),
+        mz.environmentd_app_name(),
     );
     pod_template_labels.insert("app".to_owned(), "environmentd".to_string());
 
@@ -1294,10 +1307,7 @@ fn create_balancerd_deployment_object(config: &super::Args, mz: &Materialize) ->
         mz.balancerd_deployment_name(),
     );
     pod_template_labels.insert("app".to_owned(), "balancerd".to_string());
-    pod_template_labels.insert(
-        "materialize.cloud/app".to_owned(),
-        mz.balancerd_service_name(),
-    );
+    pod_template_labels.insert("materialize.cloud/app".to_owned(), mz.balancerd_app_name());
 
     let ports = vec![
         ContainerPort {

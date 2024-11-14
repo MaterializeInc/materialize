@@ -15,6 +15,10 @@ use k8s_openapi::{
             PodTemplateSpec, Probe, SeccompProfile, SecurityContext, Service, ServicePort,
             ServiceSpec,
         },
+        networking::v1::{
+            IPBlock, NetworkPolicy, NetworkPolicyIngressRule, NetworkPolicyPeer, NetworkPolicyPort,
+            NetworkPolicySpec,
+        },
     },
     apimachinery::pkg::{apis::meta::v1::LabelSelector, util::intstr::IntOrString},
 };
@@ -28,12 +32,14 @@ use mz_cloud_resources::crd::materialize::v1alpha1::Materialize;
 const CONSOLE_IMAGE_HTTP_PORT: i32 = 8080;
 
 pub struct Resources {
+    network_policies: Vec<NetworkPolicy>,
     console_deployment: Box<Deployment>,
     console_service: Box<Service>,
 }
 
 impl Resources {
     pub fn new(config: &super::Args, mz: &Materialize, console_image_ref: &str) -> Self {
+        let network_policies = create_network_policies(config, mz);
         let console_deployment = Box::new(create_console_deployment_object(
             config,
             mz,
@@ -41,20 +47,71 @@ impl Resources {
         ));
         let console_service = Box::new(create_console_service_object(config, mz));
         Self {
+            network_policies,
             console_deployment,
             console_service,
         }
     }
 
     pub async fn apply(&self, client: &Client, namespace: &str) -> Result<(), anyhow::Error> {
+        let network_policy_api: Api<NetworkPolicy> = Api::namespaced(client.clone(), namespace);
         let deployment_api: Api<Deployment> = Api::namespaced(client.clone(), namespace);
         let service_api: Api<Service> = Api::namespaced(client.clone(), namespace);
 
+        for network_policy in &self.network_policies {
+            apply_resource(&network_policy_api, network_policy).await?;
+        }
         apply_resource(&deployment_api, &self.console_deployment).await?;
         apply_resource(&service_api, &self.console_service).await?;
 
         Ok(())
     }
+}
+
+fn create_network_policies(config: &super::Args, mz: &Materialize) -> Vec<NetworkPolicy> {
+    let mut network_policies = Vec::new();
+    if config.network_policies.ingress_enabled {
+        let console_label_selector = LabelSelector {
+            match_labels: Some(
+                mz.default_labels()
+                    .into_iter()
+                    .chain([("materialize.cloud/app".to_owned(), mz.console_app_name())])
+                    .collect(),
+            ),
+            ..Default::default()
+        };
+        network_policies.extend([NetworkPolicy {
+            metadata: mz.managed_resource_meta(mz.name_prefixed("console-ingress")),
+            spec: Some(NetworkPolicySpec {
+                ingress: Some(vec![NetworkPolicyIngressRule {
+                    from: Some(
+                        config
+                            .network_policies
+                            .ingress_cidrs
+                            .iter()
+                            .map(|cidr| NetworkPolicyPeer {
+                                ip_block: Some(IPBlock {
+                                    cidr: cidr.to_owned(),
+                                    except: None,
+                                }),
+                                ..Default::default()
+                            })
+                            .collect(),
+                    ),
+                    ports: Some(vec![NetworkPolicyPort {
+                        port: Some(IntOrString::Int(CONSOLE_IMAGE_HTTP_PORT)),
+                        protocol: Some("TCP".to_string()),
+                        ..Default::default()
+                    }]),
+                    ..Default::default()
+                }]),
+                pod_selector: console_label_selector,
+                policy_types: Some(vec!["Ingress".to_owned()]),
+                ..Default::default()
+            }),
+        }]);
+    }
+    network_policies
 }
 
 fn create_console_deployment_object(
@@ -68,10 +125,7 @@ fn create_console_deployment_object(
         mz.console_deployment_name(),
     );
     pod_template_labels.insert("app".to_owned(), "console".to_string());
-    pod_template_labels.insert(
-        "materialize.cloud/app".to_owned(),
-        mz.console_service_name(),
-    );
+    pod_template_labels.insert("materialize.cloud/app".to_owned(), mz.console_app_name());
 
     let ports = vec![ContainerPort {
         container_port: CONSOLE_IMAGE_HTTP_PORT,
