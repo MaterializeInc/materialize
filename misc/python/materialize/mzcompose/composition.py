@@ -1500,6 +1500,7 @@ class Composition:
         status: DeploymentStatus,
         mz_service: str = "materialized",
         timeout: int | None = None,
+        sleep_time: float | None = 1.0,
     ) -> None:
         timeout = timeout or (1800 if ui.env_is_truthy("CI_COVERAGE_ENABLED") else 900)
         print(
@@ -1508,7 +1509,8 @@ class Composition:
         )
 
         result = {}
-        for i in range(1, timeout):
+        timeout_time = time.time() + timeout
+        while time.time() < timeout_time:
             try:
                 result = json.loads(
                     self.exec(
@@ -1526,7 +1528,8 @@ class Composition:
             except:
                 pass
             print(".", end="")
-            time.sleep(1)
+            if sleep_time:
+                time.sleep(sleep_time)
         raise UIError(
             f"Timed out waiting for {mz_service} to reach Mz deployment status {status.value}, still in status {result.get('status')}"
         )
