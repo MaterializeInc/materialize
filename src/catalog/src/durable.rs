@@ -414,6 +414,6 @@ pub fn test_bootstrap_args() -> BootstrapArgs {
     BootstrapArgs {
         default_cluster_replica_size: "1".into(),
         bootstrap_role: None,
-        cluster_replica_size_map: ClusterReplicaSizeMap::default(),
+        cluster_replica_size_map: ClusterReplicaSizeMap::for_tests(),
     }
 }
