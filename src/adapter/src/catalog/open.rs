@@ -535,7 +535,9 @@ impl Catalog {
                 diff: diff.try_into().expect("valid diff"),
             })
             .collect();
-        let builtin_table_update = state.apply_updates_for_bootstrap(post_item_updates, &mut local_expr_cache).await;
+        let builtin_table_update = state
+            .apply_updates_for_bootstrap(post_item_updates, &mut local_expr_cache)
+            .await;
         builtin_table_updates.extend(builtin_table_update);
 
         // We don't need to apply the audit logs in memory, yet apply can be expensive when the
