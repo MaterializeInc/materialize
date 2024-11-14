@@ -39,6 +39,7 @@ from materialize.cloudtest.k8s.api.k8s_service import K8sService
 from materialize.cloudtest.k8s.api.k8s_stateful_set import K8sStatefulSet
 from materialize.mz_version import MzVersion
 from materialize.mzcompose import (
+    bootstrap_cluster_replica_size,
     cluster_replica_size_map,
     get_default_system_parameters,
 )
@@ -316,6 +317,10 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             V1EnvVar(
                 name="MZ_CLUSTER_REPLICA_SIZES",
                 value=f"{json.dumps(cluster_replica_size_map())}",
+            ),
+            V1EnvVar(
+                name="MZ_BOOTSTRAP_DEFAULT_CLUSTER_REPLICA_SIZE",
+                value=bootstrap_cluster_replica_size(),
             ),
         ]
 
