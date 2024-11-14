@@ -1,0 +1,11 @@
+
+{{ range $.Site.Data.materialize_operator_chart_parameter.parameters }}
+
+#### {{ .parameter }}
+
+**Required**: {{ .required }}
+
+**Default**: <code>{{ .default }}</code>
+
+{{.description  | $.Page.RenderString }}
+{{ end }}
