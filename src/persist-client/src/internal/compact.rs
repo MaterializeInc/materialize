@@ -80,18 +80,12 @@ pub struct CompactConfig {
 impl CompactConfig {
     /// Initialize the compaction config from Persist configuration.
     pub fn new(value: &PersistConfig, shard_id: ShardId) -> Self {
-        let mut ret = CompactConfig {
+        CompactConfig {
             compaction_memory_bound_bytes: value.dynamic.compaction_memory_bound_bytes(),
             compaction_yield_after_n_updates: value.compaction_yield_after_n_updates,
             version: value.build_version.clone(),
             batch: BatchBuilderConfig::new(value, shard_id),
-        };
-        // Use compaction as a method of getting inline writes out of state, to
-        // make room for more inline writes. We could instead do this at the end
-        // of compaction by flushing out the batch, but doing it here based on
-        // the config allows BatchBuilder to do its normal pipelining of writes.
-        ret.batch.inline_writes_single_max_bytes = 0;
-        ret
+        }
     }
 }
 
@@ -739,8 +733,16 @@ where
 
         let mut timings = Timings::default();
 
+        let mut batch_cfg = cfg.batch.clone();
+
+        // Use compaction as a method of getting inline writes out of state, to
+        // make room for more inline writes. We could instead do this at the end
+        // of compaction by flushing out the batch, but doing it here based on
+        // the config allows BatchBuilder to do its normal pipelining of writes.
+        batch_cfg.inline_writes_single_max_bytes = 0;
+
         let parts = BatchParts::new_ordered(
-            cfg.batch.clone(),
+            batch_cfg,
             cfg.batch.preferred_order,
             Arc::clone(&metrics),
             Arc::clone(&shard_metrics),
