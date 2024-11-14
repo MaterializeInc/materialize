@@ -532,7 +532,10 @@ where
                         &mut commands_state,
                         &mut output_updates,
                         &mut multi_get_scratch,
-                        DrainStyle::AtTime(partial_drain_time.clone()),
+                        DrainStyle::AtTime{
+                            time: partial_drain_time.clone(),
+                            persist_upper: &persist_upper
+                        },
                         &mut error_emitter,
                         &mut state,
                         &source_config,
@@ -610,9 +613,11 @@ enum DrainStyle<'a, T> {
         input_upper: &'a Antichain<T>,
         persist_upper: &'a Antichain<T>,
     },
-    // TODO: For partial draining when taking the source snapshot.
-    #[allow(unused)]
-    AtTime(T),
+    // For partial draining when taking the source snapshot.
+    AtTime {
+        time: T,
+        persist_upper: &'a Antichain<T>,
+    },
 }
 
 /// Helper method for [`upsert_inner`] used to stage `data` updates
@@ -658,13 +663,20 @@ where
                     // We make sure that a) we only process updates when we know their
                     // timestamp is complete, that is there will be no more updates for
                     // that timestamp, and b) that "previous" times in the persist
-                    // output are complete. The latter makes sure that we emit updates
+                    // input are complete. The latter makes sure that we emit updates
                     // for the next timestamp that are consistent with the global state
                     // in the output persist shard, which also serves as a persistent
                     // copy of our in-memory/on-disk upsert state.
                     !input_upper.less_equal(ts) && !persist_upper.less_than(ts)
                 }
-                DrainStyle::AtTime(time) => *ts <= *time,
+                DrainStyle::AtTime {
+                    time,
+                    persist_upper,
+                } => {
+                    // Even when emitting partial updates, we still need to wait
+                    // until "previous" times in the persist input are complete.
+                    *ts <= *time && !persist_upper.less_than(ts)
+                }
             };
 
             if !eligible {
@@ -787,7 +799,7 @@ where
                 }
 
                 match &drain_style {
-                    DrainStyle::AtTime(ts) => {
+                    DrainStyle::AtTime { .. } => {
                         let new_value = match existing_value {
                             Some(existing_value) => existing_value.into_provisional_value(
                                 value.clone(),
@@ -818,11 +830,11 @@ where
                     None
                 };
                 if let Some(old_value) = old_value {
-                    output_updates.push((old_value.clone(), ts, -1));
+                    output_updates.push((old_value.clone(), ts.clone(), -1));
                 }
 
                 match &drain_style {
-                    DrainStyle::AtTime(ts) => {
+                    DrainStyle::AtTime { .. } => {
                         let new_value = match existing_value {
                             Some(existing_value) => existing_value
                                 .into_provisional_tombstone(ts.clone(), Some(from_time.0.clone())),
@@ -842,7 +854,7 @@ where
     }
 
     match &drain_style {
-        DrainStyle::AtTime(_ts) => {
+        DrainStyle::AtTime { .. } => {
             match state
                 .multi_put(
                     // We don't want to update per-record stats, like size of
