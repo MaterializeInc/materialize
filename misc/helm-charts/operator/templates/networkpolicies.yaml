@@ -16,7 +16,8 @@ metadata:
   namespace: {{ .Values.namespace.name }}
 spec:
   podSelector:
-    {{- include "materialize-operator.selectorLabels" . | nindent 4 }}
+    matchLabels:
+      {{- include "materialize-operator.selectorLabels" . | nindent 6 }}
   egress:
     - to:
         - podSelector:
