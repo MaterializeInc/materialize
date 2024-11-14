@@ -17,7 +17,7 @@ tests:
           of: Deployment
       - equal:
           path: spec.template.spec.containers[0].image
-          value: materialize/orchestratord:v0.125.0-dev.0--pr.g38d50d921720caaf15998f30988db1aed720b2fc
+          value: materialize/orchestratord:v0.125.0-dev.0--pr.gd3deb07aa502a84ebd024517344f0aa861f857df
       - equal:
           path: spec.template.spec.containers[0].imagePullPolicy
           value: IfNotPresent
@@ -25,7 +25,23 @@ tests:
           path: spec.template.spec.serviceAccountName
           value: orchestratord
 
-  - it: should set correct arguments
+  - it: should set ephemeral volume class when storage class is configured
+    set:
+      storage.storageClass.name: "my-storage-class"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--ephemeral-volume-class=my-storage-class"
+
+  - it: should not set ephemeral volume class when storage class is not configured
+    set:
+      storage.storageClass.name: ""
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: "--ephemeral-volume-class"
+
+  - it: should set correct base arguments
     asserts:
       - contains:
           path: spec.template.spec.containers[0].args
@@ -48,3 +64,25 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].resources.limits.memory
           value: 512Mi
+
+  - it: should set disk limit to 0 when no storage class is configured
+    set:
+      storage.storageClass.name: ""
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[7]  # Index of the environmentd-cluster-replica-sizes argument
+          pattern: disk_limit":"0"
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[7]
+          pattern: is_cc":true
+
+  - it: should have a cluster with disk limit to 1552MiB when storage class is configured
+    set:
+      storage.storageClass.name: "my-storage-class"
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[7]
+          pattern: disk_limit":"1552MiB"
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[7]
+          pattern: is_cc":true
