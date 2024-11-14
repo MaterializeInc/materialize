@@ -749,10 +749,10 @@ def workflow_basic(c: Composition) -> None:
             try:
                 c.sql("SELECT 1", service="mz_old")
             except OperationalError as e:
-                assert "server closed the connection unexpectedly" in str(
-                    e
-                ) or "Can't create a connection to host" in str(
-                    e
+                assert (
+                    "server closed the connection unexpectedly" in str(e)
+                    or "Can't create a connection to host" in str(e)
+                    or "Connection refused" in str(e)
                 ), f"Unexpected error: {e}"
             except CommandFailureCausedUIError as e:
                 # service "mz_old" is not running
