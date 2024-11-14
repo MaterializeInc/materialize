@@ -15,12 +15,13 @@ use mz_catalog::memory::objects::BootstrapStateUpdateKind;
 use mz_catalog::memory::objects::StateUpdate;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NowFn;
-use mz_repr::{CatalogItemId, Timestamp};
+use mz_repr::{CatalogItemId, GlobalId, Timestamp};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::names::FullItemName;
 use mz_sql_parser::ast::{Raw, Statement};
 use semver::Version;
 use tracing::info;
+
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
 use crate::catalog::open::into_consolidatable_updates_startup;
 use crate::catalog::state::LocalExpressionCache;
@@ -368,7 +369,7 @@ fn ast_rewrite_sources_to_tables(
                     item.create_sql, table
                 );
                 item.create_sql = Statement::CreateTableFromSource(table).to_ast_string_stable();
-                tx.update_item(item.global_id, item)?;
+                tx.update_item(item.id, item)?;
             }
 
             // Postgres sources are multi-output sources whose subsources are
@@ -419,7 +420,7 @@ fn ast_rewrite_sources_to_tables(
                         progress_subsource,
                     });
                     item.create_sql = stmt.to_ast_string_stable();
-                    tx.update_item(item.global_id, item)?;
+                    tx.update_item(item.id, item)?;
                     info!("migrate: converted postgres source {stmt} to remove subsource options");
                 }
             }
@@ -477,7 +478,7 @@ fn ast_rewrite_sources_to_tables(
                         progress_subsource,
                     });
                     item.create_sql = stmt.to_ast_string_stable();
-                    tx.update_item(item.global_id, item)?;
+                    tx.update_item(item.id, item)?;
                     info!("migrate: converted mysql source {stmt} to remove subsource options");
                 }
             }
@@ -704,25 +705,28 @@ fn ast_rewrite_sources_to_tables(
 
                 let owner_id = item.owner_id.clone();
                 let privileges = item.privileges.clone();
+                let extra_versions = item.extra_versions.clone();
 
                 // Update the source statement in the catalog first, since the name will
                 // otherwise conflict with the new table statement.
                 info!("migrate: updated source {} to {source}", item.create_sql);
                 item.create_sql = Statement::CreateSource(source).to_ast_string_stable();
-                tx.update_item(item.global_id, item)?;
+                tx.update_item(item.id, item)?;
 
                 // Insert the new table statement into the catalog with a new id.
                 let ids = tx.allocate_user_item_ids(1)?;
-                let new_table_id = ids[0];
+                let (new_table_id, new_table_global_id) = ids[0];
                 info!("migrate: added table {new_table_id}: {table}");
                 tx.insert_user_item(
                     new_table_id,
+                    new_table_global_id,
                     schema_id,
                     &table_item_name,
                     table.to_ast_string_stable(),
                     owner_id,
                     privileges,
                     &Default::default(),
+                    extra_versions,
                 )?;
                 // We need to move the shard currently attached to the source statement to the
                 // table statement such that the existing data in the shard is preserved and can
@@ -736,7 +740,7 @@ fn ast_rewrite_sources_to_tables(
                     .pop()
                     .expect("shard should exist");
                 tx.insert_collection_metadata(btreemap! {
-                    new_table_id => existing_source_shard,
+                    new_table_global_id => existing_source_shard,
                     source_id => new_source_shard
                 })?;
 
@@ -760,7 +764,7 @@ fn ast_rewrite_sources_to_tables(
 
                 // We also need to update any other statements that reference the source to use the new
                 // table id/name instead.
-                changed_ids.insert(source_id, new_table_id);
+                changed_ids.insert(source_id, new_table_global_id);
             }
 
             // When we upgrade to > rust 1.81 we should use #[expect(unreachable_patterns)]
@@ -786,7 +790,7 @@ fn ast_rewrite_sources_to_tables(
                 if mz_sql::names::modify_dependency_item_ids(&mut statement, &changed_ids) {
                     info!("migrate: updated dependency reference in statement {statement}");
                     item.create_sql = statement.to_ast_string_stable();
-                    updated_items.insert(item.global_id, item);
+                    updated_items.insert(item.id, item);
                 }
             }
         }
