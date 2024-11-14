@@ -2388,29 +2388,38 @@ where
 }
 
 #[derive(Debug)]
-pub struct RawItemDependencyIds {
-    pub ids: BTreeSet<GlobalId>,
+struct RawItemDependencyIds<'a> {
+    ids: BTreeSet<GlobalId>,
+    names: BTreeSet<&'a UnresolvedItemName>,
 }
 
-impl<'ast> Visit<'ast, Raw> for RawItemDependencyIds {
-    fn visit_item_name(&mut self, item_name: &RawItemName) {
-        if let RawItemName::Id(id, _, _) = item_name {
-            let parsed_id = id.parse::<GlobalId>().unwrap();
-            self.ids.insert(parsed_id);
+impl<'ast> Visit<'ast, Raw> for RawItemDependencyIds<'ast> {
+    fn visit_item_name(&mut self, item_name: &'ast RawItemName) {
+        match item_name {
+            RawItemName::Name(name) => {
+                self.names.insert(name);
+            }
+            RawItemName::Id(id, _, _) => {
+                let parsed_id = id.parse::<GlobalId>().unwrap();
+                self.ids.insert(parsed_id);
+            }
         }
     }
 }
 
-/// Collect any ID-based dependencies of the provided raw AST node.
-pub fn raw_item_dependency_ids<'ast, N>(node: &'ast N) -> BTreeSet<GlobalId>
+/// Collect any dependencies of the provided raw AST node.
+pub fn raw_item_dependency_ids<'ast, N>(
+    node: &'ast N,
+) -> (BTreeSet<GlobalId>, BTreeSet<&'ast UnresolvedItemName>)
 where
     N: VisitNode<'ast, Raw>,
 {
     let mut deps = RawItemDependencyIds {
         ids: BTreeSet::new(),
+        names: BTreeSet::new(),
     };
     node.visit(&mut deps);
-    deps.ids
+    (deps.ids, deps.names)
 }
 
 #[derive(Debug)]

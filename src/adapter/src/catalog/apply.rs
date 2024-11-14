@@ -37,7 +37,7 @@ use mz_compute_types::config::ComputeReplicaConfig;
 use mz_controller::clusters::{ReplicaConfig, ReplicaLogging};
 use mz_controller_types::ClusterId;
 use mz_expr::MirScalarExpr;
-use mz_ore::collections::CollectionExt;
+use mz_ore::collections::{CollectionExt, HashMap};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{instrument, soft_assert_no_log};
 use mz_pgrepr::oid::INVALID_OID;
@@ -101,7 +101,7 @@ impl CatalogState {
         local_expression_cache: &mut LocalExpressionCache,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
         let mut builtin_table_updates = Vec::with_capacity(updates.len());
-        let updates = sort_updates(updates);
+        let updates = sort_updates(updates, &self);
 
         let mut groups: Vec<Vec<_>> = Vec::new();
         for (_, updates) in &updates.into_iter().group_by(|update| update.ts) {
@@ -143,7 +143,7 @@ impl CatalogState {
         updates: Vec<StateUpdate>,
     ) -> Result<Vec<BuiltinTableUpdate<&'static BuiltinTable>>, CatalogError> {
         let mut builtin_table_updates = Vec::with_capacity(updates.len());
-        let updates = sort_updates(updates);
+        let updates = sort_updates(updates, self);
 
         for (_, updates) in &updates.into_iter().group_by(|update| update.ts) {
             let mut retractions = InProgressRetractions::default();
@@ -1740,12 +1740,12 @@ impl CatalogState {
 }
 
 /// Sort [`StateUpdate`]s in timestamp then dependency order
-fn sort_updates(mut updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
+fn sort_updates(mut updates: Vec<StateUpdate>, state: &CatalogState) -> Vec<StateUpdate> {
     let mut sorted_updates = Vec::with_capacity(updates.len());
 
     updates.sort_by_key(|update| update.ts);
     for (_, updates) in &updates.into_iter().group_by(|update| update.ts) {
-        let sorted_ts_updates = sort_updates_inner(updates.collect());
+        let sorted_ts_updates = sort_updates_inner(updates.collect(), state);
         sorted_updates.extend(sorted_ts_updates);
     }
 
@@ -1753,7 +1753,7 @@ fn sort_updates(mut updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
 }
 
 /// Sort [`StateUpdate`]s in dependency order for a single timestamp.
-fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
+fn sort_updates_inner(updates: Vec<StateUpdate>, state: &CatalogState) -> Vec<StateUpdate> {
     fn push_update<T>(
         update: T,
         diff: StateDiff,
@@ -1889,7 +1889,16 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
     /// this set of updates and then performing a topological sort.
     fn sort_item_updates(
         item_updates: Vec<(mz_catalog::durable::Item, Timestamp, StateDiff)>,
+        state: &CatalogState,
     ) -> VecDeque<(mz_catalog::durable::Item, Timestamp, StateDiff)> {
+        let mut item_id_lookup: HashMap<_, HashMap<_, _>> = HashMap::new();
+        for (item, _, _) in &item_updates {
+            item_id_lookup
+                .entry(item.schema_id)
+                .or_insert_with(|| HashMap::new())
+                .insert(item.name.clone(), item.global_id);
+        }
+
         let mut items_with_dependencies = item_updates
             .into_iter()
             .map(|(item, ts, diff)| {
@@ -1897,9 +1906,40 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
                     .expect("failed to parse persisted SQL")
                     .into_element()
                     .ast;
-                let deps = mz_sql::names::raw_item_dependency_ids(&parsed);
+                let (mut id_deps, name_deps) = mz_sql::names::raw_item_dependency_ids(&parsed);
 
-                (item.global_id, (deps, (item, ts, diff)))
+                // Convert named deps into ID deps. Ideally this is empty and all dependencies are
+                // specified by ID. However, this is not the case and require some changes and a
+                // migration to fix.
+                for name in name_deps {
+                    let (db, schema, item) = match name.0.len() {
+                        3 => (
+                            Some(name.0[0].as_str()),
+                            name.0[1].as_str(),
+                            name.0[2].as_str(),
+                        ),
+                        2 => (None, name.0[1].as_str(), name.0[2].as_str()),
+                        _ => panic!("Invalid item name: {name:?}"),
+                    };
+                    let schema = state
+                        .resolve_schema(None, db, schema, &SYSTEM_CONN_ID)
+                        .expect("schema must be loaded before an item");
+                    // If `name` is not also being applied in this batch then the relative order of
+                    // `item` and `name` doesn't matter, so we can ignore it.
+                    let schema_id = match schema.id {
+                        SchemaSpecifier::Id(id) => id,
+                        SchemaSpecifier::Temporary => {
+                            panic!("temporary item {name:?} persisted as dependency of {item:?}")
+                        }
+                    };
+                    if let Some(ids) = item_id_lookup.get(&schema_id) {
+                        if let Some(id) = ids.get(item) {
+                            id_deps.insert(*id);
+                        }
+                    }
+                }
+
+                (item.global_id, (id_deps, (item, ts, diff)))
             })
             .collect::<BTreeMap<_, _>>();
         let mut visited = BTreeSet::new();
@@ -1942,8 +1982,8 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
             .collect()
     }
 
-    let item_retractions = sort_item_updates(item_retractions);
-    let item_additions = sort_item_updates(item_additions);
+    let item_retractions = sort_item_updates(item_retractions, state);
+    let item_additions = sort_item_updates(item_additions, state);
 
     /// Sort temporary item updates by GlobalId.
     fn sort_temp_item_updates(
