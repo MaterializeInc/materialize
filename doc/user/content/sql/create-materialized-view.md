@@ -41,11 +41,12 @@ _select&lowbar;stmt_ | The [`SELECT` statement](../select) whose results you wan
 
 {{< diagram "with-options.svg" >}}
 
-| Field      | Value     | Description                                                                                                                                                       |
-| ---------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **ASSERT NOT NULL** _col_ident_ | `text` | The column identifier for which to create a [non-null assertion](#non-null-assertions). To specify multiple columns, use the option multiple times. |
-| **RETAIN HISTORY FOR** _retention_period_ | `interval` | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`.
-| **REFRESH _refresh_strategy_** | | ***Private preview.** This option has known performance or stability issues and is under active development.* The refresh strategy for the materialized view. See [Refresh strategies](#refresh-strategies) for syntax options. <br>Default: `ON COMMIT`. |
+| Field                                     | Value               | Description                                                                                                                                                       |
+|-------------------------------------------|---------------------| ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **ASSERT NOT NULL** _col_ident_           | `text`              | The column identifier for which to create a [non-null assertion](#non-null-assertions). To specify multiple columns, use the option multiple times. |
+| **PARTITION BY _columns_**                | `(ident [, ident]*)` | ***Private preview.** This option has known performance or stability issues and is under active development.* The key by which Materialize should internally order this durable collection. See the [partitioning](/transform-data/patterns/partition-by/) docs for details.
+| **RETAIN HISTORY FOR** _retention_period_ | `interval`          | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`.
+| **REFRESH _refresh_strategy_**            |                     | ***Private preview.** This option has known performance or stability issues and is under active development.* The refresh strategy for the materialized view. See [Refresh strategies](#refresh-strategies) for syntax options. <br>Default: `ON COMMIT`. |
 
 ## Details
 
