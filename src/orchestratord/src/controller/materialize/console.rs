@@ -75,10 +75,7 @@ fn create_network_policies(config: &super::Args, mz: &Materialize) -> Vec<Networ
             match_labels: Some(
                 mz.default_labels()
                     .into_iter()
-                    .chain([(
-                        "materialize.cloud/app".to_owned(),
-                        mz.console_service_name(),
-                    )])
+                    .chain([("materialize.cloud/app".to_owned(), mz.console_app_name())])
                     .collect(),
             ),
             ..Default::default()
@@ -128,10 +125,7 @@ fn create_console_deployment_object(
         mz.console_deployment_name(),
     );
     pod_template_labels.insert("app".to_owned(), "console".to_string());
-    pod_template_labels.insert(
-        "materialize.cloud/app".to_owned(),
-        mz.console_service_name(),
-    );
+    pod_template_labels.insert("materialize.cloud/app".to_owned(), mz.console_app_name());
 
     let ports = vec![ContainerPort {
         container_port: CONSOLE_IMAGE_HTTP_PORT,

@@ -123,6 +123,10 @@ pub mod v1alpha1 {
             self.name_prefixed(&format!("environmentd-{generation}"))
         }
 
+        pub fn environmentd_app_name(&self) -> String {
+            "environmentd".to_owned()
+        }
+
         pub fn environmentd_service_name(&self) -> String {
             self.name_prefixed("environmentd")
         }
@@ -131,12 +135,20 @@ pub mod v1alpha1 {
             self.name_prefixed(&format!("environmentd-{generation}"))
         }
 
+        pub fn balancerd_app_name(&self) -> String {
+            "balancerd".to_owned()
+        }
+
         pub fn balancerd_deployment_name(&self) -> String {
             self.name_prefixed("balancerd")
         }
 
         pub fn balancerd_service_name(&self) -> String {
             self.name_prefixed("balancerd")
+        }
+
+        pub fn console_app_name(&self) -> String {
+            "console".to_owned()
         }
 
         pub fn console_deployment_name(&self) -> String {
