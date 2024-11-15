@@ -88,7 +88,7 @@ where
                     .try_into()
                     .expect("unexpected error while casting");
                 if in_memory_size > self.auto_spill_threshold_bytes {
-                    tracing::info!("spilling to disk for upsert");
+                    tracing::info!(%in_memory_size, %self.auto_spill_threshold_bytes, "spilling to disk for upsert");
                     let mut rocksdb_backend =
                         self.rocksdb_init_fn
                             .take()
