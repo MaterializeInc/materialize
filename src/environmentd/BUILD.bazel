@@ -217,7 +217,7 @@ cargo_build_script(
     srcs = ["build.rs"],
     build_script_env = {},
     compile_data = [],
-    data = ["src/bin/environmentd/sys.c"],
+    data = ["src/environmentd/sys.c"],
     proc_macro_deps = [] + all_crate_deps(
         build_proc_macro = True,
         proc_macro = True,
@@ -714,7 +714,7 @@ rust_binary(
         proc_macro = True,
     ),
     compile_data = [],
-    crate_root = "src/bin/environmentd/main.rs",
+    crate_root = "src/bin/environmentd.rs",
     data = [],
     env = {},
     features = [],

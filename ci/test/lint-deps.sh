@@ -28,6 +28,7 @@ set -euo pipefail
 entrypoints=(
     mz-clusterd
     mz-environmentd
+    mz-materialized
 )
 
 # Explicitly name targets to check dependencies. We support Apple and Linux on ARM64 and x86_64.

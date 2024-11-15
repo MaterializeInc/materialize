@@ -7,8 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-MZFROM materialized-base
-
-COPY clusterd environmentd entrypoint.sh /usr/local/bin/
-
-ENTRYPOINT ["tini", "--", "entrypoint.sh"]
+name: materialized
+description: Materialize is a fast, distributed SQL database built on streaming internals.
+pre-image:
+  - type: cargo-build
+    bin: [ materialized ]
+    bazel-bin:
+      materialized: "@//src/materialized:materialized"
+    strip: false
