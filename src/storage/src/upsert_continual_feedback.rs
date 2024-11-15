@@ -138,7 +138,7 @@ where
     G::Timestamp: TotalOrder + Sync,
     F: FnOnce() -> Fut + 'static,
     Fut: std::future::Future<Output = US>,
-    US: UpsertStateBackend<Option<FromTime>>,
+    US: UpsertStateBackend<G::Timestamp, Option<FromTime>>,
     FromTime: Debug + timely::ExchangeData + Ord + Sync,
 {
     let mut builder = AsyncOperatorBuilder::new("Upsert".to_string(), input.scope());
@@ -184,7 +184,7 @@ where
         // (as required for `consolidate_snapshot_chunk`), with slightly more efficient serialization
         // than a default `Partitioned`.
 
-        let mut state = UpsertState::<_, Option<FromTime>>::new(
+        let mut state = UpsertState::<_, G::Timestamp, Option<FromTime>>::new(
             state_fn().await,
             upsert_shared_metrics,
             &upsert_metrics,
@@ -200,7 +200,7 @@ where
 
         // A re-usable buffer of changes, per key. This is an `IndexMap` because it has to be `drain`-able
         // and have a consistent iteration order.
-        let mut commands_state: indexmap::IndexMap<_, upsert_types::UpsertValueAndSize<Option<FromTime>>> =
+        let mut commands_state: indexmap::IndexMap<_, upsert_types::UpsertValueAndSize<G::Timestamp, Option<FromTime>>> =
             indexmap::IndexMap::new();
         let mut multi_get_scratch = Vec::new();
 
@@ -622,18 +622,18 @@ enum DrainStyle<'a, T> {
 /// stash or `None` if none are left.
 async fn drain_staged_input<S, G, T, FromTime, E>(
     stash: &mut Vec<(T, UpsertKey, Reverse<FromTime>, Option<UpsertValue>)>,
-    commands_state: &mut indexmap::IndexMap<UpsertKey, UpsertValueAndSize<Option<FromTime>>>,
+    commands_state: &mut indexmap::IndexMap<UpsertKey, UpsertValueAndSize<T, Option<FromTime>>>,
     output_updates: &mut Vec<(Result<Row, UpsertError>, T, Diff)>,
     multi_get_scratch: &mut Vec<UpsertKey>,
     drain_style: DrainStyle<'_, T>,
     error_emitter: &mut E,
-    state: &mut UpsertState<'_, S, Option<FromTime>>,
+    state: &mut UpsertState<'_, S, T, Option<FromTime>>,
     source_config: &crate::source::SourceExportCreationConfig,
 ) -> Option<T>
 where
-    S: UpsertStateBackend<Option<FromTime>>,
+    S: UpsertStateBackend<T, Option<FromTime>>,
     G: Scope,
-    T: TotalOrder + Ord + Clone + Debug + timely::progress::Timestamp + Sync,
+    T: TotalOrder + timely::ExchangeData + Debug + Ord + Sync,
     FromTime: timely::ExchangeData + Ord + Sync,
     E: UpsertErrorEmitter<G>,
 {
@@ -753,10 +753,11 @@ where
 
         match value {
             Some(value) => {
-                if let Some(old_value) = existing_value
-                    .replace(StateValue::value(value.clone(), Some(from_time.0.clone())))
-                {
-                    if let Value::Value(old_value, _) = old_value.into_decoded() {
+                if let Some(old_value) = existing_value.replace(StateValue::finalized_value(
+                    value.clone(),
+                    Some(from_time.0.clone()),
+                )) {
+                    if let Value::FinalizedValue(old_value, _) = old_value.into_decoded() {
                         output_updates.push((old_value, ts.clone(), -1));
                     }
                 }
@@ -764,7 +765,7 @@ where
             }
             None => {
                 if let Some(old_value) = existing_value.take() {
-                    if let Value::Value(old_value, _) = old_value.into_decoded() {
+                    if let Value::FinalizedValue(old_value, _) = old_value.into_decoded() {
                         output_updates.push((old_value, ts, -1));
                     }
                 }
@@ -784,12 +785,12 @@ async fn ingest_state_updates<S, G, T, FromTime, E>(
     updates: &mut Vec<(UpsertKey, UpsertValue, T, Diff)>,
     persist_upper: &Antichain<T>,
     error_emitter: &mut E,
-    state: &mut UpsertState<'_, S, Option<FromTime>>,
+    state: &mut UpsertState<'_, S, T, Option<FromTime>>,
     source_config: &crate::source::SourceExportCreationConfig,
 ) where
-    S: UpsertStateBackend<Option<FromTime>>,
+    S: UpsertStateBackend<T, Option<FromTime>>,
     G: Scope,
-    T: PartialOrder + Ord + Clone + Debug + timely::progress::Timestamp,
+    T: PartialOrder + Ord + Clone + Debug + timely::progress::Timestamp + Sync,
     FromTime: timely::ExchangeData + Ord + Sync,
     E: UpsertErrorEmitter<G>,
 {
@@ -820,13 +821,15 @@ async fn ingest_state_updates<S, G, T, FromTime, E>(
     for (key, value, ts, diff) in &updates[0..idx] {
         match diff {
             1 => {
-                let value = StateValue::value(value.clone(), None::<FromTime>);
+                let value: StateValue<T, Option<FromTime>> =
+                    StateValue::finalized_value(value.clone(), None::<FromTime>);
                 let size: i64 = value.memory_size().try_into().expect("less than i64 size");
                 precomputed_putstats.size_diff += size;
                 precomputed_putstats.values_diff += 1;
             }
             -1 => {
-                let value = StateValue::value(value.clone(), None::<FromTime>);
+                let value: StateValue<T, Option<FromTime>> =
+                    StateValue::finalized_value(value.clone(), None::<FromTime>);
                 let size: i64 = value.memory_size().try_into().expect("less than i64 size");
                 precomputed_putstats.size_diff -= size;
                 precomputed_putstats.values_diff -= 1;
@@ -848,7 +851,7 @@ async fn ingest_state_updates<S, G, T, FromTime, E>(
     let commands = eligible_commands
         .map(|(key, value, ts, diff)| match diff {
             1 => {
-                let value = StateValue::value(value, None::<FromTime>);
+                let value = StateValue::finalized_value(value, None::<FromTime>);
                 (
                     key,
                     upsert_types::PutValue {
