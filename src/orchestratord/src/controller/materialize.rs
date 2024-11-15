@@ -47,6 +47,8 @@ pub struct Args {
     secrets_controller: String,
 
     #[clap(long)]
+    console_image_tag_default: String,
+    #[clap(long)]
     console_image_tag_map: Vec<KeyValueArg<String, String>>,
 
     #[clap(flatten)]
@@ -545,18 +547,13 @@ impl k8s_controller::Context for Context {
                         mz.spec.environmentd_image_ref
                     )));
                 };
-                let Some(console_image_tag) = self
+                let console_image_tag = self
                     .config
                     .console_image_tag_map
                     .iter()
                     .find(|kv| kv.key == environmentd_image_tag)
                     .map(|kv| kv.value.clone())
-                else {
-                    return Err(Error::Anyhow(anyhow::anyhow!(
-                        "no console image ref found for environmentd image ref: {}",
-                        mz.spec.environmentd_image_ref
-                    )));
-                };
+                    .unwrap_or_else(|| self.config.console_image_tag_default.clone());
                 console::Resources::new(
                     &self.config,
                     mz,
