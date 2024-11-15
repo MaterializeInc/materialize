@@ -1431,7 +1431,6 @@ fn test_storage_usage_collection_interval_timestamps() {
 }
 
 #[mz_ore::test]
-#[ignore] // TODO: Reenable when database-issues#8743 is fixed
 fn test_old_storage_usage_records_are_reaped_on_restart() {
     let now = Arc::new(Mutex::new(0));
     let now_fn = {
@@ -1439,8 +1438,8 @@ fn test_old_storage_usage_records_are_reaped_on_restart() {
         NowFn::from(move || *timestamp.lock().expect("lock poisoned"))
     };
     let data_dir = tempfile::tempdir().unwrap();
-    let collection_interval = Duration::from_secs(1);
-    let retention_period = Duration::from_millis(1100);
+    let collection_interval = Duration::from_millis(100);
+    let retention_period = Duration::from_millis(200);
     let harness = test_util::TestHarness::default()
         .with_now(now_fn)
         .with_storage_usage_collection_interval(collection_interval)
@@ -1450,16 +1449,6 @@ fn test_old_storage_usage_records_are_reaped_on_restart() {
     let initial_timestamp = {
         let server = harness.clone().start_blocking();
         let mut client = server.connect(postgres::NoTls).unwrap();
-
-        let mut mz_client = server
-            .pg_config_internal()
-            .user(&SYSTEM_USER.name)
-            .connect(postgres::NoTls)
-            .unwrap();
-        // Otherwise fails with "Records were not reaped!"
-        mz_client
-            .batch_execute("ALTER SYSTEM SET storage_source_decode_fuel = 100000")
-            .unwrap();
 
         // Create a table with no data, which should have some overhead and therefore some storage usage
         client
@@ -1476,7 +1465,7 @@ fn test_old_storage_usage_records_are_reaped_on_restart() {
                         "SELECT (EXTRACT(EPOCH FROM MAX(collection_timestamp)) * 1000)::integer FROM mz_internal.mz_storage_usage_by_shard;",
                         &[],
                     )
-                    .map_err(|e| e.to_string()).unwrap()
+                    .map_err(|e| e.to_string())?
                     .try_get::<_, i32>(0)
                     .map_err(|e| e.to_string())
             }).expect("Could not fetch initial timestamp");
@@ -1504,22 +1493,23 @@ fn test_old_storage_usage_records_are_reaped_on_restart() {
     *now.lock().expect("lock poisoned") = u64::try_from(initial_timestamp)
         .expect("negative timestamps are impossible")
         + u64::try_from(retention_period.as_millis()).expect("known to fit")
-        + 1;
+        // Add a second to account for any rounding errors.
+        + 1000;
 
     {
         let server = harness.start_blocking();
         let mut client = server.connect(postgres::NoTls).unwrap();
 
         *now.lock().expect("lock poisoned") +=
-            u64::try_from(collection_interval.as_millis()).expect("known to fit") + 1;
+            u64::try_from(collection_interval.as_millis()).expect("known to fit") + 1000;
 
         let subsequent_initial_timestamp = Retry::default().max_duration(Duration::from_secs(30)).retry(|_| {
                 client
                     .query_one(
-                        "SELECT (EXTRACT(EPOCH FROM MIN(collection_timestamp)) * 1000)::integer FROM mz_internal.mz_storage_usage_by_shard;",
+                        &format!("SELECT ts FROM (SELECT (EXTRACT(EPOCH FROM MIN(collection_timestamp)) * 1000)::integer as ts FROM mz_internal.mz_storage_usage_by_shard) WHERE ts > {initial_timestamp};"),
                         &[],
                     )
-                    .map_err(|e| e.to_string()).unwrap()
+                    .map_err(|e| e.to_string())?
                     .try_get::<_, i32>(0)
                     .map_err(|e| e.to_string())
             }).expect("Could not fetch initial timestamp");
