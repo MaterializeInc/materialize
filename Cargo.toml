@@ -257,14 +257,8 @@ rustc-demangle = { opt-level = 3 }
 # Compile time seems similar to "lto = false", runtime ~10% faster
 lto = "thin"
 
-# Emit full debug info, allowing us to easily analyze core dumps from
-# staging (and, in an emergency, also prod).
-#
-# This does not negatively impact the sizes of the main binaries
-# (clusterd and environmentd), since we split the debuginfo from those
-# and ship it separately to an s3 bucket before building their
-# docker containers.
-debug = 2
+# Emit limited debug info for smaller binaries
+debug = "line-tables-only"
 
 # IMPORTANT: when patching a dependency, you should only depend on "main",
 # "master", or an upstream release branch (e.g., "v7.x"). Do *not* depend on a
