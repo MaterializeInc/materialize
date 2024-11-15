@@ -1057,6 +1057,7 @@ impl<'a> RunnerInner<'a> {
                     secrets_reader_local_file_dir: Some(secrets_dir),
                     secrets_reader_kubernetes_context: None,
                     secrets_reader_aws_prefix: None,
+                    secrets_reader_name_prefix: None,
                 },
                 connection_context,
             },
