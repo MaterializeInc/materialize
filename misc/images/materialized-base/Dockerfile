@@ -15,15 +15,19 @@ MZFROM ubuntu-base
 RUN groupadd --system --gid=999 materialize \
     && useradd --system --gid=999 --uid=999 --create-home materialize
 
+ARG CI_SANITIZER=none
+
 RUN apt-get update \
     && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get -qy install --no-install-recommends \
         ca-certificates \
         curl \
-        llvm \
         postgresql \
         postgresql-contrib \
         tini \
         ssh \
+    && if [ "$CI_SANITIZER" != "none" ]; then \
+        TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get -qy install --no-install-recommends llvm; \
+       fi \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean \
     && mkdir -p /mzdata /scratch /var/lib/postgresql/data /var/run/postgresql \
