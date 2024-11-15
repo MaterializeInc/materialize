@@ -62,7 +62,7 @@ spec:
         {{- range $key, $value := .Values.operator.args.consoleImageTagMapOverride }}
         - "--console-image-tag-map={{ $key }}={{ $value }}"
         {{- end }}
-        - "--console-image-tag-map=v0.125.0-dev.0--pr.gd3deb07aa502a84ebd024517344f0aa861f857df=0.1.2"
+        - "--console-image-tag-map=v0.125.0-dev.0--pr.gd3deb07aa502a84ebd024517344f0aa861f857df=25.1.0-beta.1"
         {{- if .Values.operator.clusters }}
         {{- if .Values.operator.clusters.sizes }}
         - '--environmentd-cluster-replica-sizes={{ include "materialize.processClusterSizes" . | fromYaml | toJson }}'
