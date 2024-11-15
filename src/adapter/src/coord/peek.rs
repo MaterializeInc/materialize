@@ -119,7 +119,7 @@ pub enum FastPathPlan {
     /// (coll_id, idx_id, values to look up, mfp to apply)
     PeekExisting(GlobalId, GlobalId, Option<Vec<Row>>, mz_expr::SafeMfpPlan),
     /// The view can be read directly out of Persist.
-    PeekPersist(GlobalId, mz_expr::SafeMfpPlan),
+    PeekPersist(GlobalId, Option<Row>, mz_expr::SafeMfpPlan),
 }
 
 impl<'a, T: 'a> DisplayText<PlanRenderingContext<'a, T>> for FastPathPlan {
@@ -208,7 +208,7 @@ impl<'a, T: 'a> DisplayText<PlanRenderingContext<'a, T>> for FastPathPlan {
                 ctx.as_mut().reset();
                 Ok(())
             }
-            FastPathPlan::PeekPersist(gid, mfp) => {
+            FastPathPlan::PeekPersist(gid, literal_constraint, mfp) => {
                 ctx.as_mut().set();
                 let (map, filter, project) = mfp.as_map_filter_project();
 
@@ -248,7 +248,13 @@ impl<'a, T: 'a> DisplayText<PlanRenderingContext<'a, T>> for FastPathPlan {
                     .humanizer
                     .humanize_id(*gid)
                     .unwrap_or_else(|| gid.to_string());
-                writeln!(f, "{}PeekPersist {human_id}", ctx.as_mut())?;
+                write!(f, "{}PeekPersist {human_id}", ctx.as_mut())?;
+                if let Some(literal) = literal_constraint {
+                    let value = mode.expr(literal, None);
+                    writeln!(f, " [value={}]", value)?;
+                } else {
+                    writeln!(f, "")?;
+                }
                 ctx.as_mut().reset();
                 Ok(())
             }
@@ -376,11 +382,38 @@ pub fn create_fast_path_plan<T: Timestamp>(
                             )));
                         }
                     }
+
                     // If there is no arrangement, consider peeking the persist shard directly.
                     // Generally, we consider a persist peek when the query can definitely be satisfied
                     // by scanning through a small, constant number of Persist key-values.
                     let safe_mfp = mfp_to_safe_plan(mfp)?;
                     let (_maps, filters, projection) = safe_mfp.as_map_filter_project();
+
+                    let literal_constraint = {
+                        let mut row = Row::default();
+                        let mut packer = row.packer();
+                        for (idx, col) in relation_typ.column_types.iter().enumerate() {
+                            if !preserves_order(&col.scalar_type) {
+                                break;
+                            }
+                            let col_expr = MirScalarExpr::Column(idx);
+
+                            let Some((literal, _)) = filters
+                                .iter()
+                                .filter_map(|f| f.expr_eq_literal(&col_expr))
+                                .next()
+                            else {
+                                break;
+                            };
+                            packer.extend_by_row(&literal);
+                        }
+                        if row.is_empty() {
+                            None
+                        } else {
+                            Some(row)
+                        }
+                    };
+
                     let finish_ok = match &finishing {
                         None => false,
                         Some(RowSetFinishing {
@@ -409,8 +442,26 @@ pub fn create_fast_path_plan<T: Timestamp>(
                             order_ok && limit_ok
                         }
                     };
-                    if filters.is_empty() && finish_ok {
-                        return Ok(Some(FastPathPlan::PeekPersist(*get_id, safe_mfp)));
+
+                    let key_constraint = if let Some(literal) = &literal_constraint {
+                        let prefix_len = literal.iter().count();
+                        relation_typ
+                            .keys
+                            .iter()
+                            .any(|k| k.iter().all(|idx| *idx < prefix_len))
+                    } else {
+                        false
+                    };
+
+                    // We can generate a persist peek when:
+                    // - We have a literal constraint that includes an entire key (so we'll return at most one value)
+                    // - We can return the first N key values (no filters, small limit, consistent order)
+                    if key_constraint || (filters.is_empty() && finish_ok) {
+                        return Ok(Some(FastPathPlan::PeekPersist(
+                            *get_id,
+                            literal_constraint,
+                            safe_mfp,
+                        )));
                     }
                 }
                 MirRelationExpr::Join { implementation, .. } => {
@@ -552,8 +603,16 @@ impl crate::coord::Coordinator {
                 PeekTarget::Index { id: idx_id },
                 StatementExecutionStrategy::FastPath,
             ),
-            PeekPlan::FastPath(FastPathPlan::PeekPersist(coll_id, map_filter_project)) => {
-                let peek_command = (None, timestamp, map_filter_project);
+            PeekPlan::FastPath(FastPathPlan::PeekPersist(
+                coll_id,
+                literal_constraint,
+                map_filter_project,
+            )) => {
+                let peek_command = (
+                    literal_constraint.map(|r| vec![r]),
+                    timestamp,
+                    map_filter_project,
+                );
                 let metadata = self
                     .controller
                     .storage
