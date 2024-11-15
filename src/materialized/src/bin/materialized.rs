@@ -10,10 +10,11 @@
 use std::ffi::OsStr;
 
 fn main() {
-    let binary = std::env::current_exe().expect("known executable");
-    match binary.file_name().and_then(OsStr::to_str) {
+    let binary = std::env::args_os().next().expect("known executable");
+    let binary_path = std::path::Path::new(&binary);
+    match binary_path.file_name().and_then(OsStr::to_str) {
         Some("clusterd") => mz_clusterd::main(),
-        Some("materialized") => mz_environmentd::environmentd::main(),
+        Some("environmentd") => mz_environmentd::environmentd::main(),
         other => panic!("Unknown executable: {other:?}"),
     }
 }

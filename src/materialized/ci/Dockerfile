@@ -11,8 +11,9 @@ MZFROM materialized-base
 
 COPY materialized entrypoint.sh /usr/local/bin/
 
-RUN ["ln", "-s", "/usr/local/bin/materialized", "/usr/local/bin/environmentd"]
-
-RUN ["ln", "-s", "/usr/local/bin/materialized", "/usr/local/bin/clusterd"]
+USER root
+RUN ln -s /usr/local/bin/materialized /usr/local/bin/environmentd \
+  && ln -s /usr/local/bin/materialized /usr/local/bin/clusterd
+USER materialize
 
 ENTRYPOINT ["tini", "--", "entrypoint.sh"]
