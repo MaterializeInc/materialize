@@ -1213,6 +1213,7 @@ impl PersistPeek {
             &mut reader,
             txns_read.as_mut(),
             metrics,
+            &mfp_plan,
             &metadata.relation_desc,
             Antichain::from_elem(as_of),
         )
