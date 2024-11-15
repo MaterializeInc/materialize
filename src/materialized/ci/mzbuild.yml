@@ -11,8 +11,7 @@ name: materialized
 description: Materialize is a fast, distributed SQL database built on streaming internals.
 pre-image:
   - type: cargo-build
-    bin: [clusterd, environmentd]
+    bin: [ materialized ]
     bazel-bin:
-      clusterd: "@//src/clusterd:clusterd"
-      environmentd: "@//src/environmentd:environmentd"
+      materialized: "@//src/materialized:materialized"
     strip: false

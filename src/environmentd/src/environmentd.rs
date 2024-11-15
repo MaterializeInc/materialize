@@ -7,14 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::env;
+mod main;
+pub(self) mod sys;
 
-fn main() -> Result<(), anyhow::Error> {
-    println!("cargo:rustc-env=TARGET_TRIPLE={}", env::var("TARGET")?);
-
-    cc::Build::new()
-        .file("src/environmentd/sys.c")
-        .compile("environmentd_sys");
-
-    mz_npm::ensure()
-}
+pub use main::main;
