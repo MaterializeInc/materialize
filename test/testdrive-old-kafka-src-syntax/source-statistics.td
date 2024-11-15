@@ -103,13 +103,13 @@ $ set-sql-timeout duration=2minutes
 # interval is 30 seconds.
 > SELECT s.name,
   bool_and(u.snapshot_committed),
-  SUM(u.messages_received), SUM(u.updates_staged), SUM(u.updates_committed), SUM(u.bytes_received) > 0, bool_and(u.rehydration_latency IS NOT NULL)
+  SUM(u.messages_received) BETWEEN 2 AND 6, SUM(u.updates_staged), SUM(u.updates_committed), SUM(u.bytes_received) > 0, bool_and(u.rehydration_latency IS NOT NULL)
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('metrics_test_source')
   GROUP BY s.name
   ORDER BY s.name
-metrics_test_source true 2 2 2 true true
+metrics_test_source true true 2 2 true true
 
 > DROP SOURCE metrics_test_source CASCADE
 
@@ -153,10 +153,12 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 # There could also be up to 11 updates, as updates cause inserts and deletes
 # (5 initial inserts, 2 deletes, and 2 updates). In total 3 records should be present in upsert state.
 # We can't control this, so have to accept the range.
+
+# testdrive with SIZE 8 saw messages received go up to 27
 > SELECT
     s.name,
     bool_and(u.snapshot_committed),
-    SUM(u.messages_received),
+    SUM(u.messages_received) BETWEEN 9 AND 27,
     SUM(u.updates_staged) BETWEEN 3 AND 11,
     SUM(u.updates_committed) BETWEEN 3 AND 11,
     SUM(u.bytes_received) > 0,
@@ -168,7 +170,7 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
   WHERE s.name IN ('upsert')
   GROUP BY s.name
   ORDER BY s.name
-upsert true 9 true true true true 3 true
+upsert true true true true true true 3 true
 
 # While we can't control how batching works above, we can ensure that this new, later update
 # causes 1 more messages to be received, which is 1 update, a delete.
