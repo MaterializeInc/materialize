@@ -1314,7 +1314,8 @@ where
             .into_iter()
             .map(|object| BuildDesc {
                 id: object.id,
-                plan: FlatPlan::from(object.plan),
+                // This should probably be made into a fallible
+                plan: FlatPlan::try_from(object.plan).unwrap(),
             })
             .collect();
 

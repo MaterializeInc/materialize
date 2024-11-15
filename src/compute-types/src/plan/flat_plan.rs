@@ -41,7 +41,22 @@ include!(concat!(
 /// all nodes in a [`FlatPlan`] have natural iterative implementations, avoiding the risk of stack
 /// overflows.
 ///
-/// A [`FlatPlan`] can be constructed from a [`Plan`] using the corresponding [`From`] impl.
+/// A [`FlatPlan`] can be constructed from a [`Plan`] using the corresponding [`TrpFrom`] impl.
+///
+/// # Preconditions
+///
+/// A [`FlatPlan`] requires certain structure of the [`Plan`] it is converted from.
+///
+/// Informally, each valid plan is a sequence of let and letrec bindings atop a let-free expression.
+/// Each let binding is to a let-free expression, and each letrec binding is to a similarly valid plan.
+/// ```ignore
+///   valid_plan := <let_free>
+///              |  LET v = <let_free> IN <valid_plan>
+///              |  LETREC (v = <valid_plan>)* IN <valid_plan>
+/// ```
+///
+/// Input [`Plan`]s that do not satisfy this requirement will be result in errors.
+/// This structure is maintained by [`FlatPlan`], and can be relied on by others.
 ///
 /// # Invariants
 ///
@@ -54,18 +69,11 @@ include!(concat!(
 ///      in the `nodes` map.
 ///  (3) Each [`LirId`] contained within `topological_order` is contained in the `nodes` map.
 ///
-/// Constrained graph structure:
-///
-///  (4) `LetRec` nodes only occur at the root or as inputs of other `LetRec` nodes.
-///  (5) Only `LetRec` nodes may introduce cycles into the plan.
-///  (6) Each input to a `LetRec` node is the root of an independent subplan.
-///  (7) `Let` nodes only occur at the root, as inputs of `LetRec` nodes, or as `body` inputs of
-///      other `Let` nodes.
-///  (8) Each input to a `Let` node is the root of an independent subplan.
 ///
 /// Topological order:
 ///
-///  (9) `topological_order` lists the nodes in a valid topological order.
+///  (4) `topological_order` lists the nodes in a valid topological order.
+///
 ///
 /// The implementation of [`FlatPlan`] must ensure that all its methods uphold these invariants and
 /// that users are not able to break them.
@@ -283,11 +291,40 @@ pub enum FlatPlanNode<T = mz_repr::Timestamp> {
     },
 }
 
-impl<T> From<Plan<T>> for FlatPlan<T> {
+impl<T> TryFrom<Plan<T>> for FlatPlan<T> {
+    /// The only error is "invalid input plan".
+    type Error = ();
     /// Flatten the given [`Plan`] into a [`FlatPlan`].
     ///
     /// The ids in `FlatPlan.nodes` are the same as the original LirIds.
-    fn from(plan: Plan<T>) -> Self {
+    fn try_from(plan: Plan<T>) -> Result<Self, ()> {
+        // First, validate the precondition structure of `plan`.
+        let mut to_validate = vec![&plan];
+        let mut test_let_free: Vec<&Plan<T>> = Vec::new();
+        while let Some(plan) = to_validate.pop() {
+            match &plan.node {
+                PlanNode::Let { value, body, .. } => {
+                    test_let_free.push(&*value);
+                    to_validate.push(body);
+                }
+                PlanNode::LetRec { values, body, .. } => {
+                    to_validate.extend(values.iter());
+                    to_validate.push(body);
+                }
+                _ => {
+                    test_let_free.push(plan);
+                }
+            }
+        }
+        while let Some(plan) = test_let_free.pop() {
+            match plan.node {
+                PlanNode::Let { .. } | PlanNode::LetRec { .. } => return Err(()),
+                _ => {
+                    test_let_free.extend(plan.node.children());
+                }
+            }
+        }
+
         use FlatPlanNode::*;
 
         // The strategy is to walk walk through the `Plan` in right-to-left pre-order and for each
@@ -491,11 +528,11 @@ impl<T> From<Plan<T>> for FlatPlan<T> {
         flatten_order.reverse();
         let topological_order = flatten_order;
 
-        Self {
+        Ok(Self {
             steps,
             root,
             topological_order,
-        }
+        })
     }
 }
 
@@ -517,15 +554,11 @@ impl<T> FlatPlan<T> {
         self.root
     }
 
-    /// Return the root node.
-    fn root(&self) -> &FlatPlanNode<T> {
-        &self.steps.get(&self.root).expect("invariant (1)").node
-    }
-
     /// Return whether the plan contains recursion.
     pub fn is_recursive(&self) -> bool {
-        // Because of invariant (4), every recursive plan must have a `LetRec` at its root.
-        matches!(self.root(), FlatPlanNode::LetRec { .. })
+        self.steps
+            .values()
+            .any(|step| matches!(step.node, FlatPlanNode::LetRec { .. }))
     }
 
     /// Split a recursive plan into its constituent (values, body) subplans.
@@ -1016,7 +1049,9 @@ impl Arbitrary for FlatPlan {
     type Parameters = ();
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        any::<Plan>().prop_map(FlatPlan::from).boxed()
+        any::<Plan>()
+            .prop_map(|x| FlatPlan::try_from(x).unwrap())
+            .boxed()
     }
 }
 
