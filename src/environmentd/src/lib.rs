@@ -61,6 +61,7 @@ pub use crate::deployment::state::DeploymentStatus;
 pub use crate::http::{SqlResponse, WebSocketAuth, WebSocketResponse};
 
 mod deployment;
+pub mod environmentd;
 pub mod http;
 mod telemetry;
 #[cfg(feature = "test")]

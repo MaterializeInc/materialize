@@ -592,6 +592,7 @@ crates_repository(
         "//:src/lowertest-derive/Cargo.toml",
         "//:src/lowertest/Cargo.toml",
         "//:src/lsp-server/Cargo.toml",
+        "//:src/materialized/Cargo.toml",
         "//:src/metabase/Cargo.toml",
         "//:src/metrics/Cargo.toml",
         "//:src/mysql-util/Cargo.toml",

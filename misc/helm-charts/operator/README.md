@@ -271,7 +271,7 @@ Specify each parameter using the `--set key=value[,key=value]` argument to `helm
 
 ```shell
 helm install my-materialize-operator \
-  --set operator.image.tag=v1.0.0 \
+  --set operator.image.tag=v0.125.0-dev.0--pr.gd3deb07aa502a84ebd024517344f0aa861f857df \
   materialize/materialize-operator
 ```
 
@@ -307,6 +307,7 @@ metadata:
   namespace: materialize-environment
 spec:
   environmentdImageRef: materialize/environmentd:v0.125.0-dev.0--pr.gd3deb07aa502a84ebd024517344f0aa861f857df
+  backendSecretName: materialize-backend
   environmentdResourceRequirements:
     limits:
       memory: 16Gi
@@ -319,10 +320,6 @@ spec:
     requests:
       cpu: 100m
       memory: 256Mi
-  requestRollout: 22222222-2222-2222-2222-222222222222
-  forceRollout: 33333333-3333-3333-3333-333333333333
-  inPlaceRollout: false
-  backendSecretName: materialize-backend
 ```
 
 ## Configuration and Installation Details

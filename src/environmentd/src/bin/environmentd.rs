@@ -7,11 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-mod copy_to_s3_oneshot;
-mod correction;
-mod materialized_view;
-mod materialized_view_v2;
-mod refresh;
-mod subscribe;
-
-pub(crate) use correction::ConsolidatingVec;
+fn main() {
+    mz_environmentd::environmentd::main();
+}

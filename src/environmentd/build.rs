@@ -13,7 +13,7 @@ fn main() -> Result<(), anyhow::Error> {
     println!("cargo:rustc-env=TARGET_TRIPLE={}", env::var("TARGET")?);
 
     cc::Build::new()
-        .file("src/bin/environmentd/sys.c")
+        .file("src/environmentd/sys.c")
         .compile("environmentd_sys");
 
     mz_npm::ensure()

@@ -21,6 +21,13 @@ pub const ENABLE_MZ_JOIN_CORE: Config<bool> = Config::new(
      linear joins.",
 );
 
+/// Whether rendering should use the new MV sink implementation.
+pub const ENABLE_MATERIALIZED_VIEW_SINK_V2: Config<bool> = Config::new(
+    "enable_compute_materialized_view_sink_v2",
+    true,
+    "Whether compute should use the new MV sink implementation.",
+);
+
 /// The yielding behavior with which linear joins should be rendered.
 pub const LINEAR_JOIN_YIELDING: Config<&str> = Config::new(
     "linear_join_yielding",
@@ -146,6 +153,7 @@ pub const COMPUTE_REPLICA_EXPIRATION_OFFSET: Config<Duration> = Config::new(
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
         .add(&ENABLE_MZ_JOIN_CORE)
+        .add(&ENABLE_MATERIALIZED_VIEW_SINK_V2)
         .add(&LINEAR_JOIN_YIELDING)
         .add(&ENABLE_COLUMNATION_LGALLOC)
         .add(&ENABLE_LGALLOC_EAGER_RECLAMATION)

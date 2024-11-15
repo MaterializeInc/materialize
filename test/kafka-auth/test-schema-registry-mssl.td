@@ -42,7 +42,7 @@ $ kafka-ingest topic=avro-data format=avro schema=${schema}
     URL 'https://mssl.schema-registry.local:8082',
     SSL CERTIFICATE AUTHORITY = '${ca-crt}'
   )
-contains:alert bad certificate
+contains:error sending request for url
 
 # This is a bad error message to indicate "disallowed client certificate" but
 # it's not under our control.

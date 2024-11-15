@@ -1,0 +1,23 @@
+[package]
+name = "mz-materialized"
+description = "Materialize's unified binary."
+version = "0.126.0-dev.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+mz-clusterd = { path = "../clusterd", default-features = false }
+mz-environmentd = { path = "../environmentd", default-features = false }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+
+[features]
+default = ["mz-clusterd/default", "mz-environmentd/default"]
+jemalloc = ["mz-clusterd/jemalloc", "mz-environmentd/jemalloc"]
+tokio-console = ["mz-clusterd/tokio-console", "mz-environmentd/tokio-console"]
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["mz-alloc-default", "workspace-hack"]

@@ -5376,6 +5376,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-materialized"
+version = "0.126.0-dev.0"
+dependencies = [
+ "mz-clusterd",
+ "mz-environmentd",
+ "workspace-hack",
+]
+
+[[package]]
 name = "mz-metabase"
 version = "0.0.0"
 dependencies = [

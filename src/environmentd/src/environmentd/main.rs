@@ -11,6 +11,7 @@
 //!
 //! It listens for SQL connections on port 6875 (MTRL) and for HTTP connections
 //! on port 6876.
+
 use std::ffi::CStr;
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
@@ -36,7 +37,6 @@ use mz_catalog::builtin::{
 use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceController};
 use mz_controller::ControllerConfig;
-use mz_environmentd::{CatalogConfig, Listeners, ListenersConfig, BUILD_INFO};
 use mz_frontegg_auth::{Authenticator, FronteggCliArgs};
 use mz_orchestrator::Orchestrator;
 use mz_orchestrator_kubernetes::{
@@ -71,7 +71,8 @@ use tracing::{error, info, info_span, Instrument};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use url::Url;
 
-mod sys;
+use crate::environmentd::sys;
+use crate::{CatalogConfig, Listeners, ListenersConfig, BUILD_INFO};
 
 static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version(None));
 static LONG_VERSION: LazyLock<String> = LazyLock::new(|| {
@@ -626,7 +627,7 @@ fn aws_secrets_controller_key_alias(env_id: &EnvironmentId) -> String {
     format!("alias/customer_key_{}", env_id)
 }
 
-fn main() {
+pub fn main() {
     let args = cli::parse_args(CliConfig {
         env_prefix: Some("MZ_"),
         enable_version_flag: true,
@@ -867,11 +868,8 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     let secrets_reader = secrets_controller.reader();
     let now = SYSTEM_TIME.clone();
 
-    let mut persist_config = PersistConfig::new(
-        &mz_environmentd::BUILD_INFO,
-        now.clone(),
-        mz_dyncfgs::all_dyncfgs(),
-    );
+    let mut persist_config =
+        PersistConfig::new(&BUILD_INFO, now.clone(), mz_dyncfgs::all_dyncfgs());
     let persist_pubsub_server = PersistGrpcPubSubServer::new(&persist_config, &metrics_registry);
     let persist_pubsub_client = persist_pubsub_server.new_same_process_connection();
 
@@ -957,7 +955,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     );
     let orchestrator = Arc::new(TracingOrchestrator::new(orchestrator, args.tracing.clone()));
     let controller = ControllerConfig {
-        build_info: &mz_environmentd::BUILD_INFO,
+        build_info: &BUILD_INFO,
         orchestrator,
         persist_location: PersistLocation {
             blob_uri: args.persist_blob_url,
@@ -1011,7 +1009,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             metrics: Arc::new(mz_catalog::durable::Metrics::new(&metrics_registry)),
         };
         let server = listeners
-            .serve(mz_environmentd::Config {
+            .serve(crate::Config {
                 // Special modes.
                 unsafe_mode: args.unsafe_mode,
                 all_features: args.all_features,
@@ -1095,7 +1093,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
 
     println!(
         "environmentd {} listening...",
-        mz_environmentd::BUILD_INFO.human_version(args.helm_chart_version)
+        BUILD_INFO.human_version(args.helm_chart_version)
     );
     println!(" SQL address: {}", server.sql_local_addr());
     println!(" HTTP address: {}", server.http_local_addr());

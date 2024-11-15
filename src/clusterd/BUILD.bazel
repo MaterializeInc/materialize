@@ -10,9 +10,133 @@
 # by the Apache License, Version 2.0.
 
 load("@crates_io//:defs.bzl", "aliases", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_binary")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_doc_test", "rust_library", "rust_test")
 
 package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "mz_clusterd",
+    srcs = glob(["src/**/*.rs"]),
+    aliases = aliases(
+        normal = True,
+        proc_macro = True,
+    ),
+    compile_data = [],
+    crate_features = [
+        "default",
+        "mz-alloc-default",
+        "tokio-console",
+    ],
+    data = [],
+    proc_macro_deps = [] + all_crate_deps(proc_macro = True),
+    rustc_env = {},
+    rustc_flags = [],
+    version = "0.126.0-dev.0",
+    deps = [
+        "//src/alloc:mz_alloc",
+        "//src/alloc-default:mz_alloc_default",
+        "//src/build-info:mz_build_info",
+        "//src/cloud-resources:mz_cloud_resources",
+        "//src/cluster:mz_cluster",
+        "//src/compute:mz_compute",
+        "//src/compute-client:mz_compute_client",
+        "//src/dyncfgs:mz_dyncfgs",
+        "//src/http-util:mz_http_util",
+        "//src/metrics:mz_metrics",
+        "//src/orchestrator-tracing:mz_orchestrator_tracing",
+        "//src/ore:mz_ore",
+        "//src/persist-client:mz_persist_client",
+        "//src/prof-http:mz_prof_http",
+        "//src/service:mz_service",
+        "//src/storage:mz_storage",
+        "//src/storage-client:mz_storage_client",
+        "//src/storage-types:mz_storage_types",
+        "//src/timely-util:mz_timely_util",
+        "//src/txn-wal:mz_txn_wal",
+    ] + all_crate_deps(normal = True),
+)
+
+rust_test(
+    name = "mz_clusterd_lib_tests",
+    size = "medium",
+    aliases = aliases(
+        normal = True,
+        normal_dev = True,
+        proc_macro = True,
+        proc_macro_dev = True,
+    ),
+    compile_data = [],
+    crate = ":mz_clusterd",
+    crate_features = [
+        "default",
+        "mz-alloc-default",
+        "tokio-console",
+    ],
+    data = [],
+    env = {},
+    proc_macro_deps = [] + all_crate_deps(
+        proc_macro = True,
+        proc_macro_dev = True,
+    ),
+    rustc_env = {},
+    rustc_flags = [],
+    version = "0.126.0-dev.0",
+    deps = [
+        "//src/alloc:mz_alloc",
+        "//src/alloc-default:mz_alloc_default",
+        "//src/build-info:mz_build_info",
+        "//src/cloud-resources:mz_cloud_resources",
+        "//src/cluster:mz_cluster",
+        "//src/compute:mz_compute",
+        "//src/compute-client:mz_compute_client",
+        "//src/dyncfgs:mz_dyncfgs",
+        "//src/http-util:mz_http_util",
+        "//src/metrics:mz_metrics",
+        "//src/orchestrator-tracing:mz_orchestrator_tracing",
+        "//src/ore:mz_ore",
+        "//src/persist-client:mz_persist_client",
+        "//src/prof-http:mz_prof_http",
+        "//src/service:mz_service",
+        "//src/storage:mz_storage",
+        "//src/storage-client:mz_storage_client",
+        "//src/storage-types:mz_storage_types",
+        "//src/timely-util:mz_timely_util",
+        "//src/txn-wal:mz_txn_wal",
+    ] + all_crate_deps(
+        normal = True,
+        normal_dev = True,
+    ),
+)
+
+rust_doc_test(
+    name = "mz_clusterd_doc_test",
+    crate = ":mz_clusterd",
+    deps = [
+        "//src/alloc:mz_alloc",
+        "//src/alloc-default:mz_alloc_default",
+        "//src/build-info:mz_build_info",
+        "//src/cloud-resources:mz_cloud_resources",
+        "//src/cluster:mz_cluster",
+        "//src/compute:mz_compute",
+        "//src/compute-client:mz_compute_client",
+        "//src/dyncfgs:mz_dyncfgs",
+        "//src/http-util:mz_http_util",
+        "//src/metrics:mz_metrics",
+        "//src/orchestrator-tracing:mz_orchestrator_tracing",
+        "//src/ore:mz_ore",
+        "//src/persist-client:mz_persist_client",
+        "//src/prof-http:mz_prof_http",
+        "//src/service:mz_service",
+        "//src/storage:mz_storage",
+        "//src/storage-client:mz_storage_client",
+        "//src/storage-types:mz_storage_types",
+        "//src/timely-util:mz_timely_util",
+        "//src/txn-wal:mz_txn_wal",
+    ] + all_crate_deps(
+        normal = True,
+        normal_dev = True,
+    ),
+)
 
 rust_binary(
     name = "clusterd",
@@ -31,6 +155,7 @@ rust_binary(
     rustc_flags = [],
     version = "0.126.0-dev.0",
     deps = [
+        ":mz_clusterd",
         "//src/alloc:mz_alloc",
         "//src/alloc-default:mz_alloc_default",
         "//src/build-info:mz_build_info",

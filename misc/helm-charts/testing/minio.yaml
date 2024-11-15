@@ -36,11 +36,48 @@ spec:
           value: "minio"
         - name: MINIO_SECRET_KEY
           value: "minio123"
+        - name: MINIO_BROWSER
+          value: "on"
         ports:
         - containerPort: 9000
         volumeMounts:
         - name: storage
           mountPath: /data
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /minio/health/live
+            port: 9000
+          initialDelaySeconds: 10
+          periodSeconds: 20
+          timeoutSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /minio/health/ready
+            port: 9000
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 5
+      initContainers:
+      - name: create-buckets
+        image: minio/mc
+        env:
+        - name: MINIO_ACCESS_KEY
+          value: "minio"
+        - name: MINIO_SECRET_KEY
+          value: "minio123"
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          mc alias set myminio http://minio:9000 minio minio123 && \
+          mc mb -p myminio/persist && \
+          mc mb -p local/bucket
       volumes:
       - name: storage
         emptyDir: {}
