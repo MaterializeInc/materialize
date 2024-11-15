@@ -26,7 +26,7 @@ use crate::{util, KubernetesOrchestrator, FIELD_MANAGER};
 #[async_trait]
 impl SecretsController for KubernetesOrchestrator {
     async fn ensure(&self, id: CatalogItemId, contents: &[u8]) -> Result<(), anyhow::Error> {
-        let name = secret_name(id);
+        let name = secret_name(id, &self.config.name_prefix());
         let data = iter::once(("contents".into(), ByteString(contents.into())));
         let secret = Secret {
             metadata: ObjectMeta {
@@ -53,7 +53,10 @@ impl SecretsController for KubernetesOrchestrator {
         // garbage collection task.
         match self
             .secret_api
-            .delete(&secret_name(id), &DeleteParams::default())
+            .delete(
+                &secret_name(id, &self.config.name_prefix()),
+                &DeleteParams::default(),
+            )
             .await
         {
             Ok(_) => Ok(()),
@@ -72,7 +75,7 @@ impl SecretsController for KubernetesOrchestrator {
                 continue;
             };
             // Ignore invalidly named objects.
-            let Some(id) = from_secret_name(&name) else {
+            let Some(id) = from_secret_name(&name, &self.config.name_prefix()) else {
                 continue;
             };
             ids.push(id);
@@ -83,6 +86,7 @@ impl SecretsController for KubernetesOrchestrator {
     fn reader(&self) -> Arc<dyn SecretsReader> {
         Arc::new(KubernetesSecretsReader {
             secret_api: self.secret_api.clone(),
+            name_prefix: self.config.name_prefix(),
         })
     }
 }
@@ -91,6 +95,7 @@ impl SecretsController for KubernetesOrchestrator {
 #[derive(Debug)]
 pub struct KubernetesSecretsReader {
     secret_api: Api<Secret>,
+    name_prefix: String,
 }
 
 impl KubernetesSecretsReader {
@@ -98,17 +103,27 @@ impl KubernetesSecretsReader {
     ///
     /// The `context` parameter works like
     /// [`KubernetesOrchestratorConfig::context`](crate::KubernetesOrchestratorConfig::context).
-    pub async fn new(context: String) -> Result<KubernetesSecretsReader, anyhow::Error> {
+    pub async fn new(
+        context: String,
+        name_prefix: Option<String>,
+    ) -> Result<KubernetesSecretsReader, anyhow::Error> {
         let (client, _) = util::create_client(context).await?;
         let secret_api: Api<Secret> = Api::default_namespaced(client);
-        Ok(KubernetesSecretsReader { secret_api })
+        let name_prefix = name_prefix.clone().unwrap_or_default();
+        Ok(KubernetesSecretsReader {
+            secret_api,
+            name_prefix,
+        })
     }
 }
 
 #[async_trait]
 impl SecretsReader for KubernetesSecretsReader {
     async fn read(&self, id: CatalogItemId) -> Result<Vec<u8>, anyhow::Error> {
-        let secret = self.secret_api.get(&secret_name(id)).await?;
+        let secret = self
+            .secret_api
+            .get(&secret_name(id, &self.name_prefix))
+            .await?;
         let mut data = secret
             .data
             .ok_or_else(|| anyhow!("internal error: secret missing data field"))?;
@@ -121,11 +136,12 @@ impl SecretsReader for KubernetesSecretsReader {
 
 const SECRET_NAME_PREFIX: &str = "user-managed-";
 
-fn secret_name(id: CatalogItemId) -> String {
-    format!("{SECRET_NAME_PREFIX}{id}")
+fn secret_name(id: CatalogItemId, name_prefix: &str) -> String {
+    format!("{name_prefix}{SECRET_NAME_PREFIX}{id}")
 }
 
-fn from_secret_name(name: &str) -> Option<CatalogItemId> {
-    name.strip_prefix(SECRET_NAME_PREFIX)
+fn from_secret_name(name: &str, name_prefix: &str) -> Option<CatalogItemId> {
+    name.strip_prefix(&name_prefix)
+        .and_then(|name| name.strip_prefix(SECRET_NAME_PREFIX))
         .and_then(|id| id.parse().ok())
 }
