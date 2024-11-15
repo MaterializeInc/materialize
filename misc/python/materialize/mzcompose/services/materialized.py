@@ -184,12 +184,6 @@ class Materialized(Service):
                 else default_size
             )
         )
-        command += [
-            # Issue database-issues#4562 prevents the habitual use of large introspection
-            # clusters, so we leave the builtin cluster replica size as is.
-            # f"--bootstrap-builtin-cluster-replica-size={self.default_replica_size}",
-            f"--bootstrap-default-cluster-replica-size={self.default_replica_size}",
-        ]
 
         if external_metadata_store:
             address = (
