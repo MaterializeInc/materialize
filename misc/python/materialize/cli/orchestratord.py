@@ -37,7 +37,7 @@ def main():
         "--kind-cluster-name",
         default=os.environ.get("KIND_CLUSTER_NAME", "kind"),
     )
-    subparsers = parser.add_subparsers(dest="subcommand")
+    subparsers = parser.add_subparsers(required=True)
 
     parser_run = subparsers.add_parser("run")
     parser_run.add_argument("--dev", action="store_true")
@@ -59,10 +59,7 @@ def main():
     parser_environment.set_defaults(func=environment)
 
     args = parser.parse_args()
-    if args.subcommand is None:
-        run(args)
-    else:
-        args.func(args)
+    args.func(args)
 
 
 def run(args: argparse.Namespace):
