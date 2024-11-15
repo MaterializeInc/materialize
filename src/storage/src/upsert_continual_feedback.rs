@@ -204,6 +204,22 @@ where
         let mut persist_stash = vec![];
         let mut persist_upper = Antichain::from_elem(Timestamp::minimum());
 
+        // We keep track of the largest timestamp seen on the persist input so
+        // that we can block processing source input while that timestamp is
+        // beyond the persist frontier. While ingesting updates of a timestamp,
+        // our upsert state is in a consolidating state, and trying to read it
+        // at that time would yield a panic.
+        //
+        // NOTE(aljoscha): You would think that it cannot happen that we even
+        // attempt to process source updates while the state is in a
+        // consolidating state, because we always wait until the persist
+        // frontier "catches up" with the timestamp of the source input. If
+        // there is only this here UPSERT operator and no concurrent instances,
+        // this is true. But with concurrent instances it can happen that an
+        // operator that is faster than us makes it so updates get written to
+        // persist. And we would then be ingesting them.
+        let mut largest_seen_persist_ts: Option<G::Timestamp> = None;
+
         // A buffer for our output.
         let mut output_updates = vec![];
 
@@ -217,16 +233,18 @@ where
                     // Read away as much input as we can.
                     while let Some(persist_event) = persist_input.next_sync() {
                         match persist_event {
-                            AsyncEvent::Data(_cap, data) => {
+                            AsyncEvent::Data(time, data) => {
                                 tracing::trace!(
                                     worker_id = %source_config.worker_id,
                                     source_id = %source_config.id,
-                                    time=?_cap,
+                                    time=?time,
                                     updates=%data.len(),
                                     "received persist data");
+
                                 persist_stash.extend(data.into_iter().map(|((key, value), ts, diff)| {
+                                    largest_seen_persist_ts = std::cmp::max(largest_seen_persist_ts.clone(), Some(ts.clone()));
                                     (key, value, ts, diff)
-                                }))
+                                }));
                             }
                             AsyncEvent::Progress(upper) => {
                                 tracing::trace!(
@@ -432,6 +450,15 @@ where
                     }
                 }
             };
+
+            // While we have partially ingested updates of a timestamp our state
+            // is in an inconsistent/consolidating state and accessing it would
+            // panic.
+            if let Some(largest_seen_persist_ts) = largest_seen_persist_ts.as_ref() {
+                if persist_upper.less_equal(largest_seen_persist_ts) {
+                    continue;
+                }
+            }
 
             // We try and drain from our stash every time we go through the
             // loop. More of our stash can become eligible for draining both
