@@ -15,13 +15,17 @@ MZFROM ubuntu-base
 RUN groupadd --system --gid=999 materialize \
     && useradd --system --gid=999 --uid=999 --create-home materialize
 
+ARG CI_SANITIZER=none
+
 RUN apt-get update \
     && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get -qy install \
         ca-certificates \
         curl \
-        llvm \
         tini \
         ssh \
+    && if [ "$CI_SANITIZER" != "none" ]; then \
+        TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get -qy install --no-install-recommends llvm; \
+       fi \
     && mkdir /scratch \
     && chown materialize /scratch \
     && mkdir /mzdata \
