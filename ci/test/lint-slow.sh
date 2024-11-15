@@ -29,4 +29,6 @@ try bin/ci-closed-issues-detect --changed-lines-only
 # discover the failures after a merge to main.
 try cargo --locked about generate ci/deploy/licenses.hbs > /dev/null
 
+try helm unittest misc/helm-charts/operator
+
 try_status_report
