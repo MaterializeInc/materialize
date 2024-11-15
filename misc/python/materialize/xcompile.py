@@ -150,7 +150,7 @@ def cargo(
     }
 
     rustflags += [
-        "-Clink-arg=-Wl,--compress-debug-sections=zstd",
+        "-Clink-arg=-Wl,--compress-debug-sections=zlib",
         "-Clink-arg=-Wl,-O3",
         "-Csymbol-mangling-version=v0",
         "--cfg=tokio_unstable",

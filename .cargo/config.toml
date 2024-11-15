@@ -13,7 +13,7 @@
 # Sync: This target-cpu and list of features should be kept in sync with the ones in ci-builder and
 # xcompile.
 rustflags = [
-    "-Clink-arg=-Wl,--compress-debug-sections=zstd",
+    "-Clink-arg=-Wl,--compress-debug-sections=zlib",
     "-Clink-arg=-Wl,-O3",
     "-Clink-arg=-fuse-ld=lld",
     "-Csymbol-mangling-version=v0",
@@ -30,7 +30,7 @@ rustflags = [
 # xcompile.
 [target."aarch64-unknown-linux-gnu"]
 rustflags = [
-    "-Clink-arg=-Wl,--compress-debug-sections=zstd",
+    "-Clink-arg=-Wl,--compress-debug-sections=zlib",
     "-Clink-arg=-Wl,-O3",
     "-Clink-arg=-fuse-ld=lld",
     "-Csymbol-mangling-version=v0",
