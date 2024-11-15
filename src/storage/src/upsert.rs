@@ -669,18 +669,21 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
     }
 
     match state
-        .multi_put(commands_state.drain(..).map(|(k, cv)| {
-            (
-                k,
-                types::PutValue {
-                    value: cv.value.map(|cv| cv.into_decoded()),
-                    previous_value_metadata: cv.metadata.map(|v| ValueMetadata {
-                        size: v.size.try_into().expect("less than i64 size"),
-                        is_tombstone: v.is_tombstone,
-                    }),
-                },
-            )
-        }))
+        .multi_put(
+            true, // Do update per-update stats.
+            commands_state.drain(..).map(|(k, cv)| {
+                (
+                    k,
+                    types::PutValue {
+                        value: cv.value.map(|cv| cv.into_decoded()),
+                        previous_value_metadata: cv.metadata.map(|v| ValueMetadata {
+                            size: v.size.try_into().expect("less than i64 size"),
+                            is_tombstone: v.is_tombstone,
+                        }),
+                    },
+                )
+            }),
+        )
         .await
     {
         Ok(_) => {}

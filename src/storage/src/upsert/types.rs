@@ -191,6 +191,7 @@ pub struct MergeValue<V> {
 /// differential updates with diffs), so order keys are not required.
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub enum StateValue<T, O> {
+    // TODO(aljoscha): This should really be called Consolidating, or Ingesting.
     Snapshotting(Snapshotting),
     Value(Value<T, O>),
 }
@@ -592,43 +593,62 @@ impl<T: Eq, O: Default> StateValue<T, O> {
         bincode_opts: BincodeOpts,
         bincode_buffer: &mut Vec<u8>,
     ) -> bool {
-        if let Self::Snapshotting(Snapshotting {
-            value_xor,
-            len_sum,
-            checksum_sum,
-            diff_sum,
-        }) = self
-        {
-            bincode_buffer.clear();
-            bincode_opts
-                .serialize_into(&mut *bincode_buffer, &value)
-                .unwrap();
-            let len = i64::try_from(bincode_buffer.len()).unwrap();
+        match self {
+            Self::Snapshotting(Snapshotting {
+                value_xor,
+                len_sum,
+                checksum_sum,
+                diff_sum,
+            }) => {
+                bincode_buffer.clear();
+                bincode_opts
+                    .serialize_into(&mut *bincode_buffer, &value)
+                    .unwrap();
+                let len = i64::try_from(bincode_buffer.len()).unwrap();
 
-            *diff_sum += diff;
-            *len_sum += len.wrapping_mul(diff);
-            // Truncation is fine (using `as`) as this is just a checksum
-            *checksum_sum += (seahash::hash(&*bincode_buffer) as i64).wrapping_mul(diff);
+                *diff_sum += diff;
+                *len_sum += len.wrapping_mul(diff);
+                // Truncation is fine (using `as`) as this is just a checksum
+                *checksum_sum += (seahash::hash(&*bincode_buffer) as i64).wrapping_mul(diff);
 
-            // XOR of even diffs cancel out, so we only do it if diff is odd
-            if diff.abs() % 2 == 1 {
-                if value_xor.len() < bincode_buffer.len() {
-                    value_xor.resize(bincode_buffer.len(), 0);
+                // XOR of even diffs cancel out, so we only do it if diff is odd
+                if diff.abs() % 2 == 1 {
+                    if value_xor.len() < bincode_buffer.len() {
+                        value_xor.resize(bincode_buffer.len(), 0);
+                    }
+                    // Note that if the new value is _smaller_ than the `value_xor`, and
+                    // the values at the end are zeroed out, we can shrink the buffer. This
+                    // is extremely sensitive code, so we don't (yet) do that.
+                    for (acc, val) in value_xor.iter_mut().zip(bincode_buffer.drain(..)) {
+                        *acc ^= val;
+                    }
                 }
-                // Note that if the new value is _smaller_ than the `value_xor`, and
-                // the values at the end are zeroed out, we can shrink the buffer. This
-                // is extremely sensitive code, so we don't (yet) do that.
-                for (acc, val) in value_xor.iter_mut().zip(bincode_buffer.drain(..)) {
-                    *acc ^= val;
+
+                // Returns whether or not the value can be deleted. This allows us to delete values in
+                // `UpsertState::consolidate_snapshot_chunk` (even if they come back later) during snapshotting,
+                // to minimize space usage.
+                diff_sum.0 == 0 && checksum_sum.0 == 0 && value_xor.iter().all(|&x| x == 0)
+            }
+            StateValue::Value(_value) => {
+                // We can turn a Value back into a Snapshotting state:
+                // `std::mem::take` will leave behind a default value, which
+                // happens to be a default `Snapshotting` `StateValue`.
+                let this = std::mem::take(self);
+
+                let finalized_value = this.into_finalized_value();
+                if let Some((finalized_value, _order)) = finalized_value {
+                    // If we had a value before, merge it into the now-snapshotting
+                    // state first.
+                    let _ = self.merge_update(finalized_value, 1, bincode_opts, bincode_buffer);
+
+                    // Then merge the new value in.
+                    self.merge_update(value, diff, bincode_opts, bincode_buffer)
+                } else {
+                    // We didn't have a value before, might have been a
+                    // tombstone. So just merge in the new value.
+                    self.merge_update(value, diff, bincode_opts, bincode_buffer)
                 }
             }
-
-            // Returns whether or not the value can be deleted. This allows us to delete values in
-            // `UpsertState::consolidate_snapshot_chunk` (even if they come back later) during snapshotting,
-            // to minimize space usage.
-            return diff_sum.0 == 0 && checksum_sum.0 == 0 && value_xor.iter().all(|&x| x == 0);
-        } else {
-            panic!("`merge_update` called after snapshot consolidation")
         }
     }
 
@@ -997,17 +1017,29 @@ where
     O: Default,
     T: std::cmp::Eq,
 {
-    let mut current = Default::default();
-    assert!(
-        matches!(current, StateValue::Snapshotting(_)),
-        "merge_function called with non-snapshotting default"
-    );
+    let mut current: StateValue<T, O> = Default::default();
+
+    let mut bincode_buf = Vec::new();
     for update in updates {
-        assert!(
-            matches!(update, StateValue::Snapshotting(_)),
-            "merge_function called with non-snapshot update"
-        );
-        current.merge_update_state(&update);
+        match update {
+            StateValue::Snapshotting(_) => {
+                current.merge_update_state(&update);
+            }
+            StateValue::Value(_) => {
+                // This branch is more expensive, but we hopefully rarely hit
+                // it.
+                if let Some((finalized_value, _order)) = update.into_finalized_value() {
+                    let mut update = StateValue::default();
+                    update.merge_update(
+                        finalized_value,
+                        1,
+                        upsert_bincode_opts(),
+                        &mut bincode_buf,
+                    );
+                    current.merge_update_state(&update);
+                }
+            }
+        }
     }
 
     current
@@ -1019,7 +1051,7 @@ pub struct UpsertState<'metrics, S, T, O> {
     inner: S,
 
     // The status, start time, and stats about calls to `consolidate_snapshot_chunk`.
-    snapshot_start: Instant,
+    pub snapshot_start: Instant,
     snapshot_stats: SnapshotStats,
     snapshot_completed: bool,
 
@@ -1077,6 +1109,7 @@ where
     T: Eq + Clone + Send + Sync + Serialize + 'static,
     O: Default + Clone + Send + Sync + Serialize + DeserializeOwned + 'static,
 {
+    // TODO: Update docs.
     /// Consolidate the following differential updates into the state, during snapshotting.
     /// Updates provided to this method can be assumed to consolidate into a single value
     /// per-key, after all chunks have been processed.
@@ -1157,28 +1190,30 @@ where
             .merge_snapshot_deletes
             .inc_by(stats.deletes);
 
-        self.snapshot_stats += stats;
-        // Updating the metrics
-        self.worker_metrics.rehydration_total.set(
-            self.snapshot_stats.values_diff.try_into().unwrap_or_else(
-                |e: std::num::TryFromIntError| {
-                    tracing::warn!(
-                        "rehydration_total metric overflowed or is negative \
-                        and is innacurate: {}. Defaulting to 0",
-                        e.display_with_causes(),
-                    );
+        self.stats.update_bytes_indexed_by(stats.size_diff);
+        self.stats.update_records_indexed_by(stats.values_diff);
 
-                    0
-                },
-            ),
-        );
-        self.worker_metrics
-            .rehydration_updates
-            .set(self.snapshot_stats.updates);
-        // These `set_` functions also ensure that these values are non-negative.
-        self.stats.set_bytes_indexed(self.snapshot_stats.size_diff);
-        self.stats
-            .set_records_indexed(self.snapshot_stats.values_diff);
+        self.snapshot_stats += stats;
+
+        if !self.snapshot_completed {
+            // Updating the metrics
+            self.worker_metrics.rehydration_total.set(
+                self.snapshot_stats.values_diff.try_into().unwrap_or_else(
+                    |e: std::num::TryFromIntError| {
+                        tracing::warn!(
+                            "rehydration_total metric overflowed or is negative \
+                        and is innacurate: {}. Defaulting to 0",
+                            e.display_with_causes(),
+                        );
+
+                        0
+                    },
+                ),
+            );
+            self.worker_metrics
+                .rehydration_updates
+                .set(self.snapshot_stats.updates);
+        }
 
         if completed {
             if self.shrink_upsert_unused_buffers_by_ratio > 0 {
@@ -1290,6 +1325,13 @@ where
                 } else if diff < 0 {
                     stats.deletes += 1;
                 }
+
+                // We rely on the diffs in our input instead of the result of
+                // multi_put below. This makes sure we report the same stats as
+                // `consolidate_snapshot_merge_inner`, regardless of what values
+                // there were in state before.
+                stats.values_diff += diff;
+
                 let entry = self.consolidate_upsert_scratch.get_mut(&key).unwrap();
                 let val = entry.value.get_or_insert_with(Default::default);
 
@@ -1317,7 +1359,6 @@ where
                 }))
                 .await?;
 
-            stats.values_diff = p_stats.values_diff;
             stats.size_diff = p_stats.size_diff;
         }
 
@@ -1326,7 +1367,11 @@ where
 
     /// Insert or delete for all `puts` keys, prioritizing the last value for
     /// repeated keys.
-    pub async fn multi_put<P>(&mut self, puts: P) -> Result<(), anyhow::Error>
+    pub async fn multi_put<P>(
+        &mut self,
+        update_per_record_stats: bool,
+        puts: P,
+    ) -> Result<(), anyhow::Error>
     where
         P: IntoIterator<Item = (UpsertKey, PutValue<Value<T, O>>)>,
     {
@@ -1353,70 +1398,17 @@ where
         self.worker_metrics
             .multi_put_size
             .inc_by(stats.processed_puts);
-        self.worker_metrics.upsert_inserts.inc_by(stats.inserts);
-        self.worker_metrics.upsert_updates.inc_by(stats.updates);
-        self.worker_metrics.upsert_deletes.inc_by(stats.deletes);
 
-        self.stats.update_bytes_indexed_by(stats.size_diff);
-        self.stats.update_records_indexed_by(stats.values_diff);
-        self.stats
-            .update_envelope_state_tombstones_by(stats.tombstones_diff);
+        if update_per_record_stats {
+            self.worker_metrics.upsert_inserts.inc_by(stats.inserts);
+            self.worker_metrics.upsert_updates.inc_by(stats.updates);
+            self.worker_metrics.upsert_deletes.inc_by(stats.deletes);
 
-        Ok(())
-    }
-
-    /// Insert or delete for all `puts` keys, prioritizing the last value for
-    /// repeated keys.
-    ///
-    /// Version of `multi_put` that uses the given stats, for when the caller
-    /// cannot provide [`PutValues`](PutValue) with meaningful
-    /// `previous_value_metadata`. This is the case then the caller is updating
-    /// state without having previously read state, which latter would yield the
-    /// required [`ValueMetadata`]. In those cases the caller hopefully has a
-    /// better way of computing the same stats.
-    pub async fn multi_put_with_stats<P>(
-        &mut self,
-        puts: P,
-        precomputed_stats: PutStats,
-    ) -> Result<(), anyhow::Error>
-    where
-        P: IntoIterator<Item = (UpsertKey, PutValue<StateValue<T, O>>)>,
-    {
-        fail::fail_point!("fail_state_multi_put", |_| {
-            Err(anyhow::anyhow!("Error putting values into state"))
-        });
-        let now = Instant::now();
-        let stats = self
-            .inner
-            .multi_put(puts.into_iter().map(|(k, pv)| (k, pv)))
-            .await?;
-
-        self.metrics
-            .multi_put_latency
-            .observe(now.elapsed().as_secs_f64());
-
-        // We use `processed_puts`, because the backend has special knowledge
-        // here.
-        self.worker_metrics
-            .multi_put_size
-            .inc_by(stats.processed_puts);
-
-        self.worker_metrics
-            .upsert_inserts
-            .inc_by(precomputed_stats.inserts);
-        self.worker_metrics
-            .upsert_updates
-            .inc_by(precomputed_stats.updates);
-        self.worker_metrics
-            .upsert_deletes
-            .inc_by(precomputed_stats.deletes);
-
-        self.stats
-            .update_bytes_indexed_by(precomputed_stats.size_diff);
-        self.stats
-            .update_records_indexed_by(precomputed_stats.values_diff);
-        self.stats
-            .update_envelope_state_tombstones_by(precomputed_stats.tombstones_diff);
+            self.stats.update_bytes_indexed_by(stats.size_diff);
+            self.stats.update_records_indexed_by(stats.values_diff);
+            self.stats
+                .update_envelope_state_tombstones_by(stats.tombstones_diff);
+        }
 
         Ok(())
     }
