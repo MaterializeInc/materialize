@@ -20,7 +20,6 @@ from urllib.parse import urlparse, urlunparse
 from materialize import MZ_ROOT, ui
 
 DEV_IMAGE_TAG = "local-dev"
-CONSOLE_VERSION = "25.1.0-beta.1"
 DEFAULT_POSTGRES = (
     "postgres://root@postgres.materialize.svc.cluster.local:5432/materialize"
 )
@@ -80,7 +79,6 @@ def run(args: argparse.Namespace):
             "misc/helm-charts/operator",
             "--atomic",
             f"--set=operator.image.tag={DEV_IMAGE_TAG}",
-            f'--set-json=operator.args.consoleImageTagMapOverride={{"{DEV_IMAGE_TAG}":"{CONSOLE_VERSION}"}}',
             "--set=namespace.create=true",
             f"--set=namespace.name={args.namespace}",
         ]
