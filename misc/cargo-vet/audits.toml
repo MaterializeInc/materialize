@@ -299,7 +299,7 @@ version = "1.2.6"
 [[audits.custom-labels]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.1.2"
+version = "0.3.2"
 
 [[audits.datadriven]]
 who = "Ben Kirwin <bkirwi@materialize.com>"
