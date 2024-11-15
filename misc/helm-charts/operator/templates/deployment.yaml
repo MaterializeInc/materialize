@@ -35,6 +35,7 @@ spec:
         image: "{{ .Values.operator.image.repository }}:{{ .Values.operator.image.tag }}"
         imagePullPolicy: {{ .Values.operator.image.pullPolicy }}
         args:
+        - "--helm-chart-version={{ .Chart.Version }}"
         - "--startup-log-filter={{ .Values.operator.args.startupLogFilter }}"
         - "--cloud-provider={{ .Values.operator.args.cloudProvider }}"
         - "--region={{ .Values.operator.args.region }}"
