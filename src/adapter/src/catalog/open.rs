@@ -379,7 +379,6 @@ impl Catalog {
         let mut post_item_updates = Vec::new();
         let mut audit_log_updates = Vec::new();
         for (kind, ts, diff) in updates {
-            let diff = diff.try_into().expect("valid diff");
             match kind {
                 BootstrapStateUpdateKind::Role(_)
                 | BootstrapStateUpdateKind::Database(_)
@@ -393,7 +392,7 @@ impl Catalog {
                     pre_item_updates.push(StateUpdate {
                         kind: kind.into(),
                         ts,
-                        diff,
+                        diff: diff.try_into().expect("valid diff"),
                     })
                 }
                 BootstrapStateUpdateKind::IntrospectionSourceIndex(_)
@@ -401,13 +400,13 @@ impl Catalog {
                     system_item_updates.push(StateUpdate {
                         kind: kind.into(),
                         ts,
-                        diff,
+                        diff: diff.try_into().expect("valid diff"),
                     })
                 }
                 BootstrapStateUpdateKind::Item(_) => item_updates.push(StateUpdate {
                     kind: kind.into(),
                     ts,
-                    diff,
+                    diff: diff.try_into().expect("valid diff"),
                 }),
                 BootstrapStateUpdateKind::Comment(_)
                 | BootstrapStateUpdateKind::StorageCollectionMetadata(_)
@@ -419,7 +418,7 @@ impl Catalog {
                     audit_log_updates.push(StateUpdate {
                         kind: kind.into(),
                         ts,
-                        diff,
+                        diff: diff.try_into().expect("valid diff"),
                     });
                 }
             }
