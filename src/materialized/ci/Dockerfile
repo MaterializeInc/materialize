@@ -9,6 +9,10 @@
 
 MZFROM materialized-base
 
-COPY clusterd environmentd entrypoint.sh /usr/local/bin/
+COPY materialized entrypoint.sh /usr/local/bin/
+
+RUN ["ln", "-s", "/usr/local/bin/materialized", "/usr/local/bin/environmentd"]
+
+RUN ["ln", "-s", "/usr/local/bin/materialized", "/usr/local/bin/clusterd"]
 
 ENTRYPOINT ["tini", "--", "entrypoint.sh"]

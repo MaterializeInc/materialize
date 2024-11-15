@@ -45,6 +45,7 @@ members = [
     "src/mysql-util",
     "src/mz",
     "src/lsp-server",
+    "src/materialized",
     "src/metrics",
     "src/npm",
     "src/orchestrator",
