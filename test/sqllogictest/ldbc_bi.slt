@@ -2022,10 +2022,10 @@ Explained Query:
         Project (#0{creationdate}..=#11{messageid}) // { arity: 12 }
           Join on=(#12{rootpostlanguage} = #13{rootpostlanguage}) type=differential // { arity: 14 }
             implementation
-              %1[#0]UKA » %0:l0[#12]Kiif
+              %1[#0]UKA » %0:l0[#12]Keniif
             ArrangeBy keys=[[#12{rootpostlanguage}]] // { arity: 13 }
               Project (#0{creationdate}..=#10{email}, #12{rootpostlanguage}, #13) // { arity: 13 }
-                Filter (#15{length} < 120) AND (#11{creationdate} > 2012-06-03 00:00:00 UTC) AND (#14{content}) IS NOT NULL AND (#1{id} = #16{creatorpersonid}) // { arity: 17 }
+                Filter (#15{length} < 120) AND (#11{creationdate} > 2012-06-03 00:00:00 UTC) AND (#14{content}) IS NOT NULL AND (#1{id} = #16{creatorpersonid}) AND (false = (#13{rootpostlanguage}) IS NULL) // { arity: 17 }
                   Get l0 // { arity: 17 }
             ArrangeBy keys=[[#0{rootpostlanguage}]] // { arity: 1 }
               Distinct project=[#0{rootpostlanguage}] // { arity: 1 }
