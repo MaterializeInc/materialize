@@ -16,29 +16,27 @@ This directory contains simple examples for deploying MinIO, PostgreSQL, and Red
 0. Create a namespace:
 
     ```bash
+    kind create cluster
     kubectl create namespace materialize # or use an existing namespace
     ```
 
 1. Deploy the services to your Kubernetes cluster:
 
     ```bash
-    kubectl apply -f minio.yaml
-    kubectl apply -f postgres.yaml
+    kubectl apply -f misc/helm-charts/testing/minio.yaml
+    kubectl apply -f misc/helm-charts/testing/postgres.yaml
     ```
 
 2. Monitor the deployments to ensure the pods are running:
 
     ```bash
-    kubectl get pods -w
+    kubectl get pods -w -n materialize
     ```
 
 3. Create a bucket in MinIO (replace `minio-123456-abcdef` with the actual pod name):
 
     ```bash
-    kubectl exec -it minio-123456-abcdef -n materialize -- /bin/sh
-    mc alias set local http://localhost:9000 minio minio123
-    mc mb local/bucket
-    exit
+    kubectl exec -it minio-69c8d67494-clvwk -n materialize -- /bin/sh -c "mc alias set local http://localhost:9000 minio minio123; mc mb local/bucket"
     ```
 
 ## Node labels for ephemeral storage
