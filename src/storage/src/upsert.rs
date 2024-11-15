@@ -51,7 +51,7 @@ use crate::upsert_continual_feedback;
 use autospill::AutoSpillBackend;
 use memory::InMemoryHashMap;
 use types::{
-    snapshot_merge_function, upsert_bincode_opts, BincodeOpts, StateValue, UpsertState,
+    consolidating_merge_function, upsert_bincode_opts, BincodeOpts, StateValue, UpsertState,
     UpsertStateBackend, Value,
 };
 
@@ -298,7 +298,10 @@ where
                             BincodeOpts,
                             StateValue<G::Timestamp, Option<FromTime>>,
                         >| {
-                            snapshot_merge_function::<G::Timestamp, Option<FromTime>>(a.into(), b)
+                            consolidating_merge_function::<G::Timestamp, Option<FromTime>>(
+                                a.into(),
+                                b,
+                            )
                         },
                     ))
                 } else {
@@ -765,7 +768,7 @@ where
         let [mut output_cap, mut snapshot_cap, health_cap]: [_; 3] = caps.try_into().unwrap();
 
         // The order key of the `UpsertState` is `Option<FromTime>`, which implements `Default`
-        // (as required for `consolidate_snapshot_chunk`), with slightly more efficient serialization
+        // (as required for `consolidate_chunk`), with slightly more efficient serialization
         // than a default `Partitioned`.
         let mut state = UpsertState::<_, _, Option<FromTime>>::new(
             state().await,
@@ -825,7 +828,7 @@ where
             }
 
             match state
-                .consolidate_snapshot_chunk(
+                .consolidate_chunk(
                     events.drain(..),
                     PartialOrder::less_equal(&resume_upper, &snapshot_upper),
                 )

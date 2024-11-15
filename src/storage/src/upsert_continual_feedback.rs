@@ -170,7 +170,7 @@ where
         let mut snapshot_cap = CapabilitySet::from_elem(snapshot_cap);
 
         // The order key of the `UpsertState` is `Option<FromTime>`, which implements `Default`
-        // (as required for `consolidate_snapshot_chunk`), with slightly more efficient serialization
+        // (as required for `consolidate_chunk`), with slightly more efficient serialization
         // than a default `Partitioned`.
 
         let mut state = UpsertState::<_, G::Timestamp, Option<FromTime>>::new(
@@ -297,7 +297,7 @@ where
                     });
 
                     match state
-                        .consolidate_snapshot_chunk(
+                        .consolidate_chunk(
                             persist_stash_iter,
                             last_rehydration_chunk,
                         )
