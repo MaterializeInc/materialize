@@ -495,6 +495,7 @@ impl Listeners {
                         secrets_reader_local_file_dir: Some(data_directory.join("secrets")),
                         secrets_reader_kubernetes_context: None,
                         secrets_reader_aws_prefix: None,
+                        secrets_reader_name_prefix: None,
                     },
                     connection_context,
                 },

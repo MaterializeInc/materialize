@@ -976,6 +976,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             secrets_reader_local_file_dir: args.orchestrator_process_secrets_directory,
             secrets_reader_kubernetes_context: Some(args.orchestrator_kubernetes_context),
             secrets_reader_aws_prefix: Some(aws_secrets_controller_prefix(&args.environment_id)),
+            secrets_reader_name_prefix: args.orchestrator_kubernetes_name_prefix.clone(),
         },
     };
 

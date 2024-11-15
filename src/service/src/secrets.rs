@@ -44,6 +44,10 @@ pub struct SecretsReaderCliArgs {
         env = "SECRETS_READER_AWS_PREFIX"
     )]
     pub secrets_reader_aws_prefix: Option<String>,
+    /// When using the Kubernetes secrets reader, the prefix to use for secret
+    /// names.
+    #[structopt(long, env = "SECRETS_READER_NAME_PREFIX")]
+    pub secrets_reader_name_prefix: Option<String>,
 }
 
 #[derive(ArgEnum, Debug, Clone, Copy)]
@@ -65,7 +69,9 @@ impl SecretsReaderCliArgs {
                 let context = self
                     .secrets_reader_kubernetes_context
                     .expect("clap enforced");
-                Ok(Arc::new(KubernetesSecretsReader::new(context).await?))
+                Ok(Arc::new(
+                    KubernetesSecretsReader::new(context, self.secrets_reader_name_prefix).await?,
+                ))
             }
             SecretsControllerKind::AwsSecretsManager => {
                 let prefix = self.secrets_reader_aws_prefix.expect("clap enforced");

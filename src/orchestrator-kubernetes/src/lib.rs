@@ -97,6 +97,12 @@ pub struct KubernetesOrchestratorConfig {
     pub name_prefix: Option<String>,
 }
 
+impl KubernetesOrchestratorConfig {
+    pub fn name_prefix(&self) -> String {
+        self.name_prefix.clone().unwrap_or_default()
+    }
+}
+
 /// Specifies whether Kubernetes should pull Docker images when creating pods.
 #[derive(ArgEnum, Debug, Clone, Copy)]
 pub enum KubernetesImagePullPolicy {
@@ -1016,6 +1022,10 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             }
             (false, _) => None,
         };
+
+        if let Some(name_prefix) = &self.config.name_prefix {
+            args.push(format!("--secrets-reader-name-prefix={}", name_prefix));
+        }
 
         let volume_claim_templates = if self.config.coverage {
             Some(vec![PersistentVolumeClaim {
