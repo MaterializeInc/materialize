@@ -53,7 +53,7 @@
 //! let predicate0 = MirScalarExpr::column(0);
 //! let predicate1 = MirScalarExpr::column(1);
 //! let predicate01 = MirScalarExpr::column(0).call_binary(MirScalarExpr::column(2), BinaryFunc::AddInt64);
-//! let predicate012 = MirScalarExpr::literal_ok(Datum::False, ScalarType::Bool);
+//! let predicate012 = MirScalarExpr::literal_false();
 //!
 //! let mut expr = join.filter(
 //!    vec![

@@ -805,7 +805,7 @@ fn optimize(
                     if matches!(&knowledge, DatumKnowledge::Lit { .. }) {
                         e.reduce(column_types);
                     } else if func == &UnaryFunc::IsNull(func::IsNull) && !knowledge.nullable() {
-                        *e = MirScalarExpr::literal_ok(Datum::False, ScalarType::Bool);
+                        *e = MirScalarExpr::literal_false();
                     };
                     DatumKnowledge::from(&*e)
                 }
