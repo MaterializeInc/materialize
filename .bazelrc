@@ -159,12 +159,12 @@ build:release-lto --copt=-flto=thin
 build:release-lto --linkopt=-flto=thin
 build:release-lto --@rules_rust//:extra_rustc_flag=-Clto=thin
 
-# Builds from `main` or tagged builds.
+# Tagged builds, will be used as releases.
 #
-# Note: We don't use a ramdisk for tagged builds because the full debuginfo is
-# too large and we OOD/OOM.
-build:release-tagged --config=release --config=release-lto --config=release-stamp --config=debuginfo-full
-# PRs in CI.
+# Note: Not adding full debuginfo, even in release builds, to keep binary sizes
+# more reasonable.
+build:release-tagged --config=release --config=release-lto --config=release-stamp --config=debuginfo-limited
+# Builds in CI, both in PRs and on main, but without tags.
 #
 # Not doing a full stamp nor omitting full debug info, greatly speeds up compile times.
 build:release-dev --config=release --config=release-lto --config=debuginfo-limited
