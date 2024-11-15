@@ -593,13 +593,7 @@ impl<T> FlatPlan<T> {
     ///
     /// The returned value is a list of `value` plans, each with the `LocalId` it is referenced by,
     /// as well as the let-free `body` plan. The `value` plans are in topological order.
-    ///
-    /// # Panics
-    ///
-    /// Panics if this plan is recursive.
     pub fn split_lets(self) -> (Vec<(LocalId, Self)>, Self) {
-        assert!(!self.is_recursive());
-
         let (mut steps, mut root_id, mut topological_order) = self.destruct();
 
         // Descend the chain of `Let` nodes and build for each one the subplan rooted in its

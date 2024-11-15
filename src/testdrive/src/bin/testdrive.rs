@@ -502,7 +502,8 @@ async fn main() {
                     &file.to_string_lossy(),
                     start_time.elapsed(),
                     "failure",
-                    &error.to_string(),
+                    // Encode newlines so they get preserved when being parsed by python-junit-xml
+                    &error.to_string().replace("\n", "&#10;"),
                 ),
             };
             test_case.set_classname("testdrive");

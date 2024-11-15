@@ -341,7 +341,7 @@ mod let_motion {
     use mz_expr::{LetRecLimit, LocalId, MirRelationExpr};
     use mz_ore::stack::RecursionLimitError;
 
-    use crate::normalize_lets::support::{map_to_3vecs, replace_bindings_from_map};
+    use crate::normalize_lets::support::replace_bindings_from_map;
 
     /// Promotes all `Let` and `LetRec` nodes to the roots of their expressions.
     ///
@@ -350,22 +350,153 @@ mod let_motion {
     pub(crate) fn promote_let_rec(expr: &mut MirRelationExpr) {
         // First, promote all `LetRec` nodes above all other nodes.
         let mut worklist = vec![&mut *expr];
-        while let Some(expr) = worklist.pop() {
-            digest_lets(expr);
-            if let MirRelationExpr::LetRec {
-                ids: _,
-                values,
-                limits: _,
-                body,
-            } = expr
-            {
-                // The order may not be important, but let's not risk it.
-                worklist.push(body);
+        while let Some(mut expr) = worklist.pop() {
+            hoist_bindings(expr);
+            while let MirRelationExpr::LetRec { values, body, .. } = expr {
                 worklist.extend(values.iter_mut().rev());
+                expr = body;
             }
         }
+
         // Harvest any potential `Let` nodes, via a post-order traversal.
         post_order_harvest_lets(expr);
+    }
+
+    /// A stand in for the types of bindings we might encounter.
+    ///
+    /// As we dissolve various `Let` and `LetRec` expressions, a `Binding` will carry
+    /// the relevant information as we hoist it to the root of the expression.
+    enum Binding {
+        // Binding resulting from a `Let` expression.
+        Let(LocalId, MirRelationExpr),
+        // Bindings resulting from a `LetRec` expression.
+        LetRec(Vec<(LocalId, MirRelationExpr, Option<LetRecLimit>)>),
+    }
+
+    /// Hoist all exposed bindings to the root of the expression.
+    ///
+    /// A binding is "exposed" if the path from the root does not cross a LetRec binding.
+    /// After the call, the expression should be a linear sequence of bindings, where each
+    /// `Let` binding is of a let-free expression. There may be `LetRec` expressions in the
+    /// sequence, and their bindings will have hoisted bindings to their root, but not out
+    /// of the binding.
+    fn hoist_bindings(expr: &mut MirRelationExpr) {
+        // Bindings we have extracted but not fully processed.
+        let mut worklist = Vec::new();
+        // Bindings we have extracted and then fully processed.
+        let mut finished = Vec::new();
+
+        extract_bindings(expr, &mut worklist);
+        while let Some(mut bind) = worklist.pop() {
+            match &mut bind {
+                Binding::Let(_id, value) => {
+                    extract_bindings(value, &mut worklist);
+                }
+                Binding::LetRec(_binds) => {
+                    // nothing to do here; we cannot hoist letrec bindings and refine
+                    // them in an outer loop.
+                }
+            }
+            finished.push(bind);
+        }
+
+        // The worklist is empty and finished should contain only LetRec bindings and Let
+        // bindings with let-free expressions bound. We need to re-assemble them now in
+        // the correct order. The identifiers are "sequential", so we should be able to
+        // sort by them, with some care.
+
+        // We only extract non-empty letrec bindings, so it is safe to peek at the first.
+        finished.sort_by_key(|b| match b {
+            Binding::Let(id, _) => *id,
+            Binding::LetRec(binds) => binds[0].0,
+        });
+
+        // To match historical behavior we fuse let bindings into adjacent letrec bindings.
+        // We could alternately make each a singleton letrec binding (just, non-recursive).
+        // We don't yet have a strong opinion on which is most helpful and least harmful.
+        // In the absence of any letrec bindings, we form one to house the let bindings.
+        let mut ids = Vec::new();
+        let mut values = Vec::new();
+        let mut limits = Vec::new();
+        let mut compact = Vec::new();
+        for bind in finished {
+            match bind {
+                Binding::Let(id, value) => {
+                    ids.push(id);
+                    values.push(value);
+                    limits.push(None);
+                }
+                Binding::LetRec(binds) => {
+                    for (id, value, limit) in binds {
+                        ids.push(id);
+                        values.push(value);
+                        limits.push(limit);
+                    }
+                    compact.push((ids, values, limits));
+                    ids = Vec::new();
+                    values = Vec::new();
+                    limits = Vec::new();
+                }
+            }
+        }
+
+        // Remaining bindings can either be fused to the prior letrec, or put in their own.
+        if let Some((last_ids, last_vals, last_lims)) = compact.last_mut() {
+            last_ids.extend(ids);
+            last_vals.extend(values);
+            last_lims.extend(limits);
+        } else if !ids.is_empty() {
+            compact.push((ids, values, limits));
+        }
+
+        while let Some((ids, values, limits)) = compact.pop() {
+            *expr = MirRelationExpr::LetRec {
+                ids,
+                values,
+                limits,
+                body: Box::new(expr.take_dangerous()),
+            };
+        }
+    }
+
+    /// Extracts exposed bindings into `bindings`.
+    ///
+    /// After this call `expr` will contain no let or letrec bindings, though the bindings
+    /// it introduces to `bindings` may themselves contain such bindings (and they should
+    /// be further processed if the goal is to maximally extract let bindings).
+    fn extract_bindings(expr: &mut MirRelationExpr, bindings: &mut Vec<Binding>) {
+        let mut todo = vec![expr];
+        while let Some(expr) = todo.pop() {
+            match expr {
+                MirRelationExpr::Let { id, value, body } => {
+                    bindings.push(Binding::Let(*id, value.take_dangerous()));
+                    *expr = body.take_dangerous();
+                    todo.push(expr);
+                }
+                MirRelationExpr::LetRec {
+                    ids,
+                    values,
+                    limits,
+                    body,
+                } => {
+                    use itertools::Itertools;
+                    let binds: Vec<_> = ids
+                        .drain(..)
+                        .zip_eq(values.drain(..))
+                        .zip_eq(limits.drain(..))
+                        .map(|((i, v), l)| (i, v, l))
+                        .collect();
+                    if !binds.is_empty() {
+                        bindings.push(Binding::LetRec(binds));
+                    }
+                    *expr = body.take_dangerous();
+                    todo.push(expr);
+                }
+                _ => {
+                    todo.extend(expr.children_mut());
+                }
+            }
+        }
     }
 
     /// Performs a post-order traversal of the `LetRec` nodes at the root of an expression.
@@ -393,76 +524,6 @@ mod let_motion {
             }
             bindings.extend(harvest_non_recursive(body));
             replace_bindings_from_map(bindings, ids, values, limits);
-        }
-    }
-
-    /// Promotes all available let bindings to the root of the expression.
-    ///
-    /// The method only extracts bindings that can be placed in the same `LetRec` scope, so in particular
-    /// it does not continue recursively through `LetRec` nodes and stops once it arrives at the first one
-    /// along each path from the root. Each of `values` and `body` may need further processing to promote
-    /// all bindings to their respective roots.
-    ///
-    /// If the resulting `expr` is not a `LetRec` node, then it contains no further `Let` or `LetRec` nodes.
-    fn digest_lets(expr: &mut MirRelationExpr) {
-        let mut worklist = Vec::new();
-        let mut bindings = BTreeMap::new();
-        digest_lets_helper(expr, &mut worklist, &mut bindings);
-        while let Some((id, mut value, max_iter)) = worklist.pop() {
-            digest_lets_helper(&mut value, &mut worklist, &mut bindings);
-            bindings.insert(id, (value, max_iter));
-        }
-        if !bindings.is_empty() {
-            let (ids, values, limits) = map_to_3vecs(bindings);
-            *expr = MirRelationExpr::LetRec {
-                ids,
-                values,
-                limits,
-                body: Box::new(expr.take_dangerous()),
-            }
-        }
-    }
-
-    /// Extracts all `Let` and `LetRec` bindings from `expr` through its first `LetRec`.
-    ///
-    /// The bindings themselves may not be `Let`-free, and should be further processed to ensure this.
-    /// Bindings are extracted either into `worklist` if they should be further processed (e.g. from a `Let`),
-    /// or into `bindings` if they should not be further processed (e.g. from a `LetRec`).
-    fn digest_lets_helper(
-        expr: &mut MirRelationExpr,
-        worklist: &mut Vec<(LocalId, MirRelationExpr, Option<LetRecLimit>)>,
-        bindings: &mut BTreeMap<LocalId, (MirRelationExpr, Option<LetRecLimit>)>,
-    ) {
-        let mut to_visit = vec![expr];
-        while let Some(expr) = to_visit.pop() {
-            match expr {
-                MirRelationExpr::Let { id, value, body } => {
-                    // push binding into `worklist` as it can be further processed.
-                    // `limits` can be None, as we are taking a non-recursive binding.
-                    worklist.push((*id, value.take_dangerous(), None));
-                    *expr = body.take_dangerous();
-                    // Continue through `Let` nodes as they are certainly non-recursive.
-                    to_visit.push(expr);
-                }
-                MirRelationExpr::LetRec {
-                    ids,
-                    values,
-                    limits,
-                    body,
-                } => {
-                    // push bindings into `bindings` as they should not be further processed.
-                    use itertools::Itertools;
-                    bindings.extend(
-                        ids.drain(..)
-                            .zip_eq(values.drain(..).zip_eq(limits.drain(..))),
-                    );
-                    *expr = body.take_dangerous();
-                    // Stop at `LetRec` nodes as we cannot always lift `Let` nodes out of them.
-                }
-                _ => {
-                    to_visit.extend(expr.children_mut());
-                }
-            }
         }
     }
 

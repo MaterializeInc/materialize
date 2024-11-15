@@ -837,6 +837,7 @@ class ResolvedImage:
             **self.image.build_args,
             "ARCH_GCC": str(self.image.rd.arch),
             "ARCH_GO": self.image.rd.arch.go_str(),
+            "CI_SANITIZER": str(self.image.rd.sanitizer),
         }
         f = self.write_dockerfile()
         cmd: Sequence[str] = [

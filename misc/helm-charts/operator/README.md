@@ -13,7 +13,7 @@ This Helm chart deploys the Materialize operator on a Kubernetes cluster. The op
 
 ### Kubernetes Storage Configuration
 
-Materialize requires fast, locally-attached NVMe storage for optimal performance. Network-attached storage (like EBS volumes) can significantly degrade performance and is not supported.
+Materialize requires fast, locally-attached NVMe storage for optimal performance. Network-attached storage (like EBS volumes) is not supported.
 
 We recommend using OpenEBS with LVM Local PV for managing local volumes. While other storage solutions may work, we have tested and recommend OpenEBS for optimal performance.
 
@@ -354,7 +354,7 @@ For more detailed information on using and troubleshooting the Materialize opera
 Beyond the Helm configuration, there are other important knobs to tune to get the best out of Materialize within a
 Kubernetes environment.
 
-## Recommended Instance Types
+## Instance Types
 
 Materialize has been vetted to work on instances with the following properties:
 

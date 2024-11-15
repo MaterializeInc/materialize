@@ -221,7 +221,7 @@ def workflow_test_invalid_compute_reuse(c: Composition) -> None:
         time.sleep(1)
 
 
-def workflow_test_github_12251(c: Composition) -> None:
+def workflow_test_github_3553(c: Composition) -> None:
     """Test that clients do not wait indefinitely for a crashed resource."""
 
     c.down(destroy_volumes=True)
@@ -247,13 +247,13 @@ def workflow_test_github_12251(c: Composition) -> None:
             time.time() - start_time < 2
         ), "idle_in_transaction_session_timeout not respected"
     else:
-        raise RuntimeError("unexpected success in test_github_12251")
+        raise RuntimeError("unexpected success in test_github_3553")
 
     # Ensure we can select from tables after cancellation.
     c.sql("SELECT * FROM log_table;")
 
 
-def workflow_test_github_15531(c: Composition) -> None:
+def workflow_test_github_4443(c: Composition) -> None:
     """
     Test that compute command history does not leak peek commands.
 
@@ -427,7 +427,7 @@ def workflow_test_github_15531(c: Composition) -> None:
     assert replica_dataflow_count < 5, "more dataflows than expected in replica history"
 
 
-def workflow_test_github_15535(c: Composition) -> None:
+def workflow_test_github_4444(c: Composition) -> None:
     """
     Test that compute reconciliation does not produce empty frontiers.
 
@@ -487,7 +487,7 @@ def workflow_test_github_15535(c: Composition) -> None:
     assert t_upper, "t has empty upper frontier"
 
 
-def workflow_test_github_15799(c: Composition) -> None:
+def workflow_test_github_4545(c: Composition) -> None:
     """
     Test that querying introspection sources on a replica does not
     crash other replicas in the same cluster that have introspection disabled.
@@ -538,7 +538,7 @@ def workflow_test_github_15799(c: Composition) -> None:
     )
 
 
-def workflow_test_github_15930(c: Composition) -> None:
+def workflow_test_github_4587(c: Composition) -> None:
     """
     Test that triggering reconciliation does not wedge the
     mz_compute_frontiers_per_worker introspection source.
@@ -636,7 +636,7 @@ def workflow_test_github_15930(c: Composition) -> None:
         )
 
 
-def workflow_test_github_15496(c: Composition) -> None:
+def workflow_test_github_4433(c: Composition) -> None:
     """
     Test that a reduce collation over a source with an invalid accumulation does not
     panic, but rather logs errors, when soft assertions are turned off.
@@ -714,7 +714,7 @@ def workflow_test_github_15496(c: Composition) -> None:
         assert "Non-positive accumulation in ReduceMinsMaxes" in c1.stdout
 
 
-def workflow_test_github_17177(c: Composition) -> None:
+def workflow_test_github_4966(c: Composition) -> None:
     """
     Test that an accumulable reduction over a source with an invalid accumulation not only
     emits errors to the logs when soft assertions are turned off, but also produces a clean
@@ -792,7 +792,7 @@ def workflow_test_github_17177(c: Composition) -> None:
         )
 
 
-def workflow_test_github_17510(c: Composition) -> None:
+def workflow_test_github_5087(c: Composition) -> None:
     """
     Test that sum aggregations over uint2 and uint4 types do not produce a panic
     when soft assertions are turned off, but rather a SQL-level error when faced
@@ -958,7 +958,7 @@ def workflow_test_github_17510(c: Composition) -> None:
         assert "Invalid negative unsigned aggregation in ReduceAccumulable" in c1.stdout
 
 
-def workflow_test_github_17509(c: Composition) -> None:
+def workflow_test_github_5086(c: Composition) -> None:
     """
     Test that a bucketed hierarchical reduction over a source with an invalid accumulation produces
     a clean error when an arrangement hierarchy is built, in addition to logging an error, when soft
@@ -966,7 +966,7 @@ def workflow_test_github_17509(c: Composition) -> None:
 
     This is a partial regression test for https://github.com/MaterializeInc/database-issues/issues/5086.
     The checks here are extended by opting into a smaller group size with a query hint (e.g.,
-    OPTIONS (AGGREGATE INPUT GROUP SIZE = 1)) in workflow test-github-15496. This scenario was
+    OPTIONS (AGGREGATE INPUT GROUP SIZE = 1)) in workflow test-github-4433. This scenario was
     initially not covered, but eventually got supported as well.
     """
 
@@ -1053,7 +1053,7 @@ def workflow_test_github_17509(c: Composition) -> None:
         assert "Negative accumulation in ReduceMinsMaxes" not in c1.stdout
 
 
-def workflow_test_github_19610(c: Composition) -> None:
+def workflow_test_github_5831(c: Composition) -> None:
     """
     Test that a monotonic one-shot SELECT will perform consolidation without error on valid data.
     We introduce data that results in a multiset and compute min/max. In a monotonic one-shot
@@ -1272,8 +1272,8 @@ def workflow_test_single_time_monotonicity_enforcers(c: Composition) -> None:
         )
 
 
-def workflow_test_gh_25633(c: Composition) -> None:
-    """Regression test for 25633"""
+def workflow_test_github_7645(c: Composition) -> None:
+    """Regression test for database-issues#7645"""
 
     c.down(destroy_volumes=True)
 
@@ -1284,7 +1284,7 @@ def workflow_test_gh_25633(c: Composition) -> None:
             "materialized",
         )
 
-        c.run_testdrive_files("gh-25633/01-create-source.td")
+        c.run_testdrive_files("github-7645/01-create-source.td")
 
         latency = c.sql_query(
             """
@@ -1301,7 +1301,7 @@ def workflow_test_gh_25633(c: Composition) -> None:
 
         c.run_testdrive_files(
             f"--var=rehydration-latency={latency}",
-            "gh-25633/02-after-environmentd-restart.td",
+            "github-7645/02-after-environmentd-restart.td",
         )
 
 
@@ -3330,7 +3330,7 @@ def workflow_test_github_cloud_7998(
         c.run_testdrive_files("github-cloud-7998/check.td")
 
 
-def workflow_test_github_23246(c: Composition, parser: WorkflowArgumentParser) -> None:
+def workflow_test_github_7000(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Regression test for database-issues#7000."""
 
     c.down(destroy_volumes=True)
@@ -4156,7 +4156,7 @@ def workflow_test_refresh_mv_restart(
         check_introspection()
 
 
-def workflow_test_github_26215(c: Composition, parser: WorkflowArgumentParser) -> None:
+def workflow_test_github_7798(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Regression test for database-issues#7798."""
 
     c.down(destroy_volumes=True)
