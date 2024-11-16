@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig, TryIntoTimelyConfig};
 use mz_compute_types::dataflows::DataflowDescription;
-use mz_compute_types::plan::flat_plan::FlatPlan;
+use mz_compute_types::plan::flat_plan::RenderPlan;
 use mz_dyncfg::ConfigUpdates;
 use mz_expr::RowSetFinishing;
 use mz_ore::tracing::OpenTelemetryContext;
@@ -170,7 +170,7 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// [`as_of`]: DataflowDescription::as_of
     /// [`Frontiers`]: super::response::ComputeResponse::Frontiers
     /// [`SubscribeResponse`]: super::response::ComputeResponse::SubscribeResponse
-    CreateDataflow(DataflowDescription<FlatPlan<T>, CollectionMetadata, T>),
+    CreateDataflow(DataflowDescription<RenderPlan<T>, CollectionMetadata, T>),
 
     /// `Schedule` allows the replica to start computation for a compute collection.
     ///
@@ -350,7 +350,7 @@ impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
             any::<ComputeParameters>()
                 .prop_map(ComputeCommand::UpdateConfiguration)
                 .boxed(),
-            any::<DataflowDescription<FlatPlan, CollectionMetadata, mz_repr::Timestamp>>()
+            any::<DataflowDescription<RenderPlan, CollectionMetadata, mz_repr::Timestamp>>()
                 .prop_map(ComputeCommand::CreateDataflow)
                 .boxed(),
             any::<GlobalId>().prop_map(ComputeCommand::Schedule).boxed(),

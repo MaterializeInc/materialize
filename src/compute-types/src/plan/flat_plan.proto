@@ -24,7 +24,7 @@ import "expr/src/relation.proto";
 import "expr/src/scalar.proto";
 import "repr/src/row.proto";
 
-message ProtoFlatPlan {
+message ProtoRenderPlan {
   repeated ProtoBindStage binds = 1;
   ProtoLetFreePlan body = 2;
 }
@@ -41,28 +41,28 @@ message ProtoLetBind {
 
 message ProtoRecBind {
   mz_expr.id.ProtoLocalId id = 1;
-  ProtoFlatPlan value = 2;
+  ProtoRenderPlan value = 2;
   ProtoLetRecLimit limit = 3;
 }
 
 message ProtoLetFreePlan {
-  message ProtoStep {
+  message Node {
     uint64 id = 1;
-    ProtoFlatPlanStep step = 2;
+    ProtoNode node = 2;
   }
 
-  repeated ProtoStep steps = 1;
+  repeated Node nodes = 1;
   uint64 root = 2;
   repeated uint64 topological_order = 3;
 }
 
-message ProtoFlatPlanStep {
-  ProtoFlatPlanNode node = 1;
+message ProtoNode {
+  ProtoExpr expr = 1;
   optional uint64 parent = 2;
   uint32 nesting = 3;
 }
 
-message ProtoFlatPlanNode {
+message ProtoExpr {
   message ProtoConstant {
     ProtoConstantRows rows = 1;
   }

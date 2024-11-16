@@ -19,7 +19,7 @@ use mz_build_info::BuildInfo;
 use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig};
 use mz_cluster_client::WallclockLagFn;
 use mz_compute_types::dataflows::{BuildDesc, DataflowDescription};
-use mz_compute_types::plan::flat_plan::FlatPlan;
+use mz_compute_types::plan::flat_plan::RenderPlan;
 use mz_compute_types::plan::LirId;
 use mz_compute_types::sinks::{
     ComputeSinkConnection, ComputeSinkDesc, ContinualTaskConnection, MaterializedViewSinkConnection,
@@ -1314,7 +1314,7 @@ where
             .into_iter()
             .map(|object| BuildDesc {
                 id: object.id,
-                plan: FlatPlan::from(object.plan),
+                plan: RenderPlan::from(object.plan),
             })
             .collect();
 

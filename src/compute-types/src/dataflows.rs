@@ -28,7 +28,7 @@ use timely::progress::Antichain;
 use crate::dataflows::proto_dataflow_description::{
     ProtoIndexExport, ProtoIndexImport, ProtoSinkExport, ProtoSourceImport,
 };
-use crate::plan::flat_plan::FlatPlan;
+use crate::plan::flat_plan::RenderPlan;
 use crate::plan::Plan;
 use crate::sinks::{ComputeSinkConnection, ComputeSinkDesc};
 use crate::sources::{SourceInstanceArguments, SourceInstanceDesc};
@@ -476,7 +476,7 @@ where
     }
 }
 
-impl<S, T> DataflowDescription<FlatPlan, S, T>
+impl<S, T> DataflowDescription<RenderPlan, S, T>
 where
     S: Clone + PartialEq,
     T: Clone + timely::PartialOrder,
@@ -566,7 +566,7 @@ where
     }
 }
 
-impl RustType<ProtoDataflowDescription> for DataflowDescription<FlatPlan, CollectionMetadata> {
+impl RustType<ProtoDataflowDescription> for DataflowDescription<RenderPlan, CollectionMetadata> {
     fn into_proto(&self) -> ProtoDataflowDescription {
         ProtoDataflowDescription {
             source_imports: self.source_imports.into_proto(),
@@ -712,7 +712,7 @@ impl ProtoMapEntry<GlobalId, ComputeSinkDesc<CollectionMetadata>> for ProtoSinkE
     }
 }
 
-impl Arbitrary for DataflowDescription<FlatPlan, CollectionMetadata, mz_repr::Timestamp> {
+impl Arbitrary for DataflowDescription<RenderPlan, CollectionMetadata, mz_repr::Timestamp> {
     type Strategy = BoxedStrategy<Self>;
     type Parameters = ();
 
@@ -895,7 +895,7 @@ pub struct BuildDesc<P> {
     pub plan: P,
 }
 
-impl RustType<ProtoBuildDesc> for BuildDesc<FlatPlan> {
+impl RustType<ProtoBuildDesc> for BuildDesc<RenderPlan> {
     fn into_proto(&self) -> ProtoBuildDesc {
         ProtoBuildDesc {
             id: Some(self.id.into_proto()),
@@ -927,7 +927,7 @@ mod tests {
 
 
         #[mz_ore::test]
-        fn dataflow_description_protobuf_roundtrip(expect in any::<DataflowDescription<FlatPlan, CollectionMetadata, mz_repr::Timestamp>>()) {
+        fn dataflow_description_protobuf_roundtrip(expect in any::<DataflowDescription<RenderPlan, CollectionMetadata, mz_repr::Timestamp>>()) {
             let actual = protobuf_roundtrip::<_, ProtoDataflowDescription>(&expect);
             assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);

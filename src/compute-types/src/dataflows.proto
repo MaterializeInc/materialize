@@ -70,5 +70,5 @@ message ProtoIndexDesc {
 
 message ProtoBuildDesc {
   mz_repr.global_id.ProtoGlobalId id = 1;
-  plan.flat_plan.ProtoFlatPlan plan = 2;
+  plan.flat_plan.ProtoRenderPlan plan = 2;
 }
