@@ -727,7 +727,7 @@ def _get_errors_from_junit_file(log_file_name: str) -> list[JunitError]:
                     JunitError(
                         testcase.classname,
                         testcase.name,
-                        result.message.replace("&#10;", "\n") or "",
+                        (result.message or "").replace("&#10;", "\n"),
                         result.text or "",
                     )
                 )
