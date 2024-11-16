@@ -418,10 +418,11 @@ impl SortedRowCollections {
         let mut total_count = 0;
         for row_collection in data {
             total_count += row_collection.count(0, None);
+            let row_collection = row_collection.sorted_view(Arc::clone(&sort_by));
             if let Some((_, meta)) = row_collection.get(0) {
                 let diffs_left = meta.diff.get();
                 heap.push(HeapRowCollection {
-                    row_collection: row_collection.sorted_view(Arc::clone(&sort_by)),
+                    row_collection,
                     row_index: 0,
                     diffs_left,
                     sort_by: Arc::clone(&sort_by),
