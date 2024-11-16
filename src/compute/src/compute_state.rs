@@ -29,7 +29,7 @@ use mz_compute_client::protocol::response::{
     StatusResponse, SubscribeResponse,
 };
 use mz_compute_types::dataflows::DataflowDescription;
-use mz_compute_types::plan::flat_plan::RenderPlan;
+use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_compute_types::plan::LirId;
 use mz_dyncfg::ConfigSet;
 use mz_expr::SafeMfpPlan;

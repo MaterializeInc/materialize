@@ -41,10 +41,10 @@ use crate::plan::transform::{Transform, TransformConfig};
 
 mod lowering;
 
-pub mod flat_plan;
 pub mod interpret;
 pub mod join;
 pub mod reduce;
+pub mod render_plan;
 pub mod threshold;
 pub mod top_k;
 pub mod transform;

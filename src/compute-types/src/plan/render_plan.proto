@@ -11,7 +11,7 @@
 
 syntax = "proto3";
 
-package mz_compute_types.plan.flat_plan;
+package mz_compute_types.plan.render_plan;
 
 import "compute-types/src/plan.proto";
 import "compute-types/src/plan/join.proto";

@@ -13,7 +13,7 @@ syntax = "proto3";
 
 package mz_compute_types.dataflows;
 
-import "compute-types/src/plan/flat_plan.proto";
+import "compute-types/src/plan/render_plan.proto";
 import "compute-types/src/sinks.proto";
 import "compute-types/src/sources.proto";
 import "expr/src/scalar.proto";
@@ -70,5 +70,5 @@ message ProtoIndexDesc {
 
 message ProtoBuildDesc {
   mz_repr.global_id.ProtoGlobalId id = 1;
-  plan.flat_plan.ProtoRenderPlan plan = 2;
+  plan.render_plan.ProtoRenderPlan plan = 2;
 }
