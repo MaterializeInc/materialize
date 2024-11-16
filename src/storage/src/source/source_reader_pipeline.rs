@@ -132,6 +132,20 @@ pub struct RawSourceCreationConfig {
     pub busy_signal: Arc<Semaphore>,
 }
 
+/// Reduced version of [`RawSourceCreationConfig`] that is used when rendering
+/// each export.
+#[derive(Clone)]
+pub struct SourceExportCreationConfig {
+    /// The ID of this instantiation of this source.
+    pub id: GlobalId,
+    /// The ID of the worker on which this operator is executing
+    pub worker_id: usize,
+    /// The metrics & registry that each source instantiates.
+    pub metrics: StorageMetrics,
+    /// Place to share statistics updates with storage state.
+    pub source_statistics: SourceStatistics,
+}
+
 impl RawSourceCreationConfig {
     /// Returns the worker id responsible for handling the given partition.
     pub fn responsible_worker<P: Hash>(&self, partition: P) -> usize {

@@ -123,7 +123,7 @@ pub fn upsert_inner<G: Scope, FromTime, F, Fut, US>(
     persist_input: Collection<G, Result<Row, DataflowError>, Diff>,
     mut persist_token: Option<Vec<PressOnDropButton>>,
     upsert_metrics: UpsertMetrics,
-    source_config: crate::source::RawSourceCreationConfig,
+    source_config: crate::source::SourceExportCreationConfig,
     state_fn: F,
     upsert_config: UpsertConfig,
     prevent_snapshot_buffering: bool,
@@ -628,7 +628,7 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
     drain_style: DrainStyle<'_, T>,
     error_emitter: &mut E,
     state: &mut UpsertState<'_, S, Option<FromTime>>,
-    source_config: &crate::source::RawSourceCreationConfig,
+    source_config: &crate::source::SourceExportCreationConfig,
 ) -> Option<T>
 where
     S: UpsertStateBackend<Option<FromTime>>,
@@ -785,7 +785,7 @@ async fn ingest_state_updates<S, G, T, FromTime, E>(
     persist_upper: &Antichain<T>,
     error_emitter: &mut E,
     state: &mut UpsertState<'_, S, Option<FromTime>>,
-    source_config: &crate::source::RawSourceCreationConfig,
+    source_config: &crate::source::SourceExportCreationConfig,
 ) where
     S: UpsertStateBackend<Option<FromTime>>,
     G: Scope,

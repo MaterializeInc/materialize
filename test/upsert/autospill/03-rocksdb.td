@@ -10,9 +10,9 @@
 $ set-from-sql var=previous-bytes
 SELECT
   (SUM(u.bytes_indexed))::text
-  FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
-  WHERE s.name = 'autospill'
+  FROM mz_tables t
+  JOIN mz_internal.mz_source_statistics_raw u ON t.id = u.id
+  WHERE t.name = 'autospill_tbl'
 
 # Inserting large value should trigger auto spill
 $ kafka-ingest format=bytes topic=autospill key-format=bytes key-terminator=:
@@ -29,19 +29,19 @@ fish:AREALLYBIGFISHAREALLYBIGFISHAREALLYBIGFISHAREALLYBIGFISH
     -- new size here.
     SUM(u.bytes_indexed) < (${previous-bytes} * 2),
     SUM(u.records_indexed)
-  FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
-  WHERE s.name = 'autospill'
-  GROUP BY s.name
-  ORDER BY s.name
+  FROM mz_tables t
+  JOIN mz_internal.mz_source_statistics_raw u ON t.id = u.id
+  WHERE t.name = 'autospill_tbl'
+  GROUP BY t.name
+  ORDER BY t.name
 true true 3
 
 $ set-from-sql var=previous-bytes-2
 SELECT
   (SUM(u.bytes_indexed))::text
-  FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
-  WHERE s.name = 'autospill'
+  FROM mz_tables t
+  JOIN mz_internal.mz_source_statistics_raw u ON t.id = u.id
+  WHERE t.name = 'autospill_tbl'
 
 # Removing all the inserted keys
 $ kafka-ingest format=bytes topic=autospill key-format=bytes key-terminator=:
@@ -58,9 +58,9 @@ animal:
 > SELECT
     SUM(u.bytes_indexed) < ${previous-bytes-2},
     SUM(u.records_indexed)
-  FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
-  WHERE s.name = 'autospill'
-  GROUP BY s.name
-  ORDER BY s.name
+  FROM mz_tables t
+  JOIN mz_internal.mz_source_statistics_raw u ON t.id = u.id
+  WHERE t.name = 'autospill_tbl'
+  GROUP BY t.name
+  ORDER BY t.name
 true 0

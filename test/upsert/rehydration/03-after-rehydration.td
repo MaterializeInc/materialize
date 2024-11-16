@@ -39,20 +39,20 @@ mammalmore    moose    2
     SUM(u.bytes_indexed) > 0,
     SUM(u.records_indexed),
     bool_and(u.rehydration_latency IS NOT NULL)
-  FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
-  WHERE s.name IN ('upsert')
-  GROUP BY s.name
-  ORDER BY s.name
+  FROM mz_tables t
+  JOIN mz_internal.mz_source_statistics_raw u ON t.id = u.id
+  WHERE t.name IN ('upsert_tbl')
+  GROUP BY t.name
+  ORDER BY t.name
 true 3 true
 
 # Save the size of the rehydrated state.
 $ set-from-sql var=rehydrated-state-bytes
 SELECT
     (SUM(u.bytes_indexed))::text
-  FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
-  WHERE s.name IN ('upsert')
+  FROM mz_tables t
+  JOIN mz_internal.mz_source_statistics_raw u ON t.id = u.id
+  WHERE t.name IN ('upsert_tbl')
 
 # Ensure we process updates correctly.
 $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} schema=${schema}
@@ -75,19 +75,19 @@ mammalmore    moose               2
 > SELECT
     SUM(u.bytes_indexed) != ${rehydrated-state-bytes},
     SUM(u.records_indexed)
-  FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
-  WHERE s.name IN ('upsert')
-  GROUP BY s.name
-  ORDER BY s.name
+  FROM mz_tables t
+  JOIN mz_internal.mz_source_statistics_raw u ON t.id = u.id
+  WHERE t.name IN ('upsert_tbl')
+  GROUP BY t.name
+  ORDER BY t.name
 true 3
 
 $ set-from-sql var=state-bytes
 SELECT
     (SUM(u.bytes_indexed))::text
-  FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
-  WHERE s.name IN ('upsert')
+  FROM mz_tables t
+  JOIN mz_internal.mz_source_statistics_raw u ON t.id = u.id
+  WHERE t.name IN ('upsert_tbl')
 
 $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} schema=${schema}
 {"key": "fish"} {"f1": "MUCHMUCHMUCHLONGERVALUE", "f2": 9000}
@@ -95,11 +95,11 @@ $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} 
 > SELECT
     SUM(u.bytes_indexed) > ${state-bytes},
     SUM(u.records_indexed)
-  FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
-  WHERE s.name IN ('upsert')
-  GROUP BY s.name
-  ORDER BY s.name
+  FROM mz_tables t
+  JOIN mz_internal.mz_source_statistics_raw u ON t.id = u.id
+  WHERE t.name IN ('upsert_tbl')
+  GROUP BY t.name
+  ORDER BY t.name
 true 3
 
 
@@ -115,9 +115,9 @@ mammalmore    moose               2
 
 > SELECT
     SUM(u.records_indexed)
-  FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
-  WHERE s.name IN ('upsert')
-  GROUP BY s.name
-  ORDER BY s.name
+  FROM mz_tables t
+  JOIN mz_internal.mz_source_statistics_raw u ON t.id = u.id
+  WHERE t.name IN ('upsert_tbl')
+  GROUP BY t.name
+  ORDER BY t.name
 2
