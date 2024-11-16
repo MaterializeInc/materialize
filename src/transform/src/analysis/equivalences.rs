@@ -421,23 +421,35 @@ impl EquivalenceClasses {
         // This should strictly reduce complexity, and reach a fixed point.
         // Ideally it is *confluent*, arriving at the same fixed point no matter the order of operations.
 
-        // Ensure `self.classes` and `self.remap` are equivalence relations.
-        // Users are allowed to mutate `self.classes`, so we must perform this normalization at least once.
-        self.refresh();
-
         // We should not rely on nullability information present in `column_types`. (Doing this
         // every time just before calling `reduce` was found to be a bottleneck during incident-217,
         // so now we do this nullability tweaking only once here.)
-        let columns = columns.as_ref().map(|columns| {
-            columns
-                .iter()
-                .map(|col| {
-                    let mut col = col.clone();
-                    col.nullable = true;
-                    col
-                })
-                .collect()
-        });
+        let mut columns = columns.clone();
+        let mut nonnull = Vec::new();
+        if let Some(columns) = columns.as_mut() {
+            for (index, col) in columns.iter_mut().enumerate() {
+                let is_null = MirScalarExpr::column(index).call_is_null();
+                if !col.nullable
+                    && self
+                        .remap
+                        .get(&is_null)
+                        .map(|e| !e.is_literal_false())
+                        .unwrap_or(true)
+                {
+                    nonnull.push(is_null);
+                }
+                col.nullable = true;
+            }
+        }
+        if !nonnull.is_empty() {
+            nonnull.push(MirScalarExpr::literal_false());
+            self.classes.push(nonnull);
+        }
+
+        // Ensure `self.classes` and `self.remap` are equivalence relations.
+        // Users are allowed to mutate `self.classes`, so we must perform this normalization at least once.
+        // We have also likely mutated `self.classes` just above with non-nullability information.
+        self.refresh();
 
         // We continue as long as any simplification has occurred.
         // An expression can be simplified, a duplication found, or two classes unified.

@@ -241,7 +241,8 @@ Explained Query:
     Project (#0{a}, #1{b})
       Join on=(#1{b} = #2{b}) type=differential
         ArrangeBy keys=[[#1{b}]]
-          Get l0
+          Filter (█ = (#1{b}) IS NULL)
+            Get l0
         ArrangeBy keys=[[#0{b}]]
           Distinct project=[#0{b}]
             Project (#0{b})

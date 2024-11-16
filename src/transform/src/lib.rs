@@ -50,7 +50,6 @@ pub mod literal_lifting;
 pub mod monotonic;
 pub mod movement;
 pub mod non_null_requirements;
-pub mod nonnullable;
 pub mod normalize_lets;
 pub mod normalize_ops;
 pub mod notice;
@@ -590,8 +589,6 @@ impl Optimizer {
                     // Predicate pushdown sets the equivalence classes of joins.
                     Box::new(predicate_pushdown::PredicatePushdown::default()),
                     Box::new(equivalence_propagation::EquivalencePropagation::default()),
-                    // Lifts the information `!isnull(col)`
-                    Box::new(nonnullable::NonNullable),
                     // Lifts the information `col = literal`
                     // TODO (database-issues#2062): this also tries to lift `!isnull(col)` but
                     // less well than the previous transform. Eliminate

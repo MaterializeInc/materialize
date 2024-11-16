@@ -429,6 +429,14 @@ impl EquivalencePropagation {
                     }
                     for aggr in aggregates.iter_mut() {
                         reducer.reduce_expr(&mut aggr.expr);
+                        // A count expression over a non-null expression can discard the expression.
+                        if aggr.func == mz_expr::AggregateFunc::Count && !aggr.distinct {
+                            let mut probe = aggr.expr.clone().call_is_null();
+                            reducer.reduce_expr(&mut probe);
+                            if probe.is_literal_false() {
+                                aggr.expr = MirScalarExpr::literal_true();
+                            }
+                        }
                     }
                 }
 
