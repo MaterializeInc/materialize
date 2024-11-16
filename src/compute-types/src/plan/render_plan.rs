@@ -31,7 +31,7 @@ use crate::plan::{AvailableCollections, GetPlan, LirId, Plan, PlanNode};
 
 include!(concat!(
     env!("OUT_DIR"),
-    "/mz_compute_types.plan.flat_plan.rs"
+    "/mz_compute_types.plan.render_plan.rs"
 ));
 
 /// A representation of LIR plans used for rendering.

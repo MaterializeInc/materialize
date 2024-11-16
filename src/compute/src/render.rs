@@ -119,7 +119,7 @@ use differential_dataflow::{AsCollection, Collection, Data};
 use futures::channel::oneshot;
 use futures::FutureExt;
 use mz_compute_types::dataflows::{DataflowDescription, IndexDesc};
-use mz_compute_types::plan::flat_plan::{
+use mz_compute_types::plan::render_plan::{
     self, BindStage, LetBind, LetFreePlan, RecBind, RenderPlan,
 };
 use mz_compute_types::plan::LirId;
@@ -965,7 +965,7 @@ where
             .expect("LetFreePlan invariant (1)")
     }
 
-    /// Renders a [`flat_plan::Expr`], producing the collection of results.
+    /// Renders a [`render_plan::Expr`], producing the collection of results.
     ///
     /// # Panics
     ///
@@ -973,10 +973,10 @@ where
     /// Callers must ensure that input nodes have been rendered previously.
     fn render_plan_expr(
         &mut self,
-        expr: flat_plan::Expr,
+        expr: render_plan::Expr,
         collections: &BTreeMap<LirId, CollectionBundle<G>>,
     ) -> CollectionBundle<G> {
-        use flat_plan::Expr::*;
+        use render_plan::Expr::*;
 
         let expect_input = |id| {
             collections

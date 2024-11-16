@@ -100,9 +100,9 @@ filegroup(
     srcs = [
         "src/dataflows.proto",
         "src/plan.proto",
-        "src/plan/flat_plan.proto",
         "src/plan/join.proto",
         "src/plan/reduce.proto",
+        "src/plan/render_plan.proto",
         "src/plan/threshold.proto",
         "src/plan/top_k.proto",
         "src/sinks.proto",
