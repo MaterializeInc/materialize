@@ -25,6 +25,27 @@ import "expr/src/scalar.proto";
 import "repr/src/row.proto";
 
 message ProtoFlatPlan {
+  repeated ProtoBindStage binds = 1;
+  ProtoLetFreePlan body = 2;
+}
+
+message ProtoBindStage {
+  repeated ProtoLetBind lets = 1;
+  repeated ProtoRecBind recs = 2;
+}
+
+message ProtoLetBind {
+  mz_expr.id.ProtoLocalId id = 1;
+  ProtoLetFreePlan value = 2;
+}
+
+message ProtoRecBind {
+  mz_expr.id.ProtoLocalId id = 1;
+  ProtoFlatPlan value = 2;
+  ProtoLetRecLimit limit = 3;
+}
+
+message ProtoLetFreePlan {
   message ProtoStep {
     uint64 id = 1;
     ProtoFlatPlanStep step = 2;
@@ -67,20 +88,6 @@ message ProtoFlatPlanNode {
     mz_expr.id.ProtoId id = 1;
     ProtoAvailableCollections keys = 2;
     ProtoGetPlan plan = 3;
-  }
-
-  message ProtoLet {
-    mz_expr.id.ProtoLocalId id = 1;
-    uint64 value = 2;
-    uint64 body = 3;
-  }
-
-  message ProtoLetRec {
-    repeated mz_expr.id.ProtoLocalId ids = 1;
-    repeated uint64 values = 2;
-    repeated ProtoLetRecLimit limits = 3;
-    repeated bool limit_is_some = 4;
-    uint64 body = 5;
   }
 
   message ProtoMfp {
@@ -148,7 +155,6 @@ message ProtoFlatPlanNode {
   oneof kind {
     ProtoConstant constant = 1;
     ProtoGet get = 2;
-    ProtoLetRec let_rec = 3;
     ProtoMfp mfp = 4;
     ProtoFlatMap flat_map = 5;
     ProtoJoin join = 6;
@@ -158,6 +164,5 @@ message ProtoFlatPlanNode {
     ProtoThreshold threshold = 10;
     ProtoUnion union = 11;
     ProtoArrangeBy arrange_by = 12;
-    ProtoLet let = 13;
   }
 }
