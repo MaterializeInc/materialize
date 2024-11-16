@@ -120,7 +120,7 @@ use futures::channel::oneshot;
 use futures::FutureExt;
 use mz_compute_types::dataflows::{DataflowDescription, IndexDesc};
 use mz_compute_types::plan::flat_plan::{
-    BindStage, FlatPlan, FlatPlanNode, LetBind, LetFreePlan, RecBind,
+    self, BindStage, LetBind, LetFreePlan, RecBind, RenderPlan,
 };
 use mz_compute_types::plan::LirId;
 use mz_expr::{EvalError, Id};
@@ -177,7 +177,7 @@ pub use join::LinearJoinSpec;
 pub fn build_compute_dataflow<A: Allocate>(
     timely_worker: &mut TimelyWorker<A>,
     compute_state: &mut ComputeState,
-    dataflow: DataflowDescription<FlatPlan, CollectionMetadata>,
+    dataflow: DataflowDescription<RenderPlan, CollectionMetadata>,
     start_signal: StartSignal,
     until: Antichain<mz_repr::Timestamp>,
     dataflow_expiration: Antichain<mz_repr::Timestamp>,
@@ -732,13 +732,13 @@ where
 {
     /// Renders a plan to a differential dataflow, producing the collection of results.
     ///
-    /// This method allows for `plan` to contain a `LetRec` variant at its root, and is planned
+    /// This method allows for `plan` to contain [`RecBind`]s, and is planned
     /// in the context of `level` pre-existing iteration coordinates.
     ///
-    /// This method recursively descends `LetRec` nodes, establishing nested scopes for each
+    /// This method recursively descends [`RecBind`] values, establishing nested scopes for each
     /// and establishing the appropriate recursive dependencies among the bound variables.
-    /// Once non-`LetRec` nodes are reached it calls in to `render_plan` which will error if
-    /// further `LetRec` variants are found.
+    /// Once all [`RecBind`]s have been rendered it calls in to `render_plan` which will error if
+    /// further [`RecBind`]s are found.
     ///
     /// The method requires that all variables conclude with a physical representation that
     /// contains a collection (i.e. a non-arrangement), and it will panic otherwise.
@@ -746,7 +746,7 @@ where
         &mut self,
         object_id: GlobalId,
         level: usize,
-        plan: FlatPlan,
+        plan: RenderPlan,
     ) -> CollectionBundle<G> {
         for BindStage { lets, recs } in plan.binds {
             // Render the let bindings in order.
@@ -863,14 +863,17 @@ where
     G: Scope,
     G::Timestamp: RenderTimestamp,
 {
-    /// Renders a plan to a differential dataflow, producing the collection of results.
-    ///
-    /// The plan must _not_ contain any `LetRec` nodes. Recursive plans must be rendered using
-    /// `render_recursive_plan` instead.
+    /// Renders a non-recursive plan to a differential dataflow, producing the collection of
+    /// results.
     ///
     /// The return type reflects the uncertainty about the data representation, perhaps
     /// as a stream of data, perhaps as an arrangement, perhaps as a stream of batches.
-    pub fn render_plan(&mut self, object_id: GlobalId, plan: FlatPlan) -> CollectionBundle<G> {
+    ///
+    /// # Panics
+    ///
+    /// Panics if the given plan contains any [`RecBind`]s. Recursive plans must be rendered using
+    /// `render_recursive_plan` instead.
+    pub fn render_plan(&mut self, object_id: GlobalId, plan: RenderPlan) -> CollectionBundle<G> {
         for BindStage { lets, recs } in plan.binds {
             assert!(recs.is_empty());
 
@@ -896,15 +899,13 @@ where
         })
     }
 
-    /// Renders a plan to a differential dataflow, producing the collection of results.
-    ///
-    /// The plan must _not_ contain any `Let` or `LetRec` nodes.
+    /// Renders a let-free plan to a differential dataflow, producing the collection of results.
     fn render_letfree_plan(
         &mut self,
         object_id: GlobalId,
         plan: LetFreePlan,
     ) -> CollectionBundle<G> {
-        let (mut steps, root_id, topological_order) = plan.destruct();
+        let (mut nodes, root_id, topological_order) = plan.destruct();
 
         // Rendered collections by their `LirId`.
         let mut collections = BTreeMap::new();
@@ -916,26 +917,26 @@ where
         // but there's no convenient way to express the invariant.
         let should_compute_lir_metadata = self.compute_logger.is_some();
         let mut lir_mapping_metadata = if should_compute_lir_metadata {
-            Some(Vec::with_capacity(steps.len()))
+            Some(Vec::with_capacity(nodes.len()))
         } else {
             None
         };
 
         for lir_id in topological_order {
-            let step = steps.remove(&lir_id).unwrap();
+            let node = nodes.remove(&lir_id).unwrap();
 
             // TODO(mgree) need ExprHumanizer in DataflowDescription to get nice column names
             // ActiveComputeState can't have a catalog reference, so we'll need to capture the names
             // in some other structure and have that structure impl ExprHumanizer
             let metadata = if should_compute_lir_metadata {
-                let operator: Box<str> = step.node.humanize(&DummyHumanizer).into();
+                let operator: Box<str> = node.expr.humanize(&DummyHumanizer).into();
                 let operator_id_start = self.scope.peek_identifier();
                 Some((operator, operator_id_start))
             } else {
                 None
             };
 
-            let mut bundle = self.render_plan_node(step.node, &collections);
+            let mut bundle = self.render_plan_expr(node.expr, &collections);
 
             if let Some((operator, operator_id_start)) = metadata {
                 let operator_id_end = self.scope.peek_identifier();
@@ -944,7 +945,7 @@ where
                 if let Some(lir_mapping_metadata) = &mut lir_mapping_metadata {
                     lir_mapping_metadata.push((
                         lir_id,
-                        LirMetadata::new(operator, step.parent, step.nesting, operator_span),
+                        LirMetadata::new(operator, node.parent, node.nesting, operator_span),
                     ))
                 }
             }
@@ -961,21 +962,21 @@ where
 
         collections
             .remove(&root_id)
-            .expect("FlatPlan invariant (1)")
+            .expect("LetFreePlan invariant (1)")
     }
 
-    /// Renders a plan node, producing the collection of results.
+    /// Renders a [`flat_plan::Expr`], producing the collection of results.
     ///
     /// # Panics
     ///
-    /// Panics if any of the node's inputs is not found in `collections`.
+    /// Panics if any of the expr's inputs is not found in `collections`.
     /// Callers must ensure that input nodes have been rendered previously.
-    fn render_plan_node(
+    fn render_plan_expr(
         &mut self,
-        node: FlatPlanNode,
+        expr: flat_plan::Expr,
         collections: &BTreeMap<LirId, CollectionBundle<G>>,
     ) -> CollectionBundle<G> {
-        use FlatPlanNode::*;
+        use flat_plan::Expr::*;
 
         let expect_input = |id| {
             collections
@@ -984,7 +985,7 @@ where
                 .unwrap_or_else(|| panic!("missing input collection: {id}"))
         };
 
-        match node {
+        match expr {
             Constant { rows } => {
                 // Produce both rows and errs to avoid conditional dataflow construction.
                 let (rows, errs) = match rows {
