@@ -1314,7 +1314,7 @@ where
             .into_iter()
             .map(|object| BuildDesc {
                 id: object.id,
-                plan: RenderPlan::from(object.plan),
+                plan: RenderPlan::try_from(object.plan).expect("valid plan"),
             })
             .collect();
 

@@ -42,7 +42,7 @@ include!(concat!(
 /// stack overflows. An exception are recursive bindings, which are defined through nesting of
 /// [`RenderPlan`]s. We expect the depth of these nestings to be low for reasonable plans.
 ///
-/// A [`RenderPlan`] can be constructed from a [`Plan`] using the corresponding [`From`] impl.
+/// A [`RenderPlan`] can be constructed from a [`Plan`] using the corresponding [`TryFrom`] impl.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RenderPlan<T = mz_repr::Timestamp> {
     /// Stages of bindings to render in order.
@@ -284,11 +284,30 @@ pub enum Expr<T = mz_repr::Timestamp> {
     },
 }
 
-impl<T> From<Plan<T>> for RenderPlan<T> {
+impl<T> TryFrom<Plan<T>> for RenderPlan<T> {
+    /// The only error is "invalid input plan".
+    type Error = ();
+
     /// Convert the given [`Plan`] into a [`RenderPlan`].
     ///
     /// The ids in [`Node`]s are the same as the original [`LirId`]s.
-    fn from(mut plan: Plan<T>) -> Self {
+    ///
+    /// # Preconditions
+    ///
+    /// A [`RenderPlan`] requires certain structure of the [`Plan`] it is converted from.
+    ///
+    /// Informally, each valid plan is a sequence of Let and LetRec bindings atop a let-free
+    /// expression. Each Let binding is to a let-free expression, and each LetRec binding is to a
+    /// similarly valid plan.
+    ///
+    /// ```ignore
+    ///   valid_plan := <let_free>
+    ///              |  LET v = <let_free> IN <valid_plan>
+    ///              |  LETREC (v = <valid_plan>)* IN <valid_plan>
+    /// ```
+    ///
+    /// Input [`Plan`]s that do not satisfy this requirement will result in errors.
+    fn try_from(mut plan: Plan<T>) -> Result<Self, Self::Error> {
         use PlanNode::{Let, LetRec};
 
         // Peel off stages of bindings. Each stage is constructed of an arbitrary amount of leading
@@ -297,7 +316,7 @@ impl<T> From<Plan<T>> for RenderPlan<T> {
         while matches!(plan.node, Let { .. } | LetRec { .. }) {
             let mut lets = Vec::new();
             while let Let { id, value, body } = plan.node {
-                let value = LetFreePlan::from(*value);
+                let value = LetFreePlan::try_from(*value)?;
                 lets.push(LetBind { id, value });
                 plan = *body;
             }
@@ -311,7 +330,7 @@ impl<T> From<Plan<T>> for RenderPlan<T> {
             } = plan.node
             {
                 for (id, value, limit) in izip!(ids, values, limits) {
-                    let value = RenderPlan::from(value);
+                    let value = RenderPlan::try_from(value)?;
                     recs.push(RecBind { id, value, limit })
                 }
                 plan = *body;
@@ -321,19 +340,20 @@ impl<T> From<Plan<T>> for RenderPlan<T> {
         }
 
         // The rest of the plan must be let-free.
-        let body = LetFreePlan::from(plan);
+        let body = LetFreePlan::try_from(plan)?;
 
-        Self { binds, body }
+        Ok(Self { binds, body })
     }
 }
 
-impl<T> From<Plan<T>> for LetFreePlan<T> {
+impl<T> TryFrom<Plan<T>> for LetFreePlan<T> {
+    /// The only error is "invalid input plan".
+    type Error = ();
+
     /// Convert the given [`Plan`] into a [`LetFreePlan`].
     ///
-    /// # Panics
-    ///
-    /// Panics if the given [`Plan`] contains `Let` or `LetRec` nodes.
-    fn from(plan: Plan<T>) -> Self {
+    /// Returns an error if the given [`Plan`] contains `Let` or `LetRec` nodes.
+    fn try_from(plan: Plan<T>) -> Result<Self, Self::Error> {
         use Expr::*;
 
         // The strategy is to walk walk through the `Plan` in right-to-left pre-order and for each
@@ -497,18 +517,18 @@ impl<T> From<Plan<T>> for LetFreePlan<T> {
 
                     todo.push((*input, Some(lir_id), nesting.saturating_add(1)));
                 }
-                PlanNode::Let { .. } | PlanNode::LetRec { .. } => panic!("plan must be let-free"),
+                PlanNode::Let { .. } | PlanNode::LetRec { .. } => return Err(()),
             };
         }
 
         flatten_order.reverse();
         let topological_order = flatten_order;
 
-        Self {
+        Ok(Self {
             nodes,
             root,
             topological_order,
-        }
+        })
     }
 }
 
@@ -959,7 +979,9 @@ impl Arbitrary for RenderPlan {
     type Parameters = ();
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        any::<Plan>().prop_map(RenderPlan::from).boxed()
+        any::<Plan>()
+            .prop_map(|x| RenderPlan::try_from(x).unwrap())
+            .boxed()
     }
 }
 
