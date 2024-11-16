@@ -1020,16 +1020,6 @@ impl Arbitrary for FlatPlan {
     }
 }
 
-impl RustType<u64> for LirId {
-    fn into_proto(&self) -> u64 {
-        u64::from(self.0)
-    }
-
-    fn from_proto(proto: u64) -> Result<Self, mz_proto::TryFromProtoError> {
-        Ok(Self(proto.try_into()?))
-    }
-}
-
 impl RustType<ProtoFlatPlan> for FlatPlan {
     fn into_proto(&self) -> ProtoFlatPlan {
         ProtoFlatPlan {
