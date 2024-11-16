@@ -119,7 +119,9 @@ use differential_dataflow::{AsCollection, Collection, Data};
 use futures::channel::oneshot;
 use futures::FutureExt;
 use mz_compute_types::dataflows::{DataflowDescription, IndexDesc};
-use mz_compute_types::plan::flat_plan::{FlatPlan, FlatPlanNode};
+use mz_compute_types::plan::flat_plan::{
+    BindStage, FlatPlan, FlatPlanNode, LetBind, LetFreePlan, RecBind,
+};
 use mz_compute_types::plan::LirId;
 use mz_expr::{EvalError, Id};
 use mz_persist_client::operators::shard_source::SnapshotMode;
@@ -746,33 +748,28 @@ where
         level: usize,
         plan: FlatPlan,
     ) -> CollectionBundle<G> {
-        // First extract any let bindings that may wrap a letrec expression.
-        // This code allows us to handle plans that violate invariant (4).
-        // We do this here rather than in front of the recursive call below,
-        // in anticipation of recursive plans that start with let bindings,
-        // not just plans that have lets between recursive stages.
-        let (values, plan) = plan.split_lets();
-        for (id, value) in values {
-            let bundle = self
-                .scope
-                .clone()
-                .region_named(&format!("Binding({:?})", id), |region| {
-                    let depends = value.depends();
-                    self.enter_region(region, Some(&depends))
-                        .render_letfree_plan(object_id, value)
-                        .leave_region()
-                });
-            self.insert_id(Id::Local(id), bundle);
-        }
+        for BindStage { lets, recs } in plan.binds {
+            // Render the let bindings in order.
+            for LetBind { id, value } in lets {
+                let bundle =
+                    self.scope
+                        .clone()
+                        .region_named(&format!("Binding({:?})", id), |region| {
+                            let depends = value.depends();
+                            self.enter_region(region, Some(&depends))
+                                .render_letfree_plan(object_id, value)
+                                .leave_region()
+                        });
+                self.insert_id(Id::Local(id), bundle);
+            }
 
-        if plan.is_recursive() {
-            let (values, body) = plan.split_recursive();
-            let ids: Vec<_> = values.iter().map(|(id, _, _)| *id).collect();
+            let rec_ids: Vec<_> = recs.iter().map(|r| r.id).collect();
 
+            // Define variables for rec bindings.
             // It is important that we only use the `Variable` until the object is bound.
             // At that point, all subsequent uses should have access to the object itself.
             let mut variables = BTreeMap::new();
-            for id in ids.iter() {
+            for id in rec_ids.iter() {
                 use differential_dataflow::dynamic::feedback_summary;
                 use differential_dataflow::operators::iterate::Variable;
                 let inner = feedback_summary::<u64>(level + 1, 1);
@@ -788,8 +785,8 @@ where
                 );
                 variables.insert(Id::Local(*id), (oks_v, err_v));
             }
-            // Now render each of the bindings.
-            for (id, value, limit) in values {
+            // Now render each of the rec bindings.
+            for RecBind { id, value, limit } in recs {
                 let bundle = self.render_recursive_plan(object_id, level + 1, value);
                 // We need to ensure that the raw collection exists, but do not have enough information
                 // here to cause that to happen.
@@ -843,8 +840,8 @@ where
                 }
                 err_v.set(&errs);
             }
-            // Now extract each of the bindings into the outer scope.
-            for id in ids.into_iter() {
+            // Now extract each of the rec bindings into the outer scope.
+            for id in rec_ids.into_iter() {
                 let bundle = self.remove_id(Id::Local(id)).unwrap();
                 let (oks, err) = bundle.collection.unwrap();
                 self.insert_id(
@@ -855,11 +852,9 @@ where
                     ),
                 );
             }
-
-            self.render_recursive_plan(object_id, level, body)
-        } else {
-            self.render_plan(object_id, plan)
         }
+
+        self.render_letfree_plan(object_id, plan.body)
     }
 }
 
@@ -876,24 +871,27 @@ where
     /// The return type reflects the uncertainty about the data representation, perhaps
     /// as a stream of data, perhaps as an arrangement, perhaps as a stream of batches.
     pub fn render_plan(&mut self, object_id: GlobalId, plan: FlatPlan) -> CollectionBundle<G> {
-        let (values, body) = plan.split_lets();
-        for (id, value) in values {
-            let bundle = self
-                .scope
-                .clone()
-                .region_named(&format!("Binding({:?})", id), |region| {
-                    let depends = value.depends();
-                    self.enter_region(region, Some(&depends))
-                        .render_letfree_plan(object_id, value)
-                        .leave_region()
-                });
-            self.insert_id(Id::Local(id), bundle);
+        for BindStage { lets, recs } in plan.binds {
+            assert!(recs.is_empty());
+
+            for LetBind { id, value } in lets {
+                let bundle =
+                    self.scope
+                        .clone()
+                        .region_named(&format!("Binding({:?})", id), |region| {
+                            let depends = value.depends();
+                            self.enter_region(region, Some(&depends))
+                                .render_letfree_plan(object_id, value)
+                                .leave_region()
+                        });
+                self.insert_id(Id::Local(id), bundle);
+            }
         }
 
         self.scope.clone().region_named("Main Body", |region| {
-            let depends = body.depends();
+            let depends = plan.body.depends();
             self.enter_region(region, Some(&depends))
-                .render_letfree_plan(object_id, body)
+                .render_letfree_plan(object_id, plan.body)
                 .leave_region()
         })
     }
@@ -901,7 +899,11 @@ where
     /// Renders a plan to a differential dataflow, producing the collection of results.
     ///
     /// The plan must _not_ contain any `Let` or `LetRec` nodes.
-    fn render_letfree_plan(&mut self, object_id: GlobalId, plan: FlatPlan) -> CollectionBundle<G> {
+    fn render_letfree_plan(
+        &mut self,
+        object_id: GlobalId,
+        plan: LetFreePlan,
+    ) -> CollectionBundle<G> {
         let (mut steps, root_id, topological_order) = plan.destruct();
 
         // Rendered collections by their `LirId`.
@@ -1060,12 +1062,6 @@ where
                         CollectionBundle::from_collections(oks, errs)
                     }
                 }
-            }
-            Let { .. } => {
-                unreachable!("Let should have been extracted and rendered");
-            }
-            LetRec { .. } => {
-                unreachable!("LetRec should have been extracted and rendered");
             }
             Mfp {
                 input,
