@@ -211,6 +211,16 @@ impl std::fmt::Display for LirId {
     }
 }
 
+impl RustType<u64> for LirId {
+    fn into_proto(&self) -> u64 {
+        u64::from(self.0)
+    }
+
+    fn from_proto(proto: u64) -> Result<Self, mz_proto::TryFromProtoError> {
+        Ok(Self(proto.try_into()?))
+    }
+}
+
 /// A rendering plan with as much conditional logic as possible removed.
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct Plan<T = mz_repr::Timestamp> {
