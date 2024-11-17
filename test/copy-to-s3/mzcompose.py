@@ -75,7 +75,6 @@ def workflow_nightly(c: Composition, parser: WorkflowArgumentParser) -> None:
         aws_region=None,
         validate_catalog_store=True,
         default_timeout="1800s",
-        volumes_extra=["mzdata:/mzdata"],
         no_reset=True,
     )
 
