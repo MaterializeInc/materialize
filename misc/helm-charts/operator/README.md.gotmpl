@@ -202,6 +202,106 @@ kubectl logs -l app.kubernetes.io/name=materialize-operator -n materialize
 
 For more detailed information on using and troubleshooting the Materialize operator, refer to the [Materialize documentation](https://materialize.com/docs).
 
+## Upgrading Materialize
+
+Once you have the Materialize operator installed, with the operator managing your Materialize environments, you can upgrade the operator and the environments independently.
+
+### Upgrading the Helm Chart
+
+To upgrade the Materialize operator to a new version:
+
+```shell
+helm upgrade my-materialize-operator materialize/misc/helm-charts/operator
+```
+
+If you have custom values, make sure to include your values file:
+
+```shell
+helm upgrade my-materialize-operator materialize/misc/helm-charts/operator -f my-values.yaml
+```
+
+### Upgrading Materialize Environments
+
+To upgrade your Materialize environments, you'll need to update the Materialize custom resource and trigger a rollout.
+
+Note, that this will trigger a zero-downtime rolling upgrade of the Materialize environment, meaning that you will have two versions of the environment running simultaneously during the upgrade. Make sure that you have enough resources on your Kubernetes cluster to support this.
+
+#### Using `kubectl` patch
+
+For normal upgrades when there are changes to the environment (like image updates):
+
+```shell
+# Generate a new UUID and patch the Materialize environment
+kubectl patch materialize <environment-name> \
+  -n <materialize-environment-namespace> \
+  --type='merge' \
+  -p "{\"spec\": {\"requestRollout\": \"$(uuidgen)\"}}"
+```
+
+For example:
+
+```shell
+kubectl patch materialize 12345678-1234-1234-1234-123456789012 \
+  -n materialize-environment \
+  --type='merge' \
+  -p "{\"spec\": {\"requestRollout\": \"$(uuidgen)\"}}"
+```
+
+#### Using YAML Definition
+
+Alternatively, you can update your Materialize custom resource definition directly:
+
+```yaml
+apiVersion: materialize.cloud/v1alpha1
+kind: Materialize
+metadata:
+  name: 12345678-1234-1234-1234-123456789012
+  namespace: materialize-environment
+spec:
+  environmentdImageRef: materialize/environmentd:v0.125.0 # Update version as needed
+  requestRollout: 22222222-2222-2222-2222-222222222222    # Generate new UUID
+  forceRollout: 33333333-3333-3333-3333-333333333333      # Optional: for forced rollouts
+  inPlaceRollout: false
+  backendSecretName: materialize-backend
+```
+
+Apply the updated definition:
+
+```shell
+kubectl apply -f materialize.yaml
+```
+
+#### Forced Rollouts
+
+If you need to force a rollout even when there are no changes to the environment:
+
+```shell
+kubectl patch materialize <environment-name> \
+  -n materialize-environment \
+  --type='merge' \
+  -p "{\"spec\": {\"requestRollout\": \"$(uuidgen)\", \"forceRollout\": \"$(uuidgen)\"}}"
+```
+
+### Verifying the Upgrade
+
+After initiating the rollout, you can monitor the status:
+
+```shell
+# Watch the status of your Materialize environment
+kubectl get materialize -n materialize-environment -w
+
+# Check the logs of the operator
+kubectl logs -l app.kubernetes.io/name=materialize-operator -n materialize
+```
+
+### Notes on Rollouts
+
+- `requestRollout` only triggers a rollout if there are actual changes to the environment
+- `forceRollout` triggers a rollout regardless of changes
+- Both fields expect UUID values
+- Each rollout requires a new, unique UUID value
+- Use `forceRollout` sparingly, as it will cause downtime even if no changes are needed# Operational Guidelines
+
 # Operational Guidelines
 
 Beyond the Helm configuration, there are other important knobs to tune to get the best out of Materialize within a
