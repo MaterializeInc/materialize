@@ -1200,6 +1200,12 @@ pub enum CloudProvider {
     Cloudtest,
     /// Amazon Web Services.
     Aws,
+    /// Google Cloud Platform
+    Gcp,
+    /// Microsoft Azure
+    Azure,
+    /// Other generic cloud provider
+    Generic,
 }
 
 impl fmt::Display for CloudProvider {
@@ -1210,6 +1216,9 @@ impl fmt::Display for CloudProvider {
             CloudProvider::MzCompose => f.write_str("mzcompose"),
             CloudProvider::Cloudtest => f.write_str("cloudtest"),
             CloudProvider::Aws => f.write_str("aws"),
+            CloudProvider::Gcp => f.write_str("gcp"),
+            CloudProvider::Azure => f.write_str("azure"),
+            CloudProvider::Generic => f.write_str("generic"),
         }
     }
 }
@@ -1218,12 +1227,15 @@ impl FromStr for CloudProvider {
     type Err = InvalidCloudProviderError;
 
     fn from_str(s: &str) -> Result<CloudProvider, InvalidCloudProviderError> {
-        match s {
+        match s.to_lowercase().as_ref() {
             "local" => Ok(CloudProvider::Local),
             "docker" => Ok(CloudProvider::Docker),
             "mzcompose" => Ok(CloudProvider::MzCompose),
             "cloudtest" => Ok(CloudProvider::Cloudtest),
             "aws" => Ok(CloudProvider::Aws),
+            "gcp" => Ok(CloudProvider::Gcp),
+            "azure" => Ok(CloudProvider::Azure),
+            "generic" => Ok(CloudProvider::Generic),
             _ => Err(InvalidCloudProviderError),
         }
     }
@@ -1780,6 +1792,33 @@ mod tests {
                 Ok(EnvironmentId {
                     cloud_provider: CloudProvider::Aws,
                     cloud_provider_region: "us-east-1".into(),
+                    organization_id: "1497a3b7-a455-4fc4-8752-b44a94b5f90a".parse().unwrap(),
+                    ordinal: 0,
+                }),
+            ),
+            (
+                "gcp-us-central1-1497a3b7-a455-4fc4-8752-b44a94b5f90a-0",
+                Ok(EnvironmentId {
+                    cloud_provider: CloudProvider::Gcp,
+                    cloud_provider_region: "us-central1".into(),
+                    organization_id: "1497a3b7-a455-4fc4-8752-b44a94b5f90a".parse().unwrap(),
+                    ordinal: 0,
+                }),
+            ),
+            (
+                "azure-australiaeast-1497a3b7-a455-4fc4-8752-b44a94b5f90a-0",
+                Ok(EnvironmentId {
+                    cloud_provider: CloudProvider::Azure,
+                    cloud_provider_region: "australiaeast".into(),
+                    organization_id: "1497a3b7-a455-4fc4-8752-b44a94b5f90a".parse().unwrap(),
+                    ordinal: 0,
+                }),
+            ),
+            (
+                "generic-moon-station-11-darkside-1497a3b7-a455-4fc4-8752-b44a94b5f90a-0",
+                Ok(EnvironmentId {
+                    cloud_provider: CloudProvider::Generic,
+                    cloud_provider_region: "moon-station-11-darkside".into(),
                     organization_id: "1497a3b7-a455-4fc4-8752-b44a94b5f90a".parse().unwrap(),
                     ordinal: 0,
                 }),
