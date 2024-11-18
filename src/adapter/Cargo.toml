@@ -119,6 +119,11 @@ harness = false
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
 
+[package.metadata.cargo-gazelle.lib]
+# TODO(parkmycar): No idea what, but something in this crate is non-deterministic and it breaks
+# pipelining.
+disable_pipelining = true
+
 [package.metadata.cargo-gazelle.test.sql]
 data = ["tests/testdata/sql"]
 

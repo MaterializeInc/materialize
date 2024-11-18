@@ -108,6 +108,8 @@ normal = ["workspace-hack"]
 [package.metadata.cargo-gazelle.lib]
 # `num_enum` which depends on `proc-macro-crate` tries to read from the Cargo.toml at compile time.
 compile_data = ["Cargo.toml"]
+# Explicitly enable pipelining.
+disable_pipelining = false
 
 [package.metadata.cargo-gazelle.test.lib]
 data = ["src/adt/snapshots/*"]
