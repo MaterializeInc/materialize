@@ -109,7 +109,14 @@ impl BlobConfig {
 
                 let credentials = match url.password() {
                     None => None,
-                    Some(password) => Some((url.username().to_string(), password.to_string())),
+                    Some(password) => Some((
+                        String::from_utf8_lossy(&urlencoding::decode_binary(
+                            url.username().as_bytes(),
+                        ))
+                        .into_owned(),
+                        String::from_utf8_lossy(&urlencoding::decode_binary(password.as_bytes()))
+                            .into_owned(),
+                    )),
                 };
 
                 let config = S3BlobConfig::new(
