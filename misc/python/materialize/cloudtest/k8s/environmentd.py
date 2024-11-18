@@ -322,6 +322,26 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
                 name="MZ_BOOTSTRAP_DEFAULT_CLUSTER_REPLICA_SIZE",
                 value=bootstrap_cluster_replica_size(),
             ),
+            V1EnvVar(
+                name="MZ_BOOTSTRAP_BUILTIN_SYSTEM_CLUSTER_REPLICA_SIZE",
+                value=bootstrap_cluster_replica_size(),
+            ),
+            V1EnvVar(
+                name="MZ_BOOTSTRAP_BUILTIN_PROBE_CLUSTER_REPLICA_SIZE",
+                value=bootstrap_cluster_replica_size(),
+            ),
+            V1EnvVar(
+                name="MZ_BOOTSTRAP_BUILTIN_SUPPORT_CLUSTER_REPLICA_SIZE",
+                value=bootstrap_cluster_replica_size(),
+            ),
+            V1EnvVar(
+                name="MZ_BOOTSTRAP_BUILTIN_CATALOG_SERVER_CLUSTER_REPLICA_SIZE",
+                value=bootstrap_cluster_replica_size(),
+            ),
+            V1EnvVar(
+                name="MZ_BOOTSTRAP_BUILTIN_ANALYTICS_CLUSTER_REPLICA_SIZE",
+                value=bootstrap_cluster_replica_size(),
+            ),
         ]
 
         if self._meets_minimum_version("0.118.0-dev"):
