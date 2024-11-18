@@ -12,11 +12,17 @@ aliases:
 
 ## Syntax
 
-{{< diagram "show-connections.svg" >}}
+```sql
+SHOW CONNECTIONS
+[FROM <schema_name>]
+[LIKE <pattern> | WHERE <condition(s)>]
+```
 
-Field                | Use
----------------------|-----
-_schema&lowbar;name_ | The schema to show connections from. If omitted, connections from all schemas are shown. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
+Option                        | Description
+------------------------------|------------
+**FROM** \<schema_name\>      | If specified, only show connections from the specified schema. For available schema names, see [`SHOW SCHEMAS`](/sql/show-schemas).
+**LIKE** \<pattern\>          | If specified, only show connections that match the pattern.
+**WHERE** <condition(s)>      | If specified, only show connections that match the condition(s).
 
 ## Examples
 
