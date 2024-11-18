@@ -347,7 +347,7 @@ kubectl logs -l app.kubernetes.io/name=materialize-operator -n materialize
 
 For more detailed information on using and troubleshooting the Materialize operator, refer to the [Materialize documentation](https://materialize.com/docs).
 
-## Upgrading Materialize
+## Upgrading
 
 Once you have the Materialize operator installed and managing your Materialize instances, you can upgrade both components. While the operator and instances can be upgraded independently, you should ensure version compatibility between them. The operator can typically manage instances within a certain version range - upgrading the operator too far ahead of your instances may cause compatibility issues.
 
@@ -374,22 +374,42 @@ helm upgrade my-materialize-operator materialize/misc/helm-charts/operator -f my
 
 To upgrade your Materialize instances, you'll need to update the Materialize custom resource and trigger a rollout.
 
-By default, the operator performs rolling upgrades (`inPlaceRollout: false`) which minimize downtime but require additional cluster resources during the transition. For environments where scheduled downtime is acceptable, you can opt for in-place upgrades (`inPlaceRollout: true`).
+By default, the operator performs rolling upgrades (`inPlaceRollout: false`) which minimize downtime but require additional Kubernetes cluster resources during the transition. However, keep in mind that rolling upgrades typically take longer to complete due to the sequential rollout process. For environments where downtime is acceptable, you can opt for in-place upgrades (`inPlaceRollout: true`).
+
+#### Determining the Version
+
+The compatible version for your Materialize instances is specified in the Helm chart's `appVersion`. For the installed chart version, you can run:
+
+```shell
+helm list -n materialize
+```
+
+Or check the `Chart.yaml` file in the `misc/helm-charts/operator` directory:
+
+```yaml
+apiVersion: v2
+name: materialize-operator
+# ...
+version: 25.1.0-beta.1
+appVersion: v0.125.0  # Use this version for your Materialize instances
+```
+
+Use the `appVersion` (`v0.125.0` in this case) when updating your Materialize instances to ensure compatibility.
 
 #### Using `kubectl` patch
 
-For normal upgrades when there are changes to the environment (like image updates):
+For standard upgrades such as image updates:
 
 ```shell
 # For version updates, first update the image reference
-kubectl patch materialize <environment-name> \
-  -n <materialize-environment-namespace> \
+kubectl patch materialize <instance-name> \
+  -n <materialize-instance-namespace> \
   --type='merge' \
   -p "{\"spec\": {\"environmentdImageRef\": \"materialize/environmentd:v0.125.0\"}}"
 
 # Then trigger the rollout with a new UUID
-kubectl patch materialize <environment-name> \
-  -n <materialize-environment-namespace> \
+kubectl patch materialize <instance-name> \
+  -n <materialize-instance-namespace> \
   --type='merge' \
   -p "{\"spec\": {\"requestRollout\": \"$(uuidgen)\"}}"
 ```
@@ -429,10 +449,10 @@ kubectl apply -f materialize.yaml
 
 #### Forced Rollouts
 
-If you need to force a rollout even when there are no changes to the environment:
+If you need to force a rollout even when there are no changes to the instance:
 
 ```shell
-kubectl patch materialize <environment-name> \
+kubectl patch materialize <instance-name> \
   -n materialize-environment \
   --type='merge' \
   -p "{\"spec\": {\"requestRollout\": \"$(uuidgen)\", \"forceRollout\": \"$(uuidgen)\"}}"
@@ -456,7 +476,7 @@ kubectl logs -l app.kubernetes.io/name=materialize-operator -n materialize
 
 ### Notes on Rollouts
 
-- `requestRollout` triggers a rollout only if there are actual changes to the environment (like image updates)
+- `requestRollout` triggers a rollout only if there are actual changes to the instance (like image updates)
 - `forceRollout` triggers a rollout regardless of whether there are changes, which can be useful for debugging or when you need to force a rollout for other reasons
 - Both fields expect UUID values and each rollout requires a new, unique UUID value
 - `inPlaceRollout`:
