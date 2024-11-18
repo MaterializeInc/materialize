@@ -305,6 +305,16 @@ pub trait StorageController: Debug {
         id: GlobalId,
     ) -> Result<CollectionMetadata, StorageError<Self::Timestamp>>;
 
+    /// Returns `true` iff the given collection/ingestion has been hydrated.
+    ///
+    /// For this check, zero-replica clusters are always considered hydrated.
+    /// Their collections would never normally be considered hydrated but it's
+    /// clearly intentional that they have no replicas.
+    fn collection_hydrated(
+        &self,
+        collection_id: GlobalId,
+    ) -> Result<bool, StorageError<Self::Timestamp>>;
+
     /// Returns the since/upper frontiers of the identified collection.
     fn collection_frontiers(
         &self,

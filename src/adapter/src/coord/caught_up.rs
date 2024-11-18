@@ -324,10 +324,7 @@ impl Coordinator {
                         .collection_hydrated(cluster.id, id)
                         .await?
                 }
-                CollectionType::Storage => {
-                    // TODO: Hydration check for storage collections!
-                    true
-                }
+                CollectionType::Storage => self.controller.storage.collection_hydrated(id)?,
             };
 
             if within_lag && collection_hydrated {

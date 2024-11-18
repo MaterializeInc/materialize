@@ -324,6 +324,50 @@ where
         self.storage_collections.collection_metadata(id)
     }
 
+    fn collection_hydrated(
+        &self,
+        collection_id: GlobalId,
+    ) -> Result<bool, StorageError<Self::Timestamp>> {
+        let collection = self.collection(collection_id)?;
+
+        let instance_id = match &collection.data_source {
+            DataSource::Ingestion(ingestion_description) => ingestion_description.instance_id,
+            DataSource::IngestionExport { ingestion_id, .. } => {
+                let ingestion_state = self.collections.get(ingestion_id).expect("known to exist");
+
+                let instance_id = match &ingestion_state.data_source {
+                    DataSource::Ingestion(ingestion_desc) => ingestion_desc.instance_id,
+                    _ => unreachable!("SourceExport must only refer to primary source"),
+                };
+
+                instance_id
+            }
+            _ => return Ok(true),
+        };
+
+        let instance = self.instances.get(&instance_id).ok_or_else(|| {
+            StorageError::IngestionInstanceMissing {
+                storage_instance_id: instance_id,
+                ingestion_id: collection_id,
+            }
+        })?;
+
+        if instance.replica_ids().next().is_none() {
+            // Ingestions on zero-replica clusters are always considered
+            // hydrated.
+            return Ok(true);
+        }
+
+        match &collection.extra_state {
+            CollectionStateExtra::Ingestion(ingestion_state) => Ok(ingestion_state.hydrated),
+            CollectionStateExtra::None => {
+                // For now, objects that are not ingestions are always
+                // considered hydrated.
+                Ok(true)
+            }
+        }
+    }
+
     fn collection_frontiers(
         &self,
         id: GlobalId,
@@ -763,6 +807,7 @@ where
                         write_frontier: Antichain::from_elem(Self::Timestamp::minimum()),
                         hold_policy: ReadPolicy::step_back(),
                         instance_id,
+                        hydrated: false,
                     };
 
                     collection_state.extra_state = CollectionStateExtra::Ingestion(ingestion_state);
@@ -794,6 +839,7 @@ where
                         write_frontier: Antichain::from_elem(Self::Timestamp::minimum()),
                         hold_policy: ReadPolicy::step_back(),
                         instance_id: ingestion_desc.instance_id,
+                        hydrated: false,
                     };
 
                     collection_state.extra_state = CollectionStateExtra::Ingestion(ingestion_state);
@@ -1889,6 +1935,49 @@ where
                 }
             }
             Some(StorageResponse::StatusUpdates(updates)) => {
+                for status_update in updates.iter() {
+                    // NOTE(aljoscha): We sniff out the hydration status for
+                    // ingestions from status updates. This is the easiest we
+                    // can do right now, without going deeper into changing the
+                    // comms protocol between controller and cluster. We cannot,
+                    // for example use `StorageResponse::FrontierUppers`,
+                    // because those will already get sent when the ingestion is
+                    // just being created.
+                    //
+                    // Sources differ in when they will report as Running. Kafka
+                    // UPSERT sources will only switch to `Running` once their
+                    // state has been initialized from persist, which is the
+                    // first case that we care about right now.
+                    //
+                    // I wouldn't say it's ideal, but it's workable until we
+                    // find something better.
+
+                    match status_update.status {
+                        Status::Running => {
+                            let collection = self.collections.get_mut(&status_update.id);
+                            match collection {
+                                Some(collection) => {
+                                    match collection.extra_state {
+                                        CollectionStateExtra::Ingestion(
+                                            ref mut ingestion_state,
+                                        ) => {
+                                            if !ingestion_state.hydrated {
+                                                tracing::debug!(ingestion_id = %status_update.id, "ingestion is hydrated");
+                                                ingestion_state.hydrated = true;
+                                            }
+                                        }
+                                        CollectionStateExtra::None => {
+                                            // Nothing to do
+                                        }
+                                    }
+                                }
+                                None => (), // no collection, let's say that's fine
+                                            // here
+                            }
+                        }
+                        _ => (),
+                    }
+                }
                 self.record_status_updates(updates);
             }
         }
@@ -3604,6 +3693,9 @@ struct IngestionState<T: TimelyTimestamp> {
 
     /// The ID of the instance in which the ingestion is running.
     pub instance_id: StorageInstanceId,
+
+    /// Whether or not the ingestion is hydrated.
+    pub hydrated: bool,
 }
 
 /// A description of a status history collection.
