@@ -358,6 +358,9 @@ pub struct BatchBuilderConfig {
     pub(crate) preferred_order: RunOrder,
     pub(crate) structured_key_lower_len: usize,
     pub(crate) run_length_limit: usize,
+    /// The number of runs to cap the built batch at, or None if we should
+    /// continue to generate one run per part for unordered batches.
+    /// See the config definition for details.
     pub(crate) max_runs: Option<usize>,
 }
 
