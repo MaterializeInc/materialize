@@ -130,6 +130,8 @@ pub enum PeekNotification {
     Success {
         /// Number of rows in the returned peek result.
         rows: u64,
+        /// Size of the returned peek result in bytes.
+        result_size: u64,
     },
     /// Error of an unsuccessful peek, including the reason for the error.
     Error(String),
@@ -144,6 +146,7 @@ impl PeekNotification {
         match peek_response {
             PeekResponse::Rows(rows) => Self::Success {
                 rows: u64::cast_from(rows.count(offset, limit)),
+                result_size: u64::cast_from(rows.byte_len()),
             },
             PeekResponse::Error(err) => Self::Error(err.clone()),
             PeekResponse::Canceled => Self::Canceled,

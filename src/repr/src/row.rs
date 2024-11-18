@@ -457,6 +457,11 @@ impl RowRef {
         }
     }
 
+    /// Return the byte length of this [`RowRef`].
+    pub fn byte_len(&self) -> usize {
+        self.0.len()
+    }
+
     /// For debugging only.
     pub fn data(&self) -> &[u8] {
         &self.0

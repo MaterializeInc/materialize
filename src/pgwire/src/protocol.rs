@@ -1083,12 +1083,12 @@ where
                         Ok((ok, SendRowsEndedReason::Canceled)) => {
                             (Ok(ok), StatementEndedExecutionReason::Canceled)
                         }
-                        // NOTE: For now the values for `result_size` and `rows_returned` in
-                        // fetches are a bit confusing.  We record
-                        // `Some(n)` for the first fetch, where `n` is
+                        // NOTE: For now the values for `result_size` and 
+                        // `rows_returned` in fetches are a bit confusing.  
+                        // We record `Some(n)` for the first fetch, where `n` is
                         // the number of bytes/rows returned by the inner
                         // execute (regardless of how many rows the
-                        // fetch fetched) , and `None` for subsequent fetches.
+                        // fetch fetched), and `None` for subsequent fetches.
                         //
                         // This arguably makes sense since the size/rows
                         // returned measures how much work the compute
@@ -1946,7 +1946,7 @@ where
                 .get_portal_unverified_mut(&name)
                 .expect("valid fetch portal")
         });
-        let response_message = get_response(max_rows, total_bytes_sent, total_sent_rows, fetch_portal); // JC
+        let response_message = get_response(max_rows, total_bytes_sent, total_sent_rows, fetch_portal);
         self.send(response_message).await?;
         Ok((
             State::Ready,
@@ -2013,6 +2013,7 @@ where
         }
 
         let mut count = 0;
+        let mut total_sent_bytes = 0;
         loop {
             tokio::select! {
                 e = self.conn.wait_closed() => return Err(e),
@@ -2034,6 +2035,7 @@ where
                     Some(PeekResponseUnary::Rows(mut rows)) => {
                         count += rows.count();
                         while let Some(row) = rows.next() {
+                            total_sent_bytes += row.byte_len();
                             encode_fn(row, typ, &mut out)?;
                             self.send(BackendMessage::CopyData(mem::take(&mut out)))
                                 .await?;
@@ -2063,7 +2065,7 @@ where
         Ok((
             State::Ready,
             SendRowsEndedReason::Success {
-                result_size: Some(u64::cast_from(0)), // JC
+                result_size: Some(u64::cast_from(total_sent_bytes)),
                 rows_returned: u64::cast_from(count),
             },
         ))
@@ -2319,6 +2321,7 @@ fn describe_rows(stmt_desc: &StatementDesc, formats: &[Format]) -> BackendMessag
 
 type GetResponse = fn(
     max_rows: ExecuteCount,
+    total_sent_bytes: usize,
     total_sent_rows: usize,
     fetch_portal: Option<&mut Portal>,
 ) -> BackendMessage;
@@ -2327,6 +2330,7 @@ type GetResponse = fn(
 // simple query messages.
 fn portal_exec_message(
     max_rows: ExecuteCount,
+    total_sent_bytes: usize,
     total_sent_rows: usize,
     _fetch_portal: Option<&mut Portal>,
 ) -> BackendMessage {
@@ -2341,7 +2345,7 @@ fn portal_exec_message(
             BackendMessage::PortalSuspended
         }
         _ => BackendMessage::CommandComplete {
-            tag: format!("SELECT {}", total_sent_rows),
+            tag: format!("SELECT {} bytes, {} rows", total_sent_bytes, total_sent_rows),
         },
     }
 }
@@ -2349,10 +2353,11 @@ fn portal_exec_message(
 // A GetResponse used by send_rows during FETCH queries.
 fn fetch_message(
     _max_rows: ExecuteCount,
+    total_sent_bytes: usize,
     total_sent_rows: usize,
     fetch_portal: Option<&mut Portal>,
 ) -> BackendMessage {
-    let tag = format!("FETCH {}", total_sent_rows);
+    let tag = format!("FETCH {} bytes, {} rows", total_sent_bytes, total_sent_rows);
     if let Some(portal) = fetch_portal {
         portal.state = PortalState::Completed(Some(tag.clone()));
     }

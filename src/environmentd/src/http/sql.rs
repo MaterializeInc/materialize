@@ -928,9 +928,9 @@ impl ResultSender for WebSocket {
                                 );
                             }
 
-                            result_size += rows.size(); // JC
                             rows_returned += rows.count();
                             while let Some(row) = rows.next() {
+                                result_size += row.byte_len();
                                 let datums = datum_vec.borrow_with(row);
                                 let types = &desc.typ().column_types;
                                 if let Err(e) = send_ws_response(

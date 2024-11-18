@@ -574,11 +574,11 @@ impl Coordinator {
                 rows_returned.map(|rr| i64::try_from(rr).expect("must fit")),
                 execution_strategy.map(|es| es.name()),
             ),
-            StatementEndedExecutionReason::Canceled => ("canceled", None, None, None),
+            StatementEndedExecutionReason::Canceled => ("canceled", None, None, None, None),
             StatementEndedExecutionReason::Errored { error } => {
-                ("error", Some(error.as_str()), None, None)
+                ("error", Some(error.as_str()), None, None, None)
             }
-            StatementEndedExecutionReason::Aborted => ("aborted", None, None, None),
+            StatementEndedExecutionReason::Aborted => ("aborted", None, None, None, None),
         };
         packer.extend([
             Datum::TimestampTz(

@@ -456,21 +456,21 @@ ORDER BY mseh.began_at",
             }
         }
     }
-    assert_gt!(sl_results[0].result_size, Some(0)); // JC Best we can do is assert > 0?
+    assert!(sl_results[0].result_size.unwrap_or(0) > 0);
     assert_eq!(sl_results[0].rows_returned, Some(1));
     assert_eq!(sl_results[0].finished_status, "success");
     assert_eq!(
         sl_results[0].execution_strategy.as_ref().unwrap(),
         "constant"
     );
-    assert_gt!(sl_results[1].result_size, Some(0)); // JC
+    assert!(sl_results[1].result_size.unwrap_or(0) > 0);
     assert_eq!(sl_results[1].rows_returned, Some(10001));
     assert_eq!(sl_results[1].finished_status, "success");
     assert_eq!(
         sl_results[1].execution_strategy.as_ref().unwrap(),
         "standard"
     );
-    assert_gt!(sl_results[2].result_size, Some(0)); // JC
+    assert!(sl_results[2].result_size.unwrap_or(0) > 0);
     assert_eq!(sl_results[2].rows_returned, Some(10001));
     assert_eq!(sl_results[2].finished_status, "success");
     assert_eq!(

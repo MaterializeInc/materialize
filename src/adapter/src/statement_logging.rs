@@ -154,7 +154,7 @@ impl From<&ExecuteResponse> for StatementEndedExecutionReason {
                 // can ever actually happen.
                 ExecuteResponse::SendingRowsImmediate { rows, .. } => {
                     StatementEndedExecutionReason::Success {
-                        result_size: Some(0), //JC
+                        result_size: Some(u64::cast_from(rows.byte_len())), // JC method not found in `&Box<dyn RowIterator + Send + Sync>`
                         rows_returned: Some(u64::cast_from(rows.count())),
                         execution_strategy: Some(StatementExecutionStrategy::Constant),
                     }
@@ -182,7 +182,7 @@ impl From<&ExecuteResponse> for StatementEndedExecutionReason {
 
             ExecuteResponse::SendingRowsImmediate { rows, .. } => {
                 StatementEndedExecutionReason::Success {
-                    result_size: Some(0), // JC
+                    result_size: Some(u64::cast_from(rows.byte_len())), // JC method not found in `&Box<dyn RowIterator + Send + Sync>`
                     rows_returned: Some(u64::cast_from(rows.count())),
                     execution_strategy: Some(StatementExecutionStrategy::Constant),
                 }

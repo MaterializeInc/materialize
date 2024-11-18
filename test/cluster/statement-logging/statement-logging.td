@@ -292,16 +292,15 @@ ROLLBACK
 
 > SELECT * FROM t_offset_limit ORDER BY a DESC LIMIT 0;
 
-> SELECT rows_returned FROM mz_internal.mz_recent_activity_log WHERE sql = 'SELECT * FROM t_offset_limit ORDER BY a DESC OFFSET 4';
-1
+> SELECT result_size, rows_returned FROM mz_internal.mz_recent_activity_log WHERE sql = 'SELECT * FROM t_offset_limit ORDER BY a DESC OFFSET 4';
+0 1
 
-> SELECT rows_returned FROM mz_internal.mz_recent_activity_log WHERE sql = 'SELECT * FROM t_offset_limit ORDER BY a DESC LIMIT 2';
-2
+> SELECT result_size, rows_returned FROM mz_internal.mz_recent_activity_log WHERE sql = 'SELECT * FROM t_offset_limit ORDER BY a DESC LIMIT 2';
+0 2
 
-> SELECT rows_returned FROM mz_internal.mz_recent_activity_log WHERE sql = 'SELECT * FROM t_offset_limit ORDER BY a DESC OFFSET 100';
-0
+> SELECT result_size, rows_returned FROM mz_internal.mz_recent_activity_log WHERE sql = 'SELECT * FROM t_offset_limit ORDER BY a DESC OFFSET 100';
+0 0
 
-> SELECT rows_returned FROM mz_internal.mz_recent_activity_log WHERE sql = 'SELECT * FROM t_offset_limit ORDER BY a DESC LIMIT 0';
-0
+> SELECT result_size, rows_returned FROM mz_internal.mz_recent_activity_log WHERE sql = 'SELECT * FROM t_offset_limit ORDER BY a DESC LIMIT 0';
+0 0
 
-#JC Check relative size of result_size values?
