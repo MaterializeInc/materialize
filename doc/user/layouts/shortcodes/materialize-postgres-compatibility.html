@@ -1,0 +1,11 @@
+Materialize follows the SQL standard (SQL-92) implementation and aims for
+compatibility with the PostgreSQL dialect. It **does not** aim for
+compatibility with a specific version of PostgreSQL. This means that
+Materialize might support syntax from any released PostgreSQL version, but does
+not provide full coverage of the PostgreSQL dialect. The implementation and
+performance of specific features (like [window functions](/transform-data/idiomatic-materialize-sql/appendix/window-function-to-materialize))
+might also differ, because Materialize uses an entirely different database
+engine based on [Timely and Differential Dataflow](/get-started/#incremental-updates).
+
+If you need specific syntax or features that are not currently supported in
+Materialize, please submit a [feature request](/support/#requesting-a-feature).

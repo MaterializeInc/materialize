@@ -10,17 +10,9 @@ menu:
 ---
 
 With Materialize, you can use SQL to transform, deliver, and act on
-fast-changing data. Materialize follows the SQL standard
-(SQL-92) implementation, and strives for compatibility with the PostgreSQL
-dialect.
+fast-changing data.
 
-You can build complex analytical workloads using [any type of
-join](/sql/select/join/) (including non-windowed joins and joins on arbitrary
-conditions). You can also leverage exciting new SQL patterns enabled by
-streaming, like [Change Data Capture
-(CDC)](/integrations/#databases), [temporal
-filters](/sql/patterns/temporal-filters/), and
-[subscriptions](/sql/subscribe/).
+{{% materialize-postgres-compatibility %}}
 
 ### SELECT statement
 
