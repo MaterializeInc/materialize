@@ -96,6 +96,19 @@ pub mod v1alpha1 {
         pub in_place_rollout: bool,
         // The name of a secret containing metadata_backend_url and persist_backend_url.
         pub backend_secret_name: String,
+
+        // The value used by environmentd (via the --environment-id flag) to
+        // uniquely identify this instance. Must be globally unique, and
+        // defaults to a random value.
+        // NOTE: This value MUST NOT be changed in an existing instance,
+        // since it affects things like the way data is stored in the persist
+        // backend.
+        // This is safe to be set via a default because the controller code
+        // runs an initial reconcile loop in order to set the finalizer on
+        // the resource before running any user code, and that initial loop
+        // will populate any defaults.
+        #[serde(default = "Uuid::new_v4")]
+        pub environment_id: Uuid,
     }
 
     impl Materialize {
@@ -213,7 +226,10 @@ pub mod v1alpha1 {
         }
 
         pub fn environment_id(&self, cloud_provider: &str, region: &str) -> String {
-            format!("{}-{}-{}-0", cloud_provider, region, self.name_unchecked())
+            format!(
+                "{}-{}-{}-0",
+                cloud_provider, region, self.spec.environment_id,
+            )
         }
 
         pub fn requested_reconciliation_id(&self) -> Uuid {
