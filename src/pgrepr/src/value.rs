@@ -689,22 +689,20 @@ impl Value {
             Type::Array(elem_type) => {
                 let (elements, dims) =
                     strconv::parse_array(s, || None, |elem_text| Ok::<_, String>(Some(elem_text)))?;
-                packer
-                    .push_array_with(&dims, |packer| {
-                        let mut nelements = 0;
-                        for element in elements {
-                            match element {
-                                Some(elem_text) => {
-                                    Value::decode_text_into_row(elem_type, &elem_text, packer)
-                                        .unwrap()
-                                } // TODO!
-                                None => packer.push(Datum::Null),
+                packer.push_array_with(&dims, |packer| {
+                    let mut nelements = 0;
+                    for element in elements {
+                        match element {
+                            Some(elem_text) => {
+                                Value::decode_text_into_row(elem_type, &elem_text, packer)?
                             }
-                            nelements += 1;
+
+                            None => packer.push(Datum::Null),
                         }
-                        nelements
-                    })
-                    .unwrap()
+                        nelements += 1;
+                    }
+                    Ok::<_, Box<dyn Error + Sync + Send>>(nelements)
+                })?
             }
             Type::Int2Vector { .. } => {
                 return Err("input of Int2Vector types is not implemented".into())
@@ -734,30 +732,28 @@ impl Value {
                 packer.push_list_with(|packer| {
                     for elem in elems {
                         match elem {
-                            Some(elem) => {
-                                Value::decode_text_into_row(elem_type, &elem, packer).unwrap()
-                            }
+                            Some(elem) => Value::decode_text_into_row(elem_type, &elem, packer)?,
                             None => packer.push(Datum::Null),
                         }
                     }
-                });
+                    Ok::<_, Box<dyn Error + Sync + Send>>(())
+                })?;
             }
             Type::Map { value_type } => {
                 let map =
                     strconv::parse_map(s, matches!(**value_type, Type::Map { .. }), |elem_text| {
-                        elem_text.map(|t| Ok::<_, String>(t)).transpose()
+                        elem_text.map(Ok::<_, String>).transpose()
                     })?;
                 packer.push_dict_with(|row| {
                     for (k, v) in map {
                         row.push(Datum::String(&k));
                         match v {
-                            Some(elem) => {
-                                Value::decode_text_into_row(value_type, &elem, row).unwrap()
-                            }
+                            Some(elem) => Value::decode_text_into_row(value_type, &elem, row)?,
                             None => row.push(Datum::Null),
                         }
                     }
-                });
+                    Ok::<_, Box<dyn Error + Sync + Send>>(())
+                })?;
             }
             Type::Name => packer.push(Datum::String(&strconv::parse_pg_legacy_name(s))),
             Type::Numeric { .. } => packer.push(Datum::Numeric(strconv::parse_numeric(s)?)),
@@ -782,7 +778,8 @@ impl Value {
                 let range = strconv::parse_range(s, |elem_text| {
                     Value::decode_text(element_type, elem_text.as_bytes()).map(Box::new)
                 })?;
-                // TODO: bad!
+                // TODO: We should be able to push ranges without scratch space, but that requires
+                // a different `push_range` API.
                 let buf = RowArena::new();
                 let range = range.into_bounds(|elem| elem.into_datum(&buf, element_type));
 
