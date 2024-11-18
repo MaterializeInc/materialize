@@ -25,7 +25,6 @@ use mz_storage_types::sources::load_generator::{
 use mz_storage_types::sources::{MzOffset, SourceExportDetails, SourceTimestamp};
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
 use mz_timely_util::containers::stack::AccountedStackBuilder;
-use timely::dataflow::operators::ToStream;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use tokio::time::{interval_at, Instant};
@@ -240,12 +239,16 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
     let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
 
     let (data_output, stream) = builder.new_output::<AccountedStackBuilder<_>>();
+    let (health_output, health_stream) = builder.new_output();
     let (stats_output, stats_stream) = builder.new_output();
 
     let busy_signal = Arc::clone(&config.busy_signal);
     let button = builder.build(move |caps| {
         SignaledFuture::new(busy_signal, async move {
-            let [mut cap, stats_cap]: [_; 2] = caps.try_into().unwrap();
+            let [mut cap, health_cap, stats_cap]: [_; 3] = caps.try_into().unwrap();
+
+            // We only need this until we reported ourselves as Running.
+            let mut health_cap = Some(health_cap);
 
             if !config.responsible_for(()) {
                 // Emit 0, to mark this worker as having started up correctly.
@@ -343,6 +346,18 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
                         }
                     }
                     Event::Progress(Some(offset)) => {
+                        if resume_offset <= offset && health_cap.is_some() {
+                            let health_cap = health_cap.take().expect("known to exist");
+                            health_output.give(
+                                &health_cap,
+                                HealthStatusMessage {
+                                    index: 0,
+                                    namespace: StatusNamespace::Generator,
+                                    update: HealthStatusUpdate::running(),
+                                },
+                            );
+                        }
+
                         // If we've reached the requested maximum offset, cease.
                         if offset >= up_to {
                             break;
@@ -401,16 +416,10 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
         })
     });
 
-    let status = [HealthStatusMessage {
-        index: 0,
-        namespace: StatusNamespace::Generator,
-        update: HealthStatusUpdate::running(),
-    }]
-    .to_stream(scope);
     (
         stream.as_collection(),
         None,
-        status,
+        health_stream,
         stats_stream,
         vec![button.press_on_drop()],
     )
