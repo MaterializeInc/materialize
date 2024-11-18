@@ -43,6 +43,49 @@ use crate::adt::timestamp::{CheckedTimestamp, PackedNaiveDateTime};
 use crate::row::ProtoDatum;
 use crate::{Datum, RowArena, ScalarType};
 
+/// Return the stats for a fixed-size bytes column, defaulting to an appropriate value if
+/// no values are present.
+pub fn fixed_stats_from_column(
+    col: &FixedSizeBinaryArray,
+    kind: FixedSizeBytesStatsKind,
+) -> ColumnStatKinds {
+    // Note: Ideally here we'd use the arrow compute kernels for getting
+    // the min and max of a column, but aren't yet implemented for a
+    // `FixedSizedBinaryArray`.
+    //
+    // See: <https://github.com/apache/arrow-rs/issues/5934>
+
+    let lower = col.into_iter().filter_map(|x| x).min();
+    let upper = col.into_iter().filter_map(|x| x).max();
+
+    // We use the default when all values are null, including when the input is empty...
+    // in which case any min/max are fine as long as they decode properly.
+    let default = || match kind {
+        FixedSizeBytesStatsKind::PackedTime => PackedNaiveTime::from_value(NaiveTime::default())
+            .as_bytes()
+            .to_vec(),
+        FixedSizeBytesStatsKind::PackedDateTime => {
+            PackedNaiveDateTime::from_value(NaiveDateTime::default())
+                .as_bytes()
+                .to_vec()
+        }
+        FixedSizeBytesStatsKind::PackedInterval => PackedInterval::from_value(Interval::default())
+            .as_bytes()
+            .to_vec(),
+        FixedSizeBytesStatsKind::PackedNumeric => {
+            unreachable!("Numeric is not stored in a fixed size byte array")
+        }
+        FixedSizeBytesStatsKind::Uuid => Uuid::default().as_bytes().to_vec(),
+    };
+
+    BytesStats::FixedSize(FixedSizeBytesStats {
+        lower: lower.map_or_else(default, Vec::from),
+        upper: upper.map_or_else(default, Vec::from),
+        kind,
+    })
+    .into()
+}
+
 /// Returns a `(lower, upper)` bound from the provided [`ColumnStatKinds`], if applicable.
 pub fn col_values<'a>(
     typ: &ScalarType,
@@ -312,218 +355,6 @@ impl ColumnarStatsBuilder<OrderedDecimal<Numeric>> for NumericStatsBuilder {
             lower: PackedNumeric::from_value(self.lower.0).as_bytes().to_vec(),
             upper: PackedNumeric::from_value(self.upper.0).as_bytes().to_vec(),
             kind: FixedSizeBytesStatsKind::PackedNumeric,
-        })
-    }
-}
-
-/// Incrementally collects statistics for a column of `time`.
-#[derive(Default, Debug)]
-pub struct NaiveTimeStatsBuilder {
-    lower: NaiveTime,
-    upper: NaiveTime,
-}
-
-impl ColumnarStatsBuilder<NaiveTime> for NaiveTimeStatsBuilder {
-    type ArrowColumn = FixedSizeBinaryArray;
-    type FinishedStats = BytesStats;
-
-    fn from_column(col: &Self::ArrowColumn) -> Self
-    where
-        Self: Sized,
-    {
-        // Note: Ideally here we'd use the arrow compute kernels for getting
-        // the min and max of a column, but aren't yet implemented for a
-        // `FixedSizedBinaryArray`.
-        //
-        // See: <https://github.com/apache/arrow-rs/issues/5934>
-
-        let lower = col.into_iter().filter_map(|x| x).min();
-        let upper = col.into_iter().filter_map(|x| x).max();
-
-        let lower = lower
-            .map(|b| {
-                PackedNaiveTime::from_bytes(b)
-                    .expect("failed to roundtrip PackedNaiveTime")
-                    .into_value()
-            })
-            .unwrap_or_default();
-        let upper = upper
-            .map(|b| {
-                PackedNaiveTime::from_bytes(b)
-                    .expect("failed to roundtrip PackedNaiveTime")
-                    .into_value()
-            })
-            .unwrap_or_default();
-
-        NaiveTimeStatsBuilder { lower, upper }
-    }
-
-    fn finish(self) -> Self::FinishedStats
-    where
-        Self::FinishedStats: Sized,
-    {
-        BytesStats::FixedSize(FixedSizeBytesStats {
-            lower: PackedNaiveTime::from_value(self.lower).as_bytes().to_vec(),
-            upper: PackedNaiveTime::from_value(self.upper).as_bytes().to_vec(),
-            kind: FixedSizeBytesStatsKind::PackedTime,
-        })
-    }
-}
-
-/// Incrementally collects statistics for a column of `time`.
-#[derive(Default, Debug)]
-pub struct NaiveDateTimeStatsBuilder {
-    lower: NaiveDateTime,
-    upper: NaiveDateTime,
-}
-
-impl ColumnarStatsBuilder<NaiveDateTime> for NaiveDateTimeStatsBuilder {
-    type ArrowColumn = FixedSizeBinaryArray;
-    type FinishedStats = BytesStats;
-
-    fn from_column(col: &Self::ArrowColumn) -> Self
-    where
-        Self: Sized,
-    {
-        // Note: Ideally here we'd use the arrow compute kernels for getting
-        // the min and max of a column, but aren't yet implemented for a
-        // `FixedSizedBinaryArray`.
-        //
-        // See: <https://github.com/apache/arrow-rs/issues/5934>
-
-        let lower = col.into_iter().filter_map(|x| x).min();
-        let upper = col.into_iter().filter_map(|x| x).max();
-
-        let lower = lower
-            .map(|b| {
-                PackedNaiveDateTime::from_bytes(b)
-                    .expect("failed to roundtrip PackedNaiveDateTime")
-                    .into_value()
-            })
-            .unwrap_or_default();
-        let upper = upper
-            .map(|b| {
-                PackedNaiveDateTime::from_bytes(b)
-                    .expect("failed to roundtrip PackedNaiveDateTime")
-                    .into_value()
-            })
-            .unwrap_or_default();
-
-        NaiveDateTimeStatsBuilder { lower, upper }
-    }
-
-    fn finish(self) -> Self::FinishedStats
-    where
-        Self::FinishedStats: Sized,
-    {
-        BytesStats::FixedSize(FixedSizeBytesStats {
-            lower: PackedNaiveDateTime::from_value(self.lower)
-                .as_bytes()
-                .to_vec(),
-            upper: PackedNaiveDateTime::from_value(self.upper)
-                .as_bytes()
-                .to_vec(),
-            kind: FixedSizeBytesStatsKind::PackedDateTime,
-        })
-    }
-}
-
-/// Incrementally collects statistics for a column of `time`.
-#[derive(Default, Debug)]
-pub struct IntervalStatsBuilder {
-    lower: Interval,
-    upper: Interval,
-}
-
-impl ColumnarStatsBuilder<Interval> for IntervalStatsBuilder {
-    type ArrowColumn = FixedSizeBinaryArray;
-    type FinishedStats = BytesStats;
-
-    fn from_column(col: &Self::ArrowColumn) -> Self
-    where
-        Self: Sized,
-    {
-        // Note: Ideally here we'd use the arrow compute kernels for getting
-        // the min and max of a column, but aren't yet implemented for a
-        // `FixedSizedBinaryArray`.
-        //
-        // See: <https://github.com/apache/arrow-rs/issues/5934>
-
-        let lower = col.into_iter().filter_map(|x| x).min();
-        let upper = col.into_iter().filter_map(|x| x).max();
-
-        let lower = lower
-            .map(|b| {
-                PackedInterval::from_bytes(b)
-                    .expect("failed to roundtrip PackedInterval")
-                    .into_value()
-            })
-            .unwrap_or_default();
-        let upper = upper
-            .map(|b| {
-                PackedInterval::from_bytes(b)
-                    .expect("failed to roundtrip PackedInterval")
-                    .into_value()
-            })
-            .unwrap_or_default();
-
-        IntervalStatsBuilder { lower, upper }
-    }
-
-    fn finish(self) -> Self::FinishedStats
-    where
-        Self::FinishedStats: Sized,
-    {
-        BytesStats::FixedSize(FixedSizeBytesStats {
-            lower: PackedInterval::from_value(self.lower).as_bytes().to_vec(),
-            upper: PackedInterval::from_value(self.upper).as_bytes().to_vec(),
-            kind: FixedSizeBytesStatsKind::PackedInterval,
-        })
-    }
-}
-
-/// Statistics builder for a column of [`Uuid`]s.
-#[derive(Debug)]
-pub struct UuidStatsBuilder {
-    lower: Uuid,
-    upper: Uuid,
-}
-
-impl ColumnarStatsBuilder<Uuid> for UuidStatsBuilder {
-    type ArrowColumn = FixedSizeBinaryArray;
-    type FinishedStats = BytesStats;
-
-    fn from_column(col: &Self::ArrowColumn) -> Self
-    where
-        Self: Sized,
-    {
-        // Note: Ideally here we'd use the arrow compute kernels for getting
-        // the min and max of a column, but aren't yet implemented for a
-        // `FixedSizedBinaryArray`.
-        //
-        // See: <https://github.com/apache/arrow-rs/issues/5934>
-
-        let lower = col.into_iter().filter_map(|x| x).min();
-        let upper = col.into_iter().filter_map(|x| x).max();
-
-        let lower = lower
-            .map(|b| Uuid::from_slice(b).expect("failed to roundtrip UUID"))
-            .unwrap_or_default();
-        let upper = upper
-            .map(|b| Uuid::from_slice(b).expect("failed to roundtrip UUID"))
-            .unwrap_or_default();
-
-        UuidStatsBuilder { lower, upper }
-    }
-
-    fn finish(self) -> Self::FinishedStats
-    where
-        Self::FinishedStats: Sized,
-    {
-        BytesStats::FixedSize(FixedSizeBytesStats {
-            lower: self.lower.as_bytes().to_vec(),
-            upper: self.upper.as_bytes().to_vec(),
-            kind: FixedSizeBytesStatsKind::Uuid,
         })
     }
 }

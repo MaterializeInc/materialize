@@ -34,7 +34,8 @@ use mz_ore::assert_none;
 use mz_ore::cast::CastFrom;
 use mz_persist_types::columnar::{ColumnDecoder, ColumnEncoder, FixedSizeCodec, Schema2};
 use mz_persist_types::stats::{
-    ColumnNullStats, ColumnStatKinds, ColumnarStats, OptionStats, PrimitiveStats, StructStats,
+    ColumnNullStats, ColumnStatKinds, ColumnarStats, FixedSizeBytesStatsKind, OptionStats,
+    PrimitiveStats, StructStats,
 };
 use mz_persist_types::stats2::ColumnarStatsBuilder;
 use mz_persist_types::Codec;
@@ -58,10 +59,7 @@ use crate::row::{
     ProtoArray, ProtoArrayDimension, ProtoDatum, ProtoDatumOther, ProtoDict, ProtoDictElement,
     ProtoNumeric, ProtoRange, ProtoRangeInner, ProtoRow,
 };
-use crate::stats2::{
-    stats_for_json, IntervalStatsBuilder, NaiveDateTimeStatsBuilder, NaiveTimeStatsBuilder,
-    NumericStatsBuilder, UuidStatsBuilder,
-};
+use crate::stats2::{fixed_stats_from_column, stats_for_json, NumericStatsBuilder};
 use crate::{Datum, ProtoRelationDesc, RelationDesc, Row, RowPacker, ScalarType, Timestamp};
 
 // TODO(parkmycar): Benchmark the difference between `FixedSizeBinaryArray` and `BinaryArray`.
@@ -1185,16 +1183,22 @@ impl DatumColumnDecoder {
             DatumColumnDecoder::String(a) => PrimitiveStats::<String>::from_column(a).into(),
             DatumColumnDecoder::Bytes(a) => PrimitiveStats::<Vec<u8>>::from_column(a).into(),
             DatumColumnDecoder::Date(a) => PrimitiveStats::<i32>::from_column(a).into(),
-            DatumColumnDecoder::Time(a) => NaiveTimeStatsBuilder::from_column(a).finish().into(),
+            DatumColumnDecoder::Time(a) => {
+                fixed_stats_from_column(a, FixedSizeBytesStatsKind::PackedTime)
+            }
             DatumColumnDecoder::Timestamp(a) => {
-                NaiveDateTimeStatsBuilder::from_column(a).finish().into()
+                fixed_stats_from_column(a, FixedSizeBytesStatsKind::PackedDateTime)
             }
             DatumColumnDecoder::TimestampTz(a) => {
-                NaiveDateTimeStatsBuilder::from_column(a).finish().into()
+                fixed_stats_from_column(a, FixedSizeBytesStatsKind::PackedDateTime)
             }
             DatumColumnDecoder::MzTimestamp(a) => PrimitiveStats::<u64>::from_column(a).into(),
-            DatumColumnDecoder::Interval(a) => IntervalStatsBuilder::from_column(a).finish().into(),
-            DatumColumnDecoder::Uuid(a) => UuidStatsBuilder::from_column(a).finish().into(),
+            DatumColumnDecoder::Interval(a) => {
+                fixed_stats_from_column(a, FixedSizeBytesStatsKind::PackedInterval)
+            }
+            DatumColumnDecoder::Uuid(a) => {
+                fixed_stats_from_column(a, FixedSizeBytesStatsKind::Uuid)
+            }
             DatumColumnDecoder::AclItem(_)
             | DatumColumnDecoder::MzAclItem(_)
             | DatumColumnDecoder::Range(_) => ColumnStatKinds::None,
