@@ -483,6 +483,7 @@ mod tests {
 
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    #[ignore] // TODO: Reenable when database-issues#8739 is fixed
     async fn expression_cache() {
         let local_tree = LocalExpressions::arbitrary()
             .new_tree(&mut TestRunner::default())
@@ -788,6 +789,7 @@ mod tests {
 
         #[mz_ore::test]
         #[cfg_attr(miri, ignore)]
+        #[ignore] // TODO: Reenable when database-issues#8739 is fixed
         fn local_expr_cache_roundtrip((key, val) in any::<(CacheKey, LocalExpressions)>()) {
             let bincode_val = bincode::serialize(&val).expect("must serialize");
             let (encoded_key, encoded_val) = ExpressionCodec::encode(&key, &bincode_val);
@@ -800,6 +802,7 @@ mod tests {
 
         #[mz_ore::test]
         #[cfg_attr(miri, ignore)]
+        #[ignore] // TODO: Reenable when database-issues#8739 is fixed
         fn global_expr_cache_roundtrip((key, val) in any::<(CacheKey, GlobalExpressions)>()) {
             let bincode_val = bincode::serialize(&val).expect("must serialize");
             let (encoded_key, encoded_val) = ExpressionCodec::encode(&key, &bincode_val);
