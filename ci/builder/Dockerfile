@@ -259,20 +259,6 @@ RUN if [ $ARCH_GCC = x86_64 ]; then \
     && rm hugo.tar.gz; \
     fi
 
-# Install KinD and kubectl
-
-RUN curl -fsSL https://kind.sigs.k8s.io/dl/v0.14.0/kind-linux-$ARCH_GO > /usr/local/bin/kind \
-    && chmod +x /usr/local/bin/kind
-
-RUN if [ $ARCH_GO = amd64 ]; then echo 'af5e8331f2165feab52ec2ae07c427c7b66f4ad044d09f253004a20252524c8b /usr/local/bin/kind' | sha256sum --check; fi
-RUN if [ $ARCH_GO = arm64 ]; then echo '95c9601f21fdb2c286442339d5e370149b4fe2fc7c49f615647e4e27bdfb17e2 /usr/local/bin/kind' | sha256sum --check; fi
-
-RUN curl -fsSL https://dl.k8s.io/release/v1.24.3/bin/linux/$ARCH_GO/kubectl > /usr/local/bin/kubectl \
-    && chmod +x /usr/local/bin/kubectl
-
-RUN if [ $ARCH_GO = amd64 ]; then echo '8a45348bdaf81d46caf1706c8bf95b3f431150554f47d444ffde89e8cdd712c1 /usr/local/bin/kubectl' | sha256sum --check; fi
-RUN if [ $ARCH_GO = arm64 ]; then echo 'bdad4d3063ddb7bfa5ecf17fb8b029d5d81d7d4ea1650e4369aafa13ed97149a /usr/local/bin/kubectl' | sha256sum --check; fi
-
 # Install Bazel.
 #
 # TODO(parkmycar): Run Bazel in a Docker image that does not have access to clang/gcc or any other tools.
@@ -286,6 +272,38 @@ RUN arch_bazel=$(echo "$ARCH_GCC" | sed -e "s/aarch64/arm64/" -e "s/amd64/x86_64
     && if [ "$arch_bazel" = arm64 ]; then echo 'fac4b954e0501c2be8b9653a550b443eb85284e568d08b102977e2bf587b09d7 /usr/local/bin/bazel' | sha256sum --check; fi \
     && if [ "$arch_bazel" = x86_64 ]; then echo '48ea0ff9d397a48add6369c261c5a4431fe6d5d5348cfb81411782fb80c388d3 /usr/local/bin/bazel' | sha256sum --check; fi \
     && chmod +x /usr/local/bin/bazel
+
+# Install KinD, kubectl, helm & helm-docs
+
+RUN curl -fsSL https://kind.sigs.k8s.io/dl/v0.14.0/kind-linux-$ARCH_GO > /usr/local/bin/kind \
+    && chmod +x /usr/local/bin/kind \
+    && if [ $ARCH_GO = amd64 ]; then echo 'af5e8331f2165feab52ec2ae07c427c7b66f4ad044d09f253004a20252524c8b /usr/local/bin/kind' | sha256sum --check; fi \
+    && if [ $ARCH_GO = arm64 ]; then echo '95c9601f21fdb2c286442339d5e370149b4fe2fc7c49f615647e4e27bdfb17e2 /usr/local/bin/kind' | sha256sum --check; fi
+
+RUN curl -fsSL https://dl.k8s.io/release/v1.24.3/bin/linux/$ARCH_GO/kubectl > /usr/local/bin/kubectl \
+    && chmod +x /usr/local/bin/kubectl \
+    && if [ $ARCH_GO = amd64 ]; then echo '8a45348bdaf81d46caf1706c8bf95b3f431150554f47d444ffde89e8cdd712c1 /usr/local/bin/kubectl' | sha256sum --check; fi \
+    && if [ $ARCH_GO = arm64 ]; then echo 'bdad4d3063ddb7bfa5ecf17fb8b029d5d81d7d4ea1650e4369aafa13ed97149a /usr/local/bin/kubectl' | sha256sum --check; fi
+
+RUN curl -fsSL https://get.helm.sh/helm-v3.16.2-linux-$ARCH_GO.tar.gz > helm.tar.gz \
+    && if [ $ARCH_GO = amd64 ]; then echo '9318379b847e333460d33d291d4c088156299a26cd93d570a7f5d0c36e50b5bb helm.tar.gz' | sha256sum --check; fi \
+    && if [ $ARCH_GO = arm64 ]; then echo '1888301aeb7d08a03b6d9f4d2b73dcd09b89c41577e80e3455c113629fc657a4 helm.tar.gz' | sha256sum --check; fi \
+    && tar -xf helm.tar.gz -C /usr/local/bin --strip-components=1 linux-$ARCH_GO/helm \
+    && rm helm.tar.gz
+
+RUN arch_helm_docs=$(echo "$ARCH_GCC" | sed -e "s/aarch64/arm64/" -e "s/amd64/x86_64/") \
+    && curl -fsSL https://github.com/norwoodj/helm-docs/releases/download/v1.14.2/helm-docs_1.14.2_Linux_$arch_helm_docs.tar.gz > helm-docs.tar.gz \
+    && if [ "$arch_helm_docs" = "x86_64" ]; then echo 'a8cf72ada34fad93285ba2a452b38bdc5bd52cc9a571236244ec31022928d6cc helm-docs.tar.gz' | sha256sum --check; fi \
+    && if [ "$arch_helm_docs" = "arm64" ]; then echo 'c3787212332386dcd122debef7848feb165aa701467ae3e3442df7638f3ac4e4 helm-docs.tar.gz' | sha256sum --check; fi \
+    && tar -xf helm-docs.tar.gz -C /usr/local/bin \
+    && rm helm-docs.tar.gz
+
+RUN mkdir -p /usr/local/share/helm/plugins/unittest \
+    && curl -fsSL https://github.com/helm-unittest/helm-unittest/releases/download/v0.6.3/helm-unittest-linux-$ARCH_GO-0.6.3.tgz > helm-unittest.tar.gz \
+    && if [ $ARCH_GO = amd64 ]; then echo '46a23e9788cfb9f4853af9f1f8e461f5795ef6ef2917cf82df2a25bf30a65064 helm-unittest.tar.gz' | sha256sum --check; fi \
+    && if [ $ARCH_GO = arm64 ]; then echo 'cca780834c6c59dda2cbccd97002d2a5c330347b4b87dc39ad13f41a345a0401 helm-unittest.tar.gz' | sha256sum --check; fi \
+    && tar -xf helm-unittest.tar.gz -C /usr/local/share/helm/plugins/unittest \
+    && rm helm-unittest.tar.gz
 
 # Hardcode some known SSH hosts, or else SSH will ask whether the host is
 # trustworthy on the first connection.
@@ -314,6 +332,7 @@ ENV CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-unknown-linux-gnu-cc
 ENV CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-unknown-linux-gnu-cc
 ENV CARGO_TARGET_DIR=/mnt/build
 ENV CARGO_INCREMENTAL=0
+ENV HELM_PLUGINS=/usr/local/share/helm/plugins
 
 # Set a environment variable that tools can check to see if they're in the
 # builder or not.

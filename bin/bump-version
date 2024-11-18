@@ -64,6 +64,9 @@ cargo update --workspace
 
 bin/bazel gen
 
+bin/helm-chart-version-bump "v$version"
+helm-docs misc/helm-charts
+
 if $commit; then
     git commit -am "release: bump to version v$version"
 fi

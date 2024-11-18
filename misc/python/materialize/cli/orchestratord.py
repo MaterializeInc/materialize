@@ -191,7 +191,7 @@ def environment(args: argparse.Namespace):
     postgres_url_parts = urlparse(args.postgres_url)
     metadata_backend_url = urlunparse(
         postgres_url_parts._replace(
-            netloc=f"{pg_user}:{pg_pass}@{postgres_url_parts.hostname}{f":{postgres_url_parts.port}" if postgres_url_parts.port is not None else ""}",
+            netloc=f"{pg_user}:{pg_pass}@{postgres_url_parts.hostname}{f':{postgres_url_parts.port}' if postgres_url_parts.port is not None else ''}",
             path=f"/{pg_db}",
         )
     )
