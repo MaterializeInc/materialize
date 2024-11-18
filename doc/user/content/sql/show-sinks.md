@@ -12,14 +12,16 @@ aliases:
 
 ## Syntax
 
-{{< diagram "show-sinks.svg" >}}
+```mzsql
+SHOW SINKS [ FROM <schema_name> ] [ IN CLUSTER <cluster_name> ]
+```
 
 ## Details
 
-Field | Use
-------|-----
-_schema&lowbar;name_ | The schema to show sinks from. Defaults to first resolvable schema in the search path. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
-_cluster&lowbar;name_ | The cluster to show sinks from. If omitted, sinks from all clusters are shown. For available clusters, see [`SHOW CLUSTERS`](../show-clusters).
+Option                        | Description
+------------------------------|------------
+**FROM** <schema_name>        | If specified, only show sinks from the specified schema. Defaults to first resolvable schema in the search path. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
+**IN CLUSTER** <cluster_name> | If specified, only show sinks from the specified cluster. For available clusters, see [`SHOW CLUSTERS`](../show-clusters).
 
 ### Output format
 

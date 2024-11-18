@@ -7,16 +7,19 @@ menu:
 
 ---
 
-`SHOW ROLE MEMBERSHIP` lists the members of each role granted via
-[role-based access control](/manage/access-control/#role-based-access-control-rbac) (RBAC).
+`SHOW ROLE MEMBERSHIP` lists the members of each role granted (directly or
+indirectly) via [role-based access
+control](/manage/access-control/#role-based-access-control-rbac) (RBAC).
 
 ## Syntax
 
-{{< diagram "show-role-membership.svg" >}}
+```mzsql
+SHOW ROLE MEMBERSHIP [ FOR <role_name> ]
+```
 
-Field                                               | Use
-----------------------------------------------------|--------------------------------------------------
-_role_name_                                         | Only shows role memberships granted directly or indirectly to _role_name_.
+Option                     | Description
+---------------------------|------------
+**FOR** <role_name>        | If specified, only show membership for the specified role.
 
 [//]: # "TODO(morsapaes) Improve examples."
 

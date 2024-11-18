@@ -497,31 +497,10 @@ show_indexes ::=
     ('FROM' schema_name | 'ON' on_name)?
     ('IN CLUSTER' cluster_name)?
     ('LIKE' 'pattern' | 'WHERE' expr)
-show_materialized_views ::=
-    'SHOW' 'MATERIALIZED VIEWS' ('FROM' schema_name)? ('IN CLUSTER' cluster_name)?
-show_roles ::=
-  'SHOW' 'ROLES'
-  ('LIKE' 'pattern' | 'WHERE' expr)?
-show_secrets ::=
-    'SHOW' 'SECRETS' ('FROM' schema_name)? ('LIKE' 'pattern' | 'WHERE' expr)?
 show_stmt ::=
   'SHOW' ( name | 'ALL' )
-show_schemas ::=
-    'SHOW' 'SCHEMAS' ('FROM' database_name)?
-show_sinks ::=
-   'SHOW' 'SINKS' ('FROM' schema_name)? ('IN CLUSTER' cluster_name)?
-show_sources ::=
-  'SHOW' 'SOURCES' ('FROM' schema_name)? ('IN CLUSTER' cluster_name)?
-show_subsources ::=
-  'SHOW' 'SUBSOURCES' ('FROM' schema_name | 'ON' on_name)?
-show_objects ::=
-  'SHOW' 'OBJECTS' ('FROM' schema_name)?
-show_privileges ::=
-  'SHOW' 'PRIVILEGES' ('ON' ('TABLES' | 'TYPES' | 'SECRETS' | 'CONNECTIONS' | 'DATABASES' | 'SCHEMAS' | 'CLUSTERS' | 'SYSTEM'))? ('FOR' role_name)?
 show_default_privileges ::=
   'SHOW' 'DEFAULT' 'PRIVILEGES' ('ON' ('TABLES' | 'TYPES' | 'SECRETS' | 'CONNECTIONS' | 'DATABASES' | 'SCHEMAS' | 'CLUSTERS'))? ('FOR' role_name)?
-show_role_membership ::=
-  'SHOW' 'ROLE' 'MEMBERSHIP' ('FOR' role_name)?
 string_agg ::=
   'string_agg' '(' value ',' delimiter    ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? ( ',' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? )* )? ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
 subscribe_stmt ::=

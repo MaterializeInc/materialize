@@ -11,7 +11,14 @@ menu:
 
 ## Syntax
 
-{{< diagram "show-roles.svg" >}}
+```mzsql
+SHOW ROLES [ LIKE <pattern>  | WHERE <condition(s)> ]
+```
+
+Option                     | Description
+---------------------------|------------
+**LIKE** \<pattern\>       | If specified, only show roles whose name matches the pattern.
+**WHERE** <condition(s)>   | If specified, only show roles that meet the condition(s).
 
 ## Examples
 

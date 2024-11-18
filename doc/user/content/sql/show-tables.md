@@ -14,9 +14,9 @@ menu:
 SHOW TABLES [FROM <schema_name>]
 ```
 
-Option       | Description
--------------|------------
-**FROM**     | The schema to show tables from. Defaults to first resolvable schema in the search path. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
+Option                 | Description
+-----------------------|------------
+**FROM** <schema_name> | If specified, only show tables from the specified schema. Defaults to first resolvable schema in the search path. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
 
 ## Details
 

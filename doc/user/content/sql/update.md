@@ -11,15 +11,15 @@ menu:
 ## Syntax
 
 ```mzsql
-UPDATE <table_name> [ AS <alias> ]
+UPDATE <table_name> [ AS <table_alias> ]
    SET <column_name> = <expression> [, <column2_name> = <expression2>, ...]
-[WHERE <condition> ];
+[WHERE <condition(s)> ];
 ```
 
-Option | Description
-------|-----
-**AS**  | Only permit references to _table_name_ as the specified _alias_.
-**WHERE** | Only update rows which evaluate to `true` for _condition_.
+Option                        | Description
+------------------------------|------------
+**AS** <table_alias>          | If specified, you can only use the alias to refer to the table within that `UPDATE` statement.
+**WHERE** <condition(s)>      | If specified, only update rows that meet the condition(s).
 
 ## Details
 

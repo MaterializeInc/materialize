@@ -11,12 +11,14 @@ in Materialize.
 
 ## Syntax
 
-{{< diagram "show-materialized-views.svg" >}}
+```mzsql
+SHOW MATERIALIZED VIEWS [ FROM <schema_name> ] [ IN <cluster_name> ]
+```
 
-Field | Use
-------|-----
-_schema&lowbar;name_ | The schema to show materialized views from. Defaults to first resolvable schema in the search path. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
-_cluster&lowbar;name_ | The cluster to show materialized views from. If omitted, materialized views from all clusters are shown.
+Option                      | Description
+----------------------------|------------
+**FROM** <schema_name>      | If specified, only show materialized views from the specified schema. Defaults to first resolvable schema in the search path. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
+**IN** <cluster_name>       | If specified, only show materialized views from the specified cluster.
 
 ## Examples
 
