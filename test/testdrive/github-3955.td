@@ -7,13 +7,12 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-arg-default default-replica-size=1
-
 # Regression test for https://github.com/MaterializeInc/database-issues/issues/3955
 
 # The contents of the introspection tables depend on the replica size
-$ skip-if
-SELECT '${arg.default-replica-size}' != '4-4'
+> CREATE CLUSTER test (SIZE '4-4');
+
+> SET cluster = test;
 
 # In case the environment has other replicas
 > SET cluster_replica = r1
@@ -36,3 +35,5 @@ SELECT '${arg.default-replica-size}' != '4-4'
     compute_exports.export_id = frontiers.export_id AND
     time > 0
 16
+
+> DROP CLUSTER test CASCADE;
