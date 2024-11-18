@@ -20,7 +20,7 @@ use crate::stats::primitive::{
     truncate_bytes, truncate_string, PrimitiveStats, TruncateBound, TRUNCATE_LEN,
 };
 use crate::stats::{
-    ColumnNullStats, ColumnStatKinds, ColumnarStats, DynStats, NoneStats, OptionStats,
+    ColumnNullStats, ColumnStatKinds, ColumnarStats, DynStats, OptionStats,
 };
 
 /// A type that can incrementally collect stats from a sequence of values.
@@ -181,28 +181,5 @@ where
             nulls: Some(ColumnNullStats { count: self.none }),
             values: self.some.finish().into(),
         }
-    }
-}
-
-/// Empty statistics for a column of data.
-#[derive(Debug)]
-pub struct NoneStatsBuilder<A>(std::marker::PhantomData<A>);
-
-impl<T, A: arrow::array::Array + 'static> ColumnarStatsBuilder<T> for NoneStatsBuilder<A> {
-    type ArrowColumn = A;
-    type FinishedStats = NoneStats;
-
-    fn from_column(_col: &Self::ArrowColumn) -> Self
-    where
-        Self: Sized,
-    {
-        NoneStatsBuilder(std::marker::PhantomData)
-    }
-
-    fn finish(self) -> Self::FinishedStats
-    where
-        Self::FinishedStats: Sized,
-    {
-        NoneStats
     }
 }
