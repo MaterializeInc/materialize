@@ -256,3 +256,53 @@ def _wait_for_pg(
             error = e
     ui.progress(finish=True)
     raise UIError(f"never got correct result for {args}: {error}")
+
+
+def bootstrap_cluster_replica_size() -> str:
+    return "bootstrap"
+
+
+def cluster_replica_size_map() -> dict[str, dict[str, Any]]:
+    def replica_size(
+        workers: int,
+        scale: int,
+        disabled: bool = False,
+        is_cc: bool = False,
+        memory_limit: str | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "cpu_exclusive": False,
+            "cpu_limit": None,
+            "credits_per_hour": f"{workers * scale}",
+            "disabled": disabled,
+            "disk_limit": None,
+            "is_cc": is_cc,
+            "memory_limit": memory_limit,
+            "scale": scale,
+            "workers": workers,
+            # "selectors": {},
+        }
+
+    replica_sizes = {
+        bootstrap_cluster_replica_size(): replica_size(1, 1),
+        "2-4": replica_size(4, 2),
+        "free": replica_size(0, 0, disabled=True),
+        "1cc": replica_size(1, 1, is_cc=True),
+        "1C": replica_size(1, 1, is_cc=True),
+    }
+
+    for i in range(0, 6):
+        workers = 1 << i
+        replica_sizes[f"{workers}"] = replica_size(workers, 1)
+        for mem in [4, 8, 16, 32]:
+            replica_sizes[f"{workers}-{mem}G"] = replica_size(
+                workers, 1, memory_limit=f"{mem} GiB"
+            )
+
+        replica_sizes[f"{workers}-1"] = replica_size(1, workers)
+        replica_sizes[f"{workers}-{workers}"] = replica_size(workers, workers)
+        replica_sizes[f"mem-{workers}"] = replica_size(
+            workers, 1, memory_limit=f"{workers} GiB"
+        )
+
+    return replica_sizes

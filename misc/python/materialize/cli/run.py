@@ -12,6 +12,7 @@
 import argparse
 import atexit
 import getpass
+import json
 import os
 import pathlib
 import shlex
@@ -30,7 +31,10 @@ import pg8000.native
 import psutil
 
 from materialize import MZ_ROOT, rustc_flags, spawn, ui
-from materialize.mzcompose import get_default_system_parameters
+from materialize.mzcompose import (
+    cluster_replica_size_map,
+    get_default_system_parameters,
+)
 from materialize.ui import UIError
 from materialize.xcompile import Arch
 
@@ -270,6 +274,7 @@ def main() -> int:
                 f"--timestamp-oracle-url={args.postgres}?options=--search_path=tsoracle",
                 f"--environment-id={environment_id}",
                 "--bootstrap-role=materialize",
+                f"--cluster-replica-sizes={json.dumps(cluster_replica_size_map())}",
                 *args.args,
             ]
             if args.monitoring:

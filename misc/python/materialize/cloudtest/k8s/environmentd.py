@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import json
 import operator
 import urllib.parse
 from collections.abc import Callable
@@ -37,7 +38,11 @@ from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
 from materialize.cloudtest.k8s.api.k8s_service import K8sService
 from materialize.cloudtest.k8s.api.k8s_stateful_set import K8sStatefulSet
 from materialize.mz_version import MzVersion
-from materialize.mzcompose import get_default_system_parameters
+from materialize.mzcompose import (
+    bootstrap_cluster_replica_size,
+    cluster_replica_size_map,
+    get_default_system_parameters,
+)
 
 
 class EnvironmentdService(K8sService):
@@ -308,6 +313,34 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             V1EnvVar(
                 name="MZ_ADAPTER_STASH_URL",
                 value=f"postgres://root@cockroach.{self.cockroach_namespace}:26257?options=--search_path=adapter",
+            ),
+            V1EnvVar(
+                name="MZ_CLUSTER_REPLICA_SIZES",
+                value=f"{json.dumps(cluster_replica_size_map())}",
+            ),
+            V1EnvVar(
+                name="MZ_BOOTSTRAP_DEFAULT_CLUSTER_REPLICA_SIZE",
+                value=bootstrap_cluster_replica_size(),
+            ),
+            V1EnvVar(
+                name="MZ_BOOTSTRAP_BUILTIN_SYSTEM_CLUSTER_REPLICA_SIZE",
+                value=bootstrap_cluster_replica_size(),
+            ),
+            V1EnvVar(
+                name="MZ_BOOTSTRAP_BUILTIN_PROBE_CLUSTER_REPLICA_SIZE",
+                value=bootstrap_cluster_replica_size(),
+            ),
+            V1EnvVar(
+                name="MZ_BOOTSTRAP_BUILTIN_SUPPORT_CLUSTER_REPLICA_SIZE",
+                value=bootstrap_cluster_replica_size(),
+            ),
+            V1EnvVar(
+                name="MZ_BOOTSTRAP_BUILTIN_CATALOG_SERVER_CLUSTER_REPLICA_SIZE",
+                value=bootstrap_cluster_replica_size(),
+            ),
+            V1EnvVar(
+                name="MZ_BOOTSTRAP_BUILTIN_ANALYTICS_CLUSTER_REPLICA_SIZE",
+                value=bootstrap_cluster_replica_size(),
             ),
         ]
 

@@ -19,6 +19,7 @@ use aws_types::region::Region;
 use globset::GlobBuilder;
 use itertools::Itertools;
 use mz_build_info::{build_info, BuildInfo};
+use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::path::PathExt;
 use mz_ore::url::SensitiveUrl;
@@ -263,6 +264,9 @@ struct Args {
         default_value = "/tmp"
     )]
     fivetran_destination_files_path: String,
+    /// A map from size name to resource allocations for cluster replicas.
+    #[clap(long, env = "CLUSTER_REPLICA_SIZES")]
+    cluster_replica_sizes: String,
 }
 
 #[tokio::main]
@@ -352,6 +356,10 @@ async fn main() {
         arg_vars.insert(name.to_string(), val.to_string());
     }
 
+    let cluster_replica_sizes: ClusterReplicaSizeMap =
+        serde_json::from_str(&args.cluster_replica_sizes)
+            .unwrap_or_else(|e| die!("testdrive: failed to parse replica size map: {}", e));
+
     let materialize_catalog_config = if args.validate_catalog_store {
         Some(CatalogConfig {
             persist_consensus_url: args
@@ -382,6 +390,7 @@ async fn main() {
 
         // === Materialize options. ===
         materialize_pgconfig: args.materialize_url,
+        materialize_cluster_replica_sizes: cluster_replica_sizes,
         materialize_internal_pgconfig: args.materialize_internal_url,
         materialize_http_port: args.materialize_http_port,
         materialize_internal_http_port: args.materialize_internal_http_port,

@@ -25,6 +25,7 @@ use futures::Future;
 use headers::{Header, HeaderMapExt};
 use hyper::http::header::HeaderMap;
 use mz_adapter::TimestampExplanation;
+use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_controller::ControllerConfig;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
 use mz_orchestrator_tracing::{TracingCliArgs, TracingOrchestrator};
@@ -509,7 +510,7 @@ impl Listeners {
                 now: config.now,
                 environment_id: config.environment_id,
                 cors_allowed_origin: AllowOrigin::list([]),
-                cluster_replica_sizes: Default::default(),
+                cluster_replica_sizes: ClusterReplicaSizeMap::for_tests(),
                 bootstrap_default_cluster_replica_size: config.default_cluster_replica_size,
                 bootstrap_builtin_system_cluster_replica_size: config
                     .builtin_system_cluster_replica_size,

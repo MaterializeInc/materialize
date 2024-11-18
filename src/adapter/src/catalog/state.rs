@@ -57,11 +57,12 @@ use mz_repr::role_id::RoleId;
 use mz_repr::{CatalogItemId, GlobalId, RelationDesc, RelationVersion};
 use mz_secrets::InMemorySecretsController;
 use mz_sql::ast::Ident;
+use mz_sql::catalog::{BuiltinsConfig, CatalogConfig, EnvironmentId};
 use mz_sql::catalog::{
-    BuiltinsConfig, CatalogCluster, CatalogClusterReplica, CatalogConfig, CatalogDatabase,
-    CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem, CatalogItemType,
-    CatalogRecordField, CatalogRole, CatalogSchema, CatalogType, CatalogTypeDetails, EnvironmentId,
-    IdReference, NameReference, SessionCatalog, SystemObjectType, TypeReference,
+    CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError as SqlCatalogError,
+    CatalogItem as SqlCatalogItem, CatalogItemType, CatalogRecordField, CatalogRole, CatalogSchema,
+    CatalogType, CatalogTypeDetails, IdReference, NameReference, SessionCatalog, SystemObjectType,
+    TypeReference,
 };
 use mz_sql::names::{
     CommentObjectId, DatabaseId, DependencyIds, FullItemName, FullSchemaName, ObjectId,
@@ -258,6 +259,8 @@ where
 
 impl CatalogState {
     /// Returns an empty [`CatalogState`] that can be used in tests.
+    // TODO: Ideally we'd mark this as `#[cfg(test)]`, but that doesn't work with the way
+    // tests are structured in this repository.
     pub fn empty_test() -> Self {
         CatalogState {
             database_by_name: Default::default(),
@@ -290,7 +293,7 @@ impl CatalogState {
                 },
                 helm_chart_version: None,
             },
-            cluster_replica_sizes: Default::default(),
+            cluster_replica_sizes: ClusterReplicaSizeMap::for_tests(),
             availability_zones: Default::default(),
             system_configuration: Default::default(),
             egress_addresses: Default::default(),
@@ -2182,10 +2185,9 @@ impl CatalogState {
                 pending,
             } => {
                 if allowed_availability_zones.is_some() && availability_zone.is_some() {
+                    let message = "tried concretize managed replica with specific availability zones and availability zone";
                     return Err(Error {
-                        kind: ErrorKind::Internal(
-                            "tried concretize managed replica with specific availability zones and availability zone".to_string(),
-                        ),
+                        kind: ErrorKind::Internal(message.to_string()),
                     });
                 }
                 self.ensure_valid_replica_size(allowed_sizes, &size)?;

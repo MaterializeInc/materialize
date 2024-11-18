@@ -43,6 +43,7 @@ use fallible_iterator::FallibleIterator;
 use futures::sink::SinkExt;
 use itertools::Itertools;
 use md5::{Digest, Md5};
+use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_controller::ControllerConfig;
 use mz_environmentd::CatalogConfig;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
@@ -1071,7 +1072,7 @@ impl<'a> RunnerInner<'a> {
             metrics_registry,
             now,
             environment_id,
-            cluster_replica_sizes: Default::default(),
+            cluster_replica_sizes: ClusterReplicaSizeMap::for_tests(),
             bootstrap_default_cluster_replica_size: config.replicas.to_string(),
             bootstrap_builtin_system_cluster_replica_size: config.replicas.to_string(),
             bootstrap_builtin_catalog_server_cluster_replica_size: config.replicas.to_string(),

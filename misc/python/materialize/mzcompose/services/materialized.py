@@ -8,7 +8,9 @@
 # by the Apache License, Version 2.0.
 
 
+import json
 from enum import Enum
+from typing import Any
 
 from materialize import docker
 from materialize.mz_version import MzVersion
@@ -16,6 +18,8 @@ from materialize.mzcompose import (
     DEFAULT_CRDB_ENVIRONMENT,
     DEFAULT_MZ_ENVIRONMENT_ID,
     DEFAULT_MZ_VOLUMES,
+    bootstrap_cluster_replica_size,
+    cluster_replica_size_map,
     get_default_system_parameters,
 )
 from materialize.mzcompose.service import (
@@ -62,6 +66,8 @@ class Materialized(Service):
         publish: bool | None = None,
         stop_grace_period: str = "120s",
         metadata_store: str = METADATA_STORE,
+        cluster_replica_size: dict[str, dict[str, Any]] | None = None,
+        bootstrap_replica_size: str | None = None,
     ) -> None:
         if name is None:
             name = "materialized"
@@ -72,6 +78,11 @@ class Materialized(Service):
         depends_graph: dict[str, ServiceDependency] = {
             s: {"condition": "service_started"} for s in depends_on
         }
+
+        if bootstrap_replica_size is None:
+            bootstrap_replica_size = bootstrap_cluster_replica_size()
+        if cluster_replica_size is None:
+            cluster_replica_size = cluster_replica_size_map()
 
         environment = [
             "MZ_NO_TELEMETRY=1",
@@ -94,6 +105,13 @@ class Materialized(Service):
             # use Composition.override.
             "MZ_LOG_FILTER",
             "CLUSTERD_LOG_FILTER",
+            f"MZ_CLUSTER_REPLICA_SIZES={json.dumps(cluster_replica_size)}",
+            f"MZ_BOOTSTRAP_DEFAULT_CLUSTER_REPLICA_SIZE={bootstrap_replica_size}",
+            f"MZ_BOOTSTRAP_BUILTIN_SYSTEM_CLUSTER_REPLICA_SIZE={bootstrap_replica_size}",
+            f"MZ_BOOTSTRAP_BUILTIN_PROBE_CLUSTER_REPLICA_SIZE={bootstrap_replica_size}",
+            f"MZ_BOOTSTRAP_BUILTIN_SUPPORT_CLUSTER_REPLICA_SIZE={bootstrap_replica_size}",
+            f"MZ_BOOTSTRAP_BUILTIN_CATALOG_SERVER_CLUSTER_REPLICA_SIZE={bootstrap_replica_size}",
+            f"MZ_BOOTSTRAP_BUILTIN_ANALYTICS_CLUSTER_REPLICA_SIZE={bootstrap_replica_size}",
             *environment_extra,
             *DEFAULT_CRDB_ENVIRONMENT,
         ]
@@ -166,12 +184,6 @@ class Materialized(Service):
                 else default_size
             )
         )
-        command += [
-            # Issue database-issues#4562 prevents the habitual use of large introspection
-            # clusters, so we leave the builtin cluster replica size as is.
-            # f"--bootstrap-builtin-cluster-replica-size={self.default_replica_size}",
-            f"--bootstrap-default-cluster-replica-size={self.default_replica_size}",
-        ]
 
         if external_metadata_store:
             address = (

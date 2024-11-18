@@ -105,7 +105,7 @@ INSERT INTO temp SELECT * FROM temp
 $ set-regex match=true|false replacement=<TRUE_OR_FALSE>
 
 > SHOW CLUSTER REPLICAS WHERE cluster = 'mz_system'
-mz_system r1 1 <TRUE_OR_FALSE> ""
+mz_system r1 bootstrap <TRUE_OR_FALSE> ""
 
 > SELECT COUNT(*) FROM mz_catalog.mz_cluster_replicas as r, mz_catalog.mz_clusters as c WHERE r.cluster_id = c.id and c.name = 'mz_support';
 0

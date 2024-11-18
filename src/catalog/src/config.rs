@@ -118,14 +118,12 @@ impl ClusterReplicaSizeMap {
             CatalogError::Catalog(SqlCatalogError::UnknownClusterReplicaSize(name.into()))
         })
     }
-}
 
-impl Default for ClusterReplicaSizeMap {
-    // Used for testing and local purposes. This default value should not be used in production.
-    //
-    // Credits per hour are calculated as being equal to scale. This is not necessarily how the
-    // value is computed in production.
-    fn default() -> Self {
+    /// Used for testing and local purposes. This default value should not be used in production.
+    ///
+    /// Credits per hour are calculated as being equal to scale. This is not necessarily how the
+    /// value is computed in production.
+    pub fn for_tests() -> Self {
         // {
         //     "1": {"scale": 1, "workers": 1},
         //     "2": {"scale": 1, "workers": 2},
