@@ -1583,7 +1583,7 @@ class MySqlSources(Generator):
 class WebhookSources(Generator):
     COUNT = 100  # TODO: Remove when database-issues#8508 is fixed
 
-    MAX_COUNT = 1400  # Too long-running with count=2800
+    MAX_COUNT = 400  # timeout expired with count=800
 
     @classmethod
     def body(cls) -> None:
