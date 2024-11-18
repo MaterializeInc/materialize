@@ -27,7 +27,6 @@ use mz_persist_types::stats::{
     AtomicBytesStats, ColumnNullStats, ColumnStatKinds, ColumnStats, ColumnarStats,
     PrimitiveStatsVariants,
 };
-use mz_persist_types::stats2::ColumnarStatsBuilder;
 use ordered_float::OrderedFloat;
 use prost::Message;
 use serde::de::{DeserializeSeed, Error, MapAccess, SeqAccess, Visitor};
@@ -299,64 +298,31 @@ pub fn decode_numeric<'a>(
     Ok((lower, upper))
 }
 
-/// Incrementally collects statistics for a column of `decimal`.
-#[derive(Default, Debug)]
-pub struct NumericStatsBuilder {
-    lower: OrderedDecimal<Numeric>,
-    upper: OrderedDecimal<Numeric>,
-}
+/// Take the smallest / largest numeric values for a numeric col.
+/// TODO: use the float data for this instead if it becomes a performance bottleneck.
+pub fn numeric_stats_from_column(col: &BinaryArray) -> ColumnStatKinds {
+    let mut lower = OrderedDecimal(Numeric::nan());
+    let mut upper = OrderedDecimal(-Numeric::infinity());
 
-impl NumericStatsBuilder {
-    fn new() -> Self
-    where
-        Self: Sized,
-    {
-        NumericStatsBuilder {
-            lower: OrderedDecimal(Numeric::nan()),
-            upper: OrderedDecimal(-Numeric::infinity()),
-        }
-    }
-
-    fn include(&mut self, val: OrderedDecimal<Numeric>) {
-        self.lower = val.min(self.lower);
-        self.upper = val.max(self.upper);
-    }
-}
-
-impl ColumnarStatsBuilder<OrderedDecimal<Numeric>> for NumericStatsBuilder {
-    type ArrowColumn = BinaryArray;
-    type FinishedStats = BytesStats;
-
-    fn from_column(col: &Self::ArrowColumn) -> Self
-    where
-        Self: Sized,
-    {
-        // Note: PackedNumeric __does not__ sort the same as Numeric do we
-        // can't take the binary min and max like the other 'Packed' types.
-
-        let mut builder = Self::new();
-        for val in col.iter() {
-            let Some(val) = val else {
-                continue;
-            };
-            let val = PackedNumeric::from_bytes(val)
+    for val in col.iter() {
+        let Some(val) = val else {
+            continue;
+        };
+        let val = OrderedDecimal(
+            PackedNumeric::from_bytes(val)
                 .expect("failed to roundtrip Numeric")
-                .into_value();
-            builder.include(OrderedDecimal(val));
-        }
-        builder
+                .into_value(),
+        );
+        lower = val.min(lower);
+        upper = val.max(upper);
     }
 
-    fn finish(self) -> Self::FinishedStats
-    where
-        Self::FinishedStats: Sized,
-    {
-        BytesStats::FixedSize(FixedSizeBytesStats {
-            lower: PackedNumeric::from_value(self.lower.0).as_bytes().to_vec(),
-            upper: PackedNumeric::from_value(self.upper.0).as_bytes().to_vec(),
-            kind: FixedSizeBytesStatsKind::PackedNumeric,
-        })
-    }
+    BytesStats::FixedSize(FixedSizeBytesStats {
+        lower: PackedNumeric::from_value(lower.0).as_bytes().to_vec(),
+        upper: PackedNumeric::from_value(upper.0).as_bytes().to_vec(),
+        kind: FixedSizeBytesStatsKind::PackedNumeric,
+    })
+    .into()
 }
 
 #[derive(Default)]

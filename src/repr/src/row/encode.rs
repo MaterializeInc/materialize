@@ -59,7 +59,7 @@ use crate::row::{
     ProtoArray, ProtoArrayDimension, ProtoDatum, ProtoDatumOther, ProtoDict, ProtoDictElement,
     ProtoNumeric, ProtoRange, ProtoRangeInner, ProtoRow,
 };
-use crate::stats2::{fixed_stats_from_column, stats_for_json, NumericStatsBuilder};
+use crate::stats2::{fixed_stats_from_column, numeric_stats_from_column, stats_for_json};
 use crate::{Datum, ProtoRelationDesc, RelationDesc, Row, RowPacker, ScalarType, Timestamp};
 
 // TODO(parkmycar): Benchmark the difference between `FixedSizeBinaryArray` and `BinaryArray`.
@@ -1179,7 +1179,7 @@ impl DatumColumnDecoder {
             DatumColumnDecoder::I64(a) => PrimitiveStats::<i64>::from_column(a).into(),
             DatumColumnDecoder::F32(a) => PrimitiveStats::<f32>::from_column(a).into(),
             DatumColumnDecoder::F64(a) => PrimitiveStats::<f64>::from_column(a).into(),
-            DatumColumnDecoder::Numeric(a) => NumericStatsBuilder::from_column(a).finish().into(),
+            DatumColumnDecoder::Numeric(a) => numeric_stats_from_column(a),
             DatumColumnDecoder::String(a) => PrimitiveStats::<String>::from_column(a).into(),
             DatumColumnDecoder::Bytes(a) => PrimitiveStats::<Vec<u8>>::from_column(a).into(),
             DatumColumnDecoder::Date(a) => PrimitiveStats::<i32>::from_column(a).into(),
