@@ -97,6 +97,44 @@ pub fn maybe_grow<F, R>(f: F) -> R
 where
     F: FnOnce() -> R,
 {
+    if stacker::remaining_stack()
+        .map(|r| r < STACK_RED_ZONE)
+        .unwrap_or(false)
+    {
+        #[inline(never)]
+        fn trace() {
+            let mut limit = None;
+            let mut last_sp = None;
+            let mut depth = 0;
+            backtrace::trace(|frame| {
+                if limit.is_none() {
+                    limit = Some(frame.sp().wrapping_add(STACK_SIZE));
+                    eprintln!("Stack limit: {:?}", limit.unwrap());
+                }
+
+                let frame_size =
+                    unsafe { frame.sp().byte_offset_from(last_sp.unwrap_or(frame.sp())) };
+
+                // Resolve this instruction pointer to a symbol name
+                backtrace::resolve_frame(frame, |symbol| {
+                    eprintln!(
+                        "{depth}\t{:?}\t{frame_size}\t{:?}, at {}:{}",
+                        frame.sp(),
+                        symbol.name(),
+                        symbol.filename().and_then(|s| s.to_str()).unwrap_or("???"),
+                        symbol.lineno().unwrap_or(0),
+                    );
+                });
+
+                last_sp = Some(frame.sp());
+
+                depth += 1;
+
+                frame.sp() <= limit.unwrap()
+            });
+            trace();
+        }
+    }
     stacker::maybe_grow(STACK_RED_ZONE, STACK_SIZE, f)
 }
 
