@@ -49,9 +49,12 @@ WHERE name = <SOURCE_NAME>;
 
 ## Has my source ingested its initial snapshot?
 
-When you create a source, Materialize takes a snapshot of any existing data in
-the upstream external system and ingests that snapshotted data before it starts
-ingesting new data. To ensure correct and consistent results, this snapshot is
+[//]: # "TODO(morsapaes) If we decide to include screenshots of the console in
+this section, we should also adapt ingest-data/_index_ for consistency."
+
+When a new source is created, Materialize performs a sync of all data available
+in the external system before it starts ingesting new data — an operation
+known as _snapshotting_. To ensure correct and consistent results, this snapshot is
 committed atomically at a specific timestamp. Because of that, you will not be
 able to query your source (or, queries will return no data) until Materialize
 has finished ingesting the initial snapshot.
