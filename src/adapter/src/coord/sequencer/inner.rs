@@ -68,7 +68,7 @@ use mz_sql::plan::{
     PlannedRoleVariable, QueryWhen, SideEffectingFunc, UpdatePrivilege, VariableValue,
 };
 use mz_sql::session::metadata::SessionMetadata;
-use mz_sql::session::user::UserKind;
+use mz_sql::session::user::{UserKind, MZ_SYSTEM_ROLE_ID};
 use mz_sql::session::vars::{
     self, IsolationLevel, OwnedVarInput, SessionVars, Var, VarError, VarInput, NETWORK_POLICY,
     SCHEMA_ALIAS, TRANSACTION_ISOLATION_VAR_NAME,
@@ -4421,8 +4421,11 @@ impl Coordinator {
                 ))?;
 
             for grantee in &grantees {
-                self.catalog().ensure_not_system_role(grantee)?;
-                self.catalog().ensure_not_predefined_role(grantee)?;
+                // We let the system role grant privileges to other builtin roles.
+                if *session.current_role_id() != MZ_SYSTEM_ROLE_ID {
+                    self.catalog().ensure_not_system_role(grantee)?;
+                    self.catalog().ensure_not_predefined_role(grantee)?;
+                }
                 let existing_privilege = privileges
                     .get_acl_item(grantee, &grantor)
                     .map(Cow::Borrowed)
