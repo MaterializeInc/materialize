@@ -7,6 +7,7 @@
 
 use std::any::Any;
 use std::cell::RefCell;
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroUsize;
 use std::ops::DerefMut;
@@ -34,6 +35,7 @@ use mz_compute_types::plan::LirId;
 use mz_dyncfg::ConfigSet;
 use mz_expr::SafeMfpPlan;
 use mz_ore::cast::CastFrom;
+use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::UIntGauge;
 use mz_ore::now::EpochMillis;
 use mz_ore::task::AbortOnDropHandle;
@@ -1079,6 +1081,12 @@ impl PendingPeek {
             .unwrap_or(usize::MAX)
             + peek.finishing.offset;
 
+        // Persist peeks can include at most one literal constraint.
+        let literal_constraint = peek
+            .literal_constraints
+            .clone()
+            .map(|rows| rows.into_element());
+
         let task_handle = mz_ore::task::spawn(|| "persist::peek", async move {
             let start = Instant::now();
             let result = if active_worker {
@@ -1086,6 +1094,7 @@ impl PendingPeek {
                     &persist_clients,
                     metadata,
                     timestamp,
+                    literal_constraint,
                     mfp_plan,
                     max_result_size,
                     max_results_needed,
@@ -1154,6 +1163,7 @@ impl PersistPeek {
         persist_clients: &PersistClientCache,
         metadata: CollectionMetadata,
         as_of: Timestamp,
+        literal_constraint: Option<Row>,
         mfp_plan: SafeMfpPlan,
         max_result_size: usize,
         mut limit_remaining: usize,
@@ -1192,6 +1202,7 @@ impl PersistPeek {
             &mut reader,
             txns_read.as_mut(),
             metrics,
+            &mfp_plan,
             &metadata.relation_desc,
             Antichain::from_elem(as_of),
         )
@@ -1207,12 +1218,26 @@ impl PersistPeek {
         let arena = RowArena::new();
         let mut total_size = 0usize;
 
-        while limit_remaining > 0 {
+        let literal_len = match &literal_constraint {
+            None => 0,
+            Some(row) => row.iter().count(),
+        };
+
+        'collect: while limit_remaining > 0 {
             let Some(batch) = cursor.next().await else {
                 break;
             };
             for (data, _, d) in batch {
                 let row = data.map_err(|e| e.to_string())?;
+
+                if let Some(literal) = &literal_constraint {
+                    match row.iter().take(literal_len).cmp(literal.iter()) {
+                        Ordering::Less => continue,
+                        Ordering::Equal => {}
+                        Ordering::Greater => break 'collect,
+                    }
+                }
+
                 let count: usize = d.try_into().map_err(|_| {
                     format!(
                         "Invalid data in source, saw retractions ({}) for row that does not exist: {:?}",

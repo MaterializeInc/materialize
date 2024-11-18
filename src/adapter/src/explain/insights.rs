@@ -216,7 +216,7 @@ fn fast_path_insights(humanizer: &dyn ExprHumanizer, plan: FastPathPlan) -> Plan
         FastPathPlan::PeekExisting(_, id, _, _) => {
             add_import_insights(&mut insights, humanizer, id, ImportType::Compute)
         }
-        FastPathPlan::PeekPersist(id, _) => {
+        FastPathPlan::PeekPersist(id, _, _) => {
             add_import_insights(&mut insights, humanizer, id, ImportType::Storage)
         }
     }

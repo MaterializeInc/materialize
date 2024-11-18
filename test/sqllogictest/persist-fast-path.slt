@@ -155,11 +155,24 @@ Target cluster: quickstart
 
 EOF
 
+# ORDER BY is only okay when the ordering matches the shard ordering exactly
+
 query T multiline
-EXPLAIN SELECT * from numbers ORDER BY value LIMIT 10;
+EXPLAIN SELECT * from numbers ORDER BY value ASC LIMIT 10;
+----
+Explained Query (fast path):
+  Finish order_by=[#0 asc nulls_last] limit=10 output=[#0]
+    PeekPersist materialize.public.numbers
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * from numbers ORDER BY value DESC LIMIT 10;
 ----
 Explained Query:
-  Finish order_by=[#0 asc nulls_last] limit=10 output=[#0]
+  Finish order_by=[#0 desc nulls_first] limit=10 output=[#0]
     ReadStorage materialize.public.numbers
 
 Source materialize.public.numbers
@@ -167,6 +180,37 @@ Source materialize.public.numbers
 Target cluster: quickstart
 
 EOF
+
+query T multiline
+EXPLAIN SELECT value % 2 from numbers ORDER BY value % 2 LIMIT 10;
+----
+Explained Query:
+  Finish order_by=[#0 asc nulls_last] limit=10 output=[#0]
+    Project (#1)
+      Map ((#0 % 2))
+        ReadStorage materialize.public.numbers
+
+Source materialize.public.numbers
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * from numbers ORDER BY value NULLS FIRST LIMIT 10;
+----
+Explained Query:
+  Finish order_by=[#0 asc nulls_first] limit=10 output=[#0]
+    ReadStorage materialize.public.numbers
+
+Source materialize.public.numbers
+
+Target cluster: quickstart
+
+EOF
+
+# Arbitrary filters can't be pushed down... we may need to scan
+# an arbitrary number of records to find one that matches.
 
 query T multiline
 EXPLAIN SELECT * from numbers WHERE value > mz_now() LIMIT 10;
