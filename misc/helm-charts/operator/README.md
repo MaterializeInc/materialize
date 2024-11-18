@@ -349,7 +349,12 @@ For more detailed information on using and troubleshooting the Materialize opera
 
 ## Upgrading Materialize
 
-Once you have the Materialize operator installed, with the operator managing your Materialize environments, you can upgrade the operator and the environments independently.
+Once you have the Materialize operator installed and managing your Materialize instances, you can upgrade both components. While the operator and instances can be upgraded independently, you should ensure version compatibility between them. The operator can typically manage instances within a certain version range - upgrading the operator too far ahead of your instances may cause compatibility issues.
+
+We recommend:
+
+- Upgrade the operator first
+- Always upgrade your Materialize instances after upgrading the operator to ensure compatibility
 
 ### Upgrading the Helm Chart
 
@@ -365,31 +370,37 @@ If you have custom values, make sure to include your values file:
 helm upgrade my-materialize-operator materialize/misc/helm-charts/operator -f my-values.yaml
 ```
 
-### Upgrading Materialize Environments
+### Upgrading Materialize Instances
 
-To upgrade your Materialize environments, you'll need to update the Materialize custom resource and trigger a rollout.
+To upgrade your Materialize instances, you'll need to update the Materialize custom resource and trigger a rollout.
 
-Note, that this will trigger a zero-downtime rolling upgrade of the Materialize environment, meaning that you will have two versions of the environment running simultaneously during the upgrade. Make sure that you have enough resources on your Kubernetes cluster to support this.
+By default, the operator performs rolling upgrades (`inPlaceRollout: false`) which minimize downtime but require additional cluster resources during the transition. For environments where scheduled downtime is acceptable, you can opt for in-place upgrades (`inPlaceRollout: true`).
 
 #### Using `kubectl` patch
 
 For normal upgrades when there are changes to the environment (like image updates):
 
 ```shell
-# Generate a new UUID and patch the Materialize environment
+# For version updates, first update the image reference
+kubectl patch materialize <environment-name> \
+  -n <materialize-environment-namespace> \
+  --type='merge' \
+  -p "{\"spec\": {\"environmentdImageRef\": \"materialize/environmentd:v0.125.0\"}}"
+
+# Then trigger the rollout with a new UUID
 kubectl patch materialize <environment-name> \
   -n <materialize-environment-namespace> \
   --type='merge' \
   -p "{\"spec\": {\"requestRollout\": \"$(uuidgen)\"}}"
 ```
 
-For example:
+You can combine both operations in a single command if preferred:
 
 ```shell
 kubectl patch materialize 12345678-1234-1234-1234-123456789012 \
   -n materialize-environment \
   --type='merge' \
-  -p "{\"spec\": {\"requestRollout\": \"$(uuidgen)\"}}"
+  -p "{\"spec\": {\"environmentdImageRef\": \"materialize/environmentd:v0.125.0\", \"requestRollout\": \"$(uuidgen)\"}}"
 ```
 
 #### Using YAML Definition
@@ -406,7 +417,7 @@ spec:
   environmentdImageRef: materialize/environmentd:v0.125.0 # Update version as needed
   requestRollout: 22222222-2222-2222-2222-222222222222    # Generate new UUID
   forceRollout: 33333333-3333-3333-3333-333333333333      # Optional: for forced rollouts
-  inPlaceRollout: false
+  inPlaceRollout: false                                   # When false, performs a rolling upgrade rather than in-place
   backendSecretName: materialize-backend
 ```
 
@@ -427,6 +438,10 @@ kubectl patch materialize <environment-name> \
   -p "{\"spec\": {\"requestRollout\": \"$(uuidgen)\", \"forceRollout\": \"$(uuidgen)\"}}"
 ```
 
+The behavior of a forced rollout follows your `inPlaceRollout` setting:
+- With `inPlaceRollout: false` (default): Creates new instances before terminating the old ones, temporarily requiring twice the resources during the transition
+- With `inPlaceRollout: true`: Directly replaces the instances, causing downtime but without requiring additional resources
+
 ### Verifying the Upgrade
 
 After initiating the rollout, you can monitor the status:
@@ -441,11 +456,12 @@ kubectl logs -l app.kubernetes.io/name=materialize-operator -n materialize
 
 ### Notes on Rollouts
 
-- `requestRollout` only triggers a rollout if there are actual changes to the environment
-- `forceRollout` triggers a rollout regardless of changes
-- Both fields expect UUID values
-- Each rollout requires a new, unique UUID value
-- Use `forceRollout` sparingly, as it will cause downtime even if no changes are needed# Operational Guidelines
+- `requestRollout` triggers a rollout only if there are actual changes to the environment (like image updates)
+- `forceRollout` triggers a rollout regardless of whether there are changes, which can be useful for debugging or when you need to force a rollout for other reasons
+- Both fields expect UUID values and each rollout requires a new, unique UUID value
+- `inPlaceRollout`:
+  - When `false` (default): Performs a rolling upgrade by spawning new instances before terminating old ones. While this minimizes downtime, there may still be a brief interruption during the transition.
+  - When `true`: Directly replaces existing instances, which will cause downtime.
 
 # Operational Guidelines
 
