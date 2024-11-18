@@ -1760,8 +1760,7 @@ impl ColumnDecoder<SourceData> for SourceDataColumnarDecoder {
             nulls: Some(ColumnNullStats {
                 count: self.err_decoder.null_count(),
             }),
-            values: PrimitiveStats::<Vec<u8>>::from_column(&self.err_decoder)
-                .into(),
+            values: PrimitiveStats::<Vec<u8>>::from_column(&self.err_decoder).into(),
         };
         // The top level struct is non-nullable and every entry is either an
         // `Ok(Row)` or an `Err(String)`. As a result, we can compute the number

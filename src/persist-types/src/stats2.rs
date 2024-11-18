@@ -22,21 +22,14 @@ use crate::stats::primitive::{
 use crate::stats::DynStats;
 
 /// A type that can incrementally collect stats from a sequence of values.
-pub trait ColumnarStatsBuilder<T>: Debug {
+pub trait ColumnarStatsBuilder<T>: Debug + DynStats {
     /// Type of [`arrow`] column these statistics can be derived from.
     type ArrowColumn: arrow::array::Array + 'static;
-    /// The type of statistics the collector finalizes into.
-    type FinishedStats: DynStats;
 
     /// Derive statistics from a column of data.
     fn from_column(col: &Self::ArrowColumn) -> Self
     where
         Self: Sized;
-
-    /// Finish this collector returning the final aggregated statistics.
-    fn finish(self) -> Self::FinishedStats
-    where
-        Self::FinishedStats: Sized;
 }
 
 /// We collect stats for all primitive types in exactly the same way. This
@@ -47,7 +40,6 @@ pub trait ColumnarStatsBuilder<T>: Debug {
 macro_rules! primitive_stats {
     ($native:ty, $arrow_col:ty, $min_fn:path, $max_fn:path) => {
         impl ColumnarStatsBuilder<$native> for PrimitiveStats<$native> {
-            type FinishedStats = Self;
             type ArrowColumn = $arrow_col;
 
             fn from_column(col: &Self::ArrowColumn) -> Self
@@ -58,10 +50,6 @@ macro_rules! primitive_stats {
                 let upper = $max_fn(col).unwrap_or_default();
 
                 PrimitiveStats { lower, upper }
-            }
-
-            fn finish(self) -> Self::FinishedStats {
-                self
             }
         }
     };
@@ -86,8 +74,6 @@ primitive_stats!(f64, Float64Array, arrow::compute::min, arrow::compute::max);
 
 impl ColumnarStatsBuilder<&str> for PrimitiveStats<String> {
     type ArrowColumn = StringArray;
-    type FinishedStats = Self;
-
     fn from_column(col: &Self::ArrowColumn) -> Self
     where
         Self: Sized,
@@ -104,19 +90,10 @@ impl ColumnarStatsBuilder<&str> for PrimitiveStats<String> {
 
         PrimitiveStats { lower, upper }
     }
-
-    fn finish(self) -> Self::FinishedStats
-    where
-        Self::FinishedStats: Sized,
-    {
-        self
-    }
 }
 
 impl ColumnarStatsBuilder<&[u8]> for PrimitiveStats<Vec<u8>> {
     type ArrowColumn = BinaryArray;
-    type FinishedStats = Self;
-
     fn from_column(col: &Self::ArrowColumn) -> Self
     where
         Self: Sized,
@@ -132,12 +109,5 @@ impl ColumnarStatsBuilder<&[u8]> for PrimitiveStats<Vec<u8>> {
             .unwrap_or_else(|| upper.to_owned());
 
         PrimitiveStats { lower, upper }
-    }
-
-    fn finish(self) -> Self::FinishedStats
-    where
-        Self::FinishedStats: Sized,
-    {
-        self
     }
 }
