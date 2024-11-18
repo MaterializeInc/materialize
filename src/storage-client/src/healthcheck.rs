@@ -96,6 +96,7 @@ pub static MZ_STATEMENT_EXECUTION_HISTORY_DESC: LazyLock<RelationDesc> = LazyLoc
         )
         .with_column("finished_status", ScalarType::String.nullable(true))
         .with_column("error_message", ScalarType::String.nullable(true))
+        .with_column("result_size", ScalarType::Int64.nullable(true))
         .with_column("rows_returned", ScalarType::Int64.nullable(true))
         .with_column("execution_strategy", ScalarType::String.nullable(true))
         .finish()

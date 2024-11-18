@@ -161,6 +161,7 @@ mz_activity_log_thinned  params
 mz_activity_log_thinned  prepared_at
 mz_activity_log_thinned  prepared_statement_id
 mz_activity_log_thinned  prepared_statement_name
+mz_activity_log_thinned  result_size
 mz_activity_log_thinned  rows_returned
 mz_activity_log_thinned  sample_rate
 mz_activity_log_thinned  search_path
@@ -497,6 +498,7 @@ mz_recent_activity_log_thinned  params
 mz_recent_activity_log_thinned  prepared_at
 mz_recent_activity_log_thinned  prepared_statement_id
 mz_recent_activity_log_thinned  prepared_statement_name
+mz_recent_activity_log_thinned  result_size
 mz_recent_activity_log_thinned  rows_returned
 mz_recent_activity_log_thinned  sample_rate
 mz_recent_activity_log_thinned  search_path
@@ -738,6 +740,7 @@ mz_statement_execution_history  id
 mz_statement_execution_history  mz_version
 mz_statement_execution_history  params
 mz_statement_execution_history  prepared_statement_id
+mz_statement_execution_history  result_size
 mz_statement_execution_history  rows_returned
 mz_statement_execution_history  sample_rate
 mz_statement_execution_history  search_path

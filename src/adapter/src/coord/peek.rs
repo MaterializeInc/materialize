@@ -496,6 +496,7 @@ impl crate::coord::Coordinator {
                     (
                         Ok(Self::send_immediate_rows(rows)),
                         StatementEndedExecutionReason::Success {
+                            result_size: Some(0), // JC
                             rows_returned: Some(rows_returned),
                             execution_strategy: Some(StatementExecutionStrategy::Constant),
                         },
@@ -736,6 +737,7 @@ impl crate::coord::Coordinator {
                         StatementExecutionStrategy::Standard
                     };
                     StatementEndedExecutionReason::Success {
+                        result_size: Some(0), // JC
                         rows_returned: Some(num_rows),
                         execution_strategy: Some(strategy),
                     }

@@ -357,6 +357,7 @@ fn test_statement_logging_basic() {
         error_message: Option<String>,
         prepared_at: DateTime<Utc>,
         execution_strategy: Option<String>,
+        result_size: Option<i64>,
         rows_returned: Option<i64>,
         execution_timestamp: Option<u64>,
     }
@@ -376,6 +377,7 @@ fn test_statement_logging_basic() {
     mseh.error_message,
     mpsh.prepared_at,
     mseh.execution_strategy,
+    mseh.result_size,
     mseh.rows_returned,
     mseh.execution_timestamp
 FROM
@@ -412,8 +414,9 @@ ORDER BY mseh.began_at",
                 error_message: r.get(4),
                 prepared_at: r.get(5),
                 execution_strategy: r.get(6),
-                rows_returned: r.get(7),
-                execution_timestamp: r.get::<_, Option<UInt8>>(8).map(|UInt8(val)| val),
+                result_size: r.get(7),
+                rows_returned: r.get(8),
+                execution_timestamp: r.get::<_, Option<UInt8>>(9).map(|UInt8(val)| val),
             })
             .collect::<Vec<_>>(),
         Err(rows) => {
@@ -453,18 +456,21 @@ ORDER BY mseh.began_at",
             }
         }
     }
+    assert_gt!(sl_results[0].result_size, Some(0)); // JC Best we can do is assert > 0?
     assert_eq!(sl_results[0].rows_returned, Some(1));
     assert_eq!(sl_results[0].finished_status, "success");
     assert_eq!(
         sl_results[0].execution_strategy.as_ref().unwrap(),
         "constant"
     );
+    assert_gt!(sl_results[1].result_size, Some(0)); // JC
     assert_eq!(sl_results[1].rows_returned, Some(10001));
     assert_eq!(sl_results[1].finished_status, "success");
     assert_eq!(
         sl_results[1].execution_strategy.as_ref().unwrap(),
         "standard"
     );
+    assert_gt!(sl_results[2].result_size, Some(0)); // JC
     assert_eq!(sl_results[2].rows_returned, Some(10001));
     assert_eq!(sl_results[2].finished_status, "success");
     assert_eq!(
@@ -477,6 +483,7 @@ ORDER BY mseh.began_at",
         .as_ref()
         .unwrap()
         .contains("division by zero"));
+    assert_none!(sl_results[3].result_size);
     assert_none!(sl_results[3].rows_returned);
 }
 

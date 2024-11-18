@@ -89,6 +89,7 @@ impl StatementExecutionStrategy {
 #[derive(Clone, Debug)]
 pub enum StatementEndedExecutionReason {
     Success {
+        result_size: Option<u64>,
         rows_returned: Option<u64>,
         execution_strategy: Option<StatementExecutionStrategy>,
     },
@@ -153,6 +154,7 @@ impl From<&ExecuteResponse> for StatementEndedExecutionReason {
                 // can ever actually happen.
                 ExecuteResponse::SendingRowsImmediate { rows, .. } => {
                     StatementEndedExecutionReason::Success {
+                        result_size: Some(0), //JC
                         rows_returned: Some(u64::cast_from(rows.count())),
                         execution_strategy: Some(StatementExecutionStrategy::Constant),
                     }
@@ -180,6 +182,7 @@ impl From<&ExecuteResponse> for StatementEndedExecutionReason {
 
             ExecuteResponse::SendingRowsImmediate { rows, .. } => {
                 StatementEndedExecutionReason::Success {
+                    result_size: Some(0), // JC
                     rows_returned: Some(u64::cast_from(rows.count())),
                     execution_strategy: Some(StatementExecutionStrategy::Constant),
                 }
@@ -233,6 +236,7 @@ impl From<&ExecuteResponse> for StatementEndedExecutionReason {
             | ExecuteResponse::Updated(_)
             | ExecuteResponse::ValidatedConnection { .. } => {
                 StatementEndedExecutionReason::Success {
+                    result_size: None,
                     rows_returned: None,
                     execution_strategy: None,
                 }

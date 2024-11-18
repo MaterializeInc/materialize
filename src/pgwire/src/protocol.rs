@@ -421,7 +421,7 @@ struct StateMachine<'a, A> {
 }
 
 enum SendRowsEndedReason {
-    Success { rows_returned: u64 },
+    Success { result_size: u64, rows_returned: u64 },
     Errored { error: String },
     Canceled,
 }
@@ -1083,21 +1083,22 @@ where
                         Ok((ok, SendRowsEndedReason::Canceled)) => {
                             (Ok(ok), StatementEndedExecutionReason::Canceled)
                         }
-                        // NOTE: For now the `rows_returned` in
-                        // fetches is a bit confusing.  We record
+                        // NOTE: For now the values for `result_size` and `rows_returned` in
+                        // fetches are a bit confusing.  We record
                         // `Some(n)` for the first fetch, where `n` is
-                        // the number of rows returned by the inner
+                        // the number of bytes/rows returned by the inner
                         // execute (regardless of how many rows the
                         // fetch fetched) , and `None` for subsequent fetches.
                         //
-                        // This arguably makes sense since the rows
+                        // This arguably makes sense since the size/rows
                         // returned measures how much work the compute
                         // layer had to do to satisfy the query, but
                         // we should revisit it if/when we start
                         // logging the inner execute separately.
-                        Ok((ok, SendRowsEndedReason::Success { rows_returned: _ })) => (
+                        Ok((ok, SendRowsEndedReason::Success { result_size: _, rows_returned: _ })) => (
                             Ok(ok),
                             StatementEndedExecutionReason::Success {
+                                result_size: None,
                                 rows_returned: None,
                                 execution_strategy: None,
                             },
@@ -1124,6 +1125,7 @@ where
                         self.adapter_client.retire_execute(
                             outer_ctx_extra,
                             StatementEndedExecutionReason::Success {
+                                result_size: None,
                                 rows_returned: None,
                                 execution_strategy: None,
                             },
@@ -1577,9 +1579,10 @@ where
                     Ok((ok, SendRowsEndedReason::Canceled)) => {
                         (Ok(ok), StatementEndedExecutionReason::Canceled)
                     }
-                    Ok((ok, SendRowsEndedReason::Success { rows_returned })) => (
+                    Ok((ok, SendRowsEndedReason::Success { result_size, rows_returned })) => (
                         Ok(ok),
                         StatementEndedExecutionReason::Success {
+                            result_size: Some(result_size),
                             rows_returned: Some(rows_returned),
                             execution_strategy: None,
                         },
@@ -1620,9 +1623,10 @@ where
                                 // We consider that to be a cancelation, rather than a query error.
                                 (Err(e), StatementEndedExecutionReason::Canceled)
                             }
-                            Ok((state, SendRowsEndedReason::Success { rows_returned })) => (
+                            Ok((state, SendRowsEndedReason::Success { result_size, rows_returned })) => (
                                 Ok(state),
                                 StatementEndedExecutionReason::Success {
+                                    result_size: Some(result_size),
                                     rows_returned: Some(rows_returned),
                                     execution_strategy: None,
                                 },
@@ -1942,11 +1946,12 @@ where
                 .get_portal_unverified_mut(&name)
                 .expect("valid fetch portal")
         });
-        let response_message = get_response(max_rows, total_sent_rows, fetch_portal);
+        let response_message = get_response(max_rows, total_bytes_sent, total_sent_rows, fetch_portal); // JC
         self.send(response_message).await?;
         Ok((
             State::Ready,
             SendRowsEndedReason::Success {
+                result_size: Some(u64::cast_from(total_bytes_rows)),
                 rows_returned: u64::cast_from(total_sent_rows),
             },
         ))
@@ -2058,6 +2063,7 @@ where
         Ok((
             State::Ready,
             SendRowsEndedReason::Success {
+                result_size: Some(u64::cast_from(0)), // JC
                 rows_returned: u64::cast_from(count),
             },
         ))

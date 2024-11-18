@@ -110,7 +110,7 @@ serializable
 # (2) We don't have a way to log errors that happen during statement preparation,
 #     but only during statement execution.
 # (3) SQL-level statements always use a prepared statement with a useless name beginning with 's'
-# (4) `FETCH` has the somewhat confusing behavior of reporting the `rows_returned`
+# (4) `FETCH` has the somewhat confusing behavior of reporting the `result_size` and `rows_returned`
 #     of the *total* result set in the first `FETCH`, and null thereafter.
 #
 # All of these (except (3), which is just how the postgres library TD uses works) are working as designed.
@@ -121,7 +121,7 @@ serializable
 
 > WITH all_stmts AS (SELECT mseh.*, mpsh.*, mst.sql, mst.redacted_sql FROM mz_internal.mz_statement_execution_history mseh RIGHT JOIN mz_internal.mz_prepared_statement_history mpsh ON mseh.prepared_statement_id = mpsh.id RIGHT JOIN (SELECT DISTINCT sql_hash, sql, redacted_sql FROM mz_internal.mz_sql_text) mst ON mpsh.sql_hash = mst.sql_hash),
        test_begin AS (SELECT began_at FROM all_stmts WHERE sql = 'SELECT ''beginning real test!''' ORDER BY began_at DESC LIMIT 1)
-  SELECT c.name, all_stmts.cluster_name, all_stmts.application_name, all_stmts.sample_rate, all_stmts.params, all_stmts.finished_status, all_stmts.error_message, all_stmts.rows_returned, all_stmts.execution_strategy, all_stmts.name LIKE 's%', all_stmts.sql, all_stmts.transaction_isolation, all_stmts.transient_index_id ~ '^t[0-9]+$',
+  SELECT c.name, all_stmts.cluster_name, all_stmts.application_name, all_stmts.sample_rate, all_stmts.params, all_stmts.finished_status, all_stmts.error_message, all_stmts.result_size, all_stmts.rows_returned, all_stmts.execution_strategy, all_stmts.name LIKE 's%', all_stmts.sql, all_stmts.transaction_isolation, all_stmts.transient_index_id ~ '^t[0-9]+$',
   all_stmts.database_name, all_stmts.search_path::text
   FROM all_stmts, test_begin LEFT JOIN mz_clusters c ON c.id = all_stmts.cluster_id WHERE all_stmts.began_at >= test_begin.began_at AND all_stmts.sql NOT LIKE '%sduiahsdfuoiahsdf%'
 <null> <null> my_app 1 {} success <null> <null> <null> true "SET transaction_isolation TO serializable" "strict serializable" <null> materialize {public}
@@ -303,3 +303,5 @@ ROLLBACK
 
 > SELECT rows_returned FROM mz_internal.mz_recent_activity_log WHERE sql = 'SELECT * FROM t_offset_limit ORDER BY a DESC LIMIT 0';
 0
+
+#JC Check relative size of result_size values?
