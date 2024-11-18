@@ -225,7 +225,7 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
     tick_micros: Option<u64>,
     as_of: MzOffset,
     up_to: MzOffset,
-    scope: &mut G,
+    scope: &G,
     config: RawSourceCreationConfig,
     committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
     output_map: BTreeMap<LoadGeneratorOutput, Vec<usize>>,
