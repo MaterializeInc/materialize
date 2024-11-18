@@ -60,7 +60,8 @@ this exact purpose.
 
 ### Standard SQL support
 
-You use SQL to interact with Materialize. You can build complex analytical
+Like most databases, you interact with Materialize using **SQL**. You can build
+complex analytical
 workloads using **[any type of join](/sql/select/join/)** (including
 non-windowed joins and joins on arbitrary conditions) as well as leverage new
 SQL patterns enabled by streaming like [**Change Data Capture
