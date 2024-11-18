@@ -19,9 +19,7 @@ use arrow::array::{
 use crate::stats::primitive::{
     truncate_bytes, truncate_string, PrimitiveStats, TruncateBound, TRUNCATE_LEN,
 };
-use crate::stats::{
-    ColumnNullStats, ColumnStatKinds, ColumnarStats, DynStats, OptionStats,
-};
+use crate::stats::{ColumnNullStats, ColumnStatKinds, ColumnarStats, DynStats, OptionStats};
 
 /// A type that can incrementally collect stats from a sequence of values.
 pub trait ColumnarStatsBuilder<T>: Debug {
@@ -34,17 +32,6 @@ pub trait ColumnarStatsBuilder<T>: Debug {
     fn from_column(col: &Self::ArrowColumn) -> Self
     where
         Self: Sized;
-    /// Derive statistics from an opaque column of data.
-    ///
-    /// Returns `None` if the opaque column is not the same type as
-    /// [`Self::ArrowColumn`].
-    fn from_column_dyn(col: &dyn arrow::array::Array) -> Option<Self>
-    where
-        Self: Sized,
-    {
-        let col = col.as_any().downcast_ref::<Self::ArrowColumn>()?;
-        Some(Self::from_column(col))
-    }
 
     /// Finish this collector returning the final aggregated statistics.
     fn finish(self) -> Self::FinishedStats
