@@ -64,7 +64,7 @@ Setup process:
 
 #### Storage Configuration
 
-Once LVM is configured, set up the storage class:
+Once LVM is configured, set up the storage class (for example in misc/helm-charts/operator/values.yaml):
 
 ```yaml
 storage:
@@ -97,7 +97,8 @@ storage:
 To install the chart with the release name `my-materialize-operator`:
 
 ```shell
-helm install my-materialize-operator materialize/misc/helm-charts/operator
+kubectl create namespace materialize
+helm install my-materialize-operator misc/helm-charts/operator
 ```
 
 This command deploys the Materialize operator on the Kubernetes cluster with default configuration. The [Parameters](#parameters) section lists the parameters that can be configured during installation.
