@@ -36,7 +36,7 @@ pdoc==15.0.0
 # We can revert back to standard pg8000 versions once https://github.com/tlocke/pg8000/pull/161 is released
 pg8000@git+https://github.com/tlocke/pg8000@46c00021ade1d19466b07ed30392386c5f0a6b8e
 prettytable==3.11.0
-psutil==5.9.4
+psutil==6.1.0
 psycopg==3.2.3
 psycopg-binary==3.2.3
 pydantic==2.8.2
