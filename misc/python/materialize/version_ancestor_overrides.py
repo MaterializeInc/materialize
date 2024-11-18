@@ -28,6 +28,12 @@ def get_ancestor_overrides_for_performance_regressions(
 
     min_ancestor_mz_version_per_commit = dict()
 
+    if "OptbenchTPCH" in scenario_class_name:
+        # PR#30506 (Remove NonNullable transform) increases wallclock
+        min_ancestor_mz_version_per_commit[
+            "6981cb35f6a64748293867beb67e74b804f9e723"
+        ] = MzVersion.parse_mz("v0.126.0")
+
     if scenario_class_name == "KafkaUpsertUnique":
         # PR#29718 (storage: continual feedback upsert operator) increases CPU and memory
         min_ancestor_mz_version_per_commit[
