@@ -723,10 +723,7 @@ pub trait CatalogItem {
 
     /// Returns the [`CatalogCollectionItem`] for a specific version of this
     /// [`CatalogItem`].
-    fn at_version(
-        &self,
-        version: RelationVersionSelector,
-    ) -> Box<dyn CatalogCollectionItem>;
+    fn at_version(&self, version: RelationVersionSelector) -> Box<dyn CatalogCollectionItem>;
 
     /// The latest version of this item, if it's version-able.
     fn latest_version(&self) -> Option<RelationVersion>;

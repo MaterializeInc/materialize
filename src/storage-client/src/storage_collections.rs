@@ -31,13 +31,14 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
 use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::read::ReadHandle;
+use mz_persist_client::schema::CaESchema;
 use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, PersistLocation, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::txn::TxnsCodec;
 use mz_persist_types::Codec64;
-use mz_repr::{Diff, GlobalId, RelationDesc, TimestampManipulation};
+use mz_repr::{Diff, GlobalId, RelationDesc, RelationVersion, TimestampManipulation};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::inline::InlinedConnection;
 use mz_storage_types::connections::ConnectionContext;
@@ -179,6 +180,7 @@ pub trait StorageCollections: Debug {
         txn: &mut (dyn StorageTxn<Self::Timestamp> + Send),
         ids_to_add: BTreeSet<GlobalId>,
         ids_to_drop: BTreeSet<GlobalId>,
+        ids_to_register: BTreeMap<GlobalId, ShardId>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
     /// Create the collections described by the individual
@@ -259,10 +261,12 @@ pub trait StorageCollections: Debug {
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
     /// Updates the [`RelationDesc`] for the specified table.
-    fn alter_table_desc(
+    async fn alter_table_desc(
         &self,
-        table_id: GlobalId,
+        existing_collection: GlobalId,
+        new_collection: GlobalId,
         new_desc: RelationDesc,
+        expected_version: RelationVersion,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
     /// Drops the read capability for the sources and allows their resources to
@@ -825,9 +829,12 @@ where
         let dependencies = match &data_source {
             DataSource::Introspection(_)
             | DataSource::Webhook
-            | DataSource::Table
+            | DataSource::Table { primary: None }
             | DataSource::Progress
             | DataSource::Other => Vec::new(),
+            DataSource::Table {
+                primary: Some(primary),
+            } => vec![*primary],
             DataSource::IngestionExport {
                 ingestion_id,
                 data_config,
@@ -1084,11 +1091,21 @@ where
         let mut persist_compaction_commands = Vec::with_capacity(collections_net.len());
         for (key, (mut changes, frontier)) in collections_net {
             if !changes.is_empty() {
+                // If the table has a "primary" collection, let that collection drive compaction.
+                let collection = collections.get(&key).expect("must still exist");
+                let should_emit_persist_compaction = !matches!(
+                    collection.description.data_source,
+                    DataSource::Table { primary: Some(_) }
+                );
+
                 if frontier.is_empty() {
                     info!(id = %key, "removing collection state because the since advanced to []!");
                     collections.remove(&key).expect("must still exist");
                 }
-                persist_compaction_commands.push((key, frontier));
+
+                if should_emit_persist_compaction {
+                    persist_compaction_commands.push((key, frontier));
+                }
             }
         }
 
@@ -1134,7 +1151,8 @@ where
         let new_collections: BTreeSet<GlobalId> =
             init_ids.difference(&existing_metadata).cloned().collect();
 
-        self.prepare_state(txn, new_collections, drop_ids).await?;
+        self.prepare_state(txn, new_collections, drop_ids, BTreeMap::default())
+            .await?;
 
         // All shards that belong to collections dropped in the last epoch are
         // eligible for finalization. This intentionally includes any built-in
@@ -1323,6 +1341,7 @@ where
         txn: &mut (dyn StorageTxn<Self::Timestamp> + Send),
         ids_to_add: BTreeSet<GlobalId>,
         ids_to_drop: BTreeSet<GlobalId>,
+        ids_to_register: BTreeMap<GlobalId, ShardId>,
     ) -> Result<(), StorageError<T>> {
         txn.insert_collection_metadata(
             ids_to_add
@@ -1330,6 +1349,7 @@ where
                 .map(|id| (id, ShardId::new()))
                 .collect(),
         )?;
+        txn.insert_collection_metadata(ids_to_register)?;
 
         // Delete the metadata for any dropped collections.
         let dropped_mappings = txn.delete_collection_metadata(ids_to_drop);
@@ -1488,7 +1508,7 @@ where
                         | DataSource::Ingestion(_)
                         | DataSource::Progress
                         | DataSource::Other => {}
-                        DataSource::Table => {
+                        DataSource::Table { .. } => {
                             let register_ts = register_ts.expect(
                                 "caller should have provided a register_ts when creating a table",
                             );
@@ -1537,11 +1557,26 @@ where
         // Reorder in dependency order.
         to_register.sort_by_key(|(id, ..)| *id);
 
+        // Register tables first, but register them in reverse order since earlier tables
+        // can depend on later tables.
+        //
+        // Note: We could do more complex sorting to avoid the allocations, but IMO it's
+        // easier to reason about it this way.
+        let (tables_to_register, collections_to_register): (Vec<_>, Vec<_>) = to_register
+            .into_iter()
+            .partition(|(_id, desc, ..)| matches!(desc.data_source, DataSource::Table { .. }));
+        let to_register = tables_to_register
+            .into_iter()
+            .rev()
+            .chain(collections_to_register.into_iter());
+
         // We hold this lock for a very short amount of time, just doing some
         // hashmap inserts and unbounded channel sends.
         let mut self_collections = self.collections.lock().expect("lock poisoned");
 
         for (id, mut description, write_handle, since_handle, metadata) in to_register {
+            tracing::info!(%id, desc = ?description.data_source, "REGISTERING");
+
             // Ensure that the ingestion has an export for its primary source if applicable.
             // This is done in an awkward spot to appease the borrow checker.
             // TODO(database-issues#8620): This will be removed once sources no longer export
@@ -1664,7 +1699,7 @@ where
 
                     self_collections.insert(id, collection_state);
                 }
-                DataSource::Table => {
+                DataSource::Table { .. } => {
                     // See comment on self.initial_txn_upper on why we're doing
                     // this.
                     if is_in_txns(id, &metadata)
@@ -1824,27 +1859,180 @@ where
         Ok(())
     }
 
-    fn alter_table_desc(
+    async fn alter_table_desc(
         &self,
-        table_id: GlobalId,
+        existing_collection: GlobalId,
+        new_collection: GlobalId,
         new_desc: RelationDesc,
+        expected_version: RelationVersion,
     ) -> Result<(), StorageError<Self::Timestamp>> {
-        let mut self_collections = self.collections.lock().expect("lock poisoned");
-        let collection = self_collections
-            .get_mut(&table_id)
-            .ok_or_else(|| StorageError::IdentifierMissing(table_id))?;
+        let (
+            data_shard,
+            existing_write_frontier,
+            existing_read_policy,
+            mut existing_read_capabilities,
+        ) = {
+            let self_collections = self.collections.lock().expect("lock poisoned");
+            let existing = self_collections
+                .get(&existing_collection)
+                .ok_or_else(|| StorageError::IdentifierMissing(existing_collection))?;
 
-        // TODO(alter_table): To support changing the `RelationDesc` of sources
-        // we'll need to cancel the currently running `BackgroundCmd` that
-        // fetches recent uppers. See `BackgroundCmd::Register`.
-        if !matches!(&collection.description.data_source, DataSource::Table) {
-            return Err(StorageError::IdentifierInvalid(table_id));
-        }
+            // TODO(alter_table): Support changes to sources.
+            if !matches!(&existing.description.data_source, DataSource::Table { .. }) {
+                return Err(StorageError::IdentifierInvalid(existing_collection));
+            }
 
-        collection.collection_metadata.relation_desc = new_desc.clone();
-        collection.description.desc = new_desc.clone();
+            (
+                existing.collection_metadata.data_shard,
+                existing.write_frontier.clone(),
+                existing.read_policy.clone(),
+                existing.read_capabilities.clone(),
+            )
+        };
 
-        debug!("altered table {table_id}'s RelationDesc");
+        let persist_client = self
+            .persist
+            .open(self.persist_location.clone())
+            .await
+            .unwrap();
+
+        // Evolve the schema of this shard.
+        let diagnostics = Diagnostics {
+            shard_name: existing_collection.to_string(),
+            handle_purpose: "alter_table_desc".to_string(),
+        };
+        // We map the Adapter's RelationVersion 1:1 with SchemaId.
+        let expected_schema = expected_version.into();
+        let schema_result = persist_client
+            .compare_and_evolve_schema::<SourceData, (), T, Diff>(
+                data_shard,
+                expected_schema,
+                &new_desc,
+                &UnitSchema,
+                diagnostics,
+            )
+            .await
+            .map_err(|e| StorageError::InvalidUsage(e.to_string()))?;
+        tracing::info!(
+            ?existing_collection,
+            ?new_collection,
+            ?new_desc,
+            "evolved schema"
+        );
+
+        match schema_result {
+            CaESchema::Ok(id) => id,
+            // TODO(alter_table): Better handling of these errors.
+            CaESchema::ExpectedMismatch { .. } => {
+                return Err(StorageError::Generic(anyhow::anyhow!(
+                    "schema expected mismatch, {existing_collection:?}",
+                )))
+            }
+            CaESchema::Incompatible => {
+                return Err(StorageError::Generic(anyhow::anyhow!(
+                    "schema incompatible, {existing_collection:?}"
+                )))
+            }
+        };
+
+        // Once the new schema is registered we can open new data handles.
+        let (write_handle, since_handle) = self
+            .open_data_handles(
+                &new_collection,
+                data_shard,
+                None,
+                new_desc.clone(),
+                &persist_client,
+            )
+            .await;
+
+        // TODO(alter_table): Do we need to advance the since of the table to match the time this
+        // new version was registered with txn-wal?
+
+        // Because this is a Table, we know it's managed by txn_wal, and thus it's logical write
+        // frontier is possibly in advance of the write_handle's upper. So we fast forward the
+        // write frontier to match that of the existing collection.
+        let write_frontier =
+            if PartialOrder::less_than(write_handle.upper(), &existing_write_frontier) {
+                existing_write_frontier
+            } else {
+                write_handle.upper().clone()
+            };
+
+        // Note: The new collection is now the "primary collection" so we specify `None` here.
+        let collection_desc = CollectionDescription::<T>::for_table(new_desc.clone(), None);
+        let collection_meta = CollectionMetadata {
+            persist_location: self.persist_location.clone(),
+            relation_desc: collection_desc.desc.clone(),
+            data_shard,
+            // TODO(alter_table): Support changes to sources.
+            remap_shard: None,
+            txns_shard: Some(self.txns_read.txns_id().clone()),
+        };
+        let collection_state = CollectionState::new(
+            collection_desc,
+            since_handle.since().clone(),
+            write_frontier,
+            Vec::new(),
+            collection_meta,
+        );
+
+        // Great! Our new schema is registered with Persist, now we need to update our internal
+        // data structures.
+        {
+            let mut self_collections = self.collections.lock().expect("lock poisoned");
+
+            // Add a record of the new collection.
+            self_collections.insert(new_collection, collection_state);
+            // Update the existing collection so we know it's a "projection" of this new one.
+            let existing = self_collections
+                .get_mut(&existing_collection)
+                .expect("existing collection missing");
+
+            // A higher level should already be asserting this, but let's make sure.
+            assert!(matches!(
+                existing.description.data_source,
+                DataSource::Table { primary: None }
+            ));
+
+            // The existing version of the table will depend on the new version.
+            existing.description.data_source = DataSource::Table {
+                primary: Some(new_collection),
+            };
+            existing.storage_dependencies.push(new_collection);
+
+            // Install the relevant read capabilities on the new collection.
+            //
+            // Note(parkmycar): Originally we used `install_collection_dependency_read_holds_inner`
+            // here, but that only installed a ReadHold on the new collection for the implied
+            // capability of the existing collection. This would cause runtime panics because it
+            // would eventually result in negative read capabilities.
+            let mut changes = ChangeBatch::new();
+            for (time, diff) in existing_read_capabilities.updates() {
+                changes.update(time.clone(), *diff);
+            }
+            let mut updates = BTreeMap::from([(new_collection, changes)]);
+            StorageCollectionsImpl::update_read_capabilities_inner(
+                &self.cmd_tx,
+                &mut *self_collections,
+                &mut updates,
+            );
+
+            // Note: The Coordinator will also set the ReadPolicy, but start by
+            // initializing it to the same policy as the existing collection to
+            // prevent some other action, e.g. the write frontier of the
+            // txn_wal shard advancing, from getting interleaved between this
+            // call and the Coordinator's call to set the ReadPolicy.
+            self.set_read_policies_inner(
+                &mut *self_collections,
+                vec![(new_collection, existing_read_policy)],
+            );
+        };
+
+        // TODO(alter_table): Support changes to sources.
+        self.register_handles(new_collection, true, since_handle, write_handle);
+
+        info!(%existing_collection, %new_collection, ?new_desc, "altered table");
 
         Ok(())
     }
@@ -2042,7 +2230,7 @@ where
                     collection = Some(c);
                 }
                 // Introspection, other, progress, table, and webhook sources follow wall clock.
-                Introspection(_) | Progress | Table | Webhook { .. } => {
+                Introspection(_) | Progress | Table { .. } | Webhook { .. } => {
                     result = Some(TimeDependence::default())
                 }
                 // Materialized views, continual tasks, etc, aren't managed by storage.
@@ -2174,7 +2362,7 @@ where
 }
 
 /// State maintained about individual collections.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct CollectionState<T> {
     /// Description with which the collection was created
     pub description: CollectionDescription<T>,

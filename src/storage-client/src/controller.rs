@@ -34,9 +34,8 @@ use mz_cluster_client::ReplicaId;
 use mz_ore::collections::CollectionExt;
 use mz_persist_client::read::{Cursor, ReadHandle};
 use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
-use mz_persist_types::schema::SchemaId;
 use mz_persist_types::{Codec64, Opaque, ShardId};
-use mz_repr::{Diff, GlobalId, RelationDesc, Row};
+use mz_repr::{Diff, GlobalId, RelationDesc, RelationVersion, Row};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::inline::InlinedConnection;
 use mz_storage_types::controller::{CollectionMetadata, StorageError};
@@ -119,7 +118,12 @@ pub enum DataSource {
     /// Data comes from external HTTP requests pushed to Materialize.
     Webhook,
     /// The adapter layer appends timestamped data, i.e. it is a `TABLE`.
-    Table,
+    Table {
+        /// This table has had columns added or dropped to it, so we're now a
+        /// "view" over the "primary" Table/collection. Within the
+        /// `storage-controller` we the primary as a dependency.
+        primary: Option<GlobalId>,
+    },
     /// This source's data is does not need to be managed by the storage
     /// controller, e.g. it's a materialized view or the catalog collection.
     Other,
@@ -142,10 +146,10 @@ pub struct CollectionDescription<T> {
 }
 
 impl<T> CollectionDescription<T> {
-    pub fn for_table(desc: RelationDesc) -> Self {
+    pub fn for_table(desc: RelationDesc, primary: Option<GlobalId>) -> Self {
         Self {
             desc,
-            data_source: DataSource::Table,
+            data_source: DataSource::Table { primary },
             since: None,
             status_collection_id: None,
             timeline: Some(Timeline::EpochMilliseconds),
@@ -483,12 +487,12 @@ pub trait StorageController: Debug {
 
     async fn alter_table_desc(
         &mut self,
-        table_id: GlobalId,
+        existing_collection: GlobalId,
+        new_collection: GlobalId,
         new_desc: RelationDesc,
-        expected_schema: SchemaId,
-        forget_ts: Self::Timestamp,
+        expected_version: RelationVersion,
         register_ts: Self::Timestamp,
-    ) -> Result<SchemaId, StorageError<Self::Timestamp>>;
+    ) -> Result<(), StorageError<Self::Timestamp>>;
 
     /// Acquire an immutable reference to the export state, should it exist.
     fn export(
@@ -748,6 +752,7 @@ pub trait StorageController: Debug {
         txn: &mut (dyn StorageTxn<Self::Timestamp> + Send),
         ids_to_add: BTreeSet<GlobalId>,
         ids_to_drop: BTreeSet<GlobalId>,
+        ids_to_register: BTreeMap<GlobalId, ShardId>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
     async fn real_time_recent_timestamp(
@@ -765,7 +770,7 @@ impl DataSource {
     /// source using txn-wal.
     pub fn in_txns(&self) -> bool {
         match self {
-            DataSource::Table => true,
+            DataSource::Table { .. } => true,
             DataSource::Other
             | DataSource::Ingestion(_)
             | DataSource::IngestionExport { .. }

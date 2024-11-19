@@ -142,13 +142,15 @@ where
                 let _ = tx.send(());
             }
             PersistTableWriteCmd::Update {
-                table_id,
+                existing_collection,
+                new_collection,
                 handle,
                 forget_ts: _,
                 register_ts: _,
                 tx,
             } => {
-                write_handles.insert(table_id, handle).expect(
+                write_handles.remove(&existing_collection);
+                write_handles.insert(new_collection, handle).expect(
                     "PersistTableWriteCmd::Update only valid for updating extant write handles",
                 );
                 // We don't care if our waiter has gone away.

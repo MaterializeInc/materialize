@@ -1569,6 +1569,7 @@ impl Coordinator {
                 Op::AlterRole { .. }
                 | Op::AlterRetainHistory { .. }
                 | Op::AlterNetworkPolicy { .. }
+                | Op::AlterAddColumn { .. }
                 | Op::UpdatePrivilege { .. }
                 | Op::UpdateDefaultPrivilege { .. }
                 | Op::GrantRole { .. }

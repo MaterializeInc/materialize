@@ -774,9 +774,10 @@ mod tests {
     use mz_compute_types::sources::SourceInstanceArguments;
     use mz_compute_types::sources::SourceInstanceDesc;
     use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
-    use mz_repr::RelationDesc;
+    use mz_persist_types::ShardId;
     use mz_repr::RelationType;
     use mz_repr::Timestamp;
+    use mz_repr::{RelationDesc, RelationVersion};
     use mz_storage_client::controller::{CollectionDescription, StorageMetadata, StorageTxn};
     use mz_storage_client::storage_collections::CollectionFrontiers;
     use mz_storage_types::connections::inline::InlinedConnection;
@@ -877,6 +878,7 @@ mod tests {
             _txn: &mut (dyn StorageTxn<Self::Timestamp> + Send),
             _ids_to_add: BTreeSet<GlobalId>,
             _ids_to_drop: BTreeSet<GlobalId>,
+            _ids_to_register: BTreeMap<GlobalId, ShardId>,
         ) -> Result<(), StorageError<Self::Timestamp>> {
             unimplemented!()
         }
@@ -913,10 +915,12 @@ mod tests {
             unimplemented!()
         }
 
-        fn alter_table_desc(
+        async fn alter_table_desc(
             &self,
-            _table_id: GlobalId,
+            _existing_collection: GlobalId,
+            _new_collection: GlobalId,
             _new_desc: RelationDesc,
+            _expected_version: RelationVersion,
         ) -> Result<(), StorageError<Self::Timestamp>> {
             unimplemented!()
         }

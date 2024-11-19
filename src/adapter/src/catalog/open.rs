@@ -1633,7 +1633,7 @@ mod builtin_migration_tests {
             let item = match self.item {
                 SimplifiedItem::Table => CatalogItem::Table(Table {
                     create_sql: Some("CREATE TABLE materialize.public.t (a INT)".to_string()),
-                    desc: VersionedRelationDesc(desc),
+                    desc: VersionedRelationDesc::new(desc),
                     collections: [(RelationVersion::root(), global_id)].into_iter().collect(),
                     conn_id: None,
                     resolved_ids: ResolvedIds::empty(),
