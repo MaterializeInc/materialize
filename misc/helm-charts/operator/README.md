@@ -1,6 +1,6 @@
 # Materialize Kubernetes Operator Helm Chart
 
-![Version: 0.1.0](https://img.shields.io/badge/Version-0.1.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v0.125.0-dev.0--pr.gd3deb07aa502a84ebd024517344f0aa861f857df](https://img.shields.io/badge/AppVersion-v0.125.0--dev.0----pr.gd3deb07aa502a84ebd024517344f0aa861f857df-informational?style=flat-square)
+![Version: 0.1.0](https://img.shields.io/badge/Version-0.1.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v0.125.2](https://img.shields.io/badge/AppVersion-v0.125.2-informational?style=flat-square)
 
 Materialize Kubernetes Operator Helm Chart
 
@@ -250,7 +250,7 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.clusters.sizes.mz_probe.workers` |  | ``1`` |
 | `operator.image.pullPolicy` |  | ``"IfNotPresent"`` |
 | `operator.image.repository` |  | ``"materialize/orchestratord"`` |
-| `operator.image.tag` |  | ``"v0.125.0-dev.0--pr.gd3deb07aa502a84ebd024517344f0aa861f857df"`` |
+| `operator.image.tag` |  | ``"v0.125.2"`` |
 | `operator.nodeSelector` |  | ``{}`` |
 | `operator.resources.limits.memory` |  | ``"512Mi"`` |
 | `operator.resources.requests.cpu` |  | ``"100m"`` |
@@ -272,7 +272,7 @@ Specify each parameter using the `--set key=value[,key=value]` argument to `helm
 
 ```shell
 helm install my-materialize-operator \
-  --set operator.image.tag=v0.125.0-dev.0--pr.gd3deb07aa502a84ebd024517344f0aa861f857df \
+  --set operator.image.tag=v0.125.2 \
   materialize/materialize-operator
 ```
 
@@ -307,7 +307,7 @@ metadata:
   name: 12345678-1234-1234-1234-123456789012
   namespace: materialize-environment
 spec:
-  environmentdImageRef: materialize/environmentd:v0.125.0-dev.0--pr.gd3deb07aa502a84ebd024517344f0aa861f857df
+  environmentdImageRef: materialize/environmentd:v0.125.2
   backendSecretName: materialize-backend
   environmentdResourceRequirements:
     limits:
