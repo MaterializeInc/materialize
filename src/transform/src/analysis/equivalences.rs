@@ -591,6 +591,32 @@ impl EquivalenceClasses {
             new_equivalences.push(class);
         }
 
+        // If we see records formed from other expressions, we can equate the expressions with
+        // accessors applied to the class of the record former. In `minimize_once` we reduce by
+        // equivalence class representative before we perform expression simplification, so we
+        // shoud be able to just use the expression former, rather than find its representative.
+        // The risk, potentially, is that we would apply accessors to the record former and then
+        // just simplify it away learning nothing.
+        for class in self.classes.iter() {
+            for expr in class.iter() {
+                // Record-forming expressions can their accessors and their members.
+                if let MirScalarExpr::CallVariadic {
+                    func: mz_expr::VariadicFunc::RecordCreate { .. },
+                    exprs,
+                } = expr
+                {
+                    for (index, e) in exprs.iter().enumerate() {
+                        new_equivalences.push(vec![
+                            e.clone(),
+                            expr.clone().call_unary(mz_expr::UnaryFunc::RecordGet(
+                                mz_expr::func::RecordGet(index),
+                            )),
+                        ]);
+                    }
+                }
+            }
+        }
+
         // Return all newly established equivalences.
         new_equivalences
     }
