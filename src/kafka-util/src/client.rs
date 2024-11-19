@@ -206,6 +206,7 @@ impl FromStr for MzKafkaError {
             Ok(Self::UnsupportedBrokerVersion)
         } else if s.contains("Disconnected while requesting ApiVersion")
             || s.contains("Broker transport failure")
+            || s.contains("Connection refused")
         {
             Ok(Self::BrokerTransportFailure)
         } else if Regex::new(r"(\d+)/\1 brokers are down")
