@@ -415,12 +415,15 @@ impl ExpressionCacheHandle {
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
+    use std::marker::PhantomData;
     use std::sync::Arc;
+    use std::time::{Duration, Instant};
 
     use mz_compute_types::dataflows::DataflowDescription;
     use mz_durable_cache::DurableCacheCodec;
     use mz_dyncfg::ConfigSet;
     use mz_expr::OptimizedMirRelationExpr;
+    use mz_ore::test::timeout;
     use mz_persist_client::PersistClient;
     use mz_repr::optimize::OptimizerFeatures;
     use mz_repr::GlobalId;
@@ -430,7 +433,8 @@ mod tests {
     use proptest::prelude::{BoxedStrategy, ProptestConfig};
     use proptest::proptest;
     use proptest::strategy::{Strategy, ValueTree};
-    use proptest::test_runner::TestRunner;
+    use proptest::test_runner::{RngAlgorithm, TestRng, TestRunner};
+    use tracing::info;
     use uuid::Uuid;
 
     use crate::expr_cache::{
@@ -481,18 +485,72 @@ mod tests {
         type Strategy = BoxedStrategy<Self>;
     }
 
+    /// The expressions can be extremely slow to generate, so we have this hacky struct that bails
+    /// if an expression is taking to long to generate and tries to generate a new one. Of course
+    /// this means that we will never test expressions above a certain complexity. This is a
+    /// worthwhile trade-off to prevent timeouts in CI.
+    struct ArbitraryTimeout<T: Arbitrary + Send + 'static> {
+        _phantom: PhantomData<T>,
+    }
+
+    impl<T: Arbitrary + Send> ArbitraryTimeout<T> {
+        // Number of attempts to generate a value before panicking. The maximum time spent
+        // generating a value is `GENERATE_ATTEMPTS` * `TIMEOUT_SECS`.
+        const GENERATE_ATTEMPTS: u64 = 6;
+        // Amount of time in seconds before we give up trying to generate a single value.
+        const TIMEOUT_SECS: u64 = 5;
+
+        fn new() -> Self {
+            Self {
+                _phantom: Default::default(),
+            }
+        }
+
+        fn new_tree() -> Box<dyn ValueTree<Value = T>>
+        where
+            T: 'static,
+        {
+            // Important to update the RNG each time, or we'll end up generating the same struct
+            // each time.
+            let seed: [u8; 32] = rand::random();
+            let mut test_runner = TestRunner::deterministic();
+            let rng = test_runner.rng();
+            *rng = TestRng::from_seed(RngAlgorithm::ChaCha, &seed);
+            Box::new(T::arbitrary().new_tree(&mut test_runner).expect("valid"))
+        }
+
+        fn generate(&self) -> T {
+            for _ in 0..Self::GENERATE_ATTEMPTS {
+                if let Ok(val) = self.try_generate() {
+                    return val;
+                }
+            }
+            panic!("timed out generating a value");
+        }
+
+        fn try_generate(&self) -> Result<T, ()> {
+            // Note it's very important to use the thread based version of `timeout` and not the
+            // async task based version. Generating a value in a task will never await and therefore
+            // always run to completion while ignoring the timeout.
+            match timeout(Duration::from_secs(Self::TIMEOUT_SECS), || {
+                // TODO(jkosh44) It would be nice to re-use this tree on success, instead of having
+                // to re-generate a new tree every call.
+                Ok(Self::new_tree().current())
+            }) {
+                Ok(val) => Ok(val),
+                Err(_) => {
+                    info!("timed out generating a value");
+                    Err(())
+                }
+            }
+        }
+    }
+
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
-    #[ignore] // TODO: Reenable when database-issues#8739 is fixed
     async fn expression_cache() {
-        let local_tree = LocalExpressions::arbitrary()
-            .new_tree(&mut TestRunner::default())
-            .expect("valid expression");
-        let global_tree = GlobalExpressions::arbitrary()
-            .new_tree(&mut TestRunner::default())
-            .expect("valid expression");
-        let generate_local_expressions = move || local_tree.current();
-        let generate_global_expressions = move || global_tree.current();
+        let local_tree: ArbitraryTimeout<LocalExpressions> = ArbitraryTimeout::new();
+        let global_tree: ArbitraryTimeout<GlobalExpressions> = ArbitraryTimeout::new();
 
         let first_deploy_generation = 0;
         let second_deploy_generation = 1;
@@ -501,7 +559,8 @@ mod tests {
 
         let mut current_ids = BTreeSet::new();
         let mut remove_prior_gens = false;
-        let mut compact_shard = false;
+        // Compacting the shard takes too long, so we leave it to integration tests.
+        let compact_shard = false;
         let dyncfgs = &mz_persist_client::cfg::all_dyncfgs(ConfigSet::default());
 
         let mut next_id = 0;
@@ -527,8 +586,10 @@ mod tests {
             let mut global_exps = BTreeMap::new();
             for _ in 0..4 {
                 let id = GlobalId::User(next_id);
-                let local_exp = generate_local_expressions();
-                let global_exp = generate_global_expressions();
+                let start = Instant::now();
+                let local_exp = local_tree.generate();
+                let global_exp = global_tree.generate();
+                info!("Generating exps took: {:?}", start.elapsed());
 
                 cache
                     .update(
@@ -670,10 +731,12 @@ mod tests {
             // Insert some expressions at the new generation.
             let mut local_exps = BTreeMap::new();
             let mut global_exps = BTreeMap::new();
-            for _ in 0..3 {
+            for _ in 0..2 {
                 let id = GlobalId::User(next_id);
-                let local_exp = generate_local_expressions();
-                let global_exp = generate_global_expressions();
+                let start = Instant::now();
+                let local_exp = local_tree.generate();
+                let global_exp = global_tree.generate();
+                info!("Generating exps took: {:?}", start.elapsed());
 
                 cache
                     .update(
@@ -764,22 +827,6 @@ mod tests {
                 "Previous generation global expressions should be cleared"
             );
         }
-
-        {
-            // Re-open the cache and compact the shard.
-            compact_shard = true;
-            let (_cache, _local_entries, _global_entries) =
-                ExpressionCacheHandle::spawn_expression_cache(ExpressionCacheConfig {
-                    deploy_generation: first_deploy_generation,
-                    persist: persist.clone(),
-                    organization_id,
-                    current_ids: current_ids.clone(),
-                    remove_prior_gens,
-                    compact_shard,
-                    dyncfgs: dyncfgs.clone(),
-                })
-                .await;
-        }
     }
 
     proptest! {
@@ -789,8 +836,10 @@ mod tests {
 
         #[mz_ore::test]
         #[cfg_attr(miri, ignore)]
-        #[ignore] // TODO: Reenable when database-issues#8739 is fixed
-        fn local_expr_cache_roundtrip((key, val) in any::<(CacheKey, LocalExpressions)>()) {
+        fn local_expr_cache_roundtrip(key in any::<CacheKey>()) {
+            let local_tree: ArbitraryTimeout<LocalExpressions> = ArbitraryTimeout::new();
+            let val = local_tree.generate();
+
             let bincode_val = bincode::serialize(&val).expect("must serialize");
             let (encoded_key, encoded_val) = ExpressionCodec::encode(&key, &bincode_val);
             let (decoded_key, decoded_val) = ExpressionCodec::decode(&encoded_key, &encoded_val);
@@ -802,8 +851,10 @@ mod tests {
 
         #[mz_ore::test]
         #[cfg_attr(miri, ignore)]
-        #[ignore] // TODO: Reenable when database-issues#8739 is fixed
-        fn global_expr_cache_roundtrip((key, val) in any::<(CacheKey, GlobalExpressions)>()) {
+        fn global_expr_cache_roundtrip(key in any::<CacheKey>()) {
+            let global_tree: ArbitraryTimeout<GlobalExpressions> = ArbitraryTimeout::new();
+            let val = global_tree.generate();
+
             let bincode_val = bincode::serialize(&val).expect("must serialize");
             let (encoded_key, encoded_val) = ExpressionCodec::encode(&key, &bincode_val);
             let (decoded_key, decoded_val) = ExpressionCodec::decode(&encoded_key, &encoded_val);

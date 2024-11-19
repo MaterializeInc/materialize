@@ -328,7 +328,7 @@ impl Arbitrary for MirRelationExpr {
     type Parameters = ();
 
     fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
-        const VEC_LEN: usize = 4;
+        const VEC_LEN: usize = 2;
 
         // A strategy for generating the leaf cases.
         let leaf = Union::new([
@@ -348,7 +348,7 @@ impl Arbitrary for MirRelationExpr {
         ])
         .boxed();
 
-        leaf.prop_recursive(2, 3, 5, |inner| {
+        leaf.prop_recursive(2, 2, 2, |inner| {
             Union::new([
                 // Let
                 (any::<LocalId>(), inner.clone(), inner.clone())
