@@ -630,6 +630,8 @@ impl EquivalenceClasses {
                 expr.permute(permutation);
             }
         }
+        self.remap.clear();
+        self.minimize(&None);
     }
 
     /// Subject the constraints to the column projection, reworking and removing equivalences.
@@ -712,6 +714,7 @@ impl EquivalenceClasses {
                 MirScalarExpr::Column(col2),
             ]);
         }
+        self.remap.clear();
         self.minimize(&None);
     }
 
