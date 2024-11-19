@@ -125,8 +125,7 @@ Explained Query:
           Map (((#1 + #3) + 1), (#2 + 1))
             Join on=(#0 = #4 AND #1 = #5 AND #3 = #6) type=differential
               ArrangeBy keys=[[#0, #1, #3]]
-                Filter (false = (#1) IS NULL)
-                  Get l3
+                Get l3
               ArrangeBy keys=[[#0..=#2]]
                 Union
                   Negate
@@ -135,8 +134,7 @@ Explained Query:
                         Filter (#4 >= (#1 + 1)) AND (#4 <= (#1 + #2))
                           Join on=(#0 = #3) type=differential
                             ArrangeBy keys=[[#0]]
-                              Filter (false = (#1) IS NULL)
-                                Get l4
+                              Get l4
                             ArrangeBy keys=[[#0]]
                               Project (#0, #1)
                                 Filter (#2 = ".")
@@ -149,15 +147,14 @@ Explained Query:
     cte l3 =
       Project (#0..=#2, #5)
         Join on=(#0 = #3 = #6 AND #4 = (#2 + 1) AND #7 = ((#1 + #5) + 1)) type=delta
-          ArrangeBy keys=[[#0, (#2 + 1)]]
+          ArrangeBy keys=[[#0], [#0, (#2 + 1)]]
             Get l5
-          ArrangeBy keys=[[#0], [#0, #1]]
-            Project (#0, #2, #4)
-              Filter (false = (#3) IS NULL)
-                Map (array_index(regexp_split_to_array[",", case_insensitive=false](#1), integer_to_bigint(#2)), text_to_integer(#3))
-                  FlatMap generate_series(1, (regexp_split_to_array[",", case_insensitive=false](#1) array_length 1), 1)
-                    Project (#0, #2)
-                      Get l0
+          ArrangeBy keys=[[#0, #1]]
+            Project (#0, #2, #3)
+              Map (text_to_integer(array_index(regexp_split_to_array[",", case_insensitive=false](#1), integer_to_bigint(#2))))
+                FlatMap generate_series(1, (regexp_split_to_array[",", case_insensitive=false](#1) array_length 1), 1)
+                  Project (#0, #2)
+                    Get l0
           Get l2
     cte l2 =
       ArrangeBy keys=[[#0, #1]]
