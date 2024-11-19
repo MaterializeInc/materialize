@@ -4675,6 +4675,7 @@ dependencies = [
  "anyhow",
  "axum",
  "clap",
+ "custom-labels",
  "fail",
  "futures",
  "hyper 1.4.1",

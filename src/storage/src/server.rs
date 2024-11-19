@@ -121,7 +121,7 @@ impl mz_cluster::types::AsRunnableWorker<StorageCommand, StorageResponse> for Co
         .run();
     }
 
-    fn server_name() -> String {
-        "storage".to_string()
+    fn server_name() -> &'static str {
+        "storage"
     }
 }
