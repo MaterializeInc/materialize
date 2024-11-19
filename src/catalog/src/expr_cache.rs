@@ -249,11 +249,11 @@ impl ExpressionCache {
         self.durable_cache.try_set_many(&keys_to_remove).await?;
 
         if compact_shard {
-            let fuel = EXPRESSION_CACHE_FORCE_COMPACTION_FUEL.handle(dyncfgs);
-            let wait = EXPRESSION_CACHE_FORCE_COMPACTION_WAIT.handle(dyncfgs);
-            self.durable_cache
-                .dangerous_compact_shard(move || fuel.get(), move || wait.get())
-                .await;
+            // let fuel = EXPRESSION_CACHE_FORCE_COMPACTION_FUEL.handle(dyncfgs);
+            // let wait = EXPRESSION_CACHE_FORCE_COMPACTION_WAIT.handle(dyncfgs);
+            // self.durable_cache
+            //     .dangerous_compact_shard(move || fuel.get(), move || wait.get())
+            //     .await;
         }
 
         Ok((local_expressions, global_expressions))
