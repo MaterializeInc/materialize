@@ -1,6 +1,6 @@
 # Materialize Kubernetes Operator Helm Chart
 
-![Version: 25.1.0-beta.1](https://img.shields.io/badge/Version-25.1.0--beta.1-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v0.125.2](https://img.shields.io/badge/AppVersion-v0.125.2-informational?style=flat-square)
+![Version: v25.1.0-beta.1](https://img.shields.io/badge/Version-v25.1.0--beta.1-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v0.125.2](https://img.shields.io/badge/AppVersion-v0.125.2-informational?style=flat-square)
 
 Materialize Kubernetes Operator Helm Chart
 
@@ -391,7 +391,7 @@ Or check the `Chart.yaml` file in the `misc/helm-charts/operator` directory:
 apiVersion: v2
 name: materialize-operator
 # ...
-version: 25.1.0-beta.1
+version: v25.1.0-beta.1
 appVersion: v0.125.2  # Use this version for your Materialize instances
 ```
 

@@ -273,7 +273,7 @@ RUN arch_bazel=$(echo "$ARCH_GCC" | sed -e "s/aarch64/arm64/" -e "s/amd64/x86_64
     && if [ "$arch_bazel" = x86_64 ]; then echo '48ea0ff9d397a48add6369c261c5a4431fe6d5d5348cfb81411782fb80c388d3 /usr/local/bin/bazel' | sha256sum --check; fi \
     && chmod +x /usr/local/bin/bazel
 
-# Install KinD, kubectl, helm & helm-docs
+# Install KinD, kubectl, helm, helm-docs & terraform
 
 RUN curl -fsSL https://kind.sigs.k8s.io/dl/v0.14.0/kind-linux-$ARCH_GO > /usr/local/bin/kind \
     && chmod +x /usr/local/bin/kind \
@@ -304,6 +304,13 @@ RUN mkdir -p /usr/local/share/helm/plugins/unittest \
     && if [ $ARCH_GO = arm64 ]; then echo 'cca780834c6c59dda2cbccd97002d2a5c330347b4b87dc39ad13f41a345a0401 helm-unittest.tar.gz' | sha256sum --check; fi \
     && tar -xf helm-unittest.tar.gz -C /usr/local/share/helm/plugins/unittest \
     && rm helm-unittest.tar.gz
+
+RUN curl -fsSL https://releases.hashicorp.com/terraform/1.9.8/terraform_1.9.8_linux_$ARCH_GO.zip > terraform.zip \
+    && if [ $ARCH_GO = amd64 ]; then echo '186e0145f5e5f2eb97cbd785bc78f21bae4ef15119349f6ad4fa535b83b10df8 terraform.zip' | sha256sum --check; fi \
+    && if [ $ARCH_GO = arm64 ]; then echo 'f85868798834558239f6148834884008f2722548f84034c9b0f62934b2d73ebb terraform.zip' | sha256sum --check; fi \
+    && unzip terraform.zip terraform -d /usr/local/bin \
+    && chmod +x /usr/local/bin/terraform \
+    && rm terraform.zip
 
 # Hardcode some known SSH hosts, or else SSH will ask whether the host is
 # trustworthy on the first connection.
