@@ -1567,7 +1567,7 @@ Explained Query:
                   ReadIndex on=supplier fk_supplier_nationkey=[*** full scan ***] // { arity: 7 }
               ArrangeBy keys=[[#2, #1, #0], [#2, #3]] // { arity: 5 }
                 Project (#0..=#2, #4, #6) // { arity: 5 }
-                  Filter (#4) IS NOT NULL // { arity: 10 }
+                  Filter (#4) IS NOT NULL AND (#6) IS NOT NULL // { arity: 10 }
                     ReadIndex on=orderline fk_orderline_order=[*** full scan ***] // { arity: 10 }
               ArrangeBy keys=[[#0..=#2]] // { arity: 4 }
                 Project (#0..=#2, #4) // { arity: 4 }
@@ -1651,7 +1651,7 @@ Explained Query:
                 %1[×]UA » %0:l0[×]ef
               ArrangeBy keys=[[]] // { arity: 5 }
                 Project (#0..=#2, #9, #16) // { arity: 5 }
-                  Filter ((#22 = "1") OR (#22 = "2") OR (#22 = "3") OR (#22 = "4") OR (#22 = "5") OR (#22 = "6") OR (#22 = "7")) // { arity: 23 }
+                  Filter (#16) IS NOT NULL AND ((#22 = "1") OR (#22 = "2") OR (#22 = "3") OR (#22 = "4") OR (#22 = "5") OR (#22 = "6") OR (#22 = "7")) // { arity: 23 }
                     Get l0 // { arity: 23 }
               ArrangeBy keys=[[]] // { arity: 2 }
                 Reduce aggregates=[sum(#0), count(*)] // { arity: 2 }
