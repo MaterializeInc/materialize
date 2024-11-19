@@ -49,6 +49,10 @@ def workflow_default(c: Composition) -> None:
         if name == "default":
             continue
 
+        # TODO: Reenable when database-issues#8657 is fixed
+        if name == "multithreaded":
+            continue
+
         with c.test_case(name):
             c.workflow(name)
 
