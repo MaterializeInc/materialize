@@ -38,12 +38,13 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tracing::trace;
 
-use super::{matching_image_from_environmentd_image_ref, CloudProvider};
+use super::matching_image_from_environmentd_image_ref;
 use crate::k8s::{apply_resource, delete_resource, get_resource};
 use mz_cloud_resources::crd::materialize::v1alpha1::Materialize;
 use mz_environmentd::DeploymentStatus;
 use mz_orchestrator_tracing::TracingCliArgs;
 use mz_ore::instrument;
+use mz_sql::catalog::CloudProvider;
 
 #[derive(Debug, Serialize)]
 pub struct Resources {

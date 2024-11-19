@@ -23,6 +23,7 @@ use mz_cloud_resources::crd::materialize::v1alpha1::{Materialize, MaterializeSta
 use mz_orchestrator_kubernetes::KubernetesImagePullPolicy;
 use mz_orchestrator_tracing::TracingCliArgs;
 use mz_ore::{cast::CastFrom, cli::KeyValueArg, instrument};
+use mz_sql::catalog::CloudProvider;
 
 mod console;
 mod resources;
@@ -125,37 +126,6 @@ pub struct Args {
 
     #[clap(long, default_value = "9000")]
     console_http_port: i32,
-}
-
-#[derive(Debug, Eq, PartialEq, Clone, Copy)]
-pub enum CloudProvider {
-    Aws,
-    Local,
-}
-
-impl std::str::FromStr for CloudProvider {
-    type Err = String;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value.to_lowercase().as_ref() {
-            "aws" => Ok(Self::Aws),
-            "local" => Ok(Self::Local),
-            _ => Err("invalid cloud provider".to_string()),
-        }
-    }
-}
-
-impl std::fmt::Display for CloudProvider {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(
-            f,
-            "{}",
-            match self {
-                Self::Aws => "aws",
-                Self::Local => "local",
-            }
-        )
-    }
 }
 
 #[derive(clap::Parser)]
