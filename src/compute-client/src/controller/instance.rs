@@ -1234,6 +1234,12 @@ where
                 dataflow.initial_storage_as_of.clone(),
                 dataflow.refresh_schedule.clone(),
             );
+
+            // If the export is a storage sink, we can advance its write frontier to the write
+            // frontier of the target storage collection.
+            if let Ok(frontiers) = self.storage_collections.collection_frontiers(export_id) {
+                self.maybe_update_global_write_frontier(export_id, frontiers.write_frontier);
+            }
         }
 
         // Initialize tracking of subscribes.
