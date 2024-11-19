@@ -30,6 +30,7 @@ use std::time::Duration;
 
 use futures::future::BoxFuture;
 use mz_build_info::BuildInfo;
+use mz_cluster_client::metrics::ControllerMetrics;
 use mz_cluster_client::{ReplicaId, WallclockLagFn};
 use mz_compute_client::controller::{
     ComputeController, ComputeControllerResponse, ComputeControllerTimestamp, PeekNotification,
@@ -649,6 +650,8 @@ where
             Duration::from(lag_ts)
         });
 
+        let controller_metrics = ControllerMetrics::new(&config.metrics_registry);
+
         let txns_metrics = Arc::new(TxnMetrics::new(&config.metrics_registry));
         let collections_ctl = storage_collections::StorageCollectionsImpl::new(
             config.persist_location.clone(),
@@ -688,7 +691,8 @@ where
             storage_collections,
             envd_epoch,
             read_only,
-            config.metrics_registry.clone(),
+            &config.metrics_registry,
+            controller_metrics,
             config.now.clone(),
             wallclock_lag,
         );

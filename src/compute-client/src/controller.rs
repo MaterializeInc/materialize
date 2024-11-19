@@ -38,6 +38,7 @@ use futures::stream::FuturesUnordered;
 use futures::{FutureExt, StreamExt};
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterReplicaLocation;
+use mz_cluster_client::metrics::ControllerMetrics;
 use mz_cluster_client::{ReplicaId, WallclockLagFn};
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::dyncfgs::COMPUTE_REPLICA_EXPIRATION_OFFSET;
@@ -239,7 +240,8 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
         storage_collections: StorageCollections<T>,
         envd_epoch: NonZeroI64,
         read_only: bool,
-        metrics_registry: MetricsRegistry,
+        metrics_registry: &MetricsRegistry,
+        controller_metrics: ControllerMetrics,
         now: NowFn,
         wallclock_lag: WallclockLagFn<T>,
     ) -> Self {
@@ -291,6 +293,8 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
             }
         });
 
+        let metrics = ComputeControllerMetrics::new(metrics_registry, controller_metrics);
+
         Self {
             instances: BTreeMap::new(),
             instance_workload_classes,
@@ -302,7 +306,7 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
             arrangement_exert_proportionality: 16,
             stashed_response: None,
             envd_epoch,
-            metrics: ComputeControllerMetrics::new(metrics_registry),
+            metrics,
             now,
             wallclock_lag,
             dyncfg: Arc::new(mz_dyncfgs::all_dyncfgs()),
