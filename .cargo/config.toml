@@ -14,7 +14,7 @@
 # xcompile.
 rustflags = [
     "-Clink-arg=-Wl,--compress-debug-sections=zlib",
-    "-Clink-arg=-Wl,-O3",
+    "-Clink-arg=-Wl,-O2",
     "-Clink-arg=-fuse-ld=lld",
     "-Csymbol-mangling-version=v0",
     "--cfg=tokio_unstable",
@@ -31,7 +31,7 @@ rustflags = [
 [target."aarch64-unknown-linux-gnu"]
 rustflags = [
     "-Clink-arg=-Wl,--compress-debug-sections=zlib",
-    "-Clink-arg=-Wl,-O3",
+    "-Clink-arg=-Wl,-O2",
     "-Clink-arg=-fuse-ld=lld",
     "-Csymbol-mangling-version=v0",
     "--cfg=tokio_unstable",

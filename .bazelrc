@@ -93,11 +93,12 @@ build:debug --@rules_rust//:extra_rustc_flag="-Csplit-debuginfo=unpacked"
 
 # TODO(parkmycar): Enable this for macOS. `toolchains_llvm` defaults to ld64 which
 # doesn't support zlib compression.
-build:linux --linkopt="-Wl,--compress-debug-sections=zstd"
-build:linux --@rules_rust//:extra_rustc_flag="-Clink-arg=-Wl,--compress-debug-sections=zstd"
-build:linux --linkopt="-Wl,-O3"
+build:linux --linkopt="-Wl,--compress-debug-sections=zlib"
+build:linux --@rules_rust//:extra_rustc_flag="-Clink-arg=-Wl,--compress-debug-sections=zlib"
+# Specifying "-O2" uses level 6 zlib compression.
+build:linux --linkopt="-Wl,-O2"
 build:linux --@rules_rust//:extra_rustc_flag="-Clink-arg=-Wl,-O2"
-build:linux --copt="-gz=zstd"
+build:linux --copt="-gz=zlib"
 
 # Match the DWARF version used by Rust
 #
