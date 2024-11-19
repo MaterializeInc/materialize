@@ -38,17 +38,15 @@ use mz_ore::{assert_none, instrument, soft_panic_or_log};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
 use mz_persist_client::read::ReadHandle;
-use mz_persist_client::schema::CaESchema;
 use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, PersistLocation, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
-use mz_persist_types::schema::SchemaId;
 use mz_persist_types::Codec64;
 use mz_proto::RustType;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::timestamp::CheckedTimestamp;
-use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, TimestampManipulation};
+use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationVersion, Row, TimestampManipulation};
 use mz_storage_client::client::{
     ProtoStorageCommand, ProtoStorageResponse, RunIngestionCommand, RunSinkCommand, Status,
     StatusUpdate, StorageCommand, StorageResponse, TimestamplessUpdate,
@@ -872,7 +870,7 @@ where
 
                     new_source_statistic_entries.insert(id);
                 }
-                DataSource::Table => {
+                DataSource::Table { .. } => {
                     debug!(
                         ?data_source, meta = ?metadata,
                         "registering {id} with persist table worker",
@@ -990,7 +988,7 @@ where
                 DataSource::IngestionExport { .. } => unreachable!(
                     "ingestion exports do not execute directly, but instead schedule their source to be re-executed"
                 ),
-                DataSource::Introspection(_) | DataSource::Webhook | DataSource::Table | DataSource::Progress | DataSource::Other => {}
+                DataSource::Introspection(_) | DataSource::Webhook | DataSource::Table { .. } | DataSource::Progress | DataSource::Other => {}
             };
         }
 
@@ -1176,44 +1174,40 @@ where
 
     async fn alter_table_desc(
         &mut self,
-        table_id: GlobalId,
+        existing_collection: GlobalId,
+        new_collection: GlobalId,
         new_desc: RelationDesc,
-        expected_schema: SchemaId,
+        expected_version: RelationVersion,
+        new_version: RelationVersion,
         forget_ts: Self::Timestamp,
         register_ts: Self::Timestamp,
-    ) -> Result<SchemaId, StorageError<Self::Timestamp>> {
-        let shard_id = {
+    ) -> Result<(), StorageError<Self::Timestamp>> {
+        let data_shard = {
             let Controller {
                 collections,
                 storage_collections,
                 ..
             } = self;
 
-            // TODO(parkmycar): We're threading a needle here to make sure we don't
-            // leave either the Controller or StorageCollections in an inconsistent
-            // state. We should refactor this to be more robust.
-
-            // Before letting StorageCollections know, make sure we know about this
-            // collection.
-            let collection = collections
-                .get_mut(&table_id)
-                .ok_or(StorageError::IdentifierMissing(table_id))?;
-            if !matches!(collection.data_source, DataSource::Other) {
-                return Err(StorageError::IdentifierInvalid(table_id));
+            let existing = collections
+                .get(&existing_collection)
+                .ok_or(StorageError::IdentifierMissing(existing_collection))?;
+            if !matches!(existing.data_source, DataSource::Table { .. }) {
+                return Err(StorageError::IdentifierInvalid(existing_collection));
             }
 
-            // Now also let StorageCollections know!
-            storage_collections.alter_table_desc(table_id, new_desc.clone())?;
-            // StorageCollections was successfully updated, now we can update our
-            // in-memory state.
-            collection.collection_metadata.relation_desc = new_desc.clone();
+            // Let StorageCollections know!
+            storage_collections
+                .alter_table_desc(
+                    existing_collection,
+                    new_collection,
+                    new_desc.clone(),
+                    expected_version,
+                    new_version,
+                )
+                .await?;
 
-            collection.collection_metadata.data_shard
-        };
-
-        let diagnostics = Diagnostics {
-            shard_name: table_id.to_string(),
-            handle_purpose: "alter_table_desc".to_string(),
+            existing.collection_metadata.data_shard.clone()
         };
 
         let persist_client = self
@@ -1221,39 +1215,44 @@ where
             .open(self.persist_location.clone())
             .await
             .expect("invalid persist location");
-        let schema_result = persist_client
-            .compare_and_evolve_schema::<SourceData, (), T, Diff>(
-                shard_id,
-                expected_schema,
-                &new_desc,
-                &UnitSchema,
-                diagnostics,
-            )
-            .await
-            .map_err(|e| StorageError::InvalidUsage(e.to_string()))?;
-        let schema_id = match schema_result {
-            CaESchema::Ok(id) => id,
-            // TODO(alter_table): Better handling of these errors.
-            CaESchema::ExpectedMismatch { .. } => {
-                return Err(StorageError::Generic(anyhow::anyhow!(
-                    "schema expected mismatch, {table_id:?}",
-                )))
-            }
-            CaESchema::Incompatible => {
-                return Err(StorageError::Generic(anyhow::anyhow!(
-                    "schema incompatible, {table_id:?}"
-                )))
-            }
-        };
-
         let write_handle = self
-            .open_data_handles(&table_id, shard_id, new_desc.clone(), &persist_client)
+            .open_data_handles(
+                &existing_collection,
+                data_shard,
+                new_desc.clone(),
+                &persist_client,
+            )
             .await;
 
-        self.persist_table_worker
-            .update(table_id, forget_ts, register_ts, write_handle);
+        let collection_desc = CollectionDescription::<T>::for_table(new_desc.clone(), new_version);
+        let collection_meta = CollectionMetadata {
+            persist_location: self.persist_location.clone(),
+            data_shard,
+            relation_desc: new_desc.clone(),
+            // TODO(alter_table): Support schema evolution on sources.
+            remap_shard: None,
+            txns_shard: Some(self.txns_read.txns_id().clone()),
+        };
+        // TODO(alter_table): Support schema evolution on sources.
+        let wallclock_lag_metrics = self.metrics.wallclock_lag_metrics(new_collection, None);
+        let collection_state = CollectionState::<T> {
+            data_source: collection_desc.data_source.clone(),
+            collection_metadata: collection_meta,
+            extra_state: CollectionStateExtra::None,
+            wallclock_lag_max: Default::default(),
+            wallclock_lag_metrics,
+        };
 
-        Ok(schema_id)
+        self.collections.insert(new_collection, collection_state);
+        self.persist_table_worker.update(
+            existing_collection,
+            new_collection,
+            forget_ts,
+            register_ts,
+            write_handle,
+        );
+
+        Ok(())
     }
 
     fn export(
@@ -1557,7 +1556,7 @@ where
         let (table_write_ids, data_source_ids): (Vec<_>, Vec<_>) = identifiers
             .into_iter()
             .partition(|id| match self.collections[id].data_source {
-                DataSource::Table => true,
+                DataSource::Table { .. } => true,
                 DataSource::IngestionExport { .. } => false,
                 _ => panic!("identifier is not a table: {}", id),
             });
@@ -1618,7 +1617,7 @@ where
                     //
                     // We can immediately compact them, because they don't
                     // interact with clusterd.
-                    DataSource::Webhook | DataSource::Table => {
+                    DataSource::Webhook | DataSource::Table { .. } => {
                         let pending_compaction_command = PendingCompactionCommand {
                             id: *id,
                             read_frontier: Antichain::new(),
@@ -2118,7 +2117,7 @@ where
                     }
                 } else if let Some(collection) = self.collections.get(&id) {
                     match collection.data_source {
-                        DataSource::Table => {
+                        DataSource::Table { .. } => {
                             pending_collection_drops.push(id);
                         }
                         DataSource::Webhook => {
@@ -2280,9 +2279,10 @@ where
         txn: &mut (dyn StorageTxn<T> + Send),
         ids_to_add: BTreeSet<GlobalId>,
         ids_to_drop: BTreeSet<GlobalId>,
+        ids_to_register: BTreeMap<GlobalId, ShardId>,
     ) -> Result<(), StorageError<T>> {
         self.storage_collections
-            .prepare_state(txn, ids_to_add, ids_to_drop)
+            .prepare_state(txn, ids_to_add, ids_to_drop, ids_to_register)
             .await
     }
 
@@ -3107,7 +3107,7 @@ where
         let dependency = match &data_source {
             DataSource::Introspection(_)
             | DataSource::Webhook
-            | DataSource::Table
+            | DataSource::Table { .. }
             | DataSource::Progress
             | DataSource::Other => vec![],
             DataSource::IngestionExport { ingestion_id, .. } => {
