@@ -36,10 +36,12 @@ use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::collections::HashSet;
 use mz_ore::instrument;
 use mz_ore::now::EpochMillis;
+use mz_persist_types::ShardId;
 use mz_repr::adt::mz_acl_item::{merge_mz_acl_items, AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
-use mz_repr::{strconv, CatalogItemId, GlobalId};
+use mz_repr::{strconv, CatalogItemId, ColumnName, ColumnType, GlobalId};
+use mz_sql::ast::RawDataType;
 use mz_sql::catalog::{
     CatalogDatabase, CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem, CatalogRole,
     CatalogSchema, DefaultPrivilegeAclItem, DefaultPrivilegeObject, RoleAttributes, RoleMembership,
@@ -87,6 +89,13 @@ pub enum Op {
         rules: Vec<NetworkPolicyRule>,
         name: String,
         owner_id: RoleId,
+    },
+    AlterAddColumn {
+        id: CatalogItemId,
+        new_global_id: GlobalId,
+        name: ColumnName,
+        typ: ColumnType,
+        sql: RawDataType,
     },
     CreateDatabase {
         name: String,
@@ -495,6 +504,7 @@ impl Catalog {
 
         let mut storage_collections_to_create = BTreeSet::new();
         let mut storage_collections_to_drop = BTreeSet::new();
+        let mut storage_collections_to_register = BTreeMap::new();
 
         for op in ops {
             let (weird_builtin_table_update, temporary_item_updates) = Self::transact_op(
@@ -507,6 +517,7 @@ impl Catalog {
                 state,
                 &mut storage_collections_to_create,
                 &mut storage_collections_to_drop,
+                &mut storage_collections_to_register,
             )
             .await?;
 
@@ -551,6 +562,7 @@ impl Catalog {
                     tx,
                     storage_collections_to_create,
                     storage_collections_to_drop,
+                    storage_collections_to_register,
                 )
                 .await?;
             }
@@ -588,6 +600,7 @@ impl Catalog {
         state: &CatalogState,
         storage_collections_to_create: &mut BTreeSet<GlobalId>,
         storage_collections_to_drop: &mut BTreeSet<GlobalId>,
+        storage_collections_to_register: &mut BTreeMap<GlobalId, ShardId>,
     ) -> Result<(Option<BuiltinTableUpdate>, Vec<(TemporaryItem, StateDiff)>), AdapterError> {
         let mut weird_builtin_table_update = None;
         let mut temporary_item_updates = Vec::new();
@@ -701,6 +714,30 @@ impl Catalog {
                 )?;
 
                 info!("update network policy {name} ({id})");
+            }
+            Op::AlterAddColumn {
+                id,
+                new_global_id,
+                name,
+                typ,
+                sql,
+            } => {
+                let mut new_entry = state.get_entry(&id).clone();
+                let version = new_entry.item.add_column(name, typ, sql)?;
+                // All versions of a table share the same shard, so it shouldn't matter what
+                // GlobalId we use here.
+                let shard_id = state
+                    .storage_metadata()
+                    .get_collection_shard(new_entry.latest_global_id())?;
+
+                // TODO(alter_table): Support adding columns to sources.
+                let CatalogItem::Table(table) = &mut new_entry.item else {
+                    return Err(AdapterError::Unsupported("adding columns to non-Table"));
+                };
+                table.collections.insert(version, new_global_id);
+
+                tx.update_item(id, new_entry.into())?;
+                storage_collections_to_register.insert(new_global_id, shard_id);
             }
             Op::CreateDatabase { name, owner_id } => {
                 let database_owner_privileges = vec![rbac::owner_privilege(

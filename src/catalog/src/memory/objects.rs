@@ -845,7 +845,7 @@ impl From<CatalogEntry> for durable::Item {
 pub struct Table {
     /// Parse-able SQL that defines this table.
     pub create_sql: Option<String>,
-    /// [`RelationDesc`] of this table, derived from the `create_sql`.
+    /// [`VersionedRelationDesc`] of this table, derived from the `create_sql`.
     pub desc: VersionedRelationDesc,
     /// Versions of this table, and the [`GlobalId`]s that refer to them.
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
@@ -891,14 +891,14 @@ impl Table {
     }
 
     /// Returns all of the collections and their [`RelationDesc`]s associated with this [`Table`].
-    pub fn collection_descs(&self) -> impl Iterator<Item = (GlobalId, RelationDesc)> + '_ {
-        // TODO(alter_table): Support multiple versions of the table.
-        assert_eq!(self.collections.len(), 1);
+    pub fn collection_descs(
+        &self,
+    ) -> impl Iterator<Item = (GlobalId, RelationVersion, RelationDesc)> + '_ {
         self.collections.iter().map(|(version, gid)| {
             let desc = self
                 .desc
                 .at_version(RelationVersionSelector::Specific(*version));
-            (*gid, desc)
+            (*gid, *version, desc)
         })
     }
 
@@ -1996,6 +1996,46 @@ impl CatalogItem {
             .expect("item must have compaction window");
         *cw = Some(window);
         Ok(res)
+    }
+
+    pub fn add_column(
+        &mut self,
+        name: ColumnName,
+        typ: ColumnType,
+        sql: RawDataType,
+    ) -> Result<RelationVersion, PlanError> {
+        let CatalogItem::Table(table) = self else {
+            return Err(PlanError::Unsupported {
+                feature: "adding columns to a non-Table".to_string(),
+                discussion_no: None,
+            });
+        };
+        let next_version = table.desc.add_column(name.clone(), typ);
+
+        let update = |ast: &mut Statement<Raw>| match ast {
+            Statement::CreateTable(ref mut stmt) => {
+                let version = ColumnOptionDef {
+                    name: None,
+                    option: ColumnOption::Versioned {
+                        action: ColumnVersioned::Added,
+                        version: next_version.into(),
+                    },
+                };
+                let column = ColumnDef {
+                    name: name.into(),
+                    data_type: sql,
+                    collation: None,
+                    options: vec![version],
+                };
+                stmt.columns.push(column);
+                Ok(())
+            }
+            _ => Err(()),
+        };
+
+        self.update_sql(update)
+            .map_err(|()| PlanError::Unstructured("expected CREATE TABLE statement".to_string()))?;
+        Ok(next_version)
     }
 
     /// Updates the create_sql field of this item. Returns an error if this is a builtin item,

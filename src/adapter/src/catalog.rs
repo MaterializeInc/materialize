@@ -1448,8 +1448,8 @@ impl Catalog {
                 .iter()
                 .map(|(id, _)| id)
                 .chain(new_global_expressions.iter().map(|(id, _)| id))
-                .filter_map(|id| self.get_entry_by_global_id(id).index())
-                .map(|index| index.on);
+                .map(|id| self.get_entry_by_global_id(id))
+                .filter_map(|entry| entry.index().map(|index| index.on));
             let invalidate_ids = self.invalidate_for_index(ons);
             expr_cache
                 .update(

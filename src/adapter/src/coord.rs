@@ -2689,10 +2689,22 @@ impl Coordinator {
                 CatalogItem::Table(table) => {
                     match &table.data_source {
                         TableDataSource::TableWrites { defaults: _ } => {
-                            let collections_descs = table.collection_descs().map(|(gid, desc)| {
-                                (gid, CollectionDescription::for_table(desc.clone()))
+                            let versions: BTreeMap<_, _> = table
+                                .collection_descs()
+                                .map(|(gid, version, desc)| (version, (gid, desc)))
+                                .collect();
+                            let collection_descs = versions.iter().map(|(version, (gid, desc))| {
+                                let next_version = version.bump();
+                                let primary_collection =
+                                    versions.get(&next_version).map(|(gid, _desc)| gid).copied();
+                                let collection_desc = CollectionDescription::for_table(
+                                    desc.clone(),
+                                    primary_collection,
+                                );
+
+                                (*gid, collection_desc)
                             });
-                            collections.extend(collections_descs);
+                            collections.extend(collection_descs);
                         }
                         TableDataSource::DataSource {
                             desc: data_source_desc,
@@ -2700,9 +2712,10 @@ impl Coordinator {
                         } => {
                             // TODO(alter_table): Support versioning tables that read from sources.
                             soft_assert_eq_or_log!(table.collections.len(), 1);
-                            let collection_descs = table.collection_descs().map(|(gid, desc)| {
-                                (gid, source_desc(data_source_desc, &desc, timeline))
-                            });
+                            let collection_descs =
+                                table.collection_descs().map(|(gid, _version, desc)| {
+                                    (gid, source_desc(data_source_desc, &desc, timeline))
+                                });
                             collections.extend(collection_descs);
                         }
                     };
