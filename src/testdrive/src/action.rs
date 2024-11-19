@@ -359,6 +359,7 @@ impl State {
         system_parameter_defaults: BTreeMap<String, String>,
         version: semver::Version,
         bootstrap_args: &BootstrapArgs,
+        enable_expression_cache_override: Option<bool>,
         f: F,
     ) -> Result<Option<T>, anyhow::Error>
     where
@@ -394,6 +395,7 @@ impl State {
                 system_parameter_defaults,
                 version,
                 bootstrap_args,
+                enable_expression_cache_override,
             )
             .await?;
             let res = f(catalog.for_session(&Session::dummy()));
