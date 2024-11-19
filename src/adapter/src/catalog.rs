@@ -671,6 +671,7 @@ impl Catalog {
                 builtin_item_migration_config: BuiltinItemMigrationConfig::Legacy,
                 persist_client,
                 enable_expression_cache_override,
+                enable_0dt_deployment: true,
                 helm_chart_version: None,
             },
         })
