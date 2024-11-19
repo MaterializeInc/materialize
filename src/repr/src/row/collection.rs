@@ -163,13 +163,14 @@ impl RowCollection {
                     );
                 }
             }
-
-            heap.push(Reverse(Finger {
-                collection: &self,
-                cmp: &cmp,
-                start,
-                end,
-            }));
+            if start < end {
+                heap.push(Reverse(Finger {
+                    collection: &self,
+                    cmp: &cmp,
+                    start,
+                    end,
+                }));
+            }
         }
 
         let mut view = Vec::with_capacity(self.metadata.len());
