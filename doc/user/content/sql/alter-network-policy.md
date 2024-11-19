@@ -64,7 +64,7 @@ CREATE NETWORK POLICY office_access_policy (
 ```
 
 ```mzsql
-ALTER NETWORK POLICY office_access_policy ( 
+ALTER NETWORK POLICY office_access_policy SET ( 
   RULES ( 
     new_york (action='allow', direction='ingress',address='1.2.3.4/28'),
     minnesota (action='allow',direction='ingress',address='2.3.4.5/32'),
