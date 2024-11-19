@@ -9,6 +9,7 @@
 
 #![warn(missing_docs)]
 
+use std::cell::RefCell;
 use std::cmp::{max, Ordering};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -3555,10 +3556,12 @@ impl RowSetFinishing {
             return Err(format!("result exceeds max size of {max_bytes}",));
         }
 
-        let mut left_datum_vec = mz_repr::DatumVec::new();
-        let mut right_datum_vec = mz_repr::DatumVec::new();
+        let left_datum_vec = RefCell::new(mz_repr::DatumVec::new());
+        let right_datum_vec = RefCell::new(mz_repr::DatumVec::new());
 
         let sort_by = |left: &RowRef, right: &RowRef| {
+            let (mut left_datum_vec, mut right_datum_vec) =
+                (left_datum_vec.borrow_mut(), right_datum_vec.borrow_mut());
             let left_datums = left_datum_vec.borrow_with(left);
             let right_datums = right_datum_vec.borrow_with(right);
             compare_columns(&self.order_by, &left_datums, &right_datums, || {

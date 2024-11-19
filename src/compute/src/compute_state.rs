@@ -1079,6 +1079,8 @@ impl PendingPeek {
             .unwrap_or(usize::MAX)
             + peek.finishing.offset;
 
+        let order_by = peek.finishing.order_by.clone();
+
         let task_handle = mz_ore::task::spawn(|| "persist::peek", async move {
             let start = Instant::now();
             let result = if active_worker {
@@ -1095,7 +1097,16 @@ impl PendingPeek {
                 Ok(vec![])
             };
             let result = match result {
-                Ok(rows) => PeekResponse::Rows(RowCollection::new(&rows)),
+                Ok(mut rows) => {
+                    // Sort results according to finishing.
+                    let (mut datum_vec1, mut datum_vec2) = (DatumVec::new(), DatumVec::new());
+                    rows.sort_by(|(row1, _diff1), (row2, _diff2)| {
+                        let borrow1 = datum_vec1.borrow_with(row1);
+                        let borrow2 = datum_vec2.borrow_with(row2);
+                        mz_expr::compare_columns(&order_by, &borrow1, &borrow2, || row1.cmp(row2))
+                    });
+                    PeekResponse::Rows(RowCollection::new(&rows))
+                }
                 Err(e) => PeekResponse::Error(e.to_string()),
             };
             match result_tx.send((result, start.elapsed())) {
@@ -1297,7 +1308,18 @@ impl IndexPeek {
         }
 
         let response = match self.collect_finished_data(max_result_size) {
-            Ok(rows) => PeekResponse::Rows(RowCollection::new(&rows)),
+            Ok(mut rows) => {
+                // Sort results according to finishing.
+                let (mut datum_vec1, mut datum_vec2) = (DatumVec::new(), DatumVec::new());
+                let order_by = &self.peek.finishing.order_by;
+                rows.sort_by(|(row1, _diff1), (row2, _diff2)| {
+                    let borrow1 = datum_vec1.borrow_with(row1);
+                    let borrow2 = datum_vec2.borrow_with(row2);
+                    mz_expr::compare_columns(order_by, &borrow1, &borrow2, || row1.cmp(row2))
+                });
+
+                PeekResponse::Rows(RowCollection::new(&rows))
+            }
             Err(text) => PeekResponse::Error(text),
         };
         Some(response)

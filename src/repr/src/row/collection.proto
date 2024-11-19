@@ -14,6 +14,7 @@ package mz_repr.row.collection;
 message ProtoRowCollection {
   bytes encoded = 1;
   repeated ProtoEncodedRowMetadata metadata = 2;
+  repeated uint64 fingers = 3;
 }
 
 message ProtoEncodedRowMetadata {
