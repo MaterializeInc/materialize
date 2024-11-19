@@ -37,7 +37,9 @@ use mz_ore::str::{separated, StrExt};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::explain::text::DisplayText;
 use mz_repr::explain::{CompactScalars, IndexUsageType, PlanRenderingContext, UsedIndexes};
-use mz_repr::{Diff, GlobalId, IntoRowIterator, RelationType, Row, RowCollection, RowIterator};
+use mz_repr::{
+    DatumVec, Diff, GlobalId, IntoRowIterator, RelationType, Row, RowCollection, RowIterator,
+};
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp;
 use uuid::Uuid;
@@ -481,6 +483,12 @@ impl crate::coord::Coordinator {
                     ));
                 }
             }
+            let (mut datum_vec1, mut datum_vec2) = (DatumVec::new(), DatumVec::new());
+            results.sort_by(|(row1, _diff1), (row2, _diff2)| {
+                let borrow1 = datum_vec1.borrow_with(row1);
+                let borrow2 = datum_vec2.borrow_with(row2);
+                mz_expr::compare_columns(&finishing.order_by, &borrow1, &borrow2, || row1.cmp(row2))
+            });
             let row_collection = RowCollection::new(&results);
             let duration_histogram = self.metrics.row_set_finishing_seconds();
 

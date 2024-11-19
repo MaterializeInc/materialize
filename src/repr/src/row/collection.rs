@@ -74,6 +74,8 @@ impl RowCollection {
             return;
         }
 
+        let self_len = self.metadata.len();
+
         // TODO(parkmycar): Using SegmentedBytes here would be nice.
         let mut new_bytes = vec![0; self.encoded.len() + other.encoded.len()];
         new_bytes[..self.encoded.len()].copy_from_slice(&self.encoded[..]);
@@ -86,7 +88,8 @@ impl RowCollection {
 
         self.metadata.extend(mapped_metas);
         self.encoded = Bytes::from(new_bytes);
-        self.fingers.push(self.metadata.len());
+        self.fingers
+            .extend(other.fingers.iter().map(|f| f + self_len));
     }
 
     /// Total count of [`Row`]s represented by this collection, considering a
@@ -150,6 +153,16 @@ impl RowCollection {
                 .then_some(0)
                 .unwrap_or_else(|| self.fingers[index - 1]);
             let end = self.fingers[index];
+
+            // TODO: Remove
+            for j in start..end {
+                if j + 1 < end {
+                    assert_ne!(
+                        cmp(self.get(j).unwrap().0, self.get(j + 1).unwrap().0),
+                        std::cmp::Ordering::Greater
+                    );
+                }
+            }
 
             heap.push(Reverse(Finger {
                 collection: &self,
