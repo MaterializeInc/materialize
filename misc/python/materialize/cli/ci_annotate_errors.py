@@ -167,6 +167,8 @@ IGNORE_RE = re.compile(
     | txn-wal-fencing-mz_first-.* \| .* fenced\ by\ envd
     # 0dt platform-checks have two envds running in parallel, thus high load, tests still succeed, so ignore noise
     | platform-checks-mz_.* \| .* was\ expired\ due\ to\ inactivity\.\ Did\ the\ machine\ go\ to\ sleep\?
+    # Don't seem to influence test results, but still have to investigate why they are crashing
+    | \ ANOM_ABEND\ .*\ exe="/usr/bin/qemu
     )
     """,
     re.VERBOSE | re.MULTILINE,
