@@ -165,7 +165,7 @@ impl SourceConnection for LoadGeneratorSourceConnection {
     }
 
     fn supports_read_only(&self) -> bool {
-        false
+        true
     }
 }
 
