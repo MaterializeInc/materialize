@@ -201,13 +201,14 @@ impl Analysis for Equivalences {
             }
             MirRelationExpr::Reduce {
                 group_key,
-                aggregates: _,
+                aggregates,
                 ..
             } => {
                 let input_arity = depends.results::<Arity>().unwrap()[index - 1];
                 let mut equivalences = results.get(index - 1).unwrap().clone();
                 if let Some(equivalences) = &mut equivalences {
-                    // Introduce keys column equivalences as a map, then project to them as a projection.
+                    // Introduce keys column equivalences as if a map, then project to those columns.
+                    // This should retain as much information as possible about these columns.
                     for (pos, expr) in group_key.iter().enumerate() {
                         equivalences
                             .classes
@@ -218,12 +219,33 @@ impl Analysis for Equivalences {
                     // information in before applying the `project`, to set it up for success.
                     equivalences.minimize(&None);
 
+                    // Grab a copy of the equivalences with key columns added to use in aggregate reasoning.
+                    let extended = equivalences.clone();
+                    // Now project down the equivalences, as we will extend them in terms of the output columns.
+                    equivalences.project(input_arity..(input_arity + group_key.len()));
+
                     // TODO: MIN, MAX, ANY, ALL aggregates pass through all certain properties of their columns.
                     // They also pass through equivalences of them and other constant columns (e.g. key columns).
                     // However, it is not correct to simply project onto these columns, as relationships amongst
                     // aggregate columns may no longer be preserved. MAX(col) != MIN(col) even though col = col.
-                    // TODO: COUNT ensures a non-null value.
-                    equivalences.project(input_arity..(input_arity + group_key.len()));
+                    // The correct thing to do is treat the reduce as a join between single-aggregate reductions,
+                    // where each single MIN/MAX/ANY/ALL aggregate propagates equivalences.
+                    for (index, aggregate) in aggregates.iter().enumerate() {
+                        if aggregate_is_input(&aggregate.func) {
+                            let mut temp_equivs = extended.clone();
+                            temp_equivs.classes.push(vec![
+                                MirScalarExpr::column(input_arity + group_key.len()),
+                                aggregate.expr.clone(),
+                            ]);
+                            temp_equivs.minimize(&None);
+                            temp_equivs.project(input_arity..(input_arity + group_key.len() + 1));
+                            let columns = (0..group_key.len())
+                                .chain(std::iter::once(group_key.len() + index))
+                                .collect::<Vec<_>>();
+                            temp_equivs.permute(&columns[..]);
+                            equivalences.classes.extend(temp_equivs.classes);
+                        }
+                    }
                 }
                 equivalences
             }
@@ -911,5 +933,43 @@ impl<T: Clone + Ord> UnionFind<T> for BTreeMap<T, T> {
                 self.insert(y.clone(), x.clone());
             }
         }
+    }
+}
+
+use mz_expr::AggregateFunc;
+/// True iff the aggregate function returns an input datum.
+fn aggregate_is_input(aggregate: &AggregateFunc) -> bool {
+    match aggregate {
+        AggregateFunc::MaxInt16
+        | AggregateFunc::MaxInt32
+        | AggregateFunc::MaxInt64
+        | AggregateFunc::MaxUInt16
+        | AggregateFunc::MaxUInt32
+        | AggregateFunc::MaxUInt64
+        | AggregateFunc::MaxMzTimestamp
+        | AggregateFunc::MaxFloat32
+        | AggregateFunc::MaxFloat64
+        | AggregateFunc::MaxBool
+        | AggregateFunc::MaxString
+        | AggregateFunc::MaxDate
+        | AggregateFunc::MaxTimestamp
+        | AggregateFunc::MaxTimestampTz
+        | AggregateFunc::MinInt16
+        | AggregateFunc::MinInt32
+        | AggregateFunc::MinInt64
+        | AggregateFunc::MinUInt16
+        | AggregateFunc::MinUInt32
+        | AggregateFunc::MinUInt64
+        | AggregateFunc::MinMzTimestamp
+        | AggregateFunc::MinFloat32
+        | AggregateFunc::MinFloat64
+        | AggregateFunc::MinBool
+        | AggregateFunc::MinString
+        | AggregateFunc::MinDate
+        | AggregateFunc::MinTimestamp
+        | AggregateFunc::MinTimestampTz
+        | AggregateFunc::Any
+        | AggregateFunc::All => true,
+        _ => false,
     }
 }
