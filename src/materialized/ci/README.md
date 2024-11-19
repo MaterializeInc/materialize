@@ -17,11 +17,12 @@ experience with Materialize in a local environment.
 
 ## Resource requirements
 
-The Materialize Emulator requires resources proportional to the workload size and complexity.
-For a typical workload, we recommend the following resources, but this needs to be adjusted based on replica sizes.
-* At least 32GiB of RAM.
-* At least 8 vCPU cores.
-* At least 100GiB of disk space.
+The Materialize Emulator requires resources proportional to the workload size and complexity. Each workload comes
+at different resource requirements, but as a starting point we recommend the following allocation, which needs
+to be adjusted based on replica sizes.
+* At least 16GiB of RAM.
+* At least 4 vCPU cores.
+* At least 50GiB of disk space.
 
 The emulator can run with less resources, but performance may be degraded. While Materialize Cloud
 is designed to scale horizontally, the emulator is limited to a single node without performance isolation.
@@ -30,10 +31,12 @@ This means a single replica can consume all available resources, potentially imp
 The emulator uses disk space for storing data, logs, and metadata. The emulator requires an NVMe SSD
 for optimal performance.
 
-### Resource examples
+The emulator's performance is not representative of a real Materialize deployment.
 
-A workload running on a cluster of size 600cc with one replica requires at least 12 vCPU cores for the cluster
-plus 2 CPU cores for the rest of the system. We recommend at least 4GiB of RAM per vCPU.
+## Cluster and replica sizes
+
+The emulator supports the similar cluster and replica sizes that Materialize offers. The sizes represent a
+proportional increase in CPU resources. For more details, consult the documentation on [cluster sizes](https://materialize.com/docs/sql/create-cluster/#size).
 
 ## Usage
 
