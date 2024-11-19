@@ -32,6 +32,7 @@ import psutil
 
 from materialize import MZ_ROOT, rustc_flags, spawn, ui
 from materialize.mzcompose import (
+    bootstrap_cluster_replica_size,
     cluster_replica_size_map,
     get_default_system_parameters,
 )
@@ -275,6 +276,7 @@ def main() -> int:
                 f"--environment-id={environment_id}",
                 "--bootstrap-role=materialize",
                 f"--cluster-replica-sizes={json.dumps(cluster_replica_size_map())}",
+                f"--bootstrap-default-cluster-replica-size={bootstrap_cluster_replica_size()}",
                 *args.args,
             ]
             if args.monitoring:
