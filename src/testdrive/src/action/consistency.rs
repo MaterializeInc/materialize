@@ -191,6 +191,8 @@ async fn check_catalog_state(state: &State) -> Result<(), anyhow::Error> {
             system_parameter_defaults,
             version,
             &state.materialize.bootstrap_args,
+            // The expression cache can be taxing on the CPU and is unnecessary for consistency checks.
+            Some(false),
             |catalog| catalog.state().clone(),
         )
         .await

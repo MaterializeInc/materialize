@@ -3858,6 +3858,7 @@ pub fn serve(
                 http_host_name,
                 builtin_item_migration_config,
                 persist_client: persist_client.clone(),
+                enable_expression_cache_override: None,
                 helm_chart_version,
             },
         })

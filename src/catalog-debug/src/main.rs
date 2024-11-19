@@ -611,6 +611,7 @@ async fn upgrade_check(
             active_connection_count: Arc::new(Mutex::new(ConnectionCounter::new(0, 0))),
             builtin_item_migration_config: BuiltinItemMigrationConfig::Legacy,
             persist_client,
+            enable_expression_cache_override: None,
             helm_chart_version: None,
         },
         &mut storage,

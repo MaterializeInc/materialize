@@ -550,6 +550,7 @@ impl Catalog {
             environment_id,
             system_parameter_defaults,
             bootstrap_args,
+            None,
         )
         .await
     }
@@ -580,6 +581,7 @@ impl Catalog {
             environment_id,
             system_parameter_defaults,
             bootstrap_args,
+            None,
         )
         .await
     }
@@ -595,6 +597,7 @@ impl Catalog {
         system_parameter_defaults: BTreeMap<String, String>,
         version: semver::Version,
         bootstrap_args: &BootstrapArgs,
+        enable_expression_cache_override: Option<bool>,
     ) -> Result<Catalog, anyhow::Error> {
         let openable_storage = TestCatalogStateBuilder::new(persist_client.clone())
             .with_organization_id(environment_id.organization_id())
@@ -609,6 +612,7 @@ impl Catalog {
             Some(environment_id),
             system_parameter_defaults,
             bootstrap_args,
+            enable_expression_cache_override,
         )
         .await
     }
@@ -620,6 +624,7 @@ impl Catalog {
         environment_id: Option<EnvironmentId>,
         system_parameter_defaults: BTreeMap<String, String>,
         bootstrap_args: &BootstrapArgs,
+        enable_expression_cache_override: Option<bool>,
     ) -> Result<Catalog, anyhow::Error> {
         let metrics_registry = &MetricsRegistry::new();
         let active_connection_count = Arc::new(std::sync::Mutex::new(ConnectionCounter::new(0, 0)));
@@ -665,6 +670,7 @@ impl Catalog {
                 active_connection_count,
                 builtin_item_migration_config: BuiltinItemMigrationConfig::Legacy,
                 persist_client,
+                enable_expression_cache_override,
                 helm_chart_version: None,
             },
         })
