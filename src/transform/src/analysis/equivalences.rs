@@ -503,16 +503,15 @@ impl EquivalenceClasses {
         }
     }
 
-    /// Invoke `self.implications()` to propose equivalences, and then judge them to be novel or not.
+    /// Proposes new equivalences that are likely to be novel.
     ///
-    /// The method may add new classes to `self.classes`, and will return true exactly in that case.
-    /// This should eventually return `false` once `self.implications()` returns no *novel* classes,
-    /// defined as classes that when reduced (under `reduce_child`) result in at least two distinct
-    /// expressions, that do not all already have the same representative in `self.remap`.
-    ///
+    /// This method invokes `self.implications()` to propose equivalences, and then judges them to be
+    /// novel or not based on existing knowledge, reducing the equivalences down to their novel core.
     /// This method may produce non-novel equivalences, due to its inability to perform `MSE::reduce`.
     /// We can end up with e.g. constant expressions that cannot be found until they are so reduced.
-    fn expand(&mut self) -> Vec<Vec<MirScalarExpr>> {
+    /// The novelty detection is best-effort, and meant to provide a clearer signal and minimize the
+    /// number of times we call and amount of work we do in `self.refresh()`.
+    fn expand(&self) -> Vec<Vec<MirScalarExpr>> {
         // Consider expanding `self.classes` with novel equivalences.
         let mut novel = self.implications();
         for class in novel.iter_mut() {
@@ -599,7 +598,7 @@ impl EquivalenceClasses {
         // just simplify it away learning nothing.
         for class in self.classes.iter() {
             for expr in class.iter() {
-                // Record-forming expressions can their accessors and their members.
+                // Record-forming expressions can equate their accessors and their members.
                 if let MirScalarExpr::CallVariadic {
                     func: mz_expr::VariadicFunc::RecordCreate { .. },
                     exprs,
