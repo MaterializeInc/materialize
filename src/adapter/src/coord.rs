@@ -2687,9 +2687,10 @@ impl Coordinator {
                 CatalogItem::Table(table) => {
                     match &table.data_source {
                         TableDataSource::TableWrites { defaults: _ } => {
-                            let collections_descs = table.collection_descs().map(|(gid, desc)| {
-                                (gid, CollectionDescription::for_table(desc.clone()))
-                            });
+                            let collections_descs =
+                                table.collection_descs().map(|(gid, version, desc)| {
+                                    (gid, CollectionDescription::for_table(desc.clone(), version))
+                                });
                             collections.extend(collections_descs);
                         }
                         TableDataSource::DataSource {
@@ -2698,9 +2699,10 @@ impl Coordinator {
                         } => {
                             // TODO(alter_table): Support versioning tables that read from sources.
                             soft_assert_eq_or_log!(table.collections.len(), 1);
-                            let collection_descs = table.collection_descs().map(|(gid, desc)| {
-                                (gid, source_desc(data_source_desc, &desc, timeline))
-                            });
+                            let collection_descs =
+                                table.collection_descs().map(|(gid, _version, desc)| {
+                                    (gid, source_desc(data_source_desc, &desc, timeline))
+                                });
                             collections.extend(collection_descs);
                         }
                     };
