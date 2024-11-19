@@ -488,7 +488,14 @@ where
                 } else {
                     let frontier = input.frontier().frontier();
                     if !frontier.less_than(&expiration) && !warned {
-                        tracing::error!(
+                        // Here, we print a warning, not an error. The state is only a liveness
+                        // concern, but not relevant for correctness. Additionally, a race between
+                        // shutting down the dataflow and dropping the token can cause the dataflow
+                        // to shut down before we drop the token.  This can happen when dropping
+                        // the last remaining capability on a different worker.  We do not want to
+                        // log an error every time this happens.
+
+                        tracing::warn!(
                             name = name,
                             frontier = ?frontier,
                             expiration = ?expiration,
