@@ -313,7 +313,7 @@ spec:
     limits:
       memory: 16Gi
     requests:
-      cpu: 2
+      cpu: "2"
       memory: 16Gi
   balancerdResourceRequirements:
     limits:
