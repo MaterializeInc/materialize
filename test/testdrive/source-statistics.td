@@ -159,20 +159,30 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 # We can't control this, so have to accept the range.
 > SELECT
     s.name,
-    bool_and(u.snapshot_committed),
     SUM(u.messages_received),
-    SUM(u.updates_staged) BETWEEN 3 AND 11,
-    SUM(u.updates_committed) BETWEEN 3 AND 11,
-    SUM(u.bytes_received) > 0,
-    SUM(u.bytes_indexed) > 0,
-    SUM(u.records_indexed),
-    bool_and(u.rehydration_latency IS NOT NULL)
+    SUM(u.bytes_received) > 0
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('upsert')
   GROUP BY s.name
   ORDER BY s.name
-upsert true 18 true true true true 3 true
+upsert 18 true
+
+# Upsert stats are on the UPSERT sub source/table, not the main source.
+> SELECT
+    t.name,
+    bool_and(u.snapshot_committed),
+    SUM(u.updates_staged) BETWEEN 3 AND 11,
+    SUM(u.updates_committed) BETWEEN 3 AND 11,
+    SUM(u.bytes_indexed) > 0,
+    SUM(u.records_indexed),
+    bool_and(u.rehydration_latency IS NOT NULL)
+  FROM mz_tables t
+  JOIN mz_internal.mz_source_statistics_raw u ON t.id = u.id
+  WHERE t.name IN ('upsert_tbl')
+  GROUP BY t.name
+  ORDER BY t.name
+upsert_tbl true true true true 3 true
 
 # While we can't control how batching works above, we can ensure that this new, later update
 # causes 1 more messages to be received, which is 1 update, a delete.
@@ -181,49 +191,64 @@ upsert true 18 true true true true 3 true
 $ set-from-sql var=updates-committed
 SELECT
     (SUM(u.updates_committed) + 1)::text
-  FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
-  WHERE s.name IN ('upsert')
+  FROM mz_tables t
+  JOIN mz_internal.mz_source_statistics_raw u ON t.id = u.id
+  WHERE t.name IN ('upsert_tbl')
 
 $ set-from-sql var=state-bytes
 SELECT
     (SUM(u.bytes_indexed))::text
-  FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
-  WHERE s.name IN ('upsert')
+  FROM mz_tables t
+  JOIN mz_internal.mz_source_statistics u ON t.id = u.id
+  WHERE t.name IN ('upsert_tbl')
 
 $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} schema=${schema}
 {"key": "mammalmore"}
 
 > SELECT s.name,
-    bool_and(u.snapshot_committed),
     SUM(u.messages_received),
-    SUM(u.updates_staged),
-    SUM(u.updates_committed),
-    SUM(u.bytes_received) > 0,
-    SUM(u.bytes_indexed) < ${state-bytes},
-    SUM(u.records_indexed)
+    SUM(u.bytes_received) > 0
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('upsert')
   GROUP BY s.name
   ORDER BY s.name
-upsert true 20 "${updates-committed}" "${updates-committed}" true true 2
+upsert 20 true
+
+> SELECT t.name,
+    bool_and(u.snapshot_committed),
+    SUM(u.updates_staged),
+    SUM(u.updates_committed),
+    SUM(u.bytes_indexed) < ${state-bytes},
+    SUM(u.records_indexed)
+  FROM mz_tables t
+  JOIN mz_internal.mz_source_statistics_raw u ON t.id = u.id
+  WHERE t.name IN ('upsert_tbl')
+  GROUP BY t.name
+  ORDER BY t.name
+upsert_tbl true "${updates-committed}" "${updates-committed}" true 2
 
 # check pre-aggregated view
+
 > SELECT s.name,
-    u.snapshot_committed,
     u.messages_received,
-    u.updates_staged,
-    u.updates_committed,
-    u.bytes_received > 0,
-    u.bytes_indexed < ${state-bytes},
-    u.records_indexed,
-    u.rehydration_latency IS NOT NULL
+    u.bytes_received > 0
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('upsert')
-upsert true 20 "${updates-committed}" "${updates-committed}" true true 2 true
+upsert 20 true
+
+> SELECT t.name,
+    u.snapshot_committed,
+    u.updates_staged,
+    u.updates_committed,
+    u.bytes_indexed < ${state-bytes},
+    u.records_indexed,
+    u.rehydration_latency IS NOT NULL
+  FROM mz_tables t
+  JOIN mz_internal.mz_source_statistics u ON t.id = u.id
+  WHERE t.name IN ('upsert_tbl')
+upsert_tbl true "${updates-committed}" "${updates-committed}" true 2 true
 
 > DROP SOURCE upsert CASCADE
 

@@ -41,7 +41,7 @@ use timely::progress::{Antichain, Timestamp};
 use crate::decode::{render_decode_cdcv2, render_decode_delimited};
 use crate::healthcheck::{HealthStatusMessage, StatusNamespace};
 use crate::source::types::{DecodeResult, SourceOutput, SourceRender};
-use crate::source::{self, RawSourceCreationConfig};
+use crate::source::{self, RawSourceCreationConfig, SourceExportCreationConfig};
 use crate::upsert::UpsertKey;
 
 /// The output index for health streams, used to handle multiplexed streams
@@ -302,6 +302,18 @@ where
                             backpressure_metrics,
                         )
                     };
+
+                    let export_statistics = storage_state
+                        .aggregated_statistics
+                        .get_source(&export_id)
+                        .expect("statistics initialized")
+                        .clone();
+                    let export_config = SourceExportCreationConfig {
+                        id: export_id,
+                        worker_id: base_source_config.worker_id,
+                        metrics: base_source_config.metrics.clone(),
+                        source_statistics: export_statistics,
+                    };
                     let (upsert, health_update, snapshot_progress, upsert_token) =
                         crate::upsert::upsert(
                             &upsert_input.enter(scope),
@@ -309,7 +321,7 @@ where
                             refine_antichain(&resume_upper),
                             previous,
                             previous_token,
-                            base_source_config.clone(),
+                            export_config,
                             &storage_state.instance_context,
                             &storage_state.storage_configuration,
                             &storage_state.dataflow_parameters,

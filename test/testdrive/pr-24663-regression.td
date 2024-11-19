@@ -122,11 +122,11 @@ $ kafka-ingest format=avro topic=dbz-no-before key-format=avro key-schema=${keys
     bool_and(u.snapshot_committed),
     SUM(u.bytes_indexed) > 0,
     SUM(u.records_indexed)
-  FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
-  WHERE s.name IN ('dbz_no_before')
-  GROUP BY s.name
-  ORDER BY s.name
+  FROM mz_tables t
+  JOIN mz_internal.mz_source_statistics_raw u ON t.id = u.id
+  WHERE t.name IN ('dbz_no_before_tbl')
+  GROUP BY t.name
+  ORDER BY t.name
 true ${arg.leaves-tombstones} 0
 
 
@@ -142,11 +142,11 @@ id creature
     bool_and(u.snapshot_committed),
     SUM(u.bytes_indexed) > 0,
     SUM(u.records_indexed)
-  FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
-  WHERE s.name IN ('dbz_no_before')
-  GROUP BY s.name
-  ORDER BY s.name
+  FROM mz_tables t
+  JOIN mz_internal.mz_source_statistics_raw u ON t.id = u.id
+  WHERE t.name IN ('dbz_no_before_tbl')
+  GROUP BY t.name
+  ORDER BY t.name
 true true 1
 
 $ kafka-ingest format=avro topic=dbz-no-before key-format=avro key-schema=${keyschema} schema=${schema} timestamp=1
@@ -161,9 +161,9 @@ $ kafka-ingest format=avro topic=dbz-no-before key-format=avro key-schema=${keys
     bool_and(u.snapshot_committed),
     SUM(u.bytes_indexed) > 0,
     SUM(u.records_indexed)
-  FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
-  WHERE s.name IN ('dbz_no_before')
-  GROUP BY s.name
-  ORDER BY s.name
+  FROM mz_tables t
+  JOIN mz_internal.mz_source_statistics_raw u ON t.id = u.id
+  WHERE t.name IN ('dbz_no_before_tbl')
+  GROUP BY t.name
+  ORDER BY t.name
 true ${arg.leaves-tombstones} 0
