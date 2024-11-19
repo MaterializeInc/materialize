@@ -64,20 +64,37 @@ spec:
           initialDelaySeconds: 5
           periodSeconds: 10
           timeoutSeconds: 5
-      initContainers:
-      - name: create-buckets
-        image: minio/mc
-        env:
-        - name: MINIO_ACCESS_KEY
-          value: "minio"
-        - name: MINIO_SECRET_KEY
-          value: "minio123"
-        command: ["/bin/sh", "-c"]
-        args:
-        - |
-          mc alias set myminio http://minio:9000 minio minio123 && \
-          mc mb -p myminio/persist && \
-          mc mb -p local/bucket
+        lifecycle:
+          postStart:
+            exec:
+              command:
+                - "bash"
+                - "-euc"
+                - |
+                  function setup_buckets() {
+                      while true; do
+                          echo "Waiting for minio to become ready..."
+                          if curl --fail localhost:9000/minio/health/ready; then
+                              echo "Minio is ready"
+                              break
+                          fi
+                          sleep 1
+                      done
+
+                      echo "Creating local alias"
+                      mc alias set local http://localhost:9000 minio minio123
+                      echo $?
+
+                      echo "Creating local/persist bucket"
+                      mc mb -p local/persist
+                      echo $?
+
+                      echo "Creating local/bucket bucket"
+                      mc mb -p local/bucket
+                      echo $?
+                  }
+
+                  setup_buckets 2>&1 > poststart.log
       volumes:
       - name: storage
         emptyDir: {}
