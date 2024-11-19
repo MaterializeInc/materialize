@@ -788,7 +788,7 @@ class Composition:
             capture_and_print=capture_and_print,
             stdin=stdin,
             check=check,
-            environment=env_extra,
+            environment=os.environ | env_extra,
         )
 
     def run_testdrive_files(
