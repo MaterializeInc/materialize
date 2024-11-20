@@ -7,16 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-syntax = "proto3";
+pub use crate::row::collection::*;
 
-package mz_repr.row.collection;
-
-message ProtoRowCollection {
-  bytes encoded = 1;
-  repeated ProtoEncodedRowMetadata metadata = 2;
-}
-
-message ProtoEncodedRowMetadata {
-  uint64 offset = 1;
-  uint64 diff = 2;
-}
+mod collection;

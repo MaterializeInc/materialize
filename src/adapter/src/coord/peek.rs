@@ -28,6 +28,7 @@ use mz_compute_types::dataflows::{DataflowDescription, IndexImport};
 use mz_compute_types::ComputeInstanceId;
 use mz_controller_types::ClusterId;
 use mz_expr::explain::{fmt_text_constant_rows, HumanizedExplain, HumanizerMode};
+use mz_expr::row::RowCollection;
 use mz_expr::{
     permutation_for_arrangement, EvalError, Id, MirRelationExpr, MirScalarExpr,
     OptimizedMirRelationExpr, RowSetFinishing,
@@ -37,7 +38,7 @@ use mz_ore::str::{separated, StrExt};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::explain::text::DisplayText;
 use mz_repr::explain::{CompactScalars, IndexUsageType, PlanRenderingContext, UsedIndexes};
-use mz_repr::{Diff, GlobalId, IntoRowIterator, RelationType, Row, RowCollection, RowIterator};
+use mz_repr::{Diff, GlobalId, IntoRowIterator, RelationType, Row, RowIterator};
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp;
 use uuid::Uuid;
@@ -481,7 +482,7 @@ impl crate::coord::Coordinator {
                     ));
                 }
             }
-            let row_collection = RowCollection::new(&results);
+            let row_collection = RowCollection::new(results, &finishing.order_by);
             let duration_histogram = self.metrics.row_set_finishing_seconds();
 
             let (ret, reason) = match finishing.finish(

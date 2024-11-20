@@ -58,7 +58,6 @@ pub use crate::relation::{
     RelationDesc, RelationDescBuilder, RelationType, RelationVersion, RelationVersionSelector,
     VersionedRelationDesc,
 };
-pub use crate::row::collection::{ProtoRowCollection, RowCollection, SortedRowCollectionIter};
 pub use crate::row::encode::{preserves_order, RowColumnarDecoder, RowColumnarEncoder};
 pub use crate::row::iter::{IntoRowIterator, RowIterator};
 pub use crate::row::{

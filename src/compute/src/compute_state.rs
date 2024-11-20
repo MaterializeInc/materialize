@@ -32,6 +32,7 @@ use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::flat_plan::FlatPlan;
 use mz_compute_types::plan::LirId;
 use mz_dyncfg::ConfigSet;
+use mz_expr::row::RowCollection;
 use mz_expr::SafeMfpPlan;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::UIntGauge;
@@ -44,7 +45,7 @@ use mz_persist_client::read::ReadHandle;
 use mz_persist_client::Diagnostics;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::fixed_length::ToDatumIter;
-use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena, RowCollection, Timestamp};
+use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena, Timestamp};
 use mz_storage_operators::stats::StatsCursor;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::sources::SourceData;
@@ -1078,6 +1079,7 @@ impl PendingPeek {
             .map(|l| usize::cast_from(u64::from(l)))
             .unwrap_or(usize::MAX)
             + peek.finishing.offset;
+        let order_by = peek.finishing.order_by.clone();
 
         let task_handle = mz_ore::task::spawn(|| "persist::peek", async move {
             let start = Instant::now();
@@ -1095,7 +1097,7 @@ impl PendingPeek {
                 Ok(vec![])
             };
             let result = match result {
-                Ok(rows) => PeekResponse::Rows(RowCollection::new(&rows)),
+                Ok(rows) => PeekResponse::Rows(RowCollection::new(rows, &order_by)),
                 Err(e) => PeekResponse::Error(e.to_string()),
             };
             match result_tx.send((result, start.elapsed())) {
@@ -1297,7 +1299,7 @@ impl IndexPeek {
         }
 
         let response = match self.collect_finished_data(max_result_size) {
-            Ok(rows) => PeekResponse::Rows(RowCollection::new(&rows)),
+            Ok(rows) => PeekResponse::Rows(RowCollection::new(rows, &self.peek.finishing.order_by)),
             Err(text) => PeekResponse::Error(text),
         };
         Some(response)

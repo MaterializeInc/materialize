@@ -25,6 +25,7 @@ mod relation;
 mod scalar;
 
 pub mod explain;
+pub mod row;
 pub mod virtual_syntax;
 pub mod visit;
 

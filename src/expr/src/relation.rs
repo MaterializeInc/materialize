@@ -34,8 +34,8 @@ use mz_repr::explain::{
     DummyHumanizer, ExplainConfig, ExprHumanizer, IndexUsageType, PlanRenderingContext,
 };
 use mz_repr::{
-    ColumnName, ColumnType, Datum, Diff, GlobalId, IntoRowIterator, RelationType, Row,
-    RowCollection, RowIterator, RowRef, ScalarType, SortedRowCollectionIter,
+    ColumnName, ColumnType, Datum, Diff, GlobalId, IntoRowIterator, RelationType, Row, RowIterator,
+    ScalarType,
 };
 use proptest::prelude::{any, Arbitrary, BoxedStrategy};
 use proptest::strategy::{Strategy, Union};
@@ -45,6 +45,7 @@ use timely::container::columnation::{Columnation, CopyRegion};
 
 use crate::explain::{HumanizedExpr, HumanizerMode};
 use crate::relation::func::{AggregateFunc, LagLeadType, TableFunc};
+use crate::row::{RowCollection, SortedRowCollectionIter};
 use crate::visit::{Visit, VisitChildren};
 use crate::Id::Local;
 use crate::{
@@ -3555,17 +3556,7 @@ impl RowSetFinishing {
             return Err(format!("result exceeds max size of {max_bytes}",));
         }
 
-        let mut left_datum_vec = mz_repr::DatumVec::new();
-        let mut right_datum_vec = mz_repr::DatumVec::new();
-
-        let sort_by = |left: &RowRef, right: &RowRef| {
-            let left_datums = left_datum_vec.borrow_with(left);
-            let right_datums = right_datum_vec.borrow_with(right);
-            compare_columns(&self.order_by, &left_datums, &right_datums, || {
-                left.cmp(right)
-            })
-        };
-        let sorted_view = rows.sorted_view(sort_by);
+        let sorted_view = rows.sorted_view(&self.order_by);
         let mut iter = sorted_view
             .into_row_iter()
             .apply_offset(self.offset)

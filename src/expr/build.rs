@@ -28,12 +28,14 @@ fn main() {
         .extern_path(".mz_repr.strconv", "::mz_repr::strconv")
         .type_attribute(".", "#[allow(missing_docs)]")
         .btree_map(["."])
+        .bytes([".mz_expr.row.collection"])
         .compile_protos(
             &[
                 "expr/src/id.proto",
                 "expr/src/linear.proto",
                 "expr/src/relation.proto",
                 "expr/src/relation/func.proto",
+                "expr/src/row/collection.proto",
                 "expr/src/scalar.proto",
                 "expr/src/scalar/func/format.proto",
                 "expr/src/scalar/like_pattern.proto",

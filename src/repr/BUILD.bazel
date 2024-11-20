@@ -127,7 +127,6 @@ filegroup(
         "src/relation_and_scalar.proto",
         "src/role_id.proto",
         "src/row.proto",
-        "src/row/collection.proto",
         "src/strconv.proto",
         "src/timestamp.proto",
         "src/url.proto",
