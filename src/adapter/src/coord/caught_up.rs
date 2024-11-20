@@ -327,7 +327,9 @@ impl Coordinator {
                 CollectionType::Storage => self.controller.storage.collection_hydrated(id)?,
             };
 
-            if within_lag && collection_hydrated {
+            // We don't expect collections to get hydrated, ingestions to be
+            // started, etc. when they are already at the empty write frontier.
+            if live_write_frontier.is_empty() || (within_lag && collection_hydrated) {
                 // This is a bit spammy, but log caught-up collections while we
                 // investigate why environments are cutting over but then a lot
                 // of compute collections are _not_ in fact hydrated on
