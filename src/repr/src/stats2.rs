@@ -13,12 +13,13 @@
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
-use std::fmt::Formatter;
+use std::fmt::{Debug, Formatter};
 
 use anyhow::Context;
 use arrow::array::{BinaryArray, FixedSizeBinaryArray};
 use chrono::{NaiveDateTime, NaiveTime};
 use dec::OrderedDecimal;
+use mz_ore::soft_panic_or_log;
 use mz_persist_types::columnar::FixedSizeCodec;
 use mz_persist_types::stats::bytes::{BytesStats, FixedSizeBytesStats, FixedSizeBytesStatsKind};
 use mz_persist_types::stats::json::{JsonMapElementStats, JsonStats};
@@ -41,6 +42,16 @@ use crate::adt::numeric::{Numeric, PackedNumeric};
 use crate::adt::timestamp::{CheckedTimestamp, PackedNaiveDateTime};
 use crate::row::ProtoDatum;
 use crate::{Datum, RowArena, ScalarType};
+
+fn soft_expect_or_log<A, B: Debug>(result: Result<A, B>) -> Option<A> {
+    match result {
+        Ok(a) => Some(a),
+        Err(e) => {
+            soft_panic_or_log!("failed to decode stats: {e:?}");
+            None
+        }
+    }
+}
 
 /// Return the stats for a fixed-size bytes column, defaulting to an appropriate value if
 /// no values are present.
@@ -90,22 +101,22 @@ pub fn col_values<'a>(
     typ: &ScalarType,
     stats: &'a ColumnStatKinds,
     arena: &'a RowArena,
-) -> (Option<Datum<'a>>, Option<Datum<'a>>) {
+) -> Option<(Datum<'a>, Datum<'a>)> {
     use PrimitiveStatsVariants::*;
 
     /// Helper method to map the lower and upper bounds of some stats to Datums.
-    fn map_stats<'a, T, F>(stats: &'a T, f: F) -> (Option<Datum<'a>>, Option<Datum<'a>>)
+    fn map_stats<'a, T, F>(stats: &'a T, f: F) -> Option<(Datum<'a>, Datum<'a>)>
     where
         T: ColumnStats,
         F: Fn(T::Ref<'a>) -> Datum<'a>,
     {
-        (stats.lower().map(&f), stats.upper().map(&f))
+        Some((f(stats.lower()?), f(stats.upper()?)))
     }
 
     match (typ, stats) {
         (ScalarType::Bool, ColumnStatKinds::Primitive(Bool(stats))) => {
             let map_datum = |val| if val { Datum::True } else { Datum::False };
-            (stats.lower().map(map_datum), stats.upper().map(map_datum))
+            map_stats(stats, map_datum)
         }
         (ScalarType::PgLegacyChar, ColumnStatKinds::Primitive(U8(stats))) => {
             map_stats(stats, Datum::UInt8)
@@ -147,16 +158,12 @@ pub fn col_values<'a>(
                 kind: FixedSizeBytesStatsKind::PackedNumeric,
             })),
         ) => {
-            let lower = PackedNumeric::from_bytes(lower)
-                .expect("failed to roundtrip Numeric")
-                .into_value();
-            let upper = PackedNumeric::from_bytes(upper)
-                .expect("failed to roundtrip Numeric")
-                .into_value();
-            (
-                Some(Datum::Numeric(OrderedDecimal(lower))),
-                Some(Datum::Numeric(OrderedDecimal(upper))),
-            )
+            let lower = soft_expect_or_log(PackedNumeric::from_bytes(lower))?.into_value();
+            let upper = soft_expect_or_log(PackedNumeric::from_bytes(upper))?.into_value();
+            Some((
+                Datum::Numeric(OrderedDecimal(lower)),
+                Datum::Numeric(OrderedDecimal(upper)),
+            ))
         }
         (
             ScalarType::String
@@ -165,75 +172,58 @@ pub fn col_values<'a>(
             | ScalarType::VarChar { .. },
             ColumnStatKinds::Primitive(String(stats)),
         ) => map_stats(stats, Datum::String),
-        (ScalarType::Bytes, ColumnStatKinds::Bytes(BytesStats::Primitive(stats))) => (
-            Some(Datum::Bytes(&stats.lower)),
-            Some(Datum::Bytes(&stats.upper)),
-        ),
-        (ScalarType::Date, ColumnStatKinds::Primitive(I32(stats))) => map_stats(stats, |x| {
-            Datum::Date(Date::from_pg_epoch(x).expect("failed to roundtrip Date"))
-        }),
+        (ScalarType::Bytes, ColumnStatKinds::Bytes(BytesStats::Primitive(stats))) => {
+            Some((Datum::Bytes(&stats.lower), Datum::Bytes(&stats.upper)))
+        }
+        (ScalarType::Date, ColumnStatKinds::Primitive(I32(stats))) => {
+            let lower = soft_expect_or_log(Date::from_pg_epoch(stats.lower))?;
+            let upper = soft_expect_or_log(Date::from_pg_epoch(stats.upper))?;
+            Some((Datum::Date(lower), Datum::Date(upper)))
+        }
         (ScalarType::Time, ColumnStatKinds::Bytes(BytesStats::FixedSize(stats))) => {
-            let lower = PackedNaiveTime::from_bytes(&stats.lower)
-                .expect("failed to roundtrip NaiveTime")
-                .into_value();
-            let upper = PackedNaiveTime::from_bytes(&stats.upper)
-                .expect("failed to roundtrip NaiveTime")
-                .into_value();
-
-            (Some(Datum::Time(lower)), Some(Datum::Time(upper)))
+            let lower = soft_expect_or_log(PackedNaiveTime::from_bytes(&stats.lower))?.into_value();
+            let upper = soft_expect_or_log(PackedNaiveTime::from_bytes(&stats.upper))?.into_value();
+            Some((Datum::Time(lower), Datum::Time(upper)))
         }
         (ScalarType::Timestamp { .. }, ColumnStatKinds::Bytes(BytesStats::FixedSize(stats))) => {
-            let lower = PackedNaiveDateTime::from_bytes(&stats.lower)
-                .expect("failed to roundtrip PackedNaiveDateTime")
-                .into_value();
+            let lower =
+                soft_expect_or_log(PackedNaiveDateTime::from_bytes(&stats.lower))?.into_value();
             let lower =
                 CheckedTimestamp::from_timestamplike(lower).expect("failed to roundtrip timestamp");
-            let upper = PackedNaiveDateTime::from_bytes(&stats.upper)
-                .expect("failed to roundtrip Timestamp")
-                .into_value();
+            let upper =
+                soft_expect_or_log(PackedNaiveDateTime::from_bytes(&stats.upper))?.into_value();
             let upper =
                 CheckedTimestamp::from_timestamplike(upper).expect("failed to roundtrip timestamp");
 
-            (Some(Datum::Timestamp(lower)), Some(Datum::Timestamp(upper)))
+            Some((Datum::Timestamp(lower), Datum::Timestamp(upper)))
         }
         (ScalarType::TimestampTz { .. }, ColumnStatKinds::Bytes(BytesStats::FixedSize(stats))) => {
-            let lower = PackedNaiveDateTime::from_bytes(&stats.lower)
-                .expect("failed to roundtrip PackedNaiveDateTime")
+            let lower = soft_expect_or_log(PackedNaiveDateTime::from_bytes(&stats.lower))?
                 .into_value()
                 .and_utc();
-            let lower =
-                CheckedTimestamp::from_timestamplike(lower).expect("failed to roundtrip timestamp");
-            let upper = PackedNaiveDateTime::from_bytes(&stats.upper)
-                .expect("failed to roundtrip Timestamp")
+            let lower = soft_expect_or_log(CheckedTimestamp::from_timestamplike(lower))?;
+            let upper = soft_expect_or_log(PackedNaiveDateTime::from_bytes(&stats.upper))?
                 .into_value()
                 .and_utc();
-            let upper =
-                CheckedTimestamp::from_timestamplike(upper).expect("failed to roundtrip timestamp");
+            let upper = soft_expect_or_log(CheckedTimestamp::from_timestamplike(upper))?;
 
-            (
-                Some(Datum::TimestampTz(lower)),
-                Some(Datum::TimestampTz(upper)),
-            )
+            Some((Datum::TimestampTz(lower), Datum::TimestampTz(upper)))
         }
         (ScalarType::MzTimestamp, ColumnStatKinds::Primitive(U64(stats))) => {
             map_stats(stats, |x| Datum::MzTimestamp(crate::Timestamp::from(x)))
         }
         (ScalarType::Interval, ColumnStatKinds::Bytes(BytesStats::FixedSize(stats))) => {
-            let lower = PackedInterval::from_bytes(&stats.lower)
-                .map(|x| x.into_value())
-                .expect("failed to roundtrip Interval");
-            let upper = PackedInterval::from_bytes(&stats.upper)
-                .map(|x| x.into_value())
-                .expect("failed to roundtrip Interval");
-            (Some(Datum::Interval(lower)), Some(Datum::Interval(upper)))
+            let lower = soft_expect_or_log(PackedInterval::from_bytes(&stats.lower))?.into_value();
+            let upper = soft_expect_or_log(PackedInterval::from_bytes(&stats.upper))?.into_value();
+            Some((Datum::Interval(lower), Datum::Interval(upper)))
         }
         (ScalarType::Uuid, ColumnStatKinds::Bytes(BytesStats::FixedSize(stats))) => {
-            let lower = Uuid::from_slice(&stats.lower).expect("failed to roundtrip Uuid");
-            let upper = Uuid::from_slice(&stats.upper).expect("failed to roundtrip Uuid");
-            (Some(Datum::Uuid(lower)), Some(Datum::Uuid(upper)))
+            let lower = soft_expect_or_log(Uuid::from_slice(&stats.lower))?;
+            let upper = soft_expect_or_log(Uuid::from_slice(&stats.upper))?;
+            Some((Datum::Uuid(lower), Datum::Uuid(upper)))
         }
         // JSON stats are handled elsewhere.
-        (ScalarType::Jsonb, ColumnStatKinds::Bytes(BytesStats::Json(_))) => (None, None),
+        (ScalarType::Jsonb, ColumnStatKinds::Bytes(BytesStats::Json(_))) => None,
         // We don't maintain stats on any of these types.
         (
             ScalarType::AclItem
@@ -245,7 +235,7 @@ pub fn col_values<'a>(
             | ScalarType::Record { .. }
             | ScalarType::Int2Vector,
             ColumnStatKinds::None,
-        ) => (None, None),
+        ) => None,
         // V0 Columnar Stat Types that differ from the above.
         (
             ScalarType::Numeric { .. }
@@ -267,11 +257,11 @@ pub fn col_values<'a>(
                     .expect("ProtoDatum should be valid Datum")
             });
 
-            (Some(lower), Some(upper))
+            Some((lower, upper))
         }
         (typ, stats) => {
             mz_ore::soft_panic_or_log!("found unexpected {stats:?} for column {typ:?}");
-            (None, None)
+            None
         }
     }
 }
