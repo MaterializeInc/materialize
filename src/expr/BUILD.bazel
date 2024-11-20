@@ -117,6 +117,7 @@ filegroup(
         "src/linear.proto",
         "src/relation.proto",
         "src/relation/func.proto",
+        "src/row/collection.proto",
         "src/scalar.proto",
         "src/scalar/func/format.proto",
         "src/scalar/like_pattern.proto",
