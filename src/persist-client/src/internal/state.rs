@@ -1338,63 +1338,64 @@ where
         });
         match existing_id {
             Some((schema_id, encoded_schemas)) => {
-                let schema_id = *schema_id;
-                let new_k_datatype = mz_persist_types::columnar::data_type::<K>(key_schema)
-                    .expect("valid key schema");
-                let new_v_datatype = mz_persist_types::columnar::data_type::<V>(val_schema)
-                    .expect("valid val schema");
+                Break(NoOpStateTransition(Some(*schema_id)))
+                // let schema_id = *schema_id;
+                // let new_k_datatype = mz_persist_types::columnar::data_type::<K>(key_schema)
+                //     .expect("valid key schema");
+                // let new_v_datatype = mz_persist_types::columnar::data_type::<V>(val_schema)
+                //     .expect("valid val schema");
 
-                let new_k_encoded_datatype = encoded_data_type(&new_k_datatype);
-                let new_v_encoded_datatype = encoded_data_type(&new_v_datatype);
+                // let new_k_encoded_datatype = encoded_data_type(&new_k_datatype);
+                // let new_v_encoded_datatype = encoded_data_type(&new_v_datatype);
 
-                // Check if the generated Arrow DataTypes have changed.
-                if encoded_schemas.key_data_type != new_k_encoded_datatype
-                    || encoded_schemas.val_data_type != new_v_encoded_datatype
-                {
-                    let old_k_datatype =
-                        decode_data_type(Bytes::clone(&encoded_schemas.key_data_type))
-                            .expect("failed to roundtrip Arrow DataType");
-                    let old_v_datatype =
-                        decode_data_type(Bytes::clone(&encoded_schemas.val_data_type))
-                            .expect("failed to roundtrip Arrow DataType");
+                // // Check if the generated Arrow DataTypes have changed.
+                // if encoded_schemas.key_data_type != new_k_encoded_datatype
+                //     || encoded_schemas.val_data_type != new_v_encoded_datatype
+                // {
+                //     let old_k_datatype =
+                //         decode_data_type(Bytes::clone(&encoded_schemas.key_data_type))
+                //             .expect("failed to roundtrip Arrow DataType");
+                //     let old_v_datatype =
+                //         decode_data_type(Bytes::clone(&encoded_schemas.val_data_type))
+                //             .expect("failed to roundtrip Arrow DataType");
 
-                    let k_atleast_as_nullable =
-                        crate::schema::is_atleast_as_nullable(&old_k_datatype, &new_k_datatype);
-                    let v_atleast_as_nullable =
-                        crate::schema::is_atleast_as_nullable(&old_v_datatype, &new_v_datatype);
+                //     let k_atleast_as_nullable =
+                //         crate::schema::is_atleast_as_nullable(&old_k_datatype, &new_k_datatype);
+                //     let v_atleast_as_nullable =
+                //         crate::schema::is_atleast_as_nullable(&old_v_datatype, &new_v_datatype);
 
-                    // If the Arrow DataType for `k` or `v` has changed, but it's only become more
-                    // nullable, then we allow in-place re-writing of the schema.
-                    match (k_atleast_as_nullable, v_atleast_as_nullable) {
-                        // TODO(parkmycar): Remove this one-time migration after v0.123 ships.
-                        (Ok(()), Ok(())) => {
-                            let key = Bytes::clone(&encoded_schemas.key);
-                            let val = Bytes::clone(&encoded_schemas.val);
-                            self.schemas.insert(
-                                schema_id,
-                                EncodedSchemas {
-                                    key,
-                                    key_data_type: new_k_encoded_datatype,
-                                    val,
-                                    val_data_type: new_v_encoded_datatype,
-                                },
-                            );
-                            Continue(Some(schema_id))
-                        }
-                        (k_err, _) => {
-                            tracing::info!(
-                                "register schemas, Arrow DataType changed\nkey: {:?}\nold: {:?}\nnew: {:?}",
-                                k_err,
-                                old_k_datatype,
-                                new_k_datatype,
-                            );
-                            Break(NoOpStateTransition(None))
-                        }
-                    }
-                } else {
-                    // Everything matches.
-                    Break(NoOpStateTransition(Some(schema_id)))
-                }
+                //     // If the Arrow DataType for `k` or `v` has changed, but it's only become more
+                //     // nullable, then we allow in-place re-writing of the schema.
+                //     match (k_atleast_as_nullable, v_atleast_as_nullable) {
+                //         // TODO(parkmycar): Remove this one-time migration after v0.123 ships.
+                //         (Ok(()), Ok(())) => {
+                //             let key = Bytes::clone(&encoded_schemas.key);
+                //             let val = Bytes::clone(&encoded_schemas.val);
+                //             self.schemas.insert(
+                //                 schema_id,
+                //                 EncodedSchemas {
+                //                     key,
+                //                     key_data_type: new_k_encoded_datatype,
+                //                     val,
+                //                     val_data_type: new_v_encoded_datatype,
+                //                 },
+                //             );
+                //             Continue(Some(schema_id))
+                //         }
+                //         (k_err, _) => {
+                //             tracing::info!(
+                //                 "register schemas, Arrow DataType changed\nkey: {:?}\nold: {:?}\nnew: {:?}",
+                //                 k_err,
+                //                 old_k_datatype,
+                //                 new_k_datatype,
+                //             );
+                //             Break(NoOpStateTransition(None))
+                //         }
+                //     }
+                // } else {
+                //     // Everything matches.
+                //     Break(NoOpStateTransition(Some(schema_id)))
+                // }
             }
             None if self.is_tombstone() => {
                 // TODO: Is this right?
