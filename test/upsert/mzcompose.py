@@ -170,6 +170,8 @@ def workflow_rehydration(c: Composition) -> None:
                     "--orchestrator-process-scratch-directory=/scratch",
                 ],
                 additional_system_parameter_defaults={
+                    "storage_statistics_collection_interval": "1000",
+                    "storage_statistics_interval": "2000",
                     "enable_unorchestrated_cluster_replicas": "true",
                     "disk_cluster_replicas_default": "true",
                     "enable_disk_cluster_replicas": "true",
@@ -199,6 +201,8 @@ def workflow_rehydration(c: Composition) -> None:
                     "--orchestrator-process-scratch-directory=/scratch",
                 ],
                 additional_system_parameter_defaults={
+                    "storage_statistics_collection_interval": "1000",
+                    "storage_statistics_interval": "2000",
                     "enable_unorchestrated_cluster_replicas": "true",
                     "disk_cluster_replicas_default": "true",
                     "enable_disk_cluster_replicas": "true",
@@ -230,6 +234,8 @@ def workflow_rehydration(c: Composition) -> None:
                     "--orchestrator-process-scratch-directory=/scratch",
                 ],
                 additional_system_parameter_defaults={
+                    "storage_statistics_collection_interval": "1000",
+                    "storage_statistics_interval": "2000",
                     "enable_unorchestrated_cluster_replicas": "true",
                     # Force backpressure to be enabled.
                     "storage_dataflow_max_inflight_bytes": "1",
@@ -271,8 +277,8 @@ def workflow_failpoint(c: Composition) -> None:
 
     for failpoint in [
         (
-            "fail_consolidate_snapshot_chunk",
-            "upsert: Failed to rehydrate state: Error consolidating snapshot values",
+            "fail_consolidate_chunk",
+            "upsert: Failed to rehydrate state: Error consolidating values",
         ),
         (
             "fail_state_multi_put",
@@ -484,7 +490,7 @@ def workflow_autospill(c: Composition) -> None:
                 additional_system_parameter_defaults={
                     "disk_cluster_replicas_default": "true",
                     "upsert_rocksdb_auto_spill_to_disk": "true",
-                    "upsert_rocksdb_auto_spill_threshold_bytes": "250",
+                    "upsert_rocksdb_auto_spill_threshold_bytes": "290",
                     "enable_unorchestrated_cluster_replicas": "true",
                     "storage_dataflow_delay_sources_past_rehydration": "true",
                 },
@@ -499,7 +505,7 @@ def workflow_autospill(c: Composition) -> None:
                 additional_system_parameter_defaults={
                     "disk_cluster_replicas_default": "true",
                     "upsert_rocksdb_auto_spill_to_disk": "true",
-                    "upsert_rocksdb_auto_spill_threshold_bytes": "250",
+                    "upsert_rocksdb_auto_spill_threshold_bytes": "290",
                     "enable_unorchestrated_cluster_replicas": "true",
                     "storage_dataflow_delay_sources_past_rehydration": "true",
                     # Enable the RocksDB merge operator

@@ -24,23 +24,23 @@ use super::types::{
 };
 use super::UpsertKey;
 
-pub enum BackendType<O> {
-    InMemory(InMemoryHashMap<O>),
-    RocksDb(RocksDB<O>),
+pub enum BackendType<T, O> {
+    InMemory(InMemoryHashMap<T, O>),
+    RocksDb(RocksDB<T, O>),
 }
 
-pub struct AutoSpillBackend<O, F> {
-    backend_type: BackendType<O>,
+pub struct AutoSpillBackend<T, O, F> {
+    backend_type: BackendType<T, O>,
     auto_spill_threshold_bytes: usize,
     rocksdb_autospill_in_use: Arc<DeleteOnDropGauge<'static, AtomicU64, Vec<String>>>,
     rocksdb_init_fn: Option<F>,
 }
 
-impl<O, F, Fut> AutoSpillBackend<O, F>
+impl<T, O, F, Fut> AutoSpillBackend<T, O, F>
 where
     O: Clone + Send + Sync + Serialize + DeserializeOwned + 'static,
     F: FnOnce() -> Fut + 'static,
-    Fut: std::future::Future<Output = RocksDB<O>>,
+    Fut: std::future::Future<Output = RocksDB<T, O>>,
 {
     pub(crate) fn new(
         rocksdb_init_fn: F,
@@ -59,11 +59,12 @@ where
 }
 
 #[async_trait::async_trait(?Send)]
-impl<O, F, Fut> UpsertStateBackend<O> for AutoSpillBackend<O, F>
+impl<T, O, F, Fut> UpsertStateBackend<T, O> for AutoSpillBackend<T, O, F>
 where
     O: Clone + Send + Sync + Serialize + DeserializeOwned + 'static,
+    T: Clone + Send + Sync + Serialize + DeserializeOwned + 'static,
     F: FnOnce() -> Fut + 'static,
-    Fut: std::future::Future<Output = RocksDB<O>>,
+    Fut: std::future::Future<Output = RocksDB<T, O>>,
 {
     fn supports_merge(&self) -> bool {
         // We only support merge if the backend supports it; the in-memory backend does not
@@ -76,7 +77,7 @@ where
 
     async fn multi_put<P>(&mut self, puts: P) -> Result<PutStats, anyhow::Error>
     where
-        P: IntoIterator<Item = (UpsertKey, PutValue<StateValue<O>>)>,
+        P: IntoIterator<Item = (UpsertKey, PutValue<StateValue<T, O>>)>,
     {
         // Note that we never revert back to memory if the size shrinks below the threshold.
         // That case is considered rare and not worth the complexity.
@@ -88,7 +89,7 @@ where
                     .try_into()
                     .expect("unexpected error while casting");
                 if in_memory_size > self.auto_spill_threshold_bytes {
-                    tracing::info!("spilling to disk for upsert");
+                    tracing::info!(%in_memory_size, %self.auto_spill_threshold_bytes, "spilling to disk for upsert");
                     let mut rocksdb_backend =
                         self.rocksdb_init_fn
                             .take()
@@ -123,7 +124,7 @@ where
 
     async fn multi_merge<M>(&mut self, merges: M) -> Result<MergeStats, anyhow::Error>
     where
-        M: IntoIterator<Item = (UpsertKey, MergeValue<StateValue<O>>)>,
+        M: IntoIterator<Item = (UpsertKey, MergeValue<StateValue<T, O>>)>,
     {
         match &mut self.backend_type {
             BackendType::InMemory(_) => {
@@ -140,7 +141,7 @@ where
     ) -> Result<GetStats, anyhow::Error>
     where
         G: IntoIterator<Item = UpsertKey>,
-        R: IntoIterator<Item = &'r mut UpsertValueAndSize<O>>,
+        R: IntoIterator<Item = &'r mut UpsertValueAndSize<T, O>>,
         O: 'r,
     {
         match &mut self.backend_type {
