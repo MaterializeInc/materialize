@@ -671,6 +671,7 @@ impl EquivalenceClasses {
         let mut localized = false;
         while !localized {
             localized = true;
+            let mut current_map = BTreeMap::default();
             for class in self.classes.iter_mut() {
                 if !class[0].support().iter().all(|c| remap.contains_key(c)) {
                     if let Some(pos) = class
@@ -681,16 +682,15 @@ impl EquivalenceClasses {
                         localized = false;
                     }
                 }
+                for expr in class[1..].iter() {
+                    current_map.insert(expr.clone(), class[0].clone());
+                }
             }
+
             // attempt to replace representatives with equivalent localizeable expressions.
             for class_index in 0..self.classes.len() {
                 for index in 0..self.classes[class_index].len() {
-                    let mut cloned = self.classes[class_index][index].clone();
-                    // Use `reduce_child` rather than `reduce_expr` to avoid entire expression replacement.
-                    let reduced = self.reduce_child(&mut cloned);
-                    if reduced {
-                        self.classes[class_index][index] = cloned;
-                    }
+                    current_map.reduce_child(&mut self.classes[class_index][index]);
                 }
             }
             // NB: Do *not* `self.minimize()`, as we are developing localizable rather than canonical representatives.
@@ -713,65 +713,6 @@ impl EquivalenceClasses {
             ]);
         }
         self.minimize(&None);
-    }
-
-    /// Perform any exact replacement for `expr`, report if it had an effect.
-    ///
-    /// This method is only used internal to `Equivalences`, and should eventually be replaced
-    /// by the use of `self.remap` or something akin to it. The linear scan is not appropriate.
-    fn replace(&self, expr: &mut MirScalarExpr) -> bool {
-        for class in self.classes.iter() {
-            // TODO: If `class` is sorted We only need to iterate through "simpler" expressions;
-            // we can stop once x > expr.
-            // We need to be careful with that reasoning, as it interferes with self-improvement;
-            // if we are modifying `self` we must restore the invariant before relying on it again.
-            if class[1..].iter().any(|x| x == expr) {
-                expr.clone_from(&class[0]);
-                return true;
-            }
-        }
-        false
-    }
-
-    /// Perform any simplification, report if effective.
-    ///
-    /// This method is only used internal to `Equivalences`, and should eventually be replaced
-    /// by the use of `self.remap` or something akin to it. The linear scan is not appropriate.
-    fn reduce_expr(&self, expr: &mut MirScalarExpr) -> bool {
-        let mut simplified = false;
-        simplified = simplified || self.reduce_child(expr);
-        simplified = simplified || self.replace(expr);
-        simplified
-    }
-
-    /// Perform any simplification on children, report if effective.
-    ///
-    /// This method is only used internal to `Equivalences`, and should eventually be replaced
-    /// by the use of `self.remap` or something akin to it. The linear scan is not appropriate.
-    fn reduce_child(&self, expr: &mut MirScalarExpr) -> bool {
-        let mut simplified = false;
-        match expr {
-            MirScalarExpr::CallBinary { expr1, expr2, .. } => {
-                simplified = self.reduce_expr(expr1) || simplified;
-                simplified = self.reduce_expr(expr2) || simplified;
-            }
-            MirScalarExpr::CallUnary { expr, .. } => {
-                simplified = self.reduce_expr(expr) || simplified;
-            }
-            MirScalarExpr::CallVariadic { exprs, .. } => {
-                for expr in exprs.iter_mut() {
-                    simplified = self.reduce_expr(expr) || simplified;
-                }
-            }
-            MirScalarExpr::If { cond: _, then, els } => {
-                // Do not simplify `cond`, as we cannot ensure the simplification
-                // continues to hold as expressions migrate around.
-                simplified = self.reduce_expr(then) || simplified;
-                simplified = self.reduce_expr(els) || simplified;
-            }
-            _ => {}
-        }
-        simplified
     }
 
     /// True if any equivalence class contains two distinct non-error literals.
