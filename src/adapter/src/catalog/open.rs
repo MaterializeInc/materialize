@@ -435,10 +435,9 @@ impl Catalog {
         info!("startup: coordinator init: catalog open: expr cache open beginning");
         // We wait until after the `pre_item_updates` to open the cache so we can get accurate
         // dyncfgs because the `pre_item_updates` contains `SystemConfiguration` updates.
-        let expr_cache_enabled = config.enable_0dt_deployment
-            && config
-                .enable_expression_cache_override
-                .unwrap_or_else(|| ENABLE_EXPRESSION_CACHE.get(state.system_config().dyncfgs()));
+        let expr_cache_enabled = config
+            .enable_expression_cache_override
+            .unwrap_or_else(|| ENABLE_EXPRESSION_CACHE.get(state.system_config().dyncfgs()));
         let (expr_cache_handle, cached_local_exprs, cached_global_exprs) = if expr_cache_enabled {
             info!("using expression cache for startup");
             let current_ids = txn
