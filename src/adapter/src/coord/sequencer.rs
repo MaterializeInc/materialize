@@ -838,12 +838,6 @@ impl Coordinator {
             let max_returned_query_size = session.vars().max_query_result_size();
             let duration_histogram = session.metrics().row_set_finishing_seconds();
 
-            let (mut datum_vec1, mut datum_vec2) = (DatumVec::new(), DatumVec::new());
-            plan.returning.sort_by(|(row1, _diff1), (row2, _diff2)| {
-                let borrow1 = datum_vec1.borrow_with(row1);
-                let borrow2 = datum_vec2.borrow_with(row2);
-                mz_expr::compare_columns(&finishing.order_by, &borrow1, &borrow2, || row1.cmp(row2))
-            });
             return match finishing.finish(
                 RowCollection::new(plan.returning, &finishing.order_by),
                 plan.max_result_size,

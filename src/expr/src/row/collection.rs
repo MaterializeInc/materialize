@@ -24,7 +24,7 @@ use crate::ColumnOrder;
 
 include!(concat!(env!("OUT_DIR"), "/mz_expr.row.collection.rs"));
 
-/// Collection of [`Row`]s represented as a single blob.
+/// Collection of sorted [`Row`]s represented as a single blob.
 ///
 /// Note: the encoding format we use to represent [`Row`]s in this struct is
 /// not stable, and thus should never be persisted durably.
@@ -40,6 +40,10 @@ pub struct RowCollection {
 
 impl RowCollection {
     /// Create a new [`RowCollection`] from a collection of [`Row`]s. Sorts data by `order_by`.
+    ///
+    /// Note that all row collections must be constructed with the same `order_by` to ensure that
+    /// the sort order is consistent. Anything else is undefined behavior.
+    // TODO: Remember the `order_by` and assert that it is the same for all collections.
     pub fn new(mut rows: Vec<(Row, NonZeroUsize)>, order_by: &[ColumnOrder]) -> Self {
         // Sort data to maintain sortedness invariants.
         let (mut datum_vec1, mut datum_vec2) = (DatumVec::new(), DatumVec::new());
@@ -173,16 +177,7 @@ impl RowCollection {
                 .unwrap_or_else(|| self.runs[index - 1]);
             let end = self.runs[index];
 
-            // TODO: Remove
-            for j in start..end {
-                if j + 1 < end {
-                    assert_ne!(
-                        cmp(self.get(j).unwrap().0, self.get(j + 1).unwrap().0),
-                        std::cmp::Ordering::Greater
-                    );
-                }
-            }
-            heap.push(Reverse(Finger {
+            heap.push(Reverse(RunIter {
                 collection: &self,
                 cmp: &cmp,
                 start,
@@ -192,11 +187,11 @@ impl RowCollection {
 
         let mut view = Vec::with_capacity(self.metadata.len());
 
-        while let Some(Reverse(mut finger)) = heap.pop() {
-            view.push(finger.start);
-            finger.start += 1;
-            if finger.start < finger.end {
-                heap.push(Reverse(finger));
+        while let Some(Reverse(mut run)) = heap.pop() {
+            view.push(run.start);
+            run.start += 1;
+            if run.start < run.end {
+                heap.push(Reverse(run));
             }
         }
 
@@ -469,14 +464,14 @@ impl IntoRowIterator for SortedRowCollection {
     }
 }
 
-struct Finger<'a, F> {
+struct RunIter<'a, F> {
     collection: &'a RowCollection,
     cmp: &'a F,
     start: usize,
     end: usize,
 }
 
-impl<'a, F> PartialOrd for Finger<'a, F>
+impl<'a, F> PartialOrd for RunIter<'a, F>
 where
     F: Fn(&RowRef, &RowRef) -> std::cmp::Ordering,
 {
@@ -485,7 +480,7 @@ where
     }
 }
 
-impl<'a, F> Ord for Finger<'a, F>
+impl<'a, F> Ord for RunIter<'a, F>
 where
     F: Fn(&RowRef, &RowRef) -> std::cmp::Ordering,
 {
@@ -497,7 +492,7 @@ where
     }
 }
 
-impl<'a, F> PartialEq for Finger<'a, F>
+impl<'a, F> PartialEq for RunIter<'a, F>
 where
     F: Fn(&RowRef, &RowRef) -> std::cmp::Ordering,
 {
@@ -508,7 +503,7 @@ where
     }
 }
 
-impl<'a, F> Eq for Finger<'a, F> where F: Fn(&RowRef, &RowRef) -> std::cmp::Ordering {}
+impl<'a, F> Eq for RunIter<'a, F> where F: Fn(&RowRef, &RowRef) -> std::cmp::Ordering {}
 
 #[cfg(test)]
 mod tests {
