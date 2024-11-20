@@ -197,6 +197,7 @@ def test_upgrade_from_version(
             metadata_store="cockroach",
         )
         with c.override(mz_from):
+            print(f"Running materialized with deploy generation {deploy_generation}")
             c.up(mz_service)
     else:
         mz_from = Materialized(
@@ -205,11 +206,13 @@ def test_upgrade_from_version(
             volumes_extra=["secrets:/share/secrets"],
             external_metadata_store=True,
             system_parameter_defaults=system_parameter_defaults,
+            deploy_generation=deploy_generation,
             restart="on-failure",
             sanity_restart=False,
             metadata_store="cockroach",
         )
         with c.override(mz_from):
+            print(f"Running materialized with deploy generation {deploy_generation}")
             c.up(mz_service)
 
     if from_version == "current_source" or MzVersion.parse_mz(
@@ -231,9 +234,9 @@ def test_upgrade_from_version(
         f"create-in-{version_glob}-{filter}.td",
         mz_service=mz_service,
     )
+    deploy_generation += 1
     if zero_downtime:
         mz_service = "materialized2"
-        deploy_generation += 1
         c.rm("testdrive")
     else:
         c.kill(mz_service)
@@ -271,7 +274,11 @@ def test_upgrade_from_version(
                     metadata_store="cockroach",
                 )
             ):
+                print(
+                    f"Running materialized with deploy generation {deploy_generation}"
+                )
                 c.up(mz_service)
+                deploy_generation += 1
                 if zero_downtime:
                     c.await_mz_deployment_status(
                         DeploymentStatus.READY_TO_PROMOTE, mz_service
@@ -283,7 +290,6 @@ def test_upgrade_from_version(
                         if mz_service == "materialized"
                         else "materialized"
                     )
-                    deploy_generation += 1
                 else:
                     c.kill(mz_service)
                     c.rm(mz_service)
@@ -301,6 +307,7 @@ def test_upgrade_from_version(
         metadata_store="cockroach",
     )
     with c.override(mz_to):
+        print(f"Running materialized with deploy generation {deploy_generation}")
         c.up(mz_service)
         if zero_downtime:
             c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, mz_service)
@@ -310,6 +317,7 @@ def test_upgrade_from_version(
             # Restart once more, just in case
             c.kill(mz_service)
             c.rm(mz_service)
+            print(f"Running materialized with deploy generation {deploy_generation}")
             c.up(mz_service)
 
     with c.override(
