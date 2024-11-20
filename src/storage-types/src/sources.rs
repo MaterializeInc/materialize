@@ -1937,12 +1937,16 @@ impl Schema2<SourceData> for RelationDesc {
 mod tests {
     use arrow::array::{build_compare, ArrayData};
     use bytes::Bytes;
+    use mz_expr::EvalError;
     use mz_ore::assert_err;
-    use mz_persist::indexed::columnar::arrow::realloc_array;
+    use mz_persist::indexed::columnar::arrow::{realloc_any, realloc_array};
     use mz_persist::metrics::ColumnarMetrics;
     use mz_persist_types::parquet::EncodingConfig;
     use mz_persist_types::schema::{backward_compatible, Migration};
-    use mz_repr::{arb_relation_desc_diff, PropRelationDescDiff, ProtoRelationDesc, ScalarType};
+    use mz_repr::{
+        arb_relation_desc_diff, PropRelationDescDiff, ProtoRelationDesc, RelationDescBuilder,
+        ScalarType,
+    };
     use proptest::prelude::*;
     use proptest::strategy::{Union, ValueTree};
 
@@ -2008,11 +2012,17 @@ mod tests {
 
         assert_eq!(record_batch.columns().len(), 1);
         let rnd_col = &record_batch.columns()[0];
+        let rnd_col = realloc_any(Arc::clone(rnd_col), &metrics);
         let rnd_col = rnd_col
             .as_any()
             .downcast_ref::<StructArray>()
             .unwrap()
             .clone();
+
+        // Try generating stats for the data, just to make sure we don't panic.
+        let _ = <RelationDesc as Schema2<SourceData>>::decoder_any(&desc, &rnd_col)
+            .expect("valid decoder")
+            .stats();
 
         // Read back all of our data and assert it roundtrips.
         let mut rnd_data = SourceData(Ok(Row::default()));
@@ -2060,6 +2070,21 @@ mod tests {
         proptest!(|((config, (desc, source_datas)) in (any::<EncodingConfig>(), strat))| {
             roundtrip_source_data(desc, source_datas, &config);
         });
+    }
+
+    #[mz_ore::test]
+    fn roundtrip_error_nulls() {
+        let desc = RelationDescBuilder::default()
+            .with_column(
+                "ts",
+                ScalarType::TimestampTz { precision: None }.nullable(false),
+            )
+            .finish();
+        let source_datas = vec![SourceData(Err(DataflowError::EvalError(
+            EvalError::DateOutOfRange.into(),
+        )))];
+        let config = EncodingConfig::default();
+        roundtrip_source_data(desc, source_datas, &config);
     }
 
     fn is_sorted(array: &dyn Array) -> bool {

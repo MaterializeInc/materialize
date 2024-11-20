@@ -17,12 +17,12 @@ use std::sync::Arc;
 
 use anyhow::anyhow;
 use arrow::array::{
-    Array, ArrayBuilder, ArrayRef, BinaryArray, BinaryBuilder, BooleanArray, BooleanBufferBuilder,
-    BooleanBuilder, FixedSizeBinaryArray, FixedSizeBinaryBuilder, Float32Array, Float32Builder,
-    Float64Array, Float64Builder, Int16Array, Int16Builder, Int32Array, Int32Builder, Int64Array,
-    Int64Builder, ListArray, ListBuilder, MapArray, StringArray, StringBuilder, StructArray,
-    UInt16Array, UInt16Builder, UInt32Array, UInt32Builder, UInt64Array, UInt64Builder, UInt8Array,
-    UInt8Builder,
+    make_array, Array, ArrayBuilder, ArrayRef, BinaryArray, BinaryBuilder, BooleanArray,
+    BooleanBufferBuilder, BooleanBuilder, FixedSizeBinaryArray, FixedSizeBinaryBuilder,
+    Float32Array, Float32Builder, Float64Array, Float64Builder, Int16Array, Int16Builder,
+    Int32Array, Int32Builder, Int64Array, Int64Builder, ListArray, ListBuilder, MapArray,
+    StringArray, StringBuilder, StructArray, UInt16Array, UInt16Builder, UInt32Array,
+    UInt32Builder, UInt64Array, UInt64Builder, UInt8Array, UInt8Builder,
 };
 use arrow::buffer::{BooleanBuffer, Buffer, NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::{DataType, Field, Fields, ToByteSlice};
@@ -1239,6 +1239,24 @@ pub struct RowColumnarDecoder {
     nullability: Option<NullBuffer>,
 }
 
+/// Merge the provided null buffer with the existing array's null buffer, if any.
+fn mask_nulls(column: &ArrayRef, null_mask: Option<&NullBuffer>) -> ArrayRef {
+    if null_mask.is_none() {
+        Arc::clone(column)
+    } else {
+        // We calculate stats on the nested arrays, so make sure we don't count entries
+        // that are masked off at a higher level.
+        let nulls = NullBuffer::union(null_mask, column.nulls());
+        let data = column
+            .to_data()
+            .into_builder()
+            .nulls(nulls)
+            .build()
+            .expect("changed only null mask");
+        make_array(data)
+    }
+}
+
 impl RowColumnarDecoder {
     /// Creates a [`RowColumnarDecoder`] that decodes from the provided [`StructArray`].
     ///
@@ -1257,6 +1275,8 @@ impl RowColumnarDecoder {
         // For performance reasons we downcast just a single time.
         let mut decoders = Vec::with_capacity(desc_columns.len());
 
+        let null_mask = col.nulls();
+
         // The columns of the `StructArray` are named with their column index.
         for (col_idx, (col_name, col_type)) in desc.iter().enumerate() {
             let field_name = col_idx.to_string();
@@ -1266,8 +1286,9 @@ impl RowColumnarDecoder {
                     col.column_names()
                 )
             })?;
+            let column = mask_nulls(column, null_mask);
             let null_count = col_type.nullable.then(|| column.null_count());
-            let decoder = array_to_decoder(column, &col_type.scalar_type)?;
+            let decoder = array_to_decoder(&column, &col_type.scalar_type)?;
             decoders.push((col_name.as_str().into(), null_count, decoder));
         }
 
@@ -1637,13 +1658,14 @@ fn array_to_decoder(
         }
         (DataType::Struct(_), ScalarType::Record { fields, .. }) => {
             let record_array = downcast_array::<StructArray>(array)?;
-
+            let null_mask = record_array.nulls();
             let mut decoders = Vec::with_capacity(fields.len());
             for (tag, (_name, col_type)) in fields.iter().enumerate() {
                 let inner_array = record_array
                     .column_by_name(&tag.to_string())
                     .ok_or_else(|| anyhow::anyhow!("no column named '{tag}'"))?;
-                let inner_decoder = array_to_decoder(inner_array, &col_type.scalar_type)?;
+                let inner_array = mask_nulls(inner_array, null_mask);
+                let inner_decoder = array_to_decoder(&inner_array, &col_type.scalar_type)?;
 
                 decoders.push(Box::new(inner_decoder));
             }
