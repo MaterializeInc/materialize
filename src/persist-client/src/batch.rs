@@ -231,7 +231,6 @@ where
                     updates,
                     ts_rewrite,
                     schema_id,
-                    deprecated_schema_id: _,
                 }) => (updates, ts_rewrite, schema_id),
                 other @ RunPart::Many(_) | other @ RunPart::Single(BatchPart::Hollow(_)) => {
                     parts.push(other);
@@ -352,7 +351,6 @@ pub struct BatchBuilderConfig {
     pub(crate) stats_untrimmable_columns: Arc<UntrimmableColumns>,
     pub(crate) write_diffs_sum: bool,
     pub(crate) encoding_config: EncodingConfig,
-    pub(crate) record_schema_id: bool,
     pub(crate) expected_order: RunOrder,
     pub(crate) structured_key_lower_len: usize,
     pub(crate) run_length_limit: usize,
@@ -387,12 +385,6 @@ pub(crate) const ENCODING_COMPRESSION_FORMAT: Config<&'static str> = Config::new
     "persist_encoding_compression_format",
     "none",
     "A feature flag to enable compression of Parquet data (Materialize).",
-);
-
-pub(crate) const RECORD_SCHEMA_ID: Config<bool> = Config::new(
-    "persist_record_schema_id",
-    false,
-    "If set, record the ID for the shard's schema in Part and Run metadata (Materialize).",
 );
 
 pub(crate) const STRUCTURED_ORDER: Config<bool> = Config::new(
@@ -459,7 +451,6 @@ impl BatchBuilderConfig {
             BatchColumnarFormat::from_str(&BATCH_COLUMNAR_FORMAT.get(value));
         let batch_columnar_format_percent = BATCH_COLUMNAR_FORMAT_PERCENT.get(value);
 
-        let record_schema_id = RECORD_SCHEMA_ID.get(value);
         let structured_order = STRUCTURED_ORDER.get(value) && {
             shard_id.to_string() < STRUCTURED_ORDER_UNTIL_SHARD.get(value)
         };
@@ -491,7 +482,6 @@ impl BatchBuilderConfig {
                 use_dictionary: ENCODING_ENABLE_DICTIONARY.get(value),
                 compression: CompressionFormat::from_str(&ENCODING_COMPRESSION_FORMAT.get(value)),
             },
-            record_schema_id,
             expected_order,
             structured_key_lower_len: STRUCTURED_KEY_LOWER_LEN.get(value),
             run_length_limit: MAX_RUN_LEN.get(value).clamp(2, usize::MAX),
@@ -505,11 +495,9 @@ impl BatchBuilderConfig {
     }
 
     fn run_meta(&self, order: RunOrder, schema: Option<SchemaId>) -> RunMeta {
-        let schema = if self.record_schema_id { schema } else { None };
         RunMeta {
             order: Some(order),
             schema,
-            deprecated_schema: None,
         }
     }
 }
@@ -1070,7 +1058,6 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         // Decide this once per part and plumb it around as necessary so that we
         // use a consistent answer for things like inline threshold.
         let part_write_columnar_data = self.cfg.part_write_columnar_data();
-        let record_schema_id = self.cfg.record_schema_id;
 
         // If we're going to encode structured data then halve our limit since we're storing
         // it twice, once as binary encoded and once as structured.
@@ -1115,12 +1102,10 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                     batch_metrics
                         .step_inline
                         .inc_by(start.elapsed().as_secs_f64());
-                    let schema_id = if record_schema_id { schema_id } else { None };
                     RunPart::Single(BatchPart::Inline {
                         updates,
                         ts_rewrite,
                         schema_id,
-                        deprecated_schema_id: None,
                     })
                 }
                 .instrument(span),
@@ -1295,11 +1280,6 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             }
             stats
         });
-        let schema_id = if cfg.record_schema_id {
-            schema_id
-        } else {
-            None
-        };
 
         BatchPart::Hollow(HollowBatchPart {
             key: partial_key,
@@ -1311,7 +1291,6 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             diffs_sum: cfg.write_diffs_sum.then_some(diffs_sum),
             format: Some(cfg.batch_columnar_format),
             schema_id,
-            deprecated_schema_id: None,
         })
     }
 

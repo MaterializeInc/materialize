@@ -1333,7 +1333,6 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatch> for HollowBatch<T> {
                 diffs_sum: None,
                 format: None,
                 schema_id: None,
-                deprecated_schema_id: None,
             }))
         }));
         // We discard default metadatas from the proto above; re-add them here.
@@ -1366,7 +1365,6 @@ impl RustType<ProtoRunMeta> for RunMeta {
         ProtoRunMeta {
             order: order.into(),
             schema_id: self.schema.into_proto(),
-            deprecated_schema_id: self.deprecated_schema.into_proto(),
         }
     }
 
@@ -1380,7 +1378,6 @@ impl RustType<ProtoRunMeta> for RunMeta {
         Ok(Self {
             order,
             schema: proto.schema_id.into_rust()?,
-            deprecated_schema: proto.deprecated_schema_id.into_rust()?,
         })
     }
 }
@@ -1418,7 +1415,6 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for HollowRunRef<T> 
             format: None,
             schema_id: None,
             structured_key_lower: None,
-            deprecated_schema_id: None,
         };
         part
     }
@@ -1454,13 +1450,11 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for BatchPart<T> {
                 diffs_sum: x.diffs_sum.as_ref().map(|x| i64::from_le_bytes(*x)),
                 format: x.format.map(|f| f.into_proto()),
                 schema_id: x.schema_id.into_proto(),
-                deprecated_schema_id: x.deprecated_schema_id.into_proto(),
             },
             BatchPart::Inline {
                 updates,
                 ts_rewrite,
                 schema_id,
-                deprecated_schema_id,
             } => ProtoHollowBatchPart {
                 kind: Some(proto_hollow_batch_part::Kind::Inline(updates.into_proto())),
                 encoded_size_bytes: 0,
@@ -1471,7 +1465,6 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for BatchPart<T> {
                 diffs_sum: None,
                 format: None,
                 schema_id: schema_id.into_proto(),
-                deprecated_schema_id: deprecated_schema_id.into_proto(),
             },
         }
     }
@@ -1482,7 +1475,6 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for BatchPart<T> {
             None => None,
         };
         let schema_id = proto.schema_id.into_rust()?;
-        let deprecated_schema_id = proto.deprecated_schema_id.into_rust()?;
         match proto.kind {
             Some(proto_hollow_batch_part::Kind::Key(key)) => {
                 Ok(BatchPart::Hollow(HollowBatchPart {
@@ -1495,7 +1487,6 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for BatchPart<T> {
                     diffs_sum: proto.diffs_sum.map(i64::to_le_bytes),
                     format: proto.format.map(|f| f.into_rust()).transpose()?,
                     schema_id,
-                    deprecated_schema_id,
                 }))
             }
             Some(proto_hollow_batch_part::Kind::Inline(x)) => {
@@ -1508,7 +1499,6 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for BatchPart<T> {
                     updates,
                     ts_rewrite,
                     schema_id,
-                    deprecated_schema_id,
                 })
             }
             _ => Err(TryFromProtoError::unknown_enum_variant(
@@ -1831,7 +1821,6 @@ mod tests {
                 diffs_sum: None,
                 format: None,
                 schema_id: None,
-                deprecated_schema_id: None,
             }))],
             4,
         );
@@ -1858,7 +1847,6 @@ mod tests {
                 diffs_sum: None,
                 format: None,
                 schema_id: None,
-                deprecated_schema_id: None,
             })));
         assert_eq!(<HollowBatch<u64>>::from_proto(old).unwrap(), expected);
     }

@@ -511,7 +511,7 @@ where
                 tracing::debug!(?global_id, "no schema registered");
                 continue;
             };
-            tracing::debug!(?global_id, ?current_schema, new_schema = ?relation_desc, "migrating schema");
+            tracing::info!(?global_id, ?current_schema, new_schema = ?relation_desc, "migrating schema");
 
             let diagnostics = Diagnostics {
                 shard_name: global_id.to_string(),
@@ -528,7 +528,18 @@ where
                 .await
                 .expect("invalid persist usage");
             match evolve_result {
-                CaESchema::Ok(_) => (),
+                CaESchema::Ok(new_schema_id) => {
+                    if schema_id != new_schema_id {
+                        tracing::info!(
+                            ?global_id,
+                            ?new_schema_id,
+                            new_schema = ?relation_desc,
+                            "evolved schema"
+                        );
+                    } else {
+                        tracing::info!(?global_id, ?relation_desc, "no-op evolve",);
+                    }
+                }
                 CaESchema::ExpectedMismatch {
                     schema_id,
                     key,
