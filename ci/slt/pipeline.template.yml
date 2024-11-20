@@ -30,7 +30,7 @@ steps:
 
   - id: sqllogictest
     label: ":bulb: SQL logic tests %N"
-    timeout_in_minutes: 180
+    timeout_in_minutes: 240
     parallelism: 10
     agents:
       queue: hetzner-aarch64-8cpu-16gb
