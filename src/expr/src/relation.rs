@@ -35,8 +35,8 @@ use mz_repr::explain::{
     DummyHumanizer, ExplainConfig, ExprHumanizer, IndexUsageType, PlanRenderingContext,
 };
 use mz_repr::{
-    ColumnName, ColumnType, Datum, Diff, GlobalId, IntoRowIterator, RelationType, Row,
-    RowCollection, RowIterator, RowRef, ScalarType, SortedRowCollectionIter,
+    ColumnName, ColumnType, Datum, Diff, GlobalId, IntoRowIterator, RelationType, Row, RowIterator,
+    RowRef, ScalarType,
 };
 use proptest::prelude::{any, Arbitrary, BoxedStrategy};
 use proptest::strategy::{Strategy, Union};
@@ -46,6 +46,7 @@ use timely::container::columnation::{Columnation, CopyRegion};
 
 use crate::explain::{HumanizedExpr, HumanizerMode};
 use crate::relation::func::{AggregateFunc, LagLeadType, TableFunc};
+use crate::row::{RowCollection, SortedRowCollectionIter};
 use crate::visit::{Visit, VisitChildren};
 use crate::Id::Local;
 use crate::{

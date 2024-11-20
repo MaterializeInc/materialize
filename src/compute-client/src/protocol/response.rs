@@ -12,10 +12,11 @@
 use std::num::NonZeroUsize;
 
 use mz_compute_types::plan::LirId;
+use mz_expr::row::RowCollection;
 use mz_ore::cast::CastFrom;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_proto::{any_uuid, IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use mz_repr::{Diff, GlobalId, Row, RowCollection};
+use mz_repr::{Diff, GlobalId, Row};
 use mz_timely_util::progress::any_antichain;
 use proptest::prelude::{any, Arbitrary};
 use proptest::strategy::{BoxedStrategy, Just, Strategy, Union};
@@ -365,7 +366,7 @@ impl Arbitrary for PeekResponse {
                 ),
                 1..11,
             )
-            .prop_map(|rows| PeekResponse::Rows(RowCollection::new(&rows)))
+            .prop_map(|rows| PeekResponse::Rows(RowCollection::new(rows, &[])))
             .boxed(),
             ".*".prop_map(PeekResponse::Error).boxed(),
             Just(PeekResponse::Canceled).boxed(),

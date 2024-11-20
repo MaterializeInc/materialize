@@ -13,12 +13,12 @@ syntax = "proto3";
 
 package mz_compute_client.protocol.response;
 
+import "expr/src/row/collection.proto";
 import "google/protobuf/empty.proto";
 import "proto/src/proto.proto";
 import "repr/src/antichain.proto";
 import "repr/src/global_id.proto";
 import "repr/src/row.proto";
-import "repr/src/row/collection.proto";
 
 message ProtoComputeResponse {
   message ProtoFrontiersKind {
@@ -59,7 +59,7 @@ message ProtoFrontiersResponse {
 
 message ProtoPeekResponse {
   oneof kind {
-    mz_repr.row.collection.ProtoRowCollection rows = 1;
+    mz_expr.row.collection.ProtoRowCollection rows = 1;
     string error = 2;
     google.protobuf.Empty canceled = 3;
   }

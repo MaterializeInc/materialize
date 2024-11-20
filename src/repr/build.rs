@@ -14,7 +14,7 @@ fn main() {
         .protoc_executable(mz_build_tools::protoc())
         .btree_map(["."])
         .extern_path(".mz_proto", "::mz_proto")
-        .bytes([".mz_repr.row.ProtoDatum.bytes", ".mz_repr.row.collection"])
+        .bytes([".mz_repr.row.ProtoDatum.bytes"])
         .compile_protos(
             &[
                 "repr/src/adt/array.proto",
@@ -35,7 +35,6 @@ fn main() {
                 "repr/src/relation_and_scalar.proto",
                 "repr/src/role_id.proto",
                 "repr/src/row.proto",
-                "repr/src/row/collection.proto",
                 "repr/src/strconv.proto",
                 "repr/src/timestamp.proto",
                 "repr/src/url.proto",

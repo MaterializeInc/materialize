@@ -45,7 +45,6 @@ use crate::adt::timestamp::CheckedTimestamp;
 use crate::scalar::{arb_datum, DatumKind};
 use crate::{Datum, RelationDesc, Timestamp};
 
-pub mod collection;
 pub(crate) mod encode;
 pub mod iter;
 
@@ -243,6 +242,11 @@ impl Row {
         };
         let inline_size = std::mem::size_of::<Self>();
         inline_size.saturating_add(heap_size)
+    }
+
+    /// The length of the encoded row in bytes. Does not include the size of the `Row` struct itself.
+    pub fn data_len(&self) -> usize {
+        self.data.len()
     }
 
     /// Returns the total capacity in bytes used by this row.
