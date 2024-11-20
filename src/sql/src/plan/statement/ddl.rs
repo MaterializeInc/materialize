@@ -1599,6 +1599,7 @@ generate_extracted_config!(
     TableFromSourceOption,
     (TextColumns, Vec::<Ident>, Default(vec![])),
     (ExcludeColumns, Vec::<Ident>, Default(vec![])),
+    (PartitionBy, Vec<Ident>),
     (Timeline, String),
     (IgnoreKeys, bool),
     (Details, String)
@@ -1630,6 +1631,7 @@ pub fn plan_create_table_from_source(
     let TableFromSourceOptionExtracted {
         text_columns,
         exclude_columns,
+        partition_by,
         details,
         timeline,
         ignore_keys,
@@ -1825,6 +1827,11 @@ pub fn plan_create_table_from_source(
         }
         Some(timeline) => Timeline::User(timeline),
     };
+
+    if let Some(partition_by) = partition_by {
+        scx.require_feature_flag(&ENABLE_COLLECTION_PARTITION_BY)?;
+        check_partition_by(&desc, partition_by)?;
+    }
 
     let data_source = DataSourceDesc::IngestionExport {
         ingestion_id,

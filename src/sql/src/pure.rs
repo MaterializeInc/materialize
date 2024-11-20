@@ -1580,6 +1580,7 @@ async fn purify_create_table_from_source(
         exclude_columns,
         details,
         ignore_keys: _,
+        partition_by: _,
         timeline: _,
         seen: _,
     } = with_options.clone().try_into()?;

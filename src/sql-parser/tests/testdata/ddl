@@ -327,6 +327,14 @@ CREATE TABLE t FROM SOURCE foo (REFERENCE = baz) WITH (IGNORE KEYS = 'true')
 CreateTableFromSource(CreateTableFromSourceStatement { name: UnresolvedItemName([Ident("t")]), columns: NotSpecified, constraints: [], if_not_exists: false, source: Name(UnresolvedItemName([Ident("foo")])), external_reference: Some(UnresolvedItemName([Ident("baz")])), with_options: [TableFromSourceOption { name: IgnoreKeys, value: Some(Value(String("true"))) }], include_metadata: [], format: None, envelope: None })
 
 parse-statement
+CREATE TABLE t FROM SOURCE foo (REFERENCE = baz) WITH (PARTITION BY (a, b))
+----
+CREATE TABLE t FROM SOURCE foo (REFERENCE = baz) WITH (PARTITION BY = (a, b))
+=>
+CreateTableFromSource(CreateTableFromSourceStatement { name: UnresolvedItemName([Ident("t")]), columns: NotSpecified, constraints: [], if_not_exists: false, source: Name(UnresolvedItemName([Ident("foo")])), external_reference: Some(UnresolvedItemName([Ident("baz")])), with_options: [TableFromSourceOption { name: PartitionBy, value: Some(Sequence([UnresolvedItemName(UnresolvedItemName([Ident("a")])), UnresolvedItemName(UnresolvedItemName([Ident("b")]))])) }], include_metadata: [], format: None, envelope: None })
+
+
+parse-statement
 CREATE DATABASE IF EXISTS foo
 ----
 error: Expected NOT, found EXISTS

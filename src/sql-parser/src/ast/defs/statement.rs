@@ -1637,6 +1637,8 @@ pub enum TableFromSourceOptionName {
     Details,
 
     IgnoreKeys,
+    /// Partition the given table by the provided columns.
+    PartitionBy,
 }
 
 impl AstDisplay for TableFromSourceOptionName {
@@ -1647,6 +1649,7 @@ impl AstDisplay for TableFromSourceOptionName {
             TableFromSourceOptionName::Timeline => "TIMELINE",
             TableFromSourceOptionName::Details => "DETAILS",
             TableFromSourceOptionName::IgnoreKeys => "IGNORE KEYS",
+            TableFromSourceOptionName::PartitionBy => "PARTITION BY",
         })
     }
 }
@@ -1664,7 +1667,8 @@ impl WithOptionName for TableFromSourceOptionName {
             | TableFromSourceOptionName::TextColumns
             | TableFromSourceOptionName::ExcludeColumns
             | TableFromSourceOptionName::Timeline
-            | TableFromSourceOptionName::IgnoreKeys => false,
+            | TableFromSourceOptionName::IgnoreKeys
+            | TableFromSourceOptionName::PartitionBy => false,
         }
     }
 }
