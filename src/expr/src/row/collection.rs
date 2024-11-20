@@ -34,8 +34,8 @@ pub struct RowCollection {
     encoded: Bytes,
     /// Metadata about an individual Row in the blob.
     metadata: Vec<EncodedRowMetadata>,
-    /// Start of sorted runs of rows in rows.
-    fingers: Vec<usize>,
+    /// End of non-empty, sorted runs of rows in number of rows.
+    runs: Vec<usize>,
 }
 
 impl RowCollection {
@@ -48,6 +48,7 @@ impl RowCollection {
             let borrow2 = datum_vec2.borrow_with(row2);
             crate::compare_columns(order_by, &borrow1, &borrow2, || row1.cmp(row2))
         });
+
         // Pre-sizing our buffer should allow us to make just 1 allocation, and
         // use the perfect amount of memory.
         //
@@ -57,26 +58,33 @@ impl RowCollection {
 
         let mut encoded = Vec::<u8>::with_capacity(encoded_size);
         let mut metadata = Vec::<EncodedRowMetadata>::with_capacity(rows.len());
-        let fingers = vec![rows.len()];
+        let runs = if rows.is_empty() {
+            vec![]
+        } else {
+            vec![rows.len()]
+        };
 
         for (row, diff) in rows {
             encoded.extend(row.data());
             metadata.push(EncodedRowMetadata {
                 offset: encoded.len(),
-                diff: diff,
+                diff,
             });
         }
 
         RowCollection {
             encoded: Bytes::from(encoded),
             metadata,
-            fingers,
+            runs,
         }
     }
 
     /// Merge another [`RowCollection`] into `self`.
     pub fn merge(&mut self, other: &RowCollection) {
-        if other.count(0, None) == 0 {
+        if other.is_empty() {
+            return;
+        } else if self.is_empty() {
+            *self = other.clone();
             return;
         }
 
@@ -94,8 +102,7 @@ impl RowCollection {
 
         self.metadata.extend(mapped_metas);
         self.encoded = Bytes::from(new_bytes);
-        self.fingers
-            .extend(other.fingers.iter().map(|f| f + self_len));
+        self.runs.extend(other.runs.iter().map(|f| f + self_len));
     }
 
     /// Total count of [`Row`]s represented by this collection, considering a
@@ -112,6 +119,12 @@ impl RowCollection {
         }
 
         total
+    }
+
+    /// Returns true iff this collection is empty. Not `pub` because it doesn't take offset/limit
+    /// into account.
+    fn is_empty(&self) -> bool {
+        self.metadata.is_empty()
     }
 
     /// Total count of ([`Row`], `EncodedRowMetadata`) pairs in this collection.
@@ -154,11 +167,11 @@ impl RowCollection {
     {
         let mut heap = BinaryHeap::new();
 
-        for index in 0..self.fingers.len() {
+        for index in 0..self.runs.len() {
             let start = (index == 0)
                 .then_some(0)
-                .unwrap_or_else(|| self.fingers[index - 1]);
-            let end = self.fingers[index];
+                .unwrap_or_else(|| self.runs[index - 1]);
+            let end = self.runs[index];
 
             // TODO: Remove
             for j in start..end {
@@ -169,14 +182,12 @@ impl RowCollection {
                     );
                 }
             }
-            if start < end {
-                heap.push(Reverse(Finger {
-                    collection: &self,
-                    cmp: &cmp,
-                    start,
-                    end,
-                }));
-            }
+            heap.push(Reverse(Finger {
+                collection: &self,
+                cmp: &cmp,
+                start,
+                end,
+            }));
         }
 
         let mut view = Vec::with_capacity(self.metadata.len());
@@ -207,7 +218,7 @@ impl RustType<ProtoRowCollection> for RowCollection {
                 .iter()
                 .map(EncodedRowMetadata::into_proto)
                 .collect(),
-            fingers: self.fingers.iter().copied().map(u64::cast_from).collect(),
+            runs: self.runs.iter().copied().map(u64::cast_from).collect(),
         }
     }
 
@@ -219,7 +230,7 @@ impl RustType<ProtoRowCollection> for RowCollection {
                 .into_iter()
                 .map(EncodedRowMetadata::from_proto)
                 .collect::<Result<_, _>>()?,
-            fingers: proto.fingers.into_iter().map(usize::cast_from).collect(),
+            runs: proto.runs.into_iter().map(usize::cast_from).collect(),
         })
     }
 }
@@ -522,12 +533,12 @@ mod tests {
                     diff: NonZeroUsize::MIN,
                 });
             }
-            let fingers = vec![metadata.len()];
+            let runs = vec![metadata.len()];
 
             RowCollection {
                 encoded: Bytes::from(encoded),
                 metadata,
-                fingers,
+                runs,
             }
         }
     }
