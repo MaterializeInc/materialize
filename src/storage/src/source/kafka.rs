@@ -1443,7 +1443,7 @@ impl ClientContext for GlueConsumerContext {
 
 impl GlueConsumerContext {
     fn activate(&self) {
-        self.notificator.notify_waiters();
+        self.notificator.notify_one();
     }
 }
 
