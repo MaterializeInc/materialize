@@ -3712,7 +3712,7 @@ def check_read_frontier_not_stuck(c: Composition, object_name: str):
     # we need to wait a bit for the object's frontier to show up.
     result = c.sql_query(query)
     if not result:
-        time.sleep(1)
+        time.sleep(2)
         result = c.sql_query(query)
 
     before = int(result[0][0])
