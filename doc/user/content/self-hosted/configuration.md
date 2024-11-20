@@ -34,7 +34,7 @@ You can configure the Materialize operator chart. For example:
 To configure the Materialize operator chart, you can:
 
 - *Recommended:* Create a YAML file (e.g., `values.yaml`) that specifies the
-  values for the parameters and then [install the chart](/self-hosted/#install-the-chart) with the `-f` flag:
+  values for the parameters and then [install the chart](/self-hosted/#installing-the-chart) with the `-f` flag:
 
   ```shell
   helm install my-materialize-operator -f values.yaml materialize/materialize-operator
