@@ -1079,7 +1079,6 @@ impl PendingPeek {
             .map(|l| usize::cast_from(u64::from(l)))
             .unwrap_or(usize::MAX)
             + peek.finishing.offset;
-
         let order_by = peek.finishing.order_by.clone();
 
         let task_handle = mz_ore::task::spawn(|| "persist::peek", async move {

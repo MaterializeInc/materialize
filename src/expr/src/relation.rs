@@ -9,7 +9,6 @@
 
 #![warn(missing_docs)]
 
-use std::cell::RefCell;
 use std::cmp::{max, Ordering};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -36,7 +35,7 @@ use mz_repr::explain::{
 };
 use mz_repr::{
     ColumnName, ColumnType, Datum, Diff, GlobalId, IntoRowIterator, RelationType, Row, RowIterator,
-    RowRef, ScalarType,
+    ScalarType,
 };
 use proptest::prelude::{any, Arbitrary, BoxedStrategy};
 use proptest::strategy::{Strategy, Union};
@@ -3557,19 +3556,7 @@ impl RowSetFinishing {
             return Err(format!("result exceeds max size of {max_bytes}",));
         }
 
-        let left_datum_vec = RefCell::new(mz_repr::DatumVec::new());
-        let right_datum_vec = RefCell::new(mz_repr::DatumVec::new());
-
-        let sort_by = |left: &RowRef, right: &RowRef| {
-            let (mut left_datum_vec, mut right_datum_vec) =
-                (left_datum_vec.borrow_mut(), right_datum_vec.borrow_mut());
-            let left_datums = left_datum_vec.borrow_with(left);
-            let right_datums = right_datum_vec.borrow_with(right);
-            compare_columns(&self.order_by, &left_datums, &right_datums, || {
-                left.cmp(right)
-            })
-        };
-        let sorted_view = rows.sorted_view(sort_by);
+        let sorted_view = rows.sorted_view(&self.order_by);
         let mut iter = sorted_view
             .into_row_iter()
             .apply_offset(self.offset)

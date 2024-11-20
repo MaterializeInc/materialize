@@ -18,7 +18,7 @@ use inner::return_if_err;
 use mz_expr::row::RowCollection;
 use mz_expr::{MirRelationExpr, RowSetFinishing};
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::{CatalogItemId, DatumVec, Diff, GlobalId};
+use mz_repr::{CatalogItemId, Diff, GlobalId};
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{
