@@ -3707,7 +3707,15 @@ def check_read_frontier_not_stuck(c: Composition, object_name: str):
         JOIN mz_objects o ON o.id = f.object_id
         WHERE o.name = '{object_name}';
         """
-    before = int(c.sql_query(query)[0][0])
+
+    # Because `mz_frontiers` isn't a linearizable relation it's possible that
+    # we need to wait a bit for the object's frontier to show up.
+    result = c.sql_query(query)
+    if not result:
+        time.sleep(1)
+        result = c.sql_query(query)
+
+    before = int(result[0][0])
     time.sleep(2)
     after = int(c.sql_query(query)[0][0])
     assert before < after, f"read frontier of {object_name} is stuck"
