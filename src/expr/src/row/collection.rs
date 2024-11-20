@@ -25,7 +25,7 @@ use crate::ColumnOrder;
 
 include!(concat!(env!("OUT_DIR"), "/mz_expr.row.collection.rs"));
 
-/// Collection of sorted [`Row`]s represented as a single blob.
+/// Collection of runs of sorted [`Row`]s represented as a single blob.
 ///
 /// Note: the encoding format we use to represent [`Row`]s in this struct is
 /// not stable, and thus should never be persisted durably.
@@ -35,7 +35,7 @@ pub struct RowCollection {
     encoded: Bytes,
     /// Metadata about an individual Row in the blob.
     metadata: Vec<EncodedRowMetadata>,
-    /// End of non-empty, sorted runs of rows in index into `metadata`.
+    /// Ends of non-empty, sorted runs of rows in index into `metadata`.
     runs: Vec<usize>,
 }
 
@@ -505,9 +505,7 @@ where
     F: Fn(&RowRef, &RowRef) -> std::cmp::Ordering,
 {
     fn eq(&self, other: &Self) -> bool {
-        self.partial_cmp(other)
-            .map(|ordering| ordering == std::cmp::Ordering::Equal)
-            .unwrap_or(false)
+        self.cmp(other) == std::cmp::Ordering::Equal
     }
 }
 
