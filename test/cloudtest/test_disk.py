@@ -64,8 +64,8 @@ def test_disk_replica(mz: MaterializeApplication) -> None:
         "SELECT r.cluster_id, r.id as replica_id FROM mz_cluster_replicas r, mz_clusters c WHERE c.id = r.cluster_id AND c.name = 'testdrive_no_reset_disk_cluster1';"
     )[0]
 
-    source_global_id = mz.environmentd.sql_query(
-        "SELECT id FROM mz_sources WHERE name = 'source1';"
+    source_tbl_global_id = mz.environmentd.sql_query(
+        "SELECT id FROM mz_tables WHERE name = 'source1_tbl';"
     )[0][0]
 
     # verify that the replica's scratch directory contains data files for source1
@@ -79,7 +79,7 @@ def test_disk_replica(mz: MaterializeApplication) -> None:
         "-c",
         "ls /scratch/storage/upsert",
     )
-    assert source_global_id in on_disk_sources
+    assert source_tbl_global_id in on_disk_sources
 
 
 def test_always_use_disk_replica(mz: MaterializeApplication) -> None:
@@ -137,8 +137,8 @@ def test_always_use_disk_replica(mz: MaterializeApplication) -> None:
         "SELECT r.cluster_id, r.id as replica_id FROM mz_cluster_replicas r, mz_clusters c WHERE c.id = r.cluster_id AND c.name = 'disk_cluster2';"
     )[0]
 
-    source_global_id = mz.environmentd.sql_query(
-        "SELECT id FROM mz_sources WHERE name = 'source1';"
+    source_tbl_global_id = mz.environmentd.sql_query(
+        "SELECT id FROM mz_tables WHERE name = 'source1_tbl';"
     )[0][0]
 
     # verify that the replica's scratch directory contains data files for source1
@@ -152,7 +152,7 @@ def test_always_use_disk_replica(mz: MaterializeApplication) -> None:
         "-c",
         "ls /scratch/storage/upsert",
     )
-    assert source_global_id in on_disk_sources
+    assert source_tbl_global_id in on_disk_sources
 
 
 def test_no_disk_replica(mz: MaterializeApplication) -> None:
