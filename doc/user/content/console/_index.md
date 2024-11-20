@@ -22,9 +22,9 @@ view billing information.
 - [**Create New**](/console/create-new/): Shortcut menu to the following
   screens:
 
-  - [**New Cluster**](/console/create-new/#create-new-cluster) screen
+  - [**New cluster**](/console/create-new/#create-new-cluster) screen
 
-  - [**Create a Source**](/console/create-new/#create-new-source) screen
+  - [**New source**](/console/create-new/#create-new-source) screen
 
   - [**New app password**](/console/create-new/#create-new-app-password) screen
 

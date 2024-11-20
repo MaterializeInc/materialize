@@ -56,9 +56,9 @@ menus:
 
 ## Network security
 
-- [SSH tunnel connections](/ingest-data/network-security/ssh-tunnel/)
 - [Static IP addresses](/ingest-data/network-security/static-ips/)
-- [AWS PrivateLink connection](/ingest-data/network-security/privatelink/)
+- [AWS PrivateLink connections](/ingest-data/network-security/privatelink/)
+- [SSH tunnel connections](/ingest-data/network-security/ssh-tunnel/)
 
 ## Troubleshooting
 

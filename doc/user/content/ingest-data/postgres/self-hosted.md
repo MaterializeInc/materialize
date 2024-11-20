@@ -263,12 +263,12 @@ scenarios, we recommend separating your workloads into multiple clusters for
 
 ![Image of the Create New Cluster flow](/images/console/console-create-new/postgresql/create-new-cluster-flow.png "Create New Cluster flow")
 
-From the [Materialize Console](https://console.materialize.com/),
+From the [Materialize console](https://console.materialize.com/),
 
-1. Click **+ Create New** and select **Cluster** to open the **New Cluster**
+1. Click **+ Create New** and select **Cluster** to open the **New cluster**
    panel.
 
-1. In the **New Cluster** panel,
+1. In the **New cluster** panel,
 
    1. Specify the following cluster information:
 
@@ -308,8 +308,8 @@ start by selecting the relevant option.
 {{< tab "Allow Materialize IPs">}}
 
 
-1. Click **+ Create New** and select **Source** to open the **Create a Source**
-   panel. From the **Create a Source** panel, select **PostgreSQL**.
+1. Click **+ Create New** and select **Source** to open the **New source**
+   panel. From the **New source** panel, select **PostgreSQL**.
 
    ![Image of the Create New Source start](/images/console/console-create-new/postgresql/create-new-source-start.png "Create New Source start")
 
@@ -320,13 +320,14 @@ start by selecting the relevant option.
 
    - Create a **New** connection.
 
-   For a new connection, specify the following connection information and click **Continue**:
+   For a new connection, specify the following connection configuration details
+   and click **Continue**:
 
    | Field | Description |
    | ----- | ----------- |
    | **Name** | A name for the connection. |
    | **Schema** | A Materialize database and schema for the connection. |
-   | **Host** | The host of the PostgreSQL. |
+   | **Host** | The PostgreSQL database hostname. |
    | **Database** | The [database in PostgreSQL that contains the tables to replicate and where the replication user has CONNECT privilege](#2-create-a-publication-and-a-replication-user).|
    | **Port** | The port number of the PostgreSQL. |
    | **User** | The [replication user in PostgreSQL created earlier](#create-a-replication-user-for-materialize). |
@@ -607,7 +608,7 @@ running](/images/console/console-create-new/postgresql/new-source-status-running
 
 After the snapshotting phase, Materialize starts ingesting change events from
 the PostgreSQL replication stream. For this work, Materialize generally performs
-well with an `100cc` replica, so you can resize the cluster accordingly.
+well with a `100cc` replica, so you can resize the cluster accordingly.
 
 From the source's **Overview** page,
 
