@@ -382,14 +382,15 @@ def workflow_rocksdb_cleanup(c: Composition) -> None:
     ]
     c.up(*dependencies)
 
-    # Returns rockdb's cluster level and source level paths for a given source name
-    def rocksdb_path(source_name: str) -> tuple[str, str]:
+    # Returns rockdb's cluster level and source level paths for a given source table name
+    def rocksdb_path(source_tbl_name: str) -> tuple[str, str]:
         (source_id, cluster_id, replica_id) = c.sql_query(
-            f"""select s.id, s.cluster_id, c.id
-            from mz_sources s
-            join mz_cluster_replicas c
-            on s.cluster_id = c.cluster_id
-            where s.name ='{source_name}'"""
+            f"""select t.id, s.cluster_id, c.id
+            from
+            mz_sources s,
+            mz_tables t,
+            mz_cluster_replicas c
+            where t.name ='{source_tbl_name}' AND t.source_id = s.id AND s.cluster_id = c.cluster_id"""
         )[0]
         prefix = "/scratch"
         cluster_prefix = f"cluster-{cluster_id}-replica-{replica_id}-gen-0"
@@ -419,8 +420,10 @@ def workflow_rocksdb_cleanup(c: Composition) -> None:
             c.up("testdrive", persistent=True)
             c.exec("testdrive", f"rocksdb-cleanup/{testdrive_file}")
 
-            (_, kept_source_path) = rocksdb_path("kept_upsert")
-            (dropped_cluster_path, dropped_source_path) = rocksdb_path("dropped_upsert")
+            (_, kept_source_path) = rocksdb_path("kept_upsert_tbl")
+            (dropped_cluster_path, dropped_source_path) = rocksdb_path(
+                "dropped_upsert_tbl"
+            )
 
             assert num_files(kept_source_path) > 0
             assert num_files(dropped_source_path) > 0
