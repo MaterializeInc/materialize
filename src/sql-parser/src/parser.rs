@@ -3981,13 +3981,24 @@ impl<'a> Parser<'a> {
         if self.parse_keyword(REDACTED) {
             return Ok(TableOptionName::RedactedTest);
         }
-        self.expect_keywords(&[RETAIN, HISTORY])?;
-        Ok(TableOptionName::RetainHistory)
+        let name = match self.expect_one_of_keywords(&[PARTITION, RETAIN])? {
+            PARTITION => {
+                self.expect_keyword(BY)?;
+                TableOptionName::PartitionBy
+            }
+            RETAIN => {
+                self.expect_keyword(HISTORY)?;
+                TableOptionName::RetainHistory
+            }
+            _ => unreachable!(),
+        };
+        Ok(name)
     }
 
     fn parse_table_option(&mut self) -> Result<TableOption<Raw>, ParserError> {
         let name = self.parse_table_option_name()?;
         let value = match name {
+            TableOptionName::PartitionBy => self.parse_optional_option_value(),
             TableOptionName::RetainHistory => self.parse_option_retain_history(),
             TableOptionName::RedactedTest => self.parse_optional_option_value(),
         }?;
