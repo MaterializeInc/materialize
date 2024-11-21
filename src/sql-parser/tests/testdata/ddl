@@ -41,9 +41,23 @@ CREATE TABLE t (a int NOT NULL GARBAGE)
 parse-statement
 CREATE TABLE t (c int) WITH (foo = 'bar', a = 123)
 ----
-error: Expected RETAIN, found identifier "foo"
+error: Expected one of PARTITION or RETAIN, found identifier "foo"
 CREATE TABLE t (c int) WITH (foo = 'bar', a = 123)
                              ^
+
+parse-statement
+CREATE TABLE t (c int) WITH (PARTITION BY (c))
+----
+CREATE TABLE t (c int4) WITH (PARTITION BY = (c))
+=>
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: false, with_options: [TableOption { name: PartitionBy, value: Some(Sequence([UnresolvedItemName(UnresolvedItemName([Ident("c")]))])) }] })
+
+parse-statement
+CREATE TABLE t (c int, d int) WITH (PARTITION BY = (c, d))
+----
+CREATE TABLE t (c int4, d int4) WITH (PARTITION BY = (c, d))
+=>
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("d"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: false, with_options: [TableOption { name: PartitionBy, value: Some(Sequence([UnresolvedItemName(UnresolvedItemName([Ident("c")])), UnresolvedItemName(UnresolvedItemName([Ident("d")]))])) }] })
 
 parse-statement
 CREATE TABLE types_table (char_col char, bpchar_col bpchar, text_col text, bool_col boolean, date_col date, time_col time, timestamp_col timestamp, uuid_col uuid, double_col double precision);
@@ -311,6 +325,14 @@ CREATE TABLE t FROM SOURCE foo (REFERENCE = baz) WITH (IGNORE KEYS 'true')
 CREATE TABLE t FROM SOURCE foo (REFERENCE = baz) WITH (IGNORE KEYS = 'true')
 =>
 CreateTableFromSource(CreateTableFromSourceStatement { name: UnresolvedItemName([Ident("t")]), columns: NotSpecified, constraints: [], if_not_exists: false, source: Name(UnresolvedItemName([Ident("foo")])), external_reference: Some(UnresolvedItemName([Ident("baz")])), with_options: [TableFromSourceOption { name: IgnoreKeys, value: Some(Value(String("true"))) }], include_metadata: [], format: None, envelope: None })
+
+parse-statement
+CREATE TABLE t FROM SOURCE foo (REFERENCE = baz) WITH (PARTITION BY (a, b))
+----
+CREATE TABLE t FROM SOURCE foo (REFERENCE = baz) WITH (PARTITION BY = (a, b))
+=>
+CreateTableFromSource(CreateTableFromSourceStatement { name: UnresolvedItemName([Ident("t")]), columns: NotSpecified, constraints: [], if_not_exists: false, source: Name(UnresolvedItemName([Ident("foo")])), external_reference: Some(UnresolvedItemName([Ident("baz")])), with_options: [TableFromSourceOption { name: PartitionBy, value: Some(Sequence([UnresolvedItemName(UnresolvedItemName([Ident("a")])), UnresolvedItemName(UnresolvedItemName([Ident("b")]))])) }], include_metadata: [], format: None, envelope: None })
+
 
 parse-statement
 CREATE DATABASE IF EXISTS foo
@@ -1364,7 +1386,7 @@ CREATE TABLE public.customer (
         active integer NOT NULL
 ) WITH (fillfactor = 20, user_catalog_table = true, autovacuum_vacuum_threshold = 100)
 ----
-error: Expected RETAIN, found identifier "fillfactor"
+error: Expected one of PARTITION or RETAIN, found identifier "fillfactor"
 ) WITH (fillfactor = 20, user_catalog_table = true, autovacuum_vacuum_threshold = 100)
         ^
 

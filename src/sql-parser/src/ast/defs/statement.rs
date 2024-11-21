@@ -1577,6 +1577,8 @@ impl_display_t!(CreateTableStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TableOptionName {
+    // The `PARTITION BY` option
+    PartitionBy,
     // The `RETAIN HISTORY` option
     RetainHistory,
     /// A special option to test that we do redact values.
@@ -1586,6 +1588,9 @@ pub enum TableOptionName {
 impl AstDisplay for TableOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
+            TableOptionName::PartitionBy => {
+                f.write_str("PARTITION BY");
+            }
             TableOptionName::RetainHistory => {
                 f.write_str("RETAIN HISTORY");
             }
@@ -1604,6 +1609,7 @@ impl WithOptionName for TableOptionName {
     /// on the conservative side and return `true`.
     fn redact_value(&self) -> bool {
         match self {
+            TableOptionName::PartitionBy => false,
             TableOptionName::RetainHistory => false,
             TableOptionName::RedactedTest => true,
         }
@@ -1631,6 +1637,8 @@ pub enum TableFromSourceOptionName {
     Details,
 
     IgnoreKeys,
+    /// Partition the given table by the provided columns.
+    PartitionBy,
 }
 
 impl AstDisplay for TableFromSourceOptionName {
@@ -1641,6 +1649,7 @@ impl AstDisplay for TableFromSourceOptionName {
             TableFromSourceOptionName::Timeline => "TIMELINE",
             TableFromSourceOptionName::Details => "DETAILS",
             TableFromSourceOptionName::IgnoreKeys => "IGNORE KEYS",
+            TableFromSourceOptionName::PartitionBy => "PARTITION BY",
         })
     }
 }
@@ -1658,7 +1667,8 @@ impl WithOptionName for TableFromSourceOptionName {
             | TableFromSourceOptionName::TextColumns
             | TableFromSourceOptionName::ExcludeColumns
             | TableFromSourceOptionName::Timeline
-            | TableFromSourceOptionName::IgnoreKeys => false,
+            | TableFromSourceOptionName::IgnoreKeys
+            | TableFromSourceOptionName::PartitionBy => false,
         }
     }
 }

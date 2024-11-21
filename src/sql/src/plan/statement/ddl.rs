@@ -177,11 +177,12 @@ const MANAGED_REPLICA_PATTERN: std::sync::LazyLock<regex::Regex> =
 /// Given a relation desc and a column list, checks that:
 /// - the column list is a prefix of the desc;
 /// - all the listed columns are types that have meaningful Persist-level ordering.
-fn check_partition_by(desc: &RelationDesc, partition_by: &[ColumnName]) -> Result<(), PlanError> {
+fn check_partition_by(desc: &RelationDesc, partition_by: Vec<Ident>) -> Result<(), PlanError> {
     for (idx, ((desc_name, desc_type), partition_name)) in
-        desc.iter().zip(partition_by.iter()).enumerate()
+        desc.iter().zip(partition_by.into_iter()).enumerate()
     {
-        if desc_name != partition_name {
+        let partition_name = normalize::column_name(partition_name);
+        if *desc_name != partition_name {
             sql_bail!("PARTITION BY columns should be a prefix of the relation's columns (expected {desc_name} at index {idx}, got {partition_name})");
         }
         if !preserves_order(&desc_type.scalar_type) {
@@ -412,7 +413,7 @@ pub fn plan_create_table(
 
     let create_sql = normalize::create_statement(scx, Statement::CreateTable(stmt.clone()))?;
 
-    let options = plan_table_options(scx, with_options.clone())?;
+    let options = plan_table_options(scx, &desc, with_options.clone())?;
     let compaction_window = options.iter().find_map(|o| {
         #[allow(irrefutable_let_patterns)]
         if let crate::plan::TableOption::RetainHistory(lcw) = o {
@@ -1598,6 +1599,7 @@ generate_extracted_config!(
     TableFromSourceOption,
     (TextColumns, Vec::<Ident>, Default(vec![])),
     (ExcludeColumns, Vec::<Ident>, Default(vec![])),
+    (PartitionBy, Vec<Ident>),
     (Timeline, String),
     (IgnoreKeys, bool),
     (Details, String)
@@ -1629,6 +1631,7 @@ pub fn plan_create_table_from_source(
     let TableFromSourceOptionExtracted {
         text_columns,
         exclude_columns,
+        partition_by,
         details,
         timeline,
         ignore_keys,
@@ -1824,6 +1827,11 @@ pub fn plan_create_table_from_source(
         }
         Some(timeline) => Timeline::User(timeline),
     };
+
+    if let Some(partition_by) = partition_by {
+        scx.require_feature_flag(&ENABLE_COLLECTION_PARTITION_BY)?;
+        check_partition_by(&desc, partition_by)?;
+    }
 
     let data_source = DataSourceDesc::IngestionExport {
         ingestion_id,
@@ -2621,11 +2629,7 @@ pub fn plan_create_materialized_view(
 
     if let Some(partition_by) = partition_by {
         scx.require_feature_flag(&ENABLE_COLLECTION_PARTITION_BY)?;
-        let partition_by: Vec<_> = partition_by
-            .into_iter()
-            .map(normalize::column_name)
-            .collect();
-        check_partition_by(&desc, &partition_by)?;
+        check_partition_by(&desc, partition_by)?;
     }
 
     let refresh_schedule = {
@@ -5742,19 +5746,27 @@ fn plan_index_options(
 
 generate_extracted_config!(
     TableOption,
+    (PartitionBy, Vec<Ident>),
     (RetainHistory, OptionalDuration),
     (RedactedTest, String)
 );
 
 fn plan_table_options(
     scx: &StatementContext,
+    desc: &RelationDesc,
     with_opts: Vec<TableOption<Aug>>,
 ) -> Result<Vec<crate::plan::TableOption>, PlanError> {
     let TableOptionExtracted {
+        partition_by,
         retain_history,
         redacted_test,
         ..
     }: TableOptionExtracted = with_opts.try_into()?;
+
+    if let Some(partition_by) = partition_by {
+        scx.require_feature_flag(&ENABLE_COLLECTION_PARTITION_BY)?;
+        check_partition_by(desc, partition_by)?;
+    }
 
     if redacted_test.is_some() {
         scx.require_feature_flag(&vars::ENABLE_REDACTED_TEST_OPTION)?;
