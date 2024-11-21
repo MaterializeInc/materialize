@@ -27,6 +27,8 @@ use tracing::{debug, debug_span, error, warn, Instrument, Span};
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::batch::PartDeletes;
+use crate::cfg::GC_BLOB_DELETE_CONCURRENCY_LIMIT;
+
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashSet;
 use mz_persist::location::{Blob, SeqNo};
@@ -553,24 +555,15 @@ where
         F: FnMut(&Counter),
     {
         let shard_id = machine.shard_id();
-        let delete_semaphore = Semaphore::new(
-            machine
-                .applier
-                .cfg
-                .dynamic
-                .gc_blob_delete_concurrency_limit(),
-        );
+        let concurrency_limit = GC_BLOB_DELETE_CONCURRENCY_LIMIT.get(&machine.applier.cfg);
+        let delete_semaphore = Semaphore::new(concurrency_limit);
 
         let batch_parts = std::mem::take(batch_parts);
         batch_parts
             .delete(
                 machine.applier.state_versions.blob.borrow(),
                 shard_id,
-                machine
-                    .applier
-                    .cfg
-                    .dynamic
-                    .gc_blob_delete_concurrency_limit(),
+                concurrency_limit,
                 &*machine.applier.metrics,
                 &machine.applier.metrics.retries.external.batch_delete,
             )

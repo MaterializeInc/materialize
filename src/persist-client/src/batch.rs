@@ -48,7 +48,7 @@ use timely::PartialOrder;
 use tracing::{debug_span, trace_span, warn, Instrument};
 
 use crate::async_runtime::IsolatedRuntime;
-use crate::cfg::MiB;
+use crate::cfg::{MiB, BATCH_BUILDER_MAX_OUTSTANDING_PARTS};
 use crate::error::InvalidUsage;
 use crate::internal::compact::{CompactConfig, Compactor};
 use crate::internal::encoding::{LazyInlineBatchPart, LazyPartStats, LazyProto, Schemas};
@@ -480,9 +480,7 @@ impl BatchBuilderConfig {
             writer_key,
             blob_target_size: BLOB_TARGET_SIZE.get(value).clamp(1, usize::MAX),
             batch_delete_enabled: BATCH_DELETE_ENABLED.get(value),
-            batch_builder_max_outstanding_parts: value
-                .dynamic
-                .batch_builder_max_outstanding_parts(),
+            batch_builder_max_outstanding_parts: BATCH_BUILDER_MAX_OUTSTANDING_PARTS.get(value),
             batch_columnar_format,
             batch_columnar_format_percent,
             inline_writes_single_max_bytes: INLINE_WRITES_SINGLE_MAX_BYTES.get(value),
@@ -1644,6 +1642,7 @@ mod tests {
     use timely::order::Product;
 
     use crate::cache::PersistClientCache;
+    use crate::cfg::BATCH_BUILDER_MAX_OUTSTANDING_PARTS;
     use crate::internal::paths::{BlobKey, PartialBlobKey};
     use crate::tests::{all_ok, new_test_client};
     use crate::PersistLocation;
@@ -1667,7 +1666,9 @@ mod tests {
         // edge cases below.
         cache.cfg.set_config(&BLOB_TARGET_SIZE, 0);
         cache.cfg.set_config(&MAX_RUNS, 3);
-        cache.cfg.dynamic.set_batch_builder_max_outstanding_parts(2);
+        cache
+            .cfg
+            .set_config(&BATCH_BUILDER_MAX_OUTSTANDING_PARTS, 2);
 
         let client = cache
             .open(PersistLocation::new_in_mem())
