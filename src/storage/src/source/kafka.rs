@@ -609,6 +609,15 @@ impl SourceRender for KafkaSourceConnection {
                 let mut prev_pid_info: Option<BTreeMap<PartitionId, WatermarkOffsets>> = None;
                 let mut snapshot_total = None;
 
+                reader
+                    .consumer
+                    .client()
+                    .fetch_metadata(
+                        Some(&topic),
+                        config.config.parameters.kafka_timeout_config.fetch_metadata_timeout,
+                    )
+                    .unwrap();
+
                 let max_wait_time =
                     mz_storage_types::dyncfgs::KAFKA_POLL_MAX_WAIT.get(config.config.config_set());
                 loop {
