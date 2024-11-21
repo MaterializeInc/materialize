@@ -1316,6 +1316,15 @@ where
         // necessary. This would either need to work on the encoded
         // representation (which, we'd have to fall back to the linear scan) or
         // we'd need to add a Hash/Ord bound to Schema.
+        for schemas in self.schemas.values() {
+            let key_s = K::decode_schema(&schemas.key);
+            let key_dt = decode_data_type(schemas.key_data_type.clone());
+            let val_s = V::decode_schema(&schemas.val);
+            let val_dt = decode_data_type(schemas.val_data_type.clone());
+
+            tracing::info!(?key_s, ?key_dt, ?val_s, ?val_dt, "FOUND SCHEMAS");
+        }
+
         let existing_id = self.schemas.iter().rev().find(|(_, x)| {
             K::decode_schema(&x.key) == *key_schema && V::decode_schema(&x.val) == *val_schema
         });

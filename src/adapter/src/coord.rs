@@ -2577,6 +2577,7 @@ impl Coordinator {
                         source.global_id(),
                         source_desc(&source.data_source, &source.desc, &source.timeline),
                     ));
+                    compute_collections.push((source.global_id(), source.desc.clone()));
                 }
                 CatalogItem::Table(table) => {
                     match &table.data_source {
@@ -2585,6 +2586,7 @@ impl Coordinator {
                                 (gid, CollectionDescription::for_table(desc.clone()))
                             });
                             collections.extend(collections_descs);
+                            compute_collections.extend(table.collection_descs());
                         }
                         TableDataSource::DataSource {
                             desc: data_source_desc,
@@ -2624,9 +2626,9 @@ impl Coordinator {
                         // `create_collections_for_bootstrap`.
                         new_builtin_continual_tasks.push((ct.global_id(), collection_desc));
                     } else {
-                        compute_collections.push((ct.global_id(), ct.desc.clone()));
                         collections.push((ct.global_id(), collection_desc));
                     }
+                    compute_collections.push((ct.global_id(), ct.desc.clone()));
                 }
                 _ => (),
             }
@@ -2650,6 +2652,7 @@ impl Coordinator {
         //
         // Across different versions of Materialize the nullability of columns can change based on
         // updates to our optimizer.
+        tracing::info!(?compute_collections, "EVOLVING COLLECTIONS");
         self.controller
             .storage
             .evolve_nullability_for_bootstrap(storage_metadata, compute_collections)
