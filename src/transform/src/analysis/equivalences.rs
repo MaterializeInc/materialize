@@ -305,6 +305,10 @@ pub struct EquivalenceClasses {
     /// This map reflects an equivalence relation based on a prior version of `self.classes`.
     /// As users may add to `self.classes`, `self.remap` may become stale. We refresh `remap`
     /// only in `self.refresh()`, to the equivalence relation that derives from `self.classes`.
+    ///
+    /// It is important to `self.remap.clear()` if you invalidate it by mutating rather than
+    /// appending to `self.classes`. This will be corrected in the next call to `self.refresh()`,
+    /// but until then `remap` could be arbitrarily wrong. This should be improved in the future.
     remap: BTreeMap<MirScalarExpr, MirScalarExpr>,
 }
 
@@ -355,7 +359,7 @@ impl EquivalenceClasses {
     /// Restore equivalence relation structure to `self.classes` and refresh `self.remap`.
     ///
     /// This method takes roughly linear time, and returns true iff `self.remap` has changed.
-    /// This is the only method that changes `self.remap`, and is a perfect place to decide
+    /// This is the only method that refreshes `self.remap`, and is a perfect place to decide
     /// whether the equivalence classes it represents have experienced any changes since the
     /// last refresh.
     fn refresh(&mut self) -> bool {
