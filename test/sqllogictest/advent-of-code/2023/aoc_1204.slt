@@ -513,117 +513,91 @@ Explained Query:
           Project (#1)
             Map (double_to_numeric(#0))
               Union
-                Get l9
+                Get l6
                 Map (null)
                   Union
                     Negate
                       Project ()
-                        Get l9
+                        Get l6
                     Constant
                       - ()
         ArrangeBy keys=[[]]
           Union
-            Get l11
+            Get l8
             Map (0)
               Union
                 Negate
                   Project ()
-                    Get l11
+                    Get l8
                 Constant
                   - ()
     With
-      cte l11 =
+      cte l8 =
         Reduce aggregates=[count(*)]
           Project ()
-            Get l10
+            Get l7
   With Mutually Recursive
-    cte l10 =
+    cte l7 =
       Union
-        Get l8
+        Get l5
         Project (#2, #3)
           Filter (integer_to_bigint(#2) = (integer_to_bigint(#0) + #4))
             FlatMap generate_series(1, #1, 1)
               CrossJoin type=differential
                 ArrangeBy keys=[[]]
-                  Get l10
+                  Get l7
                 ArrangeBy keys=[[]]
-                  Get l8
-    cte l9 =
+                  Get l5
+    cte l6 =
       Reduce aggregates=[sum(power(2, bigint_to_double((#0 - 1))))]
         Project (#1)
           Filter (#1 > 0)
-            Get l8
-    cte l8 =
-      Project (#0, #8)
-        Join on=(#0 = #3 AND #1 = #4 = #6 AND #2 = #5 = #7) type=delta
-          ArrangeBy keys=[[#0..=#2], [#1, #2]]
+            Get l5
+    cte l5 =
+      Project (#0, #5)
+        Join on=(#1 = #3 AND #2 = #4) type=differential
+          ArrangeBy keys=[[#1, #2]]
             Get l0
-          ArrangeBy keys=[[#0..=#2]]
-            Get l1
           ArrangeBy keys=[[#0, #1]]
             Union
-              Get l7
-              Project (#0, #1, #4)
-                Map (null)
-                  Join on=(#0 = #2 AND #1 = #3) type=differential
-                    ArrangeBy keys=[[#0, #1]]
-                      Union
-                        Negate
-                          Distinct project=[#0, #1]
-                            Project (#0, #1)
-                              Get l7
-                        Get l2
-                    Get l5
-    cte l7 =
-      Union
-        Get l6
-        Map (error("more than one record produced in subquery"))
-          Project (#0, #1)
-            Filter (#2 > 1)
-              Reduce group_by=[#0, #1] aggregates=[count(*)]
-                Project (#0, #1)
-                  Get l6
-    cte l6 =
-      Union
-        Get l4
-        Project (#0, #1, #4)
-          Map (0)
-            Join on=(#0 = #2 AND #1 = #3) type=differential
-              ArrangeBy keys=[[#0, #1]]
+              Get l4
+              Map (null)
                 Union
                   Negate
                     Project (#0, #1)
                       Get l4
-                  Get l2
-              Get l5
-    cte l5 =
-      ArrangeBy keys=[[#0, #1]]
-        Get l2
+                  Get l1
     cte l4 =
+      Union
+        Get l3
+        Map (0)
+          Union
+            Negate
+              Project (#0, #1)
+                Get l3
+            Get l1
+    cte l3 =
       Reduce group_by=[#0, #1] aggregates=[count(*)]
         Project (#0, #1)
           Distinct project=[#0..=#2]
             Union
-              Get l3
+              Get l2
               Negate
                 Threshold
                   Union
-                    Get l3
+                    Get l2
                     Negate
                       Filter (#2 != "")
                         FlatMap unnest_array(#1)
-                          Get l2
-    cte l3 =
+                          Get l1
+    cte l2 =
       Filter (#2 != "")
         FlatMap unnest_array(#0)
-          Get l2
-    cte l2 =
-      Distinct project=[#0, #1]
-        Project (#1, #2)
           Get l1
     cte l1 =
-      Distinct project=[#0..=#2]
-        Get l0
+      Distinct project=[#0, #1]
+        Project (#1, #2)
+          Get l0
     cte l0 =
       Project (#3..=#5)
         Map (regexp_split_to_array["(:|\|)", case_insensitive=false](#1), text_to_integer(array_index(regexp_match["[0-9]+", case_insensitive=false](btrim(array_index(#2, 1))), 1)), regexp_split_to_array[" ", case_insensitive=false](btrim(array_index(#2, 2))), regexp_split_to_array[" ", case_insensitive=false](btrim(array_index(#2, 3))))

@@ -387,16 +387,16 @@ Explained Query:
                       - ()
         ArrangeBy keys=[[]]
           Union
-            Get l19
+            Get l17
             Map (0)
               Union
                 Negate
                   Project ()
-                    Get l19
+                    Get l17
                 Constant
                   - ()
     With
-      cte l19 =
+      cte l17 =
         Reduce aggregates=[count(*)]
           Project ()
             Union
@@ -404,18 +404,18 @@ Explained Query:
                 Project (#0, #1)
                   Join on=(#0 = #2 AND #1 = #3) type=differential
                     ArrangeBy keys=[[#0, #1]]
-                      Get l18
+                      Get l16
                     ArrangeBy keys=[[#0, #1]]
                       Distinct project=[#0, #1]
                         Project (#0, #1)
                           Get l8
-              Get l18
-      cte l18 =
+              Get l16
+      cte l16 =
         Project (#0, #1)
           Filter (#2 = true)
-            Get l17
+            Get l15
   With Mutually Recursive
-    cte l17 =
+    cte l15 =
       Distinct project=[#0..=#2]
         Union
           Project (#0, #1, #3)
@@ -429,43 +429,22 @@ Explained Query:
                   Get l11
                 ArrangeBy keys=[[#0]]
                   Union
-                    Get l16
-                    Project (#0, #2)
-                      Map (null)
-                        Join on=(#0 = #1) type=differential
-                          ArrangeBy keys=[[#0]]
-                            Union
-                              Negate
-                                Distinct project=[#0]
-                                  Project (#0)
-                                    Get l16
-                              Get l12
-                          Get l14
-    cte l16 =
-      Union
-        Get l15
-        Map (error("more than one record produced in subquery"))
-          Project (#0)
-            Filter (#1 > 1)
-              Reduce group_by=[#0] aggregates=[count(*)]
-                Project (#0)
-                  Get l15
-    cte l15 =
+                    Get l14
+                    Map (null)
+                      Union
+                        Negate
+                          Project (#0)
+                            Get l14
+                        Get l12
+    cte l14 =
       Union
         Get l13
-        Project (#0, #2)
-          Map (false)
-            Join on=(#0 = #1) type=differential
-              ArrangeBy keys=[[#0]]
-                Union
-                  Negate
-                    Project (#0)
-                      Get l13
-                  Get l12
-              Get l14
-    cte l14 =
-      ArrangeBy keys=[[#0]]
-        Get l12
+        Map (false)
+          Union
+            Negate
+              Project (#0)
+                Get l13
+            Get l12
     cte l13 =
       Reduce group_by=[#0] aggregates=[any((#0 = #1))]
         FlatMap wrap1("J", "-", "|", "F")
@@ -490,7 +469,7 @@ Explained Query:
                             Distinct project=[#0, #1]
                               Project (#0, #1)
                                 Get l10
-                    Get l17
+                    Get l15
                 Get l10
             ArrangeBy keys=[[#0, #1]]
               Project (#0, #1)
@@ -503,7 +482,7 @@ Explained Query:
             Get l8
     cte l9 =
       ArrangeBy keys=[[#0, #1]]
-        Get l17
+        Get l15
     cte l8 =
       Distinct project=[#0..=#2]
         Union
