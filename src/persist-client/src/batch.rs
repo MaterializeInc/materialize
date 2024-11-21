@@ -748,8 +748,6 @@ where
         let shard_metrics = Arc::clone(&self.parts.shard_metrics);
         let expected_order = self.parts.cfg.expected_order;
         let parts = self.parts.finish().await;
-        let parts_empty = parts.is_empty();
-        let parts_len = parts.len();
 
         let desc = Description::new(self.lower, registered_upper, self.since);
         let (runs, run_meta) = if parts.is_empty() {

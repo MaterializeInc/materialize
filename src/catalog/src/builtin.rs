@@ -9474,9 +9474,9 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_RECENT_STORAGE_USAGE),
         Builtin::Index(&MZ_RECENT_STORAGE_USAGE_IND),
         Builtin::Connection(&MZ_ANALYTICS),
-        Builtin::ContinualTask(&MZ_CLUSTER_REPLICA_METRICS_HISTORY_CT),
-        Builtin::ContinualTask(&MZ_CLUSTER_REPLICA_STATUS_HISTORY_CT),
-        Builtin::ContinualTask(&MZ_WALLCLOCK_LAG_HISTORY_CT),
+        // Builtin::ContinualTask(&MZ_CLUSTER_REPLICA_METRICS_HISTORY_CT),
+        // Builtin::ContinualTask(&MZ_CLUSTER_REPLICA_STATUS_HISTORY_CT),
+        // Builtin::ContinualTask(&MZ_WALLCLOCK_LAG_HISTORY_CT),
         Builtin::View(&MZ_INDEX_ADVICE),
     ]);
 
