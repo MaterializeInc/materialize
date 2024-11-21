@@ -292,51 +292,33 @@ SELECT * FROM longest ORDER BY d DESC;
 Explained Query:
   Finish order_by=[#2 desc nulls_first] output=[#0..=#3]
     Return
-      Get l17
+      Get l15
     With Mutually Recursive
-      cte l17 =
+      cte l15 =
         Project (#0, #1, #3, #2)
           Reduce group_by=[#0, #1, #3] aggregates=[max(#2)]
             Union
-              Project (#7, #8, #19, #20)
-                Filter (1 != ((#3 >> #18) % 2))
-                  Map (bigint_to_integer(#17), (#2 + #6), (#3 + (1 << #18)))
-                    Join on=(#0 = #4 AND #1 = #5 AND #7 = #9 = #11 = #13 = #15 AND #8 = #10 = #12 = #14 = #16) type=delta
+              Project (#7, #8, #15, #16)
+                Filter (1 != ((#3 >> #14) % 2))
+                  Map (bigint_to_integer(#13), (#2 + #6), (#3 + (1 << #14)))
+                    Join on=(#0 = #4 AND #1 = #5 AND #7 = #9 = #11 AND #8 = #10 = #12) type=delta
                       ArrangeBy keys=[[#0, #1]]
-                        Get l17
+                        Get l15
                       ArrangeBy keys=[[#0, #1], [#3, #4]]
                         Get l9
-                      Get l8
                       ArrangeBy keys=[[#0, #1]]
                         Get l10
-                      Get l15
                       ArrangeBy keys=[[#0, #1]]
                         Union
-                          Get l16
-                          Map (error("more than one record produced in subquery"))
-                            Project (#0, #1)
-                              Filter (#2 > 1)
-                                Reduce group_by=[#0, #1] aggregates=[count(*)]
-                                  Project (#0, #1)
-                                    Get l16
+                          Get l14
+                          Map (0)
+                            Union
+                              Negate
+                                Project (#0, #1)
+                                  Get l14
+                              Get l11
               Constant
                 - (12, 20, 0, 0)
-      cte l16 =
-        Union
-          Get l14
-          Project (#0, #1, #4)
-            Map (0)
-              Join on=(#0 = #2 AND #1 = #3) type=differential
-                ArrangeBy keys=[[#0, #1]]
-                  Union
-                    Negate
-                      Project (#0, #1)
-                        Get l14
-                    Get l11
-                Get l15
-      cte l15 =
-        ArrangeBy keys=[[#0, #1]]
-          Get l11
       cte l14 =
         Reduce group_by=[#0, #1] aggregates=[count(*)]
           Project (#0, #1)
