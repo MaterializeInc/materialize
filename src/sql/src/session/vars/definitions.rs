@@ -1474,6 +1474,13 @@ pub static ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE: VarDefinition = VarDefinition:
     true,
 );
 
+pub static ENABLE_REDUCE_REDUCTION: VarDefinition = VarDefinition::new(
+    "enable_reduce_reduction",
+    value!(bool; true),
+    "split complex reductions in to simpler ones and a join (Materialize).",
+    true,
+);
+
 pub static MIN_TIMESTAMP_INTERVAL: VarDefinition = VarDefinition::new(
     "min_timestamp_interval",
     value!(Duration; Duration::from_millis(1000)),
@@ -2219,6 +2226,7 @@ impl From<&super::SystemVars> for OptimizerFeatures {
             enable_value_window_function_fusion: vars.enable_value_window_function_fusion(),
             enable_reduce_unnest_list_fusion: vars.enable_reduce_unnest_list_fusion(),
             enable_window_aggregation_fusion: vars.enable_window_aggregation_fusion(),
+            enable_reduce_reduction: vars.enable_reduce_reduction(),
             persist_fast_path_limit: vars.persist_fast_path_limit(),
             reoptimize_imported_views: false,
         }

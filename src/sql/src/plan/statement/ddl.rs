@@ -4661,6 +4661,7 @@ pub fn unplan_create_cluster(
                 enable_value_window_function_fusion,
                 enable_reduce_unnest_list_fusion,
                 enable_window_aggregation_fusion,
+                enable_reduce_reduction: _,
             } = optimizer_feature_overrides;
             let features_extracted = ClusterFeatureExtracted {
                 // Seen is ignored when unplanning.

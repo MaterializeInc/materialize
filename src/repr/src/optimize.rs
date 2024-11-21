@@ -122,6 +122,8 @@ optimizer_feature_flags!({
     enable_reduce_unnest_list_fusion: bool,
     // See the feature flag of the same name.
     enable_window_aggregation_fusion: bool,
+    // See the feature flag of the same name.
+    enable_reduce_reduction: bool,
 });
 
 /// A trait used to implement layered config construction.

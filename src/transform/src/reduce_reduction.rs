@@ -32,10 +32,12 @@ impl crate::Transform for ReduceReduction {
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
-        _: &mut TransformCtx,
+        ctx: &mut TransformCtx,
     ) -> Result<(), crate::TransformError> {
-        relation.visit_pre_mut(&mut Self::action);
-        mz_repr::explain::trace_plan(&*relation);
+        if ctx.features.enable_reduce_reduction {
+            relation.visit_pre_mut(&mut Self::action);
+            mz_repr::explain::trace_plan(&*relation);
+        }
         Ok(())
     }
 }
