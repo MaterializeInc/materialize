@@ -1,7 +1,8 @@
 ---
 title: "Materialize Kubernetes Operator"
 description: ""
-
+aliases:
+  - /self-hosted/
 ---
 
 ## Materialize Kubernetes Operator
@@ -78,7 +79,6 @@ To setup:
 1. Configure volume group name as `instance-store-vg`
 
 
-
 #### Storage Configuration
 
 Once LVM is configured, set up the storage class:
@@ -128,7 +128,7 @@ storage:
 1. Install the Materialize operator with the release name
    `my-materialize-operator`
 
-      - To use the [default configuration](/self-hosted/configuration/):
+      - To use the [default configuration](/self-managed/configuration/):
 
         ```shell
         helm install my-materialize-operator materialize/misc/helm-charts/operator
@@ -136,10 +136,10 @@ storage:
 
       * To include custom configuration, you can:
 
-        - *Recommended:* Create or edita a YAML file (such as the sample
+        - *Recommended:* Create or edit a YAML file (such as the sample
           `values.yaml` file located in the
           `materialize/misc/helm-charts/operator/` directory) that specifies the
-          values for the parameters and then install the chart with the `-f`
+          configuration values and then install the chart with the `-f`
           flag:
 
           ```shell
@@ -235,24 +235,6 @@ helm delete my-materialize-operator
 This command removes all the Kubernetes components associated with the chart and
 deletes the release.
 
-## Operational Guidelines
-
-### Recommended Instance Types
-
-Materialize has been vetted to work on instances with the following properties:
-
-- ARM-based CPU
-- 1:8 ratio of vCPU to GiB memory
-- 1:16 ratio of vCPU to GiB local instance storage (if enabling spill-to-disk)
-
-When operating in AWS, we recommend using the `r7gd` and `r6gd` families of instances (and `r8gd` once available)
-when running with local disk, and the `r8g`, `r7g`, and `r6g` families when running without local disk.
-
-### CPU Affinity
-
-It is strongly recommended to enable the Kubernetes `static` [CPU management policy](https://kubernetes.io/docs/tasks/administer-cluster/cpu-management-policies/#static-policy).
-This ensures that each worker thread of Materialize is given exclusively access to a vCPU. Our benchmarks have shown this
-to substantially improve the performance of compute-bound workloads.
 
 ## Related pages
 

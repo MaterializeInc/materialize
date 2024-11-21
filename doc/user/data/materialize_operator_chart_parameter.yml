@@ -1,812 +1,587 @@
-
 parameters:
   - parameter: clusterd.nodeSelector
-    description: |
-      <red>Replace with description content here.</red>
+    description: ""
     default: "{}"
-    required: false
+
   - parameter: environmentd.nodeSelector
-    description: |
-      <red>Replace with description content here.</red>
+    description: ""
     default: "{}"
-    required: false
+
   - parameter: namespace.create
-    description: |
-      <red>Replace with description content here.</red>
+    description: ""
     default: false
-    required: false
+
   - parameter: namespace.name
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"materialize\""
-    required: false
+    description: ""
+    default: "materialize"
+
   - parameter: networkPolicies.egress.cidrs[0]
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"0.0.0.0/0\""
-    required: false
+    description: ""
+    default: "0.0.0.0/0"
+
   - parameter: networkPolicies.egress.enabled
-    description: |
-      <red>Replace with description content here.</red>
-    default: true
-    required: false
+    description: ""
+    default: false
+
   - parameter: networkPolicies.enabled
-    description: |
-      <red>Replace with description content here.</red>
-    default: true
-    required: false
+    description: ""
+    default: false
+
   - parameter: networkPolicies.ingress.cidrs[0]
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"0.0.0.0/0\""
-    required: false
+    description: ""
+    default: "0.0.0.0/0"
+
   - parameter: networkPolicies.ingress.enabled
-    description: |
-      <red>Replace with description content here.</red>
-    default: true
-    required: false
+    description: ""
+    default: false
+
   - parameter: networkPolicies.internal.enabled
-    description: |
-      <red>Replace with description content here.</red>
-    default: true
-    required: false
+    description: ""
+    default: false
+
   - parameter: observability.enabled
-    description: |
-      <red>Replace with description content here.</red>
+    description: ""
     default: false
-    required: false
+
   - parameter: observability.prometheus.enabled
-    description: |
-      <red>Replace with description content here.</red>
+    description: ""
     default: false
-    required: false
-  - parameter: operator.args.awsAccountID
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"\""
-    required: false
-  - parameter: operator.args.cloudProvider
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"local\""
-    required: false
-  - parameter: operator.args.consoleImageTagMapOverride
-    description: |
-      <red>Replace with description content here.</red>
-    default: "{}"
-    required: false
-  - parameter: operator.args.createBalancers
-    description: |
-      <red>Replace with description content here.</red>
-    default: true
-    required: false
-  - parameter: operator.args.createConsole
-    description: |
-      <red>Replace with description content here.</red>
-    default: true
-    required: false
-  - parameter: operator.args.environmentdConnectionRoleARN
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"\""
-    required: false
-  - parameter: operator.args.environmentdIAMRoleARN
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"\""
-    required: false
-  - parameter: operator.args.localDevelopment
-    description: |
-      <red>Replace with description content here.</red>
-    default: true
-    required: false
-  - parameter: operator.args.region
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"kind\""
-    required: false
+
   - parameter: operator.args.startupLogFilter
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"INFO,mz_orchestratord=TRACE\""
-    required: false
-  - parameter: operator.clusters.defaultSizes.analytics
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"25cc\""
-    required: false
-  - parameter: operator.clusters.defaultSizes.catalogServer
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"50cc\""
-    required: false
-  - parameter: operator.clusters.defaultSizes.default
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"25cc\""
-    required: false
-  - parameter: operator.clusters.defaultSizes.probe
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"mz_probe\""
-    required: false
-  - parameter: operator.clusters.defaultSizes.support
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"25cc\""
-    required: false
-  - parameter: operator.clusters.defaultSizes.system
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"25cc\""
-    required: false
-  - parameter: operator.clusters.sizes.100cc.cpu_exclusive
-    description: |
-      <red>Replace with description content here.</red>
-    default: true
-    required: false
-  - parameter: operator.clusters.sizes.100cc.cpu_limit
-    description: |
-      <red>Replace with description content here.</red>
-    default: "2"
-    required: false
-  - parameter: operator.clusters.sizes.100cc.credits_per_hour
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"1\""
-    required: false
-  - parameter: operator.clusters.sizes.100cc.disk_limit
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"31050MiB\""
-    required: false
-  - parameter: operator.clusters.sizes.100cc.memory_limit
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"15525MiB\""
-    required: false
-  - parameter: operator.clusters.sizes.100cc.scale
-    description: |
-      <red>Replace with description content here.</red>
-    default: "1"
-    required: false
-  - parameter: operator.clusters.sizes.100cc.workers
-    description: |
-      <red>Replace with description content here.</red>
-    default: "2"
-    required: false
-  - parameter: operator.clusters.sizes.1200cc.cpu_exclusive
-    description: |
-      <red>Replace with description content here.</red>
-    default: true
-    required: false
-  - parameter: operator.clusters.sizes.1200cc.cpu_limit
-    description: |
-      <red>Replace with description content here.</red>
-    default: "24"
-    required: false
-  - parameter: operator.clusters.sizes.1200cc.credits_per_hour
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"12\""
-    required: false
-  - parameter: operator.clusters.sizes.1200cc.disk_limit
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"372603MiB\""
-    required: false
-  - parameter: operator.clusters.sizes.1200cc.memory_limit
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"186301MiB\""
-    required: false
-  - parameter: operator.clusters.sizes.1200cc.scale
-    description: |
-      <red>Replace with description content here.</red>
-    default: "1"
-    required: false
-  - parameter: operator.clusters.sizes.1200cc.workers
-    description: |
-      <red>Replace with description content here.</red>
-    default: "24"
-    required: false
-  - parameter: operator.clusters.sizes.128C.cpu_exclusive
-    description: |
-      <red>Replace with description content here.</red>
-    default: true
-    required: false
-  - parameter: operator.clusters.sizes.128C.cpu_limit
-    description: |
-      <red>Replace with description content here.</red>
-    default: "62"
-    required: false
-  - parameter: operator.clusters.sizes.128C.credits_per_hour
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"128\""
-    required: false
-  - parameter: operator.clusters.sizes.128C.disk_limit
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"962560MiB\""
-    required: false
-  - parameter: operator.clusters.sizes.128C.memory_limit
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"481280MiB\""
-    required: false
-  - parameter: operator.clusters.sizes.128C.scale
-    description: |
-      <red>Replace with description content here.</red>
-    default: "4"
-    required: false
-  - parameter: operator.clusters.sizes.128C.workers
-    description: |
-      <red>Replace with description content here.</red>
-    default: "62"
-    required: false
-  - parameter: operator.clusters.sizes.1600cc.cpu_exclusive
-    description: |
-      <red>Replace with description content here.</red>
-    default: true
-    required: false
-  - parameter: operator.clusters.sizes.1600cc.cpu_limit
-    description: |
-      <red>Replace with description content here.</red>
-    default: "31"
-    required: false
-  - parameter: operator.clusters.sizes.1600cc.credits_per_hour
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"16\""
-    required: false
-  - parameter: operator.clusters.sizes.1600cc.disk_limit
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"481280MiB\""
-    required: false
-  - parameter: operator.clusters.sizes.1600cc.memory_limit
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"240640MiB\""
-    required: false
-  - parameter: operator.clusters.sizes.1600cc.scale
-    description: |
-      <red>Replace with description content here.</red>
-    default: "1"
-    required: false
-  - parameter: operator.clusters.sizes.1600cc.workers
-    description: |
-      <red>Replace with description content here.</red>
-    default: "31"
-    required: false
-  - parameter: operator.clusters.sizes.200cc.cpu_exclusive
-    description: |
-      <red>Replace with description content here.</red>
-    default: true
-    required: false
-  - parameter: operator.clusters.sizes.200cc.cpu_limit
-    description: |
-      <red>Replace with description content here.</red>
-    default: "4"
-    required: false
-  - parameter: operator.clusters.sizes.200cc.credits_per_hour
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"2\""
-    required: false
-  - parameter: operator.clusters.sizes.200cc.disk_limit
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"62100MiB\""
-    required: false
-  - parameter: operator.clusters.sizes.200cc.memory_limit
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"31050MiB\""
-    required: false
-  - parameter: operator.clusters.sizes.200cc.scale
-    description: |
-      <red>Replace with description content here.</red>
-    default: "1"
-    required: false
-  - parameter: operator.clusters.sizes.200cc.workers
-    description: |
-      <red>Replace with description content here.</red>
-    default: "4"
-    required: false
-  - parameter: operator.clusters.sizes.256C.cpu_exclusive
-    description: |
-      <red>Replace with description content here.</red>
-    default: true
-    required: false
-  - parameter: operator.clusters.sizes.256C.cpu_limit
-    description: |
-      <red>Replace with description content here.</red>
-    default: "62"
-    required: false
-  - parameter: operator.clusters.sizes.256C.credits_per_hour
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"256\""
-    required: false
-  - parameter: operator.clusters.sizes.256C.disk_limit
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"962560MiB\""
-    required: false
-  - parameter: operator.clusters.sizes.256C.memory_limit
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"481280MiB\""
-    required: false
-  - parameter: operator.clusters.sizes.256C.scale
-    description: |
-      <red>Replace with description content here.</red>
-    default: "8"
-    required: false
-  - parameter: operator.clusters.sizes.256C.workers
-    description: |
-      <red>Replace with description content here.</red>
-    default: "62"
-    required: false
-  - parameter: operator.clusters.sizes.25cc.cpu_exclusive
-    description: |
-      <red>Replace with description content here.</red>
-    default: false
-    required: false
-  - parameter: operator.clusters.sizes.25cc.cpu_limit
-    description: |
-      <red>Replace with description content here.</red>
-    default: "0.5"
-    required: false
-  - parameter: operator.clusters.sizes.25cc.credits_per_hour
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"0.25\""
-    required: false
-  - parameter: operator.clusters.sizes.25cc.disk_limit
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"7762MiB\""
-    required: false
-  - parameter: operator.clusters.sizes.25cc.memory_limit
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"3881MiB\""
-    required: false
-  - parameter: operator.clusters.sizes.25cc.scale
-    description: |
-      <red>Replace with description content here.</red>
-    default: "1"
-    required: false
-  - parameter: operator.clusters.sizes.25cc.workers
-    description: |
-      <red>Replace with description content here.</red>
-    default: "1"
-    required: false
-  - parameter: operator.clusters.sizes.300cc.cpu_exclusive
-    description: |
-      <red>Replace with description content here.</red>
-    default: true
-    required: false
-  - parameter: operator.clusters.sizes.300cc.cpu_limit
-    description: |
-      <red>Replace with description content here.</red>
-    default: "6"
-    required: false
-  - parameter: operator.clusters.sizes.300cc.credits_per_hour
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"3\""
-    required: false
-  - parameter: operator.clusters.sizes.300cc.disk_limit
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"93150MiB\""
-    required: false
-  - parameter: operator.clusters.sizes.300cc.memory_limit
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"46575MiB\""
-    required: false
-  - parameter: operator.clusters.sizes.300cc.scale
-    description: |
-      <red>Replace with description content here.</red>
-    default: "1"
-    required: false
-  - parameter: operator.clusters.sizes.300cc.workers
-    description: |
-      <red>Replace with description content here.</red>
-    default: "6"
-    required: false
-  - parameter: operator.clusters.sizes.3200cc.cpu_exclusive
-    description: |
-      <red>Replace with description content here.</red>
-    default: true
-    required: false
-  - parameter: operator.clusters.sizes.3200cc.cpu_limit
-    description: |
-      <red>Replace with description content here.</red>
-    default: "62"
-    required: false
-  - parameter: operator.clusters.sizes.3200cc.credits_per_hour
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"32\""
-    required: false
-  - parameter: operator.clusters.sizes.3200cc.disk_limit
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"962560MiB\""
-    required: false
-  - parameter: operator.clusters.sizes.3200cc.memory_limit
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"481280MiB\""
-    required: false
-  - parameter: operator.clusters.sizes.3200cc.scale
-    description: |
-      <red>Replace with description content here.</red>
-    default: "1"
-    required: false
-  - parameter: operator.clusters.sizes.3200cc.workers
-    description: |
-      <red>Replace with description content here.</red>
-    default: "62"
-    required: false
-  - parameter: operator.clusters.sizes.400cc.cpu_exclusive
-    description: |
-      <red>Replace with description content here.</red>
-    default: true
-    required: false
-  - parameter: operator.clusters.sizes.400cc.cpu_limit
-    description: |
-      <red>Replace with description content here.</red>
-    default: "8"
-    required: false
-  - parameter: operator.clusters.sizes.400cc.credits_per_hour
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"4\""
-    required: false
-  - parameter: operator.clusters.sizes.400cc.disk_limit
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"124201MiB\""
-    required: false
-  - parameter: operator.clusters.sizes.400cc.memory_limit
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"62100MiB\""
-    required: false
-  - parameter: operator.clusters.sizes.400cc.scale
-    description: |
-      <red>Replace with description content here.</red>
-    default: "1"
-    required: false
-  - parameter: operator.clusters.sizes.400cc.workers
-    description: |
-      <red>Replace with description content here.</red>
-    default: "8"
-    required: false
-  - parameter: operator.clusters.sizes.50cc.cpu_exclusive
-    description: |
-      <red>Replace with description content here.</red>
-    default: true
-    required: false
-  - parameter: operator.clusters.sizes.50cc.cpu_limit
-    description: |
-      <red>Replace with description content here.</red>
-    default: "1"
-    required: false
-  - parameter: operator.clusters.sizes.50cc.credits_per_hour
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"0.5\""
-    required: false
-  - parameter: operator.clusters.sizes.50cc.disk_limit
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"15525MiB\""
-    required: false
-  - parameter: operator.clusters.sizes.50cc.memory_limit
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"7762MiB\""
-    required: false
-  - parameter: operator.clusters.sizes.50cc.scale
-    description: |
-      <red>Replace with description content here.</red>
-    default: "1"
-    required: false
-  - parameter: operator.clusters.sizes.50cc.workers
-    description: |
-      <red>Replace with description content here.</red>
-    default: "1"
-    required: false
-  - parameter: operator.clusters.sizes.512C.cpu_exclusive
-    description: |
-      <red>Replace with description content here.</red>
-    default: true
-    required: false
-  - parameter: operator.clusters.sizes.512C.cpu_limit
-    description: |
-      <red>Replace with description content here.</red>
-    default: "62"
-    required: false
-  - parameter: operator.clusters.sizes.512C.credits_per_hour
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"512\""
-    required: false
-  - parameter: operator.clusters.sizes.512C.disk_limit
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"962560MiB\""
-    required: false
-  - parameter: operator.clusters.sizes.512C.memory_limit
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"481280MiB\""
-    required: false
-  - parameter: operator.clusters.sizes.512C.scale
-    description: |
-      <red>Replace with description content here.</red>
-    default: "16"
-    required: false
-  - parameter: operator.clusters.sizes.512C.workers
-    description: |
-      <red>Replace with description content here.</red>
-    default: "62"
-    required: false
-  - parameter: operator.clusters.sizes.600cc.cpu_exclusive
-    description: |
-      <red>Replace with description content here.</red>
-    default: true
-    required: false
-  - parameter: operator.clusters.sizes.600cc.cpu_limit
-    description: |
-      <red>Replace with description content here.</red>
-    default: "12"
-    required: false
-  - parameter: operator.clusters.sizes.600cc.credits_per_hour
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"6\""
-    required: false
-  - parameter: operator.clusters.sizes.600cc.disk_limit
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"186301MiB\""
-    required: false
-  - parameter: operator.clusters.sizes.600cc.memory_limit
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"93150MiB\""
-    required: false
-  - parameter: operator.clusters.sizes.600cc.scale
-    description: |
-      <red>Replace with description content here.</red>
-    default: "1"
-    required: false
-  - parameter: operator.clusters.sizes.600cc.workers
-    description: |
-      <red>Replace with description content here.</red>
-    default: "12"
-    required: false
-  - parameter: operator.clusters.sizes.6400cc.cpu_exclusive
-    description: |
-      <red>Replace with description content here.</red>
-    default: true
-    required: false
-  - parameter: operator.clusters.sizes.6400cc.cpu_limit
-    description: |
-      <red>Replace with description content here.</red>
-    default: "62"
-    required: false
-  - parameter: operator.clusters.sizes.6400cc.credits_per_hour
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"64\""
-    required: false
-  - parameter: operator.clusters.sizes.6400cc.disk_limit
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"962560MiB\""
-    required: false
-  - parameter: operator.clusters.sizes.6400cc.memory_limit
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"481280MiB\""
-    required: false
-  - parameter: operator.clusters.sizes.6400cc.scale
-    description: |
-      <red>Replace with description content here.</red>
-    default: "2"
-    required: false
-  - parameter: operator.clusters.sizes.6400cc.workers
-    description: |
-      <red>Replace with description content here.</red>
-    default: "62"
-    required: false
-  - parameter: operator.clusters.sizes.800cc.cpu_exclusive
-    description: |
-      <red>Replace with description content here.</red>
-    default: true
-    required: false
-  - parameter: operator.clusters.sizes.800cc.cpu_limit
-    description: |
-      <red>Replace with description content here.</red>
-    default: "16"
-    required: false
-  - parameter: operator.clusters.sizes.800cc.credits_per_hour
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"8\""
-    required: false
-  - parameter: operator.clusters.sizes.800cc.disk_limit
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"248402MiB\""
-    required: false
-  - parameter: operator.clusters.sizes.800cc.memory_limit
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"124201MiB\""
-    required: false
-  - parameter: operator.clusters.sizes.800cc.scale
-    description: |
-      <red>Replace with description content here.</red>
-    default: "1"
-    required: false
-  - parameter: operator.clusters.sizes.800cc.workers
-    description: |
-      <red>Replace with description content here.</red>
-    default: "16"
-    required: false
-  - parameter: operator.clusters.sizes.mz_probe.cpu_exclusive
-    description: |
-      <red>Replace with description content here.</red>
-    default: false
-    required: false
-  - parameter: operator.clusters.sizes.mz_probe.cpu_limit
-    description: |
-      <red>Replace with description content here.</red>
-    default: "0.1"
-    required: false
-  - parameter: operator.clusters.sizes.mz_probe.credits_per_hour
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"0.00\""
-    required: false
-  - parameter: operator.clusters.sizes.mz_probe.disk_limit
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"1552MiB\""
-    required: false
-  - parameter: operator.clusters.sizes.mz_probe.memory_limit
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"776MiB\""
-    required: false
-  - parameter: operator.clusters.sizes.mz_probe.scale
-    description: |
-      <red>Replace with description content here.</red>
-    default: "1"
-    required: false
-  - parameter: operator.clusters.sizes.mz_probe.workers
-    description: |
-      <red>Replace with description content here.</red>
-    default: "1"
-    required: false
-  - parameter: operator.image.pullPolicy
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"IfNotPresent\""
-    required: false
-  - parameter: operator.image.repository
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"materialize/orchestratord\""
-    required: false
-  - parameter: operator.image.tag
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"v0.125.0-dev.0--pr.gd3deb07aa502a84ebd024517344f0aa861f857df\""
-    required: false
-  - parameter: operator.nodeSelector
-    description: |
-      <red>Replace with description content here.</red>
-    default: "{}"
-    required: false
-  - parameter: operator.resources.limits.memory
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"512Mi\""
-    required: false
-  - parameter: operator.resources.requests.cpu
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"100m\""
-    required: false
-  - parameter: operator.resources.requests.memory
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"512Mi\""
-    required: false
-  - parameter: rbac.create
-    description: |
-      <red>Replace with description content here.</red>
+    description: ""
+    default: "INFO,mz_orchestratord=TRACE"
 
-      A boolean flag that controls whether the chart creates a `ClusterRole` and
-      `ClusterRoleBinding`.
-
-      If `true`, the chart creates a `ClusterRole` and `ClusterRoleBinding`.
-
-      If `false`, the chart does not create a `ClusterRole`. When set to
-      `false`, update the `rbac.clusterRole` parameter to specify the name of
-      the `ClusterRole` to use.
-    default: true
-    required: false
-  - parameter: rbac.clusterRole
-    description: |
-      <red>Replace with description content here.</red>
-
+  - parameter: operator.cloudProvider.providers.aws.accountID
+    description: ""
     default: ""
-    required: false
-  - parameter: serviceAccount.create
-    description: |
-      <red>Replace with description content here.</red>
+
+  - parameter: operator.cloudProvider.providers.aws.enabled
+    description: ""
+    default: false
+
+  - parameter: operator.cloudProvider.providers.aws.iam.roles.connection
+    description: ""
+    default: ""
+
+  - parameter: operator.cloudProvider.providers.aws.iam.roles.environment
+    description: ""
+    default: ""
+
+  - parameter: operator.cloudProvider.providers.gcp.enabled
+    description: ""
+    default: false
+
+  - parameter: operator.cloudProvider.region
+    description: ""
+    default: "kind"
+
+  - parameter: operator.cloudProvider.type
+    description: ""
+    default: "local"
+
+  - parameter: operator.clusters.defaultSizes.analytics
+    description: ""
+    default: "25cc"
+
+  - parameter: operator.clusters.defaultSizes.catalogServer
+    description: ""
+    default: "50cc"
+
+  - parameter: operator.clusters.defaultSizes.default
+    description: ""
+    default: "25cc"
+
+  - parameter: operator.clusters.defaultSizes.probe
+    description: ""
+    default: "mz_probe"
+
+  - parameter: operator.clusters.defaultSizes.support
+    description: ""
+    default: "25cc"
+
+  - parameter: operator.clusters.defaultSizes.system
+    description: ""
+    default: "25cc"
+
+  - parameter: operator.clusters.sizes.100cc.cpu_exclusive
+    description: ""
     default: true
-    required: false
+
+  - parameter: operator.clusters.sizes.100cc.cpu_limit
+    description: ""
+    default: 2
+
+  - parameter: operator.clusters.sizes.100cc.credits_per_hour
+    description: ""
+    default: "1"
+
+  - parameter: operator.clusters.sizes.100cc.disk_limit
+    description: ""
+    default: "31050MiB"
+
+  - parameter: operator.clusters.sizes.100cc.memory_limit
+    description: ""
+    default: "15525MiB"
+
+  - parameter: operator.clusters.sizes.100cc.scale
+    description: ""
+    default: 1
+
+  - parameter: operator.clusters.sizes.100cc.workers
+    description: ""
+    default: 2
+
+  - parameter: operator.clusters.sizes.1200cc.cpu_exclusive
+    description: ""
+    default: true
+
+  - parameter: operator.clusters.sizes.1200cc.cpu_limit
+    description: ""
+    default: 24
+
+  - parameter: operator.clusters.sizes.1200cc.credits_per_hour
+    description: ""
+    default: "12"
+
+  - parameter: operator.clusters.sizes.1200cc.disk_limit
+    description: ""
+    default: "372603MiB"
+
+  - parameter: operator.clusters.sizes.1200cc.memory_limit
+    description: ""
+    default: "186301MiB"
+
+  - parameter: operator.clusters.sizes.1200cc.scale
+    description: ""
+    default: 1
+
+  - parameter: operator.clusters.sizes.1200cc.workers
+    description: ""
+    default: 24
+
+  - parameter: operator.clusters.sizes.128C.cpu_exclusive
+    description: ""
+    default: true
+
+  - parameter: operator.clusters.sizes.128C.cpu_limit
+    description: ""
+    default: 62
+
+  - parameter: operator.clusters.sizes.128C.credits_per_hour
+    description: ""
+    default: "128"
+
+  - parameter: operator.clusters.sizes.128C.disk_limit
+    description: ""
+    default: "962560MiB"
+
+  - parameter: operator.clusters.sizes.128C.memory_limit
+    description: ""
+    default: "481280MiB"
+
+  - parameter: operator.clusters.sizes.128C.scale
+    description: ""
+    default: 4
+
+  - parameter: operator.clusters.sizes.128C.workers
+    description: ""
+    default: 62
+
+  - parameter: operator.clusters.sizes.1600cc.cpu_exclusive
+    description: ""
+    default: true
+
+  - parameter: operator.clusters.sizes.1600cc.cpu_limit
+    description: ""
+    default: 31
+
+  - parameter: operator.clusters.sizes.1600cc.credits_per_hour
+    description: ""
+    default: "16"
+
+  - parameter: operator.clusters.sizes.1600cc.disk_limit
+    description: ""
+    default: "481280MiB"
+
+  - parameter: operator.clusters.sizes.1600cc.memory_limit
+    description: ""
+    default: "240640MiB"
+
+  - parameter: operator.clusters.sizes.1600cc.scale
+    description: ""
+    default: 1
+
+  - parameter: operator.clusters.sizes.1600cc.workers
+    description: ""
+    default: 31
+
+  - parameter: operator.clusters.sizes.200cc.cpu_exclusive
+    description: ""
+    default: true
+
+  - parameter: operator.clusters.sizes.200cc.cpu_limit
+    description: ""
+    default: 4
+
+  - parameter: operator.clusters.sizes.200cc.credits_per_hour
+    description: ""
+    default: "2"
+
+  - parameter: operator.clusters.sizes.200cc.disk_limit
+    description: ""
+    default: "62100MiB"
+
+  - parameter: operator.clusters.sizes.200cc.memory_limit
+    description: ""
+    default: "31050MiB"
+
+  - parameter: operator.clusters.sizes.200cc.scale
+    description: ""
+    default: 1
+
+  - parameter: operator.clusters.sizes.200cc.workers
+    description: ""
+    default: 4
+
+  - parameter: operator.clusters.sizes.256C.cpu_exclusive
+    description: ""
+    default: true
+
+  - parameter: operator.clusters.sizes.256C.cpu_limit
+    description: ""
+    default: 62
+
+  - parameter: operator.clusters.sizes.256C.credits_per_hour
+    description: ""
+    default: "256"
+
+  - parameter: operator.clusters.sizes.256C.disk_limit
+    description: ""
+    default: "962560MiB"
+
+  - parameter: operator.clusters.sizes.256C.memory_limit
+    description: ""
+    default: "481280MiB"
+
+  - parameter: operator.clusters.sizes.256C.scale
+    description: ""
+    default: 8
+
+  - parameter: operator.clusters.sizes.256C.workers
+    description: ""
+    default: 62
+
+  - parameter: operator.clusters.sizes.25cc.cpu_exclusive
+    description: ""
+    default: false
+
+  - parameter: operator.clusters.sizes.25cc.cpu_limit
+    description: ""
+    default: 0.5
+
+  - parameter: operator.clusters.sizes.25cc.credits_per_hour
+    description: ""
+    default: "0.25"
+
+  - parameter: operator.clusters.sizes.25cc.disk_limit
+    description: ""
+    default: "7762MiB"
+
+  - parameter: operator.clusters.sizes.25cc.memory_limit
+    description: ""
+    default: "3881MiB"
+
+  - parameter: operator.clusters.sizes.25cc.scale
+    description: ""
+    default: 1
+
+  - parameter: operator.clusters.sizes.25cc.workers
+    description: ""
+    default: 1
+
+  - parameter: operator.clusters.sizes.300cc.cpu_exclusive
+    description: ""
+    default: true
+
+  - parameter: operator.clusters.sizes.300cc.cpu_limit
+    description: ""
+    default: 6
+
+  - parameter: operator.clusters.sizes.300cc.credits_per_hour
+    description: ""
+    default: "3"
+
+  - parameter: operator.clusters.sizes.300cc.disk_limit
+    description: ""
+    default: "93150MiB"
+
+  - parameter: operator.clusters.sizes.300cc.memory_limit
+    description: ""
+    default: "46575MiB"
+
+  - parameter: operator.clusters.sizes.300cc.scale
+    description: ""
+    default: 1
+
+  - parameter: operator.clusters.sizes.300cc.workers
+    description: ""
+    default: 6
+
+  - parameter: operator.clusters.sizes.3200cc.cpu_exclusive
+    description: ""
+    default: true
+
+  - parameter: operator.clusters.sizes.3200cc.cpu_limit
+    description: ""
+    default: 62
+
+  - parameter: operator.clusters.sizes.3200cc.credits_per_hour
+    description: ""
+    default: "32"
+
+  - parameter: operator.clusters.sizes.3200cc.disk_limit
+    description: ""
+    default: "962560MiB"
+
+  - parameter: operator.clusters.sizes.3200cc.memory_limit
+    description: ""
+    default: "481280MiB"
+
+  - parameter: operator.clusters.sizes.3200cc.scale
+    description: ""
+    default: 1
+
+  - parameter: operator.clusters.sizes.3200cc.workers
+    description: ""
+    default: 62
+
+  - parameter: operator.clusters.sizes.400cc.cpu_exclusive
+    description: ""
+    default: true
+
+  - parameter: operator.clusters.sizes.400cc.cpu_limit
+    description: ""
+    default: 8
+  - parameter: operator.clusters.sizes.400cc.credits_per_hour
+    description: ""
+    default: "4"
+  - parameter: operator.clusters.sizes.400cc.disk_limit
+    description: ""
+    default: 124201MiB
+  - parameter: operator.clusters.sizes.400cc.memory_limit
+    description: ""
+    default: 62100MiB
+  - parameter: operator.clusters.sizes.400cc.scale
+    description: ""
+    default: 1
+  - parameter: operator.clusters.sizes.400cc.workers
+    description: ""
+    default: 8
+  - parameter: operator.clusters.sizes.50cc.cpu_exclusive
+    description: ""
+    default: true
+  - parameter: operator.clusters.sizes.50cc.cpu_limit
+    description: ""
+    default: 1
+  - parameter: operator.clusters.sizes.50cc.credits_per_hour
+    description: ""
+    default: "0.5"
+  - parameter: operator.clusters.sizes.50cc.disk_limit
+    description: ""
+    default: 15525MiB
+  - parameter: operator.clusters.sizes.50cc.memory_limit
+    description: ""
+    default: 7762MiB
+  - parameter: operator.clusters.sizes.50cc.scale
+    description: ""
+    default: 1
+  - parameter: operator.clusters.sizes.50cc.workers
+    description: ""
+    default: 1
+
+  - parameter: operator.clusters.sizes.512C.cpu_exclusive
+    description: ""
+    default: true
+  - parameter: operator.clusters.sizes.512C.cpu_limit
+    description: ""
+    default: 62
+  - parameter: operator.clusters.sizes.512C.credits_per_hour
+    description: ""
+    default: "512"
+  - parameter: operator.clusters.sizes.512C.disk_limit
+    description: ""
+    default: 962560MiB
+  - parameter: operator.clusters.sizes.512C.memory_limit
+    description: ""
+    default: 481280MiB
+  - parameter: operator.clusters.sizes.512C.scale
+    description: ""
+    default: 16
+  - parameter: operator.clusters.sizes.512C.workers
+    description: ""
+    default: 62
+  - parameter: operator.clusters.sizes.600cc.cpu_exclusive
+    description: ""
+    default: true
+  - parameter: operator.clusters.sizes.600cc.cpu_limit
+    description: ""
+    default: 12
+  - parameter: operator.clusters.sizes.600cc.credits_per_hour
+    description: ""
+    default: "6"
+  - parameter: operator.clusters.sizes.600cc.disk_limit
+    description: ""
+    default: 186301MiB
+  - parameter: operator.clusters.sizes.600cc.memory_limit
+    description: ""
+    default: 93150MiB
+  - parameter: operator.clusters.sizes.600cc.scale
+    description: ""
+    default: 1
+  - parameter: operator.clusters.sizes.600cc.workers
+    description: ""
+    default: 12
+  - parameter: operator.clusters.sizes.6400cc.cpu_exclusive
+    description: ""
+    default: true
+  - parameter: operator.clusters.sizes.6400cc.cpu_limit
+    description: ""
+    default: 62
+  - parameter: operator.clusters.sizes.6400cc.credits_per_hour
+    description: ""
+    default: "64"
+  - parameter: operator.clusters.sizes.6400cc.disk_limit
+    description: ""
+    default: 962560MiB
+  - parameter: operator.clusters.sizes.6400cc.memory_limit
+    description: ""
+    default: 481280MiB
+  - parameter: operator.clusters.sizes.6400cc.scale
+    description: ""
+    default: 2
+  - parameter: operator.clusters.sizes.6400cc.workers
+    description: ""
+    default: 62
+  - parameter: operator.clusters.sizes.800cc.cpu_exclusive
+    description: ""
+    default: true
+  - parameter: operator.clusters.sizes.800cc.cpu_limit
+    description: ""
+    default: 16
+  - parameter: operator.clusters.sizes.800cc.credits_per_hour
+    description: ""
+    default: "8"
+  - parameter: operator.clusters.sizes.800cc.disk_limit
+    description: ""
+    default: 248402MiB
+  - parameter: operator.clusters.sizes.800cc.memory_limit
+    description: ""
+    default: 124201MiB
+  - parameter: operator.clusters.sizes.800cc.scale
+    description: ""
+    default: 1
+  - parameter: operator.clusters.sizes.800cc.workers
+    description: ""
+    default: 16
+
+  - parameter: operator.clusters.sizes.mz_probe.cpu_exclusive
+    description: ""
+    default: false
+  - parameter: operator.clusters.sizes.mz_probe.cpu_limit
+    description: ""
+    default: 0.1
+  - parameter: operator.clusters.sizes.mz_probe.credits_per_hour
+    description: ""
+    default: "0.00"
+  - parameter: operator.clusters.sizes.mz_probe.disk_limit
+    description: ""
+    default: 1552MiB
+  - parameter: operator.clusters.sizes.mz_probe.memory_limit
+    description: ""
+    default: 776MiB
+  - parameter: operator.clusters.sizes.mz_probe.scale
+    description: ""
+    default: 1
+  - parameter: operator.clusters.sizes.mz_probe.workers
+    description: ""
+    default: 1
+  - parameter: operator.features.consoleImageTagMapOverride
+    description: ""
+    default: "{}"
+  - parameter: operator.features.createBalancers
+    description: ""
+    default: true
+  - parameter: operator.features.createConsole
+    description: ""
+    default: true
+  - parameter: operator.image.pullPolicy
+    description: ""
+    default: IfNotPresent
+  - parameter: operator.image.repository
+    description: ""
+    default: materialize/orchestratord
+
+  - parameter: operator.image.tag
+    description: ""
+    default: v0.125.2
+  - parameter: operator.nodeSelector
+    description: ""
+    default: "{}"
+  - parameter: operator.resources.limits.memory
+    description: ""
+    default: 512Mi
+  - parameter: operator.resources.requests.cpu
+    description: ""
+    default: 100m
+  - parameter: operator.resources.requests.memory
+    description: ""
+    default: 512Mi
+  - parameter: rbac.create
+    description: ""
+    default: true
+  - parameter: rbac.clusterRole
+    description: ""
+    default: ""
+  - parameter: serviceAccount.create
+    description: ""
+    default: true
   - parameter: serviceAccount.name
-    description: |
-      <red>Replace with description content here.</red>
-    default: "\"orchestratord\""
-    required: false
+    description: ""
+    default: orchestratord
+
   - parameter: storage.storageClass.allowVolumeExpansion
     description: |
-      <red>Replace with description content here.</red>
+      See https://kubernetes.io/docs/concepts/storage/storage-classes/.
     default: false
-    required: false
   - parameter: storage.storageClass.create
     description: |
-      <red>Replace with description content here.</red>
+      See https://kubernetes.io/docs/concepts/storage/storage-classes/.
     default: false
-    required: false
   - parameter: storage.storageClass.name
     description: |
-      <red>Replace with description content here.</red>
-    default: "\"\""
-    required: false
+      See https://kubernetes.io/docs/concepts/storage/storage-classes/.
+    default: ""
   - parameter: storage.storageClass.parameters.fsType
     description: |
-      <red>Replace with description content here.</red>
-    default: "\"ext4\""
-    required: false
+      See https://kubernetes.io/docs/concepts/storage/storage-classes/.
+    default: ext4
   - parameter: storage.storageClass.parameters.storage
     description: |
-      <red>Replace with description content here.</red>
-    default: "\"lvm\""
-    required: false
+      See https://kubernetes.io/docs/concepts/storage/storage-classes/.
+    default: lvm
   - parameter: storage.storageClass.parameters.volgroup
     description: |
-      <red>Replace with description content here.</red>
-    default: "\"instance-store-vg\""
-    required: false
+      See https://kubernetes.io/docs/concepts/storage/storage-classes/.
+    default: instance-store-vg
   - parameter: storage.storageClass.provisioner
     description: |
-      <red>Replace with description content here.</red>
-    default: "\"\""
-    required: false
+      See https://kubernetes.io/docs/concepts/storage/storage-classes/.
+    default: ""
   - parameter: storage.storageClass.reclaimPolicy
     description: |
-      <red>Replace with description content here.</red>
-    default: "\"Delete\""
-    required: false
+      See https://kubernetes.io/docs/concepts/storage/storage-classes/.
+    default: Delete
   - parameter: storage.storageClass.volumeBindingMode
     description: |
-      <red>Replace with description content here.</red>
-    default: "\"WaitForFirstConsumer\""
-    required: false
+      See https://kubernetes.io/docs/concepts/storage/storage-classes/.
+    default: WaitForFirstConsumer

@@ -1,6 +1,8 @@
 ---
 title: "Troubleshooting"
 description: ""
+aliases:
+  - /self-hosted/troubleshooting/
 ---
 
 If you encounter issues with the Materialize operator, check the operator logs:
@@ -17,5 +19,8 @@ kubectl get all -n materialize
 
 ## See also
 
-- [Materialize Kubernetes Operator Helm Chart](/self-hosted/)
-- [Configuration](/self-hosted/configuration/)
+- [Materialize Kubernetes Operator Helm Chart](/self-managed/)
+- [Configuration](/self-managed/configuration/)
+- [Operational guidelines](/self-managed/operational-guidelines/)
+- [Installation](/self-managed/installation/)
+- [Upgrading](/self-managed/upgrading/)
