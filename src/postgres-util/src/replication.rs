@@ -102,8 +102,8 @@ pub async fn drop_replication_slots(
                 &[&slot],
             )
             .await?;
-        match rows.len() {
-            0 => {
+        match &*rows {
+            [] => {
                 // DROP_REPLICATION_SLOT will error if the slot does not exist
                 tracing::info!(
                     "drop_replication_slots called on non-existent slot {}",
@@ -111,7 +111,19 @@ pub async fn drop_replication_slots(
                 );
                 continue;
             }
-            1 => {
+            [row] => {
+                // The drop of a replication slot happens concurrently with an ingestion dataflow
+                // shutting down, therefore there is the possibility that the slot is still in use.
+                // We really don't want to leak the slot and not forcefully terminating the
+                // dataflow's connection risks timing out. For this reason we always kill the
+                // active backend and drop the slot.
+                let active_pid: Option<i32> = row.get("active_pid");
+                if let Some(active_pid) = active_pid {
+                    client
+                        .simple_query(&format!("SELECT pg_terminate_backend({active_pid})"))
+                        .await?;
+                }
+
                 let wait_str = if *should_wait { " WAIT" } else { "" };
                 replication_client
                     .simple_query(&format!("DROP_REPLICATION_SLOT {slot}{wait_str}"))
