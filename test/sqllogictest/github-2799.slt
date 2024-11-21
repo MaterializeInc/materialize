@@ -20,10 +20,9 @@ Explained Query:
   Project (#0, #1) // { arity: 2 }
     Join on=(#0 = #2) type=differential // { arity: 3 }
       implementation
-        %1[#0]UKA » %0:t1[#0]Kenf
+        %1[#0]UKA » %0:t1[#0]K
       ArrangeBy keys=[[#0]] // { arity: 2 }
-        Filter (false = (#0) IS NULL) // { arity: 2 }
-          ReadStorage materialize.public.t1 // { arity: 2 }
+        ReadStorage materialize.public.t1 // { arity: 2 }
       ArrangeBy keys=[[#0]] // { arity: 1 }
         Distinct project=[#0] // { arity: 1 }
           Project (#0) // { arity: 1 }

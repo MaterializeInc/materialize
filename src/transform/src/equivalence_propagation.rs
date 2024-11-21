@@ -305,7 +305,7 @@ impl EquivalencePropagation {
 
                 // Assemble the appended input types, for use in expression minimization.
                 // Do not use `expr_types`, which may reflect nullability that does not hold for the inputs.
-                let input_types = Some(
+                let mut input_types = Some(
                     children
                         .iter()
                         .flat_map(|c| {
@@ -367,7 +367,13 @@ impl EquivalencePropagation {
                         }
                     }
                 }
-                // Minimize relative to appended input types.
+                // Remove nullability information, as it has already been incorporated from input equivalences,
+                // and if it was reduced out relative to input equivalences we don't want to re-introduce it.
+                if let Some(input_types) = input_types.as_mut() {
+                    for col in input_types.iter_mut() {
+                        col.nullable = true;
+                    }
+                }
                 join_equivalences.minimize(&input_types);
 
                 // Revisit each child, determining the information to present to it, and recurring.
