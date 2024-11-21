@@ -752,6 +752,50 @@ async fn test_statement_logging_unsampled_metrics() {
     assert_eq!(expected_total, metric_value);
 }
 
+#[mz_ore::test]
+fn test_enable_internal_statement_logging() {
+    let (server, mut client) = setup_statement_logging_core(
+        1.0,
+        1.0,
+        test_util::TestHarness::default().with_system_parameter_default(
+            "enable_internal_statement_logging".to_string(),
+            "true".to_string(),
+        ),
+    );
+
+    client.execute("SELECT 1", &[]).unwrap();
+
+    let mut client = server.connect_internal(postgres::NoTls).unwrap();
+    let num_mz_system_statements = Retry::default()
+        .max_duration(Duration::from_secs(30))
+        .retry(|_| {
+            let sl_results = client
+                .query(
+                    "SELECT
+    count(*)
+FROM mz_internal.mz_prepared_statement_history mpsh
+JOIN mz_internal.mz_session_history USING (session_id)
+WHERE authenticated_user='mz_system'",
+                    &[],
+                )
+                .unwrap();
+
+            let count: i64 = sl_results[0].get(0);
+
+            if count > 0 {
+                Ok(count)
+            } else {
+                Err(())
+            }
+        })
+        .expect("at least some statements from mz_system should have been logged");
+
+    assert!(
+        num_mz_system_statements > 0,
+        "statements executed by mz_system should have been logged"
+    );
+}
+
 // Test the POST and WS server endpoints.
 #[mz_ore::test]
 fn test_http_sql() {

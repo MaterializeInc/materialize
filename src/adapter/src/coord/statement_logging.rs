@@ -660,7 +660,11 @@ impl Coordinator {
         params: &Params,
         logging: &Arc<QCell<PreparedStatementLoggingInfo>>,
     ) -> Option<StatementLoggingId> {
-        if session.user().is_internal() {
+        let enable_internal_statement_logging = self
+            .catalog()
+            .system_config()
+            .enable_internal_statement_logging();
+        if session.user().is_internal() && !enable_internal_statement_logging {
             return None;
         }
         let sample_rate = self.statement_execution_sample_rate(session);
