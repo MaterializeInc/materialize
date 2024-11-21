@@ -702,9 +702,9 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                     }
                     ComputeCommand::CreateInstance(config) => {
                         // Cluster creation should not be performed again!
-                        if Some(config) != old_instance_config {
+                        if old_instance_config.map_or(false, |old| !old.compatible_with(config)) {
                             halt!(
-                                "new instance configuration does not match existing instance configuration:\n{:?}\nvs\n{:?}",
+                                "new instance configuration not compatible with existing instance configuration:\n{:?}\nvs\n{:?}",
                                 config,
                                 old_instance_config,
                             );

@@ -376,6 +376,38 @@ pub struct InstanceConfig {
     pub expiration_offset: Option<Duration>,
 }
 
+impl InstanceConfig {
+    /// Check if the configuration is compatible with another configuration. This is true iff the
+    /// logging configuration is equivalent, and the other configuration (non-strictly) strengthens
+    /// the expiration offset.
+    ///
+    /// We consider a stricter offset compatible, which allows us to strengthen the value without
+    /// forcing replica restarts. However, it also means that replicas will only pick up the new
+    /// value after a restart.
+    pub fn compatible_with(&self, other: &InstanceConfig) -> bool {
+        // Destructure to protect against adding fields in the future.
+        let InstanceConfig {
+            logging: self_logging,
+            expiration_offset: self_offset,
+        } = self;
+        let InstanceConfig {
+            logging: other_logging,
+            expiration_offset: other_offset,
+        } = other;
+
+        // Logging is compatible if exactly the same.
+        let logging_compatible = self_logging == other_logging;
+
+        // The offsets are compatible of other_offset is less than or equal to self_offset, i.e., it
+        // is a smaller offset and strengthens the offset.
+        let self_offset = Antichain::from_iter(*self_offset);
+        let other_offset = Antichain::from_iter(*other_offset);
+        let offset_compatible = timely::PartialOrder::less_equal(&other_offset, &self_offset);
+
+        logging_compatible && offset_compatible
+    }
+}
+
 impl RustType<ProtoInstanceConfig> for InstanceConfig {
     fn into_proto(&self) -> ProtoInstanceConfig {
         ProtoInstanceConfig {
