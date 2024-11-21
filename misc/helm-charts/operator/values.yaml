@@ -13,28 +13,48 @@ operator:
     # The Docker repository for the operator image
     repository: materialize/orchestratord
     # The tag/version of the operator image to be used
-    tag: v0.125.0
+    tag: v0.125.2
     # Policy for pulling the image: "IfNotPresent" avoids unnecessary re-pulling of images
     pullPolicy: IfNotPresent
+
   args:
     # Log filtering settings for startup logs
     startupLogFilter: "INFO,mz_orchestratord=TRACE"
-    # Cloud provider setting (in this case, for local development)
-    cloudProvider: "local"
-    # The region where the cluster is deployed (for this example, using Kind)
-    region: "kind"
+
+  features:
     # Flag to indicate whether to create balancerd pods for the environments
     createBalancers: true
     # Flag to indicate whether to create console pods for the environments
     createConsole: true
-    # ARN of the IAM role for environmentd
-    environmentdIAMRoleARN: ""
-    # ARN of the IAM role for the CREATE CONNECTION feature
-    environmentdConnectionRoleARN: ""
-    # awsAccountID is required when cloudProvider is "aws"
-    awsAccountID: ""
-    # override the mapping of environmentd versions to console versions
+    # Override the mapping of environmentd versions to console versions
     consoleImageTagMapOverride: {}
+
+  # Cloud provider configuration
+  cloudProvider:
+    type: "local"
+
+    # Common cloud provider settings
+    region: "kind"
+
+    # Provider-specific configurations
+    providers:
+      # AWS Configuration
+      aws:
+        enabled: false
+        # When using AWS, accountID is required
+        accountID: ""
+        iam:
+          roles:
+            # ARN of the IAM role for environmentd
+            environment: ""
+            # ARN for CREATE CONNECTION feature
+            connection: ""
+
+      # GCP Configuration (placeholder for future use)
+      gcp:
+        enabled: false
+        # TODO: Add any other additions for GCP-specific configurations
+
   clusters:
     sizes:
       mz_probe:
@@ -172,6 +192,7 @@ operator:
       support: 25cc
       catalogServer: 50cc
       analytics: 25cc
+
   # Node selector to use for the operator pod
   nodeSelector: {}
   resources:
