@@ -37,8 +37,16 @@ query T multiline
 EXPLAIN SELECT a, array_agg(b), array_agg(c) FROM t GROUP BY a;
 ----
 Explained Query:
-  Reduce group_by=[#0] aggregates=[array_agg[order_by=[]](row(array[#1])), array_agg[order_by=[]](row(array[#2]))]
-    ReadStorage materialize.public.t
+  Project (#0, #1, #3)
+    Join on=(#0 = #2) type=differential
+      ArrangeBy keys=[[#0]]
+        Reduce group_by=[#0] aggregates=[array_agg[order_by=[]](row(array[#1]))]
+          Project (#0, #1)
+            ReadStorage materialize.public.t
+      ArrangeBy keys=[[#0]]
+        Reduce group_by=[#0] aggregates=[array_agg[order_by=[]](row(array[#1]))]
+          Project (#0, #2)
+            ReadStorage materialize.public.t
 
 Source materialize.public.t
 
@@ -50,8 +58,16 @@ query T multiline
 EXPLAIN SELECT a, array_agg(b), string_agg(c, ',') FROM t GROUP BY a;
 ----
 Explained Query:
-  Reduce group_by=[#0] aggregates=[array_agg[order_by=[]](row(array[#1])), string_agg[order_by=[]](row(row(#2, ",")))]
-    ReadStorage materialize.public.t
+  Project (#0, #1, #3)
+    Join on=(#0 = #2) type=differential
+      ArrangeBy keys=[[#0]]
+        Reduce group_by=[#0] aggregates=[array_agg[order_by=[]](row(array[#1]))]
+          Project (#0, #1)
+            ReadStorage materialize.public.t
+      ArrangeBy keys=[[#0]]
+        Reduce group_by=[#0] aggregates=[string_agg[order_by=[]](row(row(#1, ",")))]
+          Project (#0, #2)
+            ReadStorage materialize.public.t
 
 Source materialize.public.t
 
@@ -63,8 +79,15 @@ query T multiline
 EXPLAIN SELECT a, array_agg(b), string_agg(c, ',' ORDER BY b DESC) FROM t GROUP BY a;
 ----
 Explained Query:
-  Reduce group_by=[#0] aggregates=[array_agg[order_by=[]](row(array[#1])), string_agg[order_by=[#0 desc nulls_first]](row(row(#2, ","), #1))]
-    ReadStorage materialize.public.t
+  Project (#0, #1, #3)
+    Join on=(#0 = #2) type=differential
+      ArrangeBy keys=[[#0]]
+        Reduce group_by=[#0] aggregates=[array_agg[order_by=[]](row(array[#1]))]
+          Project (#0, #1)
+            ReadStorage materialize.public.t
+      ArrangeBy keys=[[#0]]
+        Reduce group_by=[#0] aggregates=[string_agg[order_by=[#0 desc nulls_first]](row(row(#2, ","), #1))]
+          ReadStorage materialize.public.t
 
 Source materialize.public.t
 
@@ -76,9 +99,21 @@ query T multiline
 EXPLAIN SELECT a, array_agg(b), max(c) FROM t WHERE c <> 'x' GROUP BY a;
 ----
 Explained Query:
-  Reduce group_by=[#0] aggregates=[array_agg[order_by=[]](row(array[#1])), max(#2)]
-    Filter (#2 != "x")
-      ReadStorage materialize.public.t
+  Return
+    Project (#0, #3, #1)
+      Join on=(#0 = #2) type=differential
+        ArrangeBy keys=[[#0]]
+          Reduce group_by=[#0] aggregates=[max(#1)]
+            Project (#0, #2)
+              Get l0
+        ArrangeBy keys=[[#0]]
+          Reduce group_by=[#0] aggregates=[array_agg[order_by=[]](row(array[#1]))]
+            Project (#0, #1)
+              Get l0
+  With
+    cte l0 =
+      Filter (#2 != "x")
+        ReadStorage materialize.public.t
 
 Source materialize.public.t
   filter=((#2 != "x"))
@@ -91,11 +126,24 @@ query T multiline
 EXPLAIN SELECT a, array_agg(b), max(b) FROM t GROUP BY a HAVING count(a) > 1;
 ----
 Explained Query:
-  Project (#0..=#2)
-    Filter (#3 > 1)
-      Reduce group_by=[#0] aggregates=[array_agg[order_by=[]](row(array[#1])), max(#1), count(*)]
-        Project (#0, #1)
-          ReadStorage materialize.public.t
+  Return
+    Project (#0, #5, #1)
+      Filter (#3 > 1)
+        Join on=(#0 = #2 = #4) type=delta
+          ArrangeBy keys=[[#0]]
+            Reduce group_by=[#0] aggregates=[max(#1)]
+              Get l0
+          ArrangeBy keys=[[#0]]
+            Reduce group_by=[#0] aggregates=[count(*)]
+              Project (#0)
+                ReadStorage materialize.public.t
+          ArrangeBy keys=[[#0]]
+            Reduce group_by=[#0] aggregates=[array_agg[order_by=[]](row(array[#1]))]
+              Get l0
+  With
+    cte l0 =
+      Project (#0, #1)
+        ReadStorage materialize.public.t
 
 Source materialize.public.t
 
@@ -121,9 +169,19 @@ query T multiline
 EXPLAIN SELECT a, array_agg(b ORDER BY b ASC), array_agg(b ORDER BY b DESC) FROM t GROUP BY a;
 ----
 Explained Query:
-  Reduce group_by=[#0] aggregates=[array_agg[order_by=[#0 asc nulls_last]](row(array[#1], #1)), array_agg[order_by=[#0 desc nulls_first]](row(array[#1], #1))]
-    Project (#0, #1)
-      ReadStorage materialize.public.t
+  Return
+    Project (#0, #1, #3)
+      Join on=(#0 = #2) type=differential
+        ArrangeBy keys=[[#0]]
+          Reduce group_by=[#0] aggregates=[array_agg[order_by=[#0 asc nulls_last]](row(array[#1], #1))]
+            Get l0
+        ArrangeBy keys=[[#0]]
+          Reduce group_by=[#0] aggregates=[array_agg[order_by=[#0 desc nulls_first]](row(array[#1], #1))]
+            Get l0
+  With
+    cte l0 =
+      Project (#0, #1)
+        ReadStorage materialize.public.t
 
 Source materialize.public.t
 
@@ -139,19 +197,31 @@ Explained Query:
     Project (#0, #1, #3)
       Map ((#2 > 0))
         Union
-          Get l0
+          Project (#1, #2, #0)
+            Get l1
           Map (null, null, null)
             Union
               Negate
                 Project ()
-                  Get l0
+                  Get l1
               Constant
                 - ()
   With
+    cte l1 =
+      CrossJoin type=delta
+        ArrangeBy keys=[[]]
+          Reduce aggregates=[sum(1)]
+            Project ()
+              ReadStorage materialize.public.t
+        ArrangeBy keys=[[]]
+          Reduce aggregates=[array_agg[order_by=[#0 asc nulls_last]](row(array[#0], #0))]
+            Get l0
+        ArrangeBy keys=[[]]
+          Reduce aggregates=[array_agg[order_by=[#0 desc nulls_first]](row(array[#0], #0))]
+            Get l0
     cte l0 =
-      Reduce aggregates=[array_agg[order_by=[#0 asc nulls_last]](row(array[#0], #0)), array_agg[order_by=[#0 desc nulls_first]](row(array[#0], #0)), sum(1)]
-        Project (#1)
-          ReadStorage materialize.public.t
+      Project (#1)
+        ReadStorage materialize.public.t
 
 Source materialize.public.t
 
@@ -193,19 +263,30 @@ Explained Query:
   Return
     Project (#0..=#2, #2)
       Union
-        Get l0
+        Get l1
         Map (null, null, null)
           Union
             Negate
               Project ()
-                Get l0
+                Get l1
             Constant
               - ()
   With
+    cte l1 =
+      CrossJoin type=delta
+        ArrangeBy keys=[[]]
+          Reduce aggregates=[sum(#0)]
+            Project (#0)
+              ReadStorage materialize.public.t
+        ArrangeBy keys=[[]]
+          Reduce aggregates=[jsonb_agg[order_by=[]](row(jsonbable_to_jsonb(#0)))]
+            Get l0
+        ArrangeBy keys=[[]]
+          Reduce aggregates=[array_agg[order_by=[]](row(array[#0]))]
+            Get l0
     cte l0 =
-      Reduce aggregates=[sum(#0), jsonb_agg[order_by=[]](row(jsonbable_to_jsonb(#1))), array_agg[order_by=[]](row(array[#1]))]
-        Project (#0, #1)
-          ReadStorage materialize.public.t
+      Project (#1)
+        ReadStorage materialize.public.t
 
 Source materialize.public.t
 
@@ -217,11 +298,19 @@ query T multiline
 EXPLAIN SELECT a, array_agg(b ORDER BY b) FROM t GROUP BY a HAVING array_agg(b ORDER BY b) = array_agg(b ORDER BY b DESC);
 ----
 Explained Query:
-  Project (#0, #1)
-    Filter (#1 = #2)
-      Reduce group_by=[#0] aggregates=[array_agg[order_by=[#0 asc nulls_last]](row(array[#1], #1)), array_agg[order_by=[#0 desc nulls_first]](row(array[#1], #1))]
-        Project (#0, #1)
-          ReadStorage materialize.public.t
+  Return
+    Project (#0, #1)
+      Join on=(#0 = #2 AND #1 = #3) type=differential
+        ArrangeBy keys=[[#0, #1]]
+          Reduce group_by=[#0] aggregates=[array_agg[order_by=[#0 asc nulls_last]](row(array[#1], #1))]
+            Get l0
+        ArrangeBy keys=[[#0, #1]]
+          Reduce group_by=[#0] aggregates=[array_agg[order_by=[#0 desc nulls_first]](row(array[#1], #1))]
+            Get l0
+  With
+    cte l0 =
+      Project (#0, #1)
+        ReadStorage materialize.public.t
 
 Source materialize.public.t
 
@@ -234,9 +323,19 @@ EXPLAIN SELECT a, array_agg(b), array_agg(sha256(b::BYTEA)) FROM t GROUP BY a;
 
 ----
 Explained Query:
-  Reduce group_by=[#0] aggregates=[array_agg[order_by=[]](row(array[#1])), array_agg[order_by=[]](row(array[digest(text_to_bytea(#1), "sha256")]))]
-    Project (#0, #1)
-      ReadStorage materialize.public.t
+  Return
+    Project (#0, #3, #1)
+      Join on=(#0 = #2) type=differential
+        ArrangeBy keys=[[#0]]
+          Reduce group_by=[#0] aggregates=[array_agg[order_by=[]](row(array[digest(text_to_bytea(#1), "sha256")]))]
+            Get l0
+        ArrangeBy keys=[[#0]]
+          Reduce group_by=[#0] aggregates=[array_agg[order_by=[]](row(array[#1]))]
+            Get l0
+  With
+    cte l0 =
+      Project (#0, #1)
+        ReadStorage materialize.public.t
 
 Source materialize.public.t
 
@@ -249,9 +348,19 @@ query T multiline
 EXPLAIN SELECT a, array_agg(b), array_agg(CASE WHEN a = 1 THEN 'ooo' ELSE b END) FROM t GROUP BY a;
 ----
 Explained Query:
-  Reduce group_by=[#0] aggregates=[array_agg[order_by=[]](row(array[#1])), array_agg[order_by=[]](row(array[case when (#0 = 1) then "ooo" else #1 end]))]
-    Project (#0, #1)
-      ReadStorage materialize.public.t
+  Return
+    Project (#0, #1, #3)
+      Join on=(#0 = #2) type=differential
+        ArrangeBy keys=[[#0]]
+          Reduce group_by=[#0] aggregates=[array_agg[order_by=[]](row(array[#1]))]
+            Get l0
+        ArrangeBy keys=[[#0]]
+          Reduce group_by=[#0] aggregates=[array_agg[order_by=[]](row(array[case when (#0 = 1) then "ooo" else #1 end]))]
+            Get l0
+  With
+    cte l0 =
+      Project (#0, #1)
+        ReadStorage materialize.public.t
 
 Source materialize.public.t
 

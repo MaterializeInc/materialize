@@ -304,7 +304,6 @@ DistinctByErrorCheck
 
 > SELECT mdo.name FROM mz_introspection.mz_arrangement_sharing mash JOIN mz_introspection.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 AccumulableErrorCheck
-"Arrange ReduceCollation"
 "Arrange ReduceMinsMaxes"
 "Arrange ReduceMinsMaxes"
 "Arrange ReduceMinsMaxes"
@@ -342,8 +341,6 @@ ArrangeBy[[Column(2)]]
 "DistinctBy"
 DistinctByErrorCheck
 ReduceAccumulable
-ReduceCollation
-"ReduceCollation Errors"
 ReduceMinsMaxes
 ReduceMinsMaxes
 ReduceMinsMaxes
@@ -611,10 +608,8 @@ ALTER SYSTEM SET enable_repeat_row  = true
 AccumulableErrorCheck
 AccumulableErrorCheck
 AccumulableErrorCheck
-"Arrange ReduceCollation"
 "Arrange ReduceMinsMaxes"
 "Arrange ReduceMinsMaxes"
-"Arrange bundle err"
 "ArrangeAccumulable [val: empty]"
 "ArrangeAccumulable [val: empty]"
 "ArrangeAccumulable [val: empty]"
@@ -622,7 +617,9 @@ AccumulableErrorCheck
 "ArrangeBy[[CallUnary { func: CastInt32ToInt64(CastInt32ToInt64), expr: Column(0) }]]"
 ArrangeBy[[Column(0)]]
 ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
 "ArrangeBy[[Column(0)]]"
+ArrangeBy[[Column(0)]]-errors
 ArrangeBy[[Column(0)]]-errors
 ArrangeBy[[Column(0)]]-errors
 "Arranged Accumulable Distinct [val: empty]"
@@ -640,7 +637,6 @@ ArrangeBy[[Column(0)]]-errors
 "Arranged MinsMaxesHierarchical input"
 "Arranged MinsMaxesHierarchical input"
 "Arranged MinsMaxesHierarchical input"
-"Arranged ReduceFuseBasic input"
 "Arranged ReduceInaccumulable"
 "Arranged ReduceInaccumulable"
 "Arranged TopK input"
@@ -654,11 +650,9 @@ ArrangeBy[[Column(0)]]-errors
 ReduceAccumulable
 ReduceAccumulable
 ReduceAccumulable
-ReduceCollation
-"ReduceCollation Errors"
-ReduceFuseBasic
 ReduceInaccumulable
 ReduceInaccumulable
+"ReduceInaccumulable Error Check"
 "ReduceInaccumulable Error Check"
 ReduceMinsMaxes
 ReduceMinsMaxes
@@ -711,7 +705,6 @@ ReduceMinsMaxes
   GROUP BY mdod.name
   ORDER BY mdod.name;
 "AccumulableErrorCheck" 9
-"Arrange ReduceCollation" 1
 "Arrange ReduceMinsMaxes" 3
 "Arrange export iterative" 1
 "Arrange export iterative err" 1
@@ -766,8 +759,6 @@ ReduceMinsMaxes
 "DistinctBy" 46
 "DistinctByErrorCheck" 46
 "ReduceAccumulable" 9
-"ReduceCollation" 1
-"ReduceCollation Errors" 1
 "ReduceInaccumulable" 3
 "ReduceInaccumulable Error Check" 3
 "ReduceMinsMaxes" 3
@@ -833,11 +824,8 @@ ALTER SYSTEM SET enable_introspection_subscribes = true
   GROUP BY mdod.name
   ORDER BY mdod.name
 AccumulableErrorCheck 2
-"Arrange ReduceCollation" 1
 "Arrange ReduceMinsMaxes" 1
 "ArrangeAccumulable [val: empty]" 2
 ReduceAccumulable 2
-ReduceCollation 1
-"ReduceCollation Errors" 1
 ReduceMinsMaxes 1
 "ReduceMinsMaxes Error Check" 1
