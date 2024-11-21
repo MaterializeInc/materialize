@@ -31,19 +31,19 @@ metadata:
 spec:
   environmentdImageRef: materialize/environmentd:v0.125.2
   backendSecretName: materialize-backend
-  balancerdExternalCertificateSpec:
-    dnsNames:
-      - balancerd
-    issuerRef:
-      name: dns01
-      kind: ClusterIssuer
+  #balancerdExternalCertificateSpec:
+  #  dnsNames:
+  #    - balancerd
+  #  issuerRef:
+  #    name: dns01
+  #    kind: ClusterIssuer
   #consoleExternalCertificateSpec:
   #  dnsNames:
   #    - console
   #  issuerRef:
   #    name: dns01
   #    kind: ClusterIssuer
-  internalCertificateSpec:
-    issuerRef:
-      name: intermediate-ca
-      kind: Issuer
+  #internalCertificateSpec:
+  #  issuerRef:
+  #    name: intermediate-ca
+  #    kind: Issuer
