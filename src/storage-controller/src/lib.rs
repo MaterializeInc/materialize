@@ -660,7 +660,9 @@ where
         let mut new_source_statistic_entries = BTreeSet::new();
         let mut new_webhook_statistic_entries = BTreeSet::new();
 
-        for (id, mut description, write, metadata) in to_register {
+        for (id, description, write, metadata) in to_register {
+            let mut data_source = description.data_source;
+
             to_execute.insert(id);
             new_collections.insert(id);
 
@@ -668,7 +670,7 @@ where
             // This is done in an awkward spot to appease the borrow checker.
             // TODO(database-issues#8620): This will be removed once sources no longer export
             // to primary collections and only export to explicit SourceExports (tables).
-            if let DataSource::Ingestion(ingestion) = &mut description.data_source {
+            if let DataSource::Ingestion(ingestion) = &mut data_source {
                 if let Some(export) = ingestion.desc.primary_source_export() {
                     ingestion.source_exports.insert(id, export);
                 }
@@ -677,8 +679,7 @@ where
             let write_frontier = write.upper();
 
             // Determine if this collection has another dependency.
-            let storage_dependencies =
-                self.determine_collection_dependencies(id, &description.data_source)?;
+            let storage_dependencies = self.determine_collection_dependencies(id, &data_source)?;
 
             let dependency_read_holds = self
                 .storage_collections
@@ -723,17 +724,14 @@ where
                 );
             }
 
-            let mut collection_state = CollectionState {
-                data_source: description.data_source.clone(),
-                collection_metadata: metadata.clone(),
-                extra_state: CollectionStateExtra::None,
-                wallclock_lag_max: Default::default(),
-            };
-
-            // Install the collection state in the appropriate spot.
-            match &collection_state.data_source {
+            // Perform data source-specific setup.
+            let mut extra_state = CollectionStateExtra::None;
+            match &data_source {
                 DataSource::Introspection(typ) => {
-                    debug!(data_source = ?collection_state.data_source, meta = ?metadata, "registering {} with persist monotonic worker", id);
+                    debug!(
+                        ?data_source, meta = ?metadata,
+                        "registering {id} with persist monotonic worker",
+                    );
                     // We always register the collection with the collection manager,
                     // regardless of read-only mode. The CollectionManager itself is
                     // aware of read-only mode and will not attempt to write before told
@@ -745,11 +743,12 @@ where
                         write,
                         persist_client.clone(),
                     )?;
-                    self.collections.insert(id, collection_state);
                 }
                 DataSource::Webhook => {
-                    debug!(data_source = ?collection_state.data_source, meta = ?metadata, "registering {} with persist monotonic worker", id);
-                    self.collections.insert(id, collection_state);
+                    debug!(
+                        ?data_source, meta = ?metadata,
+                        "registering {id} with persist monotonic worker",
+                    );
                     new_source_statistic_entries.insert(id);
                     // This collection of statistics is periodically aggregated into
                     // `source_statistics`.
@@ -767,7 +766,10 @@ where
                     details,
                     data_config,
                 } => {
-                    debug!(data_source = ?collection_state.data_source, meta = ?metadata, "not registering {} with a controller persist worker", id);
+                    debug!(
+                        ?data_source, meta = ?metadata,
+                        "not registering {id} with a controller persist worker",
+                    );
                     // Adjust the source to contain this export.
                     let ingestion_state = self
                         .collections
@@ -810,22 +812,28 @@ where
                         hydrated: false,
                     };
 
-                    collection_state.extra_state = CollectionStateExtra::Ingestion(ingestion_state);
+                    extra_state = CollectionStateExtra::Ingestion(ingestion_state);
 
-                    self.collections.insert(id, collection_state);
                     new_source_statistic_entries.insert(id);
                 }
                 DataSource::Table => {
-                    debug!(data_source = ?collection_state.data_source, meta = ?metadata, "registering {} with persist table worker", id);
-                    self.collections.insert(id, collection_state);
+                    debug!(
+                        ?data_source, meta = ?metadata,
+                        "registering {id} with persist table worker",
+                    );
                     table_registers.push((id, write));
                 }
                 DataSource::Progress | DataSource::Other => {
-                    debug!(data_source = ?collection_state.data_source, meta = ?metadata, "not registering {} with a controller persist worker", id);
-                    self.collections.insert(id, collection_state);
+                    debug!(
+                        ?data_source, meta = ?metadata,
+                        "not registering {id} with a controller persist worker",
+                    );
                 }
                 DataSource::Ingestion(ingestion_desc) => {
-                    debug!(?ingestion_desc, meta = ?metadata, "not registering {} with a controller persist worker", id);
+                    debug!(
+                        ?data_source, meta = ?metadata,
+                        "not registering {id} with a controller persist worker",
+                    );
 
                     let mut dependency_since = Antichain::from_elem(T::minimum());
                     for read_hold in dependency_read_holds.iter() {
@@ -842,12 +850,19 @@ where
                         hydrated: false,
                     };
 
-                    collection_state.extra_state = CollectionStateExtra::Ingestion(ingestion_state);
+                    extra_state = CollectionStateExtra::Ingestion(ingestion_state);
 
-                    self.collections.insert(id, collection_state);
                     new_source_statistic_entries.insert(id);
                 }
             }
+
+            let collection_state = CollectionState {
+                data_source,
+                collection_metadata: metadata,
+                extra_state,
+                wallclock_lag_max: Default::default(),
+            };
+            self.collections.insert(id, collection_state);
         }
 
         {
