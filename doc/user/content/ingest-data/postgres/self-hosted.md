@@ -261,6 +261,9 @@ scenarios, we recommend separating your workloads into multiple clusters for
 [resource isolation](https://materialize.com/docs/sql/create-cluster/#resource-isolation).
 {{< /note >}}
 
+{{< tabs >}}
+
+{{< tab "Console">}}
 ![Image of the Create New Cluster flow](/images/console/console-create-new/postgresql/create-new-cluster-flow.png "Create New Cluster flow")
 
 From the [Materialize console](https://console.materialize.com/),
@@ -283,10 +286,13 @@ From the [Materialize console](https://console.materialize.com/),
 1. Upon successful creation, the newly created cluster's **Overview** page
    opens.
 
-Alternatively, you can create a cluster using the [`CREATE
-CLUSTER`](/sql/create-cluster/) command in the [SQL
-Shell](https://console.materialize.com/) (or your preferred SQL client
-connected to Materialize). For example, to create a cluster named
+{{< /tab >}}
+
+{{< tab "SQL commands">}}
+
+You can create a cluster using the [`CREATE CLUSTER`](/sql/create-cluster/)
+command in the [SQL Shell](https://console.materialize.com/) (or your preferred
+SQL client connected to Materialize). For example, to create a cluster named
 `ingest_postgres` of size `200cc` (using the default replication factor of 1):
 
 ```mzsql
@@ -295,6 +301,9 @@ CREATE CLUSTER ingest_postgres (SIZE = '200cc');
 SET CLUSTER = ingest_postgres;
 ```
 
+{{< /tab >}}
+
+{{< /tabs >}}
 
 ### 2. Start ingesting data
 
@@ -320,26 +329,15 @@ start by selecting the relevant option.
 
    - Create a **New** connection.
 
-   For a new connection, specify the following connection configuration details
-   and click **Continue**:
+   For a new connection, specify the new connection information and click
+   **Continue**. For **Connection details** and **Authentication**, specify the
+   [values configured in your PostgreSQL database
+   earlier](#2-create-a-publication-and-a-replication-user).  For the
+   [replication user's password in
+   PostgreSQL](#create-a-replication-user-for-materialize) as well as the SSH
+   key and certificates, create secrets to securely store those credentials.
 
-   | Field | Description |
-   | ----- | ----------- |
-   | **Name** | A name for the connection. |
-   | **Schema** | A Materialize database and schema for the connection. |
-   | **Host** | The PostgreSQL database hostname. |
-   | **Database** | The [database in PostgreSQL that contains the tables to replicate and where the replication user has CONNECT privilege](#2-create-a-publication-and-a-replication-user).|
-   | **Port** | The port number of the PostgreSQL. |
-   | **User** | The [replication user in PostgreSQL created earlier](#create-a-replication-user-for-materialize). |
-   | **Password** | The [replication user's password in PostgreSQL](#create-a-replication-user-for-materialize). Click the **Create a new secret** button to securely store the password under a name. Once created, select the secret's name in the **Password** field. |
-   | **SSL Authentication** | Toggle on the TLS/SSL mode for the connection. |
-   | **SSL Key** | PEM key file for the SSL certificate. Click the **Create a new secret** button to securely store the PEM key file content under a name. Once created, select the secret's name in the **SSL Key** field. |
-   | **SSL Certificate** | PEM certificate file for the SSL certificate. Click the **Create a new secret** button to securely store the PEM certificate file content under a name. Once created, select the secret's name in the **SSL Certificate** field. |
-   | **SSL Mode** | Select from **require**, **verify-ca**, or **verify-full**. For **verify-ca** and **verify-full**, you also need to provide the **SSL Certificate Authority**. Click the **Create a new secret** button to securely store the CA PEM file contentunder a name. Once created, select the secret's name in the **SSL Certificate Authority** field. |
-
-   ![Image of the Create a new source
-   connection](/images/console/console-create-new/postgresql/ create-a-source-connection.png
-   "Create a new source connection")
+   ![Image of the Create a new source connection](/images/console/console-create-new/postgresql/create-a-source-connection.png "Create a new source connection")
 
    Alternatively, in the [SQL Shell](https://console.materialize.com/) (or your
    preferred SQL client connected to Materialize), you can:
@@ -372,18 +370,11 @@ start by selecting the relevant option.
       - Replace `<database>` with the name of the database containing the tables
         you want to replicate to Materialize.
 
-1. From the **Configure source** panel, enter the following information and
-   click **Create source**:
+1. From the **Configure source** panel, enter the source information and
+   click **Create source**. For the **Configuration** section, specify the
+   [publication information configured in your PostgreSQL database
+   earlier](#2-create-a-publication-and-a-replication-user).
 
-   | Field | Description |
-   | ----- | ----------- |
-   | **Name** | A name for the source in Materialize. |
-   | **Schema** | A Materialize database and schema for the source. |
-   | **Cluster** | The cluster for the source. |
-   | **Publication** | The name of the publication you created [earlier](#2-create-a-publication-and-a-replication-user). |
-   | **For all tables** | Toggle on if you want to replicate all tables in the publication and you created a publication that specifies **ALL TABLES** [earlier](#2-create-a-publication-and-a-replication-user). |
-   | **Table name** | Name of the table  table in the publication to replicate and you created a publication that specifies the table [earlier](#2-create-a-publication-and-a-replication-user). |
-   | **Alias** | Optional alias for the table. |
 
    ![Image of the Create a new
    source configuration](/images/console/console-create-new/postgresql/create-new-source-configuration.png "Create
@@ -495,7 +486,7 @@ start by selecting the relevant option.
       you want to replicate to Materialize.
 
 1. Use the [`CREATE SOURCE`](/sql/create-source/) command to connect Materialize
-   to your Azure instance and start ingesting data from the publication you
+   to your Postgres instance and start ingesting data from the publication you
    created [earlier](#2-create-a-publication-and-a-replication-user):
 
     ```mzsql
@@ -574,17 +565,23 @@ start by selecting the relevant option.
 
 {{< tab "Console">}}
 
-From the [**Database object explorer**](/console/data/) in the [Materialize
-console], you can see the status of the source you created.
+From the [**Database object explorer**](/console/data/) in the Materialize
+console, you can see the status of the source you created.
 
-Before it starts consuming the replication stream, Materialize takes a snapshot of the relevant tables in your publication. Until this snapshot is complete, Materialize won't have the same view of your data as your PostgreSQL database.
+Before it starts consuming the replication stream, Materialize takes a snapshot
+of the relevant tables in your publication. Snapshotting can take between a few
+minutes to several hours, depending on the size of your dataset and the size of
+the cluster the source is running in.
+
+{{< note >}}
+You will not be able to query the source until the snapshotting completes and
+the source status changes to **Running**. That is, your queries to the source
+will block until the snapshotting completes.
+{{< /note >}}
 
 ![Image of the new source status:
 snapshotting](/images/console/console-create-new/postgresql/new-source-status-snapshotting.png
 "New source status: snapshotting")
-
-Snapshotting can take between a few minutes to several hours, depending on the
-size of your dataset and the size of the cluster the source is running in.
 
 Once the source is running, the **Status** changes to **Running**,
 

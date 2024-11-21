@@ -13,7 +13,7 @@ The [Materialize Console](https://console.materialize.com/) provides an
 **Admin** section where you can manage client credentials and, for
 administrators, review your usage and billing information.
 
-The **Admin** section contains the following screens:
+The **Admin** section contains the following panels:
 
 | Feature | Description |
 |---------|-------------|

@@ -20,13 +20,13 @@ view billing information.
 ## Key features
 
 - [**Create New**](/console/create-new/): Shortcut menu to the following
-  screens:
+  panels:
 
-  - [**New cluster**](/console/create-new/#create-new-cluster) screen
+  - [**New cluster**](/console/create-new/#create-new-cluster) panel
 
-  - [**New source**](/console/create-new/#create-new-source) screen
+  - [**New source**](/console/create-new/#create-new-source) panel
 
-  - [**New app password**](/console/create-new/#create-new-app-password) screen
+  - [**New app password**](/console/create-new/#create-new-app-password) panel
 
 - [SQL Shell](/console/sql-shell/): Issue SQL queries.
 

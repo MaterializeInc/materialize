@@ -42,7 +42,7 @@ From the [Materialize console](https://console.materialize.com/):
 
 {{< tip >}}
 
-Before you can create a source, you must configure your upstream database. Refer
+For PostgreSQL and MySQL, you must configure your upstream database first. Refer
 to the [Ingest data](/ingest-data/) section for your data source.
 
 {{</ tip >}}
@@ -51,7 +51,7 @@ From the [Materialize console](https://console.materialize.com/):
 
 
 1. Click **+ Create New** and select **Source** to open the **New source**
-   screen.
+   panel.
 
 1. Choose the source type and follow the instructions to configure a new source.
 

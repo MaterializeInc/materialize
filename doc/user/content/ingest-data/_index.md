@@ -2,10 +2,6 @@
 title: "Ingest data"
 description: "Guides for ingesting data from various sources into Materialize"
 disable_list: true
-menus:
-  main:
-    weight: 5
-    identifier: 'ingest-data'
 ---
 
 ## External data sources
