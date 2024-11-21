@@ -572,13 +572,18 @@ impl EquivalenceClasses {
                 }
             }
         }
-        // Only keep constraints that are not already known
+        // Only keep constraints that are not already known.
+        // Known constraints will present as `COL(_) IS NULL == false`,
+        // which can only happen if `false` is present, and both terms
+        // map to the same canonical representative>
         let lit_false = MirScalarExpr::literal_false();
         let target = self.remap.get(&lit_false);
-        non_null.retain(|c| {
-            let is_null = MirScalarExpr::column(*c).call_is_null();
-            self.remap.get(&is_null) != target
-        });
+        if target.is_some() {
+            non_null.retain(|c| {
+                let is_null = MirScalarExpr::column(*c).call_is_null();
+                self.remap.get(&is_null) != target
+            });
+        }
         if !non_null.is_empty() {
             let mut class = Vec::with_capacity(non_null.len() + 1);
             class.push(MirScalarExpr::literal_false());
