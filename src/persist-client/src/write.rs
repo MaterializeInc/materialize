@@ -35,14 +35,14 @@ use uuid::Uuid;
 
 use crate::batch::{
     validate_truncate_batch, Added, Batch, BatchBuilder, BatchBuilderConfig, BatchBuilderInternal,
-    ProtoBatch, BATCH_DELETE_ENABLED,
+    BatchParts, ProtoBatch, BATCH_DELETE_ENABLED,
 };
 use crate::error::{InvalidUsage, UpperMismatch};
-use crate::internal::compact::Compactor;
+use crate::internal::compact::{CompactConfig, Compactor};
 use crate::internal::encoding::{check_data_version, Schemas};
 use crate::internal::machine::{CompareAndAppendRes, ExpireFn, Machine};
 use crate::internal::metrics::Metrics;
-use crate::internal::state::{HandleDebugState, HollowBatch};
+use crate::internal::state::{HandleDebugState, HollowBatch, RunOrder};
 use crate::read::ReadHandle;
 use crate::{parse_id, GarbageCollector, IsolatedRuntime, PersistConfig, ShardId};
 
@@ -537,7 +537,7 @@ where
                     assert_eq!(received_inline_backpressure, false);
                     received_inline_backpressure = true;
 
-                    let cfg = BatchBuilderConfig::new(&self.cfg, self.shard_id(), false);
+                    let cfg = BatchBuilderConfig::new(&self.cfg, self.shard_id());
                     // We could have a large number of inline parts (imagine the
                     // sharded persist_sink), do this flushing concurrently.
                     let flush_batches = batches
@@ -607,15 +607,45 @@ where
     /// enough that we can reasonably chunk them up: O(KB) is definitely fine,
     /// O(MB) come talk to us.
     pub fn builder(&self, lower: Antichain<T>) -> BatchBuilder<K, V, T, D> {
+        let cfg = CompactConfig::new(&self.cfg, self.shard_id());
+        let parts = if let Some(max_runs) = cfg.batch.max_runs {
+            BatchParts::new_compacting::<K, V, D>(
+                cfg,
+                Description::new(
+                    lower.clone(),
+                    Antichain::new(),
+                    Antichain::from_elem(T::minimum()),
+                ),
+                max_runs,
+                Arc::clone(&self.metrics),
+                Arc::clone(&self.machine.applier.shard_metrics),
+                self.shard_id(),
+                lower.clone(),
+                Arc::clone(&self.blob),
+                Arc::clone(&self.isolated_runtime),
+                &self.metrics.user,
+                self.write_schemas.clone(),
+            )
+        } else {
+            BatchParts::new_ordered(
+                cfg.batch,
+                RunOrder::Unordered,
+                Arc::clone(&self.metrics),
+                Arc::clone(&self.machine.applier.shard_metrics),
+                self.shard_id(),
+                lower.clone(),
+                Arc::clone(&self.blob),
+                Arc::clone(&self.isolated_runtime),
+                &self.metrics.user,
+            )
+        };
         let builder = BatchBuilderInternal::new(
-            BatchBuilderConfig::new(&self.cfg, self.shard_id(), false),
+            BatchBuilderConfig::new(&self.cfg, self.shard_id()),
+            parts,
             Arc::clone(&self.metrics),
             self.write_schemas.clone(),
-            Arc::clone(&self.machine.applier.shard_metrics),
-            self.metrics.user.clone(),
             lower,
             Arc::clone(&self.blob),
-            Arc::clone(&self.isolated_runtime),
             self.machine.shard_id().clone(),
             self.cfg.build_version.clone(),
             Antichain::from_elem(T::minimum()),

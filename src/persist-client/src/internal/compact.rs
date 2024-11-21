@@ -31,7 +31,7 @@ use tokio::sync::{mpsc, oneshot, TryAcquireError};
 use tracing::{debug, debug_span, error, trace, warn, Instrument, Span};
 
 use crate::async_runtime::IsolatedRuntime;
-use crate::batch::{BatchBuilderConfig, BatchBuilderInternal, PartDeletes};
+use crate::batch::{BatchBuilderConfig, BatchBuilderInternal, BatchParts, PartDeletes};
 use crate::cfg::MiB;
 use crate::fetch::FetchBatchFilter;
 use crate::internal::encoding::Schemas;
@@ -80,18 +80,12 @@ pub struct CompactConfig {
 impl CompactConfig {
     /// Initialize the compaction config from Persist configuration.
     pub fn new(value: &PersistConfig, shard_id: ShardId) -> Self {
-        let mut ret = CompactConfig {
+        CompactConfig {
             compaction_memory_bound_bytes: value.dynamic.compaction_memory_bound_bytes(),
             compaction_yield_after_n_updates: value.compaction_yield_after_n_updates,
             version: value.build_version.clone(),
-            batch: BatchBuilderConfig::new(value, shard_id, true),
-        };
-        // Use compaction as a method of getting inline writes out of state, to
-        // make room for more inline writes. We could instead do this at the end
-        // of compaction by flushing out the batch, but doing it here based on
-        // the config allows BatchBuilder to do its normal pipelining of writes.
-        ret.batch.inline_writes_single_max_bytes = 0;
-        ret
+            batch: BatchBuilderConfig::new(value, shard_id),
+        }
     }
 }
 
@@ -601,7 +595,7 @@ where
         Vec<(&'a Description<T>, &'a RunMeta, &'a [RunPart<T>])>,
         usize,
     )> {
-        let ordered_runs = Self::order_runs(req, cfg.batch.expected_order);
+        let ordered_runs = Self::order_runs(req, cfg.batch.preferred_order);
         let mut ordered_runs = ordered_runs.iter().peekable();
 
         let mut chunks = vec![];
@@ -717,12 +711,11 @@ where
     /// Compacts runs together. If the input runs are sorted, a single run will be created as output.
     ///
     /// Maximum possible memory usage is `(# runs + 2) * [crate::PersistConfig::blob_target_size]`
-    async fn compact_runs<'a>(
-        // note: 'a cannot be elided due to https://github.com/rust-lang/rust/issues/63033
-        cfg: &'a CompactConfig,
-        shard_id: &'a ShardId,
-        desc: &'a Description<T>,
-        runs: Vec<(&'a Description<T>, &'a RunMeta, &'a [RunPart<T>])>,
+    pub(crate) async fn compact_runs(
+        cfg: &CompactConfig,
+        shard_id: &ShardId,
+        desc: &Description<T>,
+        runs: Vec<(&Description<T>, &RunMeta, &[RunPart<T>])>,
         blob: Arc<dyn Blob>,
         metrics: Arc<Metrics>,
         shard_metrics: Arc<ShardMetrics>,
@@ -740,15 +733,32 @@ where
 
         let mut timings = Timings::default();
 
-        let mut batch = BatchBuilderInternal::<K, V, T, D>::new(
-            cfg.batch.clone(),
+        let mut batch_cfg = cfg.batch.clone();
+
+        // Use compaction as a method of getting inline writes out of state, to
+        // make room for more inline writes. We could instead do this at the end
+        // of compaction by flushing out the batch, but doing it here based on
+        // the config allows BatchBuilder to do its normal pipelining of writes.
+        batch_cfg.inline_writes_single_max_bytes = 0;
+
+        let parts = BatchParts::new_ordered(
+            batch_cfg,
+            cfg.batch.preferred_order,
             Arc::clone(&metrics),
-            write_schemas.clone(),
             Arc::clone(&shard_metrics),
-            metrics.compaction.batch.clone(),
+            *shard_id,
             desc.lower().clone(),
             Arc::clone(&blob),
             Arc::clone(&isolated_runtime),
+            &metrics.compaction.batch,
+        );
+        let mut batch = BatchBuilderInternal::<K, V, T, D>::new(
+            cfg.batch.clone(),
+            parts,
+            Arc::clone(&metrics),
+            write_schemas.clone(),
+            desc.lower().clone(),
+            Arc::clone(&blob),
             shard_id.clone(),
             cfg.version.clone(),
             desc.since().clone(),
@@ -757,7 +767,7 @@ where
 
         // Duplicating a large codepath here during the migration.
         // TODO(database-issues#7188): dedup once the migration is complete.
-        if cfg.batch.expected_order == RunOrder::Structured {
+        if cfg.batch.preferred_order == RunOrder::Structured {
             // If we're not writing down the record metadata, we must always use the old compaction
             // order. (Since that's the default when the metadata's not present.)
             let mut consolidator = Consolidator::new(

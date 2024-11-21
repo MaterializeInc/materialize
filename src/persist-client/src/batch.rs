@@ -29,7 +29,6 @@ use futures_util::stream::StreamExt;
 use futures_util::{stream, FutureExt};
 use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
-use mz_ore::task::{JoinHandle, JoinHandleExt};
 use mz_ore::{instrument, soft_panic_or_log};
 use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
 use mz_persist::indexed::encoding::{BatchColumnarFormat, BlobTraceBatchPart, BlobTraceUpdates};
@@ -51,8 +50,10 @@ use tracing::{debug_span, trace_span, warn, Instrument};
 use crate::async_runtime::IsolatedRuntime;
 use crate::cfg::MiB;
 use crate::error::InvalidUsage;
+use crate::internal::compact::{CompactConfig, Compactor};
 use crate::internal::encoding::{LazyInlineBatchPart, LazyPartStats, LazyProto, Schemas};
 use crate::internal::machine::retry_external;
+use crate::internal::merge::{MergeTree, Pending};
 use crate::internal::metrics::{BatchWriteMetrics, Metrics, RetryMetrics, ShardMetrics};
 use crate::internal::paths::{PartId, PartialBatchKey, WriterKey};
 use crate::internal::state::{
@@ -225,50 +226,53 @@ where
         // be pretty unexpected to have inline writes in more than one part, so
         // don't bother.
         let mut parts = Vec::new();
-        for part in self.batch.parts.drain(..) {
-            let (updates, ts_rewrite, schema_id) = match part {
-                RunPart::Single(BatchPart::Inline {
-                    updates,
-                    ts_rewrite,
-                    schema_id,
-                }) => (updates, ts_rewrite, schema_id),
-                other @ RunPart::Many(_) | other @ RunPart::Single(BatchPart::Hollow(_)) => {
-                    parts.push(other);
-                    continue;
-                }
-            };
-            let updates = updates
-                .decode::<T>(&self.metrics.columnar)
-                .expect("valid inline part");
-            let key_lower = updates.key_lower().to_vec();
-            let diffs_sum =
-                diffs_sum::<D>(updates.updates.records()).expect("inline parts are not empty");
-            let mut write_schemas = write_schemas.clone();
-            write_schemas.id = schema_id;
+        for (run_meta, run_parts) in self.batch.runs() {
+            for part in run_parts {
+                let (updates, ts_rewrite, schema_id) = match part {
+                    RunPart::Single(BatchPart::Inline {
+                        updates,
+                        ts_rewrite,
+                        schema_id,
+                    }) => (updates, ts_rewrite, schema_id),
+                    other @ RunPart::Many(_) | other @ RunPart::Single(BatchPart::Hollow(_)) => {
+                        parts.push(other.clone());
+                        continue;
+                    }
+                };
+                let updates = updates
+                    .decode::<T>(&self.metrics.columnar)
+                    .expect("valid inline part");
+                let key_lower = updates.key_lower().to_vec();
+                let diffs_sum =
+                    diffs_sum::<D>(updates.updates.records()).expect("inline parts are not empty");
+                let mut write_schemas = write_schemas.clone();
+                write_schemas.id = *schema_id;
 
-            let write_span =
-                debug_span!("batch::flush_to_blob", shard = %self.shard_metrics.shard_id)
-                    .or_current();
-            let handle = mz_ore::task::spawn(
-                || "batch::flush_to_blob",
-                BatchParts::write_hollow_part(
-                    cfg.clone(),
-                    cfg.part_write_columnar_data(),
-                    Arc::clone(&self.blob),
-                    Arc::clone(&self.metrics),
-                    Arc::clone(&self.shard_metrics),
-                    batch_metrics.clone(),
-                    Arc::clone(isolated_runtime),
-                    updates,
-                    key_lower,
-                    ts_rewrite,
-                    D::encode(&diffs_sum),
-                    write_schemas,
-                )
-                .instrument(write_span),
-            );
-            let part = handle.await.expect("part write task failed");
-            parts.push(RunPart::Single(part));
+                let write_span =
+                    debug_span!("batch::flush_to_blob", shard = %self.shard_metrics.shard_id)
+                        .or_current();
+                let handle = mz_ore::task::spawn(
+                    || "batch::flush_to_blob",
+                    BatchParts::write_hollow_part(
+                        cfg.clone(),
+                        cfg.part_write_columnar_data(),
+                        Arc::clone(&self.blob),
+                        Arc::clone(&self.metrics),
+                        Arc::clone(&self.shard_metrics),
+                        batch_metrics.clone(),
+                        Arc::clone(isolated_runtime),
+                        updates,
+                        run_meta.order.unwrap_or(RunOrder::Unordered),
+                        key_lower,
+                        ts_rewrite.clone(),
+                        D::encode(&diffs_sum),
+                        write_schemas,
+                    )
+                    .instrument(write_span),
+                );
+                let part = handle.await.expect("part write task failed");
+                parts.push(RunPart::Single(part));
+            }
         }
         self.batch.parts = parts;
     }
@@ -351,9 +355,13 @@ pub struct BatchBuilderConfig {
     pub(crate) stats_untrimmable_columns: Arc<UntrimmableColumns>,
     pub(crate) write_diffs_sum: bool,
     pub(crate) encoding_config: EncodingConfig,
-    pub(crate) expected_order: RunOrder,
+    pub(crate) preferred_order: RunOrder,
     pub(crate) structured_key_lower_len: usize,
     pub(crate) run_length_limit: usize,
+    /// The number of runs to cap the built batch at, or None if we should
+    /// continue to generate one run per part for unordered batches.
+    /// See the config definition for details.
+    pub(crate) max_runs: Option<usize>,
 }
 
 // TODO: Remove this once we're comfortable that there aren't any bugs.
@@ -416,6 +424,14 @@ pub(crate) const MAX_RUN_LEN: Config<usize> = Config::new(
     into the blob store.",
 );
 
+pub(crate) const MAX_RUNS: Config<usize> = Config::new(
+    "persist_batch_max_runs",
+    1,
+    "The maximum number of runs a batch builder should generate for user batches. \
+    (Compaction outputs always generate a single run.) \
+    The minimum value is 2; below this, compaction is disabled.",
+);
+
 /// A target maximum size of blob payloads in bytes. If a logical "batch" is
 /// bigger than this, it will be broken up into smaller, independent pieces.
 /// This is best-effort, not a guarantee (though as of 2022-06-09, we happen to
@@ -444,7 +460,7 @@ pub(crate) const INLINE_WRITES_TOTAL_MAX_BYTES: Config<usize> = Config::new(
 
 impl BatchBuilderConfig {
     /// Initialize a batch builder config based on a snapshot of the Persist config.
-    pub fn new(value: &PersistConfig, shard_id: ShardId, expect_consolidated: bool) -> Self {
+    pub fn new(value: &PersistConfig, shard_id: ShardId) -> Self {
         let writer_key = WriterKey::for_version(&value.build_version);
 
         let batch_columnar_format =
@@ -454,19 +470,15 @@ impl BatchBuilderConfig {
         let structured_order = STRUCTURED_ORDER.get(value) && {
             shard_id.to_string() < STRUCTURED_ORDER_UNTIL_SHARD.get(value)
         };
-        let expected_order = if expect_consolidated {
-            if structured_order {
-                RunOrder::Structured
-            } else {
-                RunOrder::Codec
-            }
+        let preferred_order = if structured_order {
+            RunOrder::Structured
         } else {
-            RunOrder::Unordered
+            RunOrder::Codec
         };
 
         BatchBuilderConfig {
             writer_key,
-            blob_target_size: BLOB_TARGET_SIZE.get(value),
+            blob_target_size: BLOB_TARGET_SIZE.get(value).clamp(1, usize::MAX),
             batch_delete_enabled: BATCH_DELETE_ENABLED.get(value),
             batch_builder_max_outstanding_parts: value
                 .dynamic
@@ -482,9 +494,13 @@ impl BatchBuilderConfig {
                 use_dictionary: ENCODING_ENABLE_DICTIONARY.get(value),
                 compression: CompressionFormat::from_str(&ENCODING_COMPRESSION_FORMAT.get(value)),
             },
-            expected_order,
+            preferred_order,
             structured_key_lower_len: STRUCTURED_KEY_LOWER_LEN.get(value),
             run_length_limit: MAX_RUN_LEN.get(value).clamp(2, usize::MAX),
+            max_runs: match MAX_RUNS.get(value) {
+                limit @ 2.. => Some(limit),
+                _ => None,
+            },
         }
     }
 
@@ -492,13 +508,6 @@ impl BatchBuilderConfig {
         // [0, 100)
         let rand = || usize::cast_from(Uuid::new_v4().hashed()) % 100;
         self.batch_columnar_format.is_structured() && self.batch_columnar_format_percent > rand()
-    }
-
-    fn run_meta(&self, order: RunOrder, schema: Option<SchemaId>) -> RunMeta {
-        RunMeta {
-            order: Some(order),
-            schema,
-        }
     }
 }
 
@@ -662,28 +671,16 @@ where
 {
     pub(crate) fn new(
         cfg: BatchBuilderConfig,
+        parts: BatchParts<T>,
         metrics: Arc<Metrics>,
         write_schemas: Schemas<K, V>,
-        shard_metrics: Arc<ShardMetrics>,
-        batch_write_metrics: BatchWriteMetrics,
         lower: Antichain<T>,
         blob: Arc<dyn Blob>,
-        isolated_runtime: Arc<IsolatedRuntime>,
         shard_id: ShardId,
         version: Version,
         since: Antichain<T>,
         inline_upper: Option<Antichain<T>>,
     ) -> Self {
-        let parts = BatchParts::new(
-            cfg.clone(),
-            Arc::clone(&metrics),
-            shard_metrics,
-            shard_id,
-            lower.clone(),
-            Arc::clone(&blob),
-            isolated_runtime,
-            &batch_write_metrics,
-        );
         Self {
             lower,
             inclusive_upper: Antichain::new(),
@@ -740,27 +737,27 @@ where
         let remainder = self.buffer.drain();
         self.flush_part(remainder).await;
 
-        let run_meta = self
-            .parts
-            .cfg
-            .run_meta(self.parts.cfg.expected_order, self.write_schemas.id);
         let batch_delete_enabled = self.parts.cfg.batch_delete_enabled;
         let shard_metrics = Arc::clone(&self.parts.shard_metrics);
-        let expected_order = self.parts.cfg.expected_order;
-        let parts = self.parts.finish().await;
+        let runs = self.parts.finish().await;
 
-        let desc = Description::new(self.lower, registered_upper, self.since);
-        let (runs, run_meta) = if parts.is_empty() {
-            (vec![], vec![])
-        } else {
-            if expected_order == RunOrder::Unordered {
-                // all parts get their own run
-                ((1..parts.len()).collect(), vec![run_meta; parts.len()])
-            } else {
-                // we've generated one big run!
-                (vec![], vec![run_meta])
+        let mut run_parts = vec![];
+        let mut run_splits = vec![];
+        let mut run_meta = vec![];
+        for (order, parts) in runs {
+            if parts.is_empty() {
+                continue;
             }
-        };
+            if run_parts.len() != 0 {
+                run_splits.push(run_parts.len());
+            }
+            run_meta.push(RunMeta {
+                order: Some(order),
+                schema: self.write_schemas.id,
+            });
+            run_parts.extend(parts);
+        }
+        let desc = Description::new(self.lower, registered_upper, self.since);
 
         let batch = Batch::new(
             batch_delete_enabled,
@@ -768,7 +765,7 @@ where
             self.blob,
             shard_metrics,
             self.version,
-            HollowBatch::new(desc, parts, self.num_updates, run_meta, runs),
+            HollowBatch::new(desc, run_parts, self.num_updates, run_meta, run_splits),
         );
 
         Ok(batch)
@@ -844,7 +841,7 @@ where
             let key_bytes = columnar.records().keys();
             if key_bytes.is_empty() {
                 &[]
-            } else if self.parts.cfg.expected_order == RunOrder::Codec {
+            } else if self.parts.expected_order() == RunOrder::Codec {
                 key_bytes.value(0)
             } else {
                 ::arrow::compute::min_binary(key_bytes).expect("min of nonempty array")
@@ -961,36 +958,15 @@ impl BatchBuffer {
     }
 }
 
-/// Either a handle to a task that returns a value or the value itself.
 #[derive(Debug)]
-enum Pending<T> {
-    Writing(JoinHandle<T>),
-    Blocking,
-    Finished(T),
-}
-
-impl<T: Send + 'static> Pending<T> {
-    fn new(handle: JoinHandle<T>) -> Self {
-        Self::Writing(handle)
-    }
-
-    fn is_finished(&self) -> bool {
-        matches!(self, Self::Finished(_))
-    }
-
-    async fn into_result(self) -> T {
-        match self {
-            Pending::Writing(h) => h.wait_and_assert_finished().await,
-            Pending::Blocking => panic!("block_until_ready cancelled?"),
-            Pending::Finished(t) => t,
-        }
-    }
-
-    async fn block_until_ready(&mut self) {
-        let pending = mem::replace(self, Self::Blocking);
-        let value = pending.into_result().await;
-        *self = Pending::Finished(value);
-    }
+enum WritingRuns<T> {
+    /// Building a single run with the specified ordering. Parts are expected to be internally
+    /// sorted and added in order. Merging a vec of parts will shift them out to a hollow run
+    /// in blob, bounding the total length of a run in memory.
+    Ordered(RunOrder, MergeTree<Pending<RunPart<T>>>),
+    /// Building multiple runs which may have different orders. Merging a vec of runs will cause
+    /// them to be compacted together, bounding the total number of runs we generate.
+    Compacting(MergeTree<(RunOrder, Pending<Vec<RunPart<T>>>)>),
 }
 
 // TODO: If this is dropped, cancel (and delete?) any writing parts and delete
@@ -1005,18 +981,112 @@ pub(crate) struct BatchParts<T> {
     blob: Arc<dyn Blob>,
     isolated_runtime: Arc<IsolatedRuntime>,
     next_index: u64,
-    /// A hierarchy of runs. `writing_runs[0]` is a run of individual batch parts;
-    /// `writing_runs[1]` is a run of hollow runs, and so on. As individual runs
-    /// get too long, they are spilled out to `blob` and a new hollow run part is added
-    /// one level up, LSM-style. This helps us ensure both that no run is "too long"
-    /// and that no batch part is more than O(log(n)) levels deep in the resulting tree.
-    writing_runs: Vec<Vec<Pending<RunPart<T>>>>,
+    writing_runs: WritingRuns<T>,
     batch_metrics: BatchWriteMetrics,
 }
 
 impl<T: Timestamp + Codec64> BatchParts<T> {
-    pub(crate) fn new(
+    pub(crate) fn new_compacting<K, V, D>(
+        cfg: CompactConfig,
+        desc: Description<T>,
+        runs_per_compaction: usize,
+        metrics: Arc<Metrics>,
+        shard_metrics: Arc<ShardMetrics>,
+        shard_id: ShardId,
+        lower: Antichain<T>,
+        blob: Arc<dyn Blob>,
+        isolated_runtime: Arc<IsolatedRuntime>,
+        batch_metrics: &BatchWriteMetrics,
+        schemas: Schemas<K, V>,
+    ) -> Self
+    where
+        K: Codec + Debug,
+        V: Codec + Debug,
+        T: Lattice + Send + Sync,
+        D: Semigroup + Ord + Codec64 + Send + Sync,
+    {
+        let writing_runs = {
+            let cfg = cfg.clone();
+            let blob = Arc::clone(&blob);
+            let metrics = Arc::clone(&metrics);
+            let shard_metrics = Arc::clone(&shard_metrics);
+            let isolated_runtime = Arc::clone(&isolated_runtime);
+            // Clamping to prevent extreme values given weird configs.
+            let runs_per_compaction = runs_per_compaction.clamp(2, 1024);
+
+            let merge_fn = move |parts: Vec<(RunOrder, Pending<Vec<RunPart<T>>>)>| {
+                let blob = Arc::clone(&blob);
+                let metrics = Arc::clone(&metrics);
+                let shard_metrics = Arc::clone(&shard_metrics);
+                let cfg = cfg.clone();
+                let isolated_runtime = Arc::clone(&isolated_runtime);
+                let write_schemas = schemas.clone();
+                let compact_desc = desc.clone();
+                let handle = mz_ore::task::spawn(
+                    || "batch::compact_runs",
+                    async move {
+                        let runs: Vec<_> = stream::iter(parts)
+                            .then(|(order, parts)| async move {
+                                (
+                                    RunMeta {
+                                        order: Some(order),
+                                        schema: schemas.id,
+                                    },
+                                    parts.into_result().await,
+                                )
+                            })
+                            .collect()
+                            .await;
+
+                        let run_refs: Vec<_> = runs
+                            .iter()
+                            .map(|(meta, run)| (&compact_desc, meta, run.as_slice()))
+                            .collect();
+
+                        let output_batch = Compactor::<K, V, T, D>::compact_runs(
+                            &cfg,
+                            &shard_id,
+                            &compact_desc,
+                            run_refs,
+                            blob,
+                            metrics,
+                            shard_metrics,
+                            isolated_runtime,
+                            write_schemas,
+                        )
+                        .await
+                        .expect("successful compaction");
+
+                        assert_eq!(
+                            output_batch.run_meta.len(),
+                            1,
+                            "compaction is guaranteed to emit a single run"
+                        );
+                        output_batch.parts
+                    }
+                    .instrument(debug_span!("batch::compact_runs")),
+                );
+                (RunOrder::Structured, Pending::new(handle))
+            };
+            WritingRuns::Compacting(MergeTree::new(runs_per_compaction, merge_fn))
+        };
+        BatchParts {
+            cfg: cfg.batch,
+            metrics,
+            shard_metrics,
+            shard_id,
+            lower,
+            blob,
+            isolated_runtime,
+            next_index: 0,
+            writing_runs,
+            batch_metrics: batch_metrics.clone(),
+        }
+    }
+
+    pub(crate) fn new_ordered(
         cfg: BatchBuilderConfig,
+        order: RunOrder,
         metrics: Arc<Metrics>,
         shard_metrics: Arc<ShardMetrics>,
         shard_id: ShardId,
@@ -1025,6 +1095,39 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         isolated_runtime: Arc<IsolatedRuntime>,
         batch_metrics: &BatchWriteMetrics,
     ) -> Self {
+        let writing_runs = {
+            let cfg = cfg.clone();
+            let blob = Arc::clone(&blob);
+            let metrics = Arc::clone(&metrics);
+            let writer_key = cfg.writer_key.clone();
+            let merge_fn = move |parts| {
+                let blob = Arc::clone(&blob);
+                let writer_key = writer_key.clone();
+                let metrics = Arc::clone(&metrics);
+                let handle = mz_ore::task::spawn(
+                    || "batch::spill_run",
+                    async move {
+                        let parts = stream::iter(parts)
+                            .then(|p: Pending<RunPart<T>>| p.into_result())
+                            .collect()
+                            .await;
+                        let run_ref = HollowRunRef::set(
+                            shard_id,
+                            blob.as_ref(),
+                            &writer_key,
+                            HollowRun { parts },
+                            &*metrics,
+                        )
+                        .await;
+
+                        RunPart::Many(run_ref)
+                    }
+                    .instrument(debug_span!("batch::spill_run")),
+                );
+                Pending::new(handle)
+            };
+            WritingRuns::Ordered(order, MergeTree::new(cfg.run_length_limit, merge_fn))
+        };
         BatchParts {
             cfg,
             metrics,
@@ -1034,8 +1137,15 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             blob,
             isolated_runtime,
             next_index: 0,
-            writing_runs: vec![vec![]],
+            writing_runs,
             batch_metrics: batch_metrics.clone(),
+        }
+    }
+
+    pub(crate) fn expected_order(&self) -> RunOrder {
+        match self.writing_runs {
+            WritingRuns::Ordered(order, _) => order,
+            WritingRuns::Compacting(_) => RunOrder::Unordered,
         }
     }
 
@@ -1067,13 +1177,13 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             self.cfg.inline_writes_single_max_bytes
         };
 
-        let handle = if updates.goodbytes() < inline_threshold {
+        let (name, write_future) = if updates.goodbytes() < inline_threshold {
             let metrics = Arc::clone(&self.metrics);
             let write_schemas = write_schemas.clone();
 
             let span = debug_span!("batch::inline_part", shard = %self.shard_id).or_current();
-            mz_ore::task::spawn(
-                || "batch::inline_part",
+            (
+                "batch::inline_part",
                 async move {
                     let updates = if part_write_columnar_data {
                         let records = updates.records().clone();
@@ -1108,7 +1218,8 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                         schema_id,
                     })
                 }
-                .instrument(span),
+                .instrument(span)
+                .boxed(),
             )
         } else {
             let part = BlobTraceBatchPart {
@@ -1118,8 +1229,8 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             };
             let write_span =
                 debug_span!("batch::write_part", shard = %self.shard_metrics.shard_id).or_current();
-            mz_ore::task::spawn(
-                || "batch::write_part",
+            (
+                "batch::write_part",
                 BatchParts::write_hollow_part(
                     self.cfg.clone(),
                     part_write_columnar_data,
@@ -1129,16 +1240,66 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                     batch_metrics.clone(),
                     Arc::clone(&self.isolated_runtime),
                     part,
+                    self.expected_order(),
                     key_lower,
                     ts_rewrite,
                     D::encode(&diffs_sum),
                     write_schemas.clone(),
                 )
                 .map(RunPart::Single)
-                .instrument(write_span),
+                .instrument(write_span)
+                .boxed(),
             )
         };
-        self.push_part(Pending::new(handle), 0).await;
+
+        match &mut self.writing_runs {
+            WritingRuns::Ordered(_order, run) => {
+                let part = Pending::new(mz_ore::task::spawn(|| name, write_future));
+                run.push(part);
+
+                // If there are more than the max outstanding parts, block on all but the
+                //  most recent.
+                for part in run
+                    .iter_mut()
+                    .rev()
+                    .skip(self.cfg.batch_builder_max_outstanding_parts)
+                    .take_while(|p| !p.is_finished())
+                {
+                    self.batch_metrics.write_stalls.inc();
+                    part.block_until_ready().await;
+                }
+            }
+            WritingRuns::Compacting(batches) => {
+                let run = Pending::Writing(mz_ore::task::spawn(|| name, async move {
+                    vec![write_future.await]
+                }));
+                batches.push((RunOrder::Unordered, run));
+
+                // Allow up to `max_outstanding_parts` (or one compaction) to be pending, and block
+                // on the rest.
+                let mut part_budget = self.cfg.batch_builder_max_outstanding_parts;
+                let mut compaction_budget = 1;
+                for (_, part) in batches
+                    .iter_mut()
+                    .rev()
+                    .skip_while(|(order, _)| match order {
+                        RunOrder::Unordered if part_budget > 0 => {
+                            part_budget -= 1;
+                            true
+                        }
+                        RunOrder::Structured | RunOrder::Codec if compaction_budget > 0 => {
+                            compaction_budget -= 1;
+                            true
+                        }
+                        _ => false,
+                    })
+                    .take_while(|(_, p)| !p.is_finished())
+                {
+                    self.batch_metrics.write_stalls.inc();
+                    part.block_until_ready().await;
+                }
+            }
+        }
     }
 
     async fn write_hollow_part<K: Codec, V: Codec>(
@@ -1150,6 +1311,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         batch_metrics: BatchWriteMetrics,
         isolated_runtime: Arc<IsolatedRuntime>,
         mut updates: BlobTraceBatchPart<T>,
+        run_order: RunOrder,
         key_lower: Vec<u8>,
         ts_rewrite: Option<Antichain<T>>,
         diffs_sum: [u8; 8],
@@ -1209,7 +1371,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
 
                 let structured_key_lower = if cfg.structured_key_lower_len > 0 {
                     updates.updates.structured().and_then(|ext| {
-                        let min_key = if cfg.expected_order == RunOrder::Structured {
+                        let min_key = if run_order == RunOrder::Structured {
                             0
                         } else {
                             let ord = ArrayOrd::new(ext.key.as_ref());
@@ -1262,7 +1424,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         batch_metrics.seconds.inc_by(start.elapsed().as_secs_f64());
         batch_metrics.bytes.inc_by(u64::cast_from(payload_len));
         batch_metrics.goodbytes.inc_by(u64::cast_from(goodbytes));
-        match cfg.expected_order {
+        match run_order {
             RunOrder::Unordered => batch_metrics.unordered.inc(),
             RunOrder::Codec => batch_metrics.codec_order.inc(),
             RunOrder::Structured => batch_metrics.structured_order.inc(),
@@ -1294,98 +1456,35 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         })
     }
 
-    async fn push_part(&mut self, mut part: Pending<RunPart<T>>, mut depth: usize) {
-        // When a run get too long, we want to write them out as a hollow run and store
-        // a reference to that run as a part of another run... and we want this tree of runs to be
-        // relatively balanced, so that we don't need to load O(n) runs into memory at once
-        // when we're enumerating parts at read time. This code implements an LSM/spine-like
-        // approach, recursively "merging" runs into entries in higher-level runs when they get
-        // too large.
-        loop {
-            // Make sure a run of parts at _depth_ exists.
-            if depth >= self.writing_runs.len() {
-                self.writing_runs.resize_with(depth + 1, Vec::new);
-            }
-            let parts = &mut self.writing_runs[depth];
-
-            parts.push(part);
-
-            // If there are more than the max outstanding parts, block on all but the
-            //  most recent.
-            for part in parts
-                .iter_mut()
-                .rev()
-                .skip(self.cfg.batch_builder_max_outstanding_parts)
-                .take_while(|p| !p.is_finished())
-            {
-                self.batch_metrics.write_stalls.inc();
-                part.block_until_ready().await;
-            }
-
-            // If we have too many parts at a given level, roll it up to the next level...
-            // unless this is an unordered batch, in which case we're later going to split
-            // all these parts up into separate runs later anyways.
-            if parts.len() <= self.cfg.run_length_limit
-                || self.cfg.expected_order == RunOrder::Unordered
-            {
-                break;
-            }
-
-            let parts: Vec<_> = parts.drain(0..self.cfg.run_length_limit).collect();
-            let shard_id = self.shard_id;
-            let blob = Arc::clone(&self.blob);
-            let writer_key = self.cfg.writer_key.clone();
-            let metrics = Arc::clone(&self.metrics);
-            let handle = mz_ore::task::spawn(
-                || "batch::inline_part",
-                async move {
-                    let parts = stream::iter(parts)
-                        .then(|p| p.into_result())
-                        .collect()
-                        .await;
-                    let run_ref = HollowRunRef::set(
-                        shard_id,
-                        blob.as_ref(),
-                        &writer_key,
-                        HollowRun { parts },
-                        &*metrics,
-                    )
-                    .await;
-
-                    RunPart::Many(run_ref)
-                }
-                .instrument(debug_span!("batch::spill_run")),
-            );
-            part = Pending::new(handle);
-            depth += 1;
-        }
-    }
-
     #[instrument(level = "debug", name = "batch::finish_upload", fields(shard = %self.shard_id))]
-    pub(crate) async fn finish(mut self) -> Vec<RunPart<T>> {
-        // At this point we have a series of runs, but we'd like a single one.
-        // Push parts at shallow depths into the runs at higher depths until they're all in the
-        // final run.
-        for depth in 0.. {
-            // Note that we check this every iteration... `push_part` may increase the length.
-            if depth + 1 == self.writing_runs.len() {
-                break;
+    pub(crate) async fn finish(self) -> Vec<(RunOrder, Vec<RunPart<T>>)> {
+        match self.writing_runs {
+            WritingRuns::Ordered(RunOrder::Unordered, run) => {
+                let parts = run.finish();
+                let mut output = Vec::with_capacity(parts.len());
+                for part in parts {
+                    output.push((RunOrder::Unordered, vec![part.into_result().await]));
+                }
+                output
             }
-            for part in mem::take(&mut self.writing_runs[depth]) {
-                self.push_part(part, depth + 1).await;
+            WritingRuns::Ordered(order, run) => {
+                let parts = run.finish();
+                let mut output = Vec::with_capacity(parts.len());
+                for part in parts {
+                    output.push(part.into_result().await);
+                }
+                vec![(order, output)]
+            }
+            WritingRuns::Compacting(batches) => {
+                let runs = batches.finish();
+                let mut output = Vec::with_capacity(runs.len());
+                for (order, run) in runs {
+                    let run = run.into_result().await;
+                    output.push((order, run))
+                }
+                output
             }
         }
-
-        let parts = self.writing_runs.pop().expect("at least one level");
-        assert!(
-            self.writing_runs.iter().all(|r| r.is_empty()),
-            "all parts should be in the last run"
-        );
-        let mut output = Vec::with_capacity(parts.len());
-        for part in parts {
-            output.push(part.into_result().await);
-        }
-        output
     }
 }
 
@@ -1541,7 +1640,6 @@ fn diffs_sum<D: Semigroup + Codec64>(updates: &ColumnarRecords) -> Option<D> {
 
 #[cfg(test)]
 mod tests {
-    use itertools::Itertools;
     use mz_dyncfg::ConfigUpdates;
     use timely::order::Product;
 
@@ -1565,11 +1663,12 @@ mod tests {
         let cache = PersistClientCache::new_no_metrics();
 
         // Set blob_target_size to 0 so that each row gets forced into its own
-        // batch. Set max_outstanding and max_run_len to a small value that's >1 to test various
+        // batch. Set max_outstanding to a small value that's >1 to test various
         // edge cases below.
         cache.cfg.set_config(&BLOB_TARGET_SIZE, 0);
+        cache.cfg.set_config(&MAX_RUNS, 3);
         cache.cfg.dynamic.set_batch_builder_max_outstanding_parts(2);
-        cache.cfg.set_config(&MAX_RUN_LEN, 3);
+
         let client = cache
             .open(PersistLocation::new_in_mem())
             .await
@@ -1582,27 +1681,19 @@ mod tests {
         let builder = write.builder(Antichain::from_elem(0));
         let mut builder = builder.builder;
 
-        // Currently we don't spill out runs for unordered data, so we need to override this
-        // for now.
-        builder.parts.cfg.expected_order = RunOrder::Codec;
-
         fn assert_writing(
             builder: &BatchBuilderInternal<String, String, u64, i64>,
-            expected_finished: &[&[bool]],
+            expected_finished: &[bool],
         ) {
-            for (depth, (actual, expected)) in builder
-                .parts
-                .writing_runs
-                .iter()
-                .zip_eq(expected_finished)
-                .enumerate()
-            {
-                let actual: Vec<_> = actual.iter().map(|p| p.is_finished()).collect();
-                assert_eq!(*expected, actual, "run at depth {depth} should match");
-            }
+            let WritingRuns::Compacting(run) = &builder.parts.writing_runs else {
+                unreachable!("ordered run!")
+            };
+
+            let actual: Vec<_> = run.iter().map(|(_, p)| p.is_finished()).collect();
+            assert_eq!(*expected_finished, actual);
         }
 
-        assert_writing(&builder, &[&[]]);
+        assert_writing(&builder, &[]);
 
         // We set blob_target_size to 0, so the first update gets forced out
         // into a run.
@@ -1610,7 +1701,7 @@ mod tests {
         let key = k.encode_to_vec();
         let val = v.encode_to_vec();
         builder.add(&key, &val, t, d).await.expect("invalid usage");
-        assert_writing(&builder, &[&[false]]);
+        assert_writing(&builder, &[false]);
 
         // We set batch_builder_max_outstanding_parts to 2, so we are allowed to
         // pipeline a second part.
@@ -1618,7 +1709,7 @@ mod tests {
         let key = k.encode_to_vec();
         let val = v.encode_to_vec();
         builder.add(&key, &val, t, d).await.expect("invalid usage");
-        assert_writing(&builder, &[&[false, false]]);
+        assert_writing(&builder, &[false, false]);
 
         // But now that we have 3 parts, the add call back-pressures until the
         // first one finishes.
@@ -1626,15 +1717,15 @@ mod tests {
         let key = k.encode_to_vec();
         let val = v.encode_to_vec();
         builder.add(&key, &val, t, d).await.expect("invalid usage");
-        assert_writing(&builder, &[&[true, false, false]]);
+        assert_writing(&builder, &[true, false, false]);
 
         // Finally, pushing a fourth part will cause the first three to spill out into
-        // a new hollow run.
+        // a new compacted run.
         let ((k, v), t, d) = &data[3];
         let key = k.encode_to_vec();
         let val = v.encode_to_vec();
         builder.add(&key, &val, t, d).await.expect("invalid usage");
-        assert_writing(&builder, &[&[false], &[false]]);
+        assert_writing(&builder, &[false, false]);
 
         // Finish off the batch and verify that the keys and such get plumbed
         // correctly by reading the data back.
@@ -1642,7 +1733,8 @@ mod tests {
             .finish(Antichain::from_elem(5))
             .await
             .expect("invalid usage");
-        assert_eq!(batch.batch.part_count(), 2);
+        assert_eq!(batch.batch.runs().count(), 2);
+        assert_eq!(batch.batch.part_count(), 4);
         write
             .append_batch(batch, Antichain::from_elem(0), Antichain::from_elem(5))
             .await

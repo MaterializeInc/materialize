@@ -1419,7 +1419,7 @@ pub mod datadriven {
 
     use crate::batch::{
         validate_truncate_batch, Batch, BatchBuilder, BatchBuilderConfig, BatchBuilderInternal,
-        BLOB_TARGET_SIZE, STRUCTURED_ORDER,
+        BatchParts, BLOB_TARGET_SIZE, STRUCTURED_ORDER,
     };
     use crate::fetch::{Cursor, EncodedPart};
     use crate::internal::compact::{CompactConfig, CompactReq, Compactor};
@@ -1427,7 +1427,7 @@ pub mod datadriven {
     use crate::internal::encoding::Schemas;
     use crate::internal::gc::GcReq;
     use crate::internal::paths::{BlobKey, BlobKeyPrefix, PartialBlobKey};
-    use crate::internal::state::{BatchPart, RunPart};
+    use crate::internal::state::{BatchPart, RunOrder, RunPart};
     use crate::internal::state_versions::EncodedRollup;
     use crate::read::{Listen, ListenEvent, READER_LEASE_DURATION};
     use crate::rpc::NoopPubSubSender;
@@ -1756,8 +1756,7 @@ pub mod datadriven {
             .flat_map(DirectiveArgs::parse_update)
             .collect();
 
-        let mut cfg =
-            BatchBuilderConfig::new(&datadriven.client.cfg, datadriven.shard_id, consolidate);
+        let mut cfg = BatchBuilderConfig::new(&datadriven.client.cfg, datadriven.shard_id);
         if let Some(target_size) = target_size {
             cfg.blob_target_size = target_size;
         };
@@ -1769,15 +1768,29 @@ pub mod datadriven {
         if consolidate {
             consolidate_updates(&mut updates);
         }
-        let builder = BatchBuilderInternal::new(
+        let run_order = if consolidate {
+            cfg.preferred_order
+        } else {
+            RunOrder::Unordered
+        };
+        let parts = BatchParts::new_ordered(
             cfg.clone(),
+            run_order,
             Arc::clone(&datadriven.client.metrics),
-            schemas.clone(),
             Arc::clone(&datadriven.machine.applier.shard_metrics),
-            datadriven.client.metrics.user.clone(),
-            lower,
+            datadriven.shard_id,
+            lower.clone(),
             Arc::clone(&datadriven.client.blob),
             Arc::clone(&datadriven.client.isolated_runtime),
+            &datadriven.client.metrics.user,
+        );
+        let builder = BatchBuilderInternal::new(
+            cfg.clone(),
+            parts,
+            Arc::clone(&datadriven.client.metrics),
+            schemas.clone(),
+            lower,
+            Arc::clone(&datadriven.client.blob),
             datadriven.shard_id.clone(),
             datadriven.client.cfg.build_version.clone(),
             since,
@@ -2393,8 +2406,7 @@ pub mod datadriven {
                 }
                 CompareAndAppendRes::InlineBackpressure => {
                     let mut b = datadriven.to_batch(batch.clone());
-                    let cfg =
-                        BatchBuilderConfig::new(&datadriven.client.cfg, datadriven.shard_id, false);
+                    let cfg = BatchBuilderConfig::new(&datadriven.client.cfg, datadriven.shard_id);
                     let schemas = Schemas::<String, ()> {
                         id: None,
                         key: Arc::new(StringSchema),
@@ -2504,7 +2516,7 @@ pub mod tests {
                 .await;
             // Flush this batch out so the CaA doesn't get inline writes
             // backpressure.
-            let cfg = BatchBuilderConfig::new(&client.cfg, write.shard_id(), false);
+            let cfg = BatchBuilderConfig::new(&client.cfg, write.shard_id());
             batch
                 .flush_to_blob(
                     &cfg,
