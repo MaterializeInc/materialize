@@ -1405,6 +1405,13 @@ pub static STATEMENT_LOGGING_DEFAULT_SAMPLE_RATE: VarDefinition = VarDefinition:
 )
 .with_constraint(&NUMERIC_BOUNDED_0_1_INCLUSIVE);
 
+pub static ENABLE_INTERNAL_STATEMENT_LOGGING: VarDefinition = VarDefinition::new(
+    "enable_internal_statement_logging",
+    value!(bool; false),
+    "Whether to log statements from the `mz_system` user.",
+    false,
+);
+
 pub static AUTO_ROUTE_CATALOG_QUERIES: VarDefinition = VarDefinition::new(
     "auto_route_catalog_queries",
     value!(bool; true),
