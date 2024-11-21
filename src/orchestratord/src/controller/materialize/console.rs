@@ -258,22 +258,12 @@ fn create_console_service_object(config: &super::Args, mz: &Materialize) -> Serv
         ..Default::default()
     }];
 
-    let spec = if config.local_development {
-        ServiceSpec {
-            type_: Some("NodePort".to_string()),
-            selector: Some(selector),
-            ports: Some(ports),
-            external_traffic_policy: Some("Local".to_string()),
-            ..Default::default()
-        }
-    } else {
-        ServiceSpec {
-            type_: Some("ClusterIP".to_string()),
-            cluster_ip: Some("None".to_string()),
-            selector: Some(selector),
-            ports: Some(ports),
-            ..Default::default()
-        }
+    let spec = ServiceSpec {
+        type_: Some("ClusterIP".to_string()),
+        cluster_ip: Some("None".to_string()),
+        selector: Some(selector),
+        ports: Some(ports),
+        ..Default::default()
     };
 
     Service {

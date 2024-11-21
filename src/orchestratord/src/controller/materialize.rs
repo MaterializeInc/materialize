@@ -35,8 +35,6 @@ pub struct Args {
     #[clap(long)]
     region: String,
     #[clap(long)]
-    local_development: bool,
-    #[clap(long)]
     create_balancers: bool,
     #[clap(long)]
     create_console: bool,

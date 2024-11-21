@@ -23,8 +23,6 @@ operator:
     cloudProvider: "local"
     # The region where the cluster is deployed (for this example, using Kind)
     region: "kind"
-    # Flag to indicate whether the environment is for local development
-    localDevelopment: true
     # Flag to indicate whether to create balancerd pods for the environments
     createBalancers: true
     # Flag to indicate whether to create console pods for the environments

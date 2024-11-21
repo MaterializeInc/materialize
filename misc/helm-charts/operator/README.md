@@ -127,7 +127,6 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.args.createConsole` |  | ``true`` |
 | `operator.args.environmentdConnectionRoleARN` |  | ``""`` |
 | `operator.args.environmentdIAMRoleARN` |  | ``""`` |
-| `operator.args.localDevelopment` |  | ``true`` |
 | `operator.args.region` |  | ``"kind"`` |
 | `operator.args.startupLogFilter` |  | ``"INFO,mz_orchestratord=TRACE"`` |
 | `operator.clusters.defaultSizes.analytics` |  | ``"25cc"`` |
