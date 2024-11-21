@@ -10,12 +10,17 @@
 # orchestratord.py — build and run environments in a local kind cluster
 
 import argparse
+import json
 import os
-import shutil
+import socket
 import subprocess
+import threading
+from collections.abc import Callable, Sequence
 from textwrap import dedent
 from time import sleep
+from typing import TypeVar
 from urllib.parse import urlparse, urlunparse
+from uuid import uuid4
 
 from materialize import MZ_ROOT, ui
 
@@ -51,12 +56,20 @@ def main():
     parser_environment.add_argument("--dev", action="store_true")
     parser_environment.add_argument("--namespace", default="materialize")
     parser_environment.add_argument(
-        "--environment-id",
+        "--environment-name",
         default="12345678-1234-1234-1234-123456789012",
     )
     parser_environment.add_argument("--postgres-url", default=DEFAULT_POSTGRES)
     parser_environment.add_argument("--s3-bucket", default=DEFAULT_MINIO)
     parser_environment.set_defaults(func=environment)
+
+    parser_portforward = subparsers.add_parser("port-forward")
+    parser_portforward.add_argument("--namespace", default="materialize")
+    parser_portforward.add_argument(
+        "--environment-name",
+        default="12345678-1234-1234-1234-123456789012",
+    )
+    parser_portforward.set_defaults(func=portforward)
 
     args = parser.parse_args()
     args.func(args)
@@ -95,26 +108,18 @@ def reset(args: argparse.Namespace):
         .splitlines()
     )
     for environment in environments:
-        (namespace, environment_id) = environment.split("/", 1)
-
-        def env_kubectl(*cmd_args: str, **subprocess_args):
-            return kubectl(
-                "-n",
-                namespace,
-                *cmd_args,
-                cluster=args.kind_cluster_name,
-                **subprocess_args,
-            )
+        (namespace, environment_name) = environment.split("/", 1)
+        env_kubectl = make_env_kubectl(args, namespace)
 
         secret_name = env_kubectl(
             "get",
             "materialize",
-            environment_id,
+            environment_name,
             "-o=jsonpath={.spec.backendSecretName}",
         )
         assert secret_name is not None
 
-        env_kubectl("delete", "--wait=true", "materialize", environment_id)
+        env_kubectl("delete", "--wait=true", "materialize", environment_name)
         env_kubectl("delete", "--wait=true", "secret", secret_name)
 
     try:
@@ -124,6 +129,8 @@ def reset(args: argparse.Namespace):
 
 
 def environment(args: argparse.Namespace):
+    env_kubectl = make_env_kubectl(args)
+
     for image in ["environmentd", "clusterd", "balancerd"]:
         acquire(
             image,
@@ -147,14 +154,7 @@ def environment(args: argparse.Namespace):
             cluster=args.kind_cluster_name,
         )
 
-    def env_kubectl(*cmd_args: str, **subprocess_args):
-        return kubectl(
-            "-n",
-            args.namespace,
-            *cmd_args,
-            cluster=args.kind_cluster_name,
-            **subprocess_args,
-        )
+    environment_id = str(uuid4())
 
     def root_psql(cmd: str):
         env_kubectl(
@@ -174,9 +174,9 @@ def environment(args: argparse.Namespace):
         )
         env_kubectl("wait", "--for=delete", "pod/psql-setup")
 
-    pg_user = f"materialize_{args.environment_id}"
+    pg_user = f"materialize_{environment_id}"
     pg_pass = "password"
-    pg_db = f"materialize_{args.environment_id}"
+    pg_db = f"materialize_{environment_id}"
 
     try:
         root_psql(f"""create role "{pg_user}" with nologin""")
@@ -195,11 +195,11 @@ def environment(args: argparse.Namespace):
     s3_bucket_parts = urlparse(args.s3_bucket)
     persist_backend_url = urlunparse(
         s3_bucket_parts._replace(
-            path=f"{s3_bucket_parts.path}/{args.environment_id}",
+            path=f"{s3_bucket_parts.path}/{environment_id}",
         )
     )
 
-    secret_name = f"materialize-backend-{args.environment_id}"
+    secret_name = f"materialize-backend-{environment_id}"
 
     resources = dedent(
         f"""
@@ -215,74 +215,124 @@ def environment(args: argparse.Namespace):
         apiVersion: materialize.cloud/v1alpha1
         kind: Materialize
         metadata:
-          name: {args.environment_id}
+          name: {args.environment_name}
         spec:
           environmentdImageRef: {environmentd_image_ref}
           backendSecretName: {secret_name}
+          environmentId: {environment_id}
         """
     )
     env_kubectl("apply", "-f", "-", input=resources.encode())
 
-    resource_id = None
-    for _ in range(60):
-        try:
-            resource_id = (
-                env_kubectl(
-                    "get",
-                    "materialize",
-                    args.environment_id,
-                    "-o=jsonpath={.status.resourceId}",
-                )
-                .decode()
-                .strip()
-            )
-            if resource_id == "<no value>" or resource_id == "":
-                resource_id = None
-        except subprocess.CalledProcessError:
-            resource_id = None
-
-        if resource_id is not None:
-            break
-
-        sleep(1)
-    assert resource_id is not None
-
-    node_port = None
-    for _ in range(60):
-        try:
-            node_port = (
-                env_kubectl(
-                    "get",
-                    "service",
-                    f"mz{resource_id}-console",
-                    '-o=jsonpath={.spec.ports[?(@.name=="http")].nodePort}',
-                )
-                .decode()
-                .strip()
-            )
-            if node_port == "<no value>" or node_port == "":
-                node_port = None
-        except subprocess.CalledProcessError:
-            node_port = None
-
-        if node_port is not None:
-            break
-
-        sleep(1)
-    assert node_port is not None
-
-    env_kubectl(
-        "wait",
-        "--for=condition=Available",
-        f"deployment/mz{resource_id}-console",
+    resource_id = get_resource_id(args)
+    retry(
+        lambda: env_kubectl(
+            "wait",
+            "--for=condition=Available",
+            f"deployment/mz{resource_id}-console",
+        ),
+        exception_types=(subprocess.CalledProcessError,),
     )
 
-    console_url = f"http://localhost:{node_port}"
-    print(console_url)
-    if shutil.which("open"):
-        subprocess.check_call(["open", console_url])
-    elif shutil.which("xdg-open"):
-        subprocess.check_call(["xdg-open", console_url])
+
+def portforward(args: argparse.Namespace):
+    env_kubectl = make_env_kubectl(args)
+
+    resource_id = get_resource_id(args)
+
+    port_forward_targets = {
+        "console/http": lambda port: f"http://localhost:{port}/",
+        "balancerd/pgwire": lambda port: f"postgres://{os.environ['USER']}@localhost:{port}/materialize",
+        "balancerd/http": lambda port: f"http://localhost:{port}/",
+        "environmentd/internal-sql": lambda port: f"postgres://mz_system@localhost:{port}/materialize",
+        "environmentd/internal-http": lambda port: f"http://localhost:{port}/",
+    }
+
+    port_forwards = {}
+    sockets = []
+    try:
+        for port_forward_target in port_forward_targets:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sockets.append(s)
+            s.bind(("", 0))
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            port_forwards[port_forward_target] = s.getsockname()[1]
+    finally:
+        for s in sockets:
+            s.close()
+
+    def port_forward(target: str, port: str):
+        target_service, target_port = target.split("/")
+        # in theory doing a port forward to the service directly should work,
+        # but i can't seem to get it to
+        selector = json.loads(
+            env_kubectl(
+                "get",
+                "service",
+                f"mz{resource_id}-{target_service}",
+                "-o=jsonpath={.spec.selector}",
+            )
+        )
+        pod = env_kubectl(
+            "get",
+            "pod",
+            "-o=name",
+            *[f"--selector={k}={v}" for k, v in selector.items()],
+        ).splitlines()[0]
+
+        env_kubectl(
+            "port-forward",
+            pod,
+            f"{port}:{target_port}",
+        )
+
+    threads = [
+        threading.Thread(target=port_forward, args=[target, port])
+        for target, port in port_forwards.items()
+    ]
+
+    for t in threads:
+        t.start()
+    for target, port in port_forwards.items():
+        print(f"{target}: {port_forward_targets[target](port)}")
+    for t in threads:
+        t.join()
+
+
+def get_resource_id(args: argparse.Namespace):
+    env_kubectl = make_env_kubectl(args)
+
+    def try_get_resource_id():
+        resource_id = (
+            env_kubectl(
+                "get",
+                "materialize",
+                args.environment_name,
+                "-o=jsonpath={.status.resourceId}",
+            )
+            .decode()
+            .strip()
+        )
+        assert resource_id != ""
+        return resource_id
+
+    return retry(
+        try_get_resource_id,
+        exception_types=(AssertionError, subprocess.CalledProcessError),
+    )
+
+
+def make_env_kubectl(args: argparse.Namespace, namespace: str | None = None):
+    def env_kubectl(*cmd_args: str, **subprocess_args):
+        return kubectl(
+            "-n",
+            namespace or args.namespace,
+            *cmd_args,
+            cluster=args.kind_cluster_name,
+            **subprocess_args,
+        )
+
+    return env_kubectl
 
 
 def acquire(image: str, dev: bool, cluster: str):
@@ -330,6 +380,27 @@ def kubectl(*args: str, cluster: str, **subprocess_args):
         ["kubectl", "--context", f"kind-{cluster}", *args],
         **subprocess_args,
     )
+
+
+T = TypeVar("T")
+
+
+def retry(
+    f: Callable[[], T],
+    max_attempts: int = 60,
+    sleep_secs: int = 1,
+    exception_types: Sequence[type[Exception]] = [AssertionError],
+) -> T | None:
+    result = None
+    for attempt in range(max_attempts):
+        try:
+            result = f()
+            break
+        except tuple(exception_types):
+            if attempt == max_attempts:
+                raise
+            sleep(sleep_secs)
+    return result
 
 
 if __name__ == "__main__":

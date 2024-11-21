@@ -1208,6 +1208,13 @@ pub enum CloudProvider {
     Generic,
 }
 
+impl CloudProvider {
+    /// Returns true if this provider actually runs in the cloud
+    pub fn is_cloud(&self) -> bool {
+        matches!(self, Self::Aws | Self::Gcp | Self::Azure | Self::Generic)
+    }
+}
+
 impl fmt::Display for CloudProvider {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {

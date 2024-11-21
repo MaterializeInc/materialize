@@ -684,22 +684,12 @@ fn create_base_service_object(
 
     let selector = btreemap! {"materialize.cloud/name".to_string() => mz.environmentd_statefulset_name(generation)};
 
-    let spec = if config.local_development {
-        ServiceSpec {
-            type_: Some("NodePort".to_string()),
-            selector: Some(selector),
-            ports: Some(ports),
-            external_traffic_policy: Some("Local".to_string()),
-            ..Default::default()
-        }
-    } else {
-        ServiceSpec {
-            type_: Some("ClusterIP".to_string()),
-            cluster_ip: Some("None".to_string()),
-            selector: Some(selector),
-            ports: Some(ports),
-            ..Default::default()
-        }
+    let spec = ServiceSpec {
+        type_: Some("ClusterIP".to_string()),
+        cluster_ip: Some("None".to_string()),
+        selector: Some(selector),
+        ports: Some(ports),
+        ..Default::default()
     };
 
     Service {
@@ -781,24 +771,6 @@ fn create_environmentd_statefulset_object(
         value: Some(config.region.clone()),
         ..Default::default()
     });
-
-    // NOTE: if we're developing locally, the launched `environmentd` pod won't
-    // always be able to load AWS credentials, and so it may fail to boot.
-    // Prevent this by providing placeholder environment variables. (These must
-    // be passed as environment variables because they are read directly by the
-    // AWS SDK, and there is no command line alternative.)
-    if config.local_development {
-        env.push(EnvVar {
-            name: "AWS_ACCESS_KEY_ID".to_string(),
-            value: Some("dummy".to_string()),
-            ..Default::default()
-        });
-        env.push(EnvVar {
-            name: "AWS_SECRET_ACCESS_KEY".to_string(),
-            value: Some("Dummy".to_string()),
-            ..Default::default()
-        });
-    }
 
     env.extend(mz.spec.environmentd_extra_env.iter().flatten().cloned());
 
@@ -899,11 +871,8 @@ fn create_environmentd_statefulset_object(
         config.secrets_controller
     ));
 
-    if config.local_development {
-        args.extend([
-            "--system-parameter-default=cluster_enable_topology_spread=false".into(),
-            "--system-parameter-default=log_filter=mz_pgwire[{conn_uuid}]=debug,mz_server_core[{conn_uuid}]=debug,info".into(),
-        ]);
+    if !config.cloud_provider.is_cloud() {
+        args.push("--system-parameter-default=cluster_enable_topology_spread=false".into())
     }
 
     if config.enable_tls {
@@ -1492,22 +1461,12 @@ fn create_balancerd_service_object(config: &super::Args, mz: &Materialize) -> Se
         },
     ];
 
-    let spec = if config.local_development {
-        ServiceSpec {
-            type_: Some("NodePort".to_string()),
-            selector: Some(selector),
-            ports: Some(ports),
-            external_traffic_policy: Some("Local".to_string()),
-            ..Default::default()
-        }
-    } else {
-        ServiceSpec {
-            type_: Some("ClusterIP".to_string()),
-            cluster_ip: Some("None".to_string()),
-            selector: Some(selector),
-            ports: Some(ports),
-            ..Default::default()
-        }
+    let spec = ServiceSpec {
+        type_: Some("ClusterIP".to_string()),
+        cluster_ip: Some("None".to_string()),
+        selector: Some(selector),
+        ports: Some(ports),
+        ..Default::default()
     };
 
     Service {
