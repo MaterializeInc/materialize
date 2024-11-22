@@ -11,9 +11,9 @@ The following tutorial deploys Materialize onto a local
 components onto your local `kind` cluster:
 
 - Materialize Operator using Helm into your local `kind` cluster.
-- MinIO object storage service as the blob storage.
-- PostgreSQL database as the  metadata database.
-
+- MinIO object storage as the blob storage for your Materialize.
+- PostgreSQL database as the metadata database for your Materialize.
+- Materialize as a containerized application into your local `kind` cluster.
 
 {{< important >}}
 

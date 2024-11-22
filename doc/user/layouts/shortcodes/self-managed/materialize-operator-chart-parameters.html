@@ -9,7 +9,7 @@
 
 {{- $headings = $headings | append $heading -}}
 
-### `{{ $heading }}` parameters
+### `{{ $heading | $.Page.RenderString }}` parameters
 
 {{ end }}
 

@@ -9,8 +9,9 @@ The following tutorial deploys Materialize onto a local
 deploys the following components onto your local `minikube` cluster:
 
 - Materialize Operator using Helm into your local `minikube` cluster.
-- MinIO object storage service as the blob storage.
-- PostgreSQL database as the  metadata database.
+- MinIO object storage as the blob storage for your Materialize.
+- PostgreSQL database as the metadata database for your Materialize.
+- Materialize as a containerized application into your local `minikube` cluster.
 
 {{< important >}}
 

@@ -37,15 +37,15 @@ You can configure the Materialize operator chart. For example:
 To configure the Materialize operator chart, you can:
 
 - *Recommended:* Modify the provided  `values.yaml` file (or create your own
-  YAML file) that specifies the configuration values and then [install the
-  chart](/self-managed/#installing-the-chart) with the `-f` flag:
+  YAML file) that specifies the configuration values and then install the
+  chart with the `-f` flag:
 
   ```shell
   helm install my-materialize-operator -f /path/to/values.yaml /path/to/materialize/helm-charts/operator
   ```
 
 - Specify each parameter using the `--set key=value[,key=value]` argument to
-  [`helm install`](/self-managed/#installing-the-chart). For example:
+  `helm install`. For example:
 
   ```shell
   helm install my-materialize-operator \
