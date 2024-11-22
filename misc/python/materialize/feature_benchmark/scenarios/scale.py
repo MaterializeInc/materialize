@@ -10,14 +10,17 @@
 from textwrap import dedent
 
 from materialize.feature_benchmark.measurement_source import MeasurementSource, Td
-from materialize.feature_benchmark.scenario import Scenario
+from materialize.feature_benchmark.scenario import Scenario, ScenarioVersion
 
 
 class SmallClusters(Scenario):
     """Materialized views across many small clusters."""
 
-    SCALE = 1.5  # 32 clusters
+    SCALE = 1.7  # 50 clusters
     FIXED_SCALE = True
+
+    def version(self) -> ScenarioVersion:
+        return ScenarioVersion.create(1, 1, 0)
 
     def benchmark(self) -> MeasurementSource:
         create = "\n".join(
