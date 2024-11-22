@@ -473,10 +473,9 @@ impl Context {
                                 // to check this here for robustness against future code changes.
                                 break 'fusion None;
                             }
-                            mfp.permute(
-                                (1..mfp.input_arity).map(|col| (col, col - 1)).collect(),
-                                mfp.input_arity - 1,
-                            );
+                            let permutation: BTreeMap<_, _> =
+                                (1..mfp.input_arity).map(|col| (col, col - 1)).collect();
+                            mfp.permute_fn(|c| permutation[&c], mfp.input_arity - 1);
                             mfp
                         };
                         // We now put together the project that was before the FlatMap, and the
