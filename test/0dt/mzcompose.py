@@ -1105,8 +1105,10 @@ def workflow_mysql_source_rehydration(c: Composition) -> None:
         user="mz_system",
     )
 
-    inserts = " ".join(
-        [f"INSERT INTO mysql_source_table VALUES ({i});" for i in range(count)]
+    inserts = (
+        "INSERT INTO mysql_source_table VALUES "
+        + ", ".join([f"({i})" for i in range(count)])
+        + ";"
     )
 
     start_time = time.time()
@@ -1150,6 +1152,7 @@ def workflow_mysql_source_rehydration(c: Composition) -> None:
                 f"""
         $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
         $ mysql-execute name=mysql
+        USE public;
         {inserts}
         > SELECT COUNT(*) FROM mysql_source_table;
         {count*(i+1)}
