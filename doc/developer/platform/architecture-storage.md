@@ -15,7 +15,7 @@ experience.
 STORAGE is tasked with managing the lifecycle of STORAGE collections (just
 collections hereafter). Collections support concurrent, sharded writes from
 multiple CLUSTER instances configured in active replication mode. Furthermore,
-collections allow writers to "start from scrach" by recreating a completely new
+collections allow writers to "start from scratch" by recreating a completely new
 version (rendition) of the collection, perhaps because the writer fixed a bug
 that results in slightly different data or because a re-shard is necessary.
 
@@ -65,7 +65,7 @@ garbage collected. In the example above, when all readers downgrade their read
 capability beyond `t_handover` the metadata collection can be consolidated and
 `rendition1` can be deleted.
 
-Readers interpret advances of the medatata frontier as proof that no rendition
+Readers interpret advances of the metadata frontier as proof that no rendition
 change occured between the previously known frontier and the newly advanced
 frontier. Therefore they can proceed with reading their current rendition for
 all times not beyond the frontier of the metadata collection.
@@ -107,7 +107,7 @@ All commands are durably persisted and their effect survives crashes and reboots
 
 ## Source ingestion
 
-In response to a CREATE SOURCE command, the STORAGE layer should instantiate a *source ingestion pipeline*.
+In response to a CREATE SOURCE command, the STORAGE layer should instantiate a _source ingestion pipeline_.
 This pipeline does not need to be a dataflow, but as we will see it is helpful to use timestamps to maintain consistency.
 
 The goal of the source ingestion pipeline is to produce data that can be appended to the `persist` shards of a durable storage collection.
@@ -163,13 +163,12 @@ There is some prep work to do first:
 
     As suggested, this may include things like the schema registry that aren't conventional inputs, but nonetheless are external sources that influence the output we will produce.
 
-2. Identify the "state" that a streaming implementation of the intended functionality would need to maintain.
+3.  Identify the "state" that a streaming implementation of the intended functionality would need to maintain.
 
     For example, if we are matching up transaction metadata with the data it references, we may need to maintain some outstanding metadata records and some outstanding data records, until all in a transaction match.
     If we intend to hold back transactions until all strictly prior transactions have completed, we may need to hold on even to some completed transactions, awaiting the completion of the prior work.
 
-3. Create `persist`-backed storage collections for the output and the identified "state".
-
+4.  Create `persist`-backed storage collections for the output and the identified "state".
 
 With this prep work done, the assembly instructions are:
 
@@ -197,7 +196,7 @@ With this prep work done, the assembly instructions are:
 
     Both of these changes may end up being aimed at a `persist` shard that has already committed updates at that time.
     This can be because on restart not all `persist` shards had the same frontier, or because another storage instance is contending on writes.
-    The writes *should* be identical, owing to the determinism of the pipeline so far.
+    The writes _should_ be identical, owing to the determinism of the pipeline so far.
     If they are not identical (an instance could assert they are on any failed write) then a new rendition is required (and perhaps a bug report, if this is unexpected).
 
 These are all of the instructions.
@@ -205,25 +204,25 @@ Clearly Step 5. is not fully specified.
 The property it must have is that two independent pipelines should produce the same output and state updates.
 One way to make this happen is to behave as if each message becomes available at its timestamp, and at each time we "immediately" retire all complete work.
 For example, the first timestamp for which we have both transaction metadata and all supporting data messages, we would output those data messages.
-Alternately, the first timestamp for which we have both transaction metadata and all supporting data messages, *and no incomplete prior transactions*, we would output those data messages.
+Alternately, the first timestamp for which we have both transaction metadata and all supporting data messages, _and no incomplete prior transactions_, we would output those data messages.
 The specific choice of what to do depends on our goals, but one attempts to do it as if executing each timestamp one at a time in sequence, and doing all the work that is possible at each timestamp.
 
 ### Outcomes
 
 The reason we follow the recipe is because we uphold the desired three properties automatically.
 
-1. *Definiteness.*
+1. _Definiteness._
 
     This is provided by `persist`.
     A recipe implementor should not be at risk of violating this property.
 
-2. *Fault Tolerance.*
+2. _Fault Tolerance._
 
     Our choice of `t` is meant to provide a "consistent snapshot" of our source pipeline.
     It is a moment at which we know exactly where we were in input processing (indicated by the reclocking collection), what our "state" was, and what the output corresponded to.
     With this consistent snapshot, one can resume work and proceed as if without interruption. Multiple concurrent instances should also produce identical outputs, because of the consistent snapshot and deterministic execution (onward, from the reclocking input).
 
-3. *Bounded input reliance.*
+3. _Bounded input reliance._
 
     Our choice of `t` should never regress, and as it advances we are certain that we can resume from input addresses indicated by the reclocking collection.
     As long as we continually advance `t`, by continually making state and output durable, we move forward the input addresses on which we rely.
