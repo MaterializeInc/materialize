@@ -27,7 +27,7 @@ pub trait Data: differential_dataflow::Data + Columnation {}
 impl<D: differential_dataflow::Data + Columnation> Data for D {}
 
 #[derive(Debug)]
-pub(super) struct Correction<D: Data> {
+pub(super) struct CorrectionV2<D: Data> {
     chains: Vec<Chain<D>>,
     since: Antichain<Timestamp>,
     /// Global persist sink metrics.
@@ -36,8 +36,8 @@ pub(super) struct Correction<D: Data> {
     _worker_metrics: SinkWorkerMetrics,
 }
 
-impl<D: Data> Correction<D> {
-    /// Construct a new `Correction` instance.
+impl<D: Data> CorrectionV2<D> {
+    /// Construct a new `CorrectionV2` instance.
     pub fn new(metrics: SinkMetrics, worker_metrics: SinkWorkerMetrics) -> Self {
         Self {
             chains: Default::default(),
