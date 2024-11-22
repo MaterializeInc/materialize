@@ -671,9 +671,7 @@ class TablesCommaJoinWithJoinCondition(Generator):
 
 
 class TablesCommaJoinWithCondition(Generator):
-    COUNT = min(
-        Generator.COUNT, 50
-    )  # TODO: Bump back to 100 when database-issues#8755 is fixed
+    COUNT = min(Generator.COUNT, 100)
 
     @classmethod
     def body(cls) -> None:
@@ -1314,9 +1312,7 @@ class FilterSubqueries(Generator):
     because of excessive memory allocations in the `RedundantJoin` transform.
     """
 
-    COUNT = min(
-        Generator.COUNT, 50
-    )  # TODO: Bump back to 100 when database-issues#8755 is fixed
+    COUNT = min(Generator.COUNT, 100)
 
     MAX_COUNT = 111  # Too long-running with count=200
 
