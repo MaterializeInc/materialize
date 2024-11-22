@@ -477,12 +477,152 @@ impl EquivalenceClasses {
         // We have also likely mutated `self.classes` just above with non-nullability information.
         self.refresh();
 
-        // We continue as long as any simplification has occurred.
-        // An expression can be simplified, a duplication found, or two classes unified.
-        let mut stable = false;
-        while !stable {
-            stable = !self.minimize_once(&columns);
+        // Termination will be detected by comparing to the map of equivalence classes.
+        let mut previous = Some(self.remap.clone());
+        while let Some(prev) = previous {
+            // Attempt to add new equivalences.
+            let novel = self.expand();
+            if !novel.is_empty() {
+                self.classes.extend(novel);
+                self.refresh();
+            }
+
+            // We continue as long as any simplification has occurred.
+            // An expression can be simplified, a duplication found, or two classes unified.
+            let mut stable = false;
+            while !stable {
+                stable = !self.minimize_once(&columns);
+            }
+
+            // Termination detection.
+            if prev != self.remap {
+                previous = Some(self.remap.clone());
+            } else {
+                previous = None;
+            }
         }
+    }
+
+    /// Proposes new equivalences that are likely to be novel.
+    ///
+    /// This method invokes `self.implications()` to propose equivalences, and then judges them to be
+    /// novel or not based on existing knowledge, reducing the equivalences down to their novel core.
+    /// This method may produce non-novel equivalences, due to its inability to perform `MSE::reduce`.
+    /// We can end up with e.g. constant expressions that cannot be found until they are so reduced.
+    /// The novelty detection is best-effort, and meant to provide a clearer signal and minimize the
+    /// number of times we call and amount of work we do in `self.refresh()`.
+    fn expand(&self) -> Vec<Vec<MirScalarExpr>> {
+        // Consider expanding `self.classes` with novel equivalences.
+        let mut novel = self.implications();
+        for class in novel.iter_mut() {
+            // reduce each expression to its canonical form.
+            for expr in class.iter_mut() {
+                self.remap.reduce_expr(expr);
+            }
+            class.sort();
+            class.dedup();
+            // for a class to be interesting we require at least two elements that do not reference the same root.
+            let common_class = class
+                .iter()
+                .map(|x| self.remap.get(x))
+                .reduce(|prev, this| if prev == this { prev } else { None });
+            if class.len() == 1 || common_class != Some(None) {
+                class.clear();
+            }
+        }
+        novel.retain(|c| !c.is_empty());
+        novel
+    }
+
+    /// Derives potentially novel equivalences without regard for minimization.
+    ///
+    /// This is an opportunity to explore equivalences that do not correspond to expression minimization,
+    /// and therefore should not be used in `minimize_once`. They are still potentially important, but
+    /// required additional guardrails to ensure we reach a fixed point.
+    ///
+    /// The implications will be introduced into `self.classes` and will prompt a round of minimization,
+    /// making it somewhat polite to avoid producing outputs that cannot result in novel equivalences.
+    /// For example, before producing a new equivalence, one could check that the involved terms are not
+    /// already present in the same class.
+    fn implications(&self) -> Vec<Vec<MirScalarExpr>> {
+        let mut new_equivalences = Vec::new();
+
+        // If we see `false == IsNull(foo)` we can add the non-null implications of `foo`.
+        let mut non_null = std::collections::BTreeSet::default();
+        for class in self.classes.iter() {
+            if Self::class_contains_literal(class, |e| e == &Ok(Datum::False)) {
+                for e in class.iter() {
+                    if let MirScalarExpr::CallUnary {
+                        func: mz_expr::UnaryFunc::IsNull(_),
+                        expr,
+                    } = e
+                    {
+                        expr.non_null_requirements(&mut non_null);
+                    }
+                }
+            }
+        }
+        // If we see `true == foo` we can add the non-null implications of `foo`.
+        // TODO: generalize to arbitrary non-null, non-error literals; at the moment `true == pred` is
+        // an important idiom to identify for how we express predicates.
+        for class in self.classes.iter() {
+            if Self::class_contains_literal(class, |e| e == &Ok(Datum::True)) {
+                for expr in class.iter() {
+                    expr.non_null_requirements(&mut non_null);
+                }
+            }
+        }
+        // Only keep constraints that are not already known.
+        // Known constraints will present as `COL(_) IS NULL == false`,
+        // which can only happen if `false` is present, and both terms
+        // map to the same canonical representative>
+        let lit_false = MirScalarExpr::literal_false();
+        let target = self.remap.get(&lit_false);
+        if target.is_some() {
+            non_null.retain(|c| {
+                let is_null = MirScalarExpr::column(*c).call_is_null();
+                self.remap.get(&is_null) != target
+            });
+        }
+        if !non_null.is_empty() {
+            let mut class = Vec::with_capacity(non_null.len() + 1);
+            class.push(MirScalarExpr::literal_false());
+            class.extend(
+                non_null
+                    .into_iter()
+                    .map(|c| MirScalarExpr::column(c).call_is_null()),
+            );
+            new_equivalences.push(class);
+        }
+
+        // If we see records formed from other expressions, we can equate the expressions with
+        // accessors applied to the class of the record former. In `minimize_once` we reduce by
+        // equivalence class representative before we perform expression simplification, so we
+        // shoud be able to just use the expression former, rather than find its representative.
+        // The risk, potentially, is that we would apply accessors to the record former and then
+        // just simplify it away learning nothing.
+        for class in self.classes.iter() {
+            for expr in class.iter() {
+                // Record-forming expressions can equate their accessors and their members.
+                if let MirScalarExpr::CallVariadic {
+                    func: mz_expr::VariadicFunc::RecordCreate { .. },
+                    exprs,
+                } = expr
+                {
+                    for (index, e) in exprs.iter().enumerate() {
+                        new_equivalences.push(vec![
+                            e.clone(),
+                            expr.clone().call_unary(mz_expr::UnaryFunc::RecordGet(
+                                mz_expr::func::RecordGet(index),
+                            )),
+                        ]);
+                    }
+                }
+            }
+        }
+
+        // Return all newly established equivalences.
+        new_equivalences
     }
 
     /// A single iteration of minimization, which we expect to repeat but benefit from factoring out.
@@ -510,7 +650,7 @@ impl EquivalenceClasses {
         //    E.g. If Eq(x, y) must be true, we can introduce classes `[x, y]` and `[false, IsNull(x), IsNull(y)]`.
         let mut to_add = Vec::new();
         for class in self.classes.iter_mut() {
-            if class.iter().any(|c| c.is_literal_true()) {
+            if Self::class_contains_literal(class, |e| e == &Ok(Datum::True)) {
                 for expr in class.iter() {
                     // If Eq(x, y) must be true, we can introduce classes `[x, y]` and `[false, IsNull(x), IsNull(y)]`.
                     // This substitution replaces a complex expression with several smaller expressions, and cannot
@@ -563,7 +703,7 @@ impl EquivalenceClasses {
                     }
                 });
             }
-            if class.iter().any(|c| c.is_literal_false()) {
+            if Self::class_contains_literal(class, |e| e == &Ok(Datum::False)) {
                 for expr in class.iter() {
                     // If FALSE == NOT(X) then TRUE == X is a simpler form.
                     if let MirScalarExpr::CallUnary {
@@ -764,6 +904,21 @@ impl EquivalenceClasses {
     /// Returns a map that can be used to replace (sub-)expressions.
     pub fn reducer(&self) -> &BTreeMap<MirScalarExpr, MirScalarExpr> {
         &self.remap
+    }
+
+    /// Examines the prefix of `class` of literals, looking for any satisfying `predicate`.
+    ///
+    /// This test bails out as soon as it sees a non-literal, and may have false negatives
+    /// if the data are not sorted with literals at the front.
+    fn class_contains_literal<P>(class: &[MirScalarExpr], mut predicate: P) -> bool
+    where
+        P: FnMut(&Result<Datum, &mz_expr::EvalError>) -> bool,
+    {
+        class
+            .iter()
+            .take_while(|e| e.is_literal())
+            .filter_map(|e| e.as_literal())
+            .any(move |e| predicate(&e))
     }
 }
 
