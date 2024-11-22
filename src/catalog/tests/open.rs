@@ -16,24 +16,26 @@ use mz_catalog::durable::objects::serialization::proto;
 use mz_catalog::durable::objects::{DurableType, Snapshot};
 use mz_catalog::durable::{
     test_bootstrap_args, CatalogError, Database, DurableCatalogError, DurableCatalogState, Epoch,
-    FenceError, Schema, TestCatalogStateBuilder, CATALOG_VERSION,
+    FenceError, Schema, TestCatalogStateBuilder, BUILTIN_MIGRATION_SHARD_KEY, CATALOG_VERSION,
+    EXPRESSION_CACHE_SHARD_KEY,
 };
 use mz_ore::cast::usize_to_u64;
 use mz_ore::collections::HashSet;
 use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistClient, PersistLocation};
+use mz_persist_types::ShardId;
 use mz_proto::RustType;
 use mz_repr::role_id::RoleId;
 use mz_sql::catalog::{RoleAttributes, RoleMembership, RoleVars};
 use uuid::Uuid;
 
-/// A new type for [`Snapshot`] that excludes the user_version from the debug output. The
-/// user_version changes frequently, so it's useful to print the contents excluding the
-/// user_version to avoid having to update the expected value in tests.
-struct HiddenUserVersionSnapshot<'a>(&'a Snapshot);
+/// A new type for [`Snapshot`] that excludes fields that change often from the debug output. It's
+/// useful to print the contents excluding these fields to avoid having to update the expected value
+/// in tests.
+struct StableSnapshot<'a>(&'a Snapshot);
 
-impl HiddenUserVersionSnapshot<'_> {
+impl StableSnapshot<'_> {
     fn user_version(&self) -> Option<&proto::ConfigValue> {
         self.0.configs.get(&Self::user_version_key())
     }
@@ -43,9 +45,29 @@ impl HiddenUserVersionSnapshot<'_> {
             key: USER_VERSION_KEY.to_string(),
         }
     }
+
+    fn builtin_migration_shard(&self) -> Option<&proto::SettingValue> {
+        self.0.settings.get(&Self::builtin_migration_shard_key())
+    }
+
+    fn builtin_migration_shard_key() -> proto::SettingKey {
+        proto::SettingKey {
+            name: BUILTIN_MIGRATION_SHARD_KEY.to_string(),
+        }
+    }
+
+    fn expression_cache_shard(&self) -> Option<&proto::SettingValue> {
+        self.0.settings.get(&Self::expression_cache_shard_key())
+    }
+
+    fn expression_cache_shard_key() -> proto::SettingKey {
+        proto::SettingKey {
+            name: EXPRESSION_CACHE_SHARD_KEY.to_string(),
+        }
+    }
 }
 
-impl Debug for HiddenUserVersionSnapshot<'_> {
+impl Debug for StableSnapshot<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let Snapshot {
             databases,
@@ -71,6 +93,9 @@ impl Debug for HiddenUserVersionSnapshot<'_> {
         } = self.0;
         let mut configs: BTreeMap<proto::ConfigKey, proto::ConfigValue> = configs.clone();
         configs.remove(&Self::user_version_key());
+        let mut settings: BTreeMap<proto::SettingKey, proto::SettingValue> = settings.clone();
+        settings.remove(&Self::builtin_migration_shard_key());
+        settings.remove(&Self::expression_cache_shard_key());
         f.debug_struct("Snapshot")
             .field("databases", databases)
             .field("schemas", schemas)
@@ -83,7 +108,7 @@ impl Debug for HiddenUserVersionSnapshot<'_> {
             .field("introspection_sources", introspection_sources)
             .field("id_allocator", id_allocator)
             .field("configs", &configs)
-            .field("settings", settings)
+            .field("settings", &settings)
             .field("source_references", source_references)
             .field("system_object_mappings", system_object_mappings)
             .field("system_configurations", system_configurations)
@@ -455,9 +480,17 @@ async fn test_open(state_builder: TestCatalogStateBuilder) {
         // Check initial snapshot.
         let snapshot = state.snapshot().await.unwrap();
         {
-            let test_snapshot = HiddenUserVersionSnapshot(&snapshot);
+            let test_snapshot = StableSnapshot(&snapshot);
+
             let user_version = test_snapshot.user_version().unwrap();
             assert_eq!(user_version.value, CATALOG_VERSION);
+
+            let builtin_migration_shard = test_snapshot.builtin_migration_shard().unwrap();
+            let _shard_id: ShardId = builtin_migration_shard.value.parse().unwrap();
+
+            let expression_cache_shard = test_snapshot.expression_cache_shard().unwrap();
+            let _shard_id: ShardId = expression_cache_shard.value.parse().unwrap();
+
             insta::assert_debug_snapshot!("initial_snapshot", test_snapshot);
         }
         let audit_log = state.get_audit_logs().await.unwrap();

@@ -18,8 +18,7 @@ use mz_catalog::builtin::{BuiltinTable, Fingerprint, BUILTINS};
 use mz_catalog::config::BuiltinItemMigrationConfig;
 use mz_catalog::durable::objects::SystemObjectUniqueIdentifier;
 use mz_catalog::durable::{
-    builtin_migration_shard_id, DurableCatalogError, FenceError, SystemObjectDescription,
-    SystemObjectMapping, Transaction,
+    DurableCatalogError, FenceError, SystemObjectDescription, SystemObjectMapping, Transaction,
 };
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::CatalogItem;
@@ -233,7 +232,9 @@ async fn migrate_builtin_items_0dt(
 
     // 1. Open migration shard.
     let organization_id = state.config.environment_id.organization_id();
-    let shard_id = builtin_migration_shard_id(organization_id);
+    let shard_id = txn
+        .get_builtin_migration_shard()
+        .expect("builtin migration shard should exist for opened catalogs");
     let diagnostics = Diagnostics {
         shard_name: "builtin_migration".to_string(),
         handle_purpose: format!("builtin table migration shard for org {organization_id:?} generation {deploy_generation:?}"),
