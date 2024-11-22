@@ -550,7 +550,7 @@ impl EquivalenceClasses {
         // If we see `false == IsNull(foo)` we can add the non-null implications of `foo`.
         let mut non_null = std::collections::BTreeSet::default();
         for class in self.classes.iter() {
-            if class.iter().any(|c| c.is_literal_false()) {
+            if Self::class_contains_literal(class, |e| e == &Ok(Datum::False)) {
                 for e in class.iter() {
                     if let MirScalarExpr::CallUnary {
                         func: mz_expr::UnaryFunc::IsNull(_),
@@ -566,7 +566,7 @@ impl EquivalenceClasses {
         // TODO: generalize to arbitrary non-null, non-error literals; at the moment `true == pred` is
         // an important idiom to identify for how we express predicates.
         for class in self.classes.iter() {
-            if class.iter().any(|c| c.is_literal_true()) {
+            if Self::class_contains_literal(class, |e| e == &Ok(Datum::True)) {
                 for expr in class.iter() {
                     expr.non_null_requirements(&mut non_null);
                 }
@@ -650,7 +650,7 @@ impl EquivalenceClasses {
         //    E.g. If Eq(x, y) must be true, we can introduce classes `[x, y]` and `[false, IsNull(x), IsNull(y)]`.
         let mut to_add = Vec::new();
         for class in self.classes.iter_mut() {
-            if class.iter().any(|c| c.is_literal_true()) {
+            if Self::class_contains_literal(class, |e| e == &Ok(Datum::True)) {
                 for expr in class.iter() {
                     // If Eq(x, y) must be true, we can introduce classes `[x, y]` and `[false, IsNull(x), IsNull(y)]`.
                     // This substitution replaces a complex expression with several smaller expressions, and cannot
@@ -703,7 +703,7 @@ impl EquivalenceClasses {
                     }
                 });
             }
-            if class.iter().any(|c| c.is_literal_false()) {
+            if Self::class_contains_literal(class, |e| e == &Ok(Datum::False)) {
                 for expr in class.iter() {
                     // If FALSE == NOT(X) then TRUE == X is a simpler form.
                     if let MirScalarExpr::CallUnary {
@@ -904,6 +904,21 @@ impl EquivalenceClasses {
     /// Returns a map that can be used to replace (sub-)expressions.
     pub fn reducer(&self) -> &BTreeMap<MirScalarExpr, MirScalarExpr> {
         &self.remap
+    }
+
+    /// Examines the prefix of `class` of literals, looking for any satisfying `predicate`.
+    ///
+    /// This test bails out as soon as it sees a non-literal, and may have false negatives
+    /// if the data are not sorted with literals at the front.
+    fn class_contains_literal<P>(class: &[MirScalarExpr], mut predicate: P) -> bool
+    where
+        P: FnMut(&Result<Datum, &mz_expr::EvalError>) -> bool,
+    {
+        class
+            .iter()
+            .take_while(|e| e.is_literal())
+            .filter_map(|e| e.as_literal())
+            .any(move |e| predicate(&e))
     }
 }
 
