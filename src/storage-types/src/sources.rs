@@ -28,7 +28,7 @@ use load_generator::{LoadGeneratorOutput, LoadGeneratorSourceExportDetails};
 use mz_ore::assert_none;
 use mz_persist_types::columnar::{ColumnDecoder, ColumnEncoder, Schema2};
 use mz_persist_types::stats::{
-    ColumnNullStats, ColumnStatKinds, ColumnarStats, OptionStats, PrimitiveStats, StructStats,
+    ColumnNullStats, ColumnStatKinds, ColumnarStats, PrimitiveStats, StructStats,
 };
 use mz_persist_types::stats2::ColumnarStatsBuilder;
 use mz_persist_types::Codec;
@@ -1756,8 +1756,12 @@ impl ColumnDecoder<SourceData> for SourceDataColumnarDecoder {
 
     fn stats(&self) -> StructStats {
         let len = self.err_decoder.len();
-        let err_stats =
-            OptionStats::<PrimitiveStats<Vec<u8>>>::from_column(&self.err_decoder).finish();
+        let err_stats = ColumnarStats {
+            nulls: Some(ColumnNullStats {
+                count: self.err_decoder.null_count(),
+            }),
+            values: PrimitiveStats::<Vec<u8>>::from_column(&self.err_decoder).into(),
+        };
         // The top level struct is non-nullable and every entry is either an
         // `Ok(Row)` or an `Err(String)`. As a result, we can compute the number
         // of `Ok` entries by subtracting the number of `Err` entries from the

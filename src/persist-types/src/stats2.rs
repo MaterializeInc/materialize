@@ -12,44 +12,24 @@
 use std::fmt::Debug;
 
 use arrow::array::{
-    Array, BinaryArray, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array,
-    Int64Array, Int8Array, StringArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+    BinaryArray, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
+    Int8Array, StringArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };
 
 use crate::stats::primitive::{
     truncate_bytes, truncate_string, PrimitiveStats, TruncateBound, TRUNCATE_LEN,
 };
-use crate::stats::{
-    ColumnNullStats, ColumnStatKinds, ColumnarStats, DynStats, NoneStats, OptionStats,
-};
+use crate::stats::DynStats;
 
 /// A type that can incrementally collect stats from a sequence of values.
-pub trait ColumnarStatsBuilder<T>: Debug {
+pub trait ColumnarStatsBuilder<T>: Debug + DynStats {
     /// Type of [`arrow`] column these statistics can be derived from.
     type ArrowColumn: arrow::array::Array + 'static;
-    /// The type of statistics the collector finalizes into.
-    type FinishedStats: DynStats;
 
     /// Derive statistics from a column of data.
     fn from_column(col: &Self::ArrowColumn) -> Self
     where
         Self: Sized;
-    /// Derive statistics from an opaque column of data.
-    ///
-    /// Returns `None` if the opaque column is not the same type as
-    /// [`Self::ArrowColumn`].
-    fn from_column_dyn(col: &dyn arrow::array::Array) -> Option<Self>
-    where
-        Self: Sized,
-    {
-        let col = col.as_any().downcast_ref::<Self::ArrowColumn>()?;
-        Some(Self::from_column(col))
-    }
-
-    /// Finish this collector returning the final aggregated statistics.
-    fn finish(self) -> Self::FinishedStats
-    where
-        Self::FinishedStats: Sized;
 }
 
 /// We collect stats for all primitive types in exactly the same way. This
@@ -60,7 +40,6 @@ pub trait ColumnarStatsBuilder<T>: Debug {
 macro_rules! primitive_stats {
     ($native:ty, $arrow_col:ty, $min_fn:path, $max_fn:path) => {
         impl ColumnarStatsBuilder<$native> for PrimitiveStats<$native> {
-            type FinishedStats = Self;
             type ArrowColumn = $arrow_col;
 
             fn from_column(col: &Self::ArrowColumn) -> Self
@@ -71,10 +50,6 @@ macro_rules! primitive_stats {
                 let upper = $max_fn(col).unwrap_or_default();
 
                 PrimitiveStats { lower, upper }
-            }
-
-            fn finish(self) -> Self::FinishedStats {
-                self
             }
         }
     };
@@ -99,8 +74,6 @@ primitive_stats!(f64, Float64Array, arrow::compute::min, arrow::compute::max);
 
 impl ColumnarStatsBuilder<&str> for PrimitiveStats<String> {
     type ArrowColumn = StringArray;
-    type FinishedStats = Self;
-
     fn from_column(col: &Self::ArrowColumn) -> Self
     where
         Self: Sized,
@@ -117,19 +90,10 @@ impl ColumnarStatsBuilder<&str> for PrimitiveStats<String> {
 
         PrimitiveStats { lower, upper }
     }
-
-    fn finish(self) -> Self::FinishedStats
-    where
-        Self::FinishedStats: Sized,
-    {
-        self
-    }
 }
 
 impl ColumnarStatsBuilder<&[u8]> for PrimitiveStats<Vec<u8>> {
     type ArrowColumn = BinaryArray;
-    type FinishedStats = Self;
-
     fn from_column(col: &Self::ArrowColumn) -> Self
     where
         Self: Sized,
@@ -145,64 +109,5 @@ impl ColumnarStatsBuilder<&[u8]> for PrimitiveStats<Vec<u8>> {
             .unwrap_or_else(|| upper.to_owned());
 
         PrimitiveStats { lower, upper }
-    }
-
-    fn finish(self) -> Self::FinishedStats
-    where
-        Self::FinishedStats: Sized,
-    {
-        self
-    }
-}
-
-impl<I, T> ColumnarStatsBuilder<Option<I>> for OptionStats<T>
-where
-    T: ColumnarStatsBuilder<I> + DynStats,
-    T::FinishedStats: Into<ColumnStatKinds>,
-{
-    type ArrowColumn = T::ArrowColumn;
-    type FinishedStats = ColumnarStats;
-
-    fn from_column(col: &Self::ArrowColumn) -> Self
-    where
-        Self: Sized,
-    {
-        OptionStats {
-            none: col.null_count(),
-            some: T::from_column(col),
-        }
-    }
-
-    fn finish(self) -> Self::FinishedStats
-    where
-        Self::FinishedStats: Sized,
-    {
-        ColumnarStats {
-            nulls: Some(ColumnNullStats { count: self.none }),
-            values: self.some.finish().into(),
-        }
-    }
-}
-
-/// Empty statistics for a column of data.
-#[derive(Debug)]
-pub struct NoneStatsBuilder<A>(std::marker::PhantomData<A>);
-
-impl<T, A: arrow::array::Array + 'static> ColumnarStatsBuilder<T> for NoneStatsBuilder<A> {
-    type ArrowColumn = A;
-    type FinishedStats = NoneStats;
-
-    fn from_column(_col: &Self::ArrowColumn) -> Self
-    where
-        Self: Sized,
-    {
-        NoneStatsBuilder(std::marker::PhantomData)
-    }
-
-    fn finish(self) -> Self::FinishedStats
-    where
-        Self::FinishedStats: Sized,
-    {
-        NoneStats
     }
 }

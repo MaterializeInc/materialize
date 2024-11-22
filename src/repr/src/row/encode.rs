@@ -34,7 +34,8 @@ use mz_ore::assert_none;
 use mz_ore::cast::CastFrom;
 use mz_persist_types::columnar::{ColumnDecoder, ColumnEncoder, FixedSizeCodec, Schema2};
 use mz_persist_types::stats::{
-    ColumnNullStats, ColumnStatKinds, ColumnarStats, OptionStats, PrimitiveStats, StructStats,
+    ColumnNullStats, ColumnStatKinds, ColumnarStats, FixedSizeBytesStatsKind, OptionStats,
+    PrimitiveStats, StructStats,
 };
 use mz_persist_types::stats2::ColumnarStatsBuilder;
 use mz_persist_types::Codec;
@@ -58,10 +59,7 @@ use crate::row::{
     ProtoArray, ProtoArrayDimension, ProtoDatum, ProtoDatumOther, ProtoDict, ProtoDictElement,
     ProtoNumeric, ProtoRange, ProtoRangeInner, ProtoRow,
 };
-use crate::stats2::{
-    stats_for_json, IntervalStatsBuilder, NaiveDateTimeStatsBuilder, NaiveTimeStatsBuilder,
-    NumericStatsBuilder, UuidStatsBuilder,
-};
+use crate::stats2::{fixed_stats_from_column, numeric_stats_from_column, stats_for_json};
 use crate::{Datum, ProtoRelationDesc, RelationDesc, Row, RowPacker, ScalarType, Timestamp};
 
 // TODO(parkmycar): Benchmark the difference between `FixedSizeBinaryArray` and `BinaryArray`.
@@ -1181,20 +1179,26 @@ impl DatumColumnDecoder {
             DatumColumnDecoder::I64(a) => PrimitiveStats::<i64>::from_column(a).into(),
             DatumColumnDecoder::F32(a) => PrimitiveStats::<f32>::from_column(a).into(),
             DatumColumnDecoder::F64(a) => PrimitiveStats::<f64>::from_column(a).into(),
-            DatumColumnDecoder::Numeric(a) => NumericStatsBuilder::from_column(a).finish().into(),
+            DatumColumnDecoder::Numeric(a) => numeric_stats_from_column(a),
             DatumColumnDecoder::String(a) => PrimitiveStats::<String>::from_column(a).into(),
             DatumColumnDecoder::Bytes(a) => PrimitiveStats::<Vec<u8>>::from_column(a).into(),
             DatumColumnDecoder::Date(a) => PrimitiveStats::<i32>::from_column(a).into(),
-            DatumColumnDecoder::Time(a) => NaiveTimeStatsBuilder::from_column(a).finish().into(),
+            DatumColumnDecoder::Time(a) => {
+                fixed_stats_from_column(a, FixedSizeBytesStatsKind::PackedTime)
+            }
             DatumColumnDecoder::Timestamp(a) => {
-                NaiveDateTimeStatsBuilder::from_column(a).finish().into()
+                fixed_stats_from_column(a, FixedSizeBytesStatsKind::PackedDateTime)
             }
             DatumColumnDecoder::TimestampTz(a) => {
-                NaiveDateTimeStatsBuilder::from_column(a).finish().into()
+                fixed_stats_from_column(a, FixedSizeBytesStatsKind::PackedDateTime)
             }
             DatumColumnDecoder::MzTimestamp(a) => PrimitiveStats::<u64>::from_column(a).into(),
-            DatumColumnDecoder::Interval(a) => IntervalStatsBuilder::from_column(a).finish().into(),
-            DatumColumnDecoder::Uuid(a) => UuidStatsBuilder::from_column(a).finish().into(),
+            DatumColumnDecoder::Interval(a) => {
+                fixed_stats_from_column(a, FixedSizeBytesStatsKind::PackedInterval)
+            }
+            DatumColumnDecoder::Uuid(a) => {
+                fixed_stats_from_column(a, FixedSizeBytesStatsKind::Uuid)
+            }
             DatumColumnDecoder::AclItem(_)
             | DatumColumnDecoder::MzAclItem(_)
             | DatumColumnDecoder::Range(_) => ColumnStatKinds::None,
@@ -2215,11 +2219,11 @@ mod tests {
             .iter()
             .map(|(name, ty)| {
                 let col_stats = stats.cols.get(name.as_str()).unwrap();
-                let (lower, upper) =
+                let lower_upper =
                     crate::stats2::col_values(&ty.scalar_type, &col_stats.values, &arena);
                 let null_count = col_stats.nulls.map_or(0, |n| n.count);
 
-                ((lower, upper), null_count)
+                (lower_upper, null_count)
             })
             .unzip();
         // Track how many nulls we saw for each column so we can assert stats match.
@@ -2233,18 +2237,14 @@ mod tests {
             // Check for each Datum in each Row that we're within our stats bounds.
             for (c_idx, (rnd_datum, ty)) in rnd_row.iter().zip_eq(desc.typ().columns()).enumerate()
             {
-                let (lower, upper) = stats[c_idx];
+                let lower_upper = stats[c_idx];
 
                 // Assert our stat bounds are correct.
                 if rnd_datum.is_null() {
                     actual_nulls[c_idx] += 1;
-                } else if lower.is_some() || upper.is_some() {
-                    if let Some(lower) = lower {
-                        assert!(rnd_datum >= lower, "{rnd_datum:?} is not >= {lower:?}");
-                    }
-                    if let Some(upper) = upper {
-                        assert!(rnd_datum <= upper, "{rnd_datum:?} is not <= {upper:?}");
-                    }
+                } else if let Some((lower, upper)) = lower_upper {
+                    assert!(rnd_datum >= lower, "{rnd_datum:?} is not >= {lower:?}");
+                    assert!(rnd_datum <= upper, "{rnd_datum:?} is not <= {upper:?}");
                 } else {
                     match &ty.scalar_type {
                         // JSON stats are handled separately.

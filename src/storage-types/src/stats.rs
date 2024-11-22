@@ -195,13 +195,13 @@ impl RelationPartStats<'_> {
         };
         let col_stats = ok_stats.cols.get(name.as_str())?;
 
-        let (min, max) = mz_repr::stats2::col_values(&typ.scalar_type, &col_stats.values, arena);
+        let min_max = mz_repr::stats2::col_values(&typ.scalar_type, &col_stats.values, arena);
         let null_count = col_stats.nulls.as_ref().map_or(0, |nulls| nulls.count);
         let total_count = self.len();
 
-        let values = match (total_count, min, max) {
-            (Some(total_count), _, _) if total_count == null_count => ResultSpec::nothing(),
-            (_, Some(min), Some(max)) => ResultSpec::value_between(min, max),
+        let values = match (total_count, min_max) {
+            (Some(total_count), _) if total_count == null_count => ResultSpec::nothing(),
+            (_, Some((min, max))) => ResultSpec::value_between(min, max),
             _ => ResultSpec::value_all(),
         };
         let nulls = if null_count > 0 {
