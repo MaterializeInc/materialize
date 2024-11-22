@@ -14,17 +14,94 @@ use std::collections::BTreeMap;
 use std::ops::{AddAssign, Bound, RangeBounds, SubAssign};
 
 use differential_dataflow::consolidation::{consolidate, consolidate_updates};
-use differential_dataflow::Data;
 use itertools::Itertools;
+use mz_compute_types::dyncfgs::{CONSOLIDATING_VEC_GROWTH_DAMPENER, ENABLE_CORRECTION_V2};
+use mz_dyncfg::ConfigSet;
 use mz_ore::iter::IteratorExt;
 use mz_persist_client::metrics::{SinkMetrics, SinkWorkerMetrics, UpdateDelta};
 use mz_repr::{Diff, Timestamp};
 use timely::progress::Antichain;
 use timely::PartialOrder;
 
+use crate::sink::correction_v2::{CorrectionV2, Data};
+
+/// A data structure suitable for storing updates in a self-correcting persist sink.
+///
+/// Selects one of two correction buffer implementations. `V1` is the original simple
+/// implementation that stores updates in non-spillable memory. `V2` improves on `V1` by supporting
+/// spill-to-disk but is less battle-tested so for now we want to keep the option of reverting to
+/// `V1` in a pinch. The plan is to remove `V1` eventually.
+pub(super) enum Correction<D: Data> {
+    V1(CorrectionV1<D>),
+    V2(CorrectionV2<D>),
+}
+
+impl<D: Data> Correction<D> {
+    /// Construct a new `Correction` instance.
+    pub fn new(
+        metrics: SinkMetrics,
+        worker_metrics: SinkWorkerMetrics,
+        config: &ConfigSet,
+    ) -> Self {
+        if ENABLE_CORRECTION_V2.get(config) {
+            Self::V2(CorrectionV2::new(metrics, worker_metrics))
+        } else {
+            let growth_dampener = CONSOLIDATING_VEC_GROWTH_DAMPENER.get(config);
+            Self::V1(CorrectionV1::new(metrics, worker_metrics, growth_dampener))
+        }
+    }
+
+    /// Insert a batch of updates.
+    pub fn insert(&mut self, updates: Vec<(D, Timestamp, Diff)>) {
+        match self {
+            Self::V1(c) => c.insert(updates),
+            Self::V2(c) => c.insert(updates),
+        }
+    }
+
+    /// Insert a batch of updates, after negating their diffs.
+    pub fn insert_negated(&mut self, updates: Vec<(D, Timestamp, Diff)>) {
+        match self {
+            Self::V1(c) => c.insert_negated(updates),
+            Self::V2(c) => c.insert_negated(updates),
+        }
+    }
+
+    /// Consolidate and return updates before the given `upper`.
+    pub fn updates_before(
+        &mut self,
+        upper: &Antichain<Timestamp>,
+    ) -> Box<dyn Iterator<Item = (D, Timestamp, Diff)> + '_> {
+        match self {
+            Self::V1(c) => Box::new(c.updates_before(upper)),
+            Self::V2(c) => Box::new(c.updates_before(upper)),
+        }
+    }
+
+    /// Advance the since frontier.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the given `since` is less than the current since frontier.
+    pub fn advance_since(&mut self, since: Antichain<Timestamp>) {
+        match self {
+            Self::V1(c) => c.advance_since(since),
+            Self::V2(c) => c.advance_since(since),
+        }
+    }
+
+    /// Consolidate all updates at the current `since`.
+    pub fn consolidate_at_since(&mut self) {
+        match self {
+            Self::V1(c) => c.consolidate_at_since(),
+            Self::V2(c) => c.consolidate_at_since(),
+        }
+    }
+}
+
 /// A collection holding `persist_sink` updates.
 ///
-/// The `Correction` data structure is purpose-built for the `persist_sink::write_batches`
+/// The `CorrectionV1` data structure is purpose-built for the `persist_sink::write_batches`
 /// operator:
 ///
 ///  * It stores updates by time, to enable efficient separation between updates that should
@@ -33,7 +110,7 @@ use timely::PartialOrder;
 ///    are removed by inserting them again, with negated diffs. Stored updates are continuously
 ///    consolidated to give them opportunity to cancel each other out.
 ///  * It provides an interface for advancing all contained updates to a given frontier.
-pub(super) struct Correction<D> {
+pub(super) struct CorrectionV1<D> {
     /// Stashed updates by time.
     updates: BTreeMap<Timestamp, ConsolidatingVec<D>>,
     /// Frontier to which all update times are advanced.
@@ -51,8 +128,8 @@ pub(super) struct Correction<D> {
     growth_dampener: usize,
 }
 
-impl<D> Correction<D> {
-    /// Construct a new `Correction` instance.
+impl<D> CorrectionV1<D> {
+    /// Construct a new `CorrectionV1` instance.
     pub fn new(
         metrics: SinkMetrics,
         worker_metrics: SinkWorkerMetrics,
@@ -82,7 +159,7 @@ impl<D> Correction<D> {
     }
 }
 
-impl<D: Data> Correction<D> {
+impl<D: Data> CorrectionV1<D> {
     /// Insert a batch of updates.
     pub fn insert(&mut self, mut updates: Vec<(D, Timestamp, Diff)>) {
         let Some(since_ts) = self.since.as_option() else {
@@ -274,7 +351,7 @@ impl<D: Data> Correction<D> {
     }
 }
 
-impl<D> Drop for Correction<D> {
+impl<D> Drop for CorrectionV1<D> {
     fn drop(&mut self) {
         self.update_metrics(Default::default());
     }

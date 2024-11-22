@@ -43,7 +43,7 @@ use tracing::trace;
 use crate::compute_state::ComputeState;
 use crate::render::sinks::SinkRender;
 use crate::render::StartSignal;
-use crate::sink::correction::Correction;
+use crate::sink::correction::CorrectionV1;
 use crate::sink::materialized_view_v2;
 use crate::sink::refresh::apply_refresh;
 
@@ -672,13 +672,13 @@ where
         // Contains `desired - persist`, reflecting the updates we would like to commit
         // to `persist` in order to "correct" it to track `desired`. These collections are
         // only modified by updates received from either the `desired` or `persist` inputs.
-        let mut correction_oks = Correction::new(
+        let mut correction_oks = CorrectionV1::new(
             sink_metrics.clone(),
             sink_worker_metrics.clone(),
             growth_dampener,
         );
         let mut correction_errs =
-            Correction::new(sink_metrics, sink_worker_metrics, growth_dampener);
+            CorrectionV1::new(sink_metrics, sink_worker_metrics, growth_dampener);
 
         // Contains descriptions of batches for which we know that we can
         // write data. We got these from the "centralized" operator that

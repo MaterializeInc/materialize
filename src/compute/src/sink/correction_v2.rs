@@ -145,7 +145,7 @@ impl<D: differential_dataflow::Data + Columnation> Data for D {}
 /// In contrast to `CorrectionV1`, this implementation stores updates in columnation regions,
 /// allowing their memory to be transparently spilled to disk.
 #[derive(Debug)]
-pub(super) struct Correction<D: Data> {
+pub(super) struct CorrectionV2<D: Data> {
     /// Chains containing sorted updates.
     chains: Vec<Chain<D>>,
     /// The frontier by which all contained times are advanced.
@@ -156,8 +156,8 @@ pub(super) struct Correction<D: Data> {
     _worker_metrics: SinkWorkerMetrics,
 }
 
-impl<D: Data> Correction<D> {
-    /// Construct a new [`Correction`] instance.
+impl<D: Data> CorrectionV2<D> {
+    /// Construct a new [`CorrectionV2`] instance.
     pub fn new(metrics: SinkMetrics, worker_metrics: SinkWorkerMetrics) -> Self {
         Self {
             chains: Default::default(),
