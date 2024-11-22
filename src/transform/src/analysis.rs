@@ -28,7 +28,7 @@ pub use unique_keys::UniqueKeys;
 pub trait Analysis: 'static {
     /// The type of value this analysis associates with an expression.
     type Value: std::fmt::Debug;
-    /// Announce any depencies this analysis has on other analyses.
+    /// Announce any dependencies this analysis has on other analyses.
     ///
     /// The method should invoke `builder.require::<Foo>()` for each other
     /// analysis `Foo` this analysis depends upon.
@@ -48,7 +48,7 @@ pub trait Analysis: 'static {
     /// The `index` indicates the post-order index for the expression, for use in finding
     /// the corresponding information in `results` and `depends`.
     ///
-    /// The return result will be associated with this expression for this analysis,
+    /// The returned result will be associated with this expression for this analysis,
     /// and the analyses will continue.
     fn derive(
         &self,
@@ -287,8 +287,7 @@ pub mod common {
                 // If we have not sequenced `type_id` but have a bundle, it means
                 // we are in the process of fulfilling its requirements: a cycle.
                 if self.result.analyses.contains_key(&type_id) {
-                    // TODO: Find a better way to identify `A`.
-                    panic!("Cyclic dependency detected: {:?}", type_id);
+                    panic!("Cyclic dependency detected: {}", std::any::type_name::<A>());
                 }
                 // Insert the analysis bundle first, so that we can detect cycles.
                 self.result.analyses.insert(
@@ -419,6 +418,7 @@ pub mod common {
         /// Analysis that starts optimistically but is only correct at a fixed point.
         ///
         /// Will fail out to `analyse_pessimistic` if the lattice is missing, or `self.fuel` is exhausted.
+        /// When successful, the result indicates whether new information was produced for `exprs.last()`.
         fn analyse_optimistic(
             &mut self,
             exprs: &[&MirRelationExpr],
@@ -458,6 +458,8 @@ pub mod common {
         }
 
         /// Analysis that starts conservatively and can be stopped at any point.
+        ///
+        /// Result indicates whether new information was produced for `exprs.last()`.
         fn analyse_pessimistic(&mut self, exprs: &[&MirRelationExpr], depends: &Derived) -> bool {
             // TODO: consider making iterative, from some `bottom()` up using `join_assign()`.
             self.results.clear();
