@@ -3,6 +3,7 @@ title: "Troubleshooting"
 description: ""
 aliases:
   - /self-hosted/troubleshooting/
+robots: "noindex, nofollow"
 ---
 
 If you encounter issues with the Materialize operator, check the operator logs:

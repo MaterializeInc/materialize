@@ -1,7 +1,7 @@
 ---
 title: "Upgrading"
 description: "Upgrading Helm chart and Materialize."
-
+robots: "noindex, nofollow"
 ---
 
 The following provides steps for upgrading the Materialize operator and

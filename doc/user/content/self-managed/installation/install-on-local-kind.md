@@ -3,6 +3,7 @@ title: "Install locally on kind"
 description: ""
 aliases:
   - /self-hosted/install-on-local-kind/
+robots: "noindex, nofollow"
 ---
 
 The following tutorial deploys Materialize onto a local

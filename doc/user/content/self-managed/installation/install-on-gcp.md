@@ -1,6 +1,7 @@
 ---
 title: "Install on GCP (Placeholder Stub)"
 description: ""
+robots: "noindex, nofollow"
 ---
 
 The following tutorial deploys Materialize onto GCP.

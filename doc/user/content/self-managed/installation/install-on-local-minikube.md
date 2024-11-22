@@ -1,6 +1,7 @@
 ---
 title: "Install locally on minikube"
 description: ""
+robots: "noindex, nofollow"
 ---
 
 The following tutorial deploys Materialize onto a local

@@ -1,7 +1,7 @@
 ---
 title: "Operational guidelines"
 description: ""
-
+robots: "noindex, nofollow"
 ---
 
 ## Recommended instance types

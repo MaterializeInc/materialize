@@ -3,6 +3,7 @@ title: "Materialize Operator Configuration"
 description: ""
 aliases:
   - /self-hosted/configuration/
+robots: "noindex, nofollow"
 ---
 
 You can configure the Materialize operator chart. For example:

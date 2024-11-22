@@ -3,6 +3,7 @@ title: "Materialize Kubernetes Operator"
 description: ""
 aliases:
   - /self-hosted/
+robots: "noindex, nofollow"
 ---
 
 ## Materialize Kubernetes Operator
