@@ -37,8 +37,11 @@ See also the [operational guidelines](/self-managed/operational-guidelines/).
 
 For instructions on installing Materialize on your Kubernetes cluster, see:
 
-- [Install locally on kind](/self-managed/installation/install-on-kind/)
-- [Install locally on minikube](/self-managed/installation/install-on-minikube/)
+- [Install locally on kind](/self-managed/installation/install-on-local-kind/)
+
+- [Install locally on
+  minikube](/self-managed/installation/install-on-local-minikube/)
+
 - [Install on AWS](/self-managed/installation/install-on-aws/)
 - [Install on GCP](/self-managed/installation/install-on-gcp/)
 
