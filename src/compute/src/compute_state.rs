@@ -29,7 +29,7 @@ use mz_compute_client::protocol::response::{
     StatusResponse, SubscribeResponse,
 };
 use mz_compute_types::dataflows::DataflowDescription;
-use mz_compute_types::plan::flat_plan::FlatPlan;
+use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_compute_types::plan::LirId;
 use mz_dyncfg::ConfigSet;
 use mz_expr::row::RowCollection;
@@ -457,7 +457,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
 
     fn handle_create_dataflow(
         &mut self,
-        dataflow: DataflowDescription<FlatPlan, CollectionMetadata>,
+        dataflow: DataflowDescription<RenderPlan, CollectionMetadata>,
     ) {
         // Collect the exported object identifiers, paired with their associated "collection" identifier.
         // The latter is used to extract dependency information, which is in terms of collections ids.

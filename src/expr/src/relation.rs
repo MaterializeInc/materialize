@@ -3853,7 +3853,9 @@ impl RustType<proto_window_frame::ProtoWindowFrameBound> for WindowFrameBound {
 }
 
 /// Maximum iterations for a LetRec.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Arbitrary)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Arbitrary,
+)]
 pub struct LetRecLimit {
     /// Maximum number of iterations to evaluate.
     pub max_iters: NonZeroU64,

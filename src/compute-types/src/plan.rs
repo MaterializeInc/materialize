@@ -41,10 +41,10 @@ use crate::plan::transform::{Transform, TransformConfig};
 
 mod lowering;
 
-pub mod flat_plan;
 pub mod interpret;
 pub mod join;
 pub mod reduce;
+pub mod render_plan;
 pub mod threshold;
 pub mod top_k;
 pub mod transform;
@@ -208,6 +208,16 @@ impl From<LirId> for u64 {
 impl std::fmt::Display for LirId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
+    }
+}
+
+impl RustType<u64> for LirId {
+    fn into_proto(&self) -> u64 {
+        u64::from(self.0)
+    }
+
+    fn from_proto(proto: u64) -> Result<Self, mz_proto::TryFromProtoError> {
+        Ok(Self(proto.try_into()?))
     }
 }
 
