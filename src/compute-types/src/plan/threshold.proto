@@ -9,6 +9,8 @@
 
 // See https://developers.google.com/protocol-buffers for what's going on here.
 
+// buf breaking: ignore (does currently not require backward-compatibility)
+
 syntax = "proto3";
 
 package mz_compute_types.plan.threshold;
@@ -26,4 +28,4 @@ message ProtoArrangement {
   repeated mz_expr.scalar.ProtoMirScalarExpr all_columns = 1;
   repeated uint64 permutation = 2;
   repeated uint64 thinning = 3;
-};
+}
