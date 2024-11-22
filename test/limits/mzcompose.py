@@ -1256,6 +1256,8 @@ class Coalesce(Generator):
 
 
 class Concat(Generator):
+    MAX_COUNT = 250_000  # Too long-running with 500_000
+
     @classmethod
     def body(cls) -> None:
         print("> CREATE TABLE t (f STRING)")
@@ -1384,6 +1386,8 @@ class RowsAggregate(Generator):
 
 class RowsOrderByLimit(Generator):
     COUNT = 10_000_000
+
+    MAX_COUNT = 80_000_000  # Too long-running with 160_000_000
 
     @classmethod
     def body(cls) -> None:
