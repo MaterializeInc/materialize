@@ -629,11 +629,6 @@ impl Optimizer {
                     // Predicate pushdown sets the equivalence classes of joins.
                     Box::new(PredicatePushdown::default()),
                     Box::new(EquivalencePropagation::default()),
-                    // Lifts the information `col = literal`
-                    // TODO (database-issues#2062): this also tries to lift `!isnull(col)` but
-                    // less well than the previous transform. Eliminate
-                    // redundancy between the two transforms.
-                    Box::new(ColumnKnowledge::default()),
                     // Lifts the information `col1 = col2`
                     Box::new(Demand::default()),
                     Box::new(FuseAndCollapse::default()),
@@ -718,7 +713,7 @@ impl Optimizer {
                 name: "fixpoint_physical_01",
                 limit: 100,
                 transforms: vec![
-                    Box::new(ColumnKnowledge::default()),
+                    Box::new(EquivalencePropagation::default()),
                     Box::new(fold_constants_fixpoint()),
                     Box::new(Demand::default()),
                     Box::new(LiteralLifting::default()),
