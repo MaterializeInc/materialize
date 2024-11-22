@@ -247,7 +247,7 @@ pub(crate) async fn initialize(
         (USER_ROLE_ID_ALLOC_KEY.to_string(), DEFAULT_ALLOCATOR_ID),
         (
             USER_CLUSTER_ID_ALLOC_KEY.to_string(),
-            DEFAULT_USER_CLUSTER_ID.inner_id() + 1,
+            (DEFAULT_USER_CLUSTER_ID.inner_id() + 1).into(),
         ),
         (
             SYSTEM_CLUSTER_ID_ALLOC_KEY.to_string(),

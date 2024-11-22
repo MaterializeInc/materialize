@@ -16,13 +16,13 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use mz_audit_log::VersionedEvent;
-use uuid::Uuid;
-
 use mz_controller_types::ClusterId;
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_persist_client::PersistClient;
 use mz_repr::{CatalogItemId, GlobalId};
+use mz_sql::catalog::CatalogError as SqlCatalogError;
+use uuid::Uuid;
 
 use crate::config::ClusterReplicaSizeMap;
 use crate::durable::debug::{DebugCatalogState, Trace};
@@ -202,6 +202,9 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send {
     /// Politely releases all external resources that can only be released in an async context.
     async fn expire(self: Box<Self>);
 
+    /// Returns true if the system bootstrapping process is complete, false otherwise.
+    fn is_bootstrap_complete(&self) -> bool;
+
     /// Get all audit log events.
     ///
     /// Results are guaranteed to be sorted by ID.
@@ -273,6 +276,9 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     /// Returns true if the catalog is opened is savepoint mode, false otherwise.
     fn is_savepoint(&self) -> bool;
 
+    /// Marks the bootstrap process as complete.
+    fn mark_bootstrap_complete(&mut self);
+
     /// Creates a new durable catalog state transaction.
     async fn transaction(&mut self) -> Result<Transaction, CatalogError>;
 
@@ -313,23 +319,6 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
         Ok(ids)
     }
 
-    /// Allocates and returns `amount` system [`CatalogItemId`]s.
-    ///
-    /// See [`Self::commit_transaction`] for details on `commit_ts`.
-    async fn allocate_system_ids(
-        &mut self,
-        amount: u64,
-        commit_ts: Timestamp,
-    ) -> Result<Vec<(CatalogItemId, GlobalId)>, CatalogError> {
-        let id = self
-            .allocate_id(SYSTEM_ITEM_ALLOC_KEY, amount, commit_ts)
-            .await?;
-        Ok(id
-            .into_iter()
-            .map(|id| (CatalogItemId::System(id), GlobalId::System(id)))
-            .collect())
-    }
-
     /// Allocates and returns both a user [`CatalogItemId`] and [`GlobalId`].
     ///
     /// See [`Self::commit_transaction`] for details on `commit_ts`.
@@ -352,7 +341,10 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
         let id = self
             .allocate_id(USER_CLUSTER_ID_ALLOC_KEY, 1, commit_ts)
             .await?;
-        let id = id.into_element();
+        let id: u32 = id
+            .into_element()
+            .try_into()
+            .map_err(|_| SqlCatalogError::IdExhaustion)?;
         Ok(ClusterId::User(id))
     }
 }

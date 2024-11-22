@@ -2301,7 +2301,8 @@ impl Coordinator {
                             let id_too_large = match id {
                                 CatalogItemId::System(id) => *id >= next_system_item_id,
                                 CatalogItemId::User(id) => *id >= next_user_item_id,
-                                CatalogItemId::Transient(_) => false,
+                                CatalogItemId::IntrospectionSourceIndex(_)
+                                | CatalogItemId::Transient(_) => false,
                             };
                             if id_too_large {
                                 info!(

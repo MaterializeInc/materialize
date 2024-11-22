@@ -28,9 +28,7 @@ use mz_catalog::config::{ClusterReplicaSizeMap, StateConfig};
 use mz_catalog::durable::objects::{
     SystemObjectDescription, SystemObjectMapping, SystemObjectUniqueIdentifier,
 };
-use mz_catalog::durable::{
-    ClusterVariant, ClusterVariantManaged, Transaction, SYSTEM_CLUSTER_ID_ALLOC_KEY,
-};
+use mz_catalog::durable::{ClusterVariant, ClusterVariantManaged, Transaction};
 use mz_catalog::expr_cache::{
     ExpressionCacheConfig, ExpressionCacheHandle, GlobalExpressions, LocalExpressions,
 };
@@ -631,6 +629,8 @@ impl Catalog {
                 );
             }
 
+            catalog.storage().await.mark_bootstrap_complete();
+
             Ok(OpenCatalogResult {
                 catalog,
                 storage_collections_to_drop,
@@ -773,6 +773,10 @@ impl Catalog {
 
             let (new_item_id, new_global_id) = match id {
                 CatalogItemId::System(_) => txn.allocate_system_item_ids(1)?.into_element(),
+                CatalogItemId::IntrospectionSourceIndex(id) => (
+                    CatalogItemId::IntrospectionSourceIndex(id),
+                    GlobalId::IntrospectionSourceIndex(id),
+                ),
                 CatalogItemId::User(_) => txn.allocate_user_item_ids(1)?.into_element(),
                 _ => unreachable!("can't migrate id: {id}"),
             };
@@ -1223,10 +1227,7 @@ fn add_new_builtin_clusters_migration(
         if !cluster_names.contains(builtin_cluster.name) {
             let cluster_size = builtin_cluster_sizes.get_size(builtin_cluster.name)?;
             let cluster_allocation = cluster_sizes.get_allocation_by_name(&cluster_size)?;
-            let id = txn.get_and_increment_id(SYSTEM_CLUSTER_ID_ALLOC_KEY.to_string())?;
-            let id = ClusterId::System(id);
             txn.insert_system_cluster(
-                id,
                 builtin_cluster.name,
                 vec![],
                 builtin_cluster.privileges.to_vec(),
@@ -1266,13 +1267,9 @@ fn add_new_remove_old_builtin_introspection_source_migration(
             }
         }
 
-        let new_ids = txn.allocate_system_item_ids(usize_to_u64(new_logs.len()))?;
-        let new_entries = new_logs
-            .into_iter()
-            .zip_eq(new_ids)
-            .map(|(log, (item_id, gid))| (log, item_id, gid));
-
-        for (log, item_id, gid) in new_entries {
+        for log in new_logs {
+            let (item_id, gid) =
+                Transaction::allocate_introspection_source_index_id(&cluster.id, log.variant);
             new_indexes.push((cluster.id, log.name.to_string(), item_id, gid));
         }
 
@@ -1760,7 +1757,7 @@ mod builtin_migration_tests {
     }
 
     async fn run_test_case(test_case: BuiltinMigrationTestCase) {
-        Catalog::with_debug(|mut catalog| async move {
+        Catalog::with_debug_in_bootstrap(|mut catalog| async move {
             let mut item_id_mapping = BTreeMap::new();
             let mut name_mapping = BTreeMap::new();
 

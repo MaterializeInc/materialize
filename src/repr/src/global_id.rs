@@ -54,6 +54,8 @@ include!(concat!(env!("OUT_DIR"), "/mz_repr.global_id.rs"));
 pub enum GlobalId {
     /// System namespace.
     System(u64),
+    /// Introspection Source Index namespace.
+    IntrospectionSourceIndex(u64),
     /// User namespace.
     User(u64),
     /// Transient namespace.
@@ -62,10 +64,15 @@ pub enum GlobalId {
     Explain,
 }
 
+static_assertions::assert_eq_size!(GlobalId, [u8; 16]);
+
 impl GlobalId {
     /// Reports whether this ID is in the system namespace.
     pub fn is_system(&self) -> bool {
-        matches!(self, GlobalId::System(_))
+        matches!(
+            self,
+            GlobalId::System(_) | GlobalId::IntrospectionSourceIndex(_)
+        )
     }
 
     /// Reports whether this ID is in the user namespace.
@@ -92,6 +99,7 @@ impl FromStr for GlobalId {
         let val: u64 = s[1..].parse()?;
         match s.chars().next().unwrap() {
             's' => Ok(GlobalId::System(val)),
+            'i' => Ok(GlobalId::IntrospectionSourceIndex(val)),
             'u' => Ok(GlobalId::User(val)),
             't' => Ok(GlobalId::Transient(val)),
             _ => Err(anyhow!("couldn't parse id {}", s)),
@@ -103,6 +111,7 @@ impl fmt::Display for GlobalId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             GlobalId::System(id) => write!(f, "s{}", id),
+            GlobalId::IntrospectionSourceIndex(id) => write!(f, "i{}", id),
             GlobalId::User(id) => write!(f, "u{}", id),
             GlobalId::Transient(id) => write!(f, "t{}", id),
             GlobalId::Explain => write!(f, "Explained Query"),
@@ -116,6 +125,7 @@ impl RustType<ProtoGlobalId> for GlobalId {
         ProtoGlobalId {
             kind: Some(match self {
                 GlobalId::System(x) => System(*x),
+                GlobalId::IntrospectionSourceIndex(x) => IntrospectionSourceIndex(*x),
                 GlobalId::User(x) => User(*x),
                 GlobalId::Transient(x) => Transient(*x),
                 GlobalId::Explain => Explain(()),
@@ -127,6 +137,7 @@ impl RustType<ProtoGlobalId> for GlobalId {
         use proto_global_id::Kind::*;
         match proto.kind {
             Some(System(x)) => Ok(GlobalId::System(x)),
+            Some(IntrospectionSourceIndex(x)) => Ok(GlobalId::IntrospectionSourceIndex(x)),
             Some(User(x)) => Ok(GlobalId::User(x)),
             Some(Transient(x)) => Ok(GlobalId::Transient(x)),
             Some(Explain(_)) => Ok(GlobalId::Explain),

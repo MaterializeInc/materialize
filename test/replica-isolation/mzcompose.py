@@ -103,6 +103,8 @@ class AllowCompactionCheck:
     def _format_id(iid: str) -> str:
         if iid.startswith("s"):
             return "System(" + iid[1:] + ")"
+        if iid.startswith("i"):
+            return "IntrospectionSourceIndex(" + iid[1:] + ")"
         if iid.startswith("u"):
             return "User(" + iid[1:] + ")"
         raise RuntimeError(f"Unexpected iid: {iid}")

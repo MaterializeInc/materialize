@@ -25,13 +25,13 @@ include!(concat!(env!("OUT_DIR"), "/mz_storage_types.instances.rs"));
 )]
 pub enum StorageInstanceId {
     /// A system storage instance.
-    System(u64),
+    System(u32),
     /// A user storage instance.
-    User(u64),
+    User(u32),
 }
 
 impl StorageInstanceId {
-    pub fn inner_id(&self) -> u64 {
+    pub fn inner_id(&self) -> u32 {
         match self {
             StorageInstanceId::System(id) | StorageInstanceId::User(id) => *id,
         }
@@ -53,7 +53,7 @@ impl FromStr for StorageInstanceId {
         if s.len() < 2 {
             bail!("couldn't parse compute instance id {}", s);
         }
-        let val: u64 = s[1..].parse()?;
+        let val: u32 = s[1..].parse()?;
         match s.chars().next().unwrap() {
             's' => Ok(Self::System(val)),
             'u' => Ok(Self::User(val)),

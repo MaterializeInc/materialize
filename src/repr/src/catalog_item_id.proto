@@ -18,5 +18,7 @@ message ProtoCatalogItemId {
     uint64 system = 1;
     uint64 user = 2;
     uint64 transient = 3;
+    // This needs to be 5 to match the GlobalId tag.
+    uint64 introspection_source_index = 5;
   }
 }

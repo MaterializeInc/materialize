@@ -50,8 +50,9 @@ use crate::durable::objects::{
     AuditLogKey, ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue,
     ClusterKey, ClusterReplicaKey, ClusterReplicaValue, ClusterValue, CommentKey, CommentValue,
     ConfigKey, ConfigValue, DatabaseKey, DatabaseValue, DefaultPrivilegesKey,
-    DefaultPrivilegesValue, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue, ItemKey,
-    ItemValue, NetworkPolicyKey, NetworkPolicyValue, RoleKey, RoleValue, SchemaKey, SchemaValue,
+    DefaultPrivilegesValue, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
+    IntrospectionSourceIndexCatalogItemId, IntrospectionSourceIndexGlobalId, ItemKey, ItemValue,
+    NetworkPolicyKey, NetworkPolicyValue, RoleKey, RoleValue, SchemaKey, SchemaValue,
     ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue, SourceReference,
     SourceReferencesKey, SourceReferencesValue, StorageCollectionMetadataKey,
     StorageCollectionMetadataValue, SystemCatalogItemId, SystemGlobalId, SystemPrivilegesKey,
@@ -419,7 +420,7 @@ impl RustType<proto::ClusterIntrospectionSourceIndexValue>
         proto: proto::ClusterIntrospectionSourceIndexValue,
     ) -> Result<Self, TryFromProtoError> {
         Ok(ClusterIntrospectionSourceIndexValue {
-            catalog_id: SystemCatalogItemId(proto.index_id),
+            catalog_id: IntrospectionSourceIndexCatalogItemId(proto.index_id),
             global_id: proto
                 .global_id
                 .into_rust_if_some("ClusterIntrospectionSourceIndexValue::global_id")?,
@@ -1620,6 +1621,9 @@ impl RustType<proto::CatalogItemId> for CatalogItemId {
         proto::CatalogItemId {
             value: Some(match self {
                 CatalogItemId::System(x) => proto::catalog_item_id::Value::System(*x),
+                CatalogItemId::IntrospectionSourceIndex(x) => {
+                    proto::catalog_item_id::Value::IntrospectionSourceIndex(*x)
+                }
                 CatalogItemId::User(x) => proto::catalog_item_id::Value::User(*x),
                 CatalogItemId::Transient(x) => proto::catalog_item_id::Value::Transient(*x),
             }),
@@ -1629,6 +1633,9 @@ impl RustType<proto::CatalogItemId> for CatalogItemId {
     fn from_proto(proto: proto::CatalogItemId) -> Result<Self, TryFromProtoError> {
         match proto.value {
             Some(proto::catalog_item_id::Value::System(x)) => Ok(CatalogItemId::System(x)),
+            Some(proto::catalog_item_id::Value::IntrospectionSourceIndex(x)) => {
+                Ok(CatalogItemId::IntrospectionSourceIndex(x))
+            }
             Some(proto::catalog_item_id::Value::User(x)) => Ok(CatalogItemId::User(x)),
             Some(proto::catalog_item_id::Value::Transient(x)) => Ok(CatalogItemId::Transient(x)),
             None => Err(TryFromProtoError::missing_field("CatalogItemId::kind")),
@@ -1646,11 +1653,28 @@ impl RustType<proto::SystemCatalogItemId> for SystemCatalogItemId {
     }
 }
 
+impl RustType<proto::IntrospectionSourceIndexCatalogItemId>
+    for IntrospectionSourceIndexCatalogItemId
+{
+    fn into_proto(&self) -> proto::IntrospectionSourceIndexCatalogItemId {
+        proto::IntrospectionSourceIndexCatalogItemId { value: self.0 }
+    }
+
+    fn from_proto(
+        proto: proto::IntrospectionSourceIndexCatalogItemId,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(IntrospectionSourceIndexCatalogItemId(proto.value))
+    }
+}
+
 impl RustType<proto::GlobalId> for GlobalId {
     fn into_proto(&self) -> proto::GlobalId {
         proto::GlobalId {
             value: Some(match self {
                 GlobalId::System(x) => proto::global_id::Value::System(*x),
+                GlobalId::IntrospectionSourceIndex(x) => {
+                    proto::global_id::Value::IntrospectionSourceIndex(*x)
+                }
                 GlobalId::User(x) => proto::global_id::Value::User(*x),
                 GlobalId::Transient(x) => proto::global_id::Value::Transient(*x),
                 GlobalId::Explain => proto::global_id::Value::Explain(Default::default()),
@@ -1661,6 +1685,9 @@ impl RustType<proto::GlobalId> for GlobalId {
     fn from_proto(proto: proto::GlobalId) -> Result<Self, TryFromProtoError> {
         match proto.value {
             Some(proto::global_id::Value::System(x)) => Ok(GlobalId::System(x)),
+            Some(proto::global_id::Value::IntrospectionSourceIndex(x)) => {
+                Ok(GlobalId::IntrospectionSourceIndex(x))
+            }
             Some(proto::global_id::Value::User(x)) => Ok(GlobalId::User(x)),
             Some(proto::global_id::Value::Transient(x)) => Ok(GlobalId::Transient(x)),
             Some(proto::global_id::Value::Explain(_)) => Ok(GlobalId::Explain),
@@ -1676,6 +1703,18 @@ impl RustType<proto::SystemGlobalId> for SystemGlobalId {
 
     fn from_proto(proto: proto::SystemGlobalId) -> Result<Self, TryFromProtoError> {
         Ok(SystemGlobalId(proto.value))
+    }
+}
+
+impl RustType<proto::IntrospectionSourceIndexGlobalId> for IntrospectionSourceIndexGlobalId {
+    fn into_proto(&self) -> proto::IntrospectionSourceIndexGlobalId {
+        proto::IntrospectionSourceIndexGlobalId { value: self.0 }
+    }
+
+    fn from_proto(
+        proto: proto::IntrospectionSourceIndexGlobalId,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(IntrospectionSourceIndexGlobalId(proto.value))
     }
 }
 

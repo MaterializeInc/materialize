@@ -36,6 +36,8 @@ include!(concat!(env!("OUT_DIR"), "/mz_repr.catalog_item_id.rs"));
 pub enum CatalogItemId {
     /// System namespace.
     System(u64),
+    /// Introspection Source Index namespace.
+    IntrospectionSourceIndex(u64),
     /// User namespace.
     User(u64),
     /// Transient item.
@@ -45,7 +47,10 @@ pub enum CatalogItemId {
 impl CatalogItemId {
     /// Reports whether this ID is in the system namespace.
     pub fn is_system(&self) -> bool {
-        matches!(self, CatalogItemId::System(_))
+        matches!(
+            self,
+            CatalogItemId::System(_) | CatalogItemId::IntrospectionSourceIndex(_)
+        )
     }
 
     /// Reports whether this ID is in the user namespace.
@@ -69,6 +74,7 @@ impl FromStr for CatalogItemId {
         let val: u64 = s[1..].parse()?;
         match s.chars().next().unwrap() {
             's' => Ok(CatalogItemId::System(val)),
+            'i' => Ok(CatalogItemId::IntrospectionSourceIndex(val)),
             'u' => Ok(CatalogItemId::User(val)),
             't' => Ok(CatalogItemId::Transient(val)),
             _ => Err(anyhow!("couldn't parse id {}", s)),
@@ -80,6 +86,7 @@ impl fmt::Display for CatalogItemId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             CatalogItemId::System(id) => write!(f, "s{}", id),
+            CatalogItemId::IntrospectionSourceIndex(id) => write!(f, "i{}", id),
             CatalogItemId::User(id) => write!(f, "u{}", id),
             CatalogItemId::Transient(id) => write!(f, "t{}", id),
         }
@@ -92,6 +99,7 @@ impl RustType<ProtoCatalogItemId> for CatalogItemId {
         ProtoCatalogItemId {
             kind: Some(match self {
                 CatalogItemId::System(x) => System(*x),
+                CatalogItemId::IntrospectionSourceIndex(x) => IntrospectionSourceIndex(*x),
                 CatalogItemId::User(x) => User(*x),
                 CatalogItemId::Transient(x) => Transient(*x),
             }),
@@ -102,6 +110,7 @@ impl RustType<ProtoCatalogItemId> for CatalogItemId {
         use proto_catalog_item_id::Kind::*;
         match proto.kind {
             Some(System(x)) => Ok(CatalogItemId::System(x)),
+            Some(IntrospectionSourceIndex(x)) => Ok(CatalogItemId::IntrospectionSourceIndex(x)),
             Some(User(x)) => Ok(CatalogItemId::User(x)),
             Some(Transient(x)) => Ok(CatalogItemId::Transient(x)),
             None => Err(TryFromProtoError::missing_field("ProtoCatalogItemId::kind")),
@@ -141,6 +150,10 @@ mod tests {
             match (og, rnd) {
                 (GlobalId::User(x), CatalogItemId::User(y)) => assert_eq!(x, y),
                 (GlobalId::System(x), CatalogItemId::System(y)) => assert_eq!(x, y),
+                (
+                    GlobalId::IntrospectionSourceIndex(x),
+                    CatalogItemId::IntrospectionSourceIndex(y),
+                ) => assert_eq!(x, y),
                 (GlobalId::Transient(x), CatalogItemId::Transient(y)) => assert_eq!(x, y),
                 (gid, item) => panic!("{gid:?} turned into {item:?}"),
             }
@@ -150,6 +163,7 @@ mod tests {
             proptest::strategy::Union::new(vec![
                 Just(GlobalId::User(inner)),
                 Just(GlobalId::System(inner)),
+                Just(GlobalId::IntrospectionSourceIndex(inner)),
                 Just(GlobalId::Transient(inner)),
             ])
         });
