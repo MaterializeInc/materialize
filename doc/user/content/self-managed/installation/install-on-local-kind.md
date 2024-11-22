@@ -146,7 +146,7 @@ repo](https://github.com/MaterializeInc/materialize).
        ```shell
        kubectl get all -n materialize-environment
        ```
- 
+
        Wait for the components to be in the `Running` state.
 
        ```shell

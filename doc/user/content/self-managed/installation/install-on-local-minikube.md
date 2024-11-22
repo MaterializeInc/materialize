@@ -67,7 +67,7 @@ repo](https://github.com/MaterializeInc/materialize).
 1. Create a minikube cluster.
 
    ```shell
-   minikube start 
+   minikube start
    ```
 
 1. Create the `materialize` namespace.
@@ -82,7 +82,7 @@ repo](https://github.com/MaterializeInc/materialize).
    1. Go to the Materialize repo directory.
 
    1. Optional. Edit the `misc/helm-charts/operator/values.yaml` to update (in
-      the `operator.args` section) the `region` value to `minikube`: 
+      the `operator.args` section) the `region` value to `minikube`:
 
       ```yaml
           region: "minikube"
@@ -208,7 +208,7 @@ repo](https://github.com/MaterializeInc/materialize).
 
       ```shell
       NAME                            TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)
-      service/mz2f4guf58oj-console    NodePort    10.111.141.122  <none>        9000:30793/TCP 
+      service/mz2f4guf58oj-console    NodePort    10.111.141.122  <none>        9000:30793/TCP
       ```
 
    1. Forward the Materialize console service to your local machine:
