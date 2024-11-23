@@ -982,7 +982,10 @@ impl Arbitrary for RenderPlan {
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         any::<Plan>()
-            .prop_map(|x| RenderPlan::try_from(x).unwrap())
+            .prop_filter_map(
+                "`Plan`'s `Arbitrary` impl can generate invalid binding structure",
+                |x| RenderPlan::try_from(x).ok(),
+            )
             .boxed()
     }
 }
