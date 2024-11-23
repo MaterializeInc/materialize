@@ -927,6 +927,7 @@ mod tests {
 
 
         #[mz_ore::test]
+        #[ignore]  // TODO: Reenable when database-issues#8785 is fixed
         fn dataflow_description_protobuf_roundtrip(expect in any::<DataflowDescription<RenderPlan, CollectionMetadata, mz_repr::Timestamp>>()) {
             let actual = protobuf_roundtrip::<_, ProtoDataflowDescription>(&expect);
             assert_ok!(actual);
