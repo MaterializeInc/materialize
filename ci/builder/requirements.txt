@@ -69,7 +69,7 @@ yamllint==1.35.1
 confluent-kafka==2.6.0
 fastavro==1.9.4
 websocket-client==1.8.0
-pyarrow-stubs==17.11
+pyarrow-stubs==17.12
 pyarrow==18.0.0
 minio==7.2.10
 zstandard==0.23.0
