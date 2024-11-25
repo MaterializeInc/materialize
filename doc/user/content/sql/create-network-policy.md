@@ -1,48 +1,53 @@
 ---
 title: "CREATE NETWORK POLICY"
-description: "`CREATE NETWORK POLICY` creates a new network policy."
+description: "`CREATE NETWORK POLICY` creates a network policy that restricts access to a Materialize region using IP-based rules."
 menu:
   main:
     parent: commands
 ---
 
-{{< warn-if-unreleased-inline "v0.123.0" >}}
-{{< public-preview />}}
+{{< private-preview />}}
 
-`CREATE NETWORK POLICY` creates a new network policy.
-
-Network Policies are used to manage access to the system.
+`CREATE NETWORK POLICY` creates a network policy that restricts access to a
+Materialize region using IP-based rules. Network policies are part of
+Materialize's framework for [access control](/manage/access-control/).
 
 ## Syntax
 
 {{< diagram "create-network-policy.svg" >}}
-{{< diagram "network-policy-rule-option.svg" >}}
 
-#### Network Policy Options 
+### `network_policy_rule`
 
-| <div style="min-width:240px">Field</div>  | Value            | Description
-|-------------------------------------------|------------------|------------------------------------------------
-| _name_                                    | `text`           | A name for the Network Policy.
-| `RULES`                                   | `text[]`         | A comma-separated list of Network Policy Rules.
-
-#### Network Policy Rule Options 
+{{< diagram "network-policy-rule.svg" >}}
 
 | <div style="min-width:240px">Field</div>  | Value            | Description
 |-------------------------------------------|------------------|------------------------------------------------
-| _name_                                    | `text`           | A name for the Network Policy Rule.
+| _name_                                    | `text`           | A name for the network policy.
+| `RULES`                                   | `text[]`         | A comma-separated list of network policy rules.
+
+#### Network policy rule options
+
+| <div style="min-width:240px">Field</div>  | Value            | Description
+|-------------------------------------------|------------------|------------------------------------------------
+| _name_                                    | `text`           | A name for the network policy rule.
 | `ACTION`                                  | `text`           | The action to take for this rule. `ALLOW` is the only valid option.
 | `DIRECTION`                               | `text`           | The direction of traffic the rule applies to. `INGRESS` is the only valid option.
 | `ADDRESS`                                 | `text`           | The Classless Inter-Domain Routing (CIDR) block the rule will be applied to.
 
-
-
 ## Details
-Network policies can be created to manage access to the system. A network policy will only be applied to resources that are associated with the network policy
-or resources with no network policy association if the network policy is set as the system `network_policy`.
 
-### Restrictions
-There is a limit to 25 rules in a network policy and 25 network policies.
-Rules in a network policy must have unique names.
+### Pre-installed network policy
+
+When you enable a Materialize region, a default network policy named `default`
+will be pre-installed. This policy has a wide open ingress rule `allow
+0.0.0.0/0`. You can modify or drop this network policy at any time.
+
+{{< note >}}
+The default value for the `network_policy` session parameter is `default`.
+Before dropping the `default` network policy, a _superuser_ (i.e. `Organization
+Admin`) must run [`ALTER SYSTEM SET network_policy`](/sql/alter-system-set) to
+change the default value.
+{{< /note >}}
 
 ## Privileges
 
@@ -53,8 +58,8 @@ The privileges required to execute this statement are:
 ## Examples
 
 ```mzsql
-CREATE NETWORK POLICY office_access_policy ( 
-  RULES ( 
+CREATE NETWORK POLICY office_access_policy (
+  RULES (
     new_york (action='allow', direction='ingress',address='1.2.3.4/28'),
     minnesota (action='allow',direction='ingress',address='2.3.4.5/32')
   )
@@ -69,3 +74,4 @@ ALTER SYSTEM SET network_policy = office_access_policy;
 
 - [ALTER NETWORK POLICY](../alter-network-policy)
 - [DROP NETWORK POLICY](../drop-network-policy)
+- [GRANT ROLE](../grant-role)

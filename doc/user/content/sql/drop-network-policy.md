@@ -1,28 +1,27 @@
 ---
 title: "DROP NETWORK POLICY"
-description: "`DROP NETWORK POLICY` removes a network policy from Materialize."
+description: "`DROP NETWORK POLICY` removes an existing network policy from Materialize."
 menu:
   main:
     parent: commands
 ---
 
-{{< warn-if-unreleased-inline "v0.123.0" >}}
-{{< public-preview />}}
+{{< private-preview />}}
 
-`DROP NETWORK POLICY` removes a network policy from Materialize.
+`DROP NETWORK POLICY` removes an existing network policy from Materialize.
+Network policies are part of Materialize's framework for [access control](/manage/access-control/).
+
+To alter the rules in a network policy, use the [`ALTER NETWORK POLICY`](../alter-network-policy)
+command.
 
 ## Syntax
 
 {{< diagram "drop-network-policy.svg" >}}
 
-Field | Use
-------|-----
+Field         | Use
+--------------|-----
 **IF EXISTS** | Do not return an error if the specified network policy does not exist.
-_network_policy_name_ | The network policy you want to drop.
-
-## Details
-
-You cannot drop the system `network_policy`.
+_name_        | The network policy you want to drop. For available network policies, see [`SHOW NETWORK POLICIES`](../show-network-policies).
 
 ## Privileges
 
@@ -32,5 +31,6 @@ The privileges required to execute this statement are:
 
 ## Related pages
 
-- [ALTER NETWORK POLICY](../alter-network-policy)
-- [CREATE NETWORK POLICY](../create-network-policy)
+- [`SHOW NETWORK POLICIES`](../show-network-policies)
+- [`ALTER NETWORK POLICY`](../alter-network-policy)
+- [`CREATE NETWORK POLICY`](../create-network-policy)

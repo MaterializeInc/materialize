@@ -1,38 +1,38 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="423" height="163">
-   <polygon points="11 17 3 13 3 21"/>
-   <polygon points="19 17 11 13 11 21"/>
-   <rect x="33" y="3" width="192" height="32"/>
-   <rect x="31" y="1" width="192" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="41" y="21">network_policy_rule_name</text>
-   <rect x="45" y="113" width="26" height="32" rx="10"/>
-   <rect x="43"
-         y="111"
+<svg xmlns="http://www.w3.org/2000/svg" width="399" height="97">
+   <polygon points="9 61 1 57 1 65"/>
+   <polygon points="17 61 9 57 9 65"/>
+   <rect x="31" y="47" width="56" height="32"/>
+   <rect x="29" y="45" width="56" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="39" y="65">name</text>
+   <rect x="127" y="47" width="26" height="32" rx="10"/>
+   <rect x="125"
+         y="45"
          width="26"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="53" y="131">(</text>
-   <rect x="111" y="113" width="198" height="32"/>
-   <rect x="109" y="111" width="198" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="119" y="131">network_policy_rule_option</text>
-   <rect x="111" y="69" width="24" height="32" rx="10"/>
-   <rect x="109"
-         y="67"
+   <text class="terminal" x="135" y="65">(</text>
+   <rect x="193" y="47" width="92" height="32"/>
+   <rect x="191" y="45" width="92" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="201" y="65">rule_option</text>
+   <rect x="193" y="3" width="24" height="32" rx="10"/>
+   <rect x="191"
+         y="1"
          width="24"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="119" y="87">,</text>
-   <rect x="349" y="113" width="26" height="32" rx="10"/>
-   <rect x="347"
-         y="111"
+   <text class="terminal" x="201" y="21">,</text>
+   <rect x="325" y="47" width="26" height="32" rx="10"/>
+   <rect x="323"
+         y="45"
          width="26"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="357" y="131">)</text>
+   <text class="terminal" x="333" y="65">)</text>
    <path class="line"
-         d="m19 17 h2 m0 0 h10 m192 0 h10 m2 0 l2 0 m2 0 l2 0 m2 0 l2 0 m-244 110 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m26 0 h10 m20 0 h10 m198 0 h10 m-238 0 l20 0 m-1 0 q-9 0 -9 -10 l0 -24 q0 -10 10 -10 m218 44 l20 0 m-20 0 q10 0 10 -10 l0 -24 q0 -10 -10 -10 m-218 0 h10 m24 0 h10 m0 0 h174 m20 44 h10 m26 0 h10 m-370 0 h20 m350 0 h20 m-390 0 q10 0 10 10 m370 0 q0 -10 10 -10 m-380 10 v14 m370 0 v-14 m-370 14 q0 10 10 10 m350 0 q10 0 10 -10 m-360 10 h10 m0 0 h340 m23 -34 h-3"/>
-   <polygon points="413 127 421 123 421 131"/>
-   <polygon points="413 127 405 123 405 131"/>
+         d="m17 61 h2 m0 0 h10 m56 0 h10 m20 0 h10 m26 0 h10 m20 0 h10 m92 0 h10 m-132 0 l20 0 m-1 0 q-9 0 -9 -10 l0 -24 q0 -10 10 -10 m112 44 l20 0 m-20 0 q10 0 10 -10 l0 -24 q0 -10 -10 -10 m-112 0 h10 m24 0 h10 m0 0 h68 m20 44 h10 m26 0 h10 m-264 0 h20 m244 0 h20 m-284 0 q10 0 10 10 m264 0 q0 -10 10 -10 m-274 10 v14 m264 0 v-14 m-264 14 q0 10 10 10 m244 0 q10 0 10 -10 m-254 10 h10 m0 0 h234 m23 -34 h-3"/>
+   <polygon points="389 61 397 57 397 65"/>
+   <polygon points="389 61 381 57 381 65"/>
 </svg>

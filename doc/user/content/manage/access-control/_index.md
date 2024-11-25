@@ -11,7 +11,8 @@ menu:
 ---
 
 {{< note >}}
-Configuring and managing access control in Materialize requires **administrator** privileges.
+Configuring and managing access control in Materialize
+requires **administrator** privileges.
 {{</ note >}}
 
 Access control in Materialize is configured at two levels: access to the
@@ -59,10 +60,22 @@ all systems in your organization.
 To configure SSO for your Materialize organization, follow [this step-by-step
 guide](/manage/access-control/sso).
 
-[//]: # "NOTE(morsapaes) This sits kind of awkward in here, but feels like the
-best place to plug it. Need to add some more meat if we keep it."
+### Configuring network policies
+
+{{< private-preview />}}
+
+By default, Materialize is available on the public internet without any
+network-layer access control. As an **administrator** of a Materialize
+organization, you can configure network policies to restrict access to a
+Materialize region using IP-based rules.
+
+To configure network policies in your Materialize organization, follow
+[this step-by-step guide](/manage/access-control/manage-network-policies).
 
 ### Using an external secret store
+
+[//]: # "NOTE(morsapaes) This sits kind of awkward in here, but feels like the
+best place to plug it. Need to add some more meat if we keep it."
 
 Although Materialize does not integrate directly with external secret stores,
 it’s possible to manage this integration via [Terraform](/manage/terraform).
