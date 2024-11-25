@@ -37,10 +37,8 @@ fn bench_transact(c: &mut Criterion) {
                     name: id.to_string(),
                     owner_id: MZ_SYSTEM_ROLE_ID,
                 }];
-                catalog
-                    .transact(None, mz_repr::Timestamp::MIN, None, ops)
-                    .await
-                    .unwrap();
+                let commit_ts = catalog.current_upper().await;
+                catalog.transact(None, commit_ts, None, ops).await.unwrap();
             })
         });
         runtime.block_on(async {

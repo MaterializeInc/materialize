@@ -200,10 +200,11 @@ mod tests {
             let metrics_registry = MetricsRegistry::new();
             let metrics = Metrics::register_into(&metrics_registry);
 
+            let commit_ts = catalog.current_upper().await;
             catalog
                 .transact(
                     None,
-                    Timestamp::MIN,
+                    commit_ts,
                     None,
                     vec![Op::CreateRole {
                         name: role.into(),

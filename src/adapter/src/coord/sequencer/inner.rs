@@ -378,7 +378,8 @@ impl Coordinator {
     ) -> Result<CreateSourcePlanBundle, AdapterError> {
         let catalog = self.catalog().for_session(session);
         let resolved_ids = mz_sql::names::visit_dependencies(&catalog, &subsource_stmt);
-        let (item_id, global_id) = self.catalog_mut().allocate_user_id().await?;
+        let id_ts = self.get_catalog_write_ts().await;
+        let (item_id, global_id) = self.catalog_mut().allocate_user_id(id_ts).await?;
 
         let plan = self.plan_statement(
             session,
@@ -531,7 +532,8 @@ impl Coordinator {
             p => unreachable!("s must be CreateSourcePlan but got {:?}", p),
         };
 
-        let (item_id, global_id) = self.catalog_mut().allocate_user_id().await?;
+        let id_ts = self.get_catalog_write_ts().await;
+        let (item_id, global_id) = self.catalog_mut().allocate_user_id(id_ts).await?;
 
         let source_full_name = self.catalog().resolve_full_name(&source_plan.name, None);
         let of_source = ResolvedItemName::Item {
@@ -738,7 +740,9 @@ impl Coordinator {
         plan: plan::CreateConnectionPlan,
         resolved_ids: ResolvedIds,
     ) {
-        let (connection_id, connection_gid) = match self.catalog_mut().allocate_user_id().await {
+        let id_ts = self.get_catalog_write_ts().await;
+        let (connection_id, connection_gid) = match self.catalog_mut().allocate_user_id(id_ts).await
+        {
             Ok(item_id) => item_id,
             Err(err) => return ctx.retire(Err(err.into())),
         };
@@ -1012,7 +1016,8 @@ impl Coordinator {
         } else {
             None
         };
-        let (table_id, global_id) = self.catalog_mut().allocate_user_id().await?;
+        let id_ts = self.get_catalog_write_ts().await;
+        let (table_id, global_id) = self.catalog_mut().allocate_user_id(id_ts).await?;
         let collections = [(RelationVersion::root(), global_id)].into_iter().collect();
 
         let data_source = match table.data_source {
@@ -1213,7 +1218,9 @@ impl Coordinator {
         } = plan;
 
         // First try to allocate an ID and an OID. If either fails, we're done.
-        let (item_id, global_id) = return_if_err!(self.catalog_mut().allocate_user_id().await, ctx);
+        let id_ts = self.get_catalog_write_ts().await;
+        let (item_id, global_id) =
+            return_if_err!(self.catalog_mut().allocate_user_id(id_ts).await, ctx);
 
         if let Some(cluster) = self.catalog().try_get_cluster(in_cluster) {
             mz_ore::soft_assert_or_log!(
@@ -1335,7 +1342,8 @@ impl Coordinator {
         plan: plan::CreateTypePlan,
         resolved_ids: ResolvedIds,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let (item_id, global_id) = self.catalog_mut().allocate_user_id().await?;
+        let id_ts = self.get_catalog_write_ts().await;
+        let (item_id, global_id) = self.catalog_mut().allocate_user_id(id_ts).await?;
         let typ = Type {
             create_sql: Some(plan.typ.create_sql),
             global_id,

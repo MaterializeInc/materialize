@@ -151,7 +151,7 @@ impl StateUpdate {
             unfinalized_shards,
             txn_wal_shard,
             audit_log_updates,
-            commit_ts: _,
+            upper: _,
         } = txn_batch;
         let databases = from_batch(databases, StateUpdateKind::Database);
         let schemas = from_batch(schemas, StateUpdateKind::Schema);

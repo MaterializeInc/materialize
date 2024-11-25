@@ -18,6 +18,7 @@ use mz_ore::channel::trigger;
 use mz_ore::exit;
 use mz_ore::halt;
 use mz_persist_client::PersistClient;
+use mz_repr::Timestamp;
 use mz_sql::catalog::EnvironmentId;
 use tracing::info;
 
@@ -26,7 +27,7 @@ use crate::BUILD_INFO;
 
 /// The necessary input for preflight checks.
 pub struct PreflightInput {
-    pub boot_ts: u64,
+    pub boot_ts: Timestamp,
     pub environment_id: EnvironmentId,
     pub persist_client: PersistClient,
     pub deploy_generation: u64,

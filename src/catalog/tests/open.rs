@@ -139,7 +139,7 @@ async fn test_is_initialized(state_builder: TestCatalogStateBuilder) {
     );
 
     let state = openable_state1
-        .open(SYSTEM_TIME(), &test_bootstrap_args())
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
         .unwrap();
     state.expire().await;
@@ -183,7 +183,7 @@ async fn test_get_deployment_generation(state_builder: TestCatalogStateBuilder) 
         );
 
         let state = openable_state
-            .open(SYSTEM_TIME(), &test_bootstrap_args())
+            .open(SYSTEM_TIME().into(), &test_bootstrap_args())
             .await
             .unwrap();
         state.expire().await;
@@ -226,7 +226,7 @@ async fn test_open_savepoint(state_builder: TestCatalogStateBuilder) {
             .clone()
             .unwrap_build()
             .await
-            .open_savepoint(SYSTEM_TIME(), &test_bootstrap_args())
+            .open_savepoint(SYSTEM_TIME().into(), &test_bootstrap_args())
             .await
             .unwrap_err();
         match err {
@@ -241,7 +241,7 @@ async fn test_open_savepoint(state_builder: TestCatalogStateBuilder) {
             .clone()
             .unwrap_build()
             .await
-            .open(SYSTEM_TIME(), &test_bootstrap_args())
+            .open(SYSTEM_TIME().into(), &test_bootstrap_args())
             .await
             .unwrap();
         assert_eq!(state.epoch(), Epoch::new(2).expect("known to be non-zero"));
@@ -254,7 +254,7 @@ async fn test_open_savepoint(state_builder: TestCatalogStateBuilder) {
             .clone()
             .unwrap_build()
             .await
-            .open_savepoint(SYSTEM_TIME(), &test_bootstrap_args())
+            .open_savepoint(SYSTEM_TIME().into(), &test_bootstrap_args())
             .await
             .unwrap();
         // Drain initial updates.
@@ -308,7 +308,8 @@ async fn test_open_savepoint(state_builder: TestCatalogStateBuilder) {
         }
         // Drain txn updates.
         let _ = txn.get_and_commit_op_updates();
-        txn.commit().await.unwrap();
+        let commit_ts = txn.upper();
+        txn.commit(commit_ts).await.unwrap();
 
         // Read back writes.
         let snapshot = state.snapshot().await.unwrap();
@@ -335,7 +336,8 @@ async fn test_open_savepoint(state_builder: TestCatalogStateBuilder) {
         }
         // Drain txn updates.
         let _ = txn.get_and_commit_op_updates();
-        txn.commit().await.unwrap();
+        let commit_ts = txn.upper();
+        txn.commit(commit_ts).await.unwrap();
 
         // Read back updates.
         let snapshot = state.snapshot().await.unwrap();
@@ -357,7 +359,7 @@ async fn test_open_savepoint(state_builder: TestCatalogStateBuilder) {
             .clone()
             .unwrap_build()
             .await
-            .open(SYSTEM_TIME(), &test_bootstrap_args())
+            .open(SYSTEM_TIME().into(), &test_bootstrap_args())
             .await
             .unwrap();
         // Write should not have persisted.
@@ -402,7 +404,7 @@ async fn test_open_read_only(state_builder: TestCatalogStateBuilder) {
         .clone()
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME(), &test_bootstrap_args())
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
         .unwrap();
     // Drain initial updates.
@@ -424,7 +426,11 @@ async fn test_open_read_only(state_builder: TestCatalogStateBuilder) {
         read_only_state.epoch(),
         Epoch::new(2).expect("known to be non-zero")
     );
-    let err = read_only_state.allocate_user_id().await.unwrap_err();
+    let commit_ts = state.current_upper().await;
+    let err = read_only_state
+        .allocate_user_id(commit_ts)
+        .await
+        .unwrap_err();
     match err {
         CatalogError::Catalog(_) => panic!("unexpected catalog error"),
         CatalogError::Durable(e) => assert!(e.can_recover_with_write_mode()),
@@ -443,7 +449,8 @@ async fn test_open_read_only(state_builder: TestCatalogStateBuilder) {
         .unwrap();
     // Drain txn updates.
     let _ = txn.get_and_commit_op_updates();
-    txn.commit().await.unwrap();
+    let commit_ts = txn.upper();
+    txn.commit(commit_ts).await.unwrap();
 
     let snapshot = read_only_state.snapshot().await.unwrap();
     let role = snapshot.roles.get(&proto::RoleKey {
@@ -472,7 +479,7 @@ async fn test_open(state_builder: TestCatalogStateBuilder) {
             .unwrap_build()
             .await
             // Use `NOW_ZERO` for consistent timestamps in the snapshots.
-            .open(NOW_ZERO(), &test_bootstrap_args())
+            .open(NOW_ZERO().into(), &test_bootstrap_args())
             .await
             .unwrap();
 
@@ -504,7 +511,7 @@ async fn test_open(state_builder: TestCatalogStateBuilder) {
             .clone()
             .unwrap_build()
             .await
-            .open(SYSTEM_TIME(), &test_bootstrap_args())
+            .open(SYSTEM_TIME().into(), &test_bootstrap_args())
             .await
             .unwrap();
 
@@ -519,7 +526,7 @@ async fn test_open(state_builder: TestCatalogStateBuilder) {
             .clone()
             .unwrap_build()
             .await
-            .open(SYSTEM_TIME(), &test_bootstrap_args())
+            .open(SYSTEM_TIME().into(), &test_bootstrap_args())
             .await
             .unwrap();
 
@@ -551,7 +558,7 @@ async fn test_unopened_deploy_generation_fencing(state_builder: TestCatalogState
             .clone()
             .unwrap_build()
             .await
-            .open(SYSTEM_TIME(), &test_bootstrap_args())
+            .open(SYSTEM_TIME().into(), &test_bootstrap_args())
             .await
             .unwrap();
         // drain catalog updates.
@@ -559,7 +566,8 @@ async fn test_unopened_deploy_generation_fencing(state_builder: TestCatalogState
         let mut txn = state.transaction().await.unwrap();
         txn.set_0dt_deployment_max_wait(zdt_deployment_max_wait)
             .unwrap();
-        txn.commit().await.unwrap();
+        let commit_ts = txn.upper();
+        txn.commit(commit_ts).await.unwrap();
     }
     let mut openable_state = state_builder.clone().unwrap_build().await;
 
@@ -579,7 +587,7 @@ async fn test_unopened_deploy_generation_fencing(state_builder: TestCatalogState
         .with_deploy_generation(deploy_generation + 1)
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME(), &test_bootstrap_args())
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
         .unwrap();
 
@@ -649,7 +657,7 @@ async fn test_opened_epoch_fencing(state_builder: TestCatalogStateBuilder) {
         .clone()
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME(), &test_bootstrap_args())
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
         .unwrap();
 
@@ -658,7 +666,7 @@ async fn test_opened_epoch_fencing(state_builder: TestCatalogStateBuilder) {
         .clone()
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME(), &test_bootstrap_args())
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
         .unwrap();
 
@@ -697,7 +705,7 @@ async fn test_opened_deploy_generation_fencing(state_builder: TestCatalogStateBu
         .with_deploy_generation(deploy_generation)
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME(), &test_bootstrap_args())
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
         .unwrap();
 
@@ -707,7 +715,7 @@ async fn test_opened_deploy_generation_fencing(state_builder: TestCatalogStateBu
         .with_deploy_generation(deploy_generation + 1)
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME(), &test_bootstrap_args())
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
         .unwrap();
 
@@ -750,7 +758,7 @@ async fn test_fencing_during_write(state_builder: TestCatalogStateBuilder) {
         .with_deploy_generation(deploy_generation)
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME(), &test_bootstrap_args())
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
         .unwrap();
     // Drain updates.
@@ -764,14 +772,15 @@ async fn test_fencing_during_write(state_builder: TestCatalogStateBuilder) {
         .with_deploy_generation(deploy_generation)
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME(), &test_bootstrap_args())
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
         .unwrap();
     // Drain updates.
     let _ = state.sync_to_current_updates().await;
 
     // Committing results in an epoch fence error.
-    let err = txn.commit().await.unwrap_err();
+    let commit_ts = txn.upper();
+    let err = txn.commit(commit_ts).await.unwrap_err();
     assert!(
         matches!(
             err,
@@ -789,12 +798,13 @@ async fn test_fencing_during_write(state_builder: TestCatalogStateBuilder) {
         .with_deploy_generation(deploy_generation + 1)
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME(), &test_bootstrap_args())
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
         .unwrap();
 
     // Committing results in a deploy generation fence error.
-    let err = txn.commit().await.unwrap_err();
+    let commit_ts = txn.upper();
+    let err = txn.commit(commit_ts).await.unwrap_err();
     assert!(
         matches!(
             err,
@@ -828,7 +838,7 @@ async fn test_persist_version_fencing() {
             .unwrap_build()
             .await;
         let _persist_state = persist_openable_state
-            .open(SYSTEM_TIME(), &test_bootstrap_args())
+            .open(SYSTEM_TIME().into(), &test_bootstrap_args())
             .await
             .unwrap();
 
@@ -875,7 +885,8 @@ async fn test_concurrent_open(state_builder: TestCatalogStateBuilder) {
         loop {
             // Drain updates.
             let _ = state.sync_to_current_updates().await?;
-            state.allocate_user_id().await?;
+            let commit_ts = state.current_upper().await;
+            state.allocate_user_id(commit_ts).await?;
             // After winning the race 100 times, sleep to give the debug state a chance to win the
             // race.
             if i > 100 {
@@ -890,7 +901,7 @@ async fn test_concurrent_open(state_builder: TestCatalogStateBuilder) {
         .with_default_deploy_generation()
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME(), &test_bootstrap_args())
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
         .unwrap();
     let state_handle = mz_ore::task::spawn(|| "state", async move {
@@ -907,7 +918,7 @@ async fn test_concurrent_open(state_builder: TestCatalogStateBuilder) {
         .clone()
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME(), &test_bootstrap_args())
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
         .unwrap();
 
@@ -917,7 +928,7 @@ async fn test_concurrent_open(state_builder: TestCatalogStateBuilder) {
     let _state = state_builder
         .unwrap_build()
         .await
-        .open(SYSTEM_TIME(), &test_bootstrap_args())
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
         .unwrap();
 }

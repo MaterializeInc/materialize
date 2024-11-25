@@ -366,8 +366,7 @@ impl Catalog {
 
         // Make life easier by consolidating all updates, so that we end up with only positive
         // diffs.
-        let commit_ts = txn.commit_ts();
-        let mut updates = into_consolidatable_updates_startup(updates, commit_ts);
+        let mut updates = into_consolidatable_updates_startup(updates, config.boot_ts);
         differential_dataflow::consolidation::consolidate_updates(&mut updates);
         soft_assert_no_log!(
             updates.iter().all(|(_, _, diff)| *diff == 1),
@@ -550,7 +549,7 @@ impl Catalog {
         builtin_table_updates.extend(builtin_table_update);
         let builtin_table_updates = state.resolve_builtin_table_updates(builtin_table_updates);
 
-        txn.commit().await?;
+        txn.commit(config.boot_ts).await?;
 
         cleanup_action.await;
 
@@ -682,7 +681,8 @@ impl Catalog {
         let updates = txn.get_and_commit_op_updates();
         let builtin_updates = state.apply_updates(updates)?;
         assert_eq!(builtin_updates, Vec::new());
-        txn.commit().await?;
+        let commit_ts = txn.upper();
+        txn.commit(commit_ts).await?;
         drop(storage);
 
         // Save updated state.
@@ -713,7 +713,8 @@ impl Catalog {
                 updates.is_empty(),
                 "initializing controller should not produce updates: {updates:?}"
             );
-            tx.commit().await?;
+            let commit_ts = tx.upper();
+            tx.commit(commit_ts).await?;
 
             let read_only_tx = storage.transaction().await?;
 
@@ -1689,13 +1690,14 @@ mod builtin_migration_tests {
         item: CatalogItem,
         item_namespace: ItemNamespace,
     ) -> (CatalogItemId, GlobalId) {
+        let id_ts = catalog.storage().await.current_upper().await;
         let (item_id, global_id) = match item_namespace {
             ItemNamespace::User => catalog
-                .allocate_user_id()
+                .allocate_user_id(id_ts)
                 .await
                 .expect("cannot fail to allocate user ids"),
             ItemNamespace::System => catalog
-                .allocate_system_id()
+                .allocate_system_id(id_ts)
                 .await
                 .expect("cannot fail to allocate system ids"),
         };
@@ -1710,10 +1712,11 @@ mod builtin_migration_tests {
             .id
             .clone();
 
+        let commit_ts = catalog.storage().await.current_upper().await;
         catalog
             .transact(
                 None,
-                mz_repr::Timestamp::MIN,
+                commit_ts,
                 None,
                 vec![Op::CreateItem {
                     id: item_id,

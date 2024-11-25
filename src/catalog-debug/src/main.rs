@@ -544,7 +544,7 @@ async fn upgrade_check(
     let now = SYSTEM_TIME.clone();
     let mut storage = openable_state
         .open_savepoint(
-            now(),
+            now().into(),
             &BootstrapArgs {
                 default_cluster_replica_size:
                     "DEFAULT CLUSTER REPLICA SIZE IS ONLY USED FOR NEW ENVIRONMENTS".into(),

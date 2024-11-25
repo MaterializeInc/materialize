@@ -349,7 +349,7 @@ impl Listeners {
         info!("startup: envd serve: catalog init beginning");
 
         // Get the current timestamp so we can record when we booted.
-        let boot_ts = (config.now)();
+        let boot_ts = (config.now)().into();
 
         let persist_client = config
             .catalog_config
