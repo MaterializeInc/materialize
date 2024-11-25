@@ -22,7 +22,7 @@ jupyterlab==4.3.0
 jupyter-black==0.3.4
 kubernetes==25.3.0
 kubernetes-stubs==22.6.0.post1
-launchdarkly-api==11.0.0
+launchdarkly-api==17.0.0
 matplotlib==3.9.2
 matplotlib-stubs==0.2.0
 networkx==3.4.2
