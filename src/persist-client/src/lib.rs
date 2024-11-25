@@ -766,6 +766,7 @@ mod tests {
 
     use crate::batch::BLOB_TARGET_SIZE;
     use crate::cache::PersistClientCache;
+    use crate::cfg::BATCH_BUILDER_MAX_OUTSTANDING_PARTS;
     use crate::error::{CodecConcreteType, CodecMismatch, UpperMismatch};
     use crate::internal::paths::BlobKey;
     use crate::read::ListenEvent;
@@ -777,7 +778,9 @@ mod tests {
         // amount of coverage of that in tests. Similarly, for max_outstanding.
         let mut cache = PersistClientCache::new_no_metrics();
         cache.cfg.set_config(&BLOB_TARGET_SIZE, 10);
-        cache.cfg.dynamic.set_batch_builder_max_outstanding_parts(1);
+        cache
+            .cfg
+            .set_config(&BATCH_BUILDER_MAX_OUTSTANDING_PARTS, 1);
         dyncfgs.apply(cache.cfg());
 
         // Enable compaction in tests to ensure we get coverage.

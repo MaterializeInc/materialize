@@ -19,7 +19,7 @@ use mz_persist::location::Blob;
 use tokio::sync::Semaphore;
 use tracing::{error, info};
 
-use crate::cfg::PersistConfig;
+use crate::cfg::{PersistConfig, USAGE_STATE_FETCH_CONCURRENCY_LIMIT};
 use crate::internal::paths::{BlobKey, BlobKeyPrefix, PartialBlobKey, WriterKey};
 use crate::internal::state::HollowBlobRef;
 use crate::internal::state_versions::StateVersions;
@@ -256,7 +256,7 @@ impl StorageUsageClient {
         I: IntoIterator<Item = ShardId>,
     {
         let semaphore = Arc::new(Semaphore::new(
-            self.cfg.dynamic.usage_state_fetch_concurrency_limit(),
+            USAGE_STATE_FETCH_CONCURRENCY_LIMIT.get(&self.cfg),
         ));
         let by_shard_futures = FuturesUnordered::new();
         for shard_id in shard_ids {
@@ -313,7 +313,7 @@ impl StorageUsageClient {
         self.metrics.audit.blob_bytes.set(blob_usage.total_size);
         self.metrics.audit.blob_count.set(blob_usage.total_count);
 
-        let semaphore = Semaphore::new(self.cfg.dynamic.usage_state_fetch_concurrency_limit());
+        let semaphore = Semaphore::new(USAGE_STATE_FETCH_CONCURRENCY_LIMIT.get(&self.cfg));
         let by_shard_futures = FuturesUnordered::new();
         for (shard_id, total_bytes) in blob_usage.by_shard.iter() {
             let shard_usage_fut = async {

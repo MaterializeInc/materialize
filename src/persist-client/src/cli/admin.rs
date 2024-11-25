@@ -33,7 +33,7 @@ use tracing::{info, warn};
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::cache::StateCache;
-use crate::cfg::all_dyncfgs;
+use crate::cfg::{all_dyncfgs, COMPACTION_MEMORY_BOUND_BYTES};
 use crate::cli::args::{make_blob, make_consensus, StateArgs, StoreArgs};
 use crate::cli::inspect::FAKE_OPAQUE_CODEC;
 use crate::internal::compact::{CompactConfig, CompactReq, Compactor};
@@ -131,10 +131,11 @@ pub async fn run(command: AdminArgs) -> Result<(), anyhow::Error> {
             let configs = all_dyncfgs(ConfigSet::default());
             // TODO: Fetch the latest values of these configs from Launch Darkly.
             let cfg = PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone(), configs);
-            if args.compaction_memory_bound_bytes > 0 {
-                cfg.dynamic
-                    .set_compaction_memory_bound_bytes(args.compaction_memory_bound_bytes);
-            }
+            cfg.set_config(
+                &COMPACTION_MEMORY_BOUND_BYTES,
+                args.compaction_memory_bound_bytes,
+            );
+
             let metrics_registry = MetricsRegistry::new();
             let expected_version = command
                 .expected_version

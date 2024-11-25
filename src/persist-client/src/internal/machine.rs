@@ -1421,6 +1421,7 @@ pub mod datadriven {
         validate_truncate_batch, Batch, BatchBuilder, BatchBuilderConfig, BatchBuilderInternal,
         BatchParts, BLOB_TARGET_SIZE, STRUCTURED_ORDER,
     };
+    use crate::cfg::COMPACTION_MEMORY_BOUND_BYTES;
     use crate::fetch::{Cursor, EncodedPart};
     use crate::internal::compact::{CompactConfig, CompactReq, Compactor};
     use crate::internal::datadriven::DirectiveArgs;
@@ -1986,7 +1987,7 @@ pub mod datadriven {
             cfg.set_config(&BLOB_TARGET_SIZE, target_size);
         };
         if let Some(memory_bound) = memory_bound {
-            cfg.dynamic.set_compaction_memory_bound_bytes(memory_bound);
+            cfg.set_config(&COMPACTION_MEMORY_BOUND_BYTES, memory_bound);
         }
         let req = CompactReq {
             shard_id: datadriven.shard_id,
