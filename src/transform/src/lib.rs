@@ -114,7 +114,7 @@ impl<'a> TransformCtx<'a> {
     /// [`MirRelationExpr`].
     pub fn local(
         features: &'a OptimizerFeatures,
-        typecheck_ctx: &'a typecheck::SharedContext,
+        typecheck_ctx: &'a SharedContext,
         df_meta: &'a mut DataflowMetainfo,
     ) -> Self {
         Self {
@@ -130,7 +130,7 @@ impl<'a> TransformCtx<'a> {
     /// Generates a [`TransformCtx`] instance for the global MIR optimization
     /// stage.
     ///
-    /// Used to call [`dataflow::optimize_dataflow`].
+    /// Used to call [`optimize_dataflow`].
     pub fn global(
         indexes: &'a dyn IndexOracle,
         stats: &'a dyn StatisticsOracle,
@@ -162,7 +162,7 @@ impl<'a> TransformCtx<'a> {
 }
 
 /// Types capable of transforming relation expressions.
-pub trait Transform: std::fmt::Debug {
+pub trait Transform: fmt::Debug {
     /// Transform a relation into a functionally equivalent relation.
     fn transform(
         &self,
@@ -445,7 +445,7 @@ macro_rules! transforms {
         }
         transforms!(@op fill $buf with $($transforms)*);
     };
-    // Internal rule. Matchesl lines without a guard: `$transform`.
+    // Internal rule. Matches lines without a guard: `$transform`.
     (@op fill $buf:ident with $transform:expr, $($transforms:tt)*) => {
         $buf.push($transform);
         transforms!(@op fill $buf with $($transforms)*);
@@ -480,16 +480,16 @@ impl Default for FuseAndCollapse {
                 Box::new(fusion::Fusion),
                 Box::new(canonicalization::FlatMapToMap),
                 Box::new(fusion::join::Join),
-                Box::new(normalize_lets::NormalizeLets::new(false)),
+                Box::new(NormalizeLets::new(false)),
                 Box::new(fusion::reduce::Reduce),
-                Box::new(crate::will_distinct::WillDistinct),
+                Box::new(will_distinct::WillDistinct),
                 Box::new(compound::UnionNegateFusion),
                 // This goes after union fusion so we can cancel out
                 // more branches at a time.
                 Box::new(union_cancel::UnionBranchCancellation),
                 // This should run before redundant join to ensure that key info
                 // is correct.
-                Box::new(normalize_lets::NormalizeLets::new(false)),
+                Box::new(NormalizeLets::new(false)),
                 // Removes redundant inputs from joins.
                 // Note that this eliminates one redundant input per join,
                 // so it is necessary to run this section in a loop.
@@ -715,7 +715,7 @@ impl Optimizer {
             // We need this to ensure that `CollectIndexRequests` gets a normalized plan.
             // (For example, `FoldConstants` can break the normalized form by removing all
             // references to a Let, see https://github.com/MaterializeInc/database-issues/issues/6371)
-            Box::new(normalize_lets::NormalizeLets::new(false)),
+            Box::new(NormalizeLets::new(false)),
             Box::new(typecheck::Typecheck::new(ctx.typecheck()).disallow_new_globals()),
         ];
         Self {

@@ -798,9 +798,6 @@ mod inlining {
                             &expr
                         };
                         match stripped_value {
-                            // TODO: One could imagine CSEing multiple occurrences of a global Get
-                            // to make us read from Persist only once.
-                            // See <https://github.com/MaterializeInc/database-issues/issues/6363>
                             MirRelationExpr::Get { .. } | MirRelationExpr::Constant { .. } => true,
                             _ => false,
                         }
