@@ -907,9 +907,9 @@ def workflow_kafka_source_rehydration(c: Composition) -> None:
           KEY FORMAT CSV WITH 2 COLUMNS DELIMITED BY ','
           VALUE FORMAT CSV WITH 2 COLUMNS DELIMITED BY ','
           ENVELOPE UPSERT;
-        # TODO: This should also work with a default index
-        # > CREATE DEFAULT INDEX ON kafka_source_tbl
-        > SELECT COUNT(*) FROM kafka_source_tbl
+        > CREATE VIEW kafka_source_cnt AS SELECT count(*) FROM kafka_source_tbl
+        > CREATE DEFAULT INDEX on kafka_source_cnt
+        > SELECT * FROM kafka_source_cnt
         {count}
         """
         )
@@ -920,7 +920,7 @@ def workflow_kafka_source_rehydration(c: Composition) -> None:
                 f"""
         $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=kafka-large repeat={count}
         key{i}A,key{i}${{kafka-ingest.iteration}}:value{i}A,${{kafka-ingest.iteration}}
-        > SELECT COUNT(*) FROM kafka_source_tbl
+        > SELECT * FROM kafka_source_cnt
         {count*(i+1)}
         """
             )
@@ -937,7 +937,6 @@ def workflow_kafka_source_rehydration(c: Composition) -> None:
             system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
             restart="on-failure",
             external_metadata_store=True,
-            # environment_extra=["FAILPOINTS=hydration=sleep(12000)"],
         )
     ):
         c.up("mz_new")
@@ -952,16 +951,14 @@ def workflow_kafka_source_rehydration(c: Composition) -> None:
         )
         elapsed = time.time() - start_time
         print(f"promotion took {elapsed} seconds")
-        print("sleeping so that the global query timestamp can advance")
-        time.sleep(5)
         start_time = time.time()
-        result = c.sql_query("SELECT COUNT(*) FROM kafka_source_tbl", service="mz_new")
+        result = c.sql_query("SELECT * FROM kafka_source_cnt", service="mz_new")
         elapsed = time.time() - start_time
         print(f"final check took {elapsed} seconds")
         duration = time.time() - start_time
         assert result[0][0] == count * repeats, f"Wrong result: {result}"
         assert (
-            duration < 10
+            duration < 2
         ), f"Took {duration}s to SELECT on Kafka source after 0dt upgrade, is it hydrated?"
 
 
@@ -1021,9 +1018,9 @@ def workflow_pg_source_rehydration(c: Composition) -> None:
           FROM POSTGRES CONNECTION pg
           (PUBLICATION 'postgres_source');
         > CREATE TABLE postgres_source_table FROM SOURCE postgres_source (REFERENCE postgres_source_table)
-        # TODO: This should also work with a default index
-        # > CREATE DEFAULT INDEX ON postgres_source_table
-        > SELECT COUNT(*) FROM postgres_source_table;
+        > CREATE VIEW postgres_source_cnt AS SELECT count(*) FROM postgres_source_table
+        > CREATE DEFAULT INDEX ON postgres_source_cnt
+        > SELECT * FROM postgres_source_cnt;
         {count}
         """
         ),
@@ -1036,7 +1033,7 @@ def workflow_pg_source_rehydration(c: Composition) -> None:
                 f"""
         $ postgres-execute connection=postgres://postgres:postgres@postgres
         {inserts}
-        > SELECT COUNT(*) FROM postgres_source_table
+        > SELECT * FROM postgres_source_cnt
         {count*(i+1)}
         """
             ),
@@ -1054,7 +1051,6 @@ def workflow_pg_source_rehydration(c: Composition) -> None:
             system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
             restart="on-failure",
             external_metadata_store=True,
-            # environment_extra=["FAILPOINTS=hydration=sleep(12000)"],
         )
     ):
         c.up("mz_new")
@@ -1070,15 +1066,13 @@ def workflow_pg_source_rehydration(c: Composition) -> None:
         elapsed = time.time() - start_time
         print(f"promotion took {elapsed} seconds")
         start_time = time.time()
-        result = c.sql_query(
-            "SELECT COUNT(*) FROM postgres_source_table", service="mz_new"
-        )
+        result = c.sql_query("SELECT * FROM postgres_source_cnt", service="mz_new")
         elapsed = time.time() - start_time
         print(f"final check took {elapsed} seconds")
         duration = time.time() - start_time
         assert result[0][0] == count * repeats, f"Wrong result: {result}"
         assert (
-            duration < 10
+            duration < 2
         ), f"Took {duration}s to SELECT on Postgres source after 0dt upgrade, is it hydrated?"
 
 
@@ -1137,9 +1131,9 @@ def workflow_mysql_source_rehydration(c: Composition) -> None:
           IN CLUSTER cluster
           FROM MYSQL CONNECTION mysql;
         > CREATE TABLE mysql_source_table FROM SOURCE mysql_source (REFERENCE public.mysql_source_table);
-        # TODO: This should also work with a default index
-        # > CREATE DEFAULT INDEX ON mysql_source_table
-        > SELECT COUNT(*) FROM mysql_source_table;
+        > CREATE VIEW mysql_source_cnt AS SELECT count(*) FROM mysql_source_table
+        > CREATE DEFAULT INDEX ON mysql_source_cnt
+        > SELECT * FROM mysql_source_cnt;
         {count}
         """
         ),
@@ -1154,7 +1148,7 @@ def workflow_mysql_source_rehydration(c: Composition) -> None:
         $ mysql-execute name=mysql
         USE public;
         {inserts}
-        > SELECT COUNT(*) FROM mysql_source_table;
+        > SELECT * FROM mysql_source_cnt;
         {count*(i+1)}
         """
             ),
@@ -1172,7 +1166,6 @@ def workflow_mysql_source_rehydration(c: Composition) -> None:
             system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
             restart="on-failure",
             external_metadata_store=True,
-            # environment_extra=["FAILPOINTS=hydration=sleep(12000)"],
         )
     ):
         c.up("mz_new")
@@ -1188,16 +1181,14 @@ def workflow_mysql_source_rehydration(c: Composition) -> None:
         elapsed = time.time() - start_time
         print(f"promotion took {elapsed} seconds")
         start_time = time.time()
-        result = c.sql_query(
-            "SELECT COUNT(*) FROM mysql_source_table", service="mz_new"
-        )
+        result = c.sql_query("SELECT * FROM mysql_source_cnt", service="mz_new")
         elapsed = time.time() - start_time
         print(f"final check took {elapsed} seconds")
         duration = time.time() - start_time
         assert result[0][0] == count * repeats, f"Wrong result: {result}"
         assert (
-            duration < 10
-        ), f"Took {duration}s to SELECT on Postgres source after 0dt upgrade, is it hydrated?"
+            duration < 2
+        ), f"Took {duration}s to SELECT on MySQL source after 0dt upgrade, is it hydrated?"
 
 
 def fetch_reconciliation_metrics(c: Composition, process: str) -> tuple[int, int]:
