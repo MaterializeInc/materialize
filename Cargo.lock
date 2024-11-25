@@ -5941,6 +5941,7 @@ dependencies = [
  "byteorder",
  "bytes",
  "bytesize",
+ "derivative",
  "mz-ore",
  "mz-server-core",
  "tokio",

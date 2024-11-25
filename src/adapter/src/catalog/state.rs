@@ -2079,6 +2079,11 @@ impl CatalogState {
         &self.system_configuration
     }
 
+    /// Return a mutable reference to the current system configuration.
+    pub fn system_config_mut(&mut self) -> &mut SystemVars {
+        &mut self.system_configuration
+    }
+
     /// Serializes the catalog's in-memory state.
     ///
     /// There are no guarantees about the format of the serialized state, except

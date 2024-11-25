@@ -65,6 +65,15 @@ pub struct User {
     pub external_metadata: Option<ExternalUserMetadata>,
 }
 
+impl From<&User> for mz_pgwire_common::UserMetadata {
+    fn from(user: &User) -> mz_pgwire_common::UserMetadata {
+        mz_pgwire_common::UserMetadata {
+            is_admin: user.is_external_admin(),
+            should_limit_connections: user.limit_max_connections(),
+        }
+    }
+}
+
 impl PartialEq for User {
     fn eq(&self, other: &User) -> bool {
         self.name == other.name

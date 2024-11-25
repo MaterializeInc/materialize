@@ -8,7 +8,6 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
 
 use bytesize::ByteSize;
 use ipnet::IpNet;
@@ -22,7 +21,6 @@ use mz_persist_client::PersistClient;
 use mz_repr::CatalogItemId;
 use mz_sql::catalog::CatalogError as SqlCatalogError;
 use mz_sql::catalog::EnvironmentId;
-use mz_sql::session::vars::ConnectionCounter;
 use serde::{Deserialize, Serialize};
 
 use crate::durable::{CatalogError, DurableCatalogState};
@@ -84,8 +82,6 @@ pub struct StateConfig {
     pub http_host_name: Option<String>,
     /// Context for source and sink connections.
     pub connection_context: mz_storage_types::connections::ConnectionContext,
-    /// Global connection limit and count
-    pub active_connection_count: Arc<std::sync::Mutex<ConnectionCounter>>,
     pub builtin_item_migration_config: BuiltinItemMigrationConfig,
     pub persist_client: PersistClient,
     /// Overrides the current value of the [`mz_adapter_types::dyncfgs::ENABLE_EXPRESSION_CACHE`]

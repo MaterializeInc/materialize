@@ -10,7 +10,7 @@
 use std::collections::BTreeMap;
 use std::convert::TryFrom;
 use std::future::Future;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Instant;
 use std::{iter, mem};
 
@@ -32,7 +32,9 @@ use mz_ore::netio::AsyncReady;
 use mz_ore::str::StrExt;
 use mz_ore::{assert_none, assert_ok, instrument};
 use mz_pgcopy::{CopyCsvFormatParams, CopyFormatParams, CopyTextFormatParams};
-use mz_pgwire_common::{ErrorResponse, Format, FrontendMessage, Severity, VERSIONS, VERSION_3};
+use mz_pgwire_common::{
+    ConnectionCounter, ErrorResponse, Format, FrontendMessage, Severity, VERSIONS, VERSION_3,
+};
 use mz_repr::{
     CatalogItemId, Datum, RelationDesc, RelationType, RowArena, RowIterator, RowRef, ScalarType,
 };
@@ -43,7 +45,7 @@ use mz_sql::parse::StatementParseResult;
 use mz_sql::plan::{CopyFormat, ExecuteTimeout, StatementDesc};
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::INTERNAL_USER_NAMES;
-use mz_sql::session::vars::{ConnectionCounter, DropConnection, Var, VarInput, MAX_COPY_FROM_SIZE};
+use mz_sql::session::vars::{Var, VarInput, MAX_COPY_FROM_SIZE};
 use postgres::error::SqlState;
 use tokio::io::{self, AsyncRead, AsyncWrite};
 use tokio::select;
@@ -96,7 +98,7 @@ pub struct RunParams<'a, A> {
     /// system resources.
     pub internal: bool,
     /// Global connection limit and count
-    pub active_connection_count: Arc<Mutex<ConnectionCounter>>,
+    pub active_connection_counter: ConnectionCounter,
     /// Helm chart version
     pub helm_chart_version: Option<String>,
 }
@@ -121,7 +123,7 @@ pub async fn run<'a, A>(
         mut params,
         frontegg,
         internal,
-        active_connection_count,
+        active_connection_counter,
         helm_chart_version,
     }: RunParams<'a, A>,
 ) -> Result<(), io::Error>
@@ -257,7 +259,7 @@ where
         .vars_mut()
         .end_transaction(EndTransactionAction::Commit);
 
-    let _guard = match DropConnection::new_connection(session.user(), active_connection_count) {
+    let _guard = match active_connection_counter.allocate_connection(session.user()) {
         Ok(drop_connection) => drop_connection,
         Err(e) => {
             let e: AdapterError = e.into();

@@ -69,15 +69,14 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::net::IpAddr;
 use std::string::ToString;
-use std::sync::LazyLock;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use derivative::Derivative;
 use im::OrdMap;
 use mz_build_info::BuildInfo;
 use mz_dyncfg::{ConfigSet, ConfigType, ConfigUpdates, ConfigVal};
-use mz_ore::cast::CastFrom;
 use mz_persist_client::cfg::{CRDB_CONNECT_TIMEOUT, CRDB_TCP_USER_TIMEOUT};
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::adt::timestamp::CheckedTimestamp;
@@ -1023,130 +1022,21 @@ pub enum NetworkPolicyError {
     AddressDenied(IpAddr),
 }
 
-#[derive(Debug, Copy, Clone)]
-pub struct ConnectionCounter {
-    pub current: u64,
-    // Callers must ensure this is always <= limit.
-    pub superuser_reserved: u64,
-    pub limit: u64,
-}
-
-impl ConnectionCounter {
-    pub fn new(limit: u64, superuser_reserved: u64) -> Self {
-        ConnectionCounter {
-            current: 0,
-            limit,
-            superuser_reserved,
-        }
-    }
-
-    fn assert(&self) {
-        self.non_reserved_remaining();
-        self.reserved_remaining();
-        self.non_reserved_limit();
-    }
-
-    /// Whether a non-reserved connection is available.
-    pub fn non_reserved_available(&self) -> bool {
-        self.non_reserved_remaining() > 0
-    }
-
-    /// Whether a reserved connection is available.
-    pub fn reserved_available(&self) -> bool {
-        self.reserved_remaining() > 0
-    }
-
-    /// The number of non-reserved connections available.
-    pub fn non_reserved_remaining(&self) -> u64 {
-        // Saturate because there can be more connections than non-reserved slots.
-        self.non_reserved_limit().saturating_sub(self.current)
-    }
-
-    /// The number of reserved connections available.
-    pub fn reserved_remaining(&self) -> u64 {
-        // Panic because there should never be more connections than the total limit.
-        self.limit.checked_sub(self.current).expect("underflow")
-    }
-
-    /// The total limit for non-reserved connections.
-    pub fn non_reserved_limit(&self) -> u64 {
-        // Panic because superuser_reserved should always be <= limit.
-        self.limit
-            .checked_sub(self.superuser_reserved)
-            .expect("underflow")
-    }
-
-    /// The total limit for reserved connections.
-    pub fn reserved_limit(&self) -> u64 {
-        self.limit
-    }
-}
-
-#[derive(Debug)]
-pub enum ConnectionError {
-    /// There were too many connections
-    TooManyConnections { current: u64, limit: u64 },
-}
-
-#[derive(Debug)]
-pub struct DropConnection {
-    pub active_connection_count: Arc<Mutex<ConnectionCounter>>,
-}
-
-impl Drop for DropConnection {
-    fn drop(&mut self) {
-        let mut connections = self.active_connection_count.lock().expect("lock poisoned");
-        assert_ne!(connections.current, 0);
-        connections.current -= 1;
-        connections.assert();
-    }
-}
-
-impl DropConnection {
-    pub fn new_connection(
-        user: &User,
-        active_connection_count: Arc<Mutex<ConnectionCounter>>,
-    ) -> Result<Option<Self>, ConnectionError> {
-        Ok(if user.limit_max_connections() {
-            {
-                let mut connections = active_connection_count.lock().expect("lock poisoned");
-                if user.is_external_admin() {
-                    if !connections.reserved_available() {
-                        return Err(ConnectionError::TooManyConnections {
-                            current: connections.current,
-                            limit: connections.reserved_limit(),
-                        });
-                    }
-                } else if !connections.non_reserved_available() {
-                    return Err(ConnectionError::TooManyConnections {
-                        current: connections.current,
-                        limit: connections.non_reserved_limit(),
-                    });
-                }
-                connections.current += 1;
-                connections.assert();
-            }
-            Some(DropConnection {
-                active_connection_count,
-            })
-        } else {
-            None
-        })
-    }
-}
-
 /// On disk variables.
 ///
 /// See the [`crate::session::vars`] module documentation for more details on the
 /// Materialize configuration model.
-#[derive(Debug, Clone)]
+#[derive(Derivative, Clone)]
+#[derivative(Debug)]
 pub struct SystemVars {
     /// Allows "unsafe" parameters to be set.
     allow_unsafe: bool,
     /// Set of all [`SystemVar`]s.
     vars: BTreeMap<&'static UncasedStr, SystemVar>,
+    /// External components interested in when a [`SystemVar`] gets updated.
+    #[derivative(Debug = "ignore")]
+    callbacks: BTreeMap<String, Vec<Arc<dyn Fn(&SystemVars) + Send + Sync>>>,
 
-    active_connection_count: Arc<Mutex<ConnectionCounter>>,
     /// NB: This is intentionally disconnected from the one that is plumbed around to persist and
     /// the controllers. This is so we can explicitly control and reason about when changes to config
     /// values are propagated to the rest of the system.
@@ -1155,7 +1045,7 @@ pub struct SystemVars {
 
 impl Default for SystemVars {
     fn default() -> Self {
-        Self::new(Arc::new(Mutex::new(ConnectionCounter::new(0, 0))))
+        Self::new()
     }
 }
 
@@ -1191,7 +1081,7 @@ impl SystemVars {
             .collect()
         });
 
-    pub fn new(active_connection_count: Arc<Mutex<ConnectionCounter>>) -> Self {
+    pub fn new() -> Self {
         let system_vars = vec![
             &MAX_KAFKA_CONNECTIONS,
             &MAX_POSTGRES_CONNECTIONS,
@@ -1372,11 +1262,10 @@ impl SystemVars {
 
         let vars = SystemVars {
             vars,
-            active_connection_count,
+            callbacks: BTreeMap::new(),
             allow_unsafe: false,
             dyncfgs,
         };
-        vars.refresh_internal_state();
 
         vars
     }
@@ -1532,7 +1421,7 @@ impl SystemVars {
             .get_mut(UncasedStr::new(name))
             .ok_or_else(|| VarError::UnknownParameter(name.into()))
             .and_then(|v| v.set(input))?;
-        self.propagate_var_change(name);
+        self.notify_callbacks(name);
         Ok(result)
     }
 
@@ -1576,7 +1465,7 @@ impl SystemVars {
             .get_mut(UncasedStr::new(name))
             .ok_or_else(|| VarError::UnknownParameter(name.into()))
             .and_then(|v| v.set_default(input))?;
-        self.propagate_var_change(name);
+        self.notify_callbacks(name);
         Ok(result)
     }
 
@@ -1603,7 +1492,7 @@ impl SystemVars {
             .get_mut(UncasedStr::new(name))
             .ok_or_else(|| VarError::UnknownParameter(name.into()))
             .map(|v| v.reset())?;
-        self.propagate_var_change(name);
+        self.notify_callbacks(name);
         Ok(result)
     }
 
@@ -1621,28 +1510,30 @@ impl SystemVars {
             .collect()
     }
 
-    /// Propagate a change to the parameter named `name` to our state.
-    fn propagate_var_change(&self, name: &str) {
-        if name == MAX_CONNECTIONS.name || name == SUPERUSER_RESERVED_CONNECTIONS.name {
-            let limit = *self.expect_value::<u32>(&MAX_CONNECTIONS);
-            let superuser_reserved = *self.expect_value::<u32>(&SUPERUSER_RESERVED_CONNECTIONS);
-            // If superuser_reserved > max_connections, prefer max_connections.
-            let superuser_reserved = std::cmp::min(limit, superuser_reserved);
-            let mut connections = self.active_connection_count.lock().expect("lock poisoned");
-            connections.assert();
-            connections.limit = u64::cast_from(limit);
-            connections.superuser_reserved = u64::cast_from(superuser_reserved);
-            connections.assert();
-        }
+    /// Registers a closure that will get called when the value for the
+    /// specified [`VarDefinition`] changes.
+    ///
+    /// The callback is guaranteed to be called at least once.
+    pub fn register_callback(
+        &mut self,
+        var: &VarDefinition,
+        callback: Arc<dyn Fn(&SystemVars) + Send + Sync>,
+    ) {
+        self.callbacks
+            .entry(var.name().to_string())
+            .or_default()
+            .push(callback);
+        self.notify_callbacks(var.name());
     }
 
-    /// Make sure that the internal state matches the SystemVars. Generally
-    /// only needed when initializing, `set`, `set_default`, and `reset`
-    /// are responsible for keeping the internal state in sync with
-    /// the affected SystemVars.
-    fn refresh_internal_state(&self) {
-        self.propagate_var_change(MAX_CONNECTIONS.name.as_str());
-        self.propagate_var_change(SUPERUSER_RESERVED_CONNECTIONS.name.as_str());
+    /// Notify any external components interested in this variable.
+    fn notify_callbacks(&self, name: &str) {
+        // Get the callbacks interested in this variable.
+        if let Some(callbacks) = self.callbacks.get(name) {
+            for callback in callbacks {
+                (callback)(self);
+            }
+        }
     }
 
     /// Returns the system default for the [`CLUSTER`] session variable. To know the active cluster

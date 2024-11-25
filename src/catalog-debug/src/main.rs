@@ -15,8 +15,8 @@ use std::fs::File;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process;
+use std::sync::Arc;
 use std::sync::LazyLock;
-use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use anyhow::Context;
@@ -53,7 +53,6 @@ use mz_persist_client::{PersistClient, PersistLocation};
 use mz_repr::{Diff, Timestamp};
 use mz_service::secrets::SecretsReaderCliArgs;
 use mz_sql::catalog::EnvironmentId;
-use mz_sql::session::vars::ConnectionCounter;
 use mz_storage_types::connections::ConnectionContext;
 use serde::{Deserialize, Serialize};
 use tracing::{error, Instrument};
@@ -608,7 +607,6 @@ async fn upgrade_check(
                 secrets_reader,
                 None,
             ),
-            active_connection_count: Arc::new(Mutex::new(ConnectionCounter::new(0, 0))),
             builtin_item_migration_config: BuiltinItemMigrationConfig::Legacy,
             persist_client,
             enable_expression_cache_override: None,
