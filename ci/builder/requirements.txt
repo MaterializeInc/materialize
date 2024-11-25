@@ -66,7 +66,7 @@ types-toml==0.10.8.20240310
 typing-extensions==4.12.2
 xxhash==3.4.1
 yamllint==1.35.1
-confluent-kafka==2.6.0
+confluent-kafka==2.6.1
 fastavro==1.9.4
 websocket-client==1.8.0
 pyarrow-stubs==17.12
