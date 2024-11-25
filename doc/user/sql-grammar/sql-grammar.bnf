@@ -23,6 +23,7 @@ alter_connection ::=
     ( 'WITH'? '(' field val ( ',' field val )* ')' )?
 alter_default_privileges ::=
   'ALTER' 'DEFAULT' 'PRIVILEGES' 'FOR' (( 'ROLE' | 'USER' ) target_role (',' target_role)* | 'ALL' 'ROLES' ) ( 'IN' 'SCHEMA' schema_name (',' schema_name)* | 'IN' 'DATABASE' database_name (',' database_name)* )? ( abbreviated_grant | abbreviated_revoke )
+alter_network_policy::='ALTER' 'NETWORK POLICY' name '('  'RULES' ( '(' network_policy_rule (',' network_policy_rule)* ')' )? ')'
 abbreviated_grant ::=
   'GRANT' ((privilege (',' privilege)*) | 'ALL' 'PRIVILEGES'? ) 'ON' ('TABLES' | 'TYPES' | 'SECRETS' | 'CONNECTIONS' | 'DATABASES' | 'SCHEMAS' | 'CLUSTERS') 'TO' 'GROUP'? grantee (',' grantee)*
 abbreviated_revoke ::=
@@ -83,8 +84,8 @@ col_option ::=
 comment_on ::=
   'COMMENT ON' (
     'CLUSTER' | 'CLUSTER REPLICA' | 'COLUMN' | 'CONNECTION' | 'DATABASE' | 'FUNCTION' |
-    'INDEX' | 'MATERIALIZED VIEW' | 'ROLE' | 'SCHEMA' | 'SECRET' | 'SINK' | 'SOURCE' |
-    'TABLE' | 'TYPE' | 'VIEW' | 'NETWORK POLICY'
+    'INDEX' | 'MATERIALIZED VIEW' | 'NETWORK POLICY' | 'ROLE' | 'SCHEMA' | 'SECRET' | 'SINK' |
+    'SOURCE' | 'TABLE' | 'TYPE' | 'VIEW'
   ) object_name 'IS' ( string_literal | 'NULL' )
 commit ::=
   'COMMIT'
@@ -213,6 +214,7 @@ load_generator_option ::=
     | 'SEED' seed
     | 'PARTITIONS' partitions
     | 'BATCH SIZE' batch_size
+create_network_policy::='CREATE' 'NETWORK POLICY' name '('  'RULES' ( '(' network_policy_rule (',' network_policy_rule)* ')' )? ')'
 create_source_postgres ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   ('IN CLUSTER' cluster_name)?
@@ -293,6 +295,8 @@ drop_database ::=
     'DROP' 'DATABASE' ('IF EXISTS')? database_name ('CASCADE' | 'RESTRICT')?
 drop_materialized_view ::=
   'DROP' 'MATERIALIZED VIEW' 'IF EXISTS'? view_name ('RESTRICT' | 'CASCADE')?
+drop_network_policy ::=
+  'DROP' 'NETWORK POLICY' 'IF EXISTS'? name
 drop_owned ::=
   'DROP' 'OWNED' 'BY' role_name ( ',' role_name )* ('RESTRICT' | 'CASCADE')?
 drop_role ::=
@@ -432,7 +436,7 @@ op_cast ::=
 prepare ::=
   'PREPARE' name 'AS' statement
 privilege ::=
-  ('SELECT' | 'INSERT' | 'UPDATE' | 'DELETE' | 'CREATE' | 'USAGE' | 'CREATEROLE' | 'CREATEDB' | 'CREATECLUSTER')
+  ('SELECT' | 'INSERT' | 'UPDATE' | 'DELETE' | 'CREATE' | 'USAGE' | 'CREATEROLE' | 'CREATEDB' | 'CREATECLUSTER' | 'CREATENETWORKPOLICY')
 reassign_owned ::=
   'REASSIGN' 'OWNED' 'BY' old_role (',' old_role)* 'TO' new_role
 reset_stmt ::=
@@ -598,3 +602,4 @@ with_options_aws ::= 'WITH' '('
 with_options_aws_static ::=
   'access_key_id' '=' val ',' 'secret_access_key' '=' val ( ',' 'token' '=' val )?
 with_options_retain_history ::= ('WITH' '(' ('RETAIN HISTORY' '='? 'FOR' retention_period) ')')
+network_policy_rule::= name ( '(' rule_option (',' rule_option)* ')' )?
