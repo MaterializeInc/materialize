@@ -688,8 +688,8 @@ where
                 if same_order {
                     ordered_runs.push((desc, meta, run));
                 } else {
-                    // The downstream consolidation step will handle a length-N run that's not in
-                    // the desired order by splitting it up into N length-1 runs. This preserves
+                    // The downstream consolidation step will handle a long run that's not in
+                    // the desired order by splitting it up into many single-element runs. This preserves
                     // correctness, but it means that we may end up needing to iterate through
                     // many more parts concurrently than expected, increasing memory use. Instead,
                     // we break up those runs before they're grouped together to be passed to

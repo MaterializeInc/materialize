@@ -1098,6 +1098,11 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             let blob = Arc::clone(&blob);
             let metrics = Arc::clone(&metrics);
             let writer_key = cfg.writer_key.clone();
+            // Don't spill "unordered" runs to S3, since we'll split them up into many single-element
+            // runs below.
+            let run_length_limit = (order == RunOrder::Unordered)
+                .then_some(usize::MAX)
+                .unwrap_or(cfg.run_length_limit);
             let merge_fn = move |parts| {
                 let blob = Arc::clone(&blob);
                 let writer_key = writer_key.clone();
@@ -1124,7 +1129,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                 );
                 Pending::new(handle)
             };
-            WritingRuns::Ordered(order, MergeTree::new(cfg.run_length_limit, merge_fn))
+            WritingRuns::Ordered(order, MergeTree::new(run_length_limit, merge_fn))
         };
         BatchParts {
             cfg,
