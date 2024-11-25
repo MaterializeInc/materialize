@@ -201,12 +201,13 @@ pub struct ConnectionCounterInner {
     current: u64,
     /// Total number of connections allowed.
     limit: u64,
-    /// Number of connections we'll reserve for super users.
+    /// Number of connections in `limit` we'll reserve for superusers.
     superuser_reserved: u64,
 }
 
 impl ConnectionCounterInner {
     fn new(limit: u64, superuser_reserved: u64) -> Self {
+        assert!(superuser_reserved < limit);
         ConnectionCounterInner {
             current: 0,
             limit,

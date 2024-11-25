@@ -3941,7 +3941,17 @@ pub fn serve(
                     system_vars.superuser_reserved_connections().cast_into();
 
                 // If superuser_reserved > max_connections, prefer max_connections.
-                let superuser_reserved = std::cmp::min(limit, superuser_reserved);
+                //
+                // In this scenario all normal users would be locked out because all connections
+                // would be reserved for superusers so complain loudly if this is the case.
+                let superuser_reserved = if superuser_reserved >= limit {
+                    soft_panic_or_log!(
+                        "superuser_reserved ({superuser_reserved}) is greater than max connections ({limit})!"
+                    );
+                    limit
+                } else {
+                    superuser_reserved
+                };
 
                 (connection_limit_callback)(limit, superuser_reserved);
             });
