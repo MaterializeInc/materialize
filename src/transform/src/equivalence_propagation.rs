@@ -360,9 +360,10 @@ impl EquivalencePropagation {
                             // literal substitution.
                             let old = expr.clone();
                             reducer.reduce_expr(expr);
-                            expr.reduce(input_types.as_ref().unwrap());
-                            if !expr.is_literal() {
+                            if !accept_expr_reduction(&old, expr) {
                                 expr.clone_from(&old);
+                            } else {
+                                expr.reduce(input_types.as_ref().unwrap());
                             }
                         }
                     }
@@ -422,9 +423,10 @@ impl EquivalencePropagation {
                         // literal substitution.
                         let old_key = key.clone();
                         reducer.reduce_expr(key);
-                        key.reduce(input_type.as_ref().unwrap());
-                        if !key.is_literal() {
+                        if !accept_expr_reduction(&old_key, key) {
                             key.clone_from(&old_key);
+                        } else {
+                            key.reduce(input_type.as_ref().unwrap());
                         }
                     }
                     for aggr in aggregates.iter_mut() {
@@ -514,4 +516,92 @@ impl EquivalencePropagation {
             }
         }
     }
+}
+
+/// Logic encapsulating our willingness to accept an expression simplification.
+///
+/// For reasons of robustness, we cannot yet perform all recommended simplifications.
+/// Certain transforms expect idiomatic expressions, often around precise use of column
+/// identifiers, rather than equivalent identifiers.
+///
+/// The substitutions we are confident with are those that introduce literals for columns,
+/// or which replace column nullability checks with literals.
+fn accept_expr_reduction(old: &MirScalarExpr, new: &MirScalarExpr) -> bool {
+    let mut todo = vec![(old, new)];
+    while let Some((old, new)) = todo.pop() {
+        match (old, new) {
+            (_, MirScalarExpr::Literal(_, _)) => {
+                // Substituting a literal is always acceptable; we don't need to consult
+                // the result of the old expression to determine this.
+            }
+            (
+                MirScalarExpr::CallUnary { func: f0, expr: e0 },
+                MirScalarExpr::CallUnary { func: f1, expr: e1 },
+            ) => {
+                if f0 != f1 {
+                    return false;
+                } else {
+                    todo.push((&**e0, &**e1));
+                }
+            }
+            (
+                MirScalarExpr::CallBinary {
+                    func: f0,
+                    expr1: e01,
+                    expr2: e02,
+                },
+                MirScalarExpr::CallBinary {
+                    func: f1,
+                    expr1: e11,
+                    expr2: e12,
+                },
+            ) => {
+                if f0 != f1 {
+                    return false;
+                } else {
+                    todo.push((&**e01, &**e11));
+                    todo.push((&**e02, &**e12));
+                }
+            }
+            (
+                MirScalarExpr::CallVariadic {
+                    func: f0,
+                    exprs: e0s,
+                },
+                MirScalarExpr::CallVariadic {
+                    func: f1,
+                    exprs: e1s,
+                },
+            ) => {
+                use itertools::Itertools;
+                if f0 != f1 {
+                    return false;
+                } else {
+                    todo.extend(e0s.iter().zip_eq(e1s));
+                }
+            }
+            (
+                MirScalarExpr::If {
+                    cond: c0,
+                    then: t0,
+                    els: e0,
+                },
+                MirScalarExpr::If {
+                    cond: c1,
+                    then: t1,
+                    els: e1,
+                },
+            ) => {
+                todo.push((&**c0, &**c1));
+                todo.push((&**t0, &**t1));
+                todo.push((&**e0, &**e1))
+            }
+            _ => {
+                if old != new {
+                    return false;
+                }
+            }
+        }
+    }
+    true
 }
