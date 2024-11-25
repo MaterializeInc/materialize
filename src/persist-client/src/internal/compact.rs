@@ -7,9 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::marker::PhantomData;
+use std::pin::pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -17,7 +19,7 @@ use anyhow::anyhow;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
-use futures_util::TryFutureExt;
+use futures_util::{StreamExt, TryFutureExt};
 use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
@@ -505,8 +507,10 @@ where
         let mut all_run_meta = vec![];
         let mut len = 0;
 
+        let ordered_runs =
+            Self::order_runs(&req, cfg.batch.preferred_order, &*blob, &*metrics).await?;
         for (runs, run_chunk_max_memory_usage) in
-            Self::chunk_runs(&req, &cfg, metrics.as_ref(), run_reserved_memory_bytes)
+            Self::chunk_runs(&ordered_runs, &cfg, &*metrics, run_reserved_memory_bytes)
         {
             metrics.compaction.chunks_compacted.inc();
             metrics
@@ -587,7 +591,7 @@ where
     /// were written with a different target size than this build. Uses [Self::order_runs] to
     /// determine the order in which runs are selected.
     fn chunk_runs<'a>(
-        req: &'a CompactReq<T>,
+        ordered_runs: &'a [(&'a Description<T>, &'a RunMeta, Cow<'a, [RunPart<T>]>)],
         cfg: &CompactConfig,
         metrics: &Metrics,
         run_reserved_memory_bytes: usize,
@@ -595,8 +599,7 @@ where
         Vec<(&'a Description<T>, &'a RunMeta, &'a [RunPart<T>])>,
         usize,
     )> {
-        let ordered_runs = Self::order_runs(req, cfg.batch.preferred_order);
-        let mut ordered_runs = ordered_runs.iter().peekable();
+        let mut ordered_runs = ordered_runs.into_iter().peekable();
 
         let mut chunks = vec![];
         let mut current_chunk = vec![];
@@ -607,7 +610,7 @@ where
                 .map(|x| x.max_part_bytes())
                 .max()
                 .unwrap_or(cfg.batch.blob_target_size);
-            current_chunk.push((*desc, *meta, *run));
+            current_chunk.push((*desc, *meta, &**run));
             current_chunk_max_memory_usage += run_greatest_part_size;
 
             if let Some((_next_desc, _next_meta, next_run)) = ordered_runs.peek() {
@@ -664,10 +667,12 @@ where
     ///     b1 runs=[C]                           output=[A, C, D, B, E, F]
     ///     b2 runs=[D, E, F]
     /// ```
-    fn order_runs(
-        req: &CompactReq<T>,
+    async fn order_runs<'a>(
+        req: &'a CompactReq<T>,
         target_order: RunOrder,
-    ) -> Vec<(&Description<T>, &RunMeta, &[RunPart<T>])> {
+        blob: &'a dyn Blob,
+        metrics: &'a Metrics,
+    ) -> anyhow::Result<Vec<(&'a Description<T>, &'a RunMeta, Cow<'a, [RunPart<T>]>)>> {
         let total_number_of_runs = req
             .inputs
             .iter()
@@ -686,26 +691,33 @@ where
             if let Some((meta, run)) = runs.next() {
                 let same_order = meta.order.unwrap_or(RunOrder::Codec) == target_order;
                 if same_order {
-                    ordered_runs.push((desc, meta, run));
+                    ordered_runs.push((desc, meta, Cow::Borrowed(run)));
                 } else {
                     // The downstream consolidation step will handle a long run that's not in
                     // the desired order by splitting it up into many single-element runs. This preserves
                     // correctness, but it means that we may end up needing to iterate through
                     // many more parts concurrently than expected, increasing memory use. Instead,
-                    // we break up those runs before they're grouped together to be passed to
-                    // consolidation.
+                    // we break up those runs into individual batch parts, fetching hollow runs as
+                    // necessary, before they're grouped together to be passed to consolidation.
                     // The downside is that this breaks the usual property that compaction produces
                     // fewer runs than it takes in. This should generally be resolved by future
                     // runs of compaction.
                     for part in run {
-                        ordered_runs.push((desc, meta, std::slice::from_ref(part)));
+                        let mut batch_parts = pin!(part.part_stream(req.shard_id, blob, metrics));
+                        while let Some(part) = batch_parts.next().await {
+                            ordered_runs.push((
+                                desc,
+                                meta,
+                                Cow::Owned(vec![RunPart::Single(part?.into_owned())]),
+                            ));
+                        }
                     }
                 }
                 batch_runs.push_back((desc, runs));
             }
         }
 
-        ordered_runs
+        Ok(ordered_runs)
     }
 
     /// Compacts runs together. If the input runs are sorted, a single run will be created as output.
