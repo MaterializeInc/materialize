@@ -113,11 +113,11 @@ The following table lists the configurable parameters of the Materialize operato
 | `namespace.create` |  | ``false`` |
 | `namespace.name` |  | ``"materialize"`` |
 | `networkPolicies.egress.cidrs[0]` |  | ``"0.0.0.0/0"`` |
-| `networkPolicies.egress.enabled` |  | ``true`` |
-| `networkPolicies.enabled` |  | ``true`` |
+| `networkPolicies.egress.enabled` |  | ``false`` |
+| `networkPolicies.enabled` |  | ``false`` |
 | `networkPolicies.ingress.cidrs[0]` |  | ``"0.0.0.0/0"`` |
-| `networkPolicies.ingress.enabled` |  | ``true`` |
-| `networkPolicies.internal.enabled` |  | ``true`` |
+| `networkPolicies.ingress.enabled` |  | ``false`` |
+| `networkPolicies.internal.enabled` |  | ``false`` |
 | `observability.enabled` |  | ``false`` |
 | `observability.prometheus.enabled` |  | ``false`` |
 | `operator.args.startupLogFilter` |  | ``"INFO,mz_orchestratord=TRACE"`` |

@@ -234,19 +234,19 @@ observability:
 # Network policies configuration
 networkPolicies:
   # Whether to enable network policies for securing communication between pods
-  enabled: true
+  enabled: false
   # internal communication between Materialize pods
   internal:
-    enabled: true
+    enabled: false
   # ingress to the SQL and HTTP interfaces
   # on environmentd or balancerd
   ingress:
-    enabled: true
+    enabled: false
     cidrs:
       - 0.0.0.0/0
   # egress from Materialize pods to sources and sinks
   egress:
-    enabled: true
+    enabled: false
     cidrs:
       - 0.0.0.0/0
 
