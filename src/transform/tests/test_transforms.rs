@@ -158,9 +158,9 @@ fn handle_apply(
             let transform = ANF::default();
             apply_transform(transform, catalog, input)
         }
-        "column_knowledge" => {
-            use mz_transform::column_knowledge::ColumnKnowledge;
-            let transform = ColumnKnowledge::default();
+        "equivalence_propagation" => {
+            use mz_transform::equivalence_propagation::EquivalencePropagation;
+            let transform = EquivalencePropagation::default();
             apply_transform(transform, catalog, input)
         }
         "flatmap_to_map" => {

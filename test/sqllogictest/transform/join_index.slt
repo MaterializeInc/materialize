@@ -98,7 +98,7 @@ NULL
 1
 3
 
-# Test that column knowledge can propagate across inputs of a join.
+# Test that equivalence propagation can propagate across inputs of a join.
 # no indexes other than the default foo(a,b) and bar(a,b)
 query T multiline
 EXPLAIN WITH(arity, join implementations) select * from (select * from foo where a = 1) filtered_foo, bar where filtered_foo.a = bar.a

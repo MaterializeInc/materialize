@@ -46,7 +46,7 @@ Source defined as t3
 
 # Infer and apply constant value knowledge.
 # Cases: Map, FlatMap, Filter, Project, Reduce, Let/Get.
-apply pipeline=column_knowledge
+apply pipeline=equivalence_propagation
 Return
   FlatMap generate_series(#1, #0 + 3, 1)
     Project (#2, #0)
@@ -78,7 +78,7 @@ With
 # Cases: Map, Filter, Project, Reduce, Let/Get.
 # TODO: The type of `(#1) IS NULL` in the map is `BOOLEAN NOT NULL`,
 #       so the first group_by key component should be reduced to `false`.
-apply pipeline=column_knowledge
+apply pipeline=equivalence_propagation
 Return
   Filter (#0) IS NULL
     Project (#2)
@@ -104,7 +104,7 @@ With
 
 # Infer and apply constant value knowledge.
 # Cases: Union.
-apply pipeline=column_knowledge
+apply pipeline=equivalence_propagation
 Return
   Filter #1 > 1 AND #2 IS NULL
     Union
@@ -138,7 +138,7 @@ With
 
 # Infer and apply constant value knowledge.
 # Cases: Join.
-apply pipeline=column_knowledge
+apply pipeline=equivalence_propagation
 Return
   Map (#0 + #1 + #2, #2 * #3)
     Join on=((#0 + #1) = #2)
@@ -162,7 +162,7 @@ With
 
 # Apply knowledge to TopK limit
 # Cases: TopK.
-apply pipeline=column_knowledge
+apply pipeline=equivalence_propagation
 TopK group_by=[#0] order_by=[#1 asc nulls_first] limit=(#1 + 2) offset=1
   Filter (#1 = 5)
     Get t0
@@ -177,7 +177,7 @@ TopK group_by=[#0] order_by=[#1 asc nulls_first] limit=7 offset=1
 
 
 # Single binding, value knowledge
-apply pipeline=column_knowledge
+apply pipeline=equivalence_propagation
 Return
   Project (#0, #1, #3, #4, #5, #6)
     Map ((#0) IS NULL, (#0) IS NULL, (#2) IS NULL)
@@ -228,7 +228,7 @@ With
 
 
 # Single binding, value knowledge
-apply pipeline=column_knowledge
+apply pipeline=equivalence_propagation
 Return
   Map (#0 + #1)
     Get l0
@@ -253,7 +253,7 @@ With Mutually Recursive
 
 
 # Single binding, NOT NULL knowledge
-apply pipeline=column_knowledge
+apply pipeline=equivalence_propagation
 Return
   Map (#1 IS NOT NULL)
     Get l0
@@ -278,7 +278,7 @@ With Mutually Recursive
 
 
 # Multiple bindings, value knowledge
-apply pipeline=column_knowledge
+apply pipeline=equivalence_propagation
 Return
   Get l1
 With Mutually Recursive
@@ -325,7 +325,7 @@ With Mutually Recursive
 #
 # This also illustrates a missed opportunity here, because if we are a bit
 # smarter we will know that l1 can only have 'false' in its first component.
-apply pipeline=column_knowledge
+apply pipeline=equivalence_propagation
 Return
   Get l1
 With Mutually Recursive
@@ -369,7 +369,7 @@ With Mutually Recursive
 
 
 # # TODO
-# apply pipeline=column_knowledge
+# apply pipeline=equivalence_propagation
 # Return
 #   Map (#0 + #1)
 #     Get l1

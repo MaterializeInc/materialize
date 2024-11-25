@@ -60,7 +60,6 @@ use crate::will_distinct::WillDistinct;
 pub mod analysis;
 pub mod canonicalization;
 pub mod canonicalize_mfp;
-pub mod column_knowledge;
 pub mod compound;
 pub mod cse;
 pub mod dataflow;
@@ -616,7 +615,7 @@ impl Optimizer {
             // TODO: lift filters/maps to maximize ability to collapse
             // things down?
             Box::new(fuse_and_collapse_fixpoint()),
-            // 3. Needs to happen before ColumnKnowledge, LiteralLifting, EquivalencePropagation
+            // 3. Needs to happen before LiteralLifting, EquivalencePropagation
             // make (literal) filters look more complicated than what the NonNegative Analysis can
             // recognize.
             Box::new(ThresholdElision),
@@ -691,11 +690,11 @@ impl Optimizer {
             // - Currently, JoinImplementation can't be before LiteralLifting because the latter
             //   sometimes creates `Unimplemented` joins (despite LiteralLifting already having been
             //   run in the logical optimizer).
-            // - Not running ColumnKnowledge in the same fixpoint loop with JoinImplementation
+            // - Not running EquivalencePropagation in the same fixpoint loop with JoinImplementation
             //   is slightly hurting our plans. However, I'd say we should fix these problems by
-            //   making ColumnKnowledge (and/or JoinImplementation) smarter (database-issues#5289), rather than
+            //   making EquivalencePropagation (and/or JoinImplementation) smarter (database-issues#5289), rather than
             //   having them in the same fixpoint loop. If they would be in the same fixpoint loop,
-            //   then we either run the risk of ColumnKnowledge invalidating a join plan (database-issues#5260),
+            //   then we either run the risk of EquivalencePropagation invalidating a join plan (database-issues#5260),
             //   or we would have to run JoinImplementation an unbounded number of times, which is
             //   also not good database-issues#4639.
             //   (The same is true for FoldConstants, Demand, and LiteralLifting to a lesser

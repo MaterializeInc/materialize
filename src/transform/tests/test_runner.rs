@@ -266,8 +266,8 @@ mod tests {
         // transforms?
         match name {
             "CanonicalizeMfp" => Ok(Box::new(mz_transform::canonicalize_mfp::CanonicalizeMfp)),
-            "ColumnKnowledge" => Ok(Box::new(
-                mz_transform::column_knowledge::ColumnKnowledge::default(),
+            "EquivalencePropagation" => Ok(Box::new(
+                mz_transform::equivalence_propagation::EquivalencePropagation::default(),
             )),
             "Demand" => Ok(Box::new(mz_transform::demand::Demand::default())),
             "Fusion" => Ok(Box::new(mz_transform::fusion::Fusion)),
