@@ -15,6 +15,7 @@ use anyhow::Context;
 use array_concat::concat_arrays;
 use itertools::Itertools;
 use maplit::btreemap;
+use mz_adapter_types::dyncfgs::KAFKA_REDPANDA_PROGRESS_TOPIC_DISABLE_TIERED_STORAGE;
 use mz_ore::num::NonNeg;
 use mz_ore::str::StrExt;
 use mz_postgres_util::tunnel::PostgresFlavor;
@@ -285,6 +286,25 @@ impl ConnectionOptionExtracted {
             CreateConnectionType::Kafka => {
                 let (tls, sasl) = plan_kafka_security(scx, &self)?;
 
+                let mut progress_topic_config = btreemap! {
+                    "cleanup.policy".to_string() => "compact".to_string(),
+                };
+
+                let disable_tiered_storage = KAFKA_REDPANDA_PROGRESS_TOPIC_DISABLE_TIERED_STORAGE
+                    .get(scx.catalog.system_vars().dyncfgs());
+                if disable_tiered_storage {
+                    // Disables tiered storage for the progress topic, which is enabled
+                    // by default on Redpanda cloud. Kafka brokers ignore unknown
+                    // configuration keys so it is safe to set this without checking
+                    // if the underlying broker is actually redpanda or not.
+                    //
+                    // See: <https://docs.redpanda.com/current/manage/tiered-storage/#enable-tiered-storage-for-specific-topics>
+                    progress_topic_config
+                        .insert("redpanda.remote.write".to_string(), "false".to_string());
+                    progress_topic_config
+                        .insert("redpanda.remote.read".to_string(), "false".to_string());
+                }
+
                 ConnectionDetails::Kafka(KafkaConnection {
                     brokers: self.get_brokers(scx)?,
                     default_tunnel: scx
@@ -301,15 +321,7 @@ impl ConnectionOptionExtracted {
                             }
                             NonNeg::try_from(val).map_err(|e| sql_err!("{e}"))
                         }).transpose()?,
-                        topic_config: btreemap! {
-                            "cleanup.policy".to_string() => "compact".to_string(),
-                            // Disables tiered storage for the progress topic, which is enabled
-                            // by default on Redpanda cloud. Kafka brokers ignore unknown
-                            // configuration keys so it is safe to set this without checking
-                            // if the underlying broker is actually redpanda or not.
-                            "redpanda.remote.write".to_string() => "false".to_string(),
-                            "redpanda.remote.read".to_string() => "false".to_string(),
-                        },
+                        topic_config: progress_topic_config,
                     },
                     options: BTreeMap::new(),
                     tls,
