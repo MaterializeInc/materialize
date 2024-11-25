@@ -579,7 +579,9 @@ impl Optimizer {
             // TODO: lift filters/maps to maximize ability to collapse
             // things down?
             Box::new(fuse_and_collapse()),
-            // 3. Structure-aware cleanup that needs to happen before ColumnKnowledge
+            // 3. Needs to happen before ColumnKnowledge, LiteralLifting, EquivalencePropagation
+            // make (literal) filters look more complicated than what the NonNegative Analysis can
+            // recognize.
             Box::new(threshold_elision::ThresholdElision),
             // 4. Move predicate information up and down the tree.
             //    This also fixes the shape of joins in the plan.
@@ -701,13 +703,6 @@ impl Optimizer {
                 limit: Some(FOLD_CONSTANTS_LIMIT),
             }),
             Box::new(canonicalization::ReduceScalars),
-            // Remove threshold operators which have no effect.
-            // Must be done at the very end of the physical pass, because before
-            // that (at least at the moment) we cannot be sure that all trees
-            // are simplified equally well so they are structurally almost
-            // identical. Check the `threshold_elision.slt` tests that fail if
-            // you remove this transform for examples.
-            Box::new(threshold_elision::ThresholdElision),
             // We need this to ensure that `CollectIndexRequests` gets a normalized plan.
             // (For example, `FoldConstants` can break the normalized form by removing all
             // references to a Let, see https://github.com/MaterializeInc/database-issues/issues/6371)

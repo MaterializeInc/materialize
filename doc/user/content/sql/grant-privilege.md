@@ -38,6 +38,7 @@ _role_name_                                         | The role name that is gain
 **CREATEROLE**                                      | Allows creating, altering, deleting roles and the ability to grant and revoke role membership. This privilege is very powerful. It allows roles to grant and revoke membership in other roles, even if it doesn't have explicit membership in those roles. As a consequence, any role with this privilege can obtain the privileges of any other role in the system. The abbreviation for this privilege is 'R' (Role).
 **CREATEDB**                                        | Allows creating databases. The abbreviation for this privilege is 'B' (dataBase).
 **CREATECLUSTER**                                   | Allows creating clusters. The abbreviation for this privilege is 'N' (compute Node).
+**CREATENETWORKPOLICY**                             | Allows creating network policies. The abbreviation for this privilege is 'P' (newtwork Policy).
 **ALL PRIVILEGES**                                  | All applicable privileges for the provided object type.
 **GROUP**                                           | This is an optional keyword that has no effect but is part of the SQL standard.
 

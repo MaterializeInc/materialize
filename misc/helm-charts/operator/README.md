@@ -1,6 +1,6 @@
 # Materialize Kubernetes Operator Helm Chart
 
-![Version: 25.1.0-beta.1](https://img.shields.io/badge/Version-25.1.0--beta.1-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v0.125.0](https://img.shields.io/badge/AppVersion-v0.125.0-informational?style=flat-square)
+![Version: 25.1.0-beta.1](https://img.shields.io/badge/Version-25.1.0--beta.1-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v0.125.2](https://img.shields.io/badge/AppVersion-v0.125.2-informational?style=flat-square)
 
 Materialize Kubernetes Operator Helm Chart
 
@@ -113,22 +113,21 @@ The following table lists the configurable parameters of the Materialize operato
 | `namespace.create` |  | ``false`` |
 | `namespace.name` |  | ``"materialize"`` |
 | `networkPolicies.egress.cidrs[0]` |  | ``"0.0.0.0/0"`` |
-| `networkPolicies.egress.enabled` |  | ``true`` |
-| `networkPolicies.enabled` |  | ``true`` |
+| `networkPolicies.egress.enabled` |  | ``false`` |
+| `networkPolicies.enabled` |  | ``false`` |
 | `networkPolicies.ingress.cidrs[0]` |  | ``"0.0.0.0/0"`` |
-| `networkPolicies.ingress.enabled` |  | ``true`` |
-| `networkPolicies.internal.enabled` |  | ``true`` |
+| `networkPolicies.ingress.enabled` |  | ``false`` |
+| `networkPolicies.internal.enabled` |  | ``false`` |
 | `observability.enabled` |  | ``false`` |
 | `observability.prometheus.enabled` |  | ``false`` |
-| `operator.args.awsAccountID` |  | ``""`` |
-| `operator.args.cloudProvider` |  | ``"local"`` |
-| `operator.args.consoleImageTagMapOverride` |  | ``{}`` |
-| `operator.args.createBalancers` |  | ``true`` |
-| `operator.args.createConsole` |  | ``true`` |
-| `operator.args.environmentdConnectionRoleARN` |  | ``""`` |
-| `operator.args.environmentdIAMRoleARN` |  | ``""`` |
-| `operator.args.region` |  | ``"kind"`` |
 | `operator.args.startupLogFilter` |  | ``"INFO,mz_orchestratord=TRACE"`` |
+| `operator.cloudProvider.providers.aws.accountID` |  | ``""`` |
+| `operator.cloudProvider.providers.aws.enabled` |  | ``false`` |
+| `operator.cloudProvider.providers.aws.iam.roles.connection` |  | ``""`` |
+| `operator.cloudProvider.providers.aws.iam.roles.environment` |  | ``""`` |
+| `operator.cloudProvider.providers.gcp.enabled` |  | ``false`` |
+| `operator.cloudProvider.region` |  | ``"kind"`` |
+| `operator.cloudProvider.type` |  | ``"local"`` |
 | `operator.clusters.defaultSizes.analytics` |  | ``"25cc"`` |
 | `operator.clusters.defaultSizes.catalogServer` |  | ``"50cc"`` |
 | `operator.clusters.defaultSizes.default` |  | ``"25cc"`` |
@@ -247,9 +246,12 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.clusters.sizes.mz_probe.memory_limit` |  | ``"776MiB"`` |
 | `operator.clusters.sizes.mz_probe.scale` |  | ``1`` |
 | `operator.clusters.sizes.mz_probe.workers` |  | ``1`` |
+| `operator.features.consoleImageTagMapOverride` |  | ``{}`` |
+| `operator.features.createBalancers` |  | ``true`` |
+| `operator.features.createConsole` |  | ``true`` |
 | `operator.image.pullPolicy` |  | ``"IfNotPresent"`` |
 | `operator.image.repository` |  | ``"materialize/orchestratord"`` |
-| `operator.image.tag` |  | ``"v0.125.0"`` |
+| `operator.image.tag` |  | ``"v0.125.2"`` |
 | `operator.nodeSelector` |  | ``{}`` |
 | `operator.resources.limits.memory` |  | ``"512Mi"`` |
 | `operator.resources.requests.cpu` |  | ``"100m"`` |
@@ -271,7 +273,7 @@ Specify each parameter using the `--set key=value[,key=value]` argument to `helm
 
 ```shell
 helm install my-materialize-operator \
-  --set operator.image.tag=v0.125.0 \
+  --set operator.image.tag=v0.125.2 \
   materialize/materialize-operator
 ```
 
@@ -306,7 +308,7 @@ metadata:
   name: 12345678-1234-1234-1234-123456789012
   namespace: materialize-environment
 spec:
-  environmentdImageRef: materialize/environmentd:v0.125.0
+  environmentdImageRef: materialize/environmentd:v0.125.2
   backendSecretName: materialize-backend
   environmentdResourceRequirements:
     limits:
@@ -390,10 +392,10 @@ apiVersion: v2
 name: materialize-operator
 # ...
 version: 25.1.0-beta.1
-appVersion: v0.125.0  # Use this version for your Materialize instances
+appVersion: v0.125.2  # Use this version for your Materialize instances
 ```
 
-Use the `appVersion` (`v0.125.0` in this case) when updating your Materialize instances to ensure compatibility.
+Use the `appVersion` (`v0.125.2` in this case) when updating your Materialize instances to ensure compatibility.
 
 #### Using `kubectl` patch
 
@@ -404,7 +406,7 @@ For standard upgrades such as image updates:
 kubectl patch materialize <instance-name> \
   -n <materialize-instance-namespace> \
   --type='merge' \
-  -p "{\"spec\": {\"environmentdImageRef\": \"materialize/environmentd:v0.125.0\"}}"
+  -p "{\"spec\": {\"environmentdImageRef\": \"materialize/environmentd:v0.125.2\"}}"
 
 # Then trigger the rollout with a new UUID
 kubectl patch materialize <instance-name> \
@@ -419,7 +421,7 @@ You can combine both operations in a single command if preferred:
 kubectl patch materialize 12345678-1234-1234-1234-123456789012 \
   -n materialize-environment \
   --type='merge' \
-  -p "{\"spec\": {\"environmentdImageRef\": \"materialize/environmentd:v0.125.0\", \"requestRollout\": \"$(uuidgen)\"}}"
+  -p "{\"spec\": {\"environmentdImageRef\": \"materialize/environmentd:v0.125.2\", \"requestRollout\": \"$(uuidgen)\"}}"
 ```
 
 #### Using YAML Definition
@@ -433,7 +435,7 @@ metadata:
   name: 12345678-1234-1234-1234-123456789012
   namespace: materialize-environment
 spec:
-  environmentdImageRef: materialize/environmentd:v0.125.0 # Update version as needed
+  environmentdImageRef: materialize/environmentd:v0.125.2 # Update version as needed
   requestRollout: 22222222-2222-2222-2222-222222222222    # Generate new UUID
   forceRollout: 33333333-3333-3333-3333-333333333333      # Optional: for forced rollouts
   inPlaceRollout: false                                   # When false, performs a rolling upgrade rather than in-place

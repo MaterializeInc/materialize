@@ -40,7 +40,7 @@ use tracing::{debug_span, warn, Instrument};
 use uuid::Uuid;
 
 use crate::batch::{BLOB_TARGET_SIZE, STRUCTURED_ORDER, STRUCTURED_ORDER_UNTIL_SHARD};
-use crate::cfg::RetryParameters;
+use crate::cfg::{RetryParameters, COMPACTION_MEMORY_BOUND_BYTES};
 use crate::fetch::{fetch_leased_part, FetchBatchFilter, FetchedPart, Lease, LeasedBatchPart};
 use crate::internal::encoding::Schemas;
 use crate::internal::machine::{ExpireFn, Machine};
@@ -1076,7 +1076,7 @@ where
                 Arc::clone(&self.machine.applier.shard_metrics),
                 self.metrics.read.snapshot.clone(),
                 filter,
-                self.cfg.dynamic.compaction_memory_bound_bytes(),
+                COMPACTION_MEMORY_BOUND_BYTES.get(&self.cfg),
             );
             for batch in batches {
                 for (meta, run) in batch.runs() {
@@ -1107,7 +1107,7 @@ where
                 Arc::clone(&self.machine.applier.shard_metrics),
                 self.metrics.read.snapshot.clone(),
                 filter,
-                self.cfg.dynamic.compaction_memory_bound_bytes(),
+                COMPACTION_MEMORY_BOUND_BYTES.get(&self.cfg),
             );
             for batch in batches {
                 for (meta, run) in batch.runs() {

@@ -650,6 +650,7 @@ steps:
               --scenario=KafkaUpsertUnique,
               --other-tag=common-ancestor,
               --ignore-other-tag-missing,
+              --scale=-1
             ]
     coverage: skip
     agents:
@@ -657,18 +658,6 @@ steps:
 
   # Fast tests closer to the end, doesn't matter as much if they have to wait
   # for an agent
-  - id: replica-isolation
-    label: Replica isolation
-    depends_on: build-aarch64
-    timeout_in_minutes: 30
-    inputs: [test/replica-isolation]
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: replica-isolation
-    agents:
-      # Runs faster with larger agent
-      queue: hetzner-aarch64-8cpu-16gb
-
   - id: persistence
     label: Persistence tests
     depends_on: build-aarch64

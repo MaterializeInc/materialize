@@ -1663,6 +1663,17 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: backup-restore-postgres
 
+  - id: replica-isolation
+    label: Replica isolation
+    depends_on: build-aarch64
+    timeout_in_minutes: 90
+    inputs: [test/replica-isolation]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: replica-isolation
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
+
   - group: "Language tests"
     key: language-tests
     steps:

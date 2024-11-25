@@ -31,6 +31,7 @@ use prost::Message;
 use timely::progress::Timestamp;
 use tracing::{debug, debug_span, trace, warn, Instrument};
 
+use crate::cfg::STATE_VERSIONS_RECENT_LIVE_DIFFS_LIMIT;
 use crate::error::{CodecMismatch, CodecMismatchT};
 use crate::internal::encoding::{Rollup, UntypedState};
 use crate::internal::machine::{retry_determinate, retry_external};
@@ -555,7 +556,7 @@ impl StateVersions {
         T: Timestamp + Lattice + Codec64,
     {
         let path = shard_id.to_string();
-        let scan_limit = self.cfg.dynamic.state_versions_recent_live_diffs_limit();
+        let scan_limit = STATE_VERSIONS_RECENT_LIVE_DIFFS_LIMIT.get(&self.cfg);
         let oldest_diffs =
             retry_external(&self.metrics.retries.external.fetch_state_scan, || async {
                 self.consensus

@@ -32,7 +32,11 @@ use tracing::{debug, debug_span, error, trace, warn, Instrument, Span};
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::batch::{BatchBuilderConfig, BatchBuilderInternal, BatchParts, PartDeletes};
-use crate::cfg::MiB;
+use crate::cfg::{
+    MiB, COMPACTION_HEURISTIC_MIN_INPUTS, COMPACTION_HEURISTIC_MIN_PARTS,
+    COMPACTION_HEURISTIC_MIN_UPDATES, COMPACTION_MEMORY_BOUND_BYTES,
+    GC_BLOB_DELETE_CONCURRENCY_LIMIT,
+};
 use crate::fetch::FetchBatchFilter;
 use crate::internal::encoding::Schemas;
 use crate::internal::gc::GarbageCollector;
@@ -81,7 +85,7 @@ impl CompactConfig {
     /// Initialize the compaction config from Persist configuration.
     pub fn new(value: &PersistConfig, shard_id: ShardId) -> Self {
         CompactConfig {
-            compaction_memory_bound_bytes: value.dynamic.compaction_memory_bound_bytes(),
+            compaction_memory_bound_bytes: COMPACTION_MEMORY_BOUND_BYTES.get(value),
             compaction_yield_after_n_updates: value.compaction_yield_after_n_updates,
             version: value.build_version.clone(),
             batch: BatchBuilderConfig::new(value, shard_id),
@@ -242,11 +246,11 @@ where
         // were just written, but it does result in non-trivial blob traffic
         // (especially in aggregate). This heuristic is something we'll need to
         // tune over time.
-        let should_compact = req.inputs.len() >= self.cfg.dynamic.compaction_heuristic_min_inputs()
+        let should_compact = req.inputs.len() >= COMPACTION_HEURISTIC_MIN_INPUTS.get(&self.cfg)
             || req.inputs.iter().map(|x| x.part_count()).sum::<usize>()
-                >= self.cfg.dynamic.compaction_heuristic_min_parts()
+                >= COMPACTION_HEURISTIC_MIN_PARTS.get(&self.cfg)
             || req.inputs.iter().map(|x| x.len).sum::<usize>()
-                >= self.cfg.dynamic.compaction_heuristic_min_updates();
+                >= COMPACTION_HEURISTIC_MIN_UPDATES.get(&self.cfg);
         if !should_compact {
             self.metrics.compaction.skipped.inc();
             return None;
@@ -409,11 +413,7 @@ where
                             .delete(
                                 machine.applier.state_versions.blob.as_ref(),
                                 machine.shard_id(),
-                                machine
-                                    .applier
-                                    .cfg
-                                    .dynamic
-                                    .gc_blob_delete_concurrency_limit(),
+                                GC_BLOB_DELETE_CONCURRENCY_LIMIT.get(&machine.applier.cfg),
                                 &*metrics,
                                 &metrics.retries.external.compaction_noop_delete,
                             )

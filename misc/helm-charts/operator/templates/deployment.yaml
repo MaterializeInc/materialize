@@ -37,30 +37,40 @@ spec:
         args:
         - "--helm-chart-version={{ .Chart.Version }}"
         - "--startup-log-filter={{ .Values.operator.args.startupLogFilter }}"
-        - "--cloud-provider={{ .Values.operator.args.cloudProvider }}"
-        - "--region={{ .Values.operator.args.region }}"
+        - "--cloud-provider={{ .Values.operator.cloudProvider.type }}"
+        - "--region={{ .Values.operator.cloudProvider.region }}"
         {{- range $key, $value := include "materialize-operator.selectorLabels" . | fromYaml }}
         - "--orchestratord-pod-selector-labels={{ $key }}={{ $value }}"
         {{- end }}
-        {{- if .Values.operator.args.awsAccountID }}
-        - "--aws-account-id={{ .Values.operator.args.awsAccountID }}"
+
+        {{/* AWS Configuration */}}
+        {{- if eq .Values.operator.cloudProvider.type "aws" }}
+        {{- with .Values.operator.cloudProvider.providers.aws }}
+        {{- if .accountID }}
+        - "--aws-account-id={{ .accountID }}"
         {{- end }}
-        {{- if .Values.operator.args.environmentdIAMRoleARN }}
-        - "--environmentd-iam-role-arn={{ .Values.operator.args.environmentdIAMRoleARN }}"
+        {{- if .iam.roles.environment }}
+        - "--environmentd-iam-role-arn={{ .iam.roles.environment }}"
         {{- end }}
-        {{- if .Values.operator.args.environmentdConnectionRoleARN }}
-        - "--environmentd-connection-role-arn={{ .Values.operator.args.environmentdConnectionRoleARN }}"
+        {{- if .iam.roles.connection }}
+        - "--environmentd-connection-role-arn={{ .iam.roles.connection }}"
         {{- end }}
-        {{- if .Values.operator.args.createBalancers }}
+        {{- end }}
+        {{- end }}
+
+        {{/* Feature Flags */}}
+        {{- if .Values.operator.features.createBalancers }}
         - "--create-balancers"
         {{- end }}
-        {{- if .Values.operator.args.createConsole }}
+        {{- if .Values.operator.features.createConsole }}
         - "--create-console"
         {{- end }}
         - "--console-image-tag-default=25.1.0-beta.1"
-        {{- range $key, $value := .Values.operator.args.consoleImageTagMapOverride }}
+        {{- range $key, $value := .Values.operator.features.consoleImageTagMapOverride }}
         - "--console-image-tag-map={{ $key }}={{ $value }}"
         {{- end }}
+
+        {{/* Cluster Configuration */}}
         {{- if .Values.operator.clusters }}
         {{- if .Values.operator.clusters.sizes }}
         - '--environmentd-cluster-replica-sizes={{ include "materialize.processClusterSizes" . | fromYaml | toJson }}'
@@ -94,6 +104,8 @@ spec:
         {{- if .Values.storage.storageClass.name }}
         - "--ephemeral-volume-class={{ .Values.storage.storageClass.name }}"
         {{- end }}
+
+        {{/* Network Policies */}}
         {{- if .Values.networkPolicies.enabled }}
         {{- if .Values.networkPolicies.internal.enabled }}
         - "--network-policies-internal-enabled=true"

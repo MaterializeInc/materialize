@@ -116,9 +116,9 @@ const CATALOG_SEED: usize = 1;
 /// race conditions where the shard version decreases after reading it.
 const UPGRADE_SEED: usize = 2;
 /// Seed used to generate the persist shard ID for builtin table migrations.
-const BUILTIN_MIGRATION_SEED: usize = 3;
+pub const BUILTIN_MIGRATION_SEED: usize = 3;
 /// Seed used to generate the persist shard ID for the expression cache.
-const EXPRESSION_CACHE_SEED: usize = 4;
+pub const EXPRESSION_CACHE_SEED: usize = 4;
 
 /// Durable catalog mode that dictates the effect of mutable operations.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -1768,20 +1768,8 @@ impl DurableCatalogState for PersistCatalogState {
     }
 }
 
-/// Deterministically generate a builtin table migration shard ID for the given
-/// `organization_id`.
-pub fn builtin_migration_shard_id(organization_id: Uuid) -> ShardId {
-    shard_id(organization_id, BUILTIN_MIGRATION_SEED)
-}
-
-/// Deterministically generate an expression cache shard ID for the given
-/// `organization_id`.
-pub fn expression_cache_shard_id(organization_id: Uuid) -> ShardId {
-    shard_id(organization_id, EXPRESSION_CACHE_SEED)
-}
-
 /// Deterministically generate a shard ID for the given `organization_id` and `seed`.
-fn shard_id(organization_id: Uuid, seed: usize) -> ShardId {
+pub fn shard_id(organization_id: Uuid, seed: usize) -> ShardId {
     let hash = sha2::Sha256::digest(format!("{organization_id}{seed}")).to_vec();
     soft_assert_eq_or_log!(hash.len(), 32, "SHA256 returns 32 bytes (256 bits)");
     let uuid = Uuid::from_slice(&hash[0..16]).expect("from_slice accepts exactly 16 bytes");

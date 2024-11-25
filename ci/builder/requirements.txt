@@ -12,7 +12,7 @@ cryptography==43.0.1
 colored==1.4.4
 docker==7.1.0
 ec2instanceconnectcli==1.0.3
-python-frontmatter==1.0.0
+python-frontmatter==1.1.0
 humanize==4.4.0
 ipympl==0.9.4
 ipywidgets==8.1.5
@@ -22,7 +22,7 @@ jupyterlab==4.3.0
 jupyter-black==0.3.4
 kubernetes==25.3.0
 kubernetes-stubs==22.6.0.post1
-launchdarkly-api==11.0.0
+launchdarkly-api==17.0.0
 matplotlib==3.9.2
 matplotlib-stubs==0.2.0
 networkx==3.4.2
@@ -31,7 +31,7 @@ numpy==1.26.4
 pandas==2.2.3
 pandas-stubs==2.2.3.241009
 parameterized==0.8.1
-paramiko==3.4.1
+paramiko==3.5.0
 pdoc==15.0.0
 # We can revert back to standard pg8000 versions once https://github.com/tlocke/pg8000/pull/161 is released
 pg8000@git+https://github.com/tlocke/pg8000@46c00021ade1d19466b07ed30392386c5f0a6b8e
@@ -69,7 +69,7 @@ yamllint==1.35.1
 confluent-kafka==2.6.0
 fastavro==1.9.4
 websocket-client==1.8.0
-pyarrow-stubs==17.11
+pyarrow-stubs==17.12
 pyarrow==18.0.0
 minio==7.2.10
 zstandard==0.23.0

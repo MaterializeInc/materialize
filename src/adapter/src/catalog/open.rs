@@ -298,7 +298,11 @@ impl Catalog {
 
         // Migrate/update durable data before we start loading the in-memory catalog.
         let (migrated_builtins, new_builtin_collections) = {
-            migrate::durable_migrate(&mut txn, config.boot_ts)?;
+            migrate::durable_migrate(
+                &mut txn,
+                state.config.environment_id.organization_id(),
+                config.boot_ts,
+            )?;
             // Overwrite and persist selected parameter values in `remote_system_parameters` that
             // was pulled from a remote frontend (e.g. LaunchDarkly) if present.
             if let Some(remote_system_parameters) = config.remote_system_parameters {
@@ -455,8 +459,10 @@ impl Catalog {
             let dyncfgs = config.persist_client.dyncfgs().clone();
             let expr_cache_config = ExpressionCacheConfig {
                 deploy_generation,
+                shard_id: txn
+                    .get_expression_cache_shard()
+                    .expect("expression cache shard should exist for opened catalogs"),
                 persist: config.persist_client,
-                organization_id: state.config.environment_id.organization_id(),
                 current_ids,
                 remove_prior_gens: !config.read_only,
                 compact_shard: config.read_only,

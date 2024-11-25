@@ -722,7 +722,9 @@ The `mz_sessions` table contains a row for each active session in the system.
 
 
 ## `mz_network_policies`
-The `mz_network_policies` table contains a row for each network policy.
+
+The `mz_network_policies` table contains a row for each network policy in the
+system.
 
 <!-- RELATION_SPEC mz_internal.mz_network_policies -->
 | Field            | Type                  | Meaning                                                                                                            |
@@ -734,16 +736,18 @@ The `mz_network_policies` table contains a row for each network policy.
 | `oid`            | [`oid`]               | A [PostgreSQL-compatible OID][`oid`] for the network policy.                                                       |
 
 ## `mz_network_policy_rules`
-The `mz_network_policy_rules` table contains a row for each network policy rule.
+
+The `mz_network_policy_rules` table contains a row for each network policy rule
+in the system.
 
 <!-- RELATION_SPEC mz_internal.mz_network_policy_rules -->
 | Field            | Type       | Meaning                                                                                                |
 | -----------------| ----------------------| --------                                                                                    |
-| `name`           | [`text`]   | The name of the network policy rule. Can be used with `network_policy_id` to form a unique identifier. |
-| `policy_id`      | [`text`]   | The id the network policy the rule is part of. Can be used with `name` to form a unique identifier.    |
-| `action`         | [`text`]   | The action of the rule. `allow` is the only action.                                                    |
+| `name`           | [`text`]   | The name of the network policy rule. Can be combined with `policy_id` to form a unique identifier. |
+| `policy_id`      | [`text`]   | The ID the network policy the rule is part of. Corresponds to [`mz_network_policy_rules.id`](#mz_network_policy_rules).     |
+| `action`         | [`text`]   | The action of the rule. `allow` is the only supported action.                                                    |
 | `address`        | [`text`]   | The address the rule will take action on.                                                              |
-| `direction`      | [`text`]   | The direction of traffic the rule applies to. `ingress` is the only supported direction.               |
+| `direction`      | [`text`]   | The direction of traffic the rule applies to. `ingress` is the only supported direction. |
 
 ## `mz_show_network_policies`
 

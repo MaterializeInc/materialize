@@ -246,10 +246,10 @@ apiVersion: v2
 name: materialize-operator
 # ...
 version: 25.1.0-beta.1
-appVersion: v0.125.0  # Use this version for your Materialize instances
+appVersion: v0.125.2  # Use this version for your Materialize instances
 ```
 
-Use the `appVersion` (`v0.125.0` in this case) when updating your Materialize instances to ensure compatibility.
+Use the `appVersion` (`v0.125.2` in this case) when updating your Materialize instances to ensure compatibility.
 
 #### Using `kubectl` patch
 
@@ -260,7 +260,7 @@ For standard upgrades such as image updates:
 kubectl patch materialize <instance-name> \
   -n <materialize-instance-namespace> \
   --type='merge' \
-  -p "{\"spec\": {\"environmentdImageRef\": \"materialize/environmentd:v0.125.0\"}}"
+  -p "{\"spec\": {\"environmentdImageRef\": \"materialize/environmentd:v0.125.2\"}}"
 
 # Then trigger the rollout with a new UUID
 kubectl patch materialize <instance-name> \
@@ -275,7 +275,7 @@ You can combine both operations in a single command if preferred:
 kubectl patch materialize 12345678-1234-1234-1234-123456789012 \
   -n materialize-environment \
   --type='merge' \
-  -p "{\"spec\": {\"environmentdImageRef\": \"materialize/environmentd:v0.125.0\", \"requestRollout\": \"$(uuidgen)\"}}"
+  -p "{\"spec\": {\"environmentdImageRef\": \"materialize/environmentd:v0.125.2\", \"requestRollout\": \"$(uuidgen)\"}}"
 ```
 
 #### Using YAML Definition
@@ -289,7 +289,7 @@ metadata:
   name: 12345678-1234-1234-1234-123456789012
   namespace: materialize-environment
 spec:
-  environmentdImageRef: materialize/environmentd:v0.125.0 # Update version as needed
+  environmentdImageRef: materialize/environmentd:v0.125.2 # Update version as needed
   requestRollout: 22222222-2222-2222-2222-222222222222    # Generate new UUID
   forceRollout: 33333333-3333-3333-3333-333333333333      # Optional: for forced rollouts
   inPlaceRollout: false                                   # When false, performs a rolling upgrade rather than in-place
