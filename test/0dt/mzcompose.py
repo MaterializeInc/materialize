@@ -192,6 +192,8 @@ def workflow_read_only(c: Composition) -> None:
         > SELECT * FROM mysql_source_table;
         A 0
 
+        $ kafka-verify-topic sink=materialize.public.kafka_sink
+
         > CREATE SOURCE kafka_sink_source
           IN CLUSTER cluster
           FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-sink-${{testdrive.seed}}')
@@ -478,6 +480,8 @@ def workflow_basic(c: Composition) -> None:
         > CREATE TABLE mysql_source_table FROM SOURCE mysql_source1 (REFERENCE public.mysql_source_table);
         > SELECT * FROM mysql_source_table;
         A 0
+
+        $ kafka-verify-topic sink=materialize.public.kafka_sink
 
         > CREATE SOURCE kafka_sink_source
           IN CLUSTER cluster
