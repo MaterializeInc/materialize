@@ -71,6 +71,7 @@ common --experimental_remote_merkle_tree_cache_size=5000
 common --bes_upload_mode=fully_async
 # Make sure any local disk cache stays within a reasonable size.
 common --experimental_disk_cache_gc_max_size=80G
+common --experimental_disk_cache_gc_max_age=14d
 
 # Tells `xz` to use all available cores.
 action_env=XZ_OPT=-T0

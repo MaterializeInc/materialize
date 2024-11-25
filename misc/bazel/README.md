@@ -85,9 +85,10 @@ common --local_resources=cpu="HOST_CPUS-1"
 # Define a shared disk cache so builds from different Materialize repos can share artifacts.
 build --disk_cache=~/.cache/bazel
 
-# Optional. The workspace RC already sets a max disk cache size, but you can override that if you
-# have more limited disk space.
+# Optional. The workspace RC already sets a max disk cache size, and artifact age
+# but you can override that if you have more limited disk space.
 common --experimental_disk_cache_gc_max_size=40G
+common --experimental_disk_cache_gc_max_age=7d
 ```
 
 ### Building a crate
