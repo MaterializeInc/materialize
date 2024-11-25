@@ -324,7 +324,8 @@ impl SourceRender for KafkaSourceConnection {
                 let (stats_tx, stats_rx) = crossbeam_channel::unbounded();
                 let health_status = Arc::new(Mutex::new(Default::default()));
                 let notificator = Arc::new(Notify::new());
-                let consumer: Result<BaseConsumer<_>, _> = connection
+
+                let reader_consumer: Result<BaseConsumer<_>, _> = connection
                     .create_with_context(
                         &config.config,
                         GlueConsumerContext {
@@ -363,37 +364,60 @@ impl SourceRender for KafkaSourceConnection {
                     )
                     .await;
 
-                let consumer = match consumer {
-                    Ok(consumer) => Arc::new(consumer),
-                    Err(e) => {
-                        let update = HealthStatusUpdate::halting(
-                            format!(
-                                "failed creating kafka consumer: {}",
-                                e.display_with_causes()
-                            ),
-                            None,
-                        );
-                        for (output, update) in outputs.iter().repeat_clone(update) {
-                            health_output.give(
-                                &health_cap,
-                                HealthStatusMessage {
-                                    index: output.output_index,
-                                    namespace: if matches!(e, ContextCreationError::Ssh(_)) {
-                                        StatusNamespace::Ssh
-                                    } else {
-                                        Self::STATUS_NAMESPACE.clone()
-                                    },
-                                    update,
-                                },
+                // Consumers use a single connection to talk to the upstream, so if we'd use the
+                // same consumer in the reader and the metadata thread, metadata probes issued by
+                // the latter could be delayed by data fetches issued by the former. We avoid that
+                // by giving the metadata thread its own consumer.
+                let metadata_consumer: Result<BaseConsumer<_>, _> = connection
+                    .create_with_context(
+                        &config.config,
+                        MzClientContext::default(),
+                        &btreemap! {
+                            // Use the user-configured topic metadata refresh
+                            // interval.
+                            "topic.metadata.refresh.interval.ms" =>
+                                topic_metadata_refresh_interval
+                                .as_millis()
+                                .to_string(),
+                        },
+                        InTask::Yes,
+                    )
+                    .await;
+
+                let (reader_consumer, metadata_consumer) =
+                    match (reader_consumer, metadata_consumer) {
+                        (Ok(r), Ok(m)) => (r, m),
+                        (Err(e), _) | (_, Err(e)) => {
+                            let update = HealthStatusUpdate::halting(
+                                format!(
+                                    "failed creating kafka consumer: {}",
+                                    e.display_with_causes()
+                                ),
+                                None,
                             );
+                            for (output, update) in outputs.iter().repeat_clone(update) {
+                                health_output.give(
+                                    &health_cap,
+                                    HealthStatusMessage {
+                                        index: output.output_index,
+                                        namespace: if matches!(e, ContextCreationError::Ssh(_)) {
+                                            StatusNamespace::Ssh
+                                        } else {
+                                            Self::STATUS_NAMESPACE.clone()
+                                        },
+                                        update,
+                                    },
+                                );
+                            }
+                            // IMPORTANT: wedge forever until the `SuspendAndRestart` is processed.
+                            // Returning would incorrectly present to the remap operator as progress to the
+                            // empty frontier which would be incorrectly recorded to the remap shard.
+                            std::future::pending::<()>().await;
+                            unreachable!("pending future never returns");
                         }
-                        // IMPORTANT: wedge forever until the `SuspendAndRestart` is processed.
-                        // Returning would incorrectly present to the remap operator as progress to the
-                        // empty frontier which would be incorrectly recorded to the remap shard.
-                        std::future::pending::<()>().await;
-                        unreachable!("pending future never returns");
-                    }
-                };
+                    };
+
+                let reader_consumer = Arc::new(reader_consumer);
 
                 // Note that we wait for this AFTER we downgrade to the source `resume_upper`. This
                 // allows downstream operators (namely, the `reclock_operator`) to downgrade to the
@@ -410,7 +434,6 @@ impl SourceRender for KafkaSourceConnection {
                 let metadata_thread_handle = {
                     let partition_info = Arc::downgrade(&partition_info);
                     let topic = topic.clone();
-                    let consumer = Arc::clone(&consumer);
 
                     // We want a fairly low ceiling on our polling frequency, since we rely
                     // on this heartbeat to determine the health of our Kafka connection.
@@ -439,7 +462,7 @@ impl SourceRender for KafkaSourceConnection {
                                 let probe_ts =
                                     mz_repr::Timestamp::try_from((now_fn)()).expect("must fit");
                                 let result = fetch_partition_info(
-                                    consumer.client(),
+                                    metadata_consumer.client(),
                                     &topic,
                                     config
                                         .config
@@ -479,7 +502,7 @@ impl SourceRender for KafkaSourceConnection {
                                         ));
 
                                         let ssh_status =
-                                            consumer.client().context().tunnel_status();
+                                            metadata_consumer.client().context().tunnel_status();
                                         let ssh_status = match ssh_status {
                                             SshTunnelStatus::Running => {
                                                 Some(HealthStatusUpdate::running())
@@ -516,7 +539,7 @@ impl SourceRender for KafkaSourceConnection {
                     source_name: config.name.clone(),
                     id: config.id,
                     partition_consumers: Vec::new(),
-                    consumer: Arc::clone(&consumer),
+                    consumer: Arc::clone(&reader_consumer),
                     worker_id: config.worker_id,
                     worker_count: config.worker_count,
                     last_offsets: outputs
@@ -540,7 +563,7 @@ impl SourceRender for KafkaSourceConnection {
                 let offset_committer = KafkaResumeUpperProcessor {
                     config: config.clone(),
                     topic_name: topic.clone(),
-                    consumer,
+                    consumer: reader_consumer,
                     progress_statistics: Arc::clone(&reader.progress_statistics),
                 };
 
