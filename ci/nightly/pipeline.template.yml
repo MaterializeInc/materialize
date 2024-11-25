@@ -1674,6 +1674,16 @@ steps:
     agents:
       queue: hetzner-aarch64-4cpu-8gb
 
+  - id: 0dt
+    label: Zero downtime
+    depends_on: build-aarch64
+    timeout_in_minutes: 120
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: 0dt
+    agents:
+      queue: hetzner-aarch64-8cpu-16gb
+
   - group: "Language tests"
     key: language-tests
     steps:

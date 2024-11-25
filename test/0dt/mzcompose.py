@@ -98,7 +98,6 @@ def workflow_read_only(c: Composition) -> None:
         CREATE CLUSTER cluster SIZE '2-1';
         GRANT ALL ON CLUSTER cluster TO materialize;
         ALTER SYSTEM SET cluster = cluster;
-        ALTER SYSTEM SET enable_0dt_deployment = true;
     """,
         service="mz_old",
         port=6877,
@@ -385,7 +384,6 @@ def workflow_basic(c: Composition) -> None:
         CREATE CLUSTER cluster SIZE '2-1';
         GRANT ALL ON CLUSTER cluster TO materialize;
         ALTER SYSTEM SET cluster = cluster;
-        ALTER SYSTEM SET enable_0dt_deployment = true;
     """,
         service="mz_old",
         port=6877,
@@ -863,6 +861,334 @@ def workflow_basic(c: Composition) -> None:
             """
             )
         )
+
+
+def workflow_kafka_source_rehydration(c: Composition) -> None:
+    """Verify Kafka source rehydration in 0dt deployment"""
+    c.down(destroy_volumes=True)
+    c.up("zookeeper", "kafka", "schema-registry", "mz_old")
+    c.up("testdrive", persistent=True)
+
+    count = 1000000
+    repeats = 20
+
+    # Make sure cluster is owned by the system so it doesn't get dropped
+    # between testdrive runs.
+    c.sql(
+        """
+        DROP CLUSTER IF EXISTS cluster CASCADE;
+        CREATE CLUSTER cluster SIZE '1';
+        GRANT ALL ON CLUSTER cluster TO materialize;
+        ALTER SYSTEM SET cluster = cluster;
+    """,
+        service="mz_old",
+        port=6877,
+        user="mz_system",
+    )
+
+    start_time = time.time()
+    c.testdrive(
+        dedent(
+            f"""
+        > SET CLUSTER = cluster;
+
+        > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL = 'PLAINTEXT';
+        > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${{testdrive.schema-registry-url}}';
+
+        $ kafka-create-topic topic=kafka-large
+        $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=kafka-large repeat={count}
+        key0A,key${{kafka-ingest.iteration}}:value0A,${{kafka-ingest.iteration}}
+        > CREATE SOURCE kafka_source
+          IN CLUSTER cluster
+          FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-large-${{testdrive.seed}}');
+
+        > CREATE TABLE kafka_source_tbl (key1, key2, value1, value2)
+          FROM SOURCE kafka_source (REFERENCE "testdrive-kafka-large-${{testdrive.seed}}")
+          KEY FORMAT CSV WITH 2 COLUMNS DELIMITED BY ','
+          VALUE FORMAT CSV WITH 2 COLUMNS DELIMITED BY ','
+          ENVELOPE UPSERT;
+        > CREATE VIEW kafka_source_cnt AS SELECT count(*) FROM kafka_source_tbl
+        > CREATE DEFAULT INDEX on kafka_source_cnt
+        > SELECT * FROM kafka_source_cnt
+        {count}
+        """
+        )
+    )
+    for i in range(1, repeats):
+        c.testdrive(
+            dedent(
+                f"""
+        $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=kafka-large repeat={count}
+        key{i}A,key{i}${{kafka-ingest.iteration}}:value{i}A,${{kafka-ingest.iteration}}
+        > SELECT * FROM kafka_source_cnt
+        {count*(i+1)}
+        """
+            )
+        )
+
+    elapsed = time.time() - start_time
+    print(f"initial ingestion took {elapsed} seconds")
+
+    with c.override(
+        Materialized(
+            name="mz_new",
+            sanity_restart=False,
+            deploy_generation=1,
+            system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
+            restart="on-failure",
+            external_metadata_store=True,
+        )
+    ):
+        c.up("mz_new")
+        start_time = time.time()
+        c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
+        elapsed = time.time() - start_time
+        print(f"re-hydration took {elapsed} seconds")
+        c.promote_mz("mz_new")
+        start_time = time.time()
+        c.await_mz_deployment_status(
+            DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None
+        )
+        elapsed = time.time() - start_time
+        print(f"promotion took {elapsed} seconds")
+        start_time = time.time()
+        result = c.sql_query("SELECT * FROM kafka_source_cnt", service="mz_new")
+        elapsed = time.time() - start_time
+        print(f"final check took {elapsed} seconds")
+        duration = time.time() - start_time
+        assert result[0][0] == count * repeats, f"Wrong result: {result}"
+        assert (
+            duration < 2
+        ), f"Took {duration}s to SELECT on Kafka source after 0dt upgrade, is it hydrated?"
+
+
+def workflow_pg_source_rehydration(c: Composition) -> None:
+    """Verify Postgres source rehydration in 0dt deployment"""
+    c.down(destroy_volumes=True)
+    c.up("postgres", "mz_old")
+    c.up("testdrive", persistent=True)
+
+    count = 1000000
+    repeats = 100
+
+    # Make sure cluster is owned by the system so it doesn't get dropped
+    # between testdrive runs.
+    c.sql(
+        """
+        DROP CLUSTER IF EXISTS cluster CASCADE;
+        CREATE CLUSTER cluster SIZE '1';
+        GRANT ALL ON CLUSTER cluster TO materialize;
+        ALTER SYSTEM SET cluster = cluster;
+    """,
+        service="mz_old",
+        port=6877,
+        user="mz_system",
+    )
+
+    inserts = (
+        "INSERT INTO postgres_source_table VALUES "
+        + ", ".join([f"({i})" for i in range(count)])
+        + ";"
+    )
+
+    start_time = time.time()
+    c.testdrive(
+        dedent(
+            f"""
+        > SET CLUSTER = cluster;
+
+        $ postgres-execute connection=postgres://postgres:postgres@postgres
+        CREATE USER postgres1 WITH SUPERUSER PASSWORD 'postgres';
+        ALTER USER postgres1 WITH replication;
+        DROP PUBLICATION IF EXISTS postgres_source;
+        DROP TABLE IF EXISTS postgres_source_table;
+        CREATE TABLE postgres_source_table (f1 INTEGER);
+        ALTER TABLE postgres_source_table REPLICA IDENTITY FULL;
+        {inserts}
+        CREATE PUBLICATION postgres_source FOR ALL TABLES;
+
+        > CREATE SECRET pgpass AS 'postgres';
+        > CREATE CONNECTION pg FOR POSTGRES
+          HOST 'postgres',
+          DATABASE postgres,
+          USER postgres1,
+          PASSWORD SECRET pgpass;
+        > CREATE SOURCE postgres_source
+          IN CLUSTER cluster
+          FROM POSTGRES CONNECTION pg
+          (PUBLICATION 'postgres_source');
+        > CREATE TABLE postgres_source_table FROM SOURCE postgres_source (REFERENCE postgres_source_table)
+        > CREATE VIEW postgres_source_cnt AS SELECT count(*) FROM postgres_source_table
+        > CREATE DEFAULT INDEX ON postgres_source_cnt
+        > SELECT * FROM postgres_source_cnt;
+        {count}
+        """
+        ),
+        quiet=True,
+    )
+
+    for i in range(1, repeats):
+        c.testdrive(
+            dedent(
+                f"""
+        $ postgres-execute connection=postgres://postgres:postgres@postgres
+        {inserts}
+        > SELECT * FROM postgres_source_cnt
+        {count*(i+1)}
+        """
+            ),
+            quiet=True,
+        )
+
+    elapsed = time.time() - start_time
+    print(f"initial ingestion took {elapsed} seconds")
+
+    with c.override(
+        Materialized(
+            name="mz_new",
+            sanity_restart=False,
+            deploy_generation=1,
+            system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
+            restart="on-failure",
+            external_metadata_store=True,
+        )
+    ):
+        c.up("mz_new")
+        start_time = time.time()
+        c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
+        elapsed = time.time() - start_time
+        print(f"re-hydration took {elapsed} seconds")
+        c.promote_mz("mz_new")
+        start_time = time.time()
+        c.await_mz_deployment_status(
+            DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None
+        )
+        elapsed = time.time() - start_time
+        print(f"promotion took {elapsed} seconds")
+        start_time = time.time()
+        result = c.sql_query("SELECT * FROM postgres_source_cnt", service="mz_new")
+        elapsed = time.time() - start_time
+        print(f"final check took {elapsed} seconds")
+        duration = time.time() - start_time
+        assert result[0][0] == count * repeats, f"Wrong result: {result}"
+        assert (
+            duration < 2
+        ), f"Took {duration}s to SELECT on Postgres source after 0dt upgrade, is it hydrated?"
+
+
+def workflow_mysql_source_rehydration(c: Composition) -> None:
+    """Verify Postgres source rehydration in 0dt deployment"""
+    c.down(destroy_volumes=True)
+    c.up("mysql", "mz_old")
+    c.up("testdrive", persistent=True)
+
+    count = 1000000
+    repeats = 100
+
+    # Make sure cluster is owned by the system so it doesn't get dropped
+    # between testdrive runs.
+    c.sql(
+        """
+        DROP CLUSTER IF EXISTS cluster CASCADE;
+        CREATE CLUSTER cluster SIZE '1';
+        GRANT ALL ON CLUSTER cluster TO materialize;
+        ALTER SYSTEM SET cluster = cluster;
+    """,
+        service="mz_old",
+        port=6877,
+        user="mz_system",
+    )
+
+    inserts = (
+        "INSERT INTO mysql_source_table VALUES "
+        + ", ".join([f"({i})" for i in range(count)])
+        + ";"
+    )
+
+    start_time = time.time()
+    c.testdrive(
+        dedent(
+            f"""
+        > SET CLUSTER = cluster;
+
+        $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
+        $ mysql-execute name=mysql
+        # create the database if it does not exist yet but do not drop it
+        CREATE DATABASE IF NOT EXISTS public;
+        USE public;
+        CREATE USER mysql1 IDENTIFIED BY 'mysql';
+        GRANT REPLICATION SLAVE ON *.* TO mysql1;
+        GRANT ALL ON public.* TO mysql1;
+        CREATE TABLE mysql_source_table (f1 INTEGER);
+        {inserts}
+
+        > CREATE SECRET mysqlpass AS 'mysql';
+        > CREATE CONNECTION mysql TO MYSQL (
+          HOST 'mysql',
+          USER mysql1,
+          PASSWORD SECRET mysqlpass);
+        > CREATE SOURCE mysql_source
+          IN CLUSTER cluster
+          FROM MYSQL CONNECTION mysql;
+        > CREATE TABLE mysql_source_table FROM SOURCE mysql_source (REFERENCE public.mysql_source_table);
+        > CREATE VIEW mysql_source_cnt AS SELECT count(*) FROM mysql_source_table
+        > CREATE DEFAULT INDEX ON mysql_source_cnt
+        > SELECT * FROM mysql_source_cnt;
+        {count}
+        """
+        ),
+        quiet=True,
+    )
+
+    for i in range(1, repeats):
+        c.testdrive(
+            dedent(
+                f"""
+        $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
+        $ mysql-execute name=mysql
+        USE public;
+        {inserts}
+        > SELECT * FROM mysql_source_cnt;
+        {count*(i+1)}
+        """
+            ),
+            quiet=True,
+        )
+
+    elapsed = time.time() - start_time
+    print(f"initial ingestion took {elapsed} seconds")
+
+    with c.override(
+        Materialized(
+            name="mz_new",
+            sanity_restart=False,
+            deploy_generation=1,
+            system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
+            restart="on-failure",
+            external_metadata_store=True,
+        )
+    ):
+        c.up("mz_new")
+        start_time = time.time()
+        c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
+        elapsed = time.time() - start_time
+        print(f"re-hydration took {elapsed} seconds")
+        c.promote_mz("mz_new")
+        start_time = time.time()
+        c.await_mz_deployment_status(
+            DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None
+        )
+        elapsed = time.time() - start_time
+        print(f"promotion took {elapsed} seconds")
+        start_time = time.time()
+        result = c.sql_query("SELECT * FROM mysql_source_cnt", service="mz_new")
+        elapsed = time.time() - start_time
+        print(f"final check took {elapsed} seconds")
+        duration = time.time() - start_time
+        assert result[0][0] == count * repeats, f"Wrong result: {result}"
+        assert (
+            duration < 2
+        ), f"Took {duration}s to SELECT on MySQL source after 0dt upgrade, is it hydrated?"
 
 
 def fetch_reconciliation_metrics(c: Composition, process: str) -> tuple[int, int]:
