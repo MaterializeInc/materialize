@@ -25,7 +25,7 @@ use mz_catalog::builtin::{
 use mz_catalog::durable::objects::{
     ClusterKey, DatabaseKey, DurableType, ItemKey, NetworkPolicyKey, RoleKey, SchemaKey,
 };
-use mz_catalog::durable::{CatalogError, DurableCatalogError, SystemObjectMapping};
+use mz_catalog::durable::{CatalogError, SystemObjectMapping};
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, Cluster, ClusterReplica, DataSourceDesc, Database, Func, Index, Log,
@@ -37,6 +37,7 @@ use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_controller::clusters::{ReplicaConfig, ReplicaLogging};
 use mz_controller_types::ClusterId;
 use mz_expr::MirScalarExpr;
+use mz_ore::collections::{CollectionExt, HashMap};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{instrument, soft_assert_no_log};
 use mz_pgrepr::oid::INVALID_OID;
@@ -54,7 +55,7 @@ use mz_sql::session::vars::{VarError, VarInput};
 use mz_sql::{plan, rbac};
 use mz_sql_parser::ast::Expr;
 use mz_storage_types::sources::Timeline;
-use tracing::{error, info_span, warn, Instrument};
+use tracing::{info_span, warn, Instrument};
 
 use crate::catalog::state::LocalExpressionCache;
 use crate::catalog::{BuiltinTableUpdate, CatalogState};
@@ -100,7 +101,7 @@ impl CatalogState {
         local_expression_cache: &mut LocalExpressionCache,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
         let mut builtin_table_updates = Vec::with_capacity(updates.len());
-        let updates = sort_updates(updates);
+        let updates = sort_updates(updates, self);
 
         let mut groups: Vec<Vec<_>> = Vec::new();
         for (_, updates) in &updates.into_iter().group_by(|update| update.ts) {
@@ -142,7 +143,7 @@ impl CatalogState {
         updates: Vec<StateUpdate>,
     ) -> Result<Vec<BuiltinTableUpdate<&'static BuiltinTable>>, CatalogError> {
         let mut builtin_table_updates = Vec::with_capacity(updates.len());
-        let updates = sort_updates(updates);
+        let updates = sort_updates(updates, self);
 
         for (_, updates) in &updates.into_iter().group_by(|update| update.ts) {
             let mut retractions = InProgressRetractions::default();
@@ -1012,17 +1013,7 @@ impl CatalogState {
                         }
                     }
                 };
-                // We allow sinks to break this invariant due to a know issue with `ALTER SINK`.
-                // https://github.com/MaterializeInc/materialize/pull/28708.
-                if !entry.is_sink() && entry.uses().iter().any(|id| *id > entry.id) {
-                    let msg = format!(
-                        "item cannot depend on items with larger GlobalIds, item: {:?}, dependencies: {:?}",
-                        entry,
-                        entry.uses()
-                    );
-                    error!("internal catalog errr: {msg}");
-                    return Err(CatalogError::Durable(DurableCatalogError::Internal(msg)));
-                }
+
                 self.insert_entry(entry);
             }
             StateDiff::Retraction => {
@@ -1724,12 +1715,12 @@ impl CatalogState {
 }
 
 /// Sort [`StateUpdate`]s in timestamp then dependency order
-fn sort_updates(mut updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
+fn sort_updates(mut updates: Vec<StateUpdate>, state: &CatalogState) -> Vec<StateUpdate> {
     let mut sorted_updates = Vec::with_capacity(updates.len());
 
     updates.sort_by_key(|update| update.ts);
     for (_, updates) in &updates.into_iter().group_by(|update| update.ts) {
-        let sorted_ts_updates = sort_updates_inner(updates.collect());
+        let sorted_ts_updates = sort_updates_inner(updates.collect(), state);
         sorted_updates.extend(sorted_ts_updates);
     }
 
@@ -1737,7 +1728,7 @@ fn sort_updates(mut updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
 }
 
 /// Sort [`StateUpdate`]s in dependency order for a single timestamp.
-fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
+fn sort_updates_inner(updates: Vec<StateUpdate>, state: &CatalogState) -> Vec<StateUpdate> {
     fn push_update<T>(
         update: T,
         diff: StateDiff,
@@ -1869,27 +1860,106 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
         }
     }
 
-    /// Sort item updates by [`CatalogItemId`].
+    /// Sort item updates by parsing statements to identify any [`CatalogItemId`]-based dependencies within
+    /// this set of updates and then performing a topological sort.
     fn sort_item_updates(
         item_updates: Vec<(mz_catalog::durable::Item, Timestamp, StateDiff)>,
+        state: &CatalogState,
     ) -> VecDeque<(mz_catalog::durable::Item, Timestamp, StateDiff)> {
-        item_updates
+        let mut item_id_lookup: HashMap<_, HashMap<_, _>> = HashMap::new();
+        for (item, _, _) in &item_updates {
+            item_id_lookup
+                .entry(item.schema_id)
+                .or_insert_with(HashMap::new)
+                .insert(item.name.clone(), item.global_id);
+        }
+
+        let mut items_with_dependencies = item_updates
             .into_iter()
-            // HACK: due to `ALTER SINK`, sinks can appear before the objects they
-            // depend upon. Fortunately, because sinks can never have dependencies
-            // and can never depend upon one another, to fix the topological sort,
-            // we can just always move sinks to the end.
-            .sorted_by_key(|(item, _ts, _diff)| {
-                if item.create_sql.starts_with("CREATE SINK") {
-                    CatalogItemId::User(u64::MAX)
-                } else {
-                    item.id
+            .map(|(item, ts, diff)| {
+                let parsed = mz_sql::parse::parse(&item.create_sql)
+                    .expect("failed to parse persisted SQL")
+                    .into_element()
+                    .ast;
+                let (mut id_deps, name_deps) = mz_sql::names::raw_item_dependency_ids(&parsed);
+
+                // Convert named deps into ID deps. Ideally this is empty and all dependencies are
+                // specified by ID. However, this is not the case and require some changes and a
+                // migration to fix.
+                for name in name_deps {
+                    let (db, schema, item) = match name.0.len() {
+                        3 => (
+                            Some(name.0[0].as_str()),
+                            name.0[1].as_str(),
+                            name.0[2].as_str(),
+                        ),
+                        2 => (None, name.0[0].as_str(), name.0[1].as_str()),
+                        // This must be a CTE.
+                        _ => continue,
+                    };
+                    let schema = state
+                        .resolve_schema(None, db, schema, &SYSTEM_CONN_ID)
+                        .expect("schema must be loaded before an item");
+                    // If `name` is not also being applied in this batch then the relative order of
+                    // `item` and `name` doesn't matter, so we can ignore it.
+                    let schema_id = match schema.id {
+                        SchemaSpecifier::Id(id) => id,
+                        SchemaSpecifier::Temporary => {
+                            panic!("temporary item {name:?} persisted as dependency of {item:?}")
+                        }
+                    };
+                    if let Some(ids) = item_id_lookup.get(&schema_id) {
+                        if let Some(id) = ids.get(item) {
+                            id_deps.insert(*id);
+                        }
+                    }
                 }
+
+                (item.global_id, (id_deps, (item, ts, diff)))
             })
+            .collect::<BTreeMap<_, _>>();
+        let mut visited = BTreeSet::new();
+        let mut sorted = Vec::new();
+        fn dfs(
+            id: GlobalId,
+            visited: &mut BTreeSet<GlobalId>,
+            sorted: &mut Vec<GlobalId>,
+            items_with_dependencies: &BTreeMap<
+                GlobalId,
+                (
+                    BTreeSet<GlobalId>,
+                    (mz_catalog::durable::Item, Timestamp, StateDiff),
+                ),
+            >,
+        ) {
+            visited.insert(id);
+            let deps = items_with_dependencies
+                .get(&id)
+                .map(|(deps, _)| deps)
+                .expect("item should be in the map");
+            for dep in deps {
+                // We only want to visit dependencies that are in the current set of updates.
+                if !visited.contains(dep) && items_with_dependencies.contains_key(dep) {
+                    dfs(*dep, visited, sorted, items_with_dependencies);
+                }
+            }
+            sorted.push(id);
+        }
+        for id in items_with_dependencies.keys() {
+            if !visited.contains(id) {
+                dfs(*id, &mut visited, &mut sorted, &items_with_dependencies);
+            }
+        }
+        // return the values from items_with_dependencies in the order of sorted
+        sorted
+            .into_iter()
+            .filter_map(|id| items_with_dependencies.remove(&id))
+            .map(|item| item.1)
             .collect()
     }
-    let item_retractions = sort_item_updates(item_retractions);
-    let item_additions = sort_item_updates(item_additions);
+
+    let item_retractions = sort_item_updates(item_retractions, state);
+    let item_additions = sort_item_updates(item_additions, state);
 
     /// Sort temporary item updates by GlobalId.
     fn sort_temp_item_updates(

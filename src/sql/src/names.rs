@@ -24,6 +24,7 @@ use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
 use mz_repr::{CatalogItemId, GlobalId};
 use mz_repr::{ColumnName, RelationVersionSelector};
+use mz_sql_parser::ast::visit_mut::VisitMutNode;
 use mz_sql_parser::ast::{CreateContinualTaskStatement, Expr, RawNetworkPolicyName, Version};
 use mz_sql_parser::ident;
 use proptest_derive::Arbitrary;
@@ -2349,6 +2350,79 @@ where
     let mut visitor = DependencyVisitor::new(catalog);
     node.visit(&mut visitor);
     ResolvedIds::new(visitor.ids)
+}
+
+#[derive(Debug)]
+struct RawItemDependencyIds<'a> {
+    ids: BTreeSet<GlobalId>,
+    names: BTreeSet<&'a UnresolvedItemName>,
+}
+
+impl<'ast> Visit<'ast, Raw> for RawItemDependencyIds<'ast> {
+    fn visit_item_name(&mut self, item_name: &'ast RawItemName) {
+        match item_name {
+            RawItemName::Name(name) => {
+                self.names.insert(name);
+            }
+            RawItemName::Id(id, _, _) => {
+                let parsed_id = id.parse::<GlobalId>().unwrap();
+                self.ids.insert(parsed_id);
+            }
+        }
+    }
+}
+
+/// Collect any dependencies of the provided raw AST node.
+pub fn raw_item_dependency_ids<'ast, N>(
+    node: &'ast N,
+) -> (BTreeSet<GlobalId>, BTreeSet<&'ast UnresolvedItemName>)
+where
+    N: VisitNode<'ast, Raw>,
+{
+    let mut deps = RawItemDependencyIds {
+        ids: BTreeSet::new(),
+        names: BTreeSet::new(),
+    };
+    node.visit(&mut deps);
+    (deps.ids, deps.names)
+}
+
+#[derive(Debug)]
+pub struct ItemDependencyModifier<'a> {
+    pub modified: bool,
+    pub id_map: &'a BTreeMap<GlobalId, GlobalId>,
+}
+
+impl<'ast, 'a> VisitMut<'ast, Raw> for ItemDependencyModifier<'a> {
+    fn visit_item_name_mut(&mut self, item_name: &mut RawItemName) {
+        if let RawItemName::Id(id, _, _) = item_name {
+            let parsed_id = id.parse::<GlobalId>().unwrap();
+            if let Some(new_id) = self.id_map.get(&parsed_id) {
+                *id = new_id.to_string();
+                self.modified = true;
+            }
+        }
+    }
+}
+
+/// Updates any references in the provided AST node that are keys in `id_map`.
+/// If an id is found it will be updated to the value of the key in `id_map`.
+/// This assumes the names of the reference(s) are unmodified (e.g. each pair of
+/// ids refer to an item of the same name, whose id has changed).
+pub fn modify_dependency_item_ids<'ast, N>(
+    node: &'ast mut N,
+    id_map: &BTreeMap<GlobalId, GlobalId>,
+) -> bool
+where
+    N: VisitMutNode<'ast, Raw>,
+{
+    let mut modifier = ItemDependencyModifier {
+        id_map,
+        modified: false,
+    };
+    node.visit_mut(&mut modifier);
+
+    modifier.modified
 }
 
 // Used when displaying a view's source for human creation. If the name

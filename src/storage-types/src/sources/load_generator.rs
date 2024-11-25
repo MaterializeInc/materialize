@@ -196,6 +196,8 @@ pub enum LoadGenerator {
 pub const LOAD_GENERATOR_DATABASE_NAME: &str = "mz_load_generators";
 
 impl LoadGenerator {
+    /// Must be kept in-sync with the same mapping on the `LoadGenerator` enum defined in
+    /// src/sql-parser/src/ast/defs/ddl.rs.
     pub fn schema_name(&self) -> &'static str {
         match self {
             LoadGenerator::Counter { .. } => "counter",
