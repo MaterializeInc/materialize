@@ -167,8 +167,6 @@ EOF
 
 # Complex example: EXCEPT ALL.
 # Here ThresholdElision can only match in after some prior simplifications
-# and for some reason (TBD later) this means that we need to run it at the
-# end of the physical pass.
 query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(non negative) FOR
 (
@@ -210,8 +208,6 @@ EOF
 
 # Complex example: EXCEPT.
 # Here ThresholdElision can only match in after some prior simplifications
-# and for some reason (TBD later) this means that we need to run it at the
-# end of the physical pass.
 query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(non negative) FOR
 (
@@ -540,6 +536,33 @@ Explained Query:
                 Get l0 // { non_negative: true }
 
 Source materialize.public.people
+
+Target cluster: quickstart
+
+EOF
+
+statement ok
+CREATE TABLE t1 (f1 INTEGER, f2 INTEGER);
+
+# Literal filter, which would be made unrecognizable by
+# ColumnKnowledge, LiteralLifting, EquivalencePropagation.
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(non negative) FOR
+SELECT f1 FROM t1 EXCEPT SELECT f1 FROM t1 WHERE f1 = 5;
+----
+Explained Query:
+  Union // { non_negative: false }
+    Distinct project=[#0] // { non_negative: true }
+      Project (#0) // { non_negative: true }
+        ReadStorage materialize.public.t1 // { non_negative: true }
+    Negate // { non_negative: false }
+      Map (5) // { non_negative: true }
+        Distinct project=[] // { non_negative: true }
+          Project () // { non_negative: true }
+            Filter (#0 = 5) // { non_negative: true }
+              ReadStorage materialize.public.t1 // { non_negative: true }
+
+Source materialize.public.t1
 
 Target cluster: quickstart
 
