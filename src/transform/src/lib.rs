@@ -69,6 +69,7 @@ use crate::dataflow::DataflowMetainfo;
 use crate::typecheck::SharedContext;
 pub use dataflow::optimize_dataflow;
 use mz_ore::{soft_assert_or_log, soft_panic_or_log};
+use crate::normalize_lets::NormalizeLets;
 
 /// Compute the conjunction of a variadic number of expressions.
 #[macro_export]
@@ -497,10 +498,7 @@ impl Default for FuseAndCollapse {
                 // Some optimizations fight against this, and we want to be sure to end as a
                 // `MirRelationExpr::Constant` if that is the case, so that subsequent use can
                 // clearly see this.
-                Box::new(fold_constants::FoldConstants {
-                    limit: Some(FOLD_CONSTANTS_LIMIT),
-                }),
-                Box::new(canonicalization::ReduceScalars),
+                Box::new(fold_constants_fixpoint()),
             ],
         }
     }
@@ -531,6 +529,23 @@ pub fn fuse_and_collapse() -> Fixpoint {
         name: "fuse_and_collapse",
         limit: 100,
         transforms: FuseAndCollapse::default().transforms,
+    }
+}
+
+/// Does constant folding idempotently. This needs to call `FoldConstants` together with
+/// `NormalizeLets` in a fixpoint loop, because currently `FoldConstants` doesn't inline CTEs.
+/// We also call `ReduceScalars`, because that does constant folding inside scalar expressions.
+pub fn fold_constants_fixpoint() -> Fixpoint {
+    Fixpoint {
+        name: "fold_constants_fixpoint",
+        limit: 100,
+        transforms: vec![
+            Box::new(fold_constants::FoldConstants {
+                limit: Some(FOLD_CONSTANTS_LIMIT),
+            }),
+            Box::new(canonicalization::ReduceScalars),
+            Box::new(NormalizeLets::new(false)),
+        ],
     }
 }
 
@@ -682,10 +697,7 @@ impl Optimizer {
                 limit: 100,
                 transforms: vec![
                     Box::new(column_knowledge::ColumnKnowledge::default()),
-                    Box::new(fold_constants::FoldConstants {
-                        limit: Some(FOLD_CONSTANTS_LIMIT),
-                    }),
-                    Box::new(canonicalization::ReduceScalars),
+                    Box::new(fold_constants_fixpoint()),
                     Box::new(demand::Demand::default()),
                     Box::new(literal_lifting::LiteralLifting::default()),
                 ],
@@ -699,10 +711,7 @@ impl Optimizer {
             Box::new(canonicalize_mfp::CanonicalizeMfp),
             // Identifies common relation subexpressions.
             Box::new(cse::relation_cse::RelationCSE::new(false)),
-            Box::new(fold_constants::FoldConstants {
-                limit: Some(FOLD_CONSTANTS_LIMIT),
-            }),
-            Box::new(canonicalization::ReduceScalars),
+            Box::new(fold_constants_fixpoint()),
             // We need this to ensure that `CollectIndexRequests` gets a normalized plan.
             // (For example, `FoldConstants` can break the normalized form by removing all
             // references to a Let, see https://github.com/MaterializeInc/database-issues/issues/6371)
@@ -753,10 +762,7 @@ impl Optimizer {
                     // The last RelationCSE before JoinImplementation should be with
                     // inline_mfp = true.
                     Box::new(cse::relation_cse::RelationCSE::new(true)),
-                    Box::new(fold_constants::FoldConstants {
-                        limit: Some(FOLD_CONSTANTS_LIMIT),
-                    }),
-                    Box::new(canonicalization::ReduceScalars),
+                    Box::new(fold_constants_fixpoint()),
                 ],
             }),
             Box::new(
