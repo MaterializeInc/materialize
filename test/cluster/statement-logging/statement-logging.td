@@ -303,4 +303,3 @@ ROLLBACK
 
 > SELECT result_size, rows_returned FROM mz_internal.mz_recent_activity_log WHERE sql = 'SELECT * FROM t_offset_limit ORDER BY a DESC LIMIT 0';
 0 0
-
