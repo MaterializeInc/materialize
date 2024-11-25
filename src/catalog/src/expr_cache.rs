@@ -25,7 +25,7 @@ use mz_persist_client::cli::admin::{
 };
 use mz_persist_client::PersistClient;
 use mz_persist_types::codec_impls::VecU8Schema;
-use mz_persist_types::Codec;
+use mz_persist_types::{Codec, ShardId};
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::GlobalId;
 use mz_transform::dataflow::DataflowMetainfo;
@@ -35,9 +35,6 @@ use serde::{Deserialize, Serialize};
 use timely::Container;
 use tokio::sync::mpsc;
 use tracing::debug;
-use uuid::Uuid;
-
-use crate::durable::expression_cache_shard_id;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Arbitrary)]
 enum ExpressionType {
@@ -111,7 +108,7 @@ impl DurableCacheCodec for ExpressionCodec {
 pub struct ExpressionCacheConfig {
     pub deploy_generation: u64,
     pub persist: PersistClient,
-    pub organization_id: Uuid,
+    pub shard_id: ShardId,
     pub current_ids: BTreeSet<GlobalId>,
     pub remove_prior_gens: bool,
     pub compact_shard: bool,
@@ -140,7 +137,7 @@ impl ExpressionCache {
         ExpressionCacheConfig {
             deploy_generation,
             persist,
-            organization_id,
+            shard_id,
             current_ids,
             remove_prior_gens,
             compact_shard,
@@ -151,7 +148,6 @@ impl ExpressionCache {
         BTreeMap<GlobalId, LocalExpressions>,
         BTreeMap<GlobalId, GlobalExpressions>,
     ) {
-        let shard_id = expression_cache_shard_id(organization_id);
         let durable_cache = DurableCache::new(&persist, shard_id, "expressions").await;
         let mut cache = Self {
             deploy_generation,
@@ -425,6 +421,7 @@ mod tests {
     use mz_expr::OptimizedMirRelationExpr;
     use mz_ore::test::timeout;
     use mz_persist_client::PersistClient;
+    use mz_persist_types::ShardId;
     use mz_repr::optimize::OptimizerFeatures;
     use mz_repr::GlobalId;
     use mz_transform::dataflow::DataflowMetainfo;
@@ -435,7 +432,6 @@ mod tests {
     use proptest::strategy::{Strategy, ValueTree};
     use proptest::test_runner::{RngAlgorithm, TestRng, TestRunner};
     use tracing::info;
-    use uuid::Uuid;
 
     use crate::expr_cache::{
         CacheKey, ExpressionCacheConfig, ExpressionCacheHandle, ExpressionCodec, GlobalExpressions,
@@ -555,7 +551,7 @@ mod tests {
         let first_deploy_generation = 0;
         let second_deploy_generation = 1;
         let persist = PersistClient::new_for_tests().await;
-        let organization_id = Uuid::new_v4();
+        let shard_id = ShardId::new();
 
         let mut current_ids = BTreeSet::new();
         let mut remove_prior_gens = false;
@@ -571,7 +567,7 @@ mod tests {
                 ExpressionCacheHandle::spawn_expression_cache(ExpressionCacheConfig {
                     deploy_generation: first_deploy_generation,
                     persist: persist.clone(),
-                    organization_id,
+                    shard_id,
                     current_ids: current_ids.clone(),
                     remove_prior_gens,
                     compact_shard,
@@ -615,7 +611,7 @@ mod tests {
                 ExpressionCacheHandle::spawn_expression_cache(ExpressionCacheConfig {
                     deploy_generation: first_deploy_generation,
                     persist: persist.clone(),
-                    organization_id,
+                    shard_id,
                     current_ids: current_ids.clone(),
                     remove_prior_gens,
                     compact_shard,
@@ -644,7 +640,7 @@ mod tests {
                 ExpressionCacheHandle::spawn_expression_cache(ExpressionCacheConfig {
                     deploy_generation: first_deploy_generation,
                     persist: persist.clone(),
-                    organization_id,
+                    shard_id,
                     current_ids: current_ids.clone(),
                     remove_prior_gens,
                     compact_shard,
@@ -687,7 +683,7 @@ mod tests {
                 ExpressionCacheHandle::spawn_expression_cache(ExpressionCacheConfig {
                     deploy_generation: first_deploy_generation,
                     persist: persist.clone(),
-                    organization_id,
+                    shard_id,
                     current_ids: current_ids.clone(),
                     remove_prior_gens,
                     compact_shard,
@@ -710,7 +706,7 @@ mod tests {
                 ExpressionCacheHandle::spawn_expression_cache(ExpressionCacheConfig {
                     deploy_generation: second_deploy_generation,
                     persist: persist.clone(),
-                    organization_id,
+                    shard_id,
                     current_ids: current_ids.clone(),
                     remove_prior_gens,
                     compact_shard,
@@ -762,7 +758,7 @@ mod tests {
                 ExpressionCacheHandle::spawn_expression_cache(ExpressionCacheConfig {
                     deploy_generation: first_deploy_generation,
                     persist: persist.clone(),
-                    organization_id,
+                    shard_id,
                     current_ids: current_ids.clone(),
                     remove_prior_gens,
                     compact_shard,
@@ -786,7 +782,7 @@ mod tests {
                 ExpressionCacheHandle::spawn_expression_cache(ExpressionCacheConfig {
                     deploy_generation: second_deploy_generation,
                     persist: persist.clone(),
-                    organization_id,
+                    shard_id,
                     current_ids: current_ids.clone(),
                     remove_prior_gens,
                     compact_shard,
@@ -809,7 +805,7 @@ mod tests {
                 ExpressionCacheHandle::spawn_expression_cache(ExpressionCacheConfig {
                     deploy_generation: first_deploy_generation,
                     persist: persist.clone(),
-                    organization_id,
+                    shard_id,
                     current_ids: current_ids.clone(),
                     remove_prior_gens,
                     compact_shard,

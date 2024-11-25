@@ -20,6 +20,7 @@ use mz_controller::clusters::ReplicaLogging;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::collections::HashSet;
 use mz_ore::now::EpochMillis;
+use mz_persist_types::ShardId;
 use mz_pgrepr::oid::{
     FIRST_USER_OID, NETWORK_POLICIES_DEFAULT_POLICY_OID, ROLE_PUBLIC_OID,
     SCHEMA_INFORMATION_SCHEMA_OID, SCHEMA_MZ_CATALOG_OID, SCHEMA_MZ_CATALOG_UNSTABLE_OID,
@@ -45,10 +46,11 @@ use crate::durable::upgrade::CATALOG_VERSION;
 use crate::durable::{
     BootstrapArgs, CatalogError, ClusterConfig, ClusterVariant, ClusterVariantManaged,
     DefaultPrivilege, ReplicaConfig, ReplicaLocation, Role, Schema, Transaction,
-    AUDIT_LOG_ID_ALLOC_KEY, CATALOG_CONTENT_VERSION_KEY, DATABASE_ID_ALLOC_KEY, OID_ALLOC_KEY,
-    SCHEMA_ID_ALLOC_KEY, STORAGE_USAGE_ID_ALLOC_KEY, SYSTEM_CLUSTER_ID_ALLOC_KEY,
-    SYSTEM_REPLICA_ID_ALLOC_KEY, USER_CLUSTER_ID_ALLOC_KEY, USER_NETWORK_POLICY_ID_ALLOC_KEY,
-    USER_REPLICA_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
+    AUDIT_LOG_ID_ALLOC_KEY, BUILTIN_MIGRATION_SHARD_KEY, CATALOG_CONTENT_VERSION_KEY,
+    DATABASE_ID_ALLOC_KEY, EXPRESSION_CACHE_SHARD_KEY, OID_ALLOC_KEY, SCHEMA_ID_ALLOC_KEY,
+    STORAGE_USAGE_ID_ALLOC_KEY, SYSTEM_CLUSTER_ID_ALLOC_KEY, SYSTEM_REPLICA_ID_ALLOC_KEY,
+    USER_CLUSTER_ID_ALLOC_KEY, USER_NETWORK_POLICY_ID_ALLOC_KEY, USER_REPLICA_ID_ALLOC_KEY,
+    USER_ROLE_ID_ALLOC_KEY,
 };
 
 /// The key within the "config" Collection that stores the version of the catalog.
@@ -742,10 +744,20 @@ pub(crate) async fn initialize(
         tx.insert_config(key, value)?;
     }
 
-    for (name, value) in [(
-        CATALOG_CONTENT_VERSION_KEY.to_string(),
-        catalog_content_version,
-    )] {
+    for (name, value) in [
+        (
+            CATALOG_CONTENT_VERSION_KEY.to_string(),
+            catalog_content_version,
+        ),
+        (
+            BUILTIN_MIGRATION_SHARD_KEY.to_string(),
+            ShardId::new().to_string(),
+        ),
+        (
+            EXPRESSION_CACHE_SHARD_KEY.to_string(),
+            ShardId::new().to_string(),
+        ),
+    ] {
         tx.set_setting(name, Some(value))?;
     }
 

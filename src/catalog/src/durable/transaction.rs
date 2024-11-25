@@ -58,10 +58,11 @@ use crate::durable::objects::{
 };
 use crate::durable::{
     CatalogError, DefaultPrivilege, DurableCatalogError, DurableCatalogState, NetworkPolicy,
-    Snapshot, SystemConfiguration, AUDIT_LOG_ID_ALLOC_KEY, CATALOG_CONTENT_VERSION_KEY,
-    DATABASE_ID_ALLOC_KEY, OID_ALLOC_KEY, SCHEMA_ID_ALLOC_KEY, STORAGE_USAGE_ID_ALLOC_KEY,
-    SYSTEM_ITEM_ALLOC_KEY, SYSTEM_REPLICA_ID_ALLOC_KEY, USER_ITEM_ALLOC_KEY,
-    USER_NETWORK_POLICY_ID_ALLOC_KEY, USER_REPLICA_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
+    Snapshot, SystemConfiguration, AUDIT_LOG_ID_ALLOC_KEY, BUILTIN_MIGRATION_SHARD_KEY,
+    CATALOG_CONTENT_VERSION_KEY, DATABASE_ID_ALLOC_KEY, EXPRESSION_CACHE_SHARD_KEY, OID_ALLOC_KEY,
+    SCHEMA_ID_ALLOC_KEY, STORAGE_USAGE_ID_ALLOC_KEY, SYSTEM_ITEM_ALLOC_KEY,
+    SYSTEM_REPLICA_ID_ALLOC_KEY, USER_ITEM_ALLOC_KEY, USER_NETWORK_POLICY_ID_ALLOC_KEY,
+    USER_REPLICA_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
 };
 use crate::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
 
@@ -1629,11 +1630,7 @@ impl<'a> Transaction<'a> {
     }
 
     /// Set persisted setting.
-    pub(crate) fn set_setting(
-        &mut self,
-        name: String,
-        value: Option<String>,
-    ) -> Result<(), CatalogError> {
+    pub fn set_setting(&mut self, name: String, value: Option<String>) -> Result<(), CatalogError> {
         self.settings.set(
             SettingKey { name },
             value.map(|value| SettingValue { value }),
@@ -1730,11 +1727,26 @@ impl<'a> Transaction<'a> {
 
     /// Get the value of a persisted config.
     pub fn get_config(&self, key: String) -> Option<u64> {
-        let val = self
-            .configs
+        self.configs
             .get(&ConfigKey { key })
-            .map(|entry| entry.value);
-        val
+            .map(|entry| entry.value)
+    }
+
+    /// Get the value of a persisted setting.
+    fn get_setting(&self, name: String) -> Option<String> {
+        self.settings
+            .get(&SettingKey { name })
+            .map(|entry| entry.value)
+    }
+
+    pub fn get_builtin_migration_shard(&self) -> Option<ShardId> {
+        self.get_setting(BUILTIN_MIGRATION_SHARD_KEY.to_string())
+            .map(|shard_id| shard_id.parse().expect("valid ShardId"))
+    }
+
+    pub fn get_expression_cache_shard(&self) -> Option<ShardId> {
+        self.get_setting(EXPRESSION_CACHE_SHARD_KEY.to_string())
+            .map(|shard_id| shard_id.parse().expect("valid ShardId"))
     }
 
     /// Updates the catalog `enable_0dt_deployment` "config" value to

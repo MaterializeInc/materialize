@@ -37,7 +37,7 @@ pub use crate::durable::objects::{
     ReplicaLocation, Role, Schema, SourceReference, SourceReferences, StorageCollectionMetadata,
     SystemConfiguration, SystemObjectDescription, SystemObjectMapping, UnfinalizedShard,
 };
-pub use crate::durable::persist::{builtin_migration_shard_id, expression_cache_shard_id};
+pub use crate::durable::persist::{shard_id, BUILTIN_MIGRATION_SEED, EXPRESSION_CACHE_SEED};
 use crate::durable::persist::{Timestamp, UnopenedPersistCatalogState};
 pub use crate::durable::transaction::Transaction;
 use crate::durable::transaction::TransactionBatch;
@@ -67,6 +67,8 @@ pub const STORAGE_USAGE_ID_ALLOC_KEY: &str = "storage_usage";
 pub const USER_NETWORK_POLICY_ID_ALLOC_KEY: &str = "user_network_policy";
 pub const OID_ALLOC_KEY: &str = "oid";
 pub(crate) const CATALOG_CONTENT_VERSION_KEY: &str = "catalog_content_version";
+pub const BUILTIN_MIGRATION_SHARD_KEY: &str = "builtin_migration_shard";
+pub const EXPRESSION_CACHE_SHARD_KEY: &str = "expression_cache_shard";
 
 #[derive(Clone, Debug)]
 pub struct BootstrapArgs {
