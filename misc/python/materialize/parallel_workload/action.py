@@ -994,6 +994,10 @@ class FlipFlagsAction(Action):
         BOOLEAN_FLAG_VALUES = ["TRUE", "FALSE"]
 
         self.flags_with_values: dict[str, list[str]] = dict()
+        self.flags_with_values["persist_blob_target_size"] = (
+            # 1 MiB, 16 MiB, 128 MiB
+            ["1048576", "16777216", "134217728"]
+        )
         for flag in ["catalog", "source", "snapshot", "txn"]:
             self.flags_with_values[f"persist_use_critical_since_{flag}"] = (
                 BOOLEAN_FLAG_VALUES
