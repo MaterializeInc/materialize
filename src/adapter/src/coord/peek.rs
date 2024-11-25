@@ -492,7 +492,11 @@ impl crate::coord::Coordinator {
                 &duration_histogram,
             ) {
                 Ok(rows) => {
-                    let result_size = rows.clone().into_row_iter().map(|r| u64::cast_from(r.byte_len())).sum();
+                    let result_size = rows
+                        .clone()
+                        .into_row_iter()
+                        .map(|r| u64::cast_from(r.byte_len()))
+                        .sum();
                     let rows_returned = u64::cast_from(rows.count());
                     (
                         Ok(Self::send_immediate_rows(rows)),
@@ -731,7 +735,10 @@ impl crate::coord::Coordinator {
         }) = self.remove_pending_peek(&uuid)
         {
             let reason = match notification {
-                PeekNotification::Success { rows: num_rows, result_size } => {
+                PeekNotification::Success {
+                    rows: num_rows,
+                    result_size,
+                } => {
                     let strategy = if is_fast_path {
                         StatementExecutionStrategy::FastPath
                     } else {

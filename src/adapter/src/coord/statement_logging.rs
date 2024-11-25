@@ -561,25 +561,25 @@ impl Coordinator {
         let mut row = Row::default();
         let mut packer = row.packer();
         Self::pack_statement_execution_inner(began_record, &mut packer);
-        let (status, error_message, result_size, rows_returned, execution_strategy) = match &ended_record.reason
-        {
-            StatementEndedExecutionReason::Success {
-                result_size,
-                rows_returned,
-                execution_strategy,
-            } => (
-                "success",
-                None,
-                result_size.map(|rs| i64::try_from(rs).expect("must fit")),
-                rows_returned.map(|rr| i64::try_from(rr).expect("must fit")),
-                execution_strategy.map(|es| es.name()),
-            ),
-            StatementEndedExecutionReason::Canceled => ("canceled", None, None, None, None),
-            StatementEndedExecutionReason::Errored { error } => {
-                ("error", Some(error.as_str()), None, None, None)
-            }
-            StatementEndedExecutionReason::Aborted => ("aborted", None, None, None, None),
-        };
+        let (status, error_message, result_size, rows_returned, execution_strategy) =
+            match &ended_record.reason {
+                StatementEndedExecutionReason::Success {
+                    result_size,
+                    rows_returned,
+                    execution_strategy,
+                } => (
+                    "success",
+                    None,
+                    result_size.map(|rs| i64::try_from(rs).expect("must fit")),
+                    rows_returned.map(|rr| i64::try_from(rr).expect("must fit")),
+                    execution_strategy.map(|es| es.name()),
+                ),
+                StatementEndedExecutionReason::Canceled => ("canceled", None, None, None, None),
+                StatementEndedExecutionReason::Errored { error } => {
+                    ("error", Some(error.as_str()), None, None, None)
+                }
+                StatementEndedExecutionReason::Aborted => ("aborted", None, None, None, None),
+            };
         packer.extend([
             Datum::TimestampTz(
                 to_datetime(ended_record.ended_at)

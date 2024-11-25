@@ -10,7 +10,7 @@
 use mz_controller_types::ClusterId;
 use mz_ore::cast::CastFrom;
 use mz_ore::now::EpochMillis;
-use mz_repr::GlobalId;
+use mz_repr::{GlobalId, RowIterator};
 use mz_sql_parser::ast::StatementKind;
 use uuid::Uuid;
 
@@ -153,8 +153,12 @@ impl From<&ExecuteResponse> for StatementEndedExecutionReason {
                 // NB [btv]: It's not clear that this combination
                 // can ever actually happen.
                 ExecuteResponse::SendingRowsImmediate { rows, .. } => {
+                    // Note(parkmycar): It potentially feels bad here to iterate over the entire
+                    // iterator _just_ to get the encoded result size. As noted above, it's not
+                    // entirely clear this case ever happens, so the simplicity is worth it.
+                    let result_size: usize = rows.box_clone().map(|row| row.byte_len()).sum();
                     StatementEndedExecutionReason::Success {
-                        result_size: Some(u64::cast_from(rows.byte_len())), // JC method not found in `&Box<dyn RowIterator + Send + Sync>`
+                        result_size: Some(u64::cast_from(result_size)),
                         rows_returned: Some(u64::cast_from(rows.count())),
                         execution_strategy: Some(StatementExecutionStrategy::Constant),
                     }
@@ -181,8 +185,14 @@ impl From<&ExecuteResponse> for StatementEndedExecutionReason {
             }
 
             ExecuteResponse::SendingRowsImmediate { rows, .. } => {
+                // Note(parkmycar): It potentially feels bad here to iterate over the entire
+                // iterator _just_ to get the encoded result size, the number of Rows returned here
+                // shouldn't be too large though. An alternative is to pre-compute some of the
+                // result size, but that would require always decoding Rows to handle projecting
+                // away columns, which has a negative impact for much larger response sizes.
+                let result_size: usize = rows.box_clone().map(|row| row.byte_len()).sum();
                 StatementEndedExecutionReason::Success {
-                    result_size: Some(u64::cast_from(rows.byte_len())), // JC method not found in `&Box<dyn RowIterator + Send + Sync>`
+                    result_size: Some(u64::cast_from(result_size)),
                     rows_returned: Some(u64::cast_from(rows.count())),
                     execution_strategy: Some(StatementExecutionStrategy::Constant),
                 }

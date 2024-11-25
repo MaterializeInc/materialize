@@ -421,8 +421,13 @@ struct StateMachine<'a, A> {
 }
 
 enum SendRowsEndedReason {
-    Success { result_size: u64, rows_returned: u64 },
-    Errored { error: String },
+    Success {
+        result_size: u64,
+        rows_returned: u64,
+    },
+    Errored {
+        error: String,
+    },
     Canceled,
 }
 
@@ -1083,8 +1088,8 @@ where
                         Ok((ok, SendRowsEndedReason::Canceled)) => {
                             (Ok(ok), StatementEndedExecutionReason::Canceled)
                         }
-                        // NOTE: For now the values for `result_size` and 
-                        // `rows_returned` in fetches are a bit confusing.  
+                        // NOTE: For now the values for `result_size` and
+                        // `rows_returned` in fetches are a bit confusing.
                         // We record `Some(n)` for the first fetch, where `n` is
                         // the number of bytes/rows returned by the inner
                         // execute (regardless of how many rows the
@@ -1095,7 +1100,13 @@ where
                         // layer had to do to satisfy the query, but
                         // we should revisit it if/when we start
                         // logging the inner execute separately.
-                        Ok((ok, SendRowsEndedReason::Success { result_size: _, rows_returned: _ })) => (
+                        Ok((
+                            ok,
+                            SendRowsEndedReason::Success {
+                                result_size: _,
+                                rows_returned: _,
+                            },
+                        )) => (
                             Ok(ok),
                             StatementEndedExecutionReason::Success {
                                 result_size: None,
@@ -1579,7 +1590,13 @@ where
                     Ok((ok, SendRowsEndedReason::Canceled)) => {
                         (Ok(ok), StatementEndedExecutionReason::Canceled)
                     }
-                    Ok((ok, SendRowsEndedReason::Success { result_size, rows_returned })) => (
+                    Ok((
+                        ok,
+                        SendRowsEndedReason::Success {
+                            result_size,
+                            rows_returned,
+                        },
+                    )) => (
                         Ok(ok),
                         StatementEndedExecutionReason::Success {
                             result_size: Some(result_size),
@@ -1623,7 +1640,13 @@ where
                                 // We consider that to be a cancelation, rather than a query error.
                                 (Err(e), StatementEndedExecutionReason::Canceled)
                             }
-                            Ok((state, SendRowsEndedReason::Success { result_size, rows_returned })) => (
+                            Ok((
+                                state,
+                                SendRowsEndedReason::Success {
+                                    result_size,
+                                    rows_returned,
+                                },
+                            )) => (
                                 Ok(state),
                                 StatementEndedExecutionReason::Success {
                                     result_size: Some(result_size),
@@ -1833,6 +1856,7 @@ where
         );
 
         let mut total_sent_rows = 0;
+        let mut total_sent_bytes = 0;
         // want_rows is the maximum number of rows the client wants.
         let mut want_rows = match max_rows {
             ExecuteCount::All => usize::MAX,
@@ -1885,16 +1909,22 @@ where
 
                     // Send a portion of the rows.
                     let mut sent_rows = 0;
+                    let mut sent_bytes = 0;
                     let messages = (&mut batch_rows)
                         .map(|row| {
+                            // HACK(parkmycar): Having side-effects in a `.map(...)` call like this
+                            // is not the best.
+                            sent_bytes += row.byte_len();
+                            sent_rows += 1;
+
                             let values = mz_pgrepr::values_from_row(row, row_desc.typ());
                             BackendMessage::DataRow(values)
                         })
-                        .inspect(|_| sent_rows += 1)
                         .take(want_rows);
                     self.send_all(messages).await?;
 
                     total_sent_rows += sent_rows;
+                    total_sent_bytes += sent_bytes;
                     want_rows -= sent_rows;
 
                     // If we have sent the number of requested rows, put the remainder of the batch
@@ -1946,12 +1976,13 @@ where
                 .get_portal_unverified_mut(&name)
                 .expect("valid fetch portal")
         });
-        let response_message = get_response(max_rows, total_bytes_sent, total_sent_rows, fetch_portal);
+        let response_message =
+            get_response(max_rows, total_sent_bytes, total_sent_rows, fetch_portal);
         self.send(response_message).await?;
         Ok((
             State::Ready,
             SendRowsEndedReason::Success {
-                result_size: Some(u64::cast_from(total_bytes_rows)),
+                result_size: u64::cast_from(total_sent_bytes),
                 rows_returned: u64::cast_from(total_sent_rows),
             },
         ))
@@ -2065,7 +2096,7 @@ where
         Ok((
             State::Ready,
             SendRowsEndedReason::Success {
-                result_size: Some(u64::cast_from(total_sent_bytes)),
+                result_size: u64::cast_from(total_sent_bytes),
                 rows_returned: u64::cast_from(count),
             },
         ))
@@ -2345,7 +2376,10 @@ fn portal_exec_message(
             BackendMessage::PortalSuspended
         }
         _ => BackendMessage::CommandComplete {
-            tag: format!("SELECT {} bytes, {} rows", total_sent_bytes, total_sent_rows),
+            tag: format!(
+                "SELECT {} bytes, {} rows",
+                total_sent_bytes, total_sent_rows
+            ),
         },
     }
 }
