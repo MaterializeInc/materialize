@@ -433,6 +433,10 @@ def set_retry_on_agent_lost(pipeline: Any) -> None:
                     "signal_reason": "agent_stop",  # Stopped by OS
                     "limit": 2,
                 },
+                {
+                    "exit_status": 128,  # Temporary Github connection issue
+                    "limit": 2,
+                },
             ]
         )
 
