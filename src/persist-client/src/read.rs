@@ -25,9 +25,9 @@ use futures::Stream;
 use futures_util::{stream, StreamExt};
 use itertools::Either;
 use mz_dyncfg::Config;
-use mz_ore::instrument;
 use mz_ore::now::EpochMillis;
 use mz_ore::task::{AbortOnDropHandle, JoinHandle, RuntimeExt};
+use mz_ore::{instrument, soft_panic_no_log};
 use mz_persist::location::{Blob, SeqNo};
 use mz_persist_types::columnar::{ColumnDecoder, Schema2};
 use mz_persist_types::{Codec, Codec64};
@@ -42,7 +42,7 @@ use uuid::Uuid;
 use crate::batch::{BLOB_TARGET_SIZE, STRUCTURED_ORDER, STRUCTURED_ORDER_UNTIL_SHARD};
 use crate::cfg::RetryParameters;
 use crate::fetch::{fetch_leased_part, FetchBatchFilter, FetchedPart, Lease, LeasedBatchPart};
-use crate::internal::encoding::Schemas;
+use crate::internal::encoding::{FullSchemas, Schemas};
 use crate::internal::machine::{ExpireFn, Machine};
 use crate::internal::metrics::Metrics;
 use crate::internal::state::{BatchPart, HollowBatch};
@@ -919,7 +919,7 @@ pub(crate) struct UnexpiredReadHandleState {
 pub struct Cursor<K: Codec, V: Codec, T: Timestamp + Codec64, D: Codec64> {
     consolidator: CursorConsolidator<K, V, T, D>,
     _lease: Lease,
-    read_schemas: Schemas<K, V>,
+    read_schemas: FullSchemas<K, V>,
 }
 
 #[derive(Debug)]
@@ -957,7 +957,9 @@ where
                     .expect("fetching a leased part")?;
                 let structured = iter.get_or_make_structured::<K, V>(
                     self.read_schemas.key.as_ref(),
+                    &self.read_schemas.key_dt,
                     self.read_schemas.val.as_ref(),
+                    &self.read_schemas.val_dt,
                 );
                 let key_decoder = self
                     .read_schemas
@@ -1062,6 +1064,23 @@ where
             as_of: as_of.clone(),
         };
         let lease = self.lease_seqno();
+        // Get the Arrow DataTypes for this schema from the registry.
+        let maybe_full_schema = self
+            .read_schemas
+            .id
+            .as_ref()
+            .and_then(|schema_id| self.machine.get_schema(*schema_id));
+        let read_schemas = match maybe_full_schema {
+            Some(schema) => schema,
+            // TODO(parkmycar): We should remove this branch once schema_ids are required.
+            None => {
+                soft_panic_no_log!(
+                    "persist schema isn't registered? {:?}",
+                    self.read_schemas.id
+                );
+                self.read_schemas.to_current_full_schemas()
+            }
+        };
 
         let structured_order = STRUCTURED_ORDER.get(&self.cfg) && {
             self.shard_id().to_string() < STRUCTURED_ORDER_UNTIL_SHARD.get(&self.cfg)
@@ -1070,7 +1089,7 @@ where
             let mut consolidator = Consolidator::new(
                 context,
                 self.shard_id(),
-                StructuredSort::new(self.read_schemas.clone()),
+                StructuredSort::new(read_schemas.clone()),
                 Arc::clone(&self.blob),
                 Arc::clone(&self.metrics),
                 Arc::clone(&self.machine.applier.shard_metrics),
@@ -1126,7 +1145,7 @@ where
         Ok(Cursor {
             consolidator,
             _lease: lease,
-            read_schemas: self.read_schemas.clone(),
+            read_schemas,
         })
     }
 

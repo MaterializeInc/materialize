@@ -23,6 +23,7 @@ use mz_persist::indexed::columnar::ColumnarRecords;
 use mz_persist::indexed::encoding::{BatchColumnarFormat, BlobTraceBatchPart, BlobTraceUpdates};
 use mz_persist::location::{SeqNo, VersionedData};
 use mz_persist::metrics::ColumnarMetrics;
+use mz_persist_types::columnar::data_type;
 use mz_persist_types::schema::SchemaId;
 use mz_persist_types::stats::{PartStats, ProtoStructStats};
 use mz_persist_types::{Codec, Codec64};
@@ -70,12 +71,67 @@ pub struct Schemas<K: Codec, V: Codec> {
     pub val: Arc<V::Schema>,
 }
 
+impl<K: Codec, V: Codec> Schemas<K, V> {
+    /// Returns a [`FullSchemas`] using [`Codec`] to [`arrow::datatypes::DataType`]
+    /// mapping for the current version of Materialize.
+    pub fn to_current_full_schemas(&self) -> FullSchemas<K, V> {
+        FullSchemas {
+            id: self.id.clone(),
+            key: Arc::clone(&self.key),
+            key_dt: data_type::<K>(self.key.as_ref()).expect("valid key schema"),
+            val: Arc::clone(&self.val),
+            val_dt: data_type::<V>(self.val.as_ref()).expect("valid val schema"),
+        }
+    }
+}
+
 impl<K: Codec, V: Codec> Clone for Schemas<K, V> {
     fn clone(&self) -> Self {
         Self {
             id: self.id,
             key: Arc::clone(&self.key),
             val: Arc::clone(&self.val),
+        }
+    }
+}
+
+/// Set of schemas including the corresponding [Arrow `DataType`].
+///
+/// Some processes, e.g. compaction, operate mainly on the Arrow `DataType` as
+/// opposed to a generic [`Codec`] type. For these processes we thread through
+/// the full schema data that's encoded in the registry in case the mapping of
+/// [`Codec::Schema`] to [Arrow `DataType`] changes between two releases.
+///
+/// [Arrow `DataType`]: arrow::datatypes::DataType
+#[derive(Debug)]
+pub struct FullSchemas<K: Codec, V: Codec> {
+    // TODO: Remove the Option once this finishes rolling out and all shards
+    // have a registered schema.
+    pub id: Option<SchemaId>,
+    pub key: Arc<K::Schema>,
+    pub key_dt: arrow::datatypes::DataType,
+    pub val: Arc<V::Schema>,
+    pub val_dt: arrow::datatypes::DataType,
+}
+
+impl<K: Codec, V: Codec> FullSchemas<K, V> {
+    pub fn to_schemas(&self) -> Schemas<K, V> {
+        Schemas {
+            id: self.id.clone(),
+            key: Arc::clone(&self.key),
+            val: Arc::clone(&self.val),
+        }
+    }
+}
+
+impl<K: Codec, V: Codec> Clone for FullSchemas<K, V> {
+    fn clone(&self) -> Self {
+        Self {
+            id: self.id,
+            key: Arc::clone(&self.key),
+            key_dt: self.key_dt.clone(),
+            val: Arc::clone(&self.val),
+            val_dt: self.val_dt.clone(),
         }
     }
 }

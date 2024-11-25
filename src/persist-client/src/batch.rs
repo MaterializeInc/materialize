@@ -1042,6 +1042,9 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                             .iter()
                             .map(|(meta, run)| (&compact_desc, meta, run.as_slice()))
                             .collect();
+                        // We just wrote these runs so use the current `FullSchemas` instead of
+                        // fetching from the schema registry.
+                        let compaction_schemas = write_schemas.to_current_full_schemas();
 
                         let output_batch = Compactor::<K, V, T, D>::compact_runs(
                             &cfg,
@@ -1052,7 +1055,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                             metrics,
                             shard_metrics,
                             isolated_runtime,
-                            write_schemas,
+                            compaction_schemas,
                         )
                         .await
                         .expect("successful compaction");
@@ -1179,7 +1182,9 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
 
         let (name, write_future) = if updates.goodbytes() < inline_threshold {
             let metrics = Arc::clone(&self.metrics);
-            let write_schemas = write_schemas.clone();
+            // We just wrote this data so it's safe to use the current mapping
+            // of `Codec::Schema` to `arrow::datatype::DataType`.
+            let write_schemas = write_schemas.to_current_full_schemas();
 
             let span = debug_span!("batch::inline_part", shard = %self.shard_id).or_current();
             (
@@ -1193,7 +1198,9 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                             .measure_part_build(|| {
                                 updates.get_or_make_structured::<K, V>(
                                     write_schemas.key.as_ref(),
+                                    &write_schemas.key_dt,
                                     write_schemas.val.as_ref(),
+                                    &write_schemas.val_dt,
                                 )
                             })
                             .clone();

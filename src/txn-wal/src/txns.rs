@@ -880,12 +880,7 @@ where
             .expect("id must have been registered to create this batch");
         let new_data_write = self
             .client
-            .open_writer(
-                self.shard_id(),
-                Arc::new(key_schema),
-                Arc::new(val_schema),
-                diagnostics,
-            )
+            .open_writer(self.shard_id(), key_schema, val_schema, diagnostics)
             .await
             .expect("codecs shouldn't change");
         tracing::info!(

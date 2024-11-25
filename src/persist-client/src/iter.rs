@@ -38,7 +38,7 @@ use timely::progress::Timestamp;
 use tracing::{debug_span, Instrument};
 
 use crate::fetch::{EncodedPart, FetchBatchFilter};
-use crate::internal::encoding::Schemas;
+use crate::internal::encoding::FullSchemas;
 use crate::internal::metrics::{ReadMetrics, ShardMetrics};
 use crate::internal::paths::WriterKey;
 use crate::internal::state::{HollowRun, RunMeta, RunOrder, RunPart};
@@ -213,13 +213,13 @@ pub struct StructuredUpdates {
 /// Sort parts ordered by the codec-encoded key and value columns.
 #[derive(Debug)]
 pub struct StructuredSort<K: Codec, V: Codec, T, D> {
-    schemas: Schemas<K, V>,
+    schemas: FullSchemas<K, V>,
     _time_diff: PhantomData<fn(T, D)>,
 }
 
 impl<K: Codec, V: Codec, T, D> StructuredSort<K, V, T, D> {
     /// A sort for structured data with the given schema.
-    pub fn new(schemas: Schemas<K, V>) -> Self {
+    pub fn new(schemas: FullSchemas<K, V>) -> Self {
         Self {
             schemas,
             _time_diff: Default::default(),
@@ -241,8 +241,12 @@ impl<K: Codec, V: Codec, T: Codec64, D: Codec64> RowSort<T, D> for StructuredSor
     }
 
     fn updates_from_blob(&self, mut updates: BlobTraceUpdates) -> Self::Updates {
-        let structured = updates
-            .get_or_make_structured::<K, V>(self.schemas.key.as_ref(), self.schemas.val.as_ref());
+        let structured = updates.get_or_make_structured::<K, V>(
+            self.schemas.key.as_ref(),
+            &self.schemas.key_dt,
+            self.schemas.val.as_ref(),
+            &self.schemas.val_dt,
+        );
         let key_ord = ArrayOrd::new(structured.key.as_ref());
         let val_ord = ArrayOrd::new(structured.val.as_ref());
         StructuredUpdates {

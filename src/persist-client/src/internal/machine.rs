@@ -44,6 +44,7 @@ use crate::critical::CriticalReaderId;
 use crate::error::{CodecMismatch, InvalidUsage};
 use crate::internal::apply::Applier;
 use crate::internal::compact::CompactReq;
+use crate::internal::encoding::FullSchemas;
 use crate::internal::gc::GarbageCollector;
 use crate::internal::maintenance::{RoutineMaintenance, WriterMaintenance};
 use crate::internal::metrics::{CmdMetrics, Metrics, MetricsRetryStream, RetryMetrics};
@@ -759,7 +760,7 @@ where
     }
 
     /// See [crate::PersistClient::get_schema].
-    pub fn get_schema(&self, schema_id: SchemaId) -> Option<(K::Schema, V::Schema)> {
+    pub fn get_schema(&self, schema_id: SchemaId) -> Option<FullSchemas<K, V>> {
         self.applier.get_schema(schema_id)
     }
 
@@ -2005,7 +2006,7 @@ pub mod datadriven {
             Arc::clone(&datadriven.machine.applier.shard_metrics),
             Arc::clone(&datadriven.client.isolated_runtime),
             req,
-            schemas,
+            schemas.to_current_full_schemas(),
         )
         .await?;
 

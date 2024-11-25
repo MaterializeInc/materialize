@@ -34,7 +34,7 @@ use crate::async_runtime::IsolatedRuntime;
 use crate::batch::{BatchBuilderConfig, BatchBuilderInternal, BatchParts, PartDeletes};
 use crate::cfg::MiB;
 use crate::fetch::FetchBatchFilter;
-use crate::internal::encoding::Schemas;
+use crate::internal::encoding::{FullSchemas, Schemas};
 use crate::internal::gc::GarbageCollector;
 use crate::internal::machine::Machine;
 use crate::internal::maintenance::RoutineMaintenance;
@@ -307,29 +307,23 @@ where
             // It's an invariant that SchemaIds are ordered.
             .max();
         let maybe_compaction_schema = match compaction_schema_id {
-            Some(id) => machine
-                .get_schema(id)
-                .map(|(key_schema, val_schema)| (id, key_schema, val_schema)),
+            Some(id) => machine.get_schema(id),
             None => None,
         };
         let use_most_recent_schema = COMPACTION_USE_MOST_RECENT_SCHEMA.get(&machine.applier.cfg);
 
         let compaction_schema = match maybe_compaction_schema {
-            Some((id, key_schema, val_schema)) if use_most_recent_schema => {
+            Some(compaction_schemas) if use_most_recent_schema => {
                 metrics.compaction.schema_selection.recent_schema.inc();
-                Schemas {
-                    id: Some(id),
-                    key: Arc::new(key_schema),
-                    val: Arc::new(val_schema),
-                }
+                compaction_schemas
             }
             Some(_) => {
                 metrics.compaction.schema_selection.disabled.inc();
-                write_schemas
+                write_schemas.to_current_full_schemas()
             }
             None => {
                 metrics.compaction.schema_selection.no_schema.inc();
-                write_schemas
+                write_schemas.to_current_full_schemas()
             }
         };
 
@@ -464,7 +458,7 @@ where
         shard_metrics: Arc<ShardMetrics>,
         isolated_runtime: Arc<IsolatedRuntime>,
         req: CompactReq<T>,
-        write_schemas: Schemas<K, V>,
+        schemas: FullSchemas<K, V>,
     ) -> Result<CompactRes<T>, anyhow::Error> {
         let () = Self::validate_req(&req)?;
 
@@ -531,7 +525,7 @@ where
                 Arc::clone(&metrics),
                 Arc::clone(&shard_metrics),
                 Arc::clone(&isolated_runtime),
-                write_schemas.clone(),
+                schemas.clone(),
             )
             .await?;
             let (parts, run_splits, run_meta, updates) =
@@ -720,7 +714,7 @@ where
         metrics: Arc<Metrics>,
         shard_metrics: Arc<ShardMetrics>,
         isolated_runtime: Arc<IsolatedRuntime>,
-        write_schemas: Schemas<K, V>,
+        compaction_schemas: FullSchemas<K, V>,
     ) -> Result<HollowBatch<T>, anyhow::Error> {
         // TODO: Figure out a more principled way to allocate our memory budget.
         // Currently, we give any excess budget to write parallelism. If we had
@@ -756,7 +750,7 @@ where
             cfg.batch.clone(),
             parts,
             Arc::clone(&metrics),
-            write_schemas.clone(),
+            compaction_schemas.to_schemas(),
             desc.lower().clone(),
             Arc::clone(&blob),
             shard_id.clone(),
@@ -778,7 +772,7 @@ where
                     desc.upper().elements()
                 ),
                 *shard_id,
-                StructuredSort::<K, V, T, D>::new(write_schemas.clone()),
+                StructuredSort::<K, V, T, D>::new(compaction_schemas.clone()),
                 blob,
                 Arc::clone(&metrics),
                 shard_metrics,
@@ -829,8 +823,10 @@ where
                 // In the hopefully-common case of a single chunk, this will not copy.
                 let updates = BlobTraceUpdates::concat::<K, V>(
                     chunks,
-                    write_schemas.key.as_ref(),
-                    write_schemas.val.as_ref(),
+                    compaction_schemas.key.as_ref(),
+                    &compaction_schemas.key_dt,
+                    compaction_schemas.val.as_ref(),
+                    &compaction_schemas.val_dt,
                     &metrics.columnar,
                 )?;
                 batch.flush_many(updates).await?;
@@ -878,7 +874,13 @@ where
                     key_vec.extend_from_slice(k);
                     val_vec.clear();
                     val_vec.extend_from_slice(v);
-                    crate::batch::validate_schema(&write_schemas, &key_vec, &val_vec, None, None);
+                    crate::batch::validate_schema(
+                        &compaction_schemas.to_schemas(),
+                        &key_vec,
+                        &val_vec,
+                        None,
+                        None,
+                    );
                     batch.add(&key_vec, &val_vec, &t, &d).await?;
                 }
                 tokio::task::yield_now().await;
@@ -899,7 +901,7 @@ where
                     &cfg.batch,
                     &metrics.compaction.batch,
                     &isolated_runtime,
-                    &write_schemas,
+                    &compaction_schemas.to_schemas(),
                 )
                 .await;
         }
@@ -1028,7 +1030,7 @@ mod tests {
             write.metrics.shards.shard(&write.machine.shard_id(), ""),
             Arc::new(IsolatedRuntime::default()),
             req.clone(),
-            schemas.clone(),
+            schemas.to_current_full_schemas(),
         )
         .await
         .expect("compaction failed");
@@ -1105,7 +1107,7 @@ mod tests {
             write.metrics.shards.shard(&write.machine.shard_id(), ""),
             Arc::new(IsolatedRuntime::default()),
             req.clone(),
-            schemas.clone(),
+            schemas.to_current_full_schemas(),
         )
         .await
         .expect("compaction failed");

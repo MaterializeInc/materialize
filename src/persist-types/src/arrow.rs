@@ -39,7 +39,7 @@ mod proto {
     include!(concat!(env!("OUT_DIR"), "/mz_persist_types.arrow.rs"));
 }
 use crate::arrow::proto::data_type;
-pub use proto::ProtoArrayData;
+pub use proto::{DataType as ProtoDataType, ProtoArrayData};
 
 /// Extract the list of fields for our recursive datatypes.
 pub fn fields_for_type(data_type: &DataType) -> &[FieldRef] {

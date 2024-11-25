@@ -25,7 +25,7 @@ use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_panic_or_log;
-use mz_persist_types::columnar::{codec_to_schema2, data_type};
+use mz_persist_types::columnar::codec_to_schema2;
 use mz_persist_types::parquet::EncodingConfig;
 use mz_persist_types::schema::backward_compatible;
 use mz_persist_types::{Codec, Codec64};
@@ -231,10 +231,15 @@ impl BlobTraceUpdates {
     }
 
     /// Return the [`ColumnarRecordsStructuredExt`] of the blob.
+    ///
+    /// It's up to the caller to guarantee that `key_datatype` and `val_datatype` are accurate
+    /// mappings of [`Codec::Schema`] to [`arrow::datatypes::DataType`].
     pub fn get_or_make_structured<K: Codec, V: Codec>(
         &mut self,
         key_schema: &K::Schema,
+        key_datatype: &arrow::datatypes::DataType,
         val_schema: &V::Schema,
+        val_datatype: &arrow::datatypes::DataType,
     ) -> &ColumnarRecordsStructuredExt {
         match self {
             BlobTraceUpdates::Row(records) => {
@@ -245,18 +250,23 @@ impl BlobTraceUpdates {
                     ColumnarRecordsStructuredExt { key, val },
                 );
                 // Recurse at most once, since this data is now structured.
-                self.get_or_make_structured::<K, V>(key_schema, val_schema)
+                self.get_or_make_structured::<K, V>(
+                    key_schema,
+                    key_datatype,
+                    val_schema,
+                    val_datatype,
+                )
             }
             BlobTraceUpdates::Both(_, structured) => {
                 // If the types don't match, attempt to migrate the array to the new type.
                 // We expect this to succeed, since this should only be called with backwards-
                 // compatible schemas... but if it fails we only log, and let some higher-level
                 // code signal the error if it cares.
-                let migrate = |array: &mut ArrayRef, to_type: DataType| {
+                let migrate = |array: &mut ArrayRef, to_type: &DataType| {
                     // TODO: Plumb down the SchemaCache and use it here for the array migrations.
                     let from_type = array.data_type().clone();
-                    if from_type != to_type {
-                        if let Some(migration) = backward_compatible(&from_type, &to_type) {
+                    if from_type != *to_type {
+                        if let Some(migration) = backward_compatible(&from_type, to_type) {
                             *array = migration.migrate(Arc::clone(array));
                         } else {
                             error!(
@@ -267,14 +277,8 @@ impl BlobTraceUpdates {
                         }
                     }
                 };
-                migrate(
-                    &mut structured.key,
-                    data_type::<K>(key_schema).expect("valid key schema"),
-                );
-                migrate(
-                    &mut structured.val,
-                    data_type::<V>(val_schema).expect("valid value schema"),
-                );
+                migrate(&mut structured.key, key_datatype);
+                migrate(&mut structured.val, val_datatype);
 
                 structured
             }
@@ -285,7 +289,9 @@ impl BlobTraceUpdates {
     pub fn concat<K: Codec, V: Codec>(
         mut updates: Vec<BlobTraceUpdates>,
         key_schema: &K::Schema,
+        key_datatype: &arrow::datatypes::DataType,
         val_schema: &V::Schema,
+        val_datatype: &arrow::datatypes::DataType,
         metrics: &ColumnarMetrics,
     ) -> anyhow::Result<BlobTraceUpdates> {
         match updates.len() {
@@ -300,7 +306,12 @@ impl BlobTraceUpdates {
         let mut keys = Vec::with_capacity(records.len());
         let mut vals = Vec::with_capacity(records.len());
         for updates in &mut updates {
-            let structured = updates.get_or_make_structured::<K, V>(key_schema, val_schema);
+            let structured = updates.get_or_make_structured::<K, V>(
+                key_schema,
+                key_datatype,
+                val_schema,
+                val_datatype,
+            );
             keys.push(structured.key.as_ref());
             vals.push(structured.val.as_ref());
         }

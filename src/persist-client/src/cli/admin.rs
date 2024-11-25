@@ -495,7 +495,7 @@ where
                 Arc::clone(&machine.applier.shard_metrics),
                 Arc::new(IsolatedRuntime::default()),
                 req,
-                schemas,
+                schemas.to_current_full_schemas(),
             )
             .await?;
             metrics.compaction.admin_count.inc();

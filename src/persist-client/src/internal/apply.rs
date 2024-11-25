@@ -15,17 +15,21 @@ use std::ops::ControlFlow::{self, Break, Continue};
 use std::sync::Arc;
 use std::time::Instant;
 
+use bytes::Bytes;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use mz_ore::cast::CastFrom;
 use mz_persist::location::{CaSResult, Indeterminate, SeqNo, VersionedData};
 use mz_persist_types::schema::SchemaId;
 use mz_persist_types::{Codec, Codec64};
+use mz_proto::ProtoType;
+use prost::Message;
 use timely::progress::{Antichain, Timestamp};
 use tracing::debug;
 
 use crate::cache::{LockingTypedState, StateCache};
 use crate::error::{CodecMismatch, InvalidUsage};
+use crate::internal::encoding::FullSchemas;
 use crate::internal::gc::GcReq;
 use crate::internal::maintenance::RoutineMaintenance;
 use crate::internal::metrics::{CmdMetrics, Metrics, ShardMetrics};
@@ -221,11 +225,29 @@ where
     }
 
     /// See [crate::PersistClient::get_schema].
-    pub fn get_schema(&self, schema_id: SchemaId) -> Option<(K::Schema, V::Schema)> {
+    pub fn get_schema(&self, schema_id: SchemaId) -> Option<FullSchemas<K, V>> {
         self.state
             .read_lock(&self.metrics.locks.applier_read_cacheable, |state| {
                 let x = state.collections.schemas.get(&schema_id)?;
-                Some((K::decode_schema(&x.key), V::decode_schema(&x.val)))
+                let key_dt =
+                    mz_persist_types::arrow::ProtoDataType::decode(Bytes::clone(&x.key_data_type))
+                        .expect("key ProtoArrayData to roundtrip")
+                        .into_rust()
+                        .expect("key ProtoArrayData to rust");
+                let val_dt =
+                    mz_persist_types::arrow::ProtoDataType::decode(Bytes::clone(&x.val_data_type))
+                        .expect("key ProtoArrayData to roundtrip")
+                        .into_rust()
+                        .expect("key ProtoArrayData to rust");
+
+                let schemas = FullSchemas {
+                    id: Some(schema_id),
+                    key: Arc::new(K::decode_schema(&x.key)),
+                    key_dt,
+                    val: Arc::new(V::decode_schema(&x.val)),
+                    val_dt,
+                };
+                Some(schemas)
             })
     }
 

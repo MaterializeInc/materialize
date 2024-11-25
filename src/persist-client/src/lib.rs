@@ -556,7 +556,7 @@ impl PersistClient {
         shard_id: ShardId,
         schema_id: SchemaId,
         diagnostics: Diagnostics,
-    ) -> Result<Option<(K::Schema, V::Schema)>, InvalidUsage<T>>
+    ) -> Result<Option<(Arc<K::Schema>, Arc<V::Schema>)>, InvalidUsage<T>>
     where
         K: Debug + Codec,
         V: Debug + Codec,
@@ -566,7 +566,9 @@ impl PersistClient {
         let machine = self
             .make_machine::<K, V, T, D>(shard_id, diagnostics)
             .await?;
-        Ok(machine.get_schema(schema_id))
+        Ok(machine
+            .get_schema(schema_id)
+            .map(|schemas| (schemas.key, schemas.val)))
     }
 
     /// Returns the latest schema registered at the current state.
