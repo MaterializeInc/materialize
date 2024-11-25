@@ -524,9 +524,9 @@ impl Transform for FuseAndCollapse {
 }
 
 /// Run the [`FuseAndCollapse`] transforms in a fixpoint.
-pub fn fuse_and_collapse() -> Fixpoint {
+pub fn fuse_and_collapse_fixpoint() -> Fixpoint {
     Fixpoint {
-        name: "fuse_and_collapse",
+        name: "fuse_and_collapse_fixpoint",
         limit: 100,
         transforms: FuseAndCollapse::default().transforms,
     }
@@ -593,7 +593,7 @@ impl Optimizer {
             // 2. Collapse constants, joins, unions, and lets as much as possible.
             // TODO: lift filters/maps to maximize ability to collapse
             // things down?
-            Box::new(fuse_and_collapse()),
+            Box::new(fuse_and_collapse_fixpoint()),
             // 3. Needs to happen before ColumnKnowledge, LiteralLifting, EquivalencePropagation
             // make (literal) filters look more complicated than what the NonNegative Analysis can
             // recognize.
