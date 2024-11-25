@@ -360,10 +360,10 @@ impl EquivalencePropagation {
                             // literal substitution.
                             let old = expr.clone();
                             reducer.reduce_expr(expr);
-                            if !accept_expr_reduction(&old, expr) {
+                            let acceptable_sub = accept_expr_reduction(&old, expr);
+                            expr.reduce(input_types.as_ref().unwrap());
+                            if !acceptable_sub && !accept_expr_reduction(&old, expr) {
                                 expr.clone_from(&old);
-                            } else {
-                                expr.reduce(input_types.as_ref().unwrap());
                             }
                         }
                     }
@@ -423,10 +423,10 @@ impl EquivalencePropagation {
                         // literal substitution.
                         let old_key = key.clone();
                         reducer.reduce_expr(key);
-                        if !accept_expr_reduction(&old_key, key) {
+                        let acceptable_sub = accept_expr_reduction(&old_key, key);
+                        key.reduce(input_type.as_ref().unwrap());
+                        if !acceptable_sub && !accept_expr_reduction(&old_key, key) {
                             key.clone_from(&old_key);
-                        } else {
-                            key.reduce(input_type.as_ref().unwrap());
                         }
                     }
                     for aggr in aggregates.iter_mut() {
