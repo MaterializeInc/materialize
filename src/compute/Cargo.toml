@@ -21,7 +21,7 @@ differential-dataflow = "0.13.1"
 differential-dogs3 = "0.1.1"
 futures = "0.3.25"
 itertools = "0.10.5"
-lgalloc = "0.3"
+lgalloc = "0.4"
 mz-build-info = { path = "../build-info" }
 mz-cluster = { path = "../cluster" }
 mz-cluster-client = { path = "../cluster-client" }
