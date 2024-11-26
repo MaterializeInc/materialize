@@ -60,6 +60,8 @@ impl crate::Transform for EquivalencePropagation {
         let derived = builder.visit(relation);
         let derived = derived.as_view();
 
+        let prior = relation.clone();
+
         let mut get_equivalences = BTreeMap::default();
         self.apply(
             relation,
@@ -67,6 +69,15 @@ impl crate::Transform for EquivalencePropagation {
             EquivalenceClasses::default(),
             &mut get_equivalences,
         );
+
+        if prior == *relation {
+            let ck = crate::ColumnKnowledge::default();
+            ck.transform(relation, ctx)?;
+            mz_ore::soft_assert_or_log!(
+                prior == *relation,
+                "ColumnKnowledge performed work after EquivalencePropagation"
+            );
+        }
 
         mz_repr::explain::trace_plan(&*relation);
         Ok(())
@@ -209,6 +220,8 @@ impl EquivalencePropagation {
                     .expect("Equivalences required");
 
                 if let Some(input_equivalences) = input_equivalences {
+                    // Clone the equivalences in case of variadic map, which will need to mutate them.
+                    let mut input_equivalences = input_equivalences.clone();
                     // Get all output types, to reveal a prefix to each scaler expr.
                     let input_types = derived
                         .value::<RelationType>()
@@ -216,10 +229,17 @@ impl EquivalencePropagation {
                         .as_ref()
                         .unwrap();
                     let input_arity = input_types.len() - scalars.len();
-                    let reducer = input_equivalences.reducer();
                     for (index, expr) in scalars.iter_mut().enumerate() {
+                        let reducer = input_equivalences.reducer();
                         reducer.reduce_expr(expr);
                         expr.reduce(&input_types[..(input_arity + index)]);
+                        // Introduce the fact relating the mapped expression and corresponding column.
+                        // This allows subsequent expressions to be optimized with this information.
+                        input_equivalences.classes.push(vec![
+                            expr.clone(),
+                            MirScalarExpr::column(input_arity + index),
+                        ]);
+                        input_equivalences.minimize(&Some(input_types.clone()));
                     }
                     let input_arity = *derived
                         .last_child()

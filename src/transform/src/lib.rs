@@ -60,6 +60,7 @@ use crate::will_distinct::WillDistinct;
 pub mod analysis;
 pub mod canonicalization;
 pub mod canonicalize_mfp;
+pub mod column_knowledge;
 pub mod compound;
 pub mod cse;
 pub mod dataflow;
