@@ -152,10 +152,10 @@ DROP TABLE t1;
 statement ok
 DROP TABLE t2;
 
-###
+# Window function tests
 # These tests were mostly copied (at some point) from `window_funcs.slt`, but here they have `WITH ... VALUES ...`, i.e.
 # constant inputs. These are good to have because constant folding is a different code path from the normal execution.
-###
+# ----------------------------------------------------------------------------------------------------------------------
 
 mode cockroach
 
