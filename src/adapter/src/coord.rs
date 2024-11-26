@@ -111,7 +111,7 @@ use mz_controller::ControllerConfig;
 use mz_controller_types::{ClusterId, ReplicaId, WatchSetId};
 use mz_expr::{MapFilterProject, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_orchestrator::{OfflineReason, ServiceProcessMetrics};
-use mz_ore::cast::{CastFrom, CastLossy};
+use mz_ore::cast::{CastFrom, CastInto, CastLossy};
 use mz_ore::channel::trigger::Trigger;
 use mz_ore::future::TimeoutError;
 use mz_ore::metrics::MetricsRegistry;
@@ -141,7 +141,7 @@ use mz_sql::plan::{
     OnTimeoutAction, Params, QueryWhen,
 };
 use mz_sql::session::user::User;
-use mz_sql::session::vars::{ConnectionCounter, SystemVars};
+use mz_sql::session::vars::SystemVars;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::ExplainStage;
 use mz_storage_client::client::TimestamplessUpdate;
@@ -1003,7 +1003,7 @@ pub struct Config {
     pub aws_account_id: Option<String>,
     pub aws_privatelink_availability_zones: Option<Vec<String>>,
     pub connection_context: ConnectionContext,
-    pub active_connection_count: Arc<Mutex<ConnectionCounter>>,
+    pub connection_limit_callback: Box<dyn Fn(u64, u64) -> () + Send + Sync + 'static>,
     pub webhook_concurrency_limit: WebhookConcurrencyLimiter,
     pub http_host_name: Option<String>,
     pub tracing_handle: TracingHandle,
@@ -3706,8 +3706,8 @@ pub fn serve(
         aws_account_id,
         aws_privatelink_availability_zones,
         connection_context,
+        connection_limit_callback,
         remote_system_parameters,
-        active_connection_count,
         webhook_concurrency_limit,
         http_host_name,
         tracing_handle,
@@ -3861,7 +3861,6 @@ pub fn serve(
                 aws_principal_context,
                 aws_privatelink_availability_zones,
                 connection_context,
-                active_connection_count,
                 http_host_name,
                 builtin_item_migration_config,
                 persist_client: persist_client.clone(),
@@ -3944,6 +3943,38 @@ pub fn serve(
                 flags::pg_timstamp_oracle_config(catalog.system_config());
             pg_timestamp_oracle_params.apply(config);
         }
+
+        // Register a callback so whenever the MAX_CONNECTIONS or SUPERUSER_RESERVED_CONNECTIONS
+        // system variables change, we update our connection limits.
+        let connection_limit_callback: Arc<dyn Fn(&SystemVars) + Send + Sync> =
+            Arc::new(move |system_vars: &SystemVars| {
+                let limit: u64 = system_vars.max_connections().cast_into();
+                let superuser_reserved: u64 =
+                    system_vars.superuser_reserved_connections().cast_into();
+
+                // If superuser_reserved > max_connections, prefer max_connections.
+                //
+                // In this scenario all normal users would be locked out because all connections
+                // would be reserved for superusers so complain if this is the case.
+                let superuser_reserved = if superuser_reserved >= limit {
+                    tracing::warn!(
+                        "superuser_reserved ({superuser_reserved}) is greater than max connections ({limit})!"
+                    );
+                    limit
+                } else {
+                    superuser_reserved
+                };
+
+                (connection_limit_callback)(limit, superuser_reserved);
+            });
+        catalog.system_config_mut().register_callback(
+            &mz_sql::session::vars::MAX_CONNECTIONS,
+            Arc::clone(&connection_limit_callback),
+        );
+        catalog.system_config_mut().register_callback(
+            &mz_sql::session::vars::SUPERUSER_RESERVED_CONNECTIONS,
+            connection_limit_callback,
+        );
 
         let parent_span = tracing::Span::current();
         let thread = thread::Builder::new()

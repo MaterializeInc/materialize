@@ -11,17 +11,15 @@ use std::future::Future;
 use std::net::IpAddr;
 use std::pin::Pin;
 use std::str::FromStr;
-use std::sync::{Arc, Mutex};
 
 use anyhow::Context;
 use async_trait::async_trait;
 use mz_frontegg_auth::Authenticator as FronteggAuthentication;
 use mz_pgwire_common::{
-    decode_startup, Conn, FrontendStartupMessage, ACCEPT_SSL_ENCRYPTION, CONN_UUID_KEY,
-    MZ_FORWARDED_FOR_KEY, REJECT_ENCRYPTION,
+    decode_startup, Conn, ConnectionCounter, FrontendStartupMessage, ACCEPT_SSL_ENCRYPTION,
+    CONN_UUID_KEY, MZ_FORWARDED_FOR_KEY, REJECT_ENCRYPTION,
 };
 use mz_server_core::{Connection, ConnectionHandler, ReloadingTlsConfig};
-use mz_sql::session::vars::ConnectionCounter;
 use openssl::ssl::Ssl;
 use tokio::io::AsyncWriteExt;
 use tokio_openssl::SslStream;
@@ -56,7 +54,7 @@ pub struct Config {
     /// system resources.
     pub internal: bool,
     /// Global connection limit and count
-    pub active_connection_count: Arc<Mutex<ConnectionCounter>>,
+    pub active_connection_counter: ConnectionCounter,
     /// Helm chart version
     pub helm_chart_version: Option<String>,
 }
@@ -68,7 +66,7 @@ pub struct Server {
     frontegg: Option<FronteggAuthentication>,
     metrics: Metrics,
     internal: bool,
-    active_connection_count: Arc<Mutex<ConnectionCounter>>,
+    active_connection_counter: ConnectionCounter,
     helm_chart_version: Option<String>,
 }
 
@@ -93,7 +91,7 @@ impl Server {
             frontegg: config.frontegg,
             metrics: Metrics::new(config.metrics, config.label),
             internal: config.internal,
-            active_connection_count: config.active_connection_count,
+            active_connection_counter: config.active_connection_counter,
             helm_chart_version: config.helm_chart_version,
         }
     }
@@ -108,8 +106,9 @@ impl Server {
         let tls = self.tls.clone();
         let internal = self.internal;
         let metrics = self.metrics.clone();
-        let active_connection_count = Arc::clone(&self.active_connection_count);
+        let active_connection_counter = self.active_connection_counter.clone();
         let helm_chart_version = self.helm_chart_version.clone();
+
         // TODO(guswynn): remove this redundant_closure_call
         #[allow(clippy::redundant_closure_call)]
         async move {
@@ -178,7 +177,7 @@ impl Server {
                                     params,
                                     frontegg: frontegg.as_ref(),
                                     internal,
-                                    active_connection_count,
+                                    active_connection_counter,
                                     helm_chart_version,
                                 })
                                 .await?;

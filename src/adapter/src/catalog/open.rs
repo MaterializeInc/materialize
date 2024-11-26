@@ -234,6 +234,11 @@ impl Catalog {
                 );
         }
 
+        let mut system_configuration = SystemVars::new().set_unsafe(config.unsafe_mode);
+        if config.all_features {
+            system_configuration.enable_all_feature_flags_by_default();
+        }
+
         let mut state = CatalogState {
             database_by_name: BTreeMap::new(),
             database_by_id: BTreeMap::new(),
@@ -247,14 +252,7 @@ impl Catalog {
             roles_by_id: BTreeMap::new(),
             network_policies_by_id: BTreeMap::new(),
             network_policies_by_name: BTreeMap::new(),
-            system_configuration: {
-                let mut s =
-                    SystemVars::new(config.active_connection_count).set_unsafe(config.unsafe_mode);
-                if config.all_features {
-                    s.enable_all_feature_flags_by_default();
-                }
-                s
-            },
+            system_configuration,
             default_privileges: DefaultPrivileges::default(),
             system_privileges: PrivilegeMap::default(),
             comments: CommentsMap::default(),

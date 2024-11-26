@@ -69,7 +69,7 @@ use mz_sql::plan::{Plan, PlanNotice, StatementDesc};
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::{MZ_SYSTEM_ROLE_ID, SUPPORT_USER, SYSTEM_USER};
-use mz_sql::session::vars::{ConnectionCounter, SystemVars};
+use mz_sql::session::vars::SystemVars;
 use mz_sql_parser::ast::QualifiedReplica;
 use mz_storage_types::connections::inline::{ConnectionResolver, InlinedConnection};
 use mz_storage_types::connections::ConnectionContext;
@@ -627,7 +627,6 @@ impl Catalog {
         enable_expression_cache_override: Option<bool>,
     ) -> Result<Catalog, anyhow::Error> {
         let metrics_registry = &MetricsRegistry::new();
-        let active_connection_count = Arc::new(std::sync::Mutex::new(ConnectionCounter::new(0, 0)));
         let secrets_reader = Arc::new(InMemorySecretsController::new());
         // Used as a lower boundary of the boot_ts, but it's ok to use now() for
         // debugging/testing.
@@ -667,7 +666,6 @@ impl Catalog {
                 aws_privatelink_availability_zones: None,
                 http_host_name: None,
                 connection_context: ConnectionContext::for_tests(secrets_reader),
-                active_connection_count,
                 builtin_item_migration_config: BuiltinItemMigrationConfig::Legacy,
                 persist_client,
                 enable_expression_cache_override,
@@ -1294,6 +1292,10 @@ impl Catalog {
 
     pub fn system_config(&self) -> &SystemVars {
         self.state.system_config()
+    }
+
+    pub fn system_config_mut(&mut self) -> &mut SystemVars {
+        self.state.system_config_mut()
     }
 
     pub fn ensure_not_reserved_role(&self, role_id: &RoleId) -> Result<(), Error> {

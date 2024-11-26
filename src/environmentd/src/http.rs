@@ -21,7 +21,7 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::net::{IpAddr, SocketAddr};
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -47,13 +47,12 @@ use mz_http_util::DynamicFilterTarget;
 use mz_ore::cast::u64_to_usize;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::str::StrExt;
+use mz_pgwire_common::{ConnectionCounter, ConnectionHandle};
 use mz_repr::user::ExternalUserMetadata;
 use mz_server_core::{Connection, ConnectionHandler, ReloadingSslContext, Server};
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::{HTTP_DEFAULT_USER, SUPPORT_USER_NAME, SYSTEM_USER_NAME};
-use mz_sql::session::vars::{
-    ConnectionCounter, DropConnection, Value, Var, VarInput, WELCOME_MESSAGE,
-};
+use mz_sql::session::vars::{Value, Var, VarInput, WELCOME_MESSAGE};
 use openssl::ssl::Ssl;
 use prometheus::{
     COMPUTE_METRIC_QUERIES, FRONTIER_METRIC_QUERIES, STORAGE_METRIC_QUERIES, USAGE_METRIC_QUERIES,
@@ -96,7 +95,7 @@ pub struct HttpConfig {
     pub frontegg: Option<FronteggAuthentication>,
     pub adapter_client: mz_adapter::Client,
     pub allowed_origin: AllowOrigin,
-    pub active_connection_count: Arc<Mutex<ConnectionCounter>>,
+    pub active_connection_counter: ConnectionCounter,
     pub helm_chart_version: Option<String>,
     pub concurrent_webhook_req: Arc<tokio::sync::Semaphore>,
     pub metrics: Metrics,
@@ -118,7 +117,7 @@ pub enum TlsMode {
 pub struct WsState {
     frontegg: Arc<Option<FronteggAuthentication>>,
     adapter_client_rx: Delayed<mz_adapter::Client>,
-    active_connection_count: SharedConnectionCounter,
+    active_connection_counter: ConnectionCounter,
     helm_chart_version: Option<String>,
 }
 
@@ -142,7 +141,7 @@ impl HttpServer {
             frontegg,
             adapter_client,
             allowed_origin,
-            active_connection_count,
+            active_connection_counter,
             helm_chart_version,
             concurrent_webhook_req,
             metrics,
@@ -164,7 +163,7 @@ impl HttpServer {
                 async move { http_auth(req, next, tls_mode, base_frontegg.as_ref().as_ref()).await }
             }))
             .layer(Extension(adapter_client_rx.clone()))
-            .layer(Extension(Arc::clone(&active_connection_count)))
+            .layer(Extension(active_connection_counter.clone()))
             .layer(
                 CorsLayer::new()
                     .allow_credentials(false)
@@ -183,7 +182,7 @@ impl HttpServer {
             .with_state(WsState {
                 frontegg,
                 adapter_client_rx,
-                active_connection_count,
+                active_connection_counter,
                 helm_chart_version,
             });
 
@@ -266,7 +265,7 @@ impl Server for HttpServer {
 pub struct InternalHttpConfig {
     pub metrics_registry: MetricsRegistry,
     pub adapter_client_rx: oneshot::Receiver<mz_adapter::Client>,
-    pub active_connection_count: Arc<Mutex<ConnectionCounter>>,
+    pub active_connection_counter: ConnectionCounter,
     pub helm_chart_version: Option<String>,
     pub deployment_state_handle: DeploymentStateHandle,
     pub internal_console_redirect_url: Option<String>,
@@ -328,7 +327,7 @@ impl InternalHttpServer {
         InternalHttpConfig {
             metrics_registry,
             adapter_client_rx,
-            active_connection_count,
+            active_connection_counter,
             helm_chart_version,
             deployment_state_handle,
             internal_console_redirect_url,
@@ -439,7 +438,7 @@ impl InternalHttpServer {
             .layer(middleware::from_fn(internal_http_auth))
             .layer(Extension(adapter_client_rx.clone()))
             .layer(Extension(console_config))
-            .layer(Extension(Arc::clone(&active_connection_count)));
+            .layer(Extension(active_connection_counter.clone()));
 
         let ws_router = Router::new()
             .route("/api/experimental/sql", routing::get(sql::handle_sql_ws))
@@ -451,7 +450,7 @@ impl InternalHttpServer {
             .with_state(WsState {
                 frontegg: Arc::new(None),
                 adapter_client_rx,
-                active_connection_count,
+                active_connection_counter,
                 helm_chart_version: helm_chart_version.clone(),
             });
 
@@ -522,8 +521,6 @@ impl Server for InternalHttpServer {
 
 type Delayed<T> = Shared<oneshot::Receiver<T>>;
 
-type SharedConnectionCounter = Arc<Mutex<ConnectionCounter>>;
-
 #[derive(Clone)]
 enum ConnProtocol {
     Http,
@@ -538,7 +535,7 @@ pub struct AuthedUser {
 
 pub struct AuthedClient {
     pub client: SessionClient,
-    pub drop_connection: Option<DropConnection>,
+    pub connection_guard: Option<ConnectionHandle>,
 }
 
 impl AuthedClient {
@@ -546,7 +543,7 @@ impl AuthedClient {
         adapter_client: &Client,
         user: AuthedUser,
         peer_addr: IpAddr,
-        active_connection_count: SharedConnectionCounter,
+        active_connection_counter: ConnectionCounter,
         helm_chart_version: Option<String>,
         session_config: F,
         options: BTreeMap<String, String>,
@@ -563,8 +560,8 @@ impl AuthedClient {
             external_metadata_rx: user.external_metadata_rx,
             helm_chart_version,
         });
-        let drop_connection =
-            DropConnection::new_connection(session.user(), active_connection_count)?;
+        let connection_guard = active_connection_counter.allocate_connection(session.user())?;
+
         session_config(&mut session);
         for (key, val) in options {
             const LOCAL: bool = false;
@@ -581,7 +578,7 @@ impl AuthedClient {
         let adapter_client = adapter_client.startup(session).await?;
         Ok(AuthedClient {
             client: adapter_client,
-            drop_connection,
+            connection_guard,
         })
     }
 }
@@ -622,7 +619,7 @@ where
         let adapter_client = adapter_client.await.map_err(|_| {
             (StatusCode::INTERNAL_SERVER_ERROR, "adapter client missing").into_response()
         })?;
-        let active_connection_count = req.extensions.get::<SharedConnectionCounter>().unwrap();
+        let active_connection_counter = req.extensions.get::<ConnectionCounter>().unwrap();
         let helm_chart_version = None;
 
         let options = if params.options.is_empty() {
@@ -645,7 +642,7 @@ where
             &adapter_client,
             user.clone(),
             peer_addr,
-            Arc::clone(active_connection_count),
+            active_connection_counter.clone(),
             helm_chart_version,
             |session| {
                 session
@@ -752,7 +749,7 @@ async fn init_ws(
     WsState {
         frontegg,
         adapter_client_rx,
-        active_connection_count,
+        active_connection_counter,
         helm_chart_version,
     }: &WsState,
     existing_user: Option<AuthedUser>,
@@ -833,7 +830,7 @@ async fn init_ws(
         &adapter_client_rx.clone().await?,
         user,
         peer_addr,
-        Arc::clone(active_connection_count),
+        active_connection_counter.clone(),
         helm_chart_version.clone(),
         |_session| (),
         options,

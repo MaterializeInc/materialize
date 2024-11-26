@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{env, io};
 
@@ -44,11 +44,12 @@ use mz_ore::url::SensitiveUrl;
 use mz_ore::{instrument, task};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::usage::StorageUsageClient;
+use mz_pgwire_common::ConnectionCounter;
 use mz_repr::strconv;
 use mz_secrets::SecretsController;
 use mz_server_core::{ConnectionStream, ListenerHandle, ReloadTrigger, ServeConfig, TlsCertConfig};
 use mz_sql::catalog::EnvironmentId;
-use mz_sql::session::vars::{ConnectionCounter, Value, VarInput};
+use mz_sql::session::vars::{Value, VarInput};
 use tokio::sync::oneshot;
 use tower_http::cors::AllowOrigin;
 use tracing::{info, info_span, Instrument};
@@ -311,8 +312,7 @@ impl Listeners {
             }
         };
 
-        let active_connection_count = Arc::new(Mutex::new(ConnectionCounter::new(0, 0)));
-
+        let active_connection_counter = ConnectionCounter::default();
         let (deployment_state, deployment_state_handle) = DeploymentState::new();
 
         // Start the internal HTTP server.
@@ -326,7 +326,7 @@ impl Listeners {
             let internal_http_server = InternalHttpServer::new(InternalHttpConfig {
                 metrics_registry: config.metrics_registry.clone(),
                 adapter_client_rx: internal_http_adapter_client_rx,
-                active_connection_count: Arc::clone(&active_connection_count),
+                active_connection_counter: active_connection_counter.clone(),
                 helm_chart_version: config.helm_chart_version.clone(),
                 deployment_state_handle,
                 internal_console_redirect_url: config.internal_console_redirect_url,
@@ -620,9 +620,16 @@ impl Listeners {
                 client_side: config.segment_client_side,
             })
         });
+        let connection_limiter = active_connection_counter.clone();
+        let connection_limit_callback = Box::new(move |limit, superuser_reserved| {
+            connection_limiter.update_limit(limit);
+            connection_limiter.update_superuser_reserved(superuser_reserved);
+        });
+
         let webhook_concurrency_limit = WebhookConcurrencyLimiter::default();
         let (adapter_handle, adapter_client) = mz_adapter::serve(mz_adapter::Config {
             connection_context: config.controller.connection_context.clone(),
+            connection_limit_callback,
             controller_config: config.controller,
             controller_envd_epoch: envd_epoch,
             storage: adapter_storage,
@@ -655,7 +662,6 @@ impl Listeners {
             remote_system_parameters,
             aws_account_id: config.aws_account_id,
             aws_privatelink_availability_zones: config.aws_privatelink_availability_zones,
-            active_connection_count: Arc::clone(&active_connection_count),
             webhook_concurrency_limit: webhook_concurrency_limit.clone(),
             http_host_name: config.http_host_name,
             tracing_handle: config.tracing_handle,
@@ -690,7 +696,7 @@ impl Listeners {
                 frontegg: config.frontegg.clone(),
                 metrics: metrics.clone(),
                 internal: false,
-                active_connection_count: Arc::clone(&active_connection_count),
+                active_connection_counter: active_connection_counter.clone(),
                 helm_chart_version: config.helm_chart_version.clone(),
             });
             mz_server_core::serve(ServeConfig {
@@ -720,7 +726,7 @@ impl Listeners {
                 frontegg: None,
                 metrics: metrics.clone(),
                 internal: true,
-                active_connection_count: Arc::clone(&active_connection_count),
+                active_connection_counter: active_connection_counter.clone(),
                 helm_chart_version: config.helm_chart_version.clone(),
             });
             mz_server_core::serve(ServeConfig {
@@ -741,7 +747,7 @@ impl Listeners {
                 frontegg: config.frontegg.clone(),
                 adapter_client: adapter_client.clone(),
                 allowed_origin: config.cors_allowed_origin.clone(),
-                active_connection_count: Arc::clone(&active_connection_count),
+                active_connection_counter: active_connection_counter.clone(),
                 helm_chart_version: config.helm_chart_version.clone(),
                 concurrent_webhook_req: webhook_concurrency_limit.semaphore(),
                 metrics: http_metrics.clone(),
@@ -764,7 +770,7 @@ impl Listeners {
                 frontegg: config.frontegg.clone(),
                 adapter_client: adapter_client.clone(),
                 allowed_origin: config.cors_allowed_origin,
-                active_connection_count: Arc::clone(&active_connection_count),
+                active_connection_counter: active_connection_counter.clone(),
                 helm_chart_version: config.helm_chart_version.clone(),
                 concurrent_webhook_req: webhook_concurrency_limit.semaphore(),
                 metrics: http_metrics,
@@ -787,7 +793,7 @@ impl Listeners {
                 frontegg: config.frontegg.clone(),
                 metrics,
                 internal: false,
-                active_connection_count: Arc::clone(&active_connection_count),
+                active_connection_counter: active_connection_counter.clone(),
                 helm_chart_version: config.helm_chart_version.clone(),
             });
             mz_server_core::serve(ServeConfig {

@@ -926,10 +926,10 @@ impl From<mz_sql_parser::ast::IdentError> for AdapterError {
     }
 }
 
-impl From<mz_sql::session::vars::ConnectionError> for AdapterError {
-    fn from(value: mz_sql::session::vars::ConnectionError) -> Self {
+impl From<mz_pgwire_common::ConnectionError> for AdapterError {
+    fn from(value: mz_pgwire_common::ConnectionError) -> Self {
         match value {
-            mz_sql::session::vars::ConnectionError::TooManyConnections { current, limit } => {
+            mz_pgwire_common::ConnectionError::TooManyConnections { current, limit } => {
                 AdapterError::ResourceExhaustion {
                     resource_type: "connection".into(),
                     limit_name: "max_connections".into(),

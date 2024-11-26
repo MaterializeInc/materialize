@@ -2066,10 +2066,10 @@ fn test_max_connections_on_all_interfaces() {
         .connect(postgres::NoTls)
         .unwrap();
     mz_client
-        .batch_execute("ALTER SYSTEM SET max_connections = 1")
+        .batch_execute("ALTER SYSTEM SET superuser_reserved_connections = 1")
         .unwrap();
     mz_client
-        .batch_execute("ALTER SYSTEM SET superuser_reserved_connections = 0")
+        .batch_execute("ALTER SYSTEM SET max_connections = 2")
         .unwrap();
 
     let client = server.connect(postgres::NoTls).unwrap();
@@ -2093,14 +2093,14 @@ fn test_max_connections_on_all_interfaces() {
         let status = res.status();
         let text = res.text().expect("no body?");
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
-        assert!(text.contains("creating connection would violate max_connections limit (desired: 2, limit: 1, current: 1)"));
+        assert_contains!(text, "creating connection would violate max_connections limit (desired: 2, limit: 2, current: 1)");
     }
 
     {
         // while postgres client is connected, websockets can't auth
         let (mut ws, _resp) = tungstenite::connect(ws_url.clone()).unwrap();
         let err = test_util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap_err();
-        assert!(err.to_string().contains("creating connection would violate max_connections limit (desired: 2, limit: 1, current: 1)"), "{err}");
+        assert_contains!(err.to_string(), "creating connection would violate max_connections limit (desired: 2, limit: 2, current: 1)");
     }
 
     tracing::info!("closing postgres client");
@@ -2112,7 +2112,7 @@ fn test_max_connections_on_all_interfaces() {
             let res = Client::new().post(http_url.clone()).json(&json).send().unwrap();
             let status = res.status();
             if status == StatusCode::INTERNAL_SERVER_ERROR {
-                assert!(res.text().expect("expect body").contains("creating connection would violate max_connections limit (desired: 2, limit: 1, current: 1)"));
+                assert_contains!(res.text().expect("expect body"), "creating connection would violate max_connections limit (desired: 2, limit: 2, current: 1)");
                 return Err(());
             }
             assert_eq!(status, StatusCode::OK);
@@ -2156,7 +2156,35 @@ fn test_max_connections_on_all_interfaces() {
     let status = res.status();
     let text = res.text().expect("no body?");
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
-    assert!(text.contains("creating connection would violate max_connections limit (desired: 2, limit: 1, current: 1)"));
+    assert_contains!(text, "creating connection would violate max_connections limit (desired: 2, limit: 2, current: 1)");
+
+    // Make sure lowering our max connections below the current limit does not
+    // cause a panic.
+    mz_client
+        .batch_execute("ALTER SYSTEM SET max_connections = 10")
+        .unwrap();
+
+    // Open a few connections.
+    let mut clients = Vec::new();
+    for _ in 0..5 {
+        let client = server
+            .pg_config()
+            .connect(postgres::NoTls)
+            .expect("success opening client");
+        clients.push(client);
+    }
+
+    // Lower the connection below the number of open clients.
+    mz_client
+        .batch_execute("ALTER SYSTEM SET max_connections = 2")
+        .unwrap();
+
+    // Opening a new connection should fail.
+    let result = server.pg_config().connect(postgres::NoTls);
+    let Err(failure) = result else {
+        panic!("unexpected success connecting to server");
+    };
+    assert_contains!(failure.to_string(), "creating connection would violate max_connections limit (desired: 7, limit: 2, current: 6)");
 }
 
 // Test max_connections and superuser_reserved_connections.
