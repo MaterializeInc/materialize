@@ -257,7 +257,9 @@ fn apply_transform<T: mz_transform::Transform>(
     // Parse the relation, returning early on parse error.
     let mut relation = try_parse_mir(catalog, input)?;
 
-    let features = mz_repr::optimize::OptimizerFeatures::default();
+    let mut features = mz_repr::optimize::OptimizerFeatures::default();
+    // Apply a non-default feature flag to test the right implementation.
+    features.enable_letrec_fixpoint_analysis = true;
     let typecheck_ctx = mz_transform::typecheck::empty_context();
     let mut df_meta = DataflowMetainfo::default();
     let mut transform_ctx =

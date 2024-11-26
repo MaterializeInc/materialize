@@ -69,9 +69,7 @@ With
     Filter false
       Reduce group_by=[2] aggregates=[sum(3), max(4)]
         Filter true AND false
-          Map (3)
-            Filter (#0 = 1) AND (#1 = 2)
-              Get t0
+          Constant <empty>
 
 
 # Infer and apply nullability knowledge.
@@ -96,10 +94,10 @@ Return
       Get l0
 With
   cte l0 =
-    Reduce group_by=[(#2) IS NULL, false] aggregates=[count(false)]
-      Map ((#1) IS NULL, false)
+    Reduce group_by=[false, false] aggregates=[count(false)]
+      Map (false, false)
         Filter false AND (#1) IS NULL
-          Get t0
+          Constant <empty>
 
 
 # Infer and apply constant value knowledge.
@@ -122,9 +120,7 @@ With
 ----
 Return
   Filter true AND false
-    Union
-      Get l0
-      Get l1
+    Constant <empty>
 With
   cte l1 =
     Project (#0, #0, #1)
@@ -225,6 +221,30 @@ With
 
 ## LetRec cases
 ## ------------
+
+# Single binding, value knowledge
+apply pipeline=equivalence_propagation
+Return
+  Get l0
+With Mutually Recursive
+  cte l0 = // { types: "(bigint)" }
+    Distinct project=[#0]
+      Union
+        Constant // { types: "(bigint)" }
+          - (1)
+        Filter (#0 = 1)
+          Get l0
+----
+Return
+  Get l0
+With Mutually Recursive
+  cte l0 =
+    Distinct project=[1]
+      Union
+        Constant
+          - (1)
+        Filter true
+          Get l0
 
 
 # Single binding, value knowledge

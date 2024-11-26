@@ -374,9 +374,9 @@ impl EquivalencePropagation {
                             // literal substitution.
                             let old = expr.clone();
                             reducer.reduce_expr(expr);
-                            let acceptable_sub = accept_expr_reduction(&old, expr);
+                            let acceptable_sub = literal_domination(&old, expr);
                             expr.reduce(input_types.as_ref().unwrap());
-                            if !acceptable_sub && !accept_expr_reduction(&old, expr) {
+                            if !acceptable_sub && !literal_domination(&old, expr) {
                                 expr.clone_from(&old);
                             }
                         }
@@ -443,9 +443,9 @@ impl EquivalencePropagation {
                         // literal substitution.
                         let old_key = key.clone();
                         reducer.reduce_expr(key);
-                        let acceptable_sub = accept_expr_reduction(&old_key, key);
+                        let acceptable_sub = literal_domination(&old_key, key);
                         key.reduce(input_type.as_ref().unwrap());
-                        if !acceptable_sub && !accept_expr_reduction(&old_key, key) {
+                        if !acceptable_sub && !literal_domination(&old_key, key) {
                             key.clone_from(&old_key);
                         }
                     }
@@ -490,10 +490,29 @@ impl EquivalencePropagation {
                 );
             }
             MirRelationExpr::TopK {
-                input, group_key, ..
+                input,
+                group_key,
+                limit,
+                ..
             } => {
-                // TODO: Update `limit` expressions, but only if we update `group_key` at the same time.
-                //       It is important to both or neither, to ensure that `limit` only references columns in `group_key`.
+                // We must be careful when updating `limit` to not install column references
+                // outside of `group_key`. We'll do this for now with `literal_domination`,
+                // which will ensure we only perform substitutions by a literal.
+                let input_equivalences = derived
+                    .last_child()
+                    .value::<Equivalences>()
+                    .expect("Equivalences required");
+                if let Some(input_equivalences) = input_equivalences {
+                    let input_types = derived
+                        .last_child()
+                        .value::<RelationType>()
+                        .expect("RelationType required");
+                    let reducer = input_equivalences.reducer();
+                    if let Some(expr) = limit {
+                        reducer.reduce_expr(expr);
+                        expr.reduce(input_types.as_ref().unwrap());
+                    }
+                }
 
                 // Discard equivalences among non-key columns, as it is not correct that `input` may drop rows
                 // that violate constraints among non-key columns without affecting the result.
@@ -547,7 +566,7 @@ impl EquivalencePropagation {
 ///
 /// The substitutions we are confident with are those that introduce literals for columns,
 /// or which replace column nullability checks with literals.
-fn accept_expr_reduction(old: &MirScalarExpr, new: &MirScalarExpr) -> bool {
+fn literal_domination(old: &MirScalarExpr, new: &MirScalarExpr) -> bool {
     let mut todo = vec![(old, new)];
     while let Some((old, new)) = todo.pop() {
         match (old, new) {
