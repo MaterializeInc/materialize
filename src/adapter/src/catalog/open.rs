@@ -1644,7 +1644,7 @@ mod builtin_migration_tests {
                             .with_key(vec![0])
                             .finish(),
                         resolved_ids: resolved_ids.into_iter().collect(),
-                        cluster_id: ClusterId::user(1).expect("1 is a valid ID"),,
+                        cluster_id: ClusterId::user(1).expect("1 is a valid ID"),
                         non_null_assertions: vec![],
                         custom_logical_compaction_window: None,
                         refresh_schedule: None,

@@ -827,7 +827,7 @@ impl<'a> Transaction<'a> {
         };
 
         let mut id: u64 = u64::from(cluster_variant) << 56;
-        id |= u64::from(cluster_id) << 8;
+        id |= cluster_id << 8;
         id |= u64::from(log_variant);
 
         (
@@ -3706,7 +3706,7 @@ mod tests {
             let mut cluster_id_inner_mask = 0xFFFF_FFFF_FFFF << 8;
             cluster_id_inner_mask &= introspection_source_index_id;
             cluster_id_inner_mask >>= 8;
-            assert_eq!(cluster_id_inner_mask, u64::from(cluster_id_inner));
+            assert_eq!(cluster_id_inner_mask, cluster_id_inner);
         }
 
         // Sanity check that `introspection_source_index_id` contains `timely_messages_received_log_variant`.
