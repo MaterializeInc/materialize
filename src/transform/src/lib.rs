@@ -553,7 +553,12 @@ pub fn fuse_and_collapse_fixpoint() -> Fixpoint {
 }
 
 /// Does constant folding idempotently. This needs to call `FoldConstants` together with
-/// `NormalizeLets` in a fixpoint loop, because currently `FoldConstants` doesn't inline CTEs.
+/// `NormalizeLets` in a fixpoint loop, because currently `FoldConstants` doesn't inline CTEs, so
+/// these two need to alternate until fixpoint.
+///
+/// Also note that `FoldConstants` can break the normalized form by removing all references to a
+/// Let.
+///
 /// We also call `ReduceScalars`, because that does constant folding inside scalar expressions.
 pub fn fold_constants_fixpoint() -> Fixpoint {
     Fixpoint {
@@ -728,11 +733,12 @@ impl Optimizer {
             Box::new(CanonicalizeMfp),
             // Identifies common relation subexpressions.
             Box::new(cse::relation_cse::RelationCSE::new(false)),
+            // Do a last run of constant folding. Importantly, this also runs `NormalizeLets`!
+            // We need `NormalizeLets` at the end of the MIR pipeline for various reasons:
+            // - The rendering expects some invariants about Let/LetRecs.
+            // - `CollectIndexRequests` needs a normalized plan.
+            //   https://github.com/MaterializeInc/database-issues/issues/6371
             Box::new(fold_constants_fixpoint()),
-            // We need this to ensure that `CollectIndexRequests` gets a normalized plan.
-            // (For example, `FoldConstants` can break the normalized form by removing all
-            // references to a Let, see https://github.com/MaterializeInc/database-issues/issues/6371)
-            Box::new(NormalizeLets::new(false)),
             Box::new(Typecheck::new(ctx.typecheck()).disallow_new_globals()),
         ];
         Self {
@@ -801,8 +807,15 @@ impl Optimizer {
             Box::new(LiteralConstraints),
             Box::new(CanonicalizeMfp),
             // We might have arrived at a constant, e.g., due to contradicting literal constraints.
-            Box::new(FoldConstants {
-                limit: Some(FOLD_CONSTANTS_LIMIT),
+            Box::new(Fixpoint {
+                name: "fast_path_fold_constants_fixpoint",
+                limit: 100,
+                transforms: vec![
+                    Box::new(FoldConstants {
+                        limit: Some(FOLD_CONSTANTS_LIMIT),
+                    }),
+                    Box::new(canonicalization::ReduceScalars),
+                ],
             }),
         ];
         Self {
