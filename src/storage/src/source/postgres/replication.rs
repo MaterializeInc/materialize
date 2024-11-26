@@ -76,7 +76,7 @@ use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::LazyLock;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use bytes::Bytes;
 use differential_dataflow::AsCollection;
@@ -627,13 +627,31 @@ async fn raw_stream<'a>(
     let row = simple_query_opt(&metadata_client, "SHOW wal_sender_timeout;")
         .await?
         .unwrap();
-    let wal_sender_timeout: &str = row.get("wal_sender_timeout").unwrap();
+    let wal_sender_timeout = match row.get("wal_sender_timeout") {
+        // When this parameter is zero the timeout mechanism is disabled
+        Some("0") => None,
+        Some(value) => Some(
+            mz_repr::adt::interval::Interval::from_str(value)
+                .unwrap()
+                .duration()
+                .unwrap(),
+        ),
+        None => panic!("ubiquitous parameter missing"),
+    };
 
-    let timeout = mz_repr::adt::interval::Interval::from_str(wal_sender_timeout)
-        .unwrap()
-        .duration()
-        .unwrap();
-    let feedback_interval = timeout.checked_div(2).unwrap();
+    // This interval controls the cadence at which we send back status updates and, crucially,
+    // request PrimaryKeepAlive messages. PrimaryKeepAlive messages drive the frontier forward in
+    // the absence of data updates and we don't want a large `wal_sender_timeout` value to slow us
+    // down. For this reason the feedback interval is set to one second, or less if the
+    // wal_sender_timeout is less than 2 seconds.
+    let feedback_interval = match wal_sender_timeout {
+        Some(t) => std::cmp::min(Duration::from_secs(1), t.checked_div(2).unwrap()),
+        None => Duration::from_secs(1),
+    };
+
+    let mut feedback_timer = tokio::time::interval(feedback_interval);
+    // 'Delay' ensures we always tick at least 'feedback_interval'.
+    feedback_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     // Postgres will return all transactions that commit *at or after* after the provided LSN,
     // following the timely upper semantics.
@@ -711,28 +729,39 @@ async fn raw_stream<'a>(
             Err(err)?;
         }
 
-        let mut last_feedback = Instant::now();
         loop {
-            let send_feedback = tokio::select! {
+            tokio::select! {
                 Some(next_message) = stream.next() => match next_message {
                     Ok(ReplicationMessage::XLogData(data)) => {
                         yield ReplicationMessage::XLogData(data);
-                        Ok(last_feedback.elapsed() > feedback_interval)
+                        Ok(())
                     }
                     Ok(ReplicationMessage::PrimaryKeepAlive(keepalive)) => {
-                        let send_feedback = keepalive.reply() == 1;
                         yield ReplicationMessage::PrimaryKeepAlive(keepalive);
-                        Ok(send_feedback)
+                        Ok(())
                     }
                     Err(err) => Err(err.into()),
                     _ => Err(TransientError::UnknownReplicationMessage),
                 },
+                _ = feedback_timer.tick() => {
+                    let ts: i64 = PG_EPOCH.elapsed().unwrap().as_micros().try_into().unwrap();
+                    let lsn = PgLsn::from(last_committed_upper.offset);
+                    trace!("timely-{} ({}) sending keepalive {lsn:?}", config.worker_id, config.id);
+                    // Postgres only sends PrimaryKeepAlive messages when *it* wants a reply, which
+                    // happens when out status update is late. Since we send them proactively this
+                    // may never happen. It is therefore *crucial* that we set the last parameter
+                    // (the reply flag) to 1 here. This will cause the upstream server to send us a
+                    // PrimaryKeepAlive message promptly which will give us frontier advancement
+                    // information in the absence of data updates.
+                    let res = stream.as_mut().standby_status_update(lsn, lsn, lsn, ts, 1).await;
+                    res.map_err(|e| e.into())
+                },
                 Some(upper) = uppers.next() => match upper.into_option() {
                     Some(lsn) => {
                         last_committed_upper = std::cmp::max(last_committed_upper, lsn);
-                        Ok(true)
+                        Ok(())
                     }
-                    None => Ok(false),
+                    None => Ok(()),
                 },
                 Ok(()) = probe_rx.changed() => match &*probe_rx.borrow() {
                     Some(Ok(probe)) => {
@@ -749,22 +778,13 @@ async fn raw_stream<'a>(
                             );
                         }
                         probe_output.give(probe_cap, probe.clone());
-                        Ok(false)
+                        Ok(())
                     },
                     Some(Err(err)) => Err(anyhow::anyhow!("{err}").into()),
-                    None => Ok(false),
+                    None => Ok(()),
                 },
                 else => return
             }?;
-            if send_feedback {
-                let ts: i64 = PG_EPOCH.elapsed().unwrap().as_micros().try_into().unwrap();
-                let lsn = PgLsn::from(last_committed_upper.offset);
-                stream
-                    .as_mut()
-                    .standby_status_update(lsn, lsn, lsn, ts, 0)
-                    .await?;
-                last_feedback = Instant::now();
-            }
         }
     });
     Ok(Ok(stream))
