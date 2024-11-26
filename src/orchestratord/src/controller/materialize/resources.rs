@@ -668,18 +668,6 @@ fn create_base_service_object(
             name: Some("internal-http".to_string()),
             ..Default::default()
         },
-        ServicePort {
-            port: config.environmentd_balancer_sql_port,
-            protocol: Some("TCP".to_string()),
-            name: Some("balancer-sql".to_string()),
-            ..Default::default()
-        },
-        ServicePort {
-            port: config.environmentd_balancer_http_port,
-            protocol: Some("TCP".to_string()),
-            name: Some("balancer-http".to_string()),
-            ..Default::default()
-        },
     ];
 
     let selector = btreemap! {"materialize.cloud/name".to_string() => mz.environmentd_statefulset_name(generation)};
@@ -848,14 +836,6 @@ fn create_environmentd_statefulset_object(
         format!(
             "--internal-http-listen-addr=0.0.0.0:{}",
             config.environmentd_internal_http_port
-        ),
-        format!(
-            "--balancer-sql-listen-addr=0.0.0.0:{}",
-            config.environmentd_balancer_sql_port
-        ),
-        format!(
-            "--balancer-http-listen-addr=0.0.0.0:{}",
-            config.environmentd_balancer_http_port
         ),
     ]);
 
@@ -1081,11 +1061,6 @@ fn create_environmentd_statefulset_object(
             ..Default::default()
         },
         ContainerPort {
-            container_port: config.environmentd_balancer_sql_port,
-            name: Some("balancer-sql".to_owned()),
-            ..Default::default()
-        },
-        ContainerPort {
             container_port: config.environmentd_http_port,
             name: Some("http".to_owned()),
             ..Default::default()
@@ -1093,11 +1068,6 @@ fn create_environmentd_statefulset_object(
         ContainerPort {
             container_port: config.environmentd_internal_http_port,
             name: Some("internal-http".to_owned()),
-            ..Default::default()
-        },
-        ContainerPort {
-            container_port: config.environmentd_balancer_http_port,
-            name: Some("balancer-http".to_owned()),
             ..Default::default()
         },
         ContainerPort {
@@ -1312,13 +1282,17 @@ fn create_balancerd_deployment_object(config: &super::Args, mz: &Materialize) ->
             "--https-resolver-template={}.{}.svc.cluster.local:{}",
             mz.environmentd_service_name(),
             mz.namespace(),
-            config.environmentd_balancer_http_port
+            // TODO after implementing self-hosted auth,
+            // point at config.environmentd_http_port
+            config.environmentd_internal_http_port
         ),
         format!(
             "--static-resolver-addr={}.{}.svc.cluster.local:{}",
             mz.environmentd_service_name(),
             mz.namespace(),
-            config.environmentd_balancer_sql_port
+            // TODO after implementing self-hosted auth,
+            // point at config.environmentd_sql_port
+            config.environmentd_internal_sql_port
         ),
     ];
 
