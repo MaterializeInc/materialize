@@ -31,7 +31,7 @@
     // https://weblog.west-wind.com/posts/2016/Feb/15/Flexbox-Containers-PRE-tags-and-managing-Overflow
     min-width: 0;
     max-width: 840px;
-    padding: var(--xx-small) var(--small);
+    padding: var(--large) var(--small);
 
     @media (max-width: 1260px) {
         flex: 2.5;
@@ -154,7 +154,7 @@ table.inline-headings {
     margin-left: auto;
     position: sticky;
     top: var(--nav-height);
-    padding: var(--x-small) var(--nano);
+    padding: var(--large) var(--small);
     overflow-y: auto;
     height: 100vh;
     display: flex;

@@ -7,6 +7,8 @@ disableKinds = ['taxonomy']
 
 [params]
 repo = "//github.com/MaterializeInc/materialize"
+bannerMessage = "Need to run Materialize in your own private or public cloud? Get early access to **self-managed Materialize**!"
+bannerLink="https://materialize.com/blog/self-managed/?utm_medium=docs-banner&utm_source=documentation&utm_campaign=FY25_Blogs&sf_campaign=701TR00000NoNFXYA3&utm_term=&utm_content="
 
 [frontmatter]
 publishDate = ["publishDate"]
