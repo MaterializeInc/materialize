@@ -102,14 +102,18 @@ pub mod common {
 
     impl Derived {
         /// Return the analysis results derived so far.
-        pub fn results<A: Analysis>(&self) -> Option<&[A::Value]> {
+        ///
+        /// # Panics
+        ///
+        /// This method panics if `A` was not installed as a required analysis.
+        pub fn results<A: Analysis>(&self) -> &[A::Value] {
             let type_id = TypeId::of::<Bundle<A>>();
             if let Some(bundle) = self.analyses.get(&type_id) {
                 if let Some(bundle) = bundle.as_any().downcast_ref::<Bundle<A>>() {
-                    return Some(&bundle.results[..]);
+                    return &bundle.results[..];
                 }
             }
-            None
+            panic!("Analysis {:?} missing", std::any::type_name::<A>());
         }
         /// Bindings from local identifiers to result offsets for analysis values.
         pub fn bindings(&self) -> &BTreeMap<LocalId, usize> {
@@ -127,7 +131,7 @@ pub mod common {
             start: usize,
             count: usize,
         ) -> impl Iterator<Item = usize> + 'a {
-            let sizes = self.results::<SubtreeSize>().expect("SubtreeSize missing");
+            let sizes = self.results::<SubtreeSize>();
             let offset = 1;
             (0..count).scan(offset, move |offset, _| {
                 let result = start - *offset;
@@ -141,10 +145,7 @@ pub mod common {
             DerivedView {
                 derived: self,
                 lower: 0,
-                upper: self
-                    .results::<SubtreeSize>()
-                    .expect("SubtreeSize missing")
-                    .len(),
+                upper: self.results::<SubtreeSize>().len(),
             }
         }
     }
@@ -166,7 +167,7 @@ pub mod common {
     impl<'a> DerivedView<'a> {
         /// The value associated with the expression.
         pub fn value<A: Analysis>(&self) -> Option<&'a A::Value> {
-            self.results::<A>().and_then(|slice| slice.last())
+            self.results::<A>().last()
         }
 
         /// The post-order traversal index for the expression.
@@ -185,16 +186,18 @@ pub mod common {
             self.derived
                 .bindings
                 .get(&id)
-                .and_then(|index| self.derived.results::<A>().and_then(|r| r.get(*index)))
+                .and_then(|index| self.derived.results::<A>().get(*index))
         }
 
         /// The results for expression and its children.
         ///
         /// The results for the expression itself will be the last element.
-        pub fn results<A: Analysis>(&self) -> Option<&'a [A::Value]> {
-            self.derived
-                .results::<A>()
-                .map(|slice| &slice[self.lower..self.upper])
+        ///
+        /// # Panics
+        ///
+        /// This method panics if `A` was not installed as a required analysis.
+        pub fn results<A: Analysis>(&self) -> &'a [A::Value] {
+            &self.derived.results::<A>()[self.lower..self.upper]
         }
 
         /// Bindings from local identifiers to result offsets for analysis values.
@@ -221,7 +224,7 @@ pub mod common {
             // Repeatedly read out the last element, then peel off that many elements.
             // Each extracted slice corresponds to a child of the current expression.
             // We should end cleanly with an empty slice, otherwise there is an issue.
-            let sizes = self.results::<SubtreeSize>().expect("SubtreeSize missing");
+            let sizes = self.results::<SubtreeSize>();
             let sizes = &sizes[..sizes.len() - 1];
 
             let offset = self.lower;
@@ -718,7 +721,7 @@ mod unique_keys {
                     keys
                 }
                 _ => {
-                    let arity = depends.results::<Arity>().unwrap();
+                    let arity = depends.results::<Arity>();
                     expr.keys_with_input_keys(
                         offsets.iter().map(|o| arity[*o]),
                         offsets.iter().map(|o| &results[*o]),
@@ -1261,7 +1264,7 @@ mod explain {
             if config.subtree_size {
                 for (expr, subtree_size) in std::iter::zip(
                     subtree_refs.iter(),
-                    derived.results::<super::SubtreeSize>().unwrap().into_iter(),
+                    derived.results::<super::SubtreeSize>().into_iter(),
                 ) {
                     let attrs = annotations.entry(expr).or_default();
                     attrs.subtree_size = Some(*subtree_size);
@@ -1270,7 +1273,7 @@ mod explain {
             if config.non_negative {
                 for (expr, non_negative) in std::iter::zip(
                     subtree_refs.iter(),
-                    derived.results::<super::NonNegative>().unwrap().into_iter(),
+                    derived.results::<super::NonNegative>().into_iter(),
                 ) {
                     let attrs = annotations.entry(expr).or_default();
                     attrs.non_negative = Some(*non_negative);
@@ -1280,7 +1283,7 @@ mod explain {
             if config.arity {
                 for (expr, arity) in std::iter::zip(
                     subtree_refs.iter(),
-                    derived.results::<super::Arity>().unwrap().into_iter(),
+                    derived.results::<super::Arity>().into_iter(),
                 ) {
                     let attrs = annotations.entry(expr).or_default();
                     attrs.arity = Some(*arity);
@@ -1290,10 +1293,7 @@ mod explain {
             if config.types {
                 for (expr, types) in std::iter::zip(
                     subtree_refs.iter(),
-                    derived
-                        .results::<super::RelationType>()
-                        .unwrap()
-                        .into_iter(),
+                    derived.results::<super::RelationType>().into_iter(),
                 ) {
                     let attrs = annotations.entry(expr).or_default();
                     attrs.types = Some(types.clone());
@@ -1303,7 +1303,7 @@ mod explain {
             if config.keys {
                 for (expr, keys) in std::iter::zip(
                     subtree_refs.iter(),
-                    derived.results::<super::UniqueKeys>().unwrap().into_iter(),
+                    derived.results::<super::UniqueKeys>().into_iter(),
                 ) {
                     let attrs = annotations.entry(expr).or_default();
                     attrs.keys = Some(keys.clone());
@@ -1313,7 +1313,7 @@ mod explain {
             if config.cardinality {
                 for (expr, card) in std::iter::zip(
                     subtree_refs.iter(),
-                    derived.results::<super::Cardinality>().unwrap().into_iter(),
+                    derived.results::<super::Cardinality>().into_iter(),
                 ) {
                     let attrs = annotations.entry(expr).or_default();
                     attrs.cardinality = Some(card.to_string());
@@ -1323,7 +1323,7 @@ mod explain {
             if config.column_names || config.humanized_exprs {
                 for (expr, column_names) in std::iter::zip(
                     subtree_refs.iter(),
-                    derived.results::<super::ColumnNames>().unwrap().into_iter(),
+                    derived.results::<super::ColumnNames>().into_iter(),
                 ) {
                     let attrs = annotations.entry(expr).or_default();
                     let value = column_names
@@ -1793,18 +1793,9 @@ mod cardinality {
         ) -> Self::Value {
             use MirRelationExpr::*;
 
-            let sizes = depends
-                .as_view()
-                .results::<SubtreeSize>()
-                .expect("SubtreeSize analysis results missing");
-            let arity = depends
-                .as_view()
-                .results::<Arity>()
-                .expect("Arity analysis results missing");
-            let keys = depends
-                .as_view()
-                .results::<UniqueKeys>()
-                .expect("UniqueKeys analysis results missing");
+            let sizes = depends.as_view().results::<SubtreeSize>();
+            let arity = depends.as_view().results::<Arity>();
+            let keys = depends.as_view().results::<UniqueKeys>();
 
             match expr {
                 Constant { rows, .. } => {
@@ -1842,7 +1833,7 @@ mod cardinality {
                 }
                 Filter { predicates, .. } => {
                     let input = results[index - 1];
-                    let keys = depends.results::<UniqueKeys>().expect("UniqueKeys missing");
+                    let keys = depends.results::<UniqueKeys>();
                     let keys = &keys[index - 1];
                     self.filter(predicates, keys, input)
                 }
