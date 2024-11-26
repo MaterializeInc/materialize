@@ -14,16 +14,15 @@ use std::str::FromStr;
 
 use anyhow::bail;
 use mz_proto::{RustType, TryFromProtoError};
-use proptest_derive::Arbitrary;
+use proptest::prelude::{Arbitrary, Strategy};
+use proptest::strategy::BoxedStrategy;
 use serde::{Deserialize, Serialize};
 use tracing::error;
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_types.instances.rs"));
 
 /// Identifier of a storage instance.
-#[derive(
-    Arbitrary, Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize,
-)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum StorageInstanceId {
     /// A system storage instance.
     System(u64),
@@ -128,4 +127,21 @@ impl RustType<ProtoStorageInstanceId> for StorageInstanceId {
             )),
         }
     }
+}
+
+impl Arbitrary for StorageInstanceId {
+    type Parameters = ();
+
+    fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
+        const UPPER_BOUND: u64 = 1 << 47;
+        (0..2, 0..UPPER_BOUND)
+            .prop_map(|(variant, id)| match variant {
+                0 => StorageInstanceId::System(id),
+                1 => StorageInstanceId::User(id),
+                _ => unreachable!(),
+            })
+            .boxed()
+    }
+
+    type Strategy = BoxedStrategy<StorageInstanceId>;
 }
