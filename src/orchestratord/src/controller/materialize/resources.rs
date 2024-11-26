@@ -1033,6 +1033,10 @@ fn create_environmentd_statefulset_object(
         &config.internal_console_proxy_url,
     ));
 
+    if !config.collect_pod_metrics {
+        args.push("--orchestrator-kubernetes-disable-pod-metrics-collection".into());
+    }
+
     // Add user-specified extra arguments.
     if let Some(extra_args) = &mz.spec.environmentd_extra_args {
         args.extend(extra_args.iter().cloned());

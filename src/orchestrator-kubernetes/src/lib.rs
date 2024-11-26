@@ -95,6 +95,8 @@ pub struct KubernetesOrchestratorConfig {
     pub service_fs_group: Option<i64>,
     /// The prefix to prepend to all object names
     pub name_prefix: Option<String>,
+    /// Whether we should attempt to collect metrics from kubernetes
+    pub collect_pod_metrics: bool,
 }
 
 impl KubernetesOrchestratorConfig {
@@ -185,6 +187,7 @@ impl Orchestrator for KubernetesOrchestrator {
                 owner_references: vec![],
                 command_rx,
                 name_prefix: self.config.name_prefix.clone().unwrap_or_default(),
+                collect_pod_metrics: self.config.collect_pod_metrics,
             }
             .spawn(format!("kubernetes-orchestrator-worker:{namespace}"));
 
@@ -284,6 +287,7 @@ struct OrchestratorWorker {
     owner_references: Vec<OwnerReference>,
     command_rx: mpsc::UnboundedReceiver<WorkerCommand>,
     name_prefix: String,
+    collect_pod_metrics: bool,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -1405,6 +1409,12 @@ impl OrchestratorWorker {
         name: &str,
         info: &ServiceInfo,
     ) -> Vec<ServiceProcessMetrics> {
+        if !self.collect_pod_metrics {
+            return (0..info.scale)
+                .map(|_| ServiceProcessMetrics::default())
+                .collect();
+        }
+
         /// Get metrics for a particular service and process, converting them into a sane (i.e., numeric) format.
         ///
         /// Note that we want to keep going even if a lookup fails for whatever reason,
