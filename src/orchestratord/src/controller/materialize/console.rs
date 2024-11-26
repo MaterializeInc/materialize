@@ -147,11 +147,9 @@ fn create_console_deployment_object(
         name: "MZ_ENDPOINT".to_string(),
         value: Some(format!(
             "http://{}.{}.svc.cluster.local:{}",
-            // TODO: this should talk to balancerd eventually, but for now we
-            // need to bypass auth which requires using the internal port
-            mz.environmentd_service_name(),
+            mz.balancerd_service_name(),
             mz.namespace(),
-            config.environmentd_internal_http_port,
+            config.balancerd_http_port,
         )),
         ..Default::default()
     }];
