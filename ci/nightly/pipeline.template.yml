@@ -1102,31 +1102,49 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: launchdarkly
 
-  - id: cloud-canary
-    label: "Canary Deploy in Staging Cloud"
-    depends_on: build-aarch64
-    timeout_in_minutes: 1200
-    concurrency: 1
-    concurrency_group: 'cloud-canary'
-    agents:
-      queue: linux-aarch64-small
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: cloud-canary
-    branches: "main v*.*"
+  - group: E2E
+    key: e2e
+    steps:
+    - id: cloud-canary
+      label: "Canary Deploy in Staging Cloud"
+      depends_on: build-aarch64
+      timeout_in_minutes: 1200
+      concurrency: 1
+      concurrency_group: 'cloud-canary'
+      agents:
+        queue: linux-aarch64-small
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: cloud-canary
+      branches: "main v*.*"
 
-  - id: mz-e2e
-    label: "Mz E2E Test"
-    depends_on: build-aarch64
-    timeout_in_minutes: 1200
-    concurrency: 1
-    concurrency_group: 'mz-e2e'
-    agents:
-      # Requires real Mz access, CONFLUENT_CLOUD_DEVEX_KAFKA_USERNAME, etc.
-      queue: linux-aarch64-small
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: mz-e2e
+    - id: mz-e2e
+      label: "Mz E2E Test"
+      depends_on: build-aarch64
+      timeout_in_minutes: 1200
+      concurrency: 1
+      concurrency_group: 'mz-e2e'
+      agents:
+        # Requires real Mz access, CONFLUENT_CLOUD_DEVEX_KAFKA_USERNAME, etc.
+        queue: linux-aarch64-small
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: mz-e2e
+
+    - id: terraform-aws
+      label: "Terraform + Helm Chart E2E on AWS"
+      artifact_paths: [test/terraform/aws/terraform.tfstate]
+      depends_on: build-aarch64
+      timeout_in_minutes: 1200
+      concurrency: 1
+      concurrency_group: 'terraform'
+      agents:
+        queue: linux-aarch64-small
+      plugins:
+        - ./ci/plugins/scratch-aws-access: ~
+        - ./ci/plugins/mzcompose:
+            composition: terraform
+      branches: "main v*.*"
 
   - group: "Output consistency"
     key: output-consistency

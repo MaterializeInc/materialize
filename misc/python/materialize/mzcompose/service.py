@@ -171,6 +171,9 @@ class ServiceConfig(TypedDict, total=False):
     stop_grace_period: str | None
     """Time to wait when stopping a container."""
 
+    network_mode: str | None
+    """Network mode."""
+
 
 class Service:
     """A Docker Compose service in a `Composition`.
