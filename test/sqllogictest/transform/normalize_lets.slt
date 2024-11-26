@@ -21,15 +21,13 @@ Explained Query:
     Get l0
   With Mutually Recursive
     cte l0 =
-      Project (#1)
-        Map (1)
-          Distinct project=[#0] monotonic
-            Union
-              Project (#1)
-                Map (7)
-                  Get l0
-              Constant
-                - (2)
+      Map (1)
+        Union
+          Distinct project=[] monotonic
+            Project ()
+              Get l0
+          Constant
+            - ()
 
 Target cluster: mz_catalog_server
 
