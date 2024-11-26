@@ -1911,15 +1911,20 @@ where
                     let mut sent_rows = 0;
                     let mut sent_bytes = 0;
                     let messages = (&mut batch_rows)
+                        // TODO(parkmycar): This is a fair bit of juggling between iterator types
+                        // to count the total number of bytes. Alternatively we could track the
+                        // total sent bytes in this .map(...) call, but having side effects in map
+                        // is a code smell.
                         .map(|row| {
-                            // HACK(parkmycar): Having side-effects in a `.map(...)` call like this
-                            // is not the best.
-                            sent_bytes += row.byte_len();
-                            sent_rows += 1;
-
+                            let row_len = row.byte_len();
                             let values = mz_pgrepr::values_from_row(row, row_desc.typ());
-                            BackendMessage::DataRow(values)
+                            (row_len, BackendMessage::DataRow(values))
                         })
+                        .inspect(|(row_len, _)| {
+                            sent_bytes += row_len;
+                            sent_rows += 1
+                        })
+                        .map(|(_row_len, row)| row)
                         .take(want_rows);
                     self.send_all(messages).await?;
 
@@ -1976,8 +1981,7 @@ where
                 .get_portal_unverified_mut(&name)
                 .expect("valid fetch portal")
         });
-        let response_message =
-            get_response(max_rows, total_sent_bytes, total_sent_rows, fetch_portal);
+        let response_message = get_response(max_rows, total_sent_rows, fetch_portal);
         self.send(response_message).await?;
         Ok((
             State::Ready,
@@ -2352,7 +2356,6 @@ fn describe_rows(stmt_desc: &StatementDesc, formats: &[Format]) -> BackendMessag
 
 type GetResponse = fn(
     max_rows: ExecuteCount,
-    total_sent_bytes: usize,
     total_sent_rows: usize,
     fetch_portal: Option<&mut Portal>,
 ) -> BackendMessage;
@@ -2361,7 +2364,6 @@ type GetResponse = fn(
 // simple query messages.
 fn portal_exec_message(
     max_rows: ExecuteCount,
-    total_sent_bytes: usize,
     total_sent_rows: usize,
     _fetch_portal: Option<&mut Portal>,
 ) -> BackendMessage {
@@ -2376,10 +2378,7 @@ fn portal_exec_message(
             BackendMessage::PortalSuspended
         }
         _ => BackendMessage::CommandComplete {
-            tag: format!(
-                "SELECT {} bytes, {} rows",
-                total_sent_bytes, total_sent_rows
-            ),
+            tag: format!("SELECT {}", total_sent_rows),
         },
     }
 }
@@ -2387,11 +2386,10 @@ fn portal_exec_message(
 // A GetResponse used by send_rows during FETCH queries.
 fn fetch_message(
     _max_rows: ExecuteCount,
-    total_sent_bytes: usize,
     total_sent_rows: usize,
     fetch_portal: Option<&mut Portal>,
 ) -> BackendMessage {
-    let tag = format!("FETCH {} bytes, {} rows", total_sent_bytes, total_sent_rows);
+    let tag = format!("FETCH {}", total_sent_rows);
     if let Some(portal) = fetch_portal {
         portal.state = PortalState::Completed(Some(tag.clone()));
     }
