@@ -2688,7 +2688,7 @@ mod tests {
             assert_eq!(
                 mz_sql::catalog::ObjectType::ClusterReplica,
                 conn_catalog.get_object_type(&ObjectId::ClusterReplica((
-                    ClusterId::User(1),
+                    ClusterId::user(1).expect("1 is a valid ID"),
                     ReplicaId::User(1)
                 )))
             );
@@ -2710,7 +2710,7 @@ mod tests {
             assert_eq!(
                 None,
                 conn_catalog.get_privileges(&SystemObjectId::Object(ObjectId::ClusterReplica((
-                    ClusterId::User(1),
+                    ClusterId::user(1).expect("1 is a valid ID"),
                     ReplicaId::User(1),
                 ))))
             );

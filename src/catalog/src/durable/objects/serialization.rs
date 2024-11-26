@@ -1056,8 +1056,18 @@ impl RustType<proto::ClusterId> for StorageInstanceId {
             .value
             .ok_or_else(|| TryFromProtoError::missing_field("ClusterId::value"))?;
         let id = match value {
-            proto::cluster_id::Value::User(id) => StorageInstanceId::User(id),
-            proto::cluster_id::Value::System(id) => StorageInstanceId::System(id),
+            proto::cluster_id::Value::User(id) => StorageInstanceId::user(id).ok_or_else(|| {
+                TryFromProtoError::InvalidPersistState(format!(
+                    "{id} is not a valid StorageInstanceId"
+                ))
+            })?,
+            proto::cluster_id::Value::System(id) => {
+                StorageInstanceId::system(id).ok_or_else(|| {
+                    TryFromProtoError::InvalidPersistState(format!(
+                        "{id} is not a valid StorageInstanceId"
+                    ))
+                })?
+            }
         };
         Ok(id)
     }

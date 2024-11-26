@@ -3625,7 +3625,7 @@ impl Coordinator {
 
         // An arbitrary compute instance ID to satisfy the function calls below. Note that
         // this only works because this function will never run.
-        let compute_instance = ComputeInstanceId::User(1);
+        let compute_instance = ComputeInstanceId::user(1).expect("1 is a valid ID");
 
         let _: () = self.ship_dataflow(dataflow, compute_instance, None).await;
     }

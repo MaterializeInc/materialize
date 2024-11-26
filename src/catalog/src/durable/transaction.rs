@@ -402,10 +402,7 @@ impl<'a> Transaction<'a> {
         temporary_oids: &HashSet<u32>,
     ) -> Result<(), CatalogError> {
         let cluster_id = self.get_and_increment_id(SYSTEM_CLUSTER_ID_ALLOC_KEY.to_string())?;
-        let cluster_id = cluster_id
-            .try_into()
-            .map_err(|_| SqlCatalogError::IdExhaustion)?;
-        let cluster_id = ClusterId::System(cluster_id);
+        let cluster_id = ClusterId::system(cluster_id).ok_or(SqlCatalogError::IdExhaustion)?;
         self.insert_cluster(
             cluster_id,
             cluster_name,
@@ -769,11 +766,11 @@ impl<'a> Transaction<'a> {
     /// Introspection source index IDs are 64 bit integers, with the following format (not to
     /// scale):
     ///
-    /// ---------------------------------------------------------------------------
-    /// | Cluster ID Variant | Cluster ID Inner Value | Empty Space | Log Variant |
-    /// |--------------------|------------------------|-------------|-------------|
-    /// |       8-bits       |         32-bits        |    8-bits   |   16-bits   |
-    /// ---------------------------------------------------------------------------
+    /// -------------------------------------------------------------
+    /// | Cluster ID Variant | Cluster ID Inner Value | Log Variant |
+    /// |--------------------|------------------------|-------------|
+    /// |       8-bits       |         48-bits        |   8-bits    |
+    /// -------------------------------------------------------------
     ///
     /// Cluster ID Variant:      A unique number indicating the variant of cluster the index belongs
     ///                          to.
@@ -788,8 +785,14 @@ impl<'a> Transaction<'a> {
             ClusterId::System(_) => 1,
             ClusterId::User(_) => 2,
         };
-        let cluster_id: u32 = cluster_id.inner_id();
-        let log_variant: u16 = match log_variant {
+        let cluster_id: u64 = cluster_id.inner_id();
+        const CLUSTER_ID_MASK: u64 = 0xFFFF << 48;
+        assert_eq!(
+            CLUSTER_ID_MASK & cluster_id,
+            0,
+            "invalid cluster ID: {cluster_id}"
+        );
+        let log_variant: u8 = match log_variant {
             LogVariant::Timely(TimelyLog::Operates) => 1,
             LogVariant::Timely(TimelyLog::Channels) => 2,
             LogVariant::Timely(TimelyLog::Elapsed) => 3,
@@ -824,7 +827,7 @@ impl<'a> Transaction<'a> {
         };
 
         let mut id: u64 = u64::from(cluster_variant) << 56;
-        id |= u64::from(cluster_id) << 24;
+        id |= u64::from(cluster_id) << 8;
         id |= u64::from(log_variant);
 
         (
@@ -3680,14 +3683,15 @@ mod tests {
     #[mz_ore::test]
     fn test_allocate_introspection_source_index_id() {
         let cluster_variant: u8 = 0b0000_0001;
-        let cluster_id_inner: u32 = 0b1010_1101_0000_1011_1111_1001_0110_1010;
-        let timely_messages_received_log_variant: u16 = 0b0000_0000_0000_1000;
+        let cluster_id_inner: u64 =
+            0b0000_0000_1100_0101_1100_0011_1010_1101_0000_1011_1111_1001_0110_1010;
+        let timely_messages_received_log_variant: u8 = 0b0000_1000;
 
         let cluster_id = ClusterId::System(cluster_id_inner);
         let log_variant = LogVariant::Timely(TimelyLog::MessagesReceived);
 
         let introspection_source_index_id: u64 =
-            0b0000_0001_1010_1101_0000_1011_1111_1001_0110_1010_0000_0000_0000_0000_0000_1000;
+            0b0000_0001_1100_0101_1100_0011_1010_1101_0000_1011_1111_1001_0110_1010_0000_1000;
 
         // Sanity check that `introspection_source_index_id` contains `cluster_variant`.
         {
@@ -3699,15 +3703,15 @@ mod tests {
 
         // Sanity check that `introspection_source_index_id` contains `cluster_id_inner`.
         {
-            let mut cluster_id_inner_mask = 0xFFFF_FFFF << 24;
+            let mut cluster_id_inner_mask = 0xFFFF_FFFF_FFFF << 8;
             cluster_id_inner_mask &= introspection_source_index_id;
-            cluster_id_inner_mask >>= 24;
+            cluster_id_inner_mask >>= 8;
             assert_eq!(cluster_id_inner_mask, u64::from(cluster_id_inner));
         }
 
         // Sanity check that `introspection_source_index_id` contains `timely_messages_received_log_variant`.
         {
-            let mut log_variant_mask = 0xFFFF;
+            let mut log_variant_mask = 0xFF;
             log_variant_mask &= introspection_source_index_id;
             assert_eq!(
                 log_variant_mask,

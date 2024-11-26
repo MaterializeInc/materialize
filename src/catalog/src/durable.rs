@@ -340,12 +340,9 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     ) -> Result<ClusterId, CatalogError> {
         let id = self
             .allocate_id(USER_CLUSTER_ID_ALLOC_KEY, 1, commit_ts)
-            .await?;
-        let id: u32 = id
-            .into_element()
-            .try_into()
-            .map_err(|_| SqlCatalogError::IdExhaustion)?;
-        Ok(ClusterId::User(id))
+            .await?
+            .into_element();
+        Ok(ClusterId::user(id).ok_or(SqlCatalogError::IdExhaustion)?)
     }
 }
 

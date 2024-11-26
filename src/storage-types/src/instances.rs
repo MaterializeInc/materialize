@@ -16,6 +16,7 @@ use anyhow::bail;
 use mz_proto::{RustType, TryFromProtoError};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
+use tracing::error;
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_types.instances.rs"));
 
@@ -25,13 +26,40 @@ include!(concat!(env!("OUT_DIR"), "/mz_storage_types.instances.rs"));
 )]
 pub enum StorageInstanceId {
     /// A system storage instance.
-    System(u32),
+    System(u64),
     /// A user storage instance.
-    User(u32),
+    User(u64),
 }
 
 impl StorageInstanceId {
-    pub fn inner_id(&self) -> u32 {
+    /// Creates a new `StorageInstanceId` in the system namespace. The top 16 bits of `id` must be
+    /// 0, because this ID is packed into 48 bits of
+    /// [`mz_repr::GlobalId::IntrospectionSourceIndex`].
+    pub fn system(id: u64) -> Option<Self> {
+        Self::new(id, Self::System)
+    }
+
+    /// Creates a new `StorageInstanceId` in the user namespace. The top 16 bits of `id` must be
+    /// 0, because this ID is packed into 48 bits of
+    /// [`mz_repr::GlobalId::IntrospectionSourceIndex`].
+    pub fn user(id: u64) -> Option<Self> {
+        Self::new(id, Self::User)
+    }
+
+    fn new(id: u64, variant: fn(u64) -> Self) -> Option<Self> {
+        const MASK: u64 = 0xFFFF << 48;
+        const WARN_MASK: u64 = 1 << 47;
+        if MASK & id == 0 {
+            if WARN_MASK & id != 0 {
+                error!("{WARN_MASK} or more `StorageInstanceId`s allocated, we will run out soon");
+            }
+            Some(variant(id))
+        } else {
+            None
+        }
+    }
+
+    pub fn inner_id(&self) -> u64 {
         match self {
             StorageInstanceId::System(id) | StorageInstanceId::User(id) => *id,
         }
@@ -53,7 +81,7 @@ impl FromStr for StorageInstanceId {
         if s.len() < 2 {
             bail!("couldn't parse compute instance id {}", s);
         }
-        let val: u32 = s[1..].parse()?;
+        let val: u64 = s[1..].parse()?;
         match s.chars().next().unwrap() {
             's' => Ok(Self::System(val)),
             'u' => Ok(Self::User(val)),
@@ -85,8 +113,16 @@ impl RustType<ProtoStorageInstanceId> for StorageInstanceId {
     fn from_proto(proto: ProtoStorageInstanceId) -> Result<Self, TryFromProtoError> {
         use proto_storage_instance_id::Kind::*;
         match proto.kind {
-            Some(System(x)) => Ok(StorageInstanceId::System(x)),
-            Some(User(x)) => Ok(StorageInstanceId::User(x)),
+            Some(System(x)) => StorageInstanceId::system(x).ok_or_else(|| {
+                TryFromProtoError::InvalidPersistState(format!(
+                    "{x} is not a valid StorageInstanceId"
+                ))
+            }),
+            Some(User(x)) => StorageInstanceId::user(x).ok_or_else(|| {
+                TryFromProtoError::InvalidPersistState(format!(
+                    "{x} is not a valid StorageInstanceId"
+                ))
+            }),
             None => Err(TryFromProtoError::missing_field(
                 "ProtoStorageInstanceId::kind",
             )),

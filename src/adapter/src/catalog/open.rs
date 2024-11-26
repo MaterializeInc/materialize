@@ -1644,7 +1644,7 @@ mod builtin_migration_tests {
                             .with_key(vec![0])
                             .finish(),
                         resolved_ids: resolved_ids.into_iter().collect(),
-                        cluster_id: ClusterId::User(1),
+                        cluster_id: ClusterId::user(1).expect("1 is a valid ID"),,
                         non_null_assertions: vec![],
                         custom_logical_compaction_window: None,
                         refresh_schedule: None,
@@ -1661,7 +1661,7 @@ mod builtin_migration_tests {
                         keys: Default::default(),
                         conn_id: None,
                         resolved_ids: [(on_item_id, on_gid)].into_iter().collect(),
-                        cluster_id: ClusterId::User(1),
+                        cluster_id: ClusterId::user(1).expect("1 is a valid ID"),
                         custom_logical_compaction_window: None,
                         is_retained_metrics_object: false,
                     })

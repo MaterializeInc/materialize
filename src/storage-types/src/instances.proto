@@ -13,7 +13,7 @@ package mz_storage_types.instances;
 
 message ProtoStorageInstanceId {
   oneof kind {
-    uint32 system = 1;
-    uint32 user = 2;
+    uint64 system = 1;
+    uint64 user = 2;
   }
 }
