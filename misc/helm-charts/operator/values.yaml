@@ -255,6 +255,25 @@ networkPolicies:
     cidrs:
       - 0.0.0.0/0
 
+tls:
+  defaultCertificateSpecs: {}
+    #balancerdExternal:
+    #  dnsNames:
+    #    - balancerd
+    #  issuerRef:
+    #    name: dns01
+    #    kind: ClusterIssuer
+    #consoleExternal:
+    #  dnsNames:
+    #    - console
+    #  issuerRef:
+    #    name: dns01
+    #    kind: ClusterIssuer
+    #internal:
+    #  issuerRef:
+    #    name: dns01
+    #    kind: ClusterIssuer
+
 # Namespace configuration
 namespace:
   # Whether to create a new namespace for the deployment

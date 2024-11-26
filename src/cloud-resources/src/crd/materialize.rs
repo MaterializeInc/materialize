@@ -38,7 +38,7 @@ pub mod v1alpha1 {
     // This is intentionally a subset of the fields of a Certificate.
     // We do not want customers to configure options that may conflict with
     // things we override or expand in our code.
-    #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+    #[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize, JsonSchema)]
     #[serde(rename_all = "camelCase")]
     pub struct MaterializeCertSpec {
         // Additional DNS names the cert will be valid for.
@@ -52,7 +52,7 @@ pub mod v1alpha1 {
         // https://golang.org/pkg/time/#ParseDuration.
         pub renew_before: Option<String>,
         // Reference to an Issuer or ClusterIssuer that will generate the certificate.
-        pub issuer_ref: CertificateIssuerRef,
+        pub issuer_ref: Option<CertificateIssuerRef>,
         // Additional annotations and labels to include in the Certificate object.
         pub secret_template: Option<CertificateSecretTemplate>,
     }

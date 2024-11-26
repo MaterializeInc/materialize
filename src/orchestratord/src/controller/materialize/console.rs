@@ -50,7 +50,8 @@ impl Resources {
             console_image_ref,
         ));
         let console_service = Box::new(create_console_service_object(config, mz));
-        let console_external_certificate = Box::new(create_console_external_certificate(mz));
+        let console_external_certificate =
+            Box::new(create_console_external_certificate(config, mz));
         Self {
             network_policies,
             console_deployment,
@@ -130,19 +131,18 @@ fn create_network_policies(config: &super::Args, mz: &Materialize) -> Vec<Networ
     network_policies
 }
 
-fn create_console_external_certificate(mz: &Materialize) -> Option<Certificate> {
-    mz.spec
-        .console_external_certificate_spec
-        .as_ref()
-        .map(|mz_cert_spec| {
-            create_certificate(
-                mz,
-                mz_cert_spec,
-                mz.console_external_certificate_name(),
-                mz.console_external_certificate_secret_name(),
-                None,
-            )
-        })
+fn create_console_external_certificate(
+    config: &super::Args,
+    mz: &Materialize,
+) -> Option<Certificate> {
+    create_certificate(
+        config.default_certificate_specs.console_external.clone(),
+        mz,
+        mz.spec.console_external_certificate_spec.clone(),
+        mz.console_external_certificate_name(),
+        mz.console_external_certificate_secret_name(),
+        None,
+    )
 }
 
 fn create_console_deployment_object(
@@ -185,12 +185,15 @@ fn create_console_deployment_object(
         ..Default::default()
     }];
 
-    if mz.spec.console_external_certificate_spec.is_some() {
-        // TODO define volumes, volume_mounts, and any arg changes
-        unimplemented!();
-    } else {
-        // currently the docker image just doesn't implement tls
-    }
+    //if issuer_ref_defined(
+    //    &config.default_certificate_specs.console_external,
+    //    &mz.spec.console_external_certificate_spec,
+    //) {
+    //    // TODO define volumes, volume_mounts, and any arg changes
+    //    unimplemented!();
+    //} else {
+    //    // currently the docker image just doesn't implement tls
+    //}
 
     let security_context = if config.enable_security_context {
         // Since we want to adhere to the most restrictive security context, all

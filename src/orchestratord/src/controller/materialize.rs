@@ -10,16 +10,20 @@
 use std::{
     collections::BTreeSet,
     fmt::Display,
+    str::FromStr,
     sync::{Arc, Mutex},
 };
 
 use http::HeaderValue;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
 use kube::{api::PostParams, runtime::controller::Action, Api, Client, Resource, ResourceExt};
+use serde::Deserialize;
 use tracing::{debug, trace};
 
 use crate::metrics::Metrics;
-use mz_cloud_resources::crd::materialize::v1alpha1::{Materialize, MaterializeStatus};
+use mz_cloud_resources::crd::materialize::v1alpha1::{
+    Materialize, MaterializeCertSpec, MaterializeStatus,
+};
 use mz_orchestrator_kubernetes::KubernetesImagePullPolicy;
 use mz_orchestrator_tracing::TracingCliArgs;
 use mz_ore::{cast::CastFrom, cli::KeyValueArg, instrument};
@@ -121,6 +125,25 @@ pub struct Args {
 
     #[clap(long, default_value = "9000")]
     console_http_port: i32,
+
+    #[clap(long, default_value = "{}")]
+    default_certificate_specs: DefaultCertificateSpecs,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct DefaultCertificateSpecs {
+    balancerd_external: Option<MaterializeCertSpec>,
+    console_external: Option<MaterializeCertSpec>,
+    internal: Option<MaterializeCertSpec>,
+}
+
+impl FromStr for DefaultCertificateSpecs {
+    type Err = serde_json::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        serde_json::from_str(s)
+    }
 }
 
 #[derive(clap::Parser)]

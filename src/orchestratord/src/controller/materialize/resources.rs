@@ -39,7 +39,7 @@ use sha2::{Digest, Sha256};
 use tracing::trace;
 
 use super::matching_image_from_environmentd_image_ref;
-use crate::controller::materialize::tls::create_certificate;
+use crate::controller::materialize::tls::{create_certificate, issuer_ref_defined};
 use crate::k8s::{apply_resource, delete_resource, get_resource};
 use mz_cloud_resources::crd::gen::cert_manager::certificates::Certificate;
 use mz_cloud_resources::crd::materialize::v1alpha1::Materialize;
@@ -83,11 +83,12 @@ impl Resources {
         let generation_service = Box::new(create_generation_service_object(config, mz, generation));
         let persist_pubsub_service =
             Box::new(create_persist_pubsub_service(config, mz, generation));
-        let environmentd_certificate = Box::new(create_environmentd_certificate(mz));
+        let environmentd_certificate = Box::new(create_environmentd_certificate(config, mz));
         let environmentd_statefulset = Box::new(create_environmentd_statefulset_object(
             config, tracing, mz, generation,
         ));
-        let balancerd_external_certificate = Box::new(create_balancerd_external_certificate(mz));
+        let balancerd_external_certificate =
+            Box::new(create_balancerd_external_certificate(config, mz));
         let balancerd_deployment = config
             .create_balancers
             .then(|| Box::new(create_balancerd_deployment_object(config, mz)));
@@ -731,22 +732,18 @@ fn create_persist_pubsub_service(
     }
 }
 
-fn create_environmentd_certificate(mz: &Materialize) -> Option<Certificate> {
-    mz.spec
-        .internal_certificate_spec
-        .as_ref()
-        .map(|mz_cert_spec| {
-            create_certificate(
-                mz,
-                mz_cert_spec,
-                mz.environmentd_certificate_name(),
-                mz.environmentd_certificate_secret_name(),
-                Some(vec![
-                    mz.environmentd_service_name(),
-                    mz.environmentd_service_internal_fqdn(),
-                ]),
-            )
-        })
+fn create_environmentd_certificate(config: &super::Args, mz: &Materialize) -> Option<Certificate> {
+    create_certificate(
+        config.default_certificate_specs.internal.clone(),
+        mz,
+        mz.spec.internal_certificate_spec.clone(),
+        mz.environmentd_certificate_name(),
+        mz.environmentd_certificate_secret_name(),
+        Some(vec![
+            mz.environmentd_service_name(),
+            mz.environmentd_service_internal_fqdn(),
+        ]),
+    )
 }
 
 fn create_environmentd_statefulset_object(
@@ -977,7 +974,10 @@ fn create_environmentd_statefulset_object(
 
     let mut volumes = Vec::new();
     let mut volume_mounts = Vec::new();
-    if mz.spec.internal_certificate_spec.is_some() {
+    if issuer_ref_defined(
+        &config.default_certificate_specs.internal,
+        &mz.spec.internal_certificate_spec,
+    ) {
         volumes.push(Volume {
             name: "certificate".to_owned(),
             secret: Some(SecretVolumeSource {
@@ -1279,19 +1279,18 @@ fn create_environmentd_statefulset_object(
     }
 }
 
-fn create_balancerd_external_certificate(mz: &Materialize) -> Option<Certificate> {
-    mz.spec
-        .balancerd_external_certificate_spec
-        .as_ref()
-        .map(|mz_cert_spec| {
-            create_certificate(
-                mz,
-                mz_cert_spec,
-                mz.balancerd_external_certificate_name(),
-                mz.balancerd_external_certificate_secret_name(),
-                None,
-            )
-        })
+fn create_balancerd_external_certificate(
+    config: &super::Args,
+    mz: &Materialize,
+) -> Option<Certificate> {
+    create_certificate(
+        config.default_certificate_specs.balancerd_external.clone(),
+        mz,
+        mz.spec.balancerd_external_certificate_spec.clone(),
+        mz.balancerd_external_certificate_name(),
+        mz.balancerd_external_certificate_secret_name(),
+        None,
+    )
 }
 
 fn create_balancerd_deployment_object(config: &super::Args, mz: &Materialize) -> Deployment {
@@ -1373,7 +1372,10 @@ fn create_balancerd_deployment_object(config: &super::Args, mz: &Materialize) ->
 
     let mut volumes = Vec::new();
     let mut volume_mounts = Vec::new();
-    if mz.spec.balancerd_external_certificate_spec.is_some() {
+    if issuer_ref_defined(
+        &config.default_certificate_specs.balancerd_external,
+        &mz.spec.balancerd_external_certificate_spec,
+    ) {
         volumes.push(Volume {
             name: "external-certificate".to_owned(),
             secret: Some(SecretVolumeSource {
