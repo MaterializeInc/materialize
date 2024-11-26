@@ -209,9 +209,17 @@ impl EquivalencePropagation {
                     .expect("Equivalences required");
 
                 if let Some(input_equivalences) = input_equivalences {
+                    // Get all output types, to reveal a prefix to each scaler expr.
+                    let input_types = derived
+                        .value::<RelationType>()
+                        .expect("RelationType required")
+                        .as_ref()
+                        .unwrap();
+                    let input_arity = input_types.len() - scalars.len();
                     let reducer = input_equivalences.reducer();
-                    for expr in scalars.iter_mut() {
+                    for (index, expr) in scalars.iter_mut().enumerate() {
                         reducer.reduce_expr(expr);
+                        expr.reduce(&input_types[..(input_arity + index)]);
                     }
                     let input_arity = *derived
                         .last_child()
@@ -234,9 +242,14 @@ impl EquivalencePropagation {
                     .expect("Equivalences required");
 
                 if let Some(input_equivalences) = input_equivalences {
+                    let input_types = derived
+                        .last_child()
+                        .value::<RelationType>()
+                        .expect("RelationType required");
                     let reducer = input_equivalences.reducer();
                     for expr in exprs.iter_mut() {
                         reducer.reduce_expr(expr);
+                        expr.reduce(input_types.as_ref().unwrap());
                     }
                     let input_arity = *derived
                         .last_child()
@@ -267,6 +280,7 @@ impl EquivalencePropagation {
                     let reducer = input_equivalences.reducer();
                     for expr in predicates.iter_mut() {
                         reducer.reduce_expr(expr);
+                        expr.reduce(input_types.as_ref().unwrap());
                     }
                     // Incorporate `predicates` into `outer_equivalences`.
                     let mut class = predicates.clone();
@@ -437,6 +451,7 @@ impl EquivalencePropagation {
                     }
                     for aggr in aggregates.iter_mut() {
                         reducer.reduce_expr(&mut aggr.expr);
+                        aggr.expr.reduce(input_type.as_ref().unwrap());
                         // A count expression over a non-null expression can discard the expression.
                         if aggr.func == mz_expr::AggregateFunc::Count && !aggr.distinct {
                             let mut probe = aggr.expr.clone().call_is_null();
