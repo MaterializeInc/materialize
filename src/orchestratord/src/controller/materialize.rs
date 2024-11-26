@@ -44,6 +44,8 @@ pub struct Args {
     helm_chart_version: Option<String>,
     #[clap(long, default_value = "kubernetes")]
     secrets_controller: String,
+    #[clap(long)]
+    collect_pod_metrics: bool,
 
     #[clap(long)]
     console_image_tag_default: String,

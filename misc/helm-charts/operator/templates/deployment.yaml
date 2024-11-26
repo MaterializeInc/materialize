@@ -123,5 +123,12 @@ spec:
         {{- end }}
         {{- end }}
         {{- end }}
+
+        {{/* Observability */}}
+        {{- if .Values.observability.enabled }}
+        {{- if .Values.observability.podMetrics.enabled }}
+        - "--collect-pod-metrics"
+        {{- end }}
+        {{- end }}
         resources:
           {{- toYaml .Values.operator.resources | nindent 10 }}

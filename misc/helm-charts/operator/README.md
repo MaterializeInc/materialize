@@ -119,6 +119,7 @@ The following table lists the configurable parameters of the Materialize operato
 | `networkPolicies.ingress.enabled` |  | ``false`` |
 | `networkPolicies.internal.enabled` |  | ``false`` |
 | `observability.enabled` |  | ``false`` |
+| `observability.podMetrics.enabled` |  | ``false`` |
 | `observability.prometheus.enabled` |  | ``false`` |
 | `operator.args.startupLogFilter` |  | ``"INFO,mz_orchestratord=TRACE"`` |
 | `operator.cloudProvider.providers.aws.accountID` |  | ``""`` |
