@@ -13,7 +13,7 @@ ALTER SYSTEM SET enable_table_keys = true
 COMPLETE 0
 
 #
-# Test various cases of column knowledge propagation
+# Test various cases of equivalence propagation
 #
 
 mode cockroach
@@ -595,25 +595,6 @@ Target cluster: quickstart
 
 EOF
 
-statement ok
-CREATE TABLE json_table(data JSONB);
-
-# Include map prefix in the `column_types` passed to `column_knowledge::optimize` (https://github.com/MaterializeInc/database-issues/issues/4460)
-
-query T multiline
-EXPLAIN WITH(arity, types) SELECT COALESCE(field, '') FROM (SELECT data->>'field' AS field FROM json_table);
-----
-Explained Query:
-  Project (#1) // { arity: 1, types: "(text)" }
-    Map (coalesce((#0 ->> "field"), "")) // { arity: 2, types: "(jsonb?, text)" }
-      ReadStorage materialize.public.json_table // { arity: 1, types: "(jsonb?)" }
-
-Source materialize.public.json_table
-
-Target cluster: quickstart
-
-EOF
-
 # WITH MUTUALLY RECURSIVE support
 # -------------------------------
 
@@ -635,47 +616,6 @@ Explained Query:
     Map (8) // { arity: 3, types: "(integer, integer, integer)" }
       Get l0 // { arity: 2, types: "(integer, integer)" }
   With Mutually Recursive
-    cte l0 =
-      Map (3, 5) // { arity: 2, types: "(integer, integer)" }
-        Distinct project=[] // { arity: 0, types: "()" }
-          Union // { arity: 0, types: "()" }
-            Project () // { arity: 0, types: "()" }
-              Filter (#0 = 3) AND (#1 = 5) // { arity: 2, types: "(integer, integer)" }
-                ReadStorage materialize.public.t1 // { arity: 2, types: "(integer, integer?)" }
-            Project () // { arity: 0, types: "()" }
-              Get l0 // { arity: 2, types: "(integer, integer)" }
-
-Source materialize.public.t1
-  filter=((#0 = 3) AND (#1 = 5))
-
-Target cluster: quickstart
-
-EOF
-
-# Give up when reaching RECURSION LIMIT
-# Same as the previous query, but with RECURSION LIMIT 1.
-# As of materialize#27389 this does not give up after the recursion limit,
-# as doing so is not necessary for equivalence propagation.
-# Issue database-issues#8294 tracks tests that may not be serving their intended
-# purpose; perhaps we can remove the test if we remove the
-# column_knowledge transform.
-query T multiline
-EXPLAIN WITH(arity, types)
-WITH MUTUALLY RECURSIVE (RECURSION LIMIT 1)
-  c0(f1 integer, f2 integer) AS (
-    SELECT * FROM (
-      SELECT * FROM t1
-      UNION
-      SELECT * FROM c0
-    ) WHERE f1 = 3 AND f2 = 5
-  )
-SELECT f1, f2, f1 + f2 FROM c0;
-----
-Explained Query:
-  Return // { arity: 3, types: "(integer, integer, integer)" }
-    Map (8) // { arity: 3, types: "(integer, integer, integer)" }
-      Get l0 // { arity: 2, types: "(integer, integer)" }
-  With Mutually Recursive [recursion_limit=1]
     cte l0 =
       Map (3, 5) // { arity: 2, types: "(integer, integer)" }
         Distinct project=[] // { arity: 0, types: "()" }

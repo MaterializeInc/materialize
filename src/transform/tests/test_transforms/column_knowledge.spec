@@ -46,7 +46,7 @@ Source defined as t3
 
 # Infer and apply constant value knowledge.
 # Cases: Map, FlatMap, Filter, Project, Reduce, Let/Get.
-apply pipeline=column_knowledge
+apply pipeline=equivalence_propagation
 Return
   FlatMap generate_series(#1, #0 + 3, 1)
     Project (#2, #0)
@@ -69,16 +69,14 @@ With
     Filter false
       Reduce group_by=[2] aggregates=[sum(3), max(4)]
         Filter true AND false
-          Map (3)
-            Filter (#0 = 1) AND (#1 = 2)
-              Get t0
+          Constant <empty>
 
 
 # Infer and apply nullability knowledge.
 # Cases: Map, Filter, Project, Reduce, Let/Get.
 # TODO: The type of `(#1) IS NULL` in the map is `BOOLEAN NOT NULL`,
 #       so the first group_by key component should be reduced to `false`.
-apply pipeline=column_knowledge
+apply pipeline=equivalence_propagation
 Return
   Filter (#0) IS NULL
     Project (#2)
@@ -96,15 +94,15 @@ Return
       Get l0
 With
   cte l0 =
-    Reduce group_by=[(#2) IS NULL, false] aggregates=[count(false)]
-      Map ((#1) IS NULL, false)
+    Reduce group_by=[false, false] aggregates=[count(false)]
+      Map (false, false)
         Filter false AND (#1) IS NULL
-          Get t0
+          Constant <empty>
 
 
 # Infer and apply constant value knowledge.
 # Cases: Union.
-apply pipeline=column_knowledge
+apply pipeline=equivalence_propagation
 Return
   Filter #1 > 1 AND #2 IS NULL
     Union
@@ -122,9 +120,7 @@ With
 ----
 Return
   Filter true AND false
-    Union
-      Get l0
-      Get l1
+    Constant <empty>
 With
   cte l1 =
     Project (#0, #0, #1)
@@ -138,7 +134,7 @@ With
 
 # Infer and apply constant value knowledge.
 # Cases: Join.
-apply pipeline=column_knowledge
+apply pipeline=equivalence_propagation
 Return
   Map (#0 + #1 + #2, #2 * #3)
     Join on=((#0 + #1) = #2)
@@ -162,7 +158,7 @@ With
 
 # Apply knowledge to TopK limit
 # Cases: TopK.
-apply pipeline=column_knowledge
+apply pipeline=equivalence_propagation
 TopK group_by=[#0] order_by=[#1 asc nulls_first] limit=(#1 + 2) offset=1
   Filter (#1 = 5)
     Get t0
@@ -177,7 +173,7 @@ TopK group_by=[#0] order_by=[#1 asc nulls_first] limit=7 offset=1
 
 
 # Single binding, value knowledge
-apply pipeline=column_knowledge
+apply pipeline=equivalence_propagation
 Return
   Project (#0, #1, #3, #4, #5, #6)
     Map ((#0) IS NULL, (#0) IS NULL, (#2) IS NULL)
@@ -202,7 +198,7 @@ With
 ----
 Return
   Project (#0, #1, #3..=#6)
-    Map ((#0) IS NULL, (#0) IS NULL, (#2) IS NULL)
+    Map ((#0) IS NULL, #4, (#2) IS NULL)
       Union
         Map (null, null)
           Union
@@ -226,9 +222,33 @@ With
 ## LetRec cases
 ## ------------
 
+# Single binding, value knowledge
+apply pipeline=equivalence_propagation
+Return
+  Get l0
+With Mutually Recursive
+  cte l0 = // { types: "(bigint)" }
+    Distinct project=[#0]
+      Union
+        Constant // { types: "(bigint)" }
+          - (1)
+        Filter (#0 = 1)
+          Get l0
+----
+Return
+  Get l0
+With Mutually Recursive
+  cte l0 =
+    Distinct project=[1]
+      Union
+        Constant
+          - (1)
+        Filter true
+          Get l0
+
 
 # Single binding, value knowledge
-apply pipeline=column_knowledge
+apply pipeline=equivalence_propagation
 Return
   Map (#0 + #1)
     Get l0
@@ -253,7 +273,7 @@ With Mutually Recursive
 
 
 # Single binding, NOT NULL knowledge
-apply pipeline=column_knowledge
+apply pipeline=equivalence_propagation
 Return
   Map (#1 IS NOT NULL)
     Get l0
@@ -278,7 +298,7 @@ With Mutually Recursive
 
 
 # Multiple bindings, value knowledge
-apply pipeline=column_knowledge
+apply pipeline=equivalence_propagation
 Return
   Get l1
 With Mutually Recursive
@@ -325,7 +345,7 @@ With Mutually Recursive
 #
 # This also illustrates a missed opportunity here, because if we are a bit
 # smarter we will know that l1 can only have 'false' in its first component.
-apply pipeline=column_knowledge
+apply pipeline=equivalence_propagation
 Return
   Get l1
 With Mutually Recursive
@@ -369,7 +389,7 @@ With Mutually Recursive
 
 
 # # TODO
-# apply pipeline=column_knowledge
+# apply pipeline=equivalence_propagation
 # Return
 #   Map (#0 + #1)
 #     Get l1

@@ -30,8 +30,8 @@ query T multiline
 EXPLAIN WITH(arity, join implementations) SELECT record, (record).f2 FROM (SELECT ROW(a, a) AS record FROM t1);
 ----
 Explained Query:
-  Project (#2, #3) // { arity: 2 }
-    Map (row(#0, #0), record_get[1](#2)) // { arity: 4 }
+  Project (#2, #0) // { arity: 2 }
+    Map (row(#0, #0)) // { arity: 3 }
       ReadStorage materialize.public.t1 // { arity: 2 }
 
 Source materialize.public.t1

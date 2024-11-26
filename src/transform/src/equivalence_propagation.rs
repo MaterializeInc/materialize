@@ -60,6 +60,8 @@ impl crate::Transform for EquivalencePropagation {
         let derived = builder.visit(relation);
         let derived = derived.as_view();
 
+        let prior = relation.clone();
+
         let mut get_equivalences = BTreeMap::default();
         self.apply(
             relation,
@@ -67,6 +69,15 @@ impl crate::Transform for EquivalencePropagation {
             EquivalenceClasses::default(),
             &mut get_equivalences,
         );
+
+        if prior == *relation {
+            let ck = crate::ColumnKnowledge::default();
+            ck.transform(relation, ctx)?;
+            mz_ore::soft_assert_or_log!(
+                prior == *relation,
+                "ColumnKnowledge performed work after EquivalencePropagation"
+            );
+        }
 
         mz_repr::explain::trace_plan(&*relation);
         Ok(())
@@ -209,6 +220,8 @@ impl EquivalencePropagation {
                     .expect("Equivalences required");
 
                 if let Some(input_equivalences) = input_equivalences {
+                    // Clone the equivalences in case of variadic map, which will need to mutate them.
+                    let mut input_equivalences = input_equivalences.clone();
                     // Get all output types, to reveal a prefix to each scaler expr.
                     let input_types = derived
                         .value::<RelationType>()
@@ -216,10 +229,17 @@ impl EquivalencePropagation {
                         .as_ref()
                         .unwrap();
                     let input_arity = input_types.len() - scalars.len();
-                    let reducer = input_equivalences.reducer();
                     for (index, expr) in scalars.iter_mut().enumerate() {
+                        let reducer = input_equivalences.reducer();
                         reducer.reduce_expr(expr);
                         expr.reduce(&input_types[..(input_arity + index)]);
+                        // Introduce the fact relating the mapped expression and corresponding column.
+                        // This allows subsequent expressions to be optimized with this information.
+                        input_equivalences.classes.push(vec![
+                            expr.clone(),
+                            MirScalarExpr::column(input_arity + index),
+                        ]);
+                        input_equivalences.minimize(&Some(input_types.clone()));
                     }
                     let input_arity = *derived
                         .last_child()
@@ -374,9 +394,9 @@ impl EquivalencePropagation {
                             // literal substitution.
                             let old = expr.clone();
                             reducer.reduce_expr(expr);
-                            let acceptable_sub = accept_expr_reduction(&old, expr);
+                            let acceptable_sub = literal_domination(&old, expr);
                             expr.reduce(input_types.as_ref().unwrap());
-                            if !acceptable_sub && !accept_expr_reduction(&old, expr) {
+                            if !acceptable_sub && !literal_domination(&old, expr) {
                                 expr.clone_from(&old);
                             }
                         }
@@ -443,9 +463,9 @@ impl EquivalencePropagation {
                         // literal substitution.
                         let old_key = key.clone();
                         reducer.reduce_expr(key);
-                        let acceptable_sub = accept_expr_reduction(&old_key, key);
+                        let acceptable_sub = literal_domination(&old_key, key);
                         key.reduce(input_type.as_ref().unwrap());
-                        if !acceptable_sub && !accept_expr_reduction(&old_key, key) {
+                        if !acceptable_sub && !literal_domination(&old_key, key) {
                             key.clone_from(&old_key);
                         }
                     }
@@ -490,10 +510,29 @@ impl EquivalencePropagation {
                 );
             }
             MirRelationExpr::TopK {
-                input, group_key, ..
+                input,
+                group_key,
+                limit,
+                ..
             } => {
-                // TODO: Update `limit` expressions, but only if we update `group_key` at the same time.
-                //       It is important to both or neither, to ensure that `limit` only references columns in `group_key`.
+                // We must be careful when updating `limit` to not install column references
+                // outside of `group_key`. We'll do this for now with `literal_domination`,
+                // which will ensure we only perform substitutions by a literal.
+                let input_equivalences = derived
+                    .last_child()
+                    .value::<Equivalences>()
+                    .expect("Equivalences required");
+                if let Some(input_equivalences) = input_equivalences {
+                    let input_types = derived
+                        .last_child()
+                        .value::<RelationType>()
+                        .expect("RelationType required");
+                    let reducer = input_equivalences.reducer();
+                    if let Some(expr) = limit {
+                        reducer.reduce_expr(expr);
+                        expr.reduce(input_types.as_ref().unwrap());
+                    }
+                }
 
                 // Discard equivalences among non-key columns, as it is not correct that `input` may drop rows
                 // that violate constraints among non-key columns without affecting the result.
@@ -547,7 +586,7 @@ impl EquivalencePropagation {
 ///
 /// The substitutions we are confident with are those that introduce literals for columns,
 /// or which replace column nullability checks with literals.
-fn accept_expr_reduction(old: &MirScalarExpr, new: &MirScalarExpr) -> bool {
+fn literal_domination(old: &MirScalarExpr, new: &MirScalarExpr) -> bool {
     let mut todo = vec![(old, new)];
     while let Some((old, new)) = todo.pop() {
         match (old, new) {

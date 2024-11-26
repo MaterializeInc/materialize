@@ -783,7 +783,7 @@ WHERE
 2  l2  32
 3  l3  33
 
-# This is similar to the previous query, but it also tests that ColumnKnowledge and LiteralLifting don't mess up
+# This is similar to the previous query, but it also tests that EquivalencePropagation and LiteralLifting don't mess up
 # the IndexedFilter join.
 
 query T multiline
@@ -819,7 +819,7 @@ WHERE
 ----
 2  l2  32
 
-# ColumnKnowledge is being propagated from one join input to the other: even though the literal constraint mentions
+# EquivalencePropagation is being propagated from one join input to the other: even though the literal constraint mentions
 # only `t1`, the `t1.a = t2.a` join constraint allows us to propagate the literal constraint from `t1.a` to `t2.a`, and
 # then insert an IndexedFilter also for `t2.a`.
 # Note that the final join's key disappears: this is ok, it happens because we know that t1.a and t2.a are both 2, so
