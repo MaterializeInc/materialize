@@ -27,7 +27,7 @@ use itertools::Either;
 use mz_dyncfg::Config;
 use mz_ore::now::EpochMillis;
 use mz_ore::task::{AbortOnDropHandle, JoinHandle, RuntimeExt};
-use mz_ore::{instrument, soft_panic_no_log};
+use mz_ore::instrument;
 use mz_persist::location::{Blob, SeqNo};
 use mz_persist_types::columnar::{ColumnDecoder, Schema2};
 use mz_persist_types::{Codec, Codec64};
@@ -1073,13 +1073,7 @@ where
         let read_schemas = match maybe_full_schema {
             Some(schema) => schema,
             // TODO(parkmycar): We should remove this branch once schema_ids are required.
-            None => {
-                soft_panic_no_log!(
-                    "persist schema isn't registered? {:?}",
-                    self.read_schemas.id
-                );
-                self.read_schemas.to_current_full_schemas()
-            }
+            None => self.read_schemas.to_current_full_schemas(),
         };
 
         let structured_order = STRUCTURED_ORDER.get(&self.cfg) && {
