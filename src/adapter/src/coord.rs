@@ -3943,9 +3943,9 @@ pub fn serve(
                 // If superuser_reserved > max_connections, prefer max_connections.
                 //
                 // In this scenario all normal users would be locked out because all connections
-                // would be reserved for superusers so complain loudly if this is the case.
+                // would be reserved for superusers so complain if this is the case.
                 let superuser_reserved = if superuser_reserved >= limit {
-                    soft_panic_or_log!(
+                    tracing::warn!(
                         "superuser_reserved ({superuser_reserved}) is greater than max connections ({limit})!"
                     );
                     limit
