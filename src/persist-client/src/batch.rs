@@ -30,10 +30,13 @@ use futures_util::{stream, FutureExt};
 use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
 use mz_ore::{instrument, soft_panic_or_log};
-use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
+use mz_persist::indexed::columnar::{
+    ColumnarRecords, ColumnarRecordsBuilder, ColumnarRecordsStructuredExt,
+};
 use mz_persist::indexed::encoding::{BatchColumnarFormat, BlobTraceBatchPart, BlobTraceUpdates};
 use mz_persist::location::Blob;
 use mz_persist_types::arrow::{ArrayBound, ArrayOrd};
+use mz_persist_types::columnar::{ColumnEncoder, Schema2};
 use mz_persist_types::parquet::{CompressionFormat, EncodingConfig};
 use mz_persist_types::schema::SchemaId;
 use mz_persist_types::stats::{trim_to_budget, truncate_bytes, TruncateBound, TRUNCATE_LEN};
@@ -563,6 +566,7 @@ where
     T: Timestamp + Lattice + Codec64,
 {
     pub(crate) metrics: Arc<Metrics>,
+    writer_schemas: Schemas<K, V>,
 
     inline_desc: Description<T>,
     inclusive_upper: Antichain<Reverse<T>>,
@@ -571,7 +575,12 @@ where
     pub(crate) key_buf: Vec<u8>,
     pub(crate) val_buf: Vec<u8>,
 
-    buffer: BatchBuffer,
+    buffer: ColumnarRecordsBuilder,
+    buffer_ext: Option<(
+        <K::Schema as Schema2<K>>::Encoder,
+        <V::Schema as Schema2<V>>::Encoder,
+    )>,
+
     pub(crate) builder: BatchBuilderInternal<K, V, T, D>,
 }
 
@@ -587,7 +596,19 @@ where
         inline_desc: Description<T>,
         metrics: Arc<Metrics>,
     ) -> Self {
-        let buffer = BatchBuffer::new(Arc::clone(&metrics), builder.parts.cfg.blob_target_size);
+        let buffer = ColumnarRecordsBuilder::default();
+        let writer_schemas = builder.write_schemas.clone();
+        let buffer_ext = builder
+            .parts
+            .cfg
+            .batch_columnar_format
+            .is_structured()
+            .then(|| {
+                (
+                    writer_schemas.key.encoder().expect("valid schema"),
+                    writer_schemas.val.encoder().expect("valid schema"),
+                )
+            });
         Self {
             metrics,
             inline_desc,
@@ -595,6 +616,8 @@ where
             key_buf: vec![],
             val_buf: vec![],
             buffer,
+            writer_schemas,
+            buffer_ext,
             builder,
         }
     }
@@ -628,8 +651,15 @@ where
             }
         }
 
+        let records = self.buffer.finish(&self.metrics.columnar);
+        let structured = self.buffer_ext.map(|(k, v)| ColumnarRecordsStructuredExt {
+            key: Arc::new(k.finish()),
+            val: Arc::new(v.finish()),
+        });
+        let part = BlobTraceUpdates::new(records, structured);
+
         self.builder
-            .flush_part(self.inline_desc.clone(), self.buffer.drain())
+            .flush_part(self.inline_desc.clone(), part)
             .await;
 
         self.builder
@@ -675,13 +705,43 @@ where
             });
         }
         self.inclusive_upper.insert(Reverse(ts.clone()));
+        let update = (
+            (self.key_buf.as_slice(), self.val_buf.as_slice()),
+            Codec64::encode(ts),
+            Codec64::encode(diff),
+        );
+        assert!(self.buffer.push(update), "single update overflowed an i32");
+        if let Some((ks, vs)) = &mut self.buffer_ext {
+            ks.append(key);
+            vs.append(val);
+        }
 
-        let added = if let Some(full_batch) =
-            self.buffer
-                .push(&self.key_buf, &self.val_buf, ts.clone(), diff.clone())
-        {
+        let added = if self.buffer.total_bytes() > self.builder.parts.cfg.blob_target_size {
+            let records = mem::take(&mut self.buffer).finish(&self.metrics.columnar);
+            let structured =
+                self.buffer_ext
+                    .as_mut()
+                    .map(|(ks, vs)| ColumnarRecordsStructuredExt {
+                        key: Arc::new(
+                            mem::replace(
+                                ks,
+                                self.writer_schemas.key.encoder().expect("valid schema"),
+                            )
+                            .finish(),
+                        ),
+                        val: Arc::new(
+                            mem::replace(
+                                vs,
+                                self.writer_schemas.val.encoder().expect("valid schema"),
+                            )
+                            .finish(),
+                        ),
+                    });
             self.builder
-                .flush_part(self.inline_desc.clone(), full_batch)
+                .flush_part(
+                    self.inline_desc.clone(),
+                    BlobTraceUpdates::new(records, structured),
+                )
                 .await;
             Added::RecordAndParts
         } else {
@@ -852,52 +912,6 @@ pub(crate) fn validate_schema<K: Codec, V: Codec>(
     };
     let () = val_valid
         .unwrap_or_else(|err| panic!("constructing batch with mismatched val schema: {}", err));
-}
-
-#[derive(Debug)]
-struct BatchBuffer {
-    metrics: Arc<Metrics>,
-    blob_target_size: usize,
-    records_builder: ColumnarRecordsBuilder,
-}
-
-impl BatchBuffer {
-    fn new(metrics: Arc<Metrics>, blob_target_size: usize) -> Self {
-        BatchBuffer {
-            metrics,
-            blob_target_size,
-            records_builder: ColumnarRecordsBuilder::default(),
-        }
-    }
-
-    fn push<T: Codec64, D: Codec64>(
-        &mut self,
-        key: &[u8],
-        val: &[u8],
-        ts: T,
-        diff: D,
-    ) -> Option<BlobTraceUpdates> {
-        let update = ((key, val), ts.encode(), diff.encode());
-        assert!(
-            self.records_builder.push(update),
-            "single update overflowed an i32"
-        );
-
-        // if we've filled up a batch part, flush out to blob to keep our memory usage capped.
-        if self.records_builder.total_bytes() >= self.blob_target_size {
-            Some(self.drain())
-        } else {
-            None
-        }
-    }
-
-    fn drain(&mut self) -> BlobTraceUpdates {
-        // TODO: we're in a position to do a very good estimate here, instead of using the default.
-        let builder = mem::take(&mut self.records_builder);
-        let records = builder.finish(&self.metrics.columnar);
-        assert_eq!(self.records_builder.len(), 0);
-        BlobTraceUpdates::Row(records)
-    }
 }
 
 #[derive(Debug)]
