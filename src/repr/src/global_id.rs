@@ -113,7 +113,7 @@ impl FromStr for GlobalId {
             't' => GlobalId::Transient,
             _ => return Err(anyhow!("couldn't parse id {}", s)),
         };
-        let val: u64 = s[1..].parse()?;
+        let val: u64 = s.parse()?;
         Ok(variant(val))
     }
 }
