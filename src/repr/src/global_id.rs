@@ -115,7 +115,6 @@ impl FromStr for GlobalId {
         };
         let val: u64 = s[1..].parse()?;
         Ok(variant(val))
-        }
     }
 }
 

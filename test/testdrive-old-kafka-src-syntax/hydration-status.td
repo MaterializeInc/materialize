@@ -30,13 +30,13 @@
 # Introspection subscribes do not show up because the hydration introspection
 # relations exclude transient dataflow.
 
-> SELECT DISTINCT left(h.object_id, 1), h.hydrated
+> SELECT DISTINCT left(h.object_id, 2), h.hydrated
   FROM mz_internal.mz_compute_hydration_statuses h
   JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
   WHERE r.name LIKE 'hydrated_test%';
 si true
 
-> SELECT DISTINCT left(h.object_id, 1), h.hydrated
+> SELECT DISTINCT left(h.object_id, 2), h.hydrated
   FROM mz_internal.mz_hydration_statuses h
   JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
   WHERE r.name LIKE 'hydrated_test%';
