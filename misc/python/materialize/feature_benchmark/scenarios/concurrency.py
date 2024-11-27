@@ -10,6 +10,7 @@
 from materialize.feature_benchmark.action import Action, TdAction
 from materialize.feature_benchmark.measurement_source import MeasurementSource, Td
 from materialize.feature_benchmark.scenario import Scenario
+from materialize.feature_benchmark.scenario_version import ScenarioVersion
 
 
 class Concurrency(Scenario):
@@ -21,6 +22,9 @@ class ParallelIngestion(Concurrency):
 
     SOURCES = 10
     FIXED_SCALE = True  # Disk slowness in CRDB leading to CRDB going down
+
+    def version(self) -> ScenarioVersion:
+        return ScenarioVersion.create(1, 1, 0)
 
     def shared(self) -> Action:
         return TdAction(
@@ -72,7 +76,7 @@ $ kafka-ingest format=avro topic=kafka-parallel-ingestion key-format=avro key-sc
         create_indexes = "\n".join(
             [
                 f"""
-> CREATE DEFAULT INDEX ON s{s}
+> CREATE DEFAULT INDEX ON s{s}_tbl
 """
                 for s in sources
             ]
