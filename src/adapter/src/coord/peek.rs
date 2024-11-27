@@ -491,12 +491,8 @@ impl crate::coord::Coordinator {
                 max_returned_query_size,
                 &duration_histogram,
             ) {
-                Ok(rows) => {
-                    let result_size = rows
-                        .clone()
-                        .into_row_iter()
-                        .map(|r| u64::cast_from(r.byte_len()))
-                        .sum();
+                Ok((rows, row_size_bytes)) => {
+                    let result_size = u64::cast_from(row_size_bytes);
                     let rows_returned = u64::cast_from(rows.count());
                     (
                         Ok(Self::send_immediate_rows(rows)),
@@ -657,7 +653,7 @@ impl crate::coord::Coordinator {
                         max_returned_query_size,
                         &duration_histogram,
                     ) {
-                        Ok(rows) => PeekResponseUnary::Rows(Box::new(rows)),
+                        Ok((rows, _size_bytes)) => PeekResponseUnary::Rows(Box::new(rows)),
                         Err(e) => PeekResponseUnary::Error(e),
                     }
                 }
