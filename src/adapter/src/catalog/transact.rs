@@ -55,7 +55,6 @@ use mz_sql::session::vars::{Value as VarValue, VarInput};
 use mz_sql::{rbac, DEFAULT_SCHEMA};
 use mz_sql_parser::ast::{QualifiedReplica, Value};
 use mz_storage_client::controller::StorageController;
-use timely::Container;
 use tracing::{info, trace};
 
 use crate::catalog::{

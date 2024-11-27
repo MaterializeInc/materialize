@@ -64,6 +64,8 @@ pub enum GlobalId {
     Explain,
 }
 
+// `GlobalId`s are serialized often, so it would be nice to try and keep them small. If this assert
+// fails, then there isn't any correctness issues just potential performance issues.
 static_assertions::assert_eq_size!(GlobalId, [u8; 16]);
 
 impl GlobalId {
