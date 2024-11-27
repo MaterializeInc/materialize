@@ -740,8 +740,8 @@ ReduceMinsMaxes
 "ArrangeBy[[Column(15)]]-errors" 1
 "ArrangeBy[[Column(2)]]" 20
 "ArrangeBy[[Column(2)]]-errors" 7
-"ArrangeBy[[Column(20)]]" 1
-"ArrangeBy[[Column(20)]]-errors" 1
+"ArrangeBy[[Column(21)]]" 1
+"ArrangeBy[[Column(21)]]-errors" 1
 "ArrangeBy[[Column(3)]]" 6
 "ArrangeBy[[Column(3)]]-errors" 2
 "ArrangeBy[[Column(4)]]" 5

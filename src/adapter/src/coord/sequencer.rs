@@ -845,7 +845,7 @@ impl Coordinator {
                 Some(max_returned_query_size),
                 duration_histogram,
             ) {
-                Ok(rows) => Ok(Self::send_immediate_rows(rows)),
+                Ok((rows, _size_bytes)) => Ok(Self::send_immediate_rows(rows)),
                 Err(e) => Err(AdapterError::ResultSize(e)),
             };
         }
