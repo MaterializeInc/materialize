@@ -320,6 +320,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             ],
             cwd=path,
         )
+        # These sleeps are a bit unclean, we should instead only consider
+        # environmentd as running when it is has started listening on its ports
+        time.sleep(30)
         port_forward_process = subprocess.Popen(
             [
                 "kubectl",
@@ -334,7 +337,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             ],
             preexec_fn=os.setpgrp,
         )
-        time.sleep(10)
+        time.sleep(30)
 
         with c.override(
             Testdrive(
