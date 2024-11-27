@@ -1587,7 +1587,8 @@ mod builtin_migration_tests {
             item_id_mapping: &BTreeMap<String, CatalogItemId>,
             global_id_mapping: &BTreeMap<String, GlobalId>,
             global_id_gen: &mut Gen<u64>,
-        ) -> (String, ItemNamespace, CatalogItem) {
+        ) -> (String, ItemNamespace, CatalogItem, GlobalId) {
+            let global_id = GlobalId::User(global_id_gen.allocate_id());
             let item = match self.item {
                 SimplifiedItem::Table => CatalogItem::Table(Table {
                     create_sql: Some("CREATE TABLE materialize.public.t (a INT)".to_string()),
@@ -1595,12 +1596,7 @@ mod builtin_migration_tests {
                         .with_column("a", ScalarType::Int32.nullable(true))
                         .with_key(vec![0])
                         .finish(),
-                    collections: [(
-                        RelationVersion::root(),
-                        GlobalId::User(global_id_gen.allocate_id()),
-                    )]
-                    .into_iter()
-                    .collect(),
+                    collections: [(RelationVersion::root(), global_id)].into_iter().collect(),
                     conn_id: None,
                     resolved_ids: ResolvedIds::empty(),
                     custom_logical_compaction_window: None,
@@ -1623,7 +1619,7 @@ mod builtin_migration_tests {
                         convert_names_to_ids(referenced_names, item_id_mapping, global_id_mapping);
 
                     CatalogItem::MaterializedView(MaterializedView {
-                        global_id: GlobalId::User(global_id_gen.allocate_id()),
+                        global_id,
                         create_sql: format!(
                             "CREATE MATERIALIZED VIEW materialize.public.mv ({column_list}) AS SELECT * FROM {table_list}"
                         ),
@@ -1659,7 +1655,7 @@ mod builtin_migration_tests {
                     let on_gid = global_id_mapping[&on];
                     CatalogItem::Index(Index {
                         create_sql: format!("CREATE INDEX idx ON materialize.public.{on} (a)"),
-                        global_id: GlobalId::User(global_id_gen.allocate_id()),
+                        global_id,
                         on: on_gid,
                         keys: Default::default(),
                         conn_id: None,
@@ -1670,7 +1666,7 @@ mod builtin_migration_tests {
                     })
                 }
             };
-            (self.name, self.namespace, item)
+            (self.name, self.namespace, item, global_id)
         }
     }
 
@@ -1689,9 +1685,9 @@ mod builtin_migration_tests {
         name: String,
         item: CatalogItem,
         item_namespace: ItemNamespace,
-    ) -> (CatalogItemId, GlobalId) {
+    ) -> CatalogItemId {
         let id_ts = catalog.storage().await.current_upper().await;
-        let (item_id, global_id) = match item_namespace {
+        let (item_id, _) = match item_namespace {
             ItemNamespace::User => catalog
                 .allocate_user_id(id_ts)
                 .await
@@ -1734,7 +1730,7 @@ mod builtin_migration_tests {
             .await
             .expect("failed to transact");
 
-        (item_id, global_id)
+        item_id
     }
 
     fn convert_names_to_ids(
@@ -1763,6 +1759,7 @@ mod builtin_migration_tests {
         ids: I,
         global_id_lookup: &BTreeMap<String, GlobalId>,
     ) -> BTreeSet<String> {
+        println!("{global_id_lookup:?}");
         ids.into_iter()
             .flat_map(|id_a| {
                 global_id_lookup
@@ -1782,10 +1779,9 @@ mod builtin_migration_tests {
             let mut global_id_mapping = BTreeMap::new();
 
             for entry in test_case.initial_state {
-                let (name, namespace, item) =
+                let (name, namespace, item, global_id) =
                     entry.to_catalog_item(&item_id_mapping, &global_id_mapping, &mut global_id_gen);
-                let (item_id, global_id) =
-                    add_item(&mut catalog, name.clone(), item, namespace).await;
+                let item_id = add_item(&mut catalog, name.clone(), item, namespace).await;
 
                 item_id_mapping.insert(name.clone(), item_id);
                 global_id_mapping.insert(name.clone(), global_id);
@@ -1814,6 +1810,7 @@ mod builtin_migration_tests {
                     .transaction()
                     .await
                     .expect("failed to create transaction");
+                println!("migrated ids {migrated_ids:?}");
                 Catalog::generate_builtin_migration_metadata(
                     &state,
                     &mut txn,
@@ -1823,6 +1820,7 @@ mod builtin_migration_tests {
                 .expect("failed to generate builtin migration metadata")
             };
 
+            println!("{:?}", migration_metadata.previous_storage_collection_ids);
             assert_eq!(
                 convert_global_ids_to_names(
                     migration_metadata
