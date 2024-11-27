@@ -4414,10 +4414,7 @@ generate_extracted_config!(
     (EnableEagerDeltaJoins, Option<bool>, Default(None)),
     (EnableNewOuterJoinLowering, Option<bool>, Default(None)),
     (EnableVariadicLeftJoinLowering, Option<bool>, Default(None)),
-    (EnableLetrecFixpointAnalysis, Option<bool>, Default(None)),
-    (EnableValueWindowFunctionFusion, Option<bool>, Default(None)),
-    (EnableReduceUnnestListFusion, Option<bool>, Default(None)),
-    (EnableWindowAggregationFusion, Option<bool>, Default(None))
+    (EnableLetrecFixpointAnalysis, Option<bool>, Default(None))
 );
 
 /// Convert a [`CreateClusterStatement`] into a [`Plan`].
@@ -4554,9 +4551,6 @@ pub fn plan_create_cluster_inner(
             enable_new_outer_join_lowering,
             enable_variadic_left_join_lowering,
             enable_letrec_fixpoint_analysis,
-            enable_value_window_function_fusion,
-            enable_reduce_unnest_list_fusion,
-            enable_window_aggregation_fusion,
             seen: _,
         } = ClusterFeatureExtracted::try_from(features)?;
         let optimizer_feature_overrides = OptimizerFeatureOverrides {
@@ -4565,9 +4559,6 @@ pub fn plan_create_cluster_inner(
             enable_new_outer_join_lowering,
             enable_variadic_left_join_lowering,
             enable_letrec_fixpoint_analysis,
-            enable_value_window_function_fusion,
-            enable_reduce_unnest_list_fusion,
-            enable_window_aggregation_fusion,
             ..Default::default()
         };
 
@@ -4662,9 +4653,6 @@ pub fn unplan_create_cluster(
                 enable_new_outer_join_lowering,
                 enable_variadic_left_join_lowering,
                 enable_letrec_fixpoint_analysis,
-                enable_value_window_function_fusion,
-                enable_reduce_unnest_list_fusion,
-                enable_window_aggregation_fusion,
                 enable_reduce_reduction: _,
             } = optimizer_feature_overrides;
             let features_extracted = ClusterFeatureExtracted {
@@ -4675,9 +4663,6 @@ pub fn unplan_create_cluster(
                 enable_new_outer_join_lowering,
                 enable_variadic_left_join_lowering,
                 enable_letrec_fixpoint_analysis,
-                enable_value_window_function_fusion,
-                enable_reduce_unnest_list_fusion,
-                enable_window_aggregation_fusion,
             };
             let features = features_extracted.into_values(scx.catalog);
             let availability_zones = if availability_zones.is_empty() {
