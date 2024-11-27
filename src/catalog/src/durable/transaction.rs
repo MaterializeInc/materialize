@@ -3643,13 +3643,15 @@ mod tests {
             .await
             .open(SYSTEM_TIME().into(), &test_bootstrap_args())
             .await
-            .unwrap();
+            .unwrap()
+            .0;
         let mut savepoint_state = state_builder
             .unwrap_build()
             .await
             .open_savepoint(SYSTEM_TIME().into(), &test_bootstrap_args())
             .await
-            .unwrap();
+            .unwrap()
+            .0;
 
         let initial_snapshot = savepoint_state.sync_to_current_updates().await.unwrap();
         assert!(!initial_snapshot.is_empty());

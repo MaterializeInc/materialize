@@ -99,11 +99,19 @@ pub trait OpenableDurableCatalogState: Debug + Send {
     ///   - Catalog migrations fail.
     ///
     /// `initial_ts` is used as the initial timestamp for new environments.
+    ///
+    /// Also returns a handle to a thread that is deserializing all of the audit logs.
     async fn open_savepoint(
         mut self: Box<Self>,
         initial_ts: Timestamp,
         bootstrap_args: &BootstrapArgs,
-    ) -> Result<Box<dyn DurableCatalogState>, CatalogError>;
+    ) -> Result<
+        (
+            Box<dyn DurableCatalogState>,
+            std::thread::JoinHandle<Vec<memory::objects::StateUpdate>>,
+        ),
+        CatalogError,
+    >;
 
     /// Opens the catalog in read only mode. All mutating methods
     /// will return an error.
@@ -120,11 +128,19 @@ pub trait OpenableDurableCatalogState: Debug + Send {
     /// needed.
     ///
     /// `initial_ts` is used as the initial timestamp for new environments.
+    ///
+    /// Also returns a handle to a thread that is deserializing all of the audit logs.
     async fn open(
         mut self: Box<Self>,
         initial_ts: Timestamp,
         bootstrap_args: &BootstrapArgs,
-    ) -> Result<Box<dyn DurableCatalogState>, CatalogError>;
+    ) -> Result<
+        (
+            Box<dyn DurableCatalogState>,
+            std::thread::JoinHandle<Vec<memory::objects::StateUpdate>>,
+        ),
+        CatalogError,
+    >;
 
     /// Opens the catalog for manual editing of the underlying data. This is helpful for
     /// fixing a corrupt catalog.

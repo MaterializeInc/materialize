@@ -561,10 +561,10 @@ impl Listeners {
         };
 
         // Load the adapter durable storage.
-        let adapter_storage = if read_only {
+        let (adapter_storage, audit_logs_handle) = if read_only {
             // TODO: behavior of migrations when booting in savepoint mode is
             // not well defined.
-            let adapter_storage = openable_adapter_storage
+            let (adapter_storage, audit_logs_handle) = openable_adapter_storage
                 .open_savepoint(boot_ts, &bootstrap_args)
                 .await?;
 
@@ -572,9 +572,9 @@ impl Listeners {
             // because we are by definition not the leader if we are in
             // read-only mode.
 
-            adapter_storage
+            (adapter_storage, audit_logs_handle)
         } else {
-            let adapter_storage = openable_adapter_storage
+            let (adapter_storage, audit_logs_handle) = openable_adapter_storage
                 .open(boot_ts, &bootstrap_args)
                 .await?;
 
@@ -583,7 +583,7 @@ impl Listeners {
             // fenced out all other environments using the adapter storage.
             deployment_state.set_is_leader();
 
-            adapter_storage
+            (adapter_storage, audit_logs_handle)
         };
 
         info!(
@@ -633,6 +633,7 @@ impl Listeners {
             controller_config: config.controller,
             controller_envd_epoch: envd_epoch,
             storage: adapter_storage,
+            audit_logs_handle,
             timestamp_oracle_url: config.timestamp_oracle_url,
             unsafe_mode: config.unsafe_mode,
             all_features: config.all_features,

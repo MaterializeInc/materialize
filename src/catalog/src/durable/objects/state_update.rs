@@ -332,6 +332,7 @@ impl StateUpdateKindJson {
                         value: String::new(),
                     },
                 ),
+                StateUpdateKind::AuditLog(proto::AuditLogKey { event: None }, ()),
             ]
             .into_iter()
             .map(|kind| {
@@ -341,6 +342,18 @@ impl StateUpdateKindJson {
             .collect()
         });
         DESERIALIZABLE_KINDS.contains(self.kind())
+    }
+
+    /// Returns true if this is an audit log update. Otherwise, returns false.
+    pub(crate) fn is_audit_log(&self) -> bool {
+        // Construct a fake audit log so we can extract exactly what the kind field will serialize
+        // as.
+        static AUDIT_LOG_KIND: LazyLock<String> = LazyLock::new(|| {
+            let audit_log = StateUpdateKind::AuditLog(proto::AuditLogKey { event: None }, ());
+            let json_kind: StateUpdateKindJson = audit_log.into();
+            json_kind.kind().to_string()
+        });
+        &*AUDIT_LOG_KIND == self.kind()
     }
 }
 
