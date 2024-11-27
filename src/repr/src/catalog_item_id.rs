@@ -120,12 +120,9 @@ impl RustType<ProtoCatalogItemId> for CatalogItemId {
 
 #[cfg(test)]
 mod tests {
-    use mz_proto::ProtoType;
     use proptest::prelude::*;
-    use prost::Message;
 
     use super::*;
-    use crate::GlobalId;
 
     #[mz_ore::test]
     fn proptest_catalog_item_id_roundtrips() {
