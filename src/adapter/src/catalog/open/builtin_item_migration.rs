@@ -47,7 +47,7 @@ pub(crate) struct BuiltinItemMigrationResult {
     /// A vec of updates to apply to the builtin tables.
     pub(crate) builtin_table_updates: Vec<BuiltinTableUpdate<&'static BuiltinTable>>,
     /// A set of storage collections to drop (only used by legacy migration).
-    pub(crate) storage_collections_to_drop: BTreeSet<CatalogItemId>,
+    pub(crate) storage_collections_to_drop: BTreeSet<GlobalId>,
     /// A set of new shards that may need to be initialized (only used by 0dt migration).
     pub(crate) migrated_storage_collections_0dt: BTreeSet<CatalogItemId>,
     /// Some cleanup action to take once the migration has been made durable.

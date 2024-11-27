@@ -77,8 +77,11 @@ use crate::AdapterError;
 
 #[derive(Debug)]
 pub struct BuiltinMigrationMetadata {
-    // Used to drop objects on STORAGE nodes
-    pub previous_storage_collection_ids: BTreeSet<CatalogItemId>,
+    /// Used to drop objects on STORAGE nodes.
+    ///
+    /// Note: These collections are only known by the storage controller, and not the
+    /// Catalog, thus we identify them by their [`GlobalId`].
+    pub previous_storage_collection_ids: BTreeSet<GlobalId>,
     // Used to update persisted on disk catalog state
     pub migrated_system_object_mappings: BTreeMap<CatalogItemId, SystemObjectMapping>,
     pub introspection_source_index_updates:
@@ -177,7 +180,7 @@ pub struct InitializeStateResult {
     /// An initialized [`CatalogState`].
     pub state: CatalogState,
     /// A set of storage collections to drop (only used by legacy migrations).
-    pub storage_collections_to_drop: BTreeSet<CatalogItemId>,
+    pub storage_collections_to_drop: BTreeSet<GlobalId>,
     /// A set of new shards that may need to be initialized (only used by 0dt migration).
     pub migrated_storage_collections_0dt: BTreeSet<CatalogItemId>,
     /// A set of new builtin items.
@@ -198,7 +201,10 @@ pub struct OpenCatalogResult {
     /// An opened [`Catalog`].
     pub catalog: Catalog,
     /// A set of storage collections to drop (only used by legacy migrations).
-    pub storage_collections_to_drop: BTreeSet<CatalogItemId>,
+    ///
+    /// Note: These Collections will not be in the Catalog, and are only known about by
+    /// the storage controller, which is why we identify them by [`GlobalId`].
+    pub storage_collections_to_drop: BTreeSet<GlobalId>,
     /// A set of new shards that may need to be initialized (only used by 0dt migration).
     pub migrated_storage_collections_0dt: BTreeSet<CatalogItemId>,
     /// A set of new builtin items.
@@ -652,16 +658,12 @@ impl Catalog {
     async fn initialize_storage_controller_state(
         &mut self,
         storage_controller: &mut dyn StorageController<Timestamp = mz_repr::Timestamp>,
-        storage_collections_to_drop: BTreeSet<CatalogItemId>,
+        storage_collections_to_drop: BTreeSet<GlobalId>,
     ) -> Result<(), mz_catalog::durable::CatalogError> {
         let collections = self
             .entries()
             .filter(|entry| entry.item().is_storage_collection())
             .flat_map(|entry| entry.global_ids())
-            .collect();
-        let collections_to_drop = storage_collections_to_drop
-            .into_iter()
-            .flat_map(|item_id| self.get_entry(&item_id).global_ids())
             .collect();
 
         // Clone the state so that any errors that occur do not leak any
@@ -672,7 +674,7 @@ impl Catalog {
         let mut txn = storage.transaction().await?;
 
         storage_controller
-            .initialize_state(&mut txn, collections, collections_to_drop)
+            .initialize_state(&mut txn, collections, storage_collections_to_drop)
             .await
             .map_err(mz_catalog::durable::DurableCatalogError::from)?;
 
@@ -695,7 +697,7 @@ impl Catalog {
         config: mz_controller::ControllerConfig,
         envd_epoch: core::num::NonZeroI64,
         read_only: bool,
-        storage_collections_to_drop: BTreeSet<CatalogItemId>,
+        storage_collections_to_drop: BTreeSet<GlobalId>,
     ) -> Result<mz_controller::Controller<mz_repr::Timestamp>, mz_catalog::durable::CatalogError>
     {
         let controller_start = Instant::now();
@@ -816,7 +818,7 @@ impl Catalog {
             if entry.item().is_storage_collection() {
                 migration_metadata
                     .previous_storage_collection_ids
-                    .insert(id);
+                    .extend(entry.global_ids());
             }
 
             // Push drop commands.
@@ -1757,6 +1759,20 @@ mod builtin_migration_tests {
         ids.into_iter().map(|id| name_lookup[&id].clone()).collect()
     }
 
+    fn convert_global_ids_to_names<I: IntoIterator<Item = GlobalId>>(
+        ids: I,
+        global_id_lookup: &BTreeMap<String, GlobalId>,
+    ) -> BTreeSet<String> {
+        ids.into_iter()
+            .flat_map(|id_a| {
+                global_id_lookup
+                    .iter()
+                    .filter_map(move |(name, id_b)| (id_a == *id_b).then_some(name))
+            })
+            .cloned()
+            .collect()
+    }
+
     async fn run_test_case(test_case: BuiltinMigrationTestCase) {
         Catalog::with_debug(|mut catalog| async move {
             let mut item_id_mapping = BTreeMap::new();
@@ -1808,11 +1824,11 @@ mod builtin_migration_tests {
             };
 
             assert_eq!(
-                convert_ids_to_names(
+                convert_global_ids_to_names(
                     migration_metadata
                         .previous_storage_collection_ids
                         .into_iter(),
-                    &name_mapping
+                    &global_id_mapping
                 ),
                 test_case
                     .expected_previous_storage_collection_names
