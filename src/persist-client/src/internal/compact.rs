@@ -23,6 +23,7 @@ use futures_util::{StreamExt, TryFutureExt};
 use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
+use mz_persist::indexed::columnar::ColumnarRecords;
 use mz_persist::indexed::encoding::BlobTraceUpdates;
 use mz_persist::location::Blob;
 use mz_persist_types::{Codec, Codec64};
@@ -898,24 +899,37 @@ where
                 metrics.compaction.not_all_prefetched.inc();
             }
 
-            // Reuse the allocations for individual keys and values
-            let mut key_vec = vec![];
-            let mut val_vec = vec![];
             loop {
-                let fetch_start = Instant::now();
-                let Some(updates) = consolidator.next().await? else {
-                    break;
-                };
-                timings.part_fetching += fetch_start.elapsed();
-                for ((k, v), t, d) in updates.take(cfg.compaction_yield_after_n_updates) {
-                    key_vec.clear();
-                    key_vec.extend_from_slice(k);
-                    val_vec.clear();
-                    val_vec.extend_from_slice(v);
-                    crate::batch::validate_schema(&write_schemas, &key_vec, &val_vec, None, None);
-                    batch.add(&key_vec, &val_vec, &t, &d).await?;
+                let mut chunks = vec![];
+                let mut total_bytes = 0;
+                // We attempt to pull chunks out of the consolidator that match our target size,
+                // but it's possible that we may get smaller chunks... for example, if not all
+                // parts have been fetched yet. Loop until we've got enough data to justify flushing
+                // it out to blob (or we run out of data.)
+                while total_bytes < cfg.batch.blob_target_size {
+                    let fetch_start = Instant::now();
+                    let Some(chunk) = consolidator
+                        .next_chunk(
+                            cfg.compaction_yield_after_n_updates,
+                            cfg.batch.blob_target_size - total_bytes,
+                        )
+                        .await?
+                    else {
+                        break;
+                    };
+                    timings.part_fetching += fetch_start.elapsed();
+                    total_bytes += chunk.goodbytes();
+                    chunks.push(chunk.records().clone());
+                    tokio::task::yield_now().await;
                 }
-                tokio::task::yield_now().await;
+
+                if chunks.is_empty() {
+                    break;
+                }
+
+                // In the hopefully-common case of a single chunk, this will not copy.
+                let updates = ColumnarRecords::concat(&chunks, &metrics.columnar);
+                batch.flush_many(BlobTraceUpdates::Row(updates)).await?;
             }
         }
         let mut batch = batch.finish(desc.upper().clone()).await?;
