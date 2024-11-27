@@ -381,7 +381,7 @@ pub(crate) const BATCH_COLUMNAR_FORMAT: Config<&'static str> = Config::new(
 
 pub(crate) const BATCH_COLUMNAR_FORMAT_PERCENT: Config<usize> = Config::new(
     "persist_batch_columnar_format_percent",
-    0,
+    100,
     "Percent of parts to write using 'persist_batch_columnar_format', falling back to 'row'.",
 );
 
@@ -420,7 +420,7 @@ pub(crate) const STRUCTURED_ORDER_UNTIL_SHARD: Config<&'static str> = Config::ne
 
 pub(crate) const STRUCTURED_KEY_LOWER_LEN: Config<usize> = Config::new(
     "persist_batch_structured_key_lower_len",
-    0,
+    256,
     "The maximum size in proto bytes of any structured key-lower metadata to preserve. \
     (If we're unable to fit the lower in budget, or the budget is zero, no metadata is kept.)",
 );
