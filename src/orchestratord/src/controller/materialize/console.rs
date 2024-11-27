@@ -26,7 +26,10 @@ use kube::{api::ObjectMeta, Api, Client};
 use maplit::btreemap;
 use tracing::trace;
 
-use crate::{controller::materialize::tls::create_certificate, k8s::apply_resource};
+use crate::{
+    controller::materialize::tls::{create_certificate, issuer_ref_defined},
+    k8s::apply_resource,
+};
 use mz_cloud_resources::crd::{
     gen::cert_manager::certificates::Certificate, materialize::v1alpha1::Materialize,
 };
@@ -174,10 +177,19 @@ fn create_console_deployment_object(
         ..Default::default()
     };
 
+    let scheme = if issuer_ref_defined(
+        &config.default_certificate_specs.balancerd_external,
+        &mz.spec.balancerd_external_certificate_spec,
+    ) {
+        "https"
+    } else {
+        "http"
+    };
     let env = vec![EnvVar {
         name: "MZ_ENDPOINT".to_string(),
         value: Some(format!(
-            "http://{}.{}.svc.cluster.local:{}",
+            "{}://{}.{}.svc.cluster.local:{}",
+            scheme,
             mz.balancerd_service_name(),
             mz.namespace(),
             config.balancerd_http_port,
