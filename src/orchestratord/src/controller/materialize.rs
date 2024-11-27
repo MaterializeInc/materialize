@@ -112,10 +112,6 @@ pub struct Args {
     environmentd_internal_http_host_override: Option<String>,
     #[clap(long, default_value = "6879")]
     environmentd_internal_persist_pubsub_port: i32,
-    #[clap(long, default_value = "6880")]
-    environmentd_balancer_sql_port: i32,
-    #[clap(long, default_value = "6881")]
-    environmentd_balancer_http_port: i32,
 
     #[clap(long, default_value = "6875")]
     balancerd_sql_port: i32,
