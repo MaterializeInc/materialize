@@ -1332,6 +1332,7 @@ steps:
       - id: rqg-window-functions
         label: "RQG window functions workload"
         depends_on: build-aarch64
+        skip: "flaky until database-issues#8366 is fixed"
         timeout_in_minutes: 45
         agents:
           queue: hetzner-aarch64-4cpu-8gb
