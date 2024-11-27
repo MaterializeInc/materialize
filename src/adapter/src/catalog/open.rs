@@ -1759,7 +1759,6 @@ mod builtin_migration_tests {
         ids: I,
         global_id_lookup: &BTreeMap<String, GlobalId>,
     ) -> BTreeSet<String> {
-        println!("{global_id_lookup:?}");
         ids.into_iter()
             .flat_map(|id_a| {
                 global_id_lookup
@@ -1810,7 +1809,6 @@ mod builtin_migration_tests {
                     .transaction()
                     .await
                     .expect("failed to create transaction");
-                println!("migrated ids {migrated_ids:?}");
                 Catalog::generate_builtin_migration_metadata(
                     &state,
                     &mut txn,
@@ -1820,7 +1818,6 @@ mod builtin_migration_tests {
                 .expect("failed to generate builtin migration metadata")
             };
 
-            println!("{:?}", migration_metadata.previous_storage_collection_ids);
             assert_eq!(
                 convert_global_ids_to_names(
                     migration_metadata
