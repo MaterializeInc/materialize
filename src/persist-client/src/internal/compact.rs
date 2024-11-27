@@ -782,7 +782,6 @@ where
             Arc::clone(&metrics),
             Arc::clone(&shard_metrics),
             *shard_id,
-            desc.lower().clone(),
             Arc::clone(&blob),
             Arc::clone(&isolated_runtime),
             &metrics.compaction.batch,
@@ -792,12 +791,9 @@ where
             parts,
             Arc::clone(&metrics),
             write_schemas.clone(),
-            desc.lower().clone(),
             Arc::clone(&blob),
             shard_id.clone(),
             cfg.version.clone(),
-            desc.since().clone(),
-            Some(desc.upper().clone()),
         );
 
         // Duplicating a large codepath here during the migration.
@@ -868,7 +864,7 @@ where
                     write_schemas.val.as_ref(),
                     &metrics.columnar,
                 )?;
-                batch.flush_many(updates).await?;
+                batch.flush_part(desc.clone(), updates).await;
             }
         } else {
             let mut consolidator = Consolidator::<T, D>::new(
@@ -929,10 +925,12 @@ where
 
                 // In the hopefully-common case of a single chunk, this will not copy.
                 let updates = ColumnarRecords::concat(&chunks, &metrics.columnar);
-                batch.flush_many(BlobTraceUpdates::Row(updates)).await?;
+                batch
+                    .flush_part(desc.clone(), BlobTraceUpdates::Row(updates))
+                    .await;
             }
         }
-        let mut batch = batch.finish(desc.upper().clone()).await?;
+        let mut batch = batch.finish(desc.clone()).await?;
 
         // We use compaction as a method of getting inline writes out of state,
         // to make room for more inline writes. This happens in
