@@ -67,18 +67,27 @@ impl CatalogItemId {
 impl FromStr for CatalogItemId {
     type Err = Error;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+    fn from_str(mut s: &str) -> Result<Self, Self::Err> {
         if s.len() < 2 {
             return Err(anyhow!("couldn't parse id {}", s));
         }
+        let tag = s.chars().next().unwrap();
+        s = &s[1..];
+        let variant = match tag {
+            's' => {
+                if Some('i') == s.chars().next() {
+                    s = &s[1..];
+                    CatalogItemId::IntrospectionSourceIndex
+                } else {
+                    CatalogItemId::System
+                }
+            }
+            'u' => CatalogItemId::User,
+            't' => CatalogItemId::Transient,
+            _ => return Err(anyhow!("couldn't parse id {}", s)),
+        };
         let val: u64 = s[1..].parse()?;
-        match s.chars().next().unwrap() {
-            's' => Ok(CatalogItemId::System(val)),
-            'i' => Ok(CatalogItemId::IntrospectionSourceIndex(val)),
-            'u' => Ok(CatalogItemId::User(val)),
-            't' => Ok(CatalogItemId::Transient(val)),
-            _ => Err(anyhow!("couldn't parse id {}", s)),
-        }
+        Ok(variant(val))
     }
 }
 
@@ -86,7 +95,7 @@ impl fmt::Display for CatalogItemId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             CatalogItemId::System(id) => write!(f, "s{}", id),
-            CatalogItemId::IntrospectionSourceIndex(id) => write!(f, "i{}", id),
+            CatalogItemId::IntrospectionSourceIndex(id) => write!(f, "si{}", id),
             CatalogItemId::User(id) => write!(f, "u{}", id),
             CatalogItemId::Transient(id) => write!(f, "t{}", id),
         }

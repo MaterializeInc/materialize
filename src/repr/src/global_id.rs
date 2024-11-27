@@ -91,20 +91,30 @@ impl GlobalId {
 impl FromStr for GlobalId {
     type Err = Error;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+    fn from_str(mut s: &str) -> Result<Self, Self::Err> {
         if s.len() < 2 {
             return Err(anyhow!("couldn't parse id {}", s));
         }
         if s == "Explained Query" {
             return Ok(GlobalId::Explain);
         }
+        let tag = s.chars().next().unwrap();
+        s = &s[1..];
+        let variant = match tag {
+            's' => {
+                if Some('i') == s.chars().next() {
+                    s = &s[1..];
+                    GlobalId::IntrospectionSourceIndex
+                } else {
+                    GlobalId::System
+                }
+            }
+            'u' => GlobalId::User,
+            't' => GlobalId::Transient,
+            _ => return Err(anyhow!("couldn't parse id {}", s)),
+        };
         let val: u64 = s[1..].parse()?;
-        match s.chars().next().unwrap() {
-            's' => Ok(GlobalId::System(val)),
-            'i' => Ok(GlobalId::IntrospectionSourceIndex(val)),
-            'u' => Ok(GlobalId::User(val)),
-            't' => Ok(GlobalId::Transient(val)),
-            _ => Err(anyhow!("couldn't parse id {}", s)),
+        Ok(variant(val))
         }
     }
 }
@@ -113,7 +123,7 @@ impl fmt::Display for GlobalId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             GlobalId::System(id) => write!(f, "s{}", id),
-            GlobalId::IntrospectionSourceIndex(id) => write!(f, "i{}", id),
+            GlobalId::IntrospectionSourceIndex(id) => write!(f, "si{}", id),
             GlobalId::User(id) => write!(f, "u{}", id),
             GlobalId::Transient(id) => write!(f, "t{}", id),
             GlobalId::Explain => write!(f, "Explained Query"),
