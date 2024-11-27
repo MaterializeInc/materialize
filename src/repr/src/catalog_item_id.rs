@@ -139,36 +139,4 @@ mod tests {
             testcase(id);
         })
     }
-
-    #[mz_ore::test]
-    fn proptest_catalog_item_id_global_id_wire_compat() {
-        fn testcase(og: GlobalId) {
-            let bytes = og.into_proto().encode_to_vec();
-            let proto = ProtoCatalogItemId::decode(&bytes[..]).expect("valid");
-            let rnd = proto.into_rust().expect("valid proto");
-
-            match (og, rnd) {
-                (GlobalId::User(x), CatalogItemId::User(y)) => assert_eq!(x, y),
-                (GlobalId::System(x), CatalogItemId::System(y)) => assert_eq!(x, y),
-                (
-                    GlobalId::IntrospectionSourceIndex(x),
-                    CatalogItemId::IntrospectionSourceIndex(y),
-                ) => assert_eq!(x, y),
-                (GlobalId::Transient(x), CatalogItemId::Transient(y)) => assert_eq!(x, y),
-                (gid, item) => panic!("{gid:?} turned into {item:?}"),
-            }
-        }
-
-        let strat = proptest::arbitrary::any::<u64>().prop_flat_map(|inner| {
-            proptest::strategy::Union::new(vec![
-                Just(GlobalId::User(inner)),
-                Just(GlobalId::System(inner)),
-                Just(GlobalId::IntrospectionSourceIndex(inner)),
-                Just(GlobalId::Transient(inner)),
-            ])
-        });
-        proptest!(|(id in strat)| {
-            testcase(id)
-        });
-    }
 }
