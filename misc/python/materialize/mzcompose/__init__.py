@@ -146,6 +146,8 @@ def get_default_system_parameters(
         "persist_schema_register": (
             "false" if version < MzVersion.parse_mz("v0.111.0-dev") else "true"
         ),
+        # 16 MiB - large enough to avoid a big perf hit, small enough to get more coverage...
+        "persist_blob_target_size": "16777216",
         "persist_schema_require": "true",
         "persist_stats_audit_percent": "100",
         "persist_txn_tables": "lazy",  # removed, but keep value for older versions
