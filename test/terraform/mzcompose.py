@@ -70,7 +70,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     tag = args.tag or f"v{ci_util.get_mz_version()}--pr.g{git.rev_parse('HEAD')}"
     materialize_environment = None
-    port_forward_process = None
+    environmentd_port_forward_process = None
+    balancerd_port_forward_process = None
 
     path = MZ_ROOT / "test" / "terraform" / "aws"
     try:
@@ -158,6 +159,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                         },
                     },
                 },
+                "rbac": {"enabled": False},
                 "namespace": {"create": True, "name": "materialize"},
                 "networkPolicies": {
                     "enabled": True,
@@ -320,24 +322,55 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             ],
             cwd=path,
         )
-        # These sleeps are a bit unclean, we should instead only consider
-        # environmentd as running when it is has started listening on its ports
-        time.sleep(30)
-        port_forward_process = subprocess.Popen(
+        # Can take a while for balancerd to come up
+        for i in range(120):
+            try:
+                balancerd_name = spawn.capture(
+                    [
+                        "kubectl",
+                        "get",
+                        "pods",
+                        "-l",
+                        "app=balancerd",
+                        "-n",
+                        "materialize-environment",
+                        "-o",
+                        "jsonpath={.items[*].metadata.name}",
+                    ],
+                    cwd=path,
+                )
+                break
+            except subprocess.CalledProcessError as e:
+                print(e)
+                time.sleep(1)
+        else:
+            raise ValueError("Never completed")
+
+        environmentd_port_forward_process = subprocess.Popen(
             [
                 "kubectl",
                 "port-forward",
                 f"pod/{environmentd_name}",
                 "-n",
                 "materialize-environment",
-                "6875:6875",
                 "6876:6876",
                 "6877:6877",
                 "6878:6878",
             ],
             preexec_fn=os.setpgrp,
         )
-        time.sleep(30)
+        balancerd_port_forward_process = subprocess.Popen(
+            [
+                "kubectl",
+                "port-forward",
+                f"pod/{balancerd_name}",
+                "-n",
+                "materialize-environment",
+                "6875:6875",
+            ],
+            preexec_fn=os.setpgrp,
+        )
+        time.sleep(10)
 
         with c.override(
             Testdrive(
@@ -442,8 +475,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 "version.td",
             )
     finally:
-        if port_forward_process:
-            os.killpg(os.getpgid(port_forward_process.pid), signal.SIGTERM)
+        if environmentd_port_forward_process:
+            os.killpg(os.getpgid(environmentd_port_forward_process.pid), signal.SIGTERM)
+        if balancerd_port_forward_process:
+            os.killpg(os.getpgid(balancerd_port_forward_process.pid), signal.SIGTERM)
 
         if args.cleanup:
             print("--- Cleaning up")
