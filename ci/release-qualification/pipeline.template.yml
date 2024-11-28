@@ -474,6 +474,18 @@ steps:
               composition: platform-checks
               args: [--scenario=DropCreateDefaultReplica, "--seed=$BUILDKITE_JOB_ID"]
 
+      - id: checks-0dt-restart-entire-mz
+        label: "Checks 0dt restart of the entire Mz %N"
+        depends_on: build-aarch64
+        timeout_in_minutes: 60
+        parallelism: 2
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=ZeroDowntimeRestartEntireMz, "--seed=$BUILDKITE_JOB_ID"]
+
   - id: limits
     label: "Product limits (finding new limits) %N"
     depends_on: build-aarch64
