@@ -19,5 +19,6 @@ message ProtoGlobalId {
     uint64 user = 2;
     uint64 transient = 3;
     google.protobuf.Empty explain = 4;
+    uint64 introspection_source_index = 5;
   }
 }

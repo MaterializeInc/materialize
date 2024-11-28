@@ -104,6 +104,7 @@ impl RustType<ProtoCatalogItemId> for CatalogItemId {
             Some(System(x)) => Ok(CatalogItemId::System(x)),
             Some(User(x)) => Ok(CatalogItemId::User(x)),
             Some(Transient(x)) => Ok(CatalogItemId::Transient(x)),
+            Some(IntrospectionSourceIndex(_)) => unimplemented!("reverted in #30649"),
             None => Err(TryFromProtoError::missing_field("ProtoCatalogItemId::kind")),
         }
     }

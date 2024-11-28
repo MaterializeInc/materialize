@@ -130,6 +130,7 @@ impl RustType<ProtoGlobalId> for GlobalId {
             Some(User(x)) => Ok(GlobalId::User(x)),
             Some(Transient(x)) => Ok(GlobalId::Transient(x)),
             Some(Explain(_)) => Ok(GlobalId::Explain),
+            Some(IntrospectionSourceIndex(_)) => unimplemented!("reverted in #30649"),
             None => Err(TryFromProtoError::missing_field("ProtoGlobalId::kind")),
         }
     }

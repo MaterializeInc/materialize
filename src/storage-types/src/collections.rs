@@ -35,6 +35,9 @@ impl RustType<GlobalId> for RustGlobalId {
             Some(global_id::Value::User(x)) => Ok(RustGlobalId::User(x)),
             Some(global_id::Value::Transient(x)) => Ok(RustGlobalId::Transient(x)),
             Some(global_id::Value::Explain(_)) => Ok(RustGlobalId::Explain),
+            Some(global_id::Value::IntrospectionSourceIndex(_)) => {
+                unimplemented!("reverted in #30649")
+            }
             None => Err(TryFromProtoError::missing_field("GlobalId::kind")),
         }
     }
