@@ -9,7 +9,7 @@
 
 import os
 
-from materialize import buildkite
+from materialize import buildkite, ui
 from materialize.mz_env_util import get_cloud_hostname
 from materialize.mzcompose.composition import Composition
 from materialize.test_analytics.config.mz_db_config import MzDbConfig
@@ -20,7 +20,12 @@ def create_test_analytics_config(c: Composition) -> MzDbConfig:
     app_password = os.getenv("PRODUCTION_ANALYTICS_APP_PASSWORD")
 
     if app_password is not None:
-        hostname = get_cloud_hostname(c, app_password=app_password)
+        try:
+            hostname = get_cloud_hostname(c, app_password=app_password)
+        except ui.CommandFailureCausedUIError as e:
+            # TODO: Remove when database-issues#8592 is fixed
+            print(f"Failed to get cloud hostname ({e}), using fallback value")
+            hostname = "7vifiksqeftxc6ld3r6zvc8n2.lb.us-east-1.aws.materialize.cloud"
     else:
         hostname = "unknown"
 

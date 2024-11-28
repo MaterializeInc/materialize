@@ -139,10 +139,6 @@ fi
 
 ci_unimportant_heading ":docker: Cleaning up after mzcompose"
 
-run() {
-    bin/ci-builder run stable bin/mzcompose --mz-quiet --find "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" "$@"
-}
-
 # docker-compose kill may fail attempting to kill containers
 # that have just exited on their own because of the
 # "shared-fate" mechanism employed by Mz clusters
