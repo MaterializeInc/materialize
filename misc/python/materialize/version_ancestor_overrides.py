@@ -29,6 +29,12 @@ def get_ancestor_overrides_for_performance_regressions(
     min_ancestor_mz_version_per_commit = dict()
 
     if "OptbenchTPCH" in scenario_class_name:
+        # PR#30602 (Replace ColumnKnowledge with EquivalencePropagation) increases wallclock
+        min_ancestor_mz_version_per_commit[
+            "1bd45336f8335b3487153beb7ce57f6391a7cf9c"
+        ] = MzVersion.parse_mz("v0.126.0")
+
+    if "OptbenchTPCH" in scenario_class_name:
         # PR#30506 (Remove NonNullable transform) increases wallclock
         min_ancestor_mz_version_per_commit[
             "6981cb35f6a64748293867beb67e74b804f9e723"
