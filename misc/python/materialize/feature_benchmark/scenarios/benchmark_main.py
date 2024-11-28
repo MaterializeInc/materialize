@@ -334,7 +334,7 @@ class InsertMultiRow(DML):
 class Update(DML):
     """Measure the time it takes for an UPDATE statement to return to client"""
 
-    SCALE = 6  # TODO: Increase scale when database-issues#8766 is fixed
+    SCALE = 7
 
     def init(self) -> list[Action]:
         return [
