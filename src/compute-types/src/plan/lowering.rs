@@ -37,8 +37,6 @@ pub(super) struct Context {
     debug_info: LirDebugInfo,
     /// Whether to enable fusion of MFPs in reductions.
     enable_reduce_mfp_fusion: bool,
-    /// Whether to fuse `Reduce` with `FlatMap UnnestList` for better window function performance.
-    enable_reduce_unnest_list_fusion: bool,
 }
 
 impl Context {
@@ -51,7 +49,6 @@ impl Context {
                 id: GlobalId::Transient(0),
             },
             enable_reduce_mfp_fusion: features.enable_reduce_mfp_fusion,
-            enable_reduce_unnest_list_fusion: features.enable_reduce_unnest_list_fusion,
         }
     }
 
@@ -418,9 +415,6 @@ impl Context {
                 // it would be very hard to hunt down all these parts. (For example, key inference
                 // infers the group key as a unique key.)
                 let fused_with_reduce = 'fusion: {
-                    if !self.enable_reduce_unnest_list_fusion {
-                        break 'fusion None;
-                    }
                     if !matches!(func, TableFunc::UnnestList { .. }) {
                         break 'fusion None;
                     }
@@ -692,10 +686,9 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 monotonic,
                 expected_group_size,
             } => {
-                if self.enable_reduce_unnest_list_fusion
-                    && aggregates
-                        .iter()
-                        .any(|agg| agg.func.can_fuse_with_unnest_list())
+                if aggregates
+                    .iter()
+                    .any(|agg| agg.func.can_fuse_with_unnest_list())
                 {
                     // This case should have been handled at the `MirRelationExpr::FlatMap` case
                     // above. But that has a pretty complicated pattern matching, so it's not

@@ -136,10 +136,6 @@ pub struct Config {
     pub enable_new_outer_join_lowering: bool,
     /// Enable outer join lowering implemented in database-issues#7561.
     pub enable_variadic_left_join_lowering: bool,
-    /// See the feature flag of the same name.
-    pub enable_value_window_function_fusion: bool,
-    /// See the feature flag of the same name.
-    pub enable_window_aggregation_fusion: bool,
 }
 
 impl From<&SystemVars> for Config {
@@ -147,8 +143,6 @@ impl From<&SystemVars> for Config {
         Self {
             enable_new_outer_join_lowering: vars.enable_new_outer_join_lowering(),
             enable_variadic_left_join_lowering: vars.enable_variadic_left_join_lowering(),
-            enable_value_window_function_fusion: vars.enable_value_window_function_fusion(),
-            enable_window_aggregation_fusion: vars.enable_window_aggregation_fusion(),
         }
     }
 }
