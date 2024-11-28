@@ -81,11 +81,11 @@ steps:
     steps:
       - id: feature-benchmark
         label: "Feature benchmark against merge base or 'latest' %N"
-        depends_on: build-aarch64
+        depends_on: build-x86_64
         timeout_in_minutes: 720
         parallelism: 8
         agents:
-          queue: linux-aarch64-medium
+          queue: hetzner-x86-64-dedi-8cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: feature-benchmark
@@ -95,10 +95,11 @@ steps:
                 - common-ancestor
       - id: scalability-benchmark-dml-dql
         label: "Scalability benchmark (read & write) against merge base or 'latest'"
-        depends_on: build-aarch64
+        depends_on: build-x86_64
         timeout_in_minutes: 240
         agents:
-          queue: linux-aarch64
+          # Larger instance is more stable in performance
+          queue: hetzner-x86-64-dedi-8cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: scalability
@@ -115,10 +116,11 @@ steps:
                 - "256"
       - id: scalability-benchmark-ddl
         label: "Scalability benchmark (DDL) against merge base or 'latest'"
-        depends_on: build-aarch64
+        depends_on: build-x86_64
         timeout_in_minutes: 1200
         agents:
-          queue: linux-aarch64
+          # Larger instance is more stable in performance
+          queue: hetzner-x86-64-dedi-16cpu-64gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: scalability
@@ -139,10 +141,11 @@ steps:
                 - "64"
       - id: scalability-benchmark-connection
         label: "Scalability benchmark (connection) against merge base or 'latest'"
-        depends_on: build-aarch64
+        depends_on: build-x86_64
         timeout_in_minutes: 180
         agents:
-          queue: linux-aarch64-medium
+          # Larger instance is more stable in performance
+          queue: hetzner-x86-64-dedi-16cpu-64gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: scalability
@@ -161,10 +164,11 @@ steps:
                 - "2048"
       - id: parallel-benchmark
         label: "Parallel Benchmark"
-        depends_on: build-aarch64
+        depends_on: build-x86_64
         timeout_in_minutes: 120
         agents:
-          queue: linux-aarch64-medium
+          # Larger instance is more stable in performance
+          queue: hetzner-x86-64-dedi-16cpu-64gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-benchmark
@@ -870,11 +874,10 @@ steps:
 
       - id: checks-0dt-bump-version
         label: "Checks 0dt upgrade to a bumped version"
-        depends_on: build-aarch64
+        depends_on: build-x86_64
         timeout_in_minutes: 240
         agents:
-          # TODO(def-): Switch back to hetzner
-          queue: builder-linux-aarch64-mem
+          queue: hetzner-x86-64-dedi-32cpu-128gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -1185,7 +1188,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 58
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: feature-flag-consistency
@@ -1523,12 +1526,11 @@ steps:
 
       - id: parallel-workload-0dt
         label: "Parallel Workload (0dt deploy)"
-        depends_on: build-aarch64
+        depends_on: build-x86_64
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 90
         agents:
-          # TODO(def-): Switch back to hetzner
-          queue: linux-aarch64-large
+          queue: hetzner-x86-64-dedi-16cpu-64gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
