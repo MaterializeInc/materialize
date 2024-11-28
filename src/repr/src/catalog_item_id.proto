@@ -18,6 +18,5 @@ message ProtoCatalogItemId {
     uint64 system = 1;
     uint64 user = 2;
     uint64 transient = 3;
-    uint64 introspection_source_index = 4;
   }
 }

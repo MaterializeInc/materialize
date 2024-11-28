@@ -381,8 +381,6 @@ pub(crate) struct PersistHandle<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> {
     fenceable_token: FenceableToken,
     /// The semantic version of the current binary.
     catalog_content_version: semver::Version,
-    /// Flag to indicate if bootstrap is complete.
-    bootstrap_complete: bool,
     /// Metrics for the persist catalog.
     metrics: Arc<Metrics>,
 }
@@ -1074,7 +1072,6 @@ impl UnopenedPersistCatalogState {
             upper,
             fenceable_token: FenceableToken::new(deploy_generation),
             catalog_content_version: version,
-            bootstrap_complete: false,
             metrics,
         };
         // If the snapshot is not consolidated, and we see multiple epoch values while applying the
@@ -1221,7 +1218,6 @@ impl UnopenedPersistCatalogState {
             snapshot: Vec::new(),
             update_applier: CatalogStateInner::new(),
             catalog_content_version: self.catalog_content_version,
-            bootstrap_complete: false,
             metrics: self.metrics,
         };
         catalog.metrics.collection_entries.reset();
@@ -1581,10 +1577,6 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
         self.expire().await
     }
 
-    fn is_bootstrap_complete(&self) -> bool {
-        self.bootstrap_complete
-    }
-
     async fn get_audit_logs(&mut self) -> Result<Vec<VersionedEvent>, CatalogError> {
         self.sync_to_current_upper().await?;
         let audit_logs: Vec<_> = self
@@ -1686,10 +1678,6 @@ impl DurableCatalogState for PersistCatalogState {
 
     fn is_savepoint(&self) -> bool {
         matches!(self.mode, Mode::Savepoint)
-    }
-
-    fn mark_bootstrap_complete(&mut self) {
-        self.bootstrap_complete = true;
     }
 
     #[mz_ore::instrument(level = "debug")]

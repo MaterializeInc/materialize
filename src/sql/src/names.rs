@@ -1867,7 +1867,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                         ResolvedClusterName {
                             // The ID is arbitrary here; we just need some dummy
                             // value to return.
-                            id: ClusterId::system(0).expect("0 is a valid ID"),
+                            id: ClusterId::System(0),
                             print_name: None,
                         }
                     }
@@ -1883,7 +1883,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                     ResolvedClusterName {
                         // The ID is arbitrary here; we just need some dummy
                         // value to return.
-                        id: ClusterId::system(0).expect("0 is a valid ID"),
+                        id: ClusterId::System(0),
                         print_name: None,
                     }
                 }
@@ -2026,7 +2026,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                         ResolvedObjectName::ClusterReplica(ResolvedClusterReplicaName {
                             // The ID is arbitrary here; we just need some dummy
                             // value to return.
-                            cluster_id: ClusterId::system(0).expect("0 is a valid ID"),
+                            cluster_id: ClusterId::System(0),
                             replica_id: ReplicaId::System(0),
                         })
                     }

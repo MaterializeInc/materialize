@@ -232,7 +232,7 @@ mod tests {
     fn history() -> CommandHistory<u64> {
         let registry = MetricsRegistry::new();
         let metrics = StorageControllerMetrics::new(registry)
-            .for_instance(StorageInstanceId::system(0).expect("0 is a valid ID"))
+            .for_instance(StorageInstanceId::System(0))
             .for_history();
 
         CommandHistory::new(metrics)
@@ -310,7 +310,7 @@ mod tests {
                 txns_shard: Default::default(),
             },
             source_exports,
-            instance_id: StorageInstanceId::system(0).expect("0 is a valid ID"),
+            instance_id: StorageInstanceId::System(0),
             remap_collection_id: GlobalId::User(remap_collection_id),
         }
     }

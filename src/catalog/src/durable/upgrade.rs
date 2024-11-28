@@ -180,14 +180,14 @@ macro_rules! objects {
     }
 }
 
-objects!(v67, v68, v69, v70, v71, v72, v73);
+objects!(v67, v68, v69, v70, v71, v72);
 
 /// The current version of the `Catalog`.
 ///
 /// We will initialize new `Catalog`es with this version, and migrate existing `Catalog`es to this
 /// version. Whenever the `Catalog` changes, e.g. the protobufs we serialize in the `Catalog`
 /// change, we need to bump this version.
-pub const CATALOG_VERSION: u64 = 73;
+pub const CATALOG_VERSION: u64 = 72;
 
 /// The minimum `Catalog` version number that we support migrating from.
 ///
@@ -204,7 +204,6 @@ mod v68_to_v69;
 mod v69_to_v70;
 mod v70_to_v71;
 mod v71_to_v72;
-mod v72_to_v73;
 
 /// Describes a single action to take during a migration from `V1` to `V2`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -326,15 +325,6 @@ async fn run_upgrade(
                 version,
                 commit_ts,
                 v71_to_v72::upgrade,
-            )
-            .await
-        }
-        72 => {
-            run_versioned_upgrade(
-                unopened_catalog_state,
-                version,
-                commit_ts,
-                v72_to_v73::upgrade,
             )
             .await
         }

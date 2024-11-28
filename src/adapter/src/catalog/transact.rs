@@ -32,6 +32,7 @@ use mz_catalog::memory::objects::{
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_controller::clusters::{ManagedReplicaLocation, ReplicaConfig, ReplicaLocation};
 use mz_controller_types::{ClusterId, ReplicaId};
+use mz_ore::cast::usize_to_u64;
 use mz_ore::collections::HashSet;
 use mz_ore::instrument;
 use mz_ore::now::EpochMillis;
@@ -902,19 +903,12 @@ impl Catalog {
                 let privileges: Vec<_> =
                     merge_mz_acl_items(owner_privileges.into_iter().chain(default_privileges))
                         .collect();
-                let introspection_source_ids: Vec<_> = introspection_sources
-                    .iter()
-                    .map(|introspection_source| {
-                        Transaction::allocate_introspection_source_index_id(
-                            &id,
-                            introspection_source.variant,
-                        )
-                    })
-                    .collect();
+                let introspection_source_ids =
+                    tx.allocate_system_item_ids(usize_to_u64(introspection_sources.len()))?;
 
                 let introspection_sources = introspection_sources
                     .into_iter()
-                    .zip_eq(introspection_source_ids)
+                    .zip_eq(introspection_source_ids.into_iter())
                     .map(|(log, (item_id, gid))| (log, item_id, gid))
                     .collect();
 

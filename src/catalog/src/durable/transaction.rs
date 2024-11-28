@@ -15,7 +15,6 @@ use anyhow::anyhow;
 use derivative::Derivative;
 use itertools::Itertools;
 use mz_audit_log::VersionedEvent;
-use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, TimelyLog};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::cast::{u64_to_usize, usize_to_u64};
 use mz_ore::collections::{CollectionExt, HashSet};
@@ -61,9 +60,9 @@ use crate::durable::{
     CatalogError, DefaultPrivilege, DurableCatalogError, DurableCatalogState, NetworkPolicy,
     Snapshot, SystemConfiguration, AUDIT_LOG_ID_ALLOC_KEY, BUILTIN_MIGRATION_SHARD_KEY,
     CATALOG_CONTENT_VERSION_KEY, DATABASE_ID_ALLOC_KEY, EXPRESSION_CACHE_SHARD_KEY, OID_ALLOC_KEY,
-    SCHEMA_ID_ALLOC_KEY, STORAGE_USAGE_ID_ALLOC_KEY, SYSTEM_CLUSTER_ID_ALLOC_KEY,
-    SYSTEM_ITEM_ALLOC_KEY, SYSTEM_REPLICA_ID_ALLOC_KEY, USER_ITEM_ALLOC_KEY,
-    USER_NETWORK_POLICY_ID_ALLOC_KEY, USER_REPLICA_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
+    SCHEMA_ID_ALLOC_KEY, STORAGE_USAGE_ID_ALLOC_KEY, SYSTEM_ITEM_ALLOC_KEY,
+    SYSTEM_REPLICA_ID_ALLOC_KEY, USER_ITEM_ALLOC_KEY, USER_NETWORK_POLICY_ID_ALLOC_KEY,
+    USER_REPLICA_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
 };
 use crate::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
 
@@ -394,6 +393,7 @@ impl<'a> Transaction<'a> {
     /// Panics if any introspection source id is not a system id
     pub fn insert_system_cluster(
         &mut self,
+        cluster_id: ClusterId,
         cluster_name: &str,
         introspection_source_indexes: Vec<(&'static BuiltinLog, CatalogItemId, GlobalId)>,
         privileges: Vec<MzAclItem>,
@@ -401,8 +401,6 @@ impl<'a> Transaction<'a> {
         config: ClusterConfig,
         temporary_oids: &HashSet<u32>,
     ) -> Result<(), CatalogError> {
-        let cluster_id = self.get_and_increment_id(SYSTEM_CLUSTER_ID_ALLOC_KEY.to_string())?;
-        let cluster_id = ClusterId::system(cluster_id).ok_or(SqlCatalogError::IdExhaustion)?;
         self.insert_cluster(
             cluster_id,
             cluster_name,
@@ -702,11 +700,6 @@ impl<'a> Transaction<'a> {
         key: String,
         amount: u64,
     ) -> Result<Vec<u64>, CatalogError> {
-        assert!(
-            key != SYSTEM_ITEM_ALLOC_KEY || !self.durable_catalog.is_bootstrap_complete(),
-            "system item IDs cannot be allocated outside of bootstrap"
-        );
-
         let current_id = self
             .id_allocator
             .items()
@@ -734,106 +727,12 @@ impl<'a> Transaction<'a> {
         &mut self,
         amount: u64,
     ) -> Result<Vec<(CatalogItemId, GlobalId)>, CatalogError> {
-        assert!(
-            !self.durable_catalog.is_bootstrap_complete(),
-            "we can only allocate system item IDs during bootstrap"
-        );
         Ok(self
             .get_and_increment_id_by(SYSTEM_ITEM_ALLOC_KEY.to_string(), amount)?
             .into_iter()
             // TODO(alter_table): Use separate ID allocators.
             .map(|x| (CatalogItemId::System(x), GlobalId::System(x)))
             .collect())
-    }
-
-    /// Allocates an ID for an introspection source index. These IDs are deterministically derived
-    /// from the `cluster_id` and `log_variant`.
-    ///
-    /// Introspection source indexes are a special edge case of items. They are considered system
-    /// items, but they are the only system item that can be created by the user at any time. All
-    /// other system items can only be created by the system during the startup of an upgrade.
-    ///
-    /// Furthermore, all other system item IDs are allocated deterministically in the same order
-    /// during startup. Therefore, all read-only `environmentd` processes during an upgrade will
-    /// allocate the same system IDs to the same items, and due to the way catalog fencing works,
-    /// only one of them can successfully write the IDs down to the catalog. This removes the need
-    /// for `environmentd` processes to coordinate system IDs allocated during read-only mode.
-    ///
-    /// Since introspection IDs can be allocated at any time, read-only instances would either need
-    /// to coordinate across processes when allocating a new ID or allocate them deterministically.
-    /// We opted to allocate the IDs deterministically to avoid the overhead of coordination.
-    ///
-    /// Introspection source index IDs are 64 bit integers, with the following format (not to
-    /// scale):
-    ///
-    /// -------------------------------------------------------------
-    /// | Cluster ID Variant | Cluster ID Inner Value | Log Variant |
-    /// |--------------------|------------------------|-------------|
-    /// |       8-bits       |         48-bits        |   8-bits    |
-    /// -------------------------------------------------------------
-    ///
-    /// Cluster ID Variant:      A unique number indicating the variant of cluster the index belongs
-    ///                          to.
-    /// Cluster ID Inner Value:  A per variant unique number indicating the cluster the index
-    ///                          belongs to.
-    /// Log Variant:             A unique number indicating the log variant this index is on.
-    pub fn allocate_introspection_source_index_id(
-        cluster_id: &ClusterId,
-        log_variant: LogVariant,
-    ) -> (CatalogItemId, GlobalId) {
-        let cluster_variant: u8 = match cluster_id {
-            ClusterId::System(_) => 1,
-            ClusterId::User(_) => 2,
-        };
-        let cluster_id: u64 = cluster_id.inner_id();
-        const CLUSTER_ID_MASK: u64 = 0xFFFF << 48;
-        assert_eq!(
-            CLUSTER_ID_MASK & cluster_id,
-            0,
-            "invalid cluster ID: {cluster_id}"
-        );
-        let log_variant: u8 = match log_variant {
-            LogVariant::Timely(TimelyLog::Operates) => 1,
-            LogVariant::Timely(TimelyLog::Channels) => 2,
-            LogVariant::Timely(TimelyLog::Elapsed) => 3,
-            LogVariant::Timely(TimelyLog::Histogram) => 4,
-            LogVariant::Timely(TimelyLog::Addresses) => 5,
-            LogVariant::Timely(TimelyLog::Parks) => 6,
-            LogVariant::Timely(TimelyLog::MessagesSent) => 7,
-            LogVariant::Timely(TimelyLog::MessagesReceived) => 8,
-            LogVariant::Timely(TimelyLog::Reachability) => 9,
-            LogVariant::Timely(TimelyLog::BatchesSent) => 10,
-            LogVariant::Timely(TimelyLog::BatchesReceived) => 11,
-            LogVariant::Differential(DifferentialLog::ArrangementBatches) => 12,
-            LogVariant::Differential(DifferentialLog::ArrangementRecords) => 13,
-            LogVariant::Differential(DifferentialLog::Sharing) => 14,
-            LogVariant::Differential(DifferentialLog::BatcherRecords) => 15,
-            LogVariant::Differential(DifferentialLog::BatcherSize) => 16,
-            LogVariant::Differential(DifferentialLog::BatcherCapacity) => 17,
-            LogVariant::Differential(DifferentialLog::BatcherAllocations) => 18,
-            LogVariant::Compute(ComputeLog::DataflowCurrent) => 19,
-            LogVariant::Compute(ComputeLog::FrontierCurrent) => 20,
-            LogVariant::Compute(ComputeLog::PeekCurrent) => 21,
-            LogVariant::Compute(ComputeLog::PeekDuration) => 22,
-            LogVariant::Compute(ComputeLog::ImportFrontierCurrent) => 23,
-            LogVariant::Compute(ComputeLog::ArrangementHeapSize) => 24,
-            LogVariant::Compute(ComputeLog::ArrangementHeapCapacity) => 25,
-            LogVariant::Compute(ComputeLog::ArrangementHeapAllocations) => 26,
-            LogVariant::Compute(ComputeLog::ShutdownDuration) => 27,
-            LogVariant::Compute(ComputeLog::ErrorCount) => 28,
-            LogVariant::Compute(ComputeLog::HydrationTime) => 29,
-            LogVariant::Compute(ComputeLog::LirMapping) => 30,
-            LogVariant::Compute(ComputeLog::DataflowGlobal) => 31,
-        };
-
-        let mut id: u64 = u64::from(cluster_variant) << 56;
-        id |= cluster_id << 8;
-        id |= u64::from(log_variant);
-
-        (
-            CatalogItemId::IntrospectionSourceIndex(id),
-            GlobalId::IntrospectionSourceIndex(id),
-        )
     }
 
     pub fn allocate_user_item_ids(
@@ -3678,57 +3577,5 @@ mod tests {
         assert_eq!(db_name, db.name);
         assert_eq!(db_owner, db.owner_id);
         assert_eq!(db_privileges, db.privileges);
-    }
-
-    #[mz_ore::test]
-    fn test_allocate_introspection_source_index_id() {
-        let cluster_variant: u8 = 0b0000_0001;
-        let cluster_id_inner: u64 =
-            0b0000_0000_1100_0101_1100_0011_1010_1101_0000_1011_1111_1001_0110_1010;
-        let timely_messages_received_log_variant: u8 = 0b0000_1000;
-
-        let cluster_id = ClusterId::System(cluster_id_inner);
-        let log_variant = LogVariant::Timely(TimelyLog::MessagesReceived);
-
-        let introspection_source_index_id: u64 =
-            0b0000_0001_1100_0101_1100_0011_1010_1101_0000_1011_1111_1001_0110_1010_0000_1000;
-
-        // Sanity check that `introspection_source_index_id` contains `cluster_variant`.
-        {
-            let mut cluster_variant_mask = 0xFF << 56;
-            cluster_variant_mask &= introspection_source_index_id;
-            cluster_variant_mask >>= 56;
-            assert_eq!(cluster_variant_mask, u64::from(cluster_variant));
-        }
-
-        // Sanity check that `introspection_source_index_id` contains `cluster_id_inner`.
-        {
-            let mut cluster_id_inner_mask = 0xFFFF_FFFF_FFFF << 8;
-            cluster_id_inner_mask &= introspection_source_index_id;
-            cluster_id_inner_mask >>= 8;
-            assert_eq!(cluster_id_inner_mask, cluster_id_inner);
-        }
-
-        // Sanity check that `introspection_source_index_id` contains `timely_messages_received_log_variant`.
-        {
-            let mut log_variant_mask = 0xFF;
-            log_variant_mask &= introspection_source_index_id;
-            assert_eq!(
-                log_variant_mask,
-                u64::from(timely_messages_received_log_variant)
-            );
-        }
-
-        let (catalog_item_id, global_id) =
-            Transaction::allocate_introspection_source_index_id(&cluster_id, log_variant);
-
-        assert_eq!(
-            catalog_item_id,
-            CatalogItemId::IntrospectionSourceIndex(introspection_source_index_id)
-        );
-        assert_eq!(
-            global_id,
-            GlobalId::IntrospectionSourceIndex(introspection_source_index_id)
-        );
     }
 }

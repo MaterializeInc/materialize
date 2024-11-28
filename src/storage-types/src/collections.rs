@@ -22,9 +22,6 @@ impl RustType<GlobalId> for RustGlobalId {
         GlobalId {
             value: Some(match self {
                 RustGlobalId::System(x) => global_id::Value::System(*x),
-                RustGlobalId::IntrospectionSourceIndex(x) => {
-                    global_id::Value::IntrospectionSourceIndex(*x)
-                }
                 RustGlobalId::User(x) => global_id::Value::User(*x),
                 RustGlobalId::Transient(x) => global_id::Value::Transient(*x),
                 RustGlobalId::Explain => global_id::Value::Explain(Default::default()),
@@ -35,9 +32,6 @@ impl RustType<GlobalId> for RustGlobalId {
     fn from_proto(proto: GlobalId) -> Result<Self, TryFromProtoError> {
         match proto.value {
             Some(global_id::Value::System(x)) => Ok(RustGlobalId::System(x)),
-            Some(global_id::Value::IntrospectionSourceIndex(x)) => {
-                Ok(RustGlobalId::IntrospectionSourceIndex(x))
-            }
             Some(global_id::Value::User(x)) => Ok(RustGlobalId::User(x)),
             Some(global_id::Value::Transient(x)) => Ok(RustGlobalId::Transient(x)),
             Some(global_id::Value::Explain(_)) => Ok(RustGlobalId::Explain),

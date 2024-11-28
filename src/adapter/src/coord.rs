@@ -2301,8 +2301,7 @@ impl Coordinator {
                             let id_too_large = match id {
                                 CatalogItemId::System(id) => *id >= next_system_item_id,
                                 CatalogItemId::User(id) => *id >= next_user_item_id,
-                                CatalogItemId::IntrospectionSourceIndex(_)
-                                | CatalogItemId::Transient(_) => false,
+                                CatalogItemId::Transient(_) => false,
                             };
                             if id_too_large {
                                 info!(
@@ -3625,7 +3624,7 @@ impl Coordinator {
 
         // An arbitrary compute instance ID to satisfy the function calls below. Note that
         // this only works because this function will never run.
-        let compute_instance = ComputeInstanceId::user(1).expect("1 is a valid ID");
+        let compute_instance = ComputeInstanceId::User(1);
 
         let _: () = self.ship_dataflow(dataflow, compute_instance, None).await;
     }
