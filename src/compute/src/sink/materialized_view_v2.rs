@@ -197,36 +197,26 @@ where
     // Determine the active worker for single-worker operators.
     let active_worker_id = usize::cast_from(sink_id.hashed()) % scope.peers();
 
-    let operator_name = |name| format!("persist_sink({sink_id})::{name}");
-    let persist_api = |purpose| PersistApi {
+    let persist_api = PersistApi {
         persist_clients: Arc::clone(&compute_state.persist_clients),
         collection: target.clone(),
         shard_name: sink_id.to_string(),
-        purpose,
+        purpose: format!("MV sink {sink_id}"),
     };
 
-    let name = operator_name("mint");
     let (desired, descs, mint_token) = mint::render(
-        name.clone(),
-        persist_api(name),
+        sink_id,
+        persist_api.clone(),
         as_of,
         active_worker_id,
         compute_state.read_only_rx.clone(),
         &desired,
     );
 
-    let name = operator_name("write");
     let (batches, write_token) =
-        write::render(name.clone(), persist_api(name), &desired, &persist, &descs);
+        write::render(sink_id, persist_api.clone(), &desired, &persist, &descs);
 
-    let name = operator_name("append");
-    let append_token = append::render(
-        name.clone(),
-        persist_api(name),
-        active_worker_id,
-        &descs,
-        &batches,
-    );
+    let append_token = append::render(sink_id, persist_api, active_worker_id, &descs, &batches);
 
     Rc::new((persist_token, mint_token, write_token, append_token))
 }
@@ -388,12 +378,17 @@ impl std::fmt::Debug for BatchDescription {
     }
 }
 
+/// Construct a name for the given sub-operator.
+fn operator_name(sink_id: GlobalId, sub_operator: &str) -> String {
+    format!("mv_sink({sink_id})::{sub_operator}")
+}
+
 /// Implementation of the `mint` operator.
 mod mint {
     use super::*;
 
     pub fn render<S>(
-        name: String,
+        sink_id: GlobalId,
         persist_api: PersistApi,
         as_of: Antichain<Timestamp>,
         active_worker_id: usize,
@@ -406,6 +401,7 @@ mod mint {
         let scope = desired.ok.scope();
         let worker_id = scope.index();
 
+        let name = operator_name(sink_id, "mint");
         let mut op = OperatorBuilder::new(name, scope);
 
         let (ok_output, ok_stream) = op.new_output::<CapacityContainerBuilder<_>>();
@@ -451,7 +447,7 @@ mod mint {
             let mut cap_set = CapabilitySet::from_elem(desc_cap);
 
             let read_only = *read_only_rx.borrow_and_update();
-            let mut state = State::new(as_of, read_only);
+            let mut state = State::new(sink_id, as_of, read_only);
 
             // Create a stream that reports advancements of the target shard's frontier.
             let mut persist_frontiers = pin!(async_stream::stream! {
@@ -528,6 +524,7 @@ mod mint {
 
     /// State maintained by the `mint` operator.
     struct State {
+        sink_id: GlobalId,
         /// The frontiers of the `desired` inputs.
         desired_frontiers: OkErr<Antichain<Timestamp>, Antichain<Timestamp>>,
         /// The frontier of the target persist shard.
@@ -542,13 +539,14 @@ mod mint {
     }
 
     impl State {
-        fn new(as_of: Antichain<Timestamp>, read_only: bool) -> Self {
+        fn new(sink_id: GlobalId, as_of: Antichain<Timestamp>, read_only: bool) -> Self {
             // Initializing `persist_frontier` to the `as_of` ensures that the first minted batch
             // description will have a `lower` of `as_of` or beyond, and thus that we don't spend
             // work needlessly writing batches at previous times.
             let persist_frontier = as_of;
 
             Self {
+                sink_id,
                 desired_frontiers: OkErr::new_frontiers(),
                 persist_frontier,
                 last_lower: None,
@@ -559,6 +557,7 @@ mod mint {
         fn trace<S: AsRef<str>>(&self, message: S) {
             let message = message.as_ref();
             trace!(
+                sink_id = %self.sink_id,
                 desired_frontier = ?self.desired_frontiers.frontier().elements(),
                 persist_frontier = ?self.persist_frontier.elements(),
                 last_lower = ?self.last_lower.as_ref().map(|f| f.elements()),
@@ -625,7 +624,7 @@ mod write {
     use super::*;
 
     pub fn render<S>(
-        name: String,
+        sink_id: GlobalId,
         persist_api: PersistApi,
         desired: &DesiredStreams<S>,
         persist: &PersistStreams<S>,
@@ -637,6 +636,7 @@ mod write {
         let scope = desired.ok.scope();
         let worker_id = scope.index();
 
+        let name = operator_name(sink_id, "write");
         let mut op = OperatorBuilder::new(name, scope);
 
         let (batches_output, batches_output_stream) = op.new_output();
@@ -663,7 +663,7 @@ mod write {
 
             let writer = persist_api.open_writer().await;
             let sink_metrics = persist_api.open_metrics().await;
-            let mut state = State::new(worker_id, writer, sink_metrics);
+            let mut state = State::new(sink_id, worker_id, writer, sink_metrics);
 
             loop {
                 // Read from the inputs, extract `desired` updates as positive contributions to
@@ -747,6 +747,7 @@ mod write {
 
     /// State maintained by the `write` operator.
     struct State {
+        sink_id: GlobalId,
         worker_id: usize,
         persist_writer: WriteHandle<SourceData, (), Timestamp, Diff>,
         /// Contains `desired - persist`, reflecting the updates we would like to commit to
@@ -763,6 +764,7 @@ mod write {
 
     impl State {
         fn new(
+            sink_id: GlobalId,
             worker_id: usize,
             persist_writer: WriteHandle<SourceData, (), Timestamp, Diff>,
             metrics: SinkMetrics,
@@ -770,6 +772,7 @@ mod write {
             let worker_metrics = metrics.for_worker(worker_id);
 
             Self {
+                sink_id,
                 worker_id,
                 persist_writer,
                 corrections: OkErr::new(
@@ -785,6 +788,7 @@ mod write {
         fn trace<S: AsRef<str>>(&self, message: S) {
             let message = message.as_ref();
             trace!(
+                sink_id = %self.sink_id,
                 worker = %self.worker_id,
                 desired_frontier = ?self.desired_frontiers.frontier().elements(),
                 persist_frontier = ?self.persist_frontiers.frontier().elements(),
@@ -904,7 +908,7 @@ mod append {
     use super::*;
 
     pub fn render<S>(
-        name: String,
+        sink_id: GlobalId,
         persist_api: PersistApi,
         active_worker_id: usize,
         descs: &DescsStream<S>,
@@ -916,6 +920,7 @@ mod append {
         let scope = descs.scope();
         let worker_id = scope.index();
 
+        let name = operator_name(sink_id, "append");
         let mut op = OperatorBuilder::new(name, scope);
 
         let mut descs_input = op.new_disconnected_input(descs, Pipeline);
@@ -930,7 +935,7 @@ mod append {
             }
 
             let writer = persist_api.open_writer().await;
-            let mut state = State::new(writer);
+            let mut state = State::new(sink_id, writer);
 
             loop {
                 // Read from the inputs, absorb batch descriptions and batches. If the `batches`
@@ -970,6 +975,7 @@ mod append {
 
     /// State maintained by the `append` operator.
     struct State {
+        sink_id: GlobalId,
         persist_writer: WriteHandle<SourceData, (), Timestamp, Diff>,
         /// The current input frontier of `batches`.
         batches_frontier: Antichain<Timestamp>,
@@ -982,8 +988,12 @@ mod append {
     }
 
     impl State {
-        fn new(persist_writer: WriteHandle<SourceData, (), Timestamp, Diff>) -> Self {
+        fn new(
+            sink_id: GlobalId,
+            persist_writer: WriteHandle<SourceData, (), Timestamp, Diff>,
+        ) -> Self {
             Self {
+                sink_id,
                 persist_writer,
                 batches_frontier: Antichain::from_elem(Timestamp::MIN),
                 lower: Antichain::from_elem(Timestamp::MIN),
@@ -995,6 +1005,7 @@ mod append {
         fn trace<S: AsRef<str>>(&self, message: S) {
             let message = message.as_ref();
             trace!(
+                sink_id = %self.sink_id,
                 batches_frontier = ?self.batches_frontier.elements(),
                 lower = ?self.lower.elements(),
                 batch_description = ?self.batch_description,
