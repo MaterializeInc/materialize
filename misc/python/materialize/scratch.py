@@ -24,6 +24,7 @@ from botocore.exceptions import ClientError
 from mypy_boto3_ec2.literals import InstanceTypeType
 from mypy_boto3_ec2.service_resource import Instance
 from mypy_boto3_ec2.type_defs import (
+    FilterTypeDef,
     InstanceNetworkInterfaceSpecificationTypeDef,
     InstanceTypeDef,
     RunInstancesRequestRequestTypeDef,
@@ -365,6 +366,32 @@ def launch_cluster(
 
 def whoami() -> str:
     return boto3.client("sts").get_caller_identity()["UserId"].split(":")[1]
+
+
+def get_instance(name: str) -> Instance:
+    """
+    Get an instance by instance id. The special name 'mine' resolves to a
+    unique running owned instance, if there is one; otherwise the name is
+    assumed to be an instance id.
+    :param name: The instance id or the special case 'mine'.
+    :return: The instance to which the name refers.
+    """
+    if name == "mine":
+        filters: list[FilterTypeDef] = [
+            {"Name": "tag:LaunchedBy", "Values": [whoami()]},
+            {"Name": "instance-state-name", "Values": ["pending", "running"]},
+        ]
+        instances = [i for i in boto3.resource("ec2").instances.filter(Filters=filters)]
+        if not instances:
+            raise RuntimeError("can't understand 'mine': no owned instance?")
+        if len(instances) > 1:
+            raise RuntimeError(
+                f"can't understand 'mine': too many owned instances ({', '.join(i.id for i in instances)})"
+            )
+        instance = instances[0]
+        say(f"understanding 'mine' as unique owned instance {instance.id}")
+        return instance
+    return boto3.resource("ec2").Instance(name)
 
 
 def get_instances_by_tag(k: str, v: str) -> list[InstanceTypeDef]:

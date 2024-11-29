@@ -51,7 +51,7 @@ _shtab_scratch_destroy_options=(
 
 _shtab_scratch_forward_options=(
   "(- : *)"{-h,--help}"[show this help message and exit]"
-  ":The ID of the instance to connect to:"
+  ":The ID of the instance to connect to, or \'mine\' to specify your only live instance:"
   "(*)::The remote ports to forward locally:"
 )
 
@@ -69,17 +69,17 @@ _shtab_scratch_mine_options=(
 _shtab_scratch_push_options=(
   "(- : *)"{-h,--help}"[show this help message and exit]"
   "--rev[The git rev to checkout]:rev:"
-  ":The ID of the instance to connect to:"
+  ":The ID of the instance to connect to, or \'mine\' to specify your only live instance:"
 )
 
 _shtab_scratch_sftp_options=(
   "(- : *)"{-h,--help}"[show this help message and exit]"
-  ":The ID of the instance to connect to:"
+  ":The ID of the instance to connect to, or \'mine\' to specify your only live instance:"
 )
 
 _shtab_scratch_ssh_options=(
   "(- : *)"{-h,--help}"[show this help message and exit]"
-  ":The ID of the instance to connect to:"
+  ":The ID of the instance to connect to, or \'mine\' to specify your only live instance:"
   "(*)::The command to run via SSH, if any:"
 )
 
