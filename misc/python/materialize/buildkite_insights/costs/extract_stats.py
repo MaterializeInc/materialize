@@ -65,9 +65,12 @@ hetzner_instance_cost = {
     "x86-64-4cpu-8gb": 0.0113,
     "x86-64-8cpu-16gb": 0.0273,
     "x86-64-16cpu-32gb": 0.0540,
-    "x86-64-16cpu-64gb": 0.1546,
-    "x86-64-32cpu-128gb": 0.3085,
-    "x86-64-48cpu-192gb": 0.4623,
+    "x86-64-dedi-2cpu-8gb": 0.0200,
+    "x86-64-dedi-4cpu-16gb": 0.0392,
+    "x86-64-dedi-8cpu-32gb": 0.0777,
+    "x86-64-dedi-16cpu-64gb": 0.1546,
+    "x86-64-dedi-32cpu-128gb": 0.3085,
+    "x86-64-dedi-48cpu-192gb": 0.4623,
     "x86-64": 0,  # local experiments
 }
 

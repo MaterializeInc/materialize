@@ -461,6 +461,10 @@ class InsertAndSelect(DML):
     def benchmark(self) -> MeasurementSource:
         return Td(
             f"""
+$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET max_result_size = 17179869184;
+
 > DROP TABLE IF EXISTS t1;
 
 > CREATE TABLE t1 (f1 INTEGER)

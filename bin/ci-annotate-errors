@@ -25,6 +25,7 @@ else
     # keep only the remaining first line because there is a further line containing the mzcompose result summary
     HOSTNAME=$(echo "$OUTPUT" | head -n 1)
   else
+    # TODO: Remove when database-issues#8592 is fixed
     echo "Failed to get cloud hostname, using fallback value"
     HOSTNAME="7vifiksqeftxc6ld3r6zvc8n2.lb.us-east-1.aws.materialize.cloud"
   fi

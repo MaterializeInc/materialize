@@ -166,11 +166,11 @@ steps:
     steps:
       - id: feature-benchmark-scale-plus-one
         label: "Feature benchmark against 'common-ancestor' with --scale=+1 %N"
-        depends_on: build-aarch64
+        depends_on: build-x86_64
         timeout_in_minutes: 2880
         parallelism: 8
         agents:
-          queue: linux-aarch64-medium
+          queue: hetzner-x86-64-dedi-8cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: feature-benchmark
@@ -178,10 +178,10 @@ steps:
 
       - id: long-parallel-benchmark
         label: "Long Parallel Benchmark"
-        depends_on: build-aarch64
+        depends_on: build-x86_64
         timeout_in_minutes: 1200
         agents:
-          queue: linux-aarch64-medium
+          queue: hetzner-x86-64-dedi-8cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-benchmark

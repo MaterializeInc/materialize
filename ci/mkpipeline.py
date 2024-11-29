@@ -386,12 +386,29 @@ def switch_jobs_to_aws(pipeline: Any, priority: int) -> None:
     def visit(config: Any) -> None:
         if "agents" in config:
             agent = config["agents"].get("queue", None)
-            if agent == "hetzner-aarch64-4cpu-8gb":
+            if agent in ("hetzner-aarch64-4cpu-8gb", "hetzner-aarch64-2cpu-4gb"):
                 config["agents"]["queue"] = "linux-aarch64-small"
             if agent == "hetzner-aarch64-8cpu-16gb":
                 config["agents"]["queue"] = "linux-aarch64"
             if agent == "hetzner-aarch64-16cpu-32gb":
                 config["agents"]["queue"] = "linux-aarch64-medium"
+            if agent in (
+                "hetzner-x86-64-4cpu-8gb",
+                "hetzner-x86-64-2cpu-4gb",
+                "hetzner-x86-64-dedi-2cpu-8gb",
+            ):
+                config["agents"]["queue"] = "linux-x86-64-small"
+            if agent in ("hetzner-x86-64-8cpu-16gb", "hetzner-x86-64-dedi-4cpu-16gb"):
+                config["agents"]["queue"] = "linux-x86-64"
+            if agent in ("hetzner-x86-64-16cpu-32gb", "hetzner-x86-64-dedi-8cpu-32gb"):
+                config["agents"]["queue"] = "linux-x86-64-medium"
+            if agent == "hetzner-x86-64-dedi-16cpu-64gb":
+                config["agents"]["queue"] = "linux-x86-64-large"
+            if agent in (
+                "hetzner-x86-64-dedi-32cpu-128gb",
+                "hetzner-x86-64-dedi-48cpu-192gb",
+            ):
+                config["agents"]["queue"] = "builder-linux-x86_64"
 
     for config in pipeline["steps"]:
         if "trigger" in config or "wait" in config:

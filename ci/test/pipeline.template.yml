@@ -170,7 +170,7 @@ steps:
         depends_on: []
         timeout_in_minutes: 20
         agents:
-          queue: linux-aarch64-small
+          queue: hetzner-aarch64-4cpu-8gb
         coverage: skip
         sanitizer: skip
 
@@ -640,7 +640,7 @@ steps:
 
   - id: feature-benchmark-kafka-only
     label: "Feature benchmark (Kafka only)"
-    depends_on: build-aarch64
+    depends_on: build-x86_64
     timeout_in_minutes: 45
     plugins:
       - ./ci/plugins/mzcompose:
@@ -654,7 +654,7 @@ steps:
             ]
     coverage: skip
     agents:
-      queue: linux-aarch64-small
+      queue: hetzner-x86-64-dedi-4cpu-16gb
 
   # Fast tests closer to the end, doesn't matter as much if they have to wait
   # for an agent
