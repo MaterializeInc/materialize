@@ -131,7 +131,7 @@ use mz_timely_util::builder_async::{Event, OperatorBuilder};
 use serde::{Deserialize, Serialize};
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::operators::{Broadcast, Capability, CapabilitySet, InspectCore};
+use timely::dataflow::operators::{Broadcast, Capability, CapabilitySet};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use timely::PartialOrder;
@@ -156,6 +156,9 @@ type DescsStream<S> = Stream<S, BatchDescription>;
 /// Type of the `batches` stream.
 type BatchesStream<S> = Stream<S, ProtoBatch>;
 
+/// Type of the shared sink write frontier.
+type SharedSinkFrontier = Rc<RefCell<Antichain<Timestamp>>>;
+
 /// Renders an MV sink writing the given desired collection into the `target` persist collection.
 pub(super) fn persist_sink<S>(
     sink_id: GlobalId,
@@ -173,26 +176,13 @@ where
     let desired = OkErr::new(ok_collection.inner, err_collection.inner);
 
     // Read back the persist shard.
-    let (mut persist, persist_token) = persist_source(
+    let (persist, persist_token) = persist_source(
         &mut scope,
         sink_id,
         target.clone(),
         compute_state,
         start_signal,
     );
-
-    // Report sink frontier updates to the `ComputeState`.
-    let sink_frontier = Rc::new(RefCell::new(Antichain::from_elem(Timestamp::MIN)));
-    let collection = compute_state.expect_collection_mut(sink_id);
-    collection.sink_write_frontier = Some(Rc::clone(&sink_frontier));
-
-    persist.ok = persist.ok.inspect_container(move |event| {
-        if let Err(frontier) = event {
-            let mut borrow = sink_frontier.borrow_mut();
-            borrow.clear();
-            borrow.extend(frontier.iter().copied());
-        }
-    });
 
     // Determine the active worker for single-worker operators.
     let active_worker_id = usize::cast_from(sink_id.hashed()) % scope.peers();
@@ -204,7 +194,7 @@ where
         purpose: format!("MV sink {sink_id}"),
     };
 
-    let (desired, descs, mint_token) = mint::render(
+    let (desired, descs, sink_frontier, mint_token) = mint::render(
         sink_id,
         persist_api.clone(),
         as_of,
@@ -217,6 +207,10 @@ where
         write::render(sink_id, persist_api.clone(), &desired, &persist, &descs);
 
     let append_token = append::render(sink_id, persist_api, active_worker_id, &descs, &batches);
+
+    // Report sink frontier updates to the `ComputeState`.
+    let collection = compute_state.expect_collection_mut(sink_id);
+    collection.sink_write_frontier = Some(sink_frontier);
 
     Rc::new((persist_token, mint_token, write_token, append_token))
 }
@@ -394,12 +388,20 @@ mod mint {
         active_worker_id: usize,
         mut read_only_rx: watch::Receiver<bool>,
         desired: &DesiredStreams<S>,
-    ) -> (DesiredStreams<S>, DescsStream<S>, Box<dyn Any>)
+    ) -> (
+        DesiredStreams<S>,
+        DescsStream<S>,
+        SharedSinkFrontier,
+        Box<dyn Any>,
+    )
     where
         S: Scope<Timestamp = Timestamp>,
     {
         let scope = desired.ok.scope();
         let worker_id = scope.index();
+
+        let sink_frontier = Rc::new(RefCell::new(Antichain::from_elem(Timestamp::MIN)));
+        let shared_frontier = Rc::clone(&sink_frontier);
 
         let name = operator_name(sink_id, "mint");
         let mut op = OperatorBuilder::new(name, scope);
@@ -425,6 +427,7 @@ mod mint {
             // Non-active workers just pass the `desired` and `persist` data through.
             if worker_id != active_worker_id {
                 drop(desc_cap);
+                shared_frontier.borrow_mut().clear();
 
                 loop {
                     tokio::select! {
@@ -449,13 +452,20 @@ mod mint {
             let read_only = *read_only_rx.borrow_and_update();
             let mut state = State::new(sink_id, as_of, read_only);
 
-            // Create a stream that reports advancements of the target shard's frontier.
+            // Create a stream that reports advancements of the target shard's frontier and updates
+            // the shared sink frontier.
+            //
+            // We collect the persist frontier from a write handle directly, rather than inspecting
+            // the `persist` stream, because the latter has two annoying glitches:
+            //  (a) It starts at the shard's read frontier, not its write frontier.
+            //  (b) It can lag behind if there are spikes in ingested data.
             let mut persist_frontiers = pin!(async_stream::stream! {
                 let mut writer = persist_api.open_writer().await;
                 let mut frontier = Antichain::from_elem(Timestamp::MIN);
                 while !frontier.is_empty() {
                     writer.wait_for_upper_past(&frontier).await;
                     frontier = writer.upper().clone();
+                    shared_frontier.borrow_mut().clone_from(&frontier);
                     yield frontier.clone();
                 }
             });
@@ -519,7 +529,12 @@ mod mint {
 
         let token = Box::new(button.press_on_drop());
 
-        (desired_output_streams, desc_output_stream, token)
+        (
+            desired_output_streams,
+            desc_output_stream,
+            sink_frontier,
+            token,
+        )
     }
 
     /// State maintained by the `mint` operator.
