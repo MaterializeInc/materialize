@@ -78,7 +78,7 @@ from materialize.version_list import (
 )
 
 SERVICES = [
-    Cockroach(setup_materialize=True),
+    Cockroach(setup_materialize=True, in_memory=True),
     Materialized(
         image="materialize/materialized:latest",
         sanity_restart=False,
@@ -92,7 +92,7 @@ SERVICES = [
 ]
 
 DEFAULT_REGRESSION_THRESHOLD = 0.2
-SCALABILITY_FRAMEWORK_VERSION = "1.4.0"
+SCALABILITY_FRAMEWORK_VERSION = "1.5.0"
 
 INCLUDE_ZERO_IN_Y_AXIS = True
 

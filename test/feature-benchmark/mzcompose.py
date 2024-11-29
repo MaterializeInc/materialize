@@ -104,7 +104,7 @@ from materialize.util import all_subclasses
 #
 
 
-FEATURE_BENCHMARK_FRAMEWORK_VERSION = "1.4.0"
+FEATURE_BENCHMARK_FRAMEWORK_VERSION = "1.5.0"
 
 
 def make_filter(args: argparse.Namespace) -> Filter:
@@ -134,7 +134,7 @@ SERVICES = [
     KafkaService(),
     SchemaRegistry(),
     Redpanda(),
-    Cockroach(setup_materialize=True),
+    Cockroach(setup_materialize=True, in_memory=True),
     Minio(setup_materialize=True),
     KgenService(),
     Postgres(),
