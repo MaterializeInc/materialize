@@ -13,7 +13,7 @@ operator:
     # The Docker repository for the operator image
     repository: materialize/orchestratord
     # The tag/version of the operator image to be used
-    tag: v0.125.2
+    tag: v0.126.0
     # Policy for pulling the image: "IfNotPresent" avoids unnecessary re-pulling of images
     pullPolicy: IfNotPresent
 
@@ -248,12 +248,12 @@ networkPolicies:
   ingress:
     enabled: false
     cidrs:
-      - 0.0.0.0/0
+    - 0.0.0.0/0
   # egress from Materialize pods to sources and sinks
   egress:
     enabled: false
     cidrs:
-      - 0.0.0.0/0
+    - 0.0.0.0/0
 
 # Namespace configuration
 namespace:
