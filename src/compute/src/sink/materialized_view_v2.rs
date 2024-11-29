@@ -127,6 +127,7 @@ use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceData;
+use mz_timely_util::builder_async::PressOnDropButton;
 use mz_timely_util::builder_async::{Event, OperatorBuilder};
 use serde::{Deserialize, Serialize};
 use timely::container::CapacityContainerBuilder;
@@ -304,7 +305,7 @@ fn persist_source<S>(
     target: CollectionMetadata,
     compute_state: &ComputeState,
     start_signal: StartSignal,
-) -> (PersistStreams<S>, Box<dyn Any>)
+) -> (PersistStreams<S>, Vec<PressOnDropButton>)
 where
     S: Scope<Timestamp = Timestamp>,
 {
@@ -340,7 +341,6 @@ where
     );
 
     let streams = OkErr::new(ok_stream, err_stream);
-    let token = Box::new(token);
     (streams, token)
 }
 
@@ -356,7 +356,7 @@ struct BatchDescription {
 
 impl BatchDescription {
     fn new(lower: Antichain<Timestamp>, upper: Antichain<Timestamp>) -> Self {
-        debug_assert!(PartialOrder::less_than(&lower, &upper));
+        assert!(PartialOrder::less_than(&lower, &upper));
         Self { lower, upper }
     }
 }
@@ -392,7 +392,7 @@ mod mint {
         DesiredStreams<S>,
         DescsStream<S>,
         SharedSinkFrontier,
-        Box<dyn Any>,
+        PressOnDropButton,
     )
     where
         S: Scope<Timestamp = Timestamp>,
@@ -527,13 +527,11 @@ mod mint {
             }
         });
 
-        let token = Box::new(button.press_on_drop());
-
         (
             desired_output_streams,
             desc_output_stream,
             sink_frontier,
-            token,
+            button.press_on_drop(),
         )
     }
 
@@ -644,7 +642,7 @@ mod write {
         desired: &DesiredStreams<S>,
         persist: &PersistStreams<S>,
         descs: &Stream<S, BatchDescription>,
-    ) -> (BatchesStream<S>, Box<dyn Any>)
+    ) -> (BatchesStream<S>, PressOnDropButton)
     where
         S: Scope<Timestamp = Timestamp>,
     {
@@ -755,9 +753,7 @@ mod write {
             }
         });
 
-        let token = Box::new(button.press_on_drop());
-
-        (batches_output_stream, token)
+        (batches_output_stream, button.press_on_drop())
     }
 
     /// State maintained by the `write` operator.
@@ -774,6 +770,10 @@ mod write {
         /// The frontiers of the `persist` inputs.
         persist_frontiers: OkErr<Antichain<Timestamp>, Antichain<Timestamp>>,
         /// The current valid batch description and associated output capability, if any.
+        ///
+        /// Note that "valid" here implies that if a batch description is set, it must be true that
+        /// its `lower` is >= the `persist_frontier`. Otherwise the described batch couldn't be
+        /// appended anymore, rendering the batch description invalid.
         batch_description: Option<(BatchDescription, Capability<Timestamp>)>,
     }
 
@@ -888,8 +888,8 @@ mod write {
 
             let (desc, cap) = self.batch_description.take()?;
 
-            debug_assert_eq!(desc.lower, *self.corrections.ok.since());
-            debug_assert_eq!(desc.lower, *self.corrections.err.since());
+            assert_eq!(desc.lower, *self.corrections.ok.since());
+            assert_eq!(desc.lower, *self.corrections.err.since());
 
             let ok_updates = self.corrections.ok.updates_before(&desc.upper);
             let err_updates = self.corrections.err.updates_before(&desc.upper);
@@ -928,7 +928,7 @@ mod append {
         active_worker_id: usize,
         descs: &DescsStream<S>,
         batches: &BatchesStream<S>,
-    ) -> Box<dyn Any>
+    ) -> PressOnDropButton
     where
         S: Scope<Timestamp = Timestamp>,
     {
@@ -984,8 +984,7 @@ mod append {
             }
         });
 
-        let token = Box::new(button.press_on_drop());
-        token
+        button.press_on_drop()
     }
 
     /// State maintained by the `append` operator.
@@ -1039,7 +1038,7 @@ mod append {
         /// Discards all currently stashed batches and batch descriptions, assuming that they are
         /// now invalid.
         async fn advance_lower(&mut self, frontier: Antichain<Timestamp>) {
-            debug_assert!(PartialOrder::less_than(&self.lower, &frontier));
+            assert!(PartialOrder::less_than(&self.lower, &frontier));
 
             self.lower = frontier;
             self.batch_description = None;
