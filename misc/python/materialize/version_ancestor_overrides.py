@@ -28,6 +28,11 @@ def get_ancestor_overrides_for_performance_regressions(
 
     min_ancestor_mz_version_per_commit = dict()
 
+    if scenario_class_name == "InsertMultiRow":
+        # PR#30622 (Refactor how we run FoldConstants) increases wallclock
+        min_ancestor_mz_version_per_commit[
+            "a558d6bdc4b29abf79457eaba52914a0d6c805b7"
+        ] = MzVersion.parse_mz("v0.127.0")
     if scenario_class_name == "CrossJoin":
         # PR#26745 (compute: MV sink refresh) increases wallclock
         min_ancestor_mz_version_per_commit[
