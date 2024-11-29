@@ -697,14 +697,18 @@ def trim_builds(
                 step["concurrency"] = 1
                 step["concurrency_group"] = f"rust-build-aarch64/{hash(deps)}"
         elif step.get("id") == "build-x86_64":
-            (deps, check) = get_deps(Arch.X86_64, bazel=True)
+            (deps, check) = get_deps(
+                Arch.X86_64, bazel=ui.env_is_truthy("CI_BAZEL_BUILD", "1")
+            )
             if check:
                 step["skip"] = True
             else:
                 step["concurrency"] = 1
                 step["concurrency_group"] = f"build-x86_64/{hash(deps)}"
         elif step.get("id") == "build-aarch64":
-            (deps, check) = get_deps(Arch.AARCH64, bazel=True)
+            (deps, check) = get_deps(
+                Arch.AARCH64, bazel=ui.env_is_truthy("CI_BAZEL_BUILD", "1")
+            )
             if check:
                 step["skip"] = True
             else:
