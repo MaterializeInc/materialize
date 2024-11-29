@@ -1,4 +1,3 @@
----
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -13,6 +12,6 @@ name: materialize-operator
 description: Materialize Kubernetes Operator Helm Chart
 type: application
 version: v25.1.0-beta.1
-appVersion: v0.125.2
+appVersion: v0.127.0-dev.0
 icon: https://materialize.com/favicon.ico
 home: https://materialize.com
