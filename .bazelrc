@@ -144,6 +144,8 @@ build:check --output_groups=build_metadata
 #
 # `/dev/shm` is a RAM backed temporary filesystem, it should speedup sandbox creation.
 build:ci --sandbox_base=/dev/shm
+# Always enable verbose failures in CI, makes it easier to debug failures.
+build:ci --verbose_failures
 
 # Release Build Configuration
 #
