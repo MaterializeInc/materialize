@@ -9,20 +9,21 @@
 
 import argparse
 
-import boto3
-
 from materialize.cli.scratch import check_required_vars
-from materialize.scratch import mkrepo
+from materialize.scratch import get_instance, mkrepo
 
 
 def configure_parser(parser: argparse.ArgumentParser) -> None:
     check_required_vars()
 
-    parser.add_argument("instance", help="The ID of the instance to connect to")
+    parser.add_argument(
+        "instance",
+        help="The ID of the instance to connect to, or 'mine' to specify your only live instance",
+    )
     parser.add_argument("--rev", help="The git rev to checkout", default="HEAD")
 
 
 def run(args: argparse.Namespace) -> None:
-    instance = boto3.resource("ec2").Instance(args.instance)
+    instance = get_instance(args.instance)
 
     mkrepo(instance, args.rev, init=False, force=True)
