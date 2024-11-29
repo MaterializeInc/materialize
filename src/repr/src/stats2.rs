@@ -581,6 +581,7 @@ mod tests {
     use uuid::Uuid;
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // slow
     fn proptest_uuid_sort_order() {
         fn test(mut og: Vec<Uuid>) {
             let mut as_bytes: Vec<_> = og.iter().map(|u| u.as_bytes().clone()).collect();
