@@ -921,6 +921,7 @@ class Composition:
                 service["command"] = []
             self.files = {}
 
+        self.capture_logs()
         self.invoke(
             "up",
             *(["--detach"] if detach else []),
