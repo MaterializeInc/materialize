@@ -7,8 +7,13 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Optimizer implementation for `CREATE VIEW` statements and other misc statements, such as
-//! `INSERT`.
+//! An Optimizer that
+//! 1. Optimistically calls `optimize_mir_constant`.
+//! 2. Then, if we haven't arrived at a constant, it calls `optimize_mir_local`, i.e., the
+//!    logical optimizer.
+//!
+//! This is used for `CREATE VIEW` statements and in various other situations where no physical
+//! optimization is needed, such as for `INSERT` statements.
 
 use std::time::Instant;
 
@@ -19,7 +24,10 @@ use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::typecheck::{empty_context, SharedContext as TypecheckContext};
 use mz_transform::TransformCtx;
 
-use crate::optimize::{optimize_mir_local, trace_plan, Optimize, OptimizerConfig, OptimizerError};
+use crate::optimize::{
+    optimize_mir_constant, optimize_mir_local, trace_plan, Optimize, OptimizerConfig,
+    OptimizerError,
+};
 
 pub struct Optimizer {
     /// A typechecking context to use throughout the optimizer pipeline.
@@ -53,14 +61,24 @@ impl Optimize<HirRelationExpr> for Optimizer {
         trace_plan!(at: "raw", &expr);
 
         // HIR ⇒ MIR lowering and decorrelation
-        let expr = expr.lower(&self.config, self.metrics.as_ref())?;
+        let mut expr = expr.lower(&self.config, self.metrics.as_ref())?;
 
         let mut df_meta = DataflowMetainfo::default();
         let mut transform_ctx =
             TransformCtx::local(&self.config.features, &self.typecheck_ctx, &mut df_meta);
 
+        // First, we run a very simple optimizer pipeline, which only folds constants. This takes
+        // care of constant INSERTs. (This optimizer is also used for INSERTs, not just VIEWs.)
+        expr = optimize_mir_constant(expr, &mut transform_ctx)?;
+
         // MIR ⇒ MIR optimization (local)
-        let expr = optimize_mir_local(expr, &mut transform_ctx)?;
+        let expr = if expr.as_const().is_some() {
+            // No need to optimize further, because we already have a constant.
+            OptimizedMirRelationExpr(expr)
+        } else {
+            // Call the real optimization.
+            optimize_mir_local(expr, &mut transform_ctx)?
+        };
 
         if let Some(metrics) = &self.metrics {
             metrics.observe_e2e_optimization_time("view", time.elapsed());
