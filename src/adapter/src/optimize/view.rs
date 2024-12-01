@@ -7,7 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Optimizer implementation for `CREATE VIEW` statements.
+//! Optimizer implementation for `CREATE VIEW` statements and other misc statements, such as
+//! `INSERT`.
 
 use std::time::Instant;
 
@@ -54,10 +55,11 @@ impl Optimize<HirRelationExpr> for Optimizer {
         // HIR ⇒ MIR lowering and decorrelation
         let expr = expr.lower(&self.config, self.metrics.as_ref())?;
 
-        // MIR ⇒ MIR optimization (local)
         let mut df_meta = DataflowMetainfo::default();
         let mut transform_ctx =
             TransformCtx::local(&self.config.features, &self.typecheck_ctx, &mut df_meta);
+
+        // MIR ⇒ MIR optimization (local)
         let expr = optimize_mir_local(expr, &mut transform_ctx)?;
 
         if let Some(metrics) = &self.metrics {
