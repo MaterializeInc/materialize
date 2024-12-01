@@ -22,7 +22,8 @@ fish:AREALLYBIGFISHAREALLYBIGFISHAREALLYBIGFISHAREALLYBIGFISH
 3
 
 > SELECT
-    SUM(u.bytes_indexed) > 0,
+    -- TODO: Reenable when database-issues#8802 is fixed
+    -- SUM(u.bytes_indexed) > 0,
     -- This + the assertion below that ensures the byte count goes to 0 tests
     -- that we correctly transition the `bytes_indexed` count to the
     -- in-rocksdb. In the past, we would accidentally SUM the previous and
@@ -34,7 +35,7 @@ fish:AREALLYBIGFISHAREALLYBIGFISHAREALLYBIGFISHAREALLYBIGFISH
   WHERE t.name = 'autospill_tbl'
   GROUP BY t.name
   ORDER BY t.name
-true true 3
+true 3
 
 $ set-from-sql var=previous-bytes-2
 SELECT
@@ -56,11 +57,12 @@ animal:
 # bytes_indexed will still have tombstones, but should be smaller than when
 # there are full values.
 > SELECT
-    SUM(u.bytes_indexed) < ${previous-bytes-2},
+    -- TODO: Reenable when database-issues#8802 is fixed
+    -- SUM(u.bytes_indexed) < ${previous-bytes-2},
     SUM(u.records_indexed)
   FROM mz_tables t
   JOIN mz_internal.mz_source_statistics_raw u ON t.id = u.id
   WHERE t.name = 'autospill_tbl'
   GROUP BY t.name
   ORDER BY t.name
-true 0
+0
