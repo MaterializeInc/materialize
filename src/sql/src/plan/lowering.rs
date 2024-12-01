@@ -777,28 +777,28 @@ impl HirRelationExpr {
                         })
                     })?
                 }
-                Union { base, inputs } => {
+                Union { positive, negative } => {
                     // Union is uncomplicated.
-                    SR::Union {
-                        base: Box::new(base.applied_to(
+                    let mut inputs = Vec::with_capacity(positive.len() + negative.len());
+                    for expr in positive {
+                        inputs.push(expr.applied_to(
                             id_gen,
                             get_outer.clone(),
                             col_map,
                             cte_map,
                             context,
-                        )?),
-                        inputs: inputs
-                            .into_iter()
-                            .map(|input| {
-                                input.applied_to(
-                                    id_gen,
-                                    get_outer.clone(),
-                                    col_map,
-                                    cte_map,
-                                    context,
-                                )
-                            })
-                            .collect::<Result<Vec<_>, _>>()?,
+                        )?);
+                    }
+                    for expr in negative {
+                        inputs.push(
+                            expr.applied_to(id_gen, get_outer.clone(), col_map, cte_map, context)?
+                                .negate(),
+                        );
+                    }
+
+                    SR::Union {
+                        base: Box::new(inputs.remove(0)),
+                        inputs,
                     }
                 }
                 Reduce {
@@ -899,12 +899,6 @@ impl HirRelationExpr {
                     }
 
                     result
-                }
-                Negate { input } => {
-                    // Negate is uncomplicated.
-                    input
-                        .applied_to(id_gen, get_outer, col_map, cte_map, context)?
-                        .negate()
                 }
                 Threshold { input } => {
                     // Threshold is uncomplicated.
