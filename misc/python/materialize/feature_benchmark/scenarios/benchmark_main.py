@@ -311,7 +311,10 @@ class InsertBatch(DML):
 
 
 class InsertMultiRow(DML):
-    """Measure the time it takes for a single multi-row INSERT statement to return."""
+    """Measure the time it takes for a single multi-row INSERT statement to return.
+    When `sequence_insert` calls `constant_optimizer`, it should be able to reach a constant. Otherwise, we run the full
+    logical optimizer, which makes this test show a regression.
+    """
 
     SCALE = 4  # FATAL:  request larger than 2.0 MB
 

@@ -552,9 +552,11 @@ pub fn fuse_and_collapse_fixpoint() -> Fixpoint {
     }
 }
 
-/// Does constant folding idempotently. This needs to call `FoldConstants` together with
-/// `NormalizeLets` in a fixpoint loop, because currently `FoldConstants` doesn't inline CTEs, so
-/// these two need to alternate until fixpoint.
+/// Does constant folding to a fixpoint: An expression all of whose leaves are constants, of size
+/// small enough to be inlined and folded should reach a single `MirRelationExpr::Constant`.
+///
+/// This needs to call `FoldConstants` together with `NormalizeLets` in a fixpoint loop, because
+/// currently `FoldConstants` doesn't inline CTEs, so these two need to alternate until fixpoint.
 ///
 /// Also note that `FoldConstants` can break the normalized form by removing all references to a
 /// Let.
@@ -816,6 +818,15 @@ impl Optimizer {
         Self {
             name: "fast_path_optimizer",
             transforms,
+        }
+    }
+
+    /// Builds a tiny optimizer, which just folds constants. For more details, see
+    /// [fold_constants_fixpoint].
+    pub fn constant_optimizer(_ctx: &mut TransformCtx) -> Self {
+        Self {
+            name: "fast_path_optimizer",
+            transforms: vec![Box::new(fold_constants_fixpoint())],
         }
     }
 
