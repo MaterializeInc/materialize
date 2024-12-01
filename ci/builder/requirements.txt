@@ -19,7 +19,7 @@ ipywidgets==8.1.5
 junit-xml==1.9
 junitparser==3.2.0
 jupyterlab==4.3.0
-jupyter-black==0.3.4
+jupyter-black==0.4.0
 kubernetes==25.3.0
 kubernetes-stubs==22.6.0.post1
 launchdarkly-api==17.0.0
