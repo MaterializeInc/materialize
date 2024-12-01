@@ -12,6 +12,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::hash::Hash;
+use std::iter;
 use std::ops::{Add, AddAssign, Deref, DerefMut};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -115,6 +116,22 @@ impl IngestionDescription {
             instance_id,
             remap_collection_id,
         }
+    }
+
+    /// Reports whether it is worthwhile to run the source in read only mode.
+    ///
+    /// This presently checks that the underlying source type supports read
+    /// only mode and the source's envelope type is upsert.
+    pub fn wants_read_only(&self) -> bool {
+        self.desc.connection.supports_read_only()
+            && (self
+                .source_exports
+                .iter()
+                .map(|(_id, e)| &e.data_config.envelope)
+                .chain(iter::once(
+                    &self.desc.primary_source_export().data_config.envelope,
+                ))
+                .any(|e| matches!(e, SourceEnvelope::Upsert(_))))
     }
 }
 
