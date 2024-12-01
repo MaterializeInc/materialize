@@ -9926,7 +9926,28 @@ WHERE a = c AND d = e AND b + d > 42
                       "before": {
                         "mfp": {
                           "expressions": [],
-                          "predicates": [],
+                          "predicates": [
+                            [
+                              2,
+                              {
+                                "CallUnary": {
+                                  "func": {
+                                    "Not": null
+                                  },
+                                  "expr": {
+                                    "CallUnary": {
+                                      "func": {
+                                        "IsNull": null
+                                      },
+                                      "expr": {
+                                        "Column": 1
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            ]
+                          ],
                           "projection": [
                             0,
                             1
@@ -10133,6 +10154,26 @@ WHERE a = c AND d = e AND b + d > 42
                               ],
                               "predicates": [
                                 [
+                                  3,
+                                  {
+                                    "CallUnary": {
+                                      "func": {
+                                        "Not": null
+                                      },
+                                      "expr": {
+                                        "CallUnary": {
+                                          "func": {
+                                            "IsNull": null
+                                          },
+                                          "expr": {
+                                            "Column": 2
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                ],
+                                [
                                   4,
                                   {
                                     "CallBinary": {
@@ -10311,6 +10352,26 @@ WHERE a = c AND d = e AND b + d > 42
                                 }
                               ],
                               "predicates": [
+                                [
+                                  3,
+                                  {
+                                    "CallUnary": {
+                                      "func": {
+                                        "Not": null
+                                      },
+                                      "expr": {
+                                        "CallUnary": {
+                                          "func": {
+                                            "IsNull": null
+                                          },
+                                          "expr": {
+                                            "Column": 2
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                ],
                                 [
                                   4,
                                   {
