@@ -358,10 +358,17 @@ impl<D> Drop for CorrectionV1<D> {
 }
 
 /// Helper type for convenient tracking of length and capacity together.
-#[derive(Clone, Copy, Default)]
-struct LengthAndCapacity {
-    length: usize,
-    capacity: usize,
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct LengthAndCapacity {
+    pub length: usize,
+    pub capacity: usize,
+}
+
+impl AddAssign<Self> for LengthAndCapacity {
+    fn add_assign(&mut self, size: Self) {
+        self.length += size.length;
+        self.capacity += size.capacity;
+    }
 }
 
 impl AddAssign<(usize, usize)> for LengthAndCapacity {
