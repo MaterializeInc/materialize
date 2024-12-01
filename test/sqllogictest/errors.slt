@@ -22,5 +22,5 @@ SELECT noexist()
 query error db error: ERROR: function "noexist" does not exist
 SELECT * FROM noexist()
 
-statement error Expected DATABASE, SCHEMA, ROLE, TYPE, INDEX, SINK, SOURCE, TABLE, SECRET, \[OR REPLACE\] \[TEMPORARY\] VIEW, or \[OR REPLACE\] MATERIALIZED VIEW after CREATE, found identifier "material"
+statement error DATABASE, SCHEMA, ROLE, TYPE, INDEX, SINK, SOURCE, [TEMPORARY] TABLE, SECRET, [OR REPLACE] [TEMPORARY] VIEW, or [OR REPLACE] MATERIALIZED VIEW after CREATE, found identifier "material"
 CREATE MATERIAL VIEW in_a_material_world AS SELECT 1
