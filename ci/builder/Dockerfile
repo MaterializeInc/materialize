@@ -190,11 +190,24 @@ RUN mkdir rust \
     PATH=$PATH:/root/.cargo/bin cargo miri setup \
     ;; \
     esac \
-    && curl -fsSL https://static.rust-lang.org/dist$RUST_DATE/rust-std-$RUST_VERSION-wasm32-unknown-unknown.tar.gz > rust.tar.gz \
-    && curl -fsSL https://static.rust-lang.org/dist$RUST_DATE/rust-std-$RUST_VERSION-wasm32-unknown-unknown.tar.gz.asc > rust.asc \
-    && gpg --verify rust.asc rust.tar.gz \
-    && tar -xzf rust.tar.gz -C /usr/local/lib/rustlib/ --strip-components=4 \
-    && rm -rf rust.asc rust.tar.gz rust \
+    && curl -fsSL https://static.rust-lang.org/dist$RUST_DATE/rust-std-$RUST_VERSION-wasm32-unknown-unknown.tar.gz > rust-std-wasm.tar.gz \
+    && curl -fsSL https://static.rust-lang.org/dist$RUST_DATE/rust-std-$RUST_VERSION-wasm32-unknown-unknown.tar.gz.asc > rust-std-wasm.asc \
+    && gpg --verify rust-std-wasm.asc rust-std-wasm.tar.gz \
+    && tar -xzf rust-std-wasm.tar.gz -C /usr/local/lib/rustlib/ --strip-components=4 \
+    && rm -rf rust-std-wasm.asc rust-std-wasm.tar.gz rust \
+    && if [ $ARCH_GCC = x86_64 ]; then \
+    curl -fsSL https://static.rust-lang.org/dist$RUST_DATE/rust-std-$RUST_VERSION-aarch64-unknown-linux-gnu.tar.gz > rust-std-aarch64.tar.gz \
+    && curl -fsSL https://static.rust-lang.org/dist$RUST_DATE/rust-std-$RUST_VERSION-aarch64-unknown-linux-gnu.tar.gz.asc > rust-std-aarch64.asc \
+    && gpg --verify rust-std-aarch64.asc rust-std-aarch64.tar.gz \
+    && tar -xzf rust-std-aarch64.tar.gz -C /usr/local/lib/rustlib/ --strip-components=4 \
+    && rm -rf rust-std-aarch64.asc rust-std-aarch64.tar.gz rust \
+    ; elif [ $ARCH_GCC = aarch64 ]; then \
+    curl -fsSL https://static.rust-lang.org/dist$RUST_DATE/rust-std-$RUST_VERSION-x86_64-unknown-linux-gnu.tar.gz > rust-std-x86_64.tar.gz \
+    && curl -fsSL https://static.rust-lang.org/dist$RUST_DATE/rust-std-$RUST_VERSION-x86_64-unknown-linux-gnu.tar.gz.asc > rust-std-x86_64.asc \
+    && gpg --verify rust-std-x86_64.asc rust-std-x86_64.tar.gz \
+    && tar -xzf rust-std-x86_64.tar.gz -C /usr/local/lib/rustlib/ --strip-components=4 \
+    && rm -rf rust-std-x86_64.asc rust-std-x86_64.tar.gz rust \
+    ; fi \
     && cargo install --root /usr/local --version "=0.9.1" --locked cargo-vet \
     && cargo install --root /usr/local --version "=0.6.1" --locked cargo-about \
     && cargo install --root /usr/local --version "=2.0.2" --locked cargo-deb \
