@@ -72,6 +72,9 @@ class Identifiers(Check):
         "role",
         "comment_table",
         "comment_column",
+        "ct0",
+        "ct1",
+        "ct2",
     ]
 
     def __init__(self, base_version: MzVersion, rng: Random | None) -> None:
@@ -98,7 +101,11 @@ class Identifiers(Check):
             > CREATE TABLE {dq(self.ident["schema"])}.{dq(self.ident["table"])} ({dq(self.ident["column"])} TEXT, c2 {dq(self.ident["type"])});
             > INSERT INTO {dq(self.ident["schema"])}.{dq(self.ident["table"])} VALUES ({sq(self.ident["value1"])}, LIST[{sq(self.ident["value2"])}]::{dq(self.ident["type"])});
             > CREATE MATERIALIZED VIEW {dq(self.ident["schema"])}.{dq(self.ident["mv0"])} IN CLUSTER {self._default_cluster()} AS
-              SELECT COUNT({dq(self.ident["column"])}) FROM {dq(self.ident["schema"])}.{dq(self.ident["table"])};
+              SELECT COUNT({dq(self.ident["column"])}) AS c FROM {dq(self.ident["schema"])}.{dq(self.ident["table"])};
+            >[version>=12400] CREATE CONTINUAL TASK {dq(self.ident["schema"])}.{dq(self.ident["ct0"])}
+              IN CLUSTER {self._default_cluster()}
+              FROM TRANSFORM {dq(self.ident["schema"])}.{dq(self.ident["mv0"])}
+              USING (SELECT c FROM {dq(self.ident["schema"])}.{dq(self.ident["mv0"])})
 
             $ kafka-create-topic topic=sink-source-ident
 
@@ -157,6 +164,10 @@ class Identifiers(Check):
               INTO KAFKA CONNECTION {dq(self.ident["kafka_conn"])} (TOPIC 'sink-sink-ident')
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION {dq(self.ident["csr_conn"])}
               ENVELOPE DEBEZIUM;
+            >[version>=12400] CREATE CONTINUAL TASK {dq(self.ident["schema"])}.{dq(self.ident["ct" + i])}
+              IN CLUSTER {self._default_cluster()}
+              FROM TRANSFORM {dq(self.ident["schema"])}.{dq(self.ident["mv" + i])}
+              USING (SELECT {dq(self.ident["column"])} FROM {dq(self.ident["schema"])}.{dq(self.ident["mv" + i])})
             """
             for i in ["1", "2"]
         ]
@@ -242,5 +253,23 @@ class Identifiers(Check):
 
         >[version>=11400] SHOW SECRETS;
         {dq_print(self.ident["secret"])} ""
+        """
+        if self.base_version >= MzVersion(0, 124, 0):
+            cmds += f"""
+        > SELECT * FROM {dq(self.ident["schema"])}.{dq(self.ident["ct0"])};
+        0
+        1
+        2
+        3
+
+        > SELECT * FROM {dq(self.ident["schema"])}.{dq(self.ident["ct1"])};
+        {dq_print(self.ident["value1"])} {dq_print(self.ident["value2"])}
+        {dq_print(self.ident["value1"])} {dq_print(self.ident["value2"])}
+        {dq_print(self.ident["value1"])} {dq_print(self.ident["value2"])}
+
+        > SELECT * FROM {dq(self.ident["schema"])}.{dq(self.ident["ct2"])};
+        {dq_print(self.ident["value1"])} {dq_print(self.ident["value2"])}
+        {dq_print(self.ident["value1"])} {dq_print(self.ident["value2"])}
+        {dq_print(self.ident["value1"])} {dq_print(self.ident["value2"])}
         """
         return Testdrive(dedent(cmds))
