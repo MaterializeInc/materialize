@@ -741,7 +741,6 @@ impl SessionClient {
 
         // Collect optimizer parameters.
         let optimizer_config = optimize::OptimizerConfig::from(conn_catalog.system_vars());
-        // Build an optimizer for this VIEW.
         let mut optimizer = optimize::view::Optimizer::new(optimizer_config, None);
 
         let result: Result<_, AdapterError> =

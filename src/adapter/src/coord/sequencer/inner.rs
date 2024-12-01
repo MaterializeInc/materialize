@@ -2647,7 +2647,6 @@ impl Coordinator {
             // Collect optimizer parameters.
             let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
 
-            // Build an optimizer for this VIEW.
             let mut optimizer = optimize::view::Optimizer::new(optimizer_config, None);
 
             // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
