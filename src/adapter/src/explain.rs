@@ -90,7 +90,7 @@ where
 /// In the long term, this method and [`explain_dataflow`] should be unified. In
 /// order to do that, however, we first need to generalize the role
 /// [`DataflowMetainfo`] as a carrier of metainformation for the optimization
-/// pass in general, and not for a specific strucutre representing an
+/// pass in general, and not for a specific structure representing an
 /// intermediate result.
 pub(crate) fn explain_plan<T>(
     mut plan: T,

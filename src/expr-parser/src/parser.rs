@@ -120,12 +120,12 @@ mod relation {
         let constant = input.parse::<kw::Constant>()?;
 
         let parse_typ = |input: ParseStream| -> syn::Result<RelationType> {
-            let attrs = attributes::parse_attributes(input)?;
-            let Some(column_types) = attrs.types else {
-                let msg = "Missing expected `types` attribute for Constant line";
+            let analyses = analyses::parse_analyses(input)?;
+            let Some(column_types) = analyses.types else {
+                let msg = "Missing expected `types` analyses for Constant line";
                 Err(Error::new(input.span(), msg))?
             };
-            let keys = attrs.keys.unwrap_or_default();
+            let keys = analyses.keys.unwrap_or_default();
             Ok(RelationType { column_types, keys })
         };
 
@@ -200,13 +200,13 @@ mod relation {
 
         if recursive {
             let (mut ids, mut values, mut limits) = (vec![], vec![], vec![]);
-            for (id, attrs, value) in ctes.into_iter().rev() {
+            for (id, analyses, value) in ctes.into_iter().rev() {
                 let typ = {
-                    let Some(column_types) = attrs.types else {
-                        let msg = format!("`let {}` needs a `types` attribute", id);
+                    let Some(column_types) = analyses.types else {
+                        let msg = format!("`let {}` needs a `types` analyses", id);
                         Err(Error::new(with.span(), msg))?
                     };
-                    let keys = attrs.keys.unwrap_or_default();
+                    let keys = analyses.keys.unwrap_or_default();
                     RelationType { column_types, keys }
                 };
 
@@ -251,7 +251,7 @@ mod relation {
     fn parse_cte(
         ctx: CtxRef,
         input: ParseStream,
-    ) -> syn::Result<(LocalId, attributes::Attributes, MirRelationExpr)> {
+    ) -> syn::Result<(LocalId, analyses::Analyses, MirRelationExpr)> {
         let cte = input.parse::<kw::cte>()?;
 
         let ident = input.parse::<syn::Ident>()?;
@@ -259,12 +259,12 @@ mod relation {
 
         input.parse::<syn::Token![=]>()?;
 
-        let attrs = attributes::parse_attributes(input)?;
+        let analyses = analyses::parse_analyses(input)?;
 
         let parse_value = ParseChildren::new(input, cte.span().start());
         let value = parse_value.parse_one(ctx, parse_expr)?;
 
-        Ok((id, attrs, value))
+        Ok((id, analyses, value))
     }
 
     fn parse_project(ctx: CtxRef, input: ParseStream) -> Result {
@@ -953,7 +953,7 @@ mod scalar {
         let typ = if input.eat(kw::null) {
             packer.push(Datum::Null);
             input.parse::<syn::Token![::]>()?;
-            attributes::parse_scalar_type(input)?.nullable(true)
+            analyses::parse_scalar_type(input)?.nullable(true)
         } else {
             match input.parse::<syn::Lit>()? {
                 syn::Lit::Str(l) => {
@@ -1237,21 +1237,21 @@ mod row {
     }
 }
 
-mod attributes {
+mod analyses {
     use mz_repr::{ColumnType, ScalarType};
 
     use super::*;
 
     #[derive(Default)]
-    pub struct Attributes {
+    pub struct Analyses {
         pub types: Option<Vec<ColumnType>>,
         pub keys: Option<Vec<Vec<usize>>>,
     }
 
-    pub fn parse_attributes(input: ParseStream) -> syn::Result<Attributes> {
-        let mut attributes = Attributes::default();
+    pub fn parse_analyses(input: ParseStream) -> syn::Result<Analyses> {
+        let mut analyses = Analyses::default();
 
-        // Attributes are optional, appearing after a `//` at the end of the
+        // Analyses are optional, appearing after a `//` at the end of the
         // line. However, since the syn lexer eats comments, we assume that `//`
         // was replaced with `::` upfront.
         if input.eat(syn::Token![::]) {
@@ -1260,7 +1260,7 @@ mod attributes {
 
             let (start, end) = (inner.span().start(), inner.span().end());
             if start.line != end.line {
-                let msg = "attributes should not span more than one line".to_string();
+                let msg = "analyses should not span more than one line".to_string();
                 Err(Error::new(inner.span(), msg))?
             }
 
@@ -1270,17 +1270,17 @@ mod attributes {
                     "types" => {
                         inner.parse::<syn::Token![:]>()?;
                         let value = inner.parse::<syn::LitStr>()?.value();
-                        attributes.types = Some(parse_types.parse_str(&value)?);
+                        analyses.types = Some(parse_types.parse_str(&value)?);
                     }
                     // TODO: support keys
                     key => {
-                        let msg = format!("unexpected attribute type `{}`", key);
+                        let msg = format!("unexpected analysis type `{}`", key);
                         Err(Error::new(inner.span(), msg))?;
                     }
                 }
             }
         }
-        Ok(attributes)
+        Ok(analyses)
     }
 
     fn parse_types(input: ParseStream) -> syn::Result<Vec<ColumnType>> {
@@ -1394,7 +1394,7 @@ mod def {
         input.parse::<syn::Token![-]>()?;
         let column_name = input.parse::<syn::Ident>()?.to_string();
         input.parse::<syn::Token![:]>()?;
-        let column_type = attributes::parse_column_type(input)?;
+        let column_type = analyses::parse_column_type(input)?;
         Ok((column_name, column_type))
     }
 

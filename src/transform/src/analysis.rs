@@ -1196,16 +1196,16 @@ mod column_names {
 }
 
 mod explain {
-    //! Derived attributes framework and definitions.
+    //! Derived Analysis framework and definitions.
 
     use std::collections::BTreeMap;
 
     use mz_expr::explain::ExplainContext;
     use mz_expr::MirRelationExpr;
     use mz_ore::stack::RecursionLimitError;
-    use mz_repr::explain::{AnnotatedPlan, Attributes};
+    use mz_repr::explain::{Analyses, AnnotatedPlan};
 
-    // Attributes should have shortened paths when exported.
+    // Analyses should have shortened paths when exported.
     use super::DerivedBuilder;
 
     impl<'c> From<&ExplainContext<'c>> for DerivedBuilder<'c> {
@@ -1239,19 +1239,19 @@ mod explain {
     }
 
     /// Produce an [`AnnotatedPlan`] wrapping the given [`MirRelationExpr`] along
-    /// with [`Attributes`] derived from the given context configuration.
+    /// with [`Analyses`] derived from the given context configuration.
     pub fn annotate_plan<'a>(
         plan: &'a MirRelationExpr,
         context: &'a ExplainContext,
     ) -> Result<AnnotatedPlan<'a, MirRelationExpr>, RecursionLimitError> {
-        let mut annotations = BTreeMap::<&MirRelationExpr, Attributes>::default();
+        let mut annotations = BTreeMap::<&MirRelationExpr, Analyses>::default();
         let config = context.config;
 
-        // We want to annotate the plan with attributes in the following cases:
-        // 1. An attribute was explicitly requested in the ExplainConfig.
+        // We want to annotate the plan with analyses in the following cases:
+        // 1. An Analysis was explicitly requested in the ExplainConfig.
         // 2. Humanized expressions were requested in the ExplainConfig (in which
-        //    case we need to derive the ColumnNames attribute).
-        if config.requires_attributes() || config.humanized_exprs {
+        //    case we need to derive the ColumnNames Analysis).
+        if config.requires_analyses() || config.humanized_exprs {
             // get the annotation keys
             let subtree_refs = plan.post_order_vec();
             // get the annotation values
@@ -1263,8 +1263,8 @@ mod explain {
                     subtree_refs.iter(),
                     derived.results::<super::SubtreeSize>().unwrap().into_iter(),
                 ) {
-                    let attrs = annotations.entry(expr).or_default();
-                    attrs.subtree_size = Some(*subtree_size);
+                    let analyses = annotations.entry(expr).or_default();
+                    analyses.subtree_size = Some(*subtree_size);
                 }
             }
             if config.non_negative {
@@ -1272,8 +1272,8 @@ mod explain {
                     subtree_refs.iter(),
                     derived.results::<super::NonNegative>().unwrap().into_iter(),
                 ) {
-                    let attrs = annotations.entry(expr).or_default();
-                    attrs.non_negative = Some(*non_negative);
+                    let analyses = annotations.entry(expr).or_default();
+                    analyses.non_negative = Some(*non_negative);
                 }
             }
 
@@ -1282,8 +1282,8 @@ mod explain {
                     subtree_refs.iter(),
                     derived.results::<super::Arity>().unwrap().into_iter(),
                 ) {
-                    let attrs = annotations.entry(expr).or_default();
-                    attrs.arity = Some(*arity);
+                    let analyses = annotations.entry(expr).or_default();
+                    analyses.arity = Some(*arity);
                 }
             }
 
@@ -1295,8 +1295,8 @@ mod explain {
                         .unwrap()
                         .into_iter(),
                 ) {
-                    let attrs = annotations.entry(expr).or_default();
-                    attrs.types = Some(types.clone());
+                    let analyses = annotations.entry(expr).or_default();
+                    analyses.types = Some(types.clone());
                 }
             }
 
@@ -1305,8 +1305,8 @@ mod explain {
                     subtree_refs.iter(),
                     derived.results::<super::UniqueKeys>().unwrap().into_iter(),
                 ) {
-                    let attrs = annotations.entry(expr).or_default();
-                    attrs.keys = Some(keys.clone());
+                    let analyses = annotations.entry(expr).or_default();
+                    analyses.keys = Some(keys.clone());
                 }
             }
 
@@ -1315,8 +1315,8 @@ mod explain {
                     subtree_refs.iter(),
                     derived.results::<super::Cardinality>().unwrap().into_iter(),
                 ) {
-                    let attrs = annotations.entry(expr).or_default();
-                    attrs.cardinality = Some(card.to_string());
+                    let analyses = annotations.entry(expr).or_default();
+                    analyses.cardinality = Some(card.to_string());
                 }
             }
 
@@ -1325,12 +1325,12 @@ mod explain {
                     subtree_refs.iter(),
                     derived.results::<super::ColumnNames>().unwrap().into_iter(),
                 ) {
-                    let attrs = annotations.entry(expr).or_default();
+                    let analyses = annotations.entry(expr).or_default();
                     let value = column_names
                         .iter()
                         .map(|column_name| column_name.humanize(context.humanizer))
                         .collect();
-                    attrs.column_names = Some(value);
+                    analyses.column_names = Some(value);
                 }
             }
         }
@@ -1339,7 +1339,7 @@ mod explain {
     }
 }
 
-/// Definition and helper structs for the [`Cardinality`] attribute.
+/// Definition and helper structs for the [`Cardinality`] Analysis.
 mod cardinality {
     use std::collections::{BTreeMap, BTreeSet};
 

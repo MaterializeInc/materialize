@@ -228,7 +228,7 @@ impl Default for ExplainConfig {
 }
 
 impl ExplainConfig {
-    pub fn requires_attributes(&self) -> bool {
+    pub fn requires_analyses(&self) -> bool {
         self.subtree_size
             || self.non_negative
             || self.arity
@@ -383,7 +383,7 @@ impl<'a> AsRef<&'a dyn ExprHumanizer> for RenderingContext<'a> {
 pub struct PlanRenderingContext<'a, T> {
     pub indent: Indent,
     pub humanizer: &'a dyn ExprHumanizer,
-    pub annotations: BTreeMap<&'a T, Attributes>,
+    pub annotations: BTreeMap<&'a T, Analyses>,
     pub config: &'a ExplainConfig,
 }
 
@@ -391,7 +391,7 @@ impl<'a, T> PlanRenderingContext<'a, T> {
     pub fn new(
         indent: Indent,
         humanizer: &'a dyn ExprHumanizer,
-        annotations: BTreeMap<&'a T, Attributes>,
+        annotations: BTreeMap<&'a T, Analyses>,
         config: &'a ExplainConfig,
     ) -> PlanRenderingContext<'a, T> {
         PlanRenderingContext {
@@ -612,16 +612,16 @@ pub trait ScalarOps {
 }
 
 /// A somewhat ad-hoc way to keep carry a plan with a set
-/// of attributes derived for each node in that plan.
+/// of analyses derived for each node in that plan.
 #[allow(missing_debug_implementations)]
 pub struct AnnotatedPlan<'a, T> {
     pub plan: &'a T,
-    pub annotations: BTreeMap<&'a T, Attributes>,
+    pub annotations: BTreeMap<&'a T, Analyses>,
 }
 
-/// A container for derived attributes.
+/// A container for derived analyses.
 #[derive(Clone, Default, Debug)]
-pub struct Attributes {
+pub struct Analyses {
     pub non_negative: Option<bool>,
     pub subtree_size: Option<usize>,
     pub arity: Option<usize>,
@@ -632,47 +632,47 @@ pub struct Attributes {
 }
 
 #[derive(Debug, Clone)]
-pub struct HumanizedAttributes<'a> {
-    attrs: &'a Attributes,
+pub struct HumanizedAnalyses<'a> {
+    analyses: &'a Analyses,
     humanizer: &'a dyn ExprHumanizer,
     config: &'a ExplainConfig,
 }
 
-impl<'a> HumanizedAttributes<'a> {
-    pub fn new<T>(attrs: &'a Attributes, ctx: &PlanRenderingContext<'a, T>) -> Self {
+impl<'a> HumanizedAnalyses<'a> {
+    pub fn new<T>(analyses: &'a Analyses, ctx: &PlanRenderingContext<'a, T>) -> Self {
         Self {
-            attrs,
+            analyses,
             humanizer: ctx.humanizer,
             config: ctx.config,
         }
     }
 }
 
-impl<'a> fmt::Display for HumanizedAttributes<'a> {
-    // Attribute rendering is guarded by the ExplainConfig flag for each
-    // attribute. This is needed because we might have derived attributes that
+impl<'a> Display for HumanizedAnalyses<'a> {
+    // Analysis rendering is guarded by the ExplainConfig flag for each
+    // Analysis. This is needed because we might have derived Analysis that
     // are not explicitly requested (such as column_names), in which case we
     // don't want to display them.
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         let mut builder = f.debug_struct("//");
 
         if self.config.subtree_size {
-            let subtree_size = self.attrs.subtree_size.expect("subtree_size");
+            let subtree_size = self.analyses.subtree_size.expect("subtree_size");
             builder.field("subtree_size", &subtree_size);
         }
 
         if self.config.non_negative {
-            let non_negative = self.attrs.non_negative.expect("non_negative");
+            let non_negative = self.analyses.non_negative.expect("non_negative");
             builder.field("non_negative", &non_negative);
         }
 
         if self.config.arity {
-            let arity = self.attrs.arity.expect("arity");
+            let arity = self.analyses.arity.expect("arity");
             builder.field("arity", &arity);
         }
 
         if self.config.types {
-            let types = match self.attrs.types.as_ref().expect("types") {
+            let types = match self.analyses.types.as_ref().expect("types") {
                 Some(types) => {
                     let types = types
                         .into_iter()
@@ -688,7 +688,7 @@ impl<'a> fmt::Display for HumanizedAttributes<'a> {
 
         if self.config.keys {
             let keys = self
-                .attrs
+                .analyses
                 .keys
                 .as_ref()
                 .expect("keys")
@@ -699,12 +699,12 @@ impl<'a> fmt::Display for HumanizedAttributes<'a> {
         }
 
         if self.config.cardinality {
-            let cardinality = self.attrs.cardinality.as_ref().expect("cardinality");
+            let cardinality = self.analyses.cardinality.as_ref().expect("cardinality");
             builder.field("cardinality", cardinality);
         }
 
         if self.config.column_names {
-            let column_names = self.attrs.column_names.as_ref().expect("column_names");
+            let column_names = self.analyses.column_names.as_ref().expect("column_names");
             let column_names = column_names.into_iter().enumerate().map(|(i, c)| {
                 if c.is_empty() {
                     Cow::Owned(format!("#{i}"))
