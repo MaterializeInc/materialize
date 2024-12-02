@@ -76,12 +76,6 @@ For more information, see:
 - [`CREATE CLUSTER`](/sql/create-cluster).
 - [`ALTER CLUSTER`](/sql/alter-cluster).
 
-### COMMENT ON
-
-Materialize adds the `COMMENT ON` command to allow commenting on an object.
-
-For more information, see [`COMMENT ON`](/sql/comment-on).
-
 ### Support for Fivetran
 
 Materialize adds support for Fivetran to sync data into Materialize.

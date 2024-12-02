@@ -289,14 +289,14 @@ The `mz_pending_cluster_replicas` table lists the replicas that were created dur
 
 ## `mz_comments`
 
-The `mz_comments` table stores optional comments (descriptions) for objects in the database.
+The `mz_comments` table stores optional comments (i.e., descriptions) for objects in the database.
 
 <!-- RELATION_SPEC mz_internal.mz_comments -->
 | Field          | Type        | Meaning                                                                                      |
 | -------------- |-------------| --------                                                                                     |
 | `id`           | [`text`]    | The ID of the object. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects).           |
 | `object_type`  | [`text`]    | The type of object the comment is associated with.                                           |
-| `object_sub_id`| [`integer`] | For a comment on a column of a relation, this is the column number. For all other object types this column is `NULL`. |
+| `object_sub_id`| [`integer`] | For a comment on a column of a relation, the column number. `NULL` for other object types.   |
 | `comment`      | [`text`]    | The comment itself.                                                                          |
 
 ## `mz_compute_dependencies`
