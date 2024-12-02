@@ -203,10 +203,10 @@ RUN mkdir rust \
     && cargo install --root /usr/local --version ="0.9.28" --locked cargo-hakari \
     && cargo install --root /usr/local --version "=0.9.72" --locked cargo-nextest \
     && cargo install --root /usr/local --version "=0.6.11" --locked cargo-llvm-cov \
-    && cargo install --root /usr/local --version "=0.1.50" --features=vendored-openssl cargo-udeps \
-    && cargo install --root /usr/local --version "=0.2.15" --no-default-features --features=s3,openssl/vendored sccache \
-    && cargo install --root /usr/local --version "=0.3.6" cargo-binutils \
-    && cargo install --root /usr/local --version "=0.13.0" wasm-pack
+    && cargo install --root /usr/local --version "=0.1.50" --locked --features=vendored-openssl cargo-udeps \
+    && cargo install --root /usr/local --version "=0.2.15" --locked --no-default-features --features=s3,openssl/vendored sccache \
+    && cargo install --root /usr/local --version "=0.3.6" --locked cargo-binutils \
+    && cargo install --root /usr/local --version "=0.13.0" --locked wasm-pack
 
 # Link the system lld into the cross-compiling sysroot.
 
