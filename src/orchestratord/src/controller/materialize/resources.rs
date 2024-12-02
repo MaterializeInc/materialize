@@ -886,7 +886,11 @@ fn create_environmentd_statefulset_object(
     ));
 
     if !config.cloud_provider.is_cloud() {
-        args.push("--system-parameter-default=cluster_enable_topology_spread=false".into())
+        args.push("--system-parameter-default=cluster_enable_topology_spread=false".into());
+    }
+
+    if config.enable_internal_statement_logging {
+        args.push("--system-parameter-default=enable_internal_statement_logging=true".into());
     }
 
     // Add persist arguments.

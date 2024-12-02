@@ -42,6 +42,9 @@ spec:
         {{- range $key, $value := include "materialize-operator.selectorLabels" . | fromYaml }}
         - "--orchestratord-pod-selector-labels={{ $key }}={{ $value }}"
         {{- end }}
+        {{- if .Values.operator.args.enableInternalStatementLogging }}
+        - "--enable-internal-statement-logging"
+        {{- end }}
 
         {{/* AWS Configuration */}}
         {{- if eq .Values.operator.cloudProvider.type "aws" }}
