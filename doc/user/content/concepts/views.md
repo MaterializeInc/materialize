@@ -58,7 +58,7 @@ query results stored in memory. Indexes in Materialize store **both** the key
 and any associated rows.
 
 Creating an index on a view executes the underlying view query and the index
-stores both the key and the associated the view results (i.e., the associated
+stores both the key and the associated results (i.e., the associated
 rows) in memory within the [cluster](/concepts/clusters/) where the index is
 created.
 
@@ -78,7 +78,7 @@ For example,
 
 **As new data arrives**, the index **incrementally updates** view results in
 memory within that [cluster](/concepts/clusters/). Within the cluster, the
-**in-memory, up-to-date** results are immediately available and computationally
+**in-memory**, **up-to-date** results are immediately available and computationally
 free to query.
 
 See also:
@@ -122,7 +122,7 @@ the cluster. Because materialized views maintain the up-to-date results in
 durable storage, indexes on materialized views serve up-to-date results without
 themselves performing the incremental computation. However, unlike materialized
 views that are accessible across clusters, indexes are accessible only within
-the cluster. .
+the cluster.
 
 {{< note >}}
 

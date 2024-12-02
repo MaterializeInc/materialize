@@ -28,7 +28,7 @@ or a table without performing some transformation using a view, etc.
 {{</ note>}}
 
 In Materialize, you can create indexes on a [source](/concepts/sources/) or a
-[table](/sql/create-table) to maintain in-memory up-to-date source or table data
+[table](/sql/create-table) to maintain in-memory, up-to-date source or table data
 in the cluster you create the index. This can help improve [query
 performance](#indexes-and-query-optimizations) when [using
 joins](/transform-data/optimization/#join) or when serving results directly
@@ -54,7 +54,7 @@ CREATE INDEX idx_on_my_view ON my_view_name(...) ;
 
 During the index creation on a [view](/concepts/views/#views "query saved under
 a name"), the view is executed. The index stores both the key and the associated
-the view results (i.e., the associated rows) in memory within the cluster. **As
+results (i.e., the associated rows) in memory within the cluster. **As
 new data arrives**, the index **incrementally updates** the view results.
 
 Within the cluster, querying an indexed view is:
@@ -98,10 +98,11 @@ vs. materialized views, see [Usage patterns](#usage-patterns).
 
 ## Indexes and clusters
 
-Indexes are local to a cluster. Queries from a different cluster cannot use the
+Indexes are local to a cluster. Queries executed against a cluster where the
+desired indexes do not exist **will not** use the
 indexes in another cluster.
 
-For example, the following operation creates an index in the current cluster:
+For example, the following statement creates an index in the current cluster:
 
 ```mzsql
 CREATE INDEX idx_on_my_view ON my_view_name(...) ;
@@ -109,7 +110,7 @@ CREATE INDEX idx_on_my_view ON my_view_name(...) ;
 
 Only queries in the current cluster can use the index.
 
-Similarly, the following operation creates an index in the specified cluster
+Similarly, the following statement creates an index in the specified cluster
 named `active_cluster`:
 
 ```mzsql
