@@ -13,34 +13,41 @@ aliases:
 ## Overview
 
 In Materialize, indexes represent query results stored in memory **within a
-[cluster](/concepts/clusters/)**. Indexes in Materialize store **both** the key
-and any associated rows.
-
-You can create indexes on [sources](/concepts/sources/), tables,
+[cluster](/concepts/clusters/)**. You can create indexes on [sources](/concepts/sources/),
 [views](/concepts/views/#views), or [materialized
 views](/concepts/views/#materialized-views).
 
-## Indexes on sources and tables
+## Index structure
+
+Indexes in Materialize have the following structure for each unique row:
+
+```none
+((tuple of indexed key expression), (tuple of the row, i.e. stored columns))
+```
+
+Unlike some other databases where indexes store the key and a pointer to the
+associated rows, indexes in Materialize store **both** the key and any
+associated rows. As such, the in-memory size of indexes are proportional to the
+current size of the source or view they represent. See [Indexes and
+memory](#indexes-and-memory) for more details.
+
+## Indexes on sources
 
 {{< note >}}
 In practice, you may find that you rarely need to index a source
 or a table without performing some transformation using a view, etc.
 {{</ note>}}
 
-In Materialize, you can create indexes on a [source](/concepts/sources/) or a
-[table](/sql/create-table) to maintain in-memory, up-to-date source or table data
-in the cluster you create the index. This can help improve [query
-performance](#indexes-and-query-optimizations) when [using
-joins](/transform-data/optimization/#join) or when serving results directly
-from a source or a table. However, in practice, you may find that you rarely
-need to index a source or a table directly.
+In Materialize, you can create indexes on a [source](/concepts/sources/) to
+maintain in-memory, up-to-date source data in the cluster you create the index.
+This can help improve [query performance](#indexes-and-query-optimizations) when
+[using joins](/transform-data/optimization/#join) or when serving results
+directly from a source. However, in practice, you may find that you rarely need
+to index a source directly.
 
 ```mzsql
 CREATE INDEX idx_on_my_source ON my_source (...);
-CREATE INDEX idx_on_my_table ON my_table (...);
 ```
-
-Indexes in Materialize store **both** the key and any associated rows.
 
 ## Indexes on views
 
@@ -53,9 +60,9 @@ CREATE INDEX idx_on_my_view ON my_view_name(...) ;
 ```
 
 During the index creation on a [view](/concepts/views/#views "query saved under
-a name"), the view is executed. The index stores both the key and the associated
-results (i.e., the associated rows) in memory within the cluster. **As
-new data arrives**, the index **incrementally updates** the view results.
+a name"), the view is executed and the view results are stored in memory within
+the cluster. **As new data arrives**, the index **incrementally updates** the
+results in memory.
 
 Within the cluster, querying an indexed view is:
 
@@ -79,9 +86,6 @@ materialized views require no additional computation to keep results up-to-date.
 CREATE INDEX idx_on_my_mat_view ON my_mat_view_name(...) ;
 ```
 
-The index stores both the key and the associated view results in memory within
-the cluster.
-
 {{< note >}}
 
 A materialized view can be queried from any cluster whereas its indexed results
@@ -99,25 +103,58 @@ vs. materialized views, see [Usage patterns](#usage-patterns).
 ## Indexes and clusters
 
 Indexes are local to a cluster. Queries executed against a cluster where the
-desired indexes do not exist **will not** use the
-indexes in another cluster.
+desired indexes do not exist **will not** use the indexes in another cluster.
 
-For example, the following statement creates an index in the current cluster:
+For example:
+
+- Create an index in the current cluster:
+
+  ```mzsql
+  CREATE INDEX idx_on_my_view ON my_view_name(item) ;
+  ```
+
+  Then, only queries in the current cluster can use the index depending on the
+  query pattern.
+
+- Explicitly specify the cluster when creating the index:
+
+  ```mzsql
+  CREATE INDEX idx_on_my_view IN CLUSTER active_cluster ON my_view (...);
+  ```
+
+  Then, only queries in the `active_cluster` cluster can use the index depending
+  on the query pattern.
+
+To verify that a query on the view uses the index when executed from the same
+cluster, run [`EXPLAIN PLAN FOR`](/sql/explain-plan/) the query in the cluster.
+For example, to verify that a `SELECT` from `my_view` uses the index when
+executed from the `active_cluster` cluster, run [`EXPLAIN PLAN
+FOR`](/sql/explain-plan/) on the query.
 
 ```mzsql
-CREATE INDEX idx_on_my_view ON my_view_name(...) ;
+SET cluster = active_cluster;
+EXPLAIN PLAN FOR SELECT * FROM my_view;
 ```
 
-Only queries in the current cluster can use the index.
+The plan includes both a `(fast path)` indicator as well as a `Used Indexes`
+information, indicating that the query would use the index.
 
-Similarly, the following statement creates an index in the specified cluster
-named `active_cluster`:
+To verify that a query from a different cluster does not use the index, run
+`EXPLAIN PLAN FOR` the query from a different cluster. The returned plan does
+not include either the `(fast path)` indicator or the `Used Indexes`
+information.
 
 ```mzsql
-CREATE INDEX idx_on_my_view IN CLUSTER active_cluster ON my_view (...);
+SET cluster = not_current_cluster;
+EXPLAIN PLAN FOR SELECT * FROM my_view;
 ```
 
-Only queries in the `active_cluster` cluster can use the index.
+See also [Indexes and query optimization](/transform-data/optimization/#indexes)
+for information on when queries can use the index.
+
+## Indexes and memory
+
+{{% views-indexes/indexes-memory-footprint %}}
 
 ## Usage patterns
 
