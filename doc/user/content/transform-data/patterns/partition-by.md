@@ -1,6 +1,6 @@
 ---
-title: "PARTITION BY"
-description: "Specifying the sort order of the data."
+title: "Partitioning and filter pushdown"
+description: "Declare how collections are stored."
 aliases:
   - /guides/partition-by/
   - /sql/patterns/partition-by/
@@ -9,54 +9,54 @@ menu:
     parent: 'sql-patterns'
 ---
 
+[//]: # "TODO link to the source table docs once that feature is documented."
+
+{{< private-preview />}}
+
 A few types of Materialize collections are durably written to storage: [materialized views](/sql/create-materialized-view/), [tables](/sql/create-table), and [sources](/sql/create-source).
 
 Internally, Materialize stores these durable collections in an [LSM-tree](https://en.wikipedia.org/wiki/Log-structured_merge-tree)-like structure. Each collection is made up of a set of
-**runs** of data, each run is sorted and then split up into individual **parts**, and those parts are written to object storage and retrieved only when necessary to satisfy a query. Materialize will also periodically **compact** the data it stores to consolidate small parts into larger ones or discard deleted rows.
+**runs** of data, each of which is sorted and then partitioned up into individual **parts**, and those parts are written to object storage and fetched only when necessary to satisfy a query. Materialize will also periodically **compact** the data it stores, to consolidate small parts into larger ones or discard deleted rows.
 
-Materialize lets you specify the ordering it will use to sort these runs of data internally. A well-chosen sort order can unlock optimizations like [filter pushdown](#filter-pushdown), which in turn can make queries and other operations more efficient.
+Using the `PARTITION BY` option, you can specify the internal ordering that
+Materialize will use to sort, partition, and store these runs of data.
+A well-chosen partitioning can unlock optimizations like [filter pushdown](#filter-pushdown), which in turn can make queries and other operations more efficient.
+
+{{< note >}}
+The `PARTITION BY` option has no impact on the order in which records are returned by queries.
+If you want to return results in a specific order, use an `ORDER BY` clause on your [`SELECT` statement](/sql/select/).
+{{< /note >}}
 
 ## Syntax
 
-The option `PARTITION BY <column list>` declares that a [materialized view](/sql/create-materialized-view/#with_options), [table](/sql/create-table/#with_options), or source table should be ordered by the listed columns. For example, a table that stores an append-only collection of events may look like:
+The option `PARTITION BY <column list>` declares that a [materialized view](/sql/create-materialized-view/#with_options) or [table](/sql/create-table/#with_options) should be partitioned by the listed columns.
+For example, a table that stores an append-only collection of events may want to partition the data by time:
 
 ```mzsql
-CREATE TABLE events (created_at timestamptz, body jsonb)
+CREATE TABLE events (event_ts timestamptz, body jsonb)
 WITH (
-    PARTITION BY (created_at)
+    PARTITION BY (event_ts)
 );
 ```
 
-When multiple columns are specified, rows are ordered lexicographically:
-`PARTITION BY (created_date, created_time)` would sort first by the created date, then order rows with equal created date by time. Durable collections without a `PARTITION BY` option might be stored in any order.
+This `PARTITION BY` clause declares that events with similar `event_ts` timestamps should be stored together.
 
-Note that this declaration has no impact on the order in which records are returned by queries. If you want to return results in a specific order, use an
-`ORDER BY` clause on your select statement.
+When multiple columns are specified, rows are partitioned lexicographically.
+For example, `PARTITION BY (event_date, event_time)` would partition first by the created date;
+if many rows have the same `event_date`, those rows would be partitioned by the `event_time` column.
+Durable collections without a `PARTITION BY` option can be partitioned arbitrarily.
 
-## Filter pushdown
-
-As mentioned above, Materialize stores durable collections as a set of parts. If it can prove that a particular part in a collection is not needed to answer a particular query, it can skip fetching it, saving a substantial amount of time and computation. For example:
-
-- If a materialized view has a temporal filter that preserves only the last two days of data, we'd like to filter out parts that contain data from a month ago.
-- If a select statement filters for only data from a particular country, we'd like to avoid fetching parts that only contain data from other countries.
-
-This optimization tends to be important for append-only timeseries datasets, but it can be useful for any dataset where most queries look at only a particular "range" of the data. If the query is a select statement, it can make that select statement more performant; if the query is an index or a materialized view, it can make it much faster to bootstrap.
-
-Materialize will always try to filter out parts it doesn't need for a particular query, but that filtering is usually only effective when similar rows are stored together. If you want to make sure that filter pushdown reliably kicks in for your query, you should:
-
-- Use a `PARTITION BY` clause on the relevant column to ensure that data with similar values for that column are stored close together.
-- Add a filter to your query that only returns true for a particular range of values in that column.
-
-Filters that consist of arithmetic, date math, and comparisons are generally eligible for pushdown, including all the examples in this page. However, more complex filters might not be. You can check whether the filters in your query can be pushed down by using [the
-`filter_pushdown` option](/sql/explain-plan/#output-modifiers) in an `EXPLAIN` statement.
-
-Some common functions, such as casting from a string to a timestamp, can prevent filter pushdown for a query. For similar functions that _do_ allow pushdown, see [the pushdown functions documentation](/sql/functions/pushdown/).
+{{< note >}}
+The `PARTITION BY` option does not mean that rows with different values for the specified columns will be stored in different parts, only that rows with similar values for those columns should be stored together.
+{{< /note >}}
 
 ## Requirements
 
-Materialize imposes some restrictions on the list of columns in the partition-by clause.
+Materialize currently imposes some restrictions on the list of columns in the `PARTITION BY` clause.
 
-- This clause must list a prefix of the columns in the collection. For example, if you're creating a table that partitions by a single column, that column must be the first column in the table's schema definition.
+- This clause must list a prefix of the columns in the collection. For example:
+  - if you're creating a table that partitions by a single column, that column must be the first column in the table's schema definition;
+  - if you're creating a table that partitions by two columns, those columns must be the first two columns in the table's schema definition and listed in the same order.
 - Only certain types of columns are supported. This includes:
     - all fixed-width integer types, including `smallint`, `integer`, and `bigint`;
     - date and time types, including `date`, `time`, `timestamp`, `timestamptz`, and `mz_timestamp`;
@@ -65,6 +65,39 @@ Materialize imposes some restrictions on the list of columns in the partition-by
     - `record` types where all fields types are supported.
 
 We intend to relax some of these restrictions in the future.
+
+## Filter pushdown
+
+Suppose we're running a query against our `events` data with a [temporal filter](/transform-data/patterns/temporal-filters/).
+
+```mzsql
+SELECT * FROM events WHERE mz_now() <= event_ts + INTERVAL '5min';
+```
+
+This query returns only rows with similar values for `event_ts`: timestamps in the last five minutes.
+Since we declared that our `events` table is partitioned by `event_ts`, Materialize can determine that all the rows that pass this filter must also be _stored_ close together, and fetch only the exact parts it needs to satisfy the query.
+
+This optimization is called _filter pushdown_... and it can save a substantial amount of time and computation given a large collection and a selective filter. This tends to be common for append-only timeseries datasets and temporal filters, but it can be useful for any dataset where most queries look at only a particular "range" of the data.
+
+Materialize will always try to filter out parts it doesn't need for a particular query, but that filtering is usually only effective when similar rows are stored together.
+If you want to make sure that filter pushdown reliably kicks in for your query, you can:
+
+- Use a `PARTITION BY` clause on the relevant column to ensure that data with similar values for that column are stored close together.
+- Add a filter to your query that only returns true for a narrow range of values in that column.
+
+Filters that consist of arithmetic, date math, and comparisons are generally eligible for pushdown, including all the examples in this page. However, more complex filters might not be. You can check whether the filters in your query can be pushed down using [an `EXPLAIN` statement](/sql/explain-plan/). In the following example, we can be confident our temporal filter will be pushed down because it's present in the `pushdown` list at the bottom of the output.
+
+```mzsql
+EXPLAIN SELECT * FROM events WHERE mz_now() <= event_ts + INTERVAL '5min';
+----
+Explained Query:
+[...]
+Source materialize.public.events
+  [...]
+  pushdown=((mz_now() <= timestamp_to_mz_timestamp((#0 + 00:05:00))))
+```
+
+Some common functions, such as casting from a string to a timestamp, can prevent filter pushdown for a query. For similar functions that _do_ allow pushdown, see [the pushdown functions documentation](/sql/functions/pushdown/).
 
 ## Examples
 
@@ -88,16 +121,17 @@ For timeseries or "event"-type collections, it's often useful to partition the d
 
 1. Insert a few records, one "older" record and one more recent.
     ```mzsql
-    INSERT INTO events VALUES (now()::timestamp - '1 minute', 'hello');
+    INSERT INTO events VALUES (now()::timestamp - '5 minutes', 'hello');
     INSERT INTO events VALUES (now(), 'world');
     ```
 
-1. If we run a select statement against the data sometime in the next couple of minutes, we return one row but not the other.
+1. Run a select statement against the data sometime in the next few minutes. This should return only the more recent of the two rows.
     ```mzsql
-    SELECT * FROM events WHERE event_ts > mz_now() - '2 minutes';
+    SELECT * FROM events WHERE event_ts + '2 minutes' > mz_now();
     ```
 
-1. An `EXPLAIN FILTER PUSHDOWN` statement shows that we're able to fetch a subset of the parts in our collection... only those parts that contain data with recent timestamps.
+1. To verify that Materialize fetched only the parts that contain data with the
+   recent timestamps, run an `EXPLAIN FILTER PUSHDOWN` statement.
     ```mzsql
     EXPLAIN FILTER PUSHDOWN FOR
     SELECT * FROM events WHERE event_ts + '2 minutes' > mz_now();
@@ -105,11 +139,15 @@ For timeseries or "event"-type collections, it's often useful to partition the d
 
 If you wait a few minutes longer until there are no events that match the temporal filter, you'll notice that not only does the query return zero rows, but the explain shows that we fetched zero parts.
 
-Note that the exact numbers you see here may very: parts can be much larger than a single row, and the actual level of filtering may vary for small datasets as data is compacted together internally. However, datasets of a few gigabytes or larger should reliably see benefits from this optimization.
+{{< note >}}
 
-### Partitioning by primary key
+The exact numbers you see here may very: parts can be much larger than a single row, and the actual level of filtering may vary for small datasets as data is compacted together internally. However, datasets of a few gigabytes or larger should reliably see benefits from this optimization.
 
-Other datasets don't have a strong timeseries component, but they do have a clear notion of type or category. For example, let's suppose we manage a collection of music venues spread across the world, but regularly want to target queries to just those that exist in a single country.
+{{< /note >}}
+
+### Partitioning by category
+
+Other datasets don't have a strong timeseries component, but they do have a clear notion of type or category. For example, suppose you have a collection of music venues spread across the world that you regularly query by a single country.
 
 1. First, create a table called `venues`, partitioned by country.
     ```mzsql
@@ -123,21 +161,25 @@ Other datasets don't have a strong timeseries component, but they do have a clea
     );
     ```
 
-1. Insert a few records, one "older" record and one more recent.
+1. Insert a few records with different country codes.
     ```mzsql
     INSERT INTO venues VALUES ('US', uuid_generate_v5('venue', 'Rock World'));
     INSERT INTO venues VALUES ('CA', uuid_generate_v5('venue', 'Friendship Cove'));
     ```
 
-1. We can filter down our list of venues to just those in a specific country.
+1. Query for venues in a specific country.
     ```mzsql
     SELECT * FROM venues WHERE country_code = 'US';
     ```
 
-1. An `EXPLAIN FILTER PUSHDOWN` statement shows that we're only fetching a subset of parts we've stored.
+1. Run `EXPLAIN FILTER PUSHDOWN` to check that we're fetching only parts that contain data from the `US`.
     ```mzsql
     EXPLAIN FILTER PUSHDOWN FOR
     SELECT * FROM venues WHERE country_code = 'US';
     ```
 
+{{< note >}}
+
 As before, we're not guaranteed to see much or any benefit from filter pushdown on small collections... but for datasets of over a few gigabytes, we should reliably be able to filter down to a subset of the parts we'd otherwise need to fetch.
+
+{{< /note >}}
