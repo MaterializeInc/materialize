@@ -23,15 +23,15 @@ pipeline=${1:-test}
 bootstrap_steps=
 
 for arch in x86_64 aarch64; do
-    for toolchain in stable nightly; do
-        if ! MZ_DEV_CI_BUILDER_ARCH=$arch bin/ci-builder exists $toolchain; then
+    for flavor in stable nightly min; do
+        if ! MZ_DEV_CI_BUILDER_ARCH=$arch bin/ci-builder exists $flavor; then
             queue=builder-linux-x86_64
             if [[ $arch = aarch64 ]]; then
                 queue=builder-linux-aarch64-mem
             fi
             bootstrap_steps+="
-  - label: bootstrap $toolchain $arch
-    command: bin/ci-builder push $toolchain
+  - label: bootstrap $flavor $arch
+    command: bin/ci-builder push $flavor
     agents:
       queue: $queue
 "
@@ -47,7 +47,7 @@ steps:
     env:
       CI_BAZEL_BUILD: 1
       CI_BAZEL_REMOTE_CACHE: "https://bazel-remote.dev.materialize.com"
-    command: bin/ci-builder run stable bin/pyactivate -m ci.mkpipeline $pipeline $@
+    command: bin/ci-builder run min bin/pyactivate -m ci.mkpipeline $pipeline $@
     priority: 200
     agents:
       queue: hetzner-aarch64-4cpu-8gb
