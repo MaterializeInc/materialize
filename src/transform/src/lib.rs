@@ -700,15 +700,6 @@ impl Optimizer {
             //   also not good database-issues#4639.
             //   (The same is true for FoldConstants, Demand, and LiteralLifting to a lesser
             //   extent.)
-            //
-            // Also note that FoldConstants and LiteralLifting are not confluent. They can
-            // oscillate between e.g.:
-            //         Constant
-            //           - (4)
-            // and
-            //         Map (4)
-            //           Constant
-            //             - ()
             Box::new(Fixpoint {
                 name: "fixpoint_physical_01",
                 limit: 100,

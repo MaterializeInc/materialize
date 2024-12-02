@@ -62,12 +62,14 @@ impl crate::Transform for LiteralLifting {
         relation: &mut MirRelationExpr,
         _: &mut TransformCtx,
     ) -> Result<(), crate::TransformError> {
-        let literals = self.action(relation, &mut BTreeMap::new())?;
-        if !literals.is_empty() {
-            // Literals return up the root should be re-installed.
-            *relation = relation.take_dangerous().map(literals);
+        if relation.as_const().is_none() {
+            let literals = self.action(relation, &mut BTreeMap::new())?;
+            if !literals.is_empty() {
+                // Literals return up the root should be re-installed.
+                *relation = relation.take_dangerous().map(literals);
+            }
+            mz_repr::explain::trace_plan(&*relation);
         }
-        mz_repr::explain::trace_plan(&*relation);
         Ok(())
     }
 }
