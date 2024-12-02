@@ -90,7 +90,7 @@ _shtab_scratch() {
   if ((${_shtab_scratch_options[(I)${(q)one_or_more}*]} + ${_shtab_scratch_options[(I)${(q)remainder}*]} == 0)); then  # noqa: E501
     _shtab_scratch_options+=(': :_shtab_scratch_commands' '*::: :->scratch')
   fi
-  _arguments -C $_shtab_scratch_options
+  _arguments -C -s $_shtab_scratch_options
 
   case $state in
     scratch)
@@ -98,15 +98,15 @@ _shtab_scratch() {
       (( CURRENT += 1 ))
       curcontext="${curcontext%:*:*}:_shtab_scratch-$line[1]:"
       case $line[1] in
-        completion) _arguments -C $_shtab_scratch_completion_options ;;
-        create) _arguments -C $_shtab_scratch_create_options ;;
-        destroy) _arguments -C $_shtab_scratch_destroy_options ;;
-        forward) _arguments -C $_shtab_scratch_forward_options ;;
-        login) _arguments -C $_shtab_scratch_login_options ;;
-        mine) _arguments -C $_shtab_scratch_mine_options ;;
-        push) _arguments -C $_shtab_scratch_push_options ;;
-        sftp) _arguments -C $_shtab_scratch_sftp_options ;;
-        ssh) _arguments -C $_shtab_scratch_ssh_options ;;
+        completion) _arguments -C -s $_shtab_scratch_completion_options ;;
+        create) _arguments -C -s $_shtab_scratch_create_options ;;
+        destroy) _arguments -C -s $_shtab_scratch_destroy_options ;;
+        forward) _arguments -C -s $_shtab_scratch_forward_options ;;
+        login) _arguments -C -s $_shtab_scratch_login_options ;;
+        mine) _arguments -C -s $_shtab_scratch_mine_options ;;
+        push) _arguments -C -s $_shtab_scratch_push_options ;;
+        sftp) _arguments -C -s $_shtab_scratch_sftp_options ;;
+        ssh) _arguments -C -s $_shtab_scratch_ssh_options ;;
       esac
   esac
 }
@@ -114,4 +114,12 @@ _shtab_scratch() {
 
 
 typeset -A opt_args
-_shtab_scratch "$@"
+
+if [[ $zsh_eval_context[-1] == eval ]]; then
+  # eval/source/. command, register function for later
+  compdef _shtab_scratch -N scratch
+else
+  # autoload from fpath, call function directly
+  _shtab_scratch "$@"
+fi
+
