@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use anyhow::bail;
 use chrono::{DateTime, NaiveDateTime};
 use differential_dataflow::AsCollection;
 use futures::StreamExt;
@@ -41,7 +42,6 @@ use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
 use mz_timely_util::containers::stack::AccountedStackBuilder;
 use mz_timely_util::order::Partitioned;
-use rdkafka::client::Client;
 use rdkafka::consumer::base_consumer::PartitionQueue;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::error::KafkaError;
@@ -99,8 +99,7 @@ pub struct KafkaSourceReader {
     /// thread.
     progress_statistics: Arc<Mutex<PartialProgressStatistics>>,
     /// The last partition info we received. For each partition we also fetch the high watermark.
-    partition_info:
-        Arc<Mutex<Option<(mz_repr::Timestamp, BTreeMap<PartitionId, WatermarkOffsets>)>>>,
+    partition_info: Arc<Mutex<Option<(mz_repr::Timestamp, BTreeMap<PartitionId, HighWatermark>)>>>,
     /// A handle to the spawned metadata thread
     // Drop order is important here, we want the thread to be unparked after the `partition_info`
     // Arc has been dropped, so that the unpacked thread notices it and exits immediately
@@ -129,17 +128,10 @@ struct PartitionCapability {
     progress: Capability<KafkaTimestamp>,
 }
 
-/// Represents the low and high watermark offsets of a Kafka partition.
-#[derive(Debug)]
-struct WatermarkOffsets {
-    /// The offset of the earliest message in the topic/partition. If no messages have been written
-    /// to the topic, the low watermark offset is set to 0. The low watermark will also be 0 if one
-    /// message has been written to the partition (with offset 0).
-    low: u64,
-    /// The high watermark offset, which is the offset of the latest message in the topic/partition
-    /// available for consumption + 1.
-    high: u64,
-}
+/// The high watermark offsets of a Kafka partition.
+///
+/// This is the offset of the latest message in the topic/partition available for consumption + 1.
+type HighWatermark = u64;
 
 /// Processes `resume_uppers` stream updates, committing them upstream and
 /// storing them in the `progress_statistics` to be emitted later.
@@ -465,7 +457,7 @@ impl SourceRender for KafkaSourceConnection {
                                 let probe_ts =
                                     mz_repr::Timestamp::try_from((now_fn)()).expect("must fit");
                                 let result = fetch_partition_info(
-                                    metadata_consumer.client(),
+                                    &metadata_consumer,
                                     &topic,
                                     config
                                         .config
@@ -611,7 +603,7 @@ impl SourceRender for KafkaSourceConnection {
 
                 let mut prev_offset_known = None;
                 let mut prev_offset_committed = None;
-                let mut prev_pid_info: Option<BTreeMap<PartitionId, WatermarkOffsets>> = None;
+                let mut prev_pid_info: Option<BTreeMap<PartitionId, HighWatermark>> = None;
                 let mut snapshot_total = None;
 
                 let max_wait_time =
@@ -662,15 +654,15 @@ impl SourceRender for KafkaSourceConnection {
 
                         // The second heuristic is whether the high watermark regressed
                         if let Some(prev_pid_info) = prev_pid_info {
-                            for (pid, prev_watermarks) in prev_pid_info {
-                                let watermarks = &partitions[&pid];
-                                if !(prev_watermarks.high <= watermarks.high) {
+                            for (pid, prev_high_watermark) in prev_pid_info {
+                                let high_watermark = partitions[&pid];
+                                if !(prev_high_watermark <= high_watermark) {
                                     let err = DataflowError::SourceError(Box::new(SourceError {
                                         error: SourceErrorDetails::Other(
                                             format!(
                                                 "topic was recreated: high watermark of \
-                                        partition {pid} regressed from {} to {}",
-                                                prev_watermarks.high, watermarks.high
+                                                 partition {pid} regressed from {} to {}",
+                                                prev_high_watermark, high_watermark
                                             )
                                             .into(),
                                         ),
@@ -694,13 +686,13 @@ impl SourceRender for KafkaSourceConnection {
                             probe_ts,
                             upstream_frontier: Antichain::from_elem(future_ts),
                         };
-                        for (&pid, watermarks) in &partitions {
+                        for (&pid, &high_watermark) in &partitions {
                             probe.upstream_frontier.insert(Partitioned::new_singleton(
                                 RangeBound::exact(pid),
-                                MzOffset::from(watermarks.high),
+                                MzOffset::from(high_watermark),
                             ));
                             if responsible_for_pid(&config, pid) {
-                                upstream_stat += watermarks.high;
+                                upstream_stat += high_watermark;
                                 reader.ensure_partition(pid);
                                 if let Entry::Vacant(entry) =
                                     reader.partition_capabilities.entry(pid)
@@ -709,14 +701,13 @@ impl SourceRender for KafkaSourceConnection {
                                         Some(&offset) => offset.try_into().unwrap(),
                                         None => 0u64,
                                     };
-                                    let start_offset = std::cmp::max(start_offset, watermarks.low);
                                     let part_since_ts = Partitioned::new_singleton(
                                         RangeBound::exact(pid),
                                         MzOffset::from(start_offset),
                                     );
                                     let part_upper_ts = Partitioned::new_singleton(
                                         RangeBound::exact(pid),
-                                        MzOffset::from(watermarks.high),
+                                        MzOffset::from(high_watermark),
                                     );
 
                                     // This is the moment at which we have discovered a new partition
@@ -1548,24 +1539,33 @@ mod tests {
     }
 }
 
-/// Fetches the list of partitions and their corresponding high watermark
-fn fetch_partition_info<C: ClientContext>(
-    client: &Client<C>,
+/// Fetches the list of partitions and their corresponding high watermark.
+fn fetch_partition_info<C: ConsumerContext>(
+    consumer: &BaseConsumer<C>,
     topic: &str,
     fetch_timeout: Duration,
-) -> Result<BTreeMap<PartitionId, WatermarkOffsets>, anyhow::Error> {
-    let pids = get_partitions(client, topic, fetch_timeout)?;
+) -> Result<BTreeMap<PartitionId, HighWatermark>, anyhow::Error> {
+    let pids = get_partitions(consumer.client(), topic, fetch_timeout)?;
+
+    let mut offset_requests = TopicPartitionList::with_capacity(pids.len());
+    for pid in pids {
+        offset_requests.add_partition_offset(topic, pid, Offset::End)?;
+    }
+
+    let offset_responses = consumer.offsets_for_times(offset_requests, fetch_timeout)?;
 
     let mut result = BTreeMap::new();
-
-    for pid in pids {
-        let (low, high) = client.fetch_watermarks(topic, pid, fetch_timeout)?;
-        let watermarks = WatermarkOffsets {
-            low: low.try_into().expect("invalid negative offset"),
-            high: high.try_into().expect("invalid negative offset"),
+    for entry in offset_responses.elements() {
+        let offset = match entry.offset() {
+            Offset::Offset(offset) => offset,
+            offset => bail!("unexpected high watermark offset: {offset:?}"),
         };
-        result.insert(pid, watermarks);
+
+        let pid = entry.partition();
+        let watermark = offset.try_into().expect("invalid negative offset");
+        result.insert(pid, watermark);
     }
+
     Ok(result)
 }
 
