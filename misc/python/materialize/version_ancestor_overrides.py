@@ -32,7 +32,7 @@ def get_ancestor_overrides_for_performance_regressions(
         # PR#30617 (storage/kafka: use separate consumer for metadata probing)
         # adds 1s of delay to Kafka source startup
         min_ancestor_mz_version_per_commit[
-            "f316f8fde68e6fa1c90328d8868a0750c86bdcf4"
+            "9f7b634e6824f73d0effcdfa86c2b8b1642a4784"
         ] = MzVersion.parse_mz("v0.127.0")
     if scenario_class_name == "InsertMultiRow":
         # PR#30622 (Refactor how we run FoldConstants) increases wallclock
