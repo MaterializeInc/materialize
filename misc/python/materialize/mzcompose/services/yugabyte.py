@@ -58,7 +58,7 @@ class Yugabyte(Service):
                     '/home/yugabyte/bin/ysqlsh -h $(hostname) -p 5433 -U yugabyte -c "\\conninfo"',
                 ],
                 "interval": "1s",
-                "start_period": "30s",
+                "start_period": "60s",
             },
         }
 

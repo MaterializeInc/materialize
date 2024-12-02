@@ -13,7 +13,7 @@ Native Yugabyte source tests, functional.
 
 import random
 
-from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.yugabyte import Yugabyte
@@ -21,6 +21,7 @@ from materialize.mzcompose.services.yugabyte import Yugabyte
 SERVICES = [
     Yugabyte(),
     Materialized(),
+    # Overridden below
     Testdrive(),
 ]
 
@@ -28,13 +29,29 @@ SERVICES = [
 #
 # Test that Yugabyte ingestion works
 #
-def workflow_default(c: Composition) -> None:
+def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
+    parser.add_argument(
+        "filter",
+        nargs="*",
+        default=["*.td"],
+        help="limit to only the files matching filter",
+    )
+
+    parser.add_argument(
+        "--default-timeout",
+        type=str,
+        help="set the default timeout for Testdrive",
+    )
+
+    args = parser.parse_args()
+
     c.up("yugabyte", "materialized")
     seed = random.getrandbits(16)
-    c.run_testdrive_files(
-        "--no-reset",
-        "--max-errors=1",
-        f"--seed={seed}",
-        f"--var=default-replica-size={Materialized.Size.DEFAULT_SIZE}-{Materialized.Size.DEFAULT_SIZE}",
-        "yugabyte-cdc.td",
-    )
+    with c.override(Testdrive(default_timeout=args.default_timeout)):
+        c.run_testdrive_files(
+            "--no-reset",
+            "--max-errors=1",
+            f"--seed={seed}",
+            f"--var=default-replica-size={Materialized.Size.DEFAULT_SIZE}-{Materialized.Size.DEFAULT_SIZE}",
+            *args.filter,
+        )
