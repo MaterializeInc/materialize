@@ -98,7 +98,7 @@ use mz_catalog::durable::OpenableDurableCatalogState;
 use mz_catalog::expr_cache::{GlobalExpressions, LocalExpressions};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, ClusterReplicaProcessStatus, ClusterVariantManaged, Connection,
-    DataSourceDesc, Table, TableDataSource,
+    DataSourceDesc, StateUpdate, Table, TableDataSource,
 };
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig, VpcEndpointEvent};
 use mz_compute_client::as_of_selection;
@@ -977,6 +977,7 @@ pub struct Config {
     pub controller_config: ControllerConfig,
     pub controller_envd_epoch: NonZeroI64,
     pub storage: Box<dyn mz_catalog::durable::DurableCatalogState>,
+    pub audit_logs_handle: thread::JoinHandle<Vec<StateUpdate>>,
     pub timestamp_oracle_url: Option<SensitiveUrl>,
     pub unsafe_mode: bool,
     pub all_features: bool,
@@ -1787,6 +1788,7 @@ impl Coordinator {
         mut builtin_table_updates: Vec<BuiltinTableUpdate>,
         cached_global_exprs: BTreeMap<GlobalId, GlobalExpressions>,
         uncached_local_exprs: BTreeMap<GlobalId, LocalExpressions>,
+        audit_logs_handle: std::thread::JoinHandle<Vec<StateUpdate>>,
     ) -> Result<(), AdapterError> {
         let bootstrap_start = Instant::now();
         info!("startup: coordinator init: bootstrap beginning");
@@ -2248,12 +2250,27 @@ impl Coordinator {
         if self.controller.read_only() {
             info!("coordinator init: bootstrap: stashing builtin table updates while in read-only mode");
 
+            let audit_join_start = Instant::now();
+            info!("startup: coordinator init: bootstrap: join audit log deserialization beginning");
+            let audit_log_updates = audit_logs_handle
+                .join()
+                .expect("unable to deserialize audit log");
+            let audit_log_builtin_table_updates = self
+                .catalog()
+                .state()
+                .generate_builtin_table_updates(audit_log_updates);
+            builtin_table_updates.extend(audit_log_builtin_table_updates);
+            info!(
+                "startup: coordinator init: bootstrap: join audit log deserialization complete in {:?}",
+                audit_join_start.elapsed()
+            );
             self.buffered_builtin_table_updates
                 .as_mut()
                 .expect("in read-only mode")
                 .append(&mut builtin_table_updates);
         } else {
-            self.bootstrap_tables(&entries, builtin_table_updates).await;
+            self.bootstrap_tables(&entries, builtin_table_updates, audit_logs_handle)
+                .await;
         };
         info!(
             "startup: coordinator init: bootstrap: generate builtin updates complete in {:?}",
@@ -2367,6 +2384,7 @@ impl Coordinator {
         &mut self,
         entries: &[CatalogEntry],
         mut builtin_table_updates: Vec<BuiltinTableUpdate>,
+        audit_logs_handle: thread::JoinHandle<Vec<StateUpdate>>,
     ) {
         /// Smaller helper struct of metadata for bootstrapping tables.
         struct TableMetadata<'a> {
@@ -2464,6 +2482,21 @@ impl Coordinator {
             let retractions = retractions.expect("cannot fail to fetch snapshot");
             builtin_table_updates.extend(retractions);
         }
+
+        let audit_join_start = Instant::now();
+        info!("startup: coordinator init: bootstrap: join audit log deserialization beginning");
+        let audit_log_updates = audit_logs_handle
+            .join()
+            .expect("unable to deserialize audit log");
+        let audit_log_builtin_table_updates = self
+            .catalog()
+            .state()
+            .generate_builtin_table_updates(audit_log_updates);
+        builtin_table_updates.extend(audit_log_builtin_table_updates);
+        info!(
+            "startup: coordinator init: bootstrap: join audit log deserialization complete in {:?}",
+            audit_join_start.elapsed()
+        );
 
         // Now that the snapshots are complete, the appends must also be complete.
         table_fence_rx
@@ -3682,6 +3715,7 @@ pub fn serve(
         controller_config,
         controller_envd_epoch,
         mut storage,
+        audit_logs_handle,
         timestamp_oracle_url,
         unsafe_mode,
         all_features,
@@ -4065,6 +4099,7 @@ pub fn serve(
                             builtin_table_updates,
                             cached_global_exprs,
                             uncached_local_exprs,
+                            audit_logs_handle,
                         )
                         .await?;
                     coord

@@ -20,6 +20,7 @@
 //!   - Config
 //!   - Setting
 //!   - FenceToken
+//!   - AuditLog
 //!
 //! When you want to make a change to the `Catalog` you need to follow these steps:
 //!
@@ -57,8 +58,6 @@ mod tests;
 
 use mz_ore::{soft_assert_eq_or_log, soft_assert_ne_or_log};
 use mz_repr::Diff;
-use timely::progress::Timestamp as TimelyTimestamp;
-
 use paste::paste;
 #[cfg(test)]
 use proptest::prelude::*;
@@ -66,6 +65,7 @@ use proptest::prelude::*;
 use proptest::strategy::ValueTree;
 #[cfg(test)]
 use proptest_derive::Arbitrary;
+use timely::progress::Timestamp as TimelyTimestamp;
 
 use crate::durable::initialize::USER_VERSION_KEY;
 use crate::durable::objects::serialization::proto;
@@ -377,6 +377,12 @@ async fn run_versioned_upgrade<V1: IntoStateUpdateKindJson, V2: IntoStateUpdateK
         .into_iter()
         .flat_map(|action| action.into_updates().into_iter())
         .collect();
+    // Validate that we're not migrating an un-migratable collection.
+    for (update, _) in &updates {
+        if update.is_always_deserializable() {
+            panic!("migration to un-migratable collection: {update:?}\nall updates: {updates:?}");
+        }
+    }
 
     // 3. Add a retraction for old version and insertion for new version into updates.
     let next_version = current_version + 1;

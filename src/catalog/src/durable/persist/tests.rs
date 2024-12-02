@@ -51,7 +51,8 @@ async fn test_upgrade_shard() {
     let _persist_state = persist_openable_state
         .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .expect("failed to open persist catalog");
+        .expect("failed to open persist catalog")
+        .0;
 
     assert_eq!(
         Some(first_version.clone()),
@@ -111,7 +112,8 @@ async fn test_upgrade_shard() {
     let _persist_state = persist_openable_state
         .open_savepoint(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .expect("failed to open savepoint persist catalog");
+        .expect("failed to open savepoint persist catalog")
+        .0;
 
     assert_eq!(
         Some(first_version.clone()),
@@ -140,7 +142,8 @@ async fn test_upgrade_shard() {
     let _persist_state = persist_openable_state
         .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .expect("failed to open readonly persist catalog");
+        .expect("failed to open readonly persist catalog")
+        .0;
 
     assert_eq!(
         Some(second_version),
@@ -180,7 +183,8 @@ async fn test_version_regression() {
     let _persist_state = persist_openable_state
         .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .expect("failed to open persist catalog");
+        .expect("failed to open persist catalog")
+        .0;
 
     assert_eq!(
         Some(first_version.clone()),
@@ -201,7 +205,8 @@ async fn test_version_regression() {
     let _persist_state = persist_openable_state
         .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .expect("failed to open readonly persist catalog");
+        .expect("failed to open readonly persist catalog")
+        .0;
 
     assert_eq!(
         Some(second_version.clone()),

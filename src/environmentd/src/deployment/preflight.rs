@@ -75,7 +75,7 @@ pub async fn preflight_legacy(
             .open_savepoint(boot_ts.clone(), &bootstrap_args)
             .await
         {
-            Ok(adapter_storage) => Box::new(adapter_storage).expire().await,
+            Ok((adapter_storage, _)) => Box::new(adapter_storage).expire().await,
             Err(CatalogError::Durable(e)) if e.can_recover_with_write_mode() => {
                 // This is theoretically possible if catalog implementation A is
                 // initialized, implementation B is uninitialized, and we are going to
