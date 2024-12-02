@@ -108,12 +108,9 @@ Constant
 build apply=LiteralLifting
 (constant [[1 2 3] [1 4 3]] [int64 int64 int64])
 ----
-Map (3)
-  Project (#1, #0)
-    Map (1)
-      Constant
-        - (2)
-        - (4)
+Constant
+  - (1, 2, 3)
+  - (1, 4, 3)
 
 build apply=LiteralLifting
 (union
@@ -306,9 +303,6 @@ With
 build format=types apply=LiteralLifting
 (constant [[1 2 3] [1 4 3]] ([int64 int64 int64] [[1 2]]))
 ----
-Map (3) // { types: "(Int64, Int64, Int64)", keys: "([1])" }
-  Project (#1, #0) // { types: "(Int64, Int64)", keys: "([1])" }
-    Map (1) // { types: "(Int64, Int64)", keys: "([0])" }
-      Constant // { types: "(Int64)", keys: "([0])" }
-        - (2)
-        - (4)
+Constant // { types: "(Int64, Int64, Int64)", keys: "([1], [1, 2])" }
+  - (1, 2, 3)
+  - (1, 4, 3)

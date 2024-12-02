@@ -63,13 +63,10 @@ Constant // { types: "(text, bigint, bigint, bigint, text)" }
   - (1, "oh", 2, 5, "foo")
   - (1, "my", 2, 7, "foo")
 ----
-Map ("foo")
-  Project (#2, #0, #3, #1)
-    Map (1, 2)
-      Constant
-        - ("my", 3)
-        - ("oh", 5)
-        - ("my", 7)
+Constant
+  - (1, "my", 2, 3, "foo")
+  - (1, "oh", 2, 5, "foo")
+  - (1, "my", 2, 7, "foo")
 
 
 # Lift prefix and suffix from constant collections.
