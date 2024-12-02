@@ -214,6 +214,7 @@ clusterd:
 
 # RBAC (Role-Based Access Control) settings
 rbac:
+  enabled: true
   # Whether to create necessary RBAC roles and bindings
   create: true
 

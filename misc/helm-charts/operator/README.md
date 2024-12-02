@@ -258,6 +258,7 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.resources.requests.cpu` |  | ``"100m"`` |
 | `operator.resources.requests.memory` |  | ``"512Mi"`` |
 | `rbac.create` |  | ``true`` |
+| `rbac.enabled` |  | ``true`` |
 | `serviceAccount.create` |  | ``true`` |
 | `serviceAccount.name` |  | ``"orchestratord"`` |
 | `storage.storageClass.allowVolumeExpansion` |  | ``false`` |
