@@ -10,8 +10,6 @@ menu:
     weight: 20
 ---
 
-{{< public-preview />}}
-
 {{% create-source/intro %}}
 Materialize supports MySQL (5.7+) as a real-time data source. To connect to a
 MySQL database, you first need to tweak its configuration to enable

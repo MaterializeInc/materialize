@@ -8,8 +8,6 @@ menu:
     identifier: "mysql-self-hosted"
 ---
 
-{{< public-preview />}}
-
 This page shows you how to stream data from a self-hosted MySQL database to
 Materialize using the [MySQL source](/sql/create-source/mysql/).
 
