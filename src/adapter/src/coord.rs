@@ -3996,7 +3996,7 @@ pub fn serve(
                             storage_collections_to_drop,
                         )
                     })
-                    .expect("failed to initialize storage_controller");
+                    .unwrap_or_terminate("failed to initialize storage_controller");
                 // Initializing the controller uses one or more timestamps, so push the boot timestamp up to the
                 // current catalog upper.
                 let catalog_upper = handle.block_on(catalog.current_upper());
