@@ -1577,3 +1577,42 @@ Source materialize.public.t4
 Target cluster: no_replicas
 
 EOF
+
+statement ok
+CREATE TABLE t5(
+    x int,
+    y int NOT NULL,
+    z int
+);
+
+statement ok
+CREATE TABLE t6(
+    a int NOT NULL,
+    b int
+);
+
+# WITH(EQUIVALENCES)
+query T multiline
+EXPLAIN WITH(EQUIVALENCES)
+SELECT *
+FROM t5, t6
+WHERE x = a AND b IN (8,9);
+----
+Explained Query:
+  Project (#0..=#2, #0, #4) // { equivs: "[[#0, #3], [false, (#0) IS NULL, (#1) IS NULL], [true, ((#4 = 8) OR (#4 = 9))]]" }
+    Join on=(#0 = #3) type=differential // { equivs: "[[#0, #3], [false, (#0) IS NULL, (#1) IS NULL], [true, ((#4 = 8) OR (#4 = 9))]]" }
+      ArrangeBy keys=[[#0]] // { equivs: "[[false, (#0) IS NULL, (#1) IS NULL]]" }
+        Filter (#0) IS NOT NULL // { equivs: "[[false, (#0) IS NULL, (#1) IS NULL]]" }
+          ReadStorage materialize.public.t5 // { equivs: "[[false, (#1) IS NULL]]" }
+      ArrangeBy keys=[[#0]] // { equivs: "[[false, (#0) IS NULL], [true, ((#1 = 8) OR (#1 = 9))]]" }
+        Filter ((#1 = 8) OR (#1 = 9)) // { equivs: "[[false, (#0) IS NULL], [true, ((#1 = 8) OR (#1 = 9))]]" }
+          ReadStorage materialize.public.t6 // { equivs: "[[false, (#0) IS NULL]]" }
+
+Source materialize.public.t5
+  filter=((#0) IS NOT NULL)
+Source materialize.public.t6
+  filter=(((#1 = 8) OR (#1 = 9)))
+
+Target cluster: no_replicas
+
+EOF

@@ -170,6 +170,10 @@ pub struct ExplainConfig {
     pub cardinality: bool,
     /// Show the `ColumnNames` Analysis.
     pub column_names: bool,
+    /// Show the `Equivalences` Analysis.
+    pub equivalences: bool,
+    // TODO: add an option to show the `Monotonic` Analysis. This is non-trivial, because this
+    // Analysis needs the set of monotonic GlobalIds, which are cumbersome to pass around.
 
     // Other display options:
     /// Render implemented MIR `Join` nodes in a way which reflects the implementation.
@@ -222,6 +226,7 @@ impl Default for ExplainConfig {
             subtree_size: false,
             timing: false,
             types: false,
+            equivalences: false,
             features: Default::default(),
         }
     }
@@ -236,6 +241,7 @@ impl ExplainConfig {
             || self.keys
             || self.cardinality
             || self.column_names
+            || self.equivalences
     }
 }
 
@@ -629,6 +635,7 @@ pub struct Analyses {
     pub keys: Option<Vec<Vec<usize>>>,
     pub cardinality: Option<String>,
     pub column_names: Option<Vec<String>>,
+    pub equivalences: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -714,6 +721,11 @@ impl<'a> Display for HumanizedAnalyses<'a> {
             });
             let column_names = bracketed("(", ")", separated(", ", column_names)).to_string();
             builder.field("column_names", &column_names);
+        }
+
+        if self.config.equivalences {
+            let equivs = self.analyses.equivalences.as_ref().expect("equivalences");
+            builder.field("equivs", equivs);
         }
 
         builder.finish()
@@ -938,6 +950,7 @@ mod tests {
             raw_plans: false,
             raw_syntax: false,
             subtree_size: false,
+            equivalences: false,
             timing: true,
             types: false,
             features: Default::default(),

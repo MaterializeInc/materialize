@@ -141,6 +141,7 @@ mod tests {
                     raw_plans: false,
                     raw_syntax: false,
                     subtree_size: false,
+                    equivalences: false,
                     timing: false,
                     types: format_contains("types"),
                     ..ExplainConfig::default()

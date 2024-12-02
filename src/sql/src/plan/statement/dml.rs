@@ -364,6 +364,7 @@ generate_extracted_config!(
     (SubtreeSize, bool, Default(false)),
     (Timing, bool, Default(false)),
     (Types, bool, Default(false)),
+    (Equivalences, bool, Default(false)),
     (ReoptimizeImportedViews, Option<bool>, Default(None)),
     (EnableNewOuterJoinLowering, Option<bool>, Default(None)),
     (EnableEagerDeltaJoins, Option<bool>, Default(None)),
@@ -406,6 +407,7 @@ impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
             raw_syntax: v.raw_syntax,
             redacted: v.redacted,
             subtree_size: v.subtree_size,
+            equivalences: v.equivalences,
             timing: v.timing,
             types: v.types,
             // The ones that are initialized with `Default::default()` are not wired up to EXPLAIN.

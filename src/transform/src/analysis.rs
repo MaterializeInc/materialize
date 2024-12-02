@@ -1205,6 +1205,8 @@ mod explain {
     use mz_ore::stack::RecursionLimitError;
     use mz_repr::explain::{Analyses, AnnotatedPlan};
 
+    use crate::analysis::equivalences::Equivalences;
+
     // Analyses should have shortened paths when exported.
     use super::DerivedBuilder;
 
@@ -1233,6 +1235,9 @@ mod explain {
             }
             if context.config.column_names || context.config.humanized_exprs {
                 builder.require(super::ColumnNames);
+            }
+            if context.config.equivalences {
+                builder.require(Equivalences);
             }
             builder
         }
@@ -1331,6 +1336,19 @@ mod explain {
                         .map(|column_name| column_name.humanize(context.humanizer))
                         .collect();
                     analyses.column_names = Some(value);
+                }
+            }
+
+            if config.equivalences {
+                for (expr, equivs) in std::iter::zip(
+                    subtree_refs.iter(),
+                    derived.results::<Equivalences>().unwrap().into_iter(),
+                ) {
+                    let analyses = annotations.entry(expr).or_default();
+                    analyses.equivalences = Some(match equivs.as_ref() {
+                        Some(equivs) => equivs.to_string(),
+                        None => "<empty collection>".to_string(),
+                    });
                 }
             }
         }
