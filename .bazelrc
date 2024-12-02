@@ -129,8 +129,7 @@ build --@rules_rust//:extra_rustc_flag="-Csymbol-mangling-version=v0"
 build --@rules_rust//:extra_rustc_flag="-Ccodegen-units=64"
 # Enabling pipelined builds allows dependent libraries to begin compiling with
 # just `.rmeta` instead of the full `.rlib`.
-# TODO: Reenable when fixed, currently still sometimes fails, see for example: https://buildkite.com/materialize/test/builds/93445#0192d426-ff4e-4658-b48a-9473843ae116
-#build --@rules_rust//rust/settings:pipelined_compilation=True
+build --@rules_rust//rust/settings:pipelined_compilation=True
 
 # `cargo check` like config, still experimental!
 #
