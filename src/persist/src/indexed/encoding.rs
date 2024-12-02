@@ -65,7 +65,7 @@ pub enum BatchColumnarFormat {
 impl BatchColumnarFormat {
     /// Returns a default value for [`BatchColumnarFormat`].
     pub const fn default() -> Self {
-        BatchColumnarFormat::Row
+        BatchColumnarFormat::Both(2)
     }
 
     /// Returns a [`BatchColumnarFormat`] for a given `&str`, falling back to a default value if
@@ -204,6 +204,29 @@ pub enum BlobTraceUpdates {
 }
 
 impl BlobTraceUpdates {
+    /// Create a new [BlobTraceUpdates] from the provided parts.
+    pub fn new(
+        codec: ColumnarRecords,
+        structured: Option<ColumnarRecordsStructuredExt>,
+    ) -> BlobTraceUpdates {
+        match structured {
+            None => Self::Row(codec),
+            Some(structured) => {
+                assert_eq!(
+                    codec.len(),
+                    structured.key.len(),
+                    "key length should match codec data"
+                );
+                assert_eq!(
+                    codec.len(),
+                    structured.val.len(),
+                    "val length should match codec data"
+                );
+                Self::Both(codec, structured)
+            }
+        }
+    }
+
     /// The number of updates.
     pub fn len(&self) -> usize {
         self.records().len()

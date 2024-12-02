@@ -40,7 +40,7 @@ part 0
 
 # compact b0 and b1 with enough memory for both runs, but a target size that can only hold 2 parts/keys in mem at a time.
 # most importantly, we expect there to be a single run, as each input has a single run of ordered parts
-compact output=b0_1 inputs=(b0,b1) lower=0 upper=6 since=6 target_size=50 memory_bound=10000
+compact output=b0_1 inputs=(b0,b1) lower=0 upper=6 since=6 target_size=30 memory_bound=10000
 ----
 parts=2 len=4
 
@@ -81,7 +81,7 @@ f 8 1
 part 0
 
 # compact b0, b1, b2 with enough memory for all runs, but a target size that can only hold 2 keys in mem at a time.
-compact output=b0_1_2 inputs=(b0,b1,b2) lower=0 upper=9 since=8 target_size=50 memory_bound=1000
+compact output=b0_1_2 inputs=(b0,b1,b2) lower=0 upper=9 since=8 target_size=30 memory_bound=1000
 ----
 parts=3 len=6
 
@@ -153,7 +153,7 @@ set-batch-parts-size input=b2 size=50
 ----
 ok
 
-compact output=b0_1_2 inputs=(b0,b1,b2) lower=0 upper=9 since=8 target_size=50 memory_bound=200
+compact output=b0_1_2 inputs=(b0,b1,b2) lower=0 upper=9 since=8 target_size=30 memory_bound=200
 ----
 parts=4 len=7
 
@@ -193,7 +193,7 @@ set-batch-parts-size input=b2 size=1000
 ----
 ok
 
-compact output=b0_1_2 inputs=(b0,b1,b2) lower=0 upper=9 since=8 target_size=50 memory_bound=200
+compact output=b0_1_2 inputs=(b0,b1,b2) lower=0 upper=9 since=8 target_size=30 memory_bound=200
 ----
 parts=4 len=7
 
@@ -223,7 +223,7 @@ set-batch-parts-size input=b0_1_2 size=1000
 ----
 ok
 
-compact output=b0_1_2_iter1 inputs=(b0_1_2) lower=0 upper=9 since=8 target_size=100 memory_bound=1000
+compact output=b0_1_2_iter1 inputs=(b0_1_2) lower=0 upper=9 since=8 target_size=60 memory_bound=1000
 ----
 parts=2 len=6
 
@@ -245,7 +245,7 @@ set-batch-parts-size input=b0_1_2_iter1 size=1000
 ----
 ok
 
-compact output=b0_1_2_iter2 inputs=(b0_1_2_iter1) lower=0 upper=9 since=8 target_size=100 memory_bound=1000
+compact output=b0_1_2_iter2 inputs=(b0_1_2_iter1) lower=0 upper=9 since=8 target_size=60 memory_bound=1000
 ----
 parts=2 len=6
 
