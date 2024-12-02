@@ -109,5 +109,16 @@ rules:
   verbs:
   - get
   - list
+- apiGroups: ["cert-manager.io"]
+  resources:
+  - certificates
+  verbs:
+  - create
+  - update
+  - patch
+  - delete
+  - get
+  - list
+  - watch
 
 {{- end }}

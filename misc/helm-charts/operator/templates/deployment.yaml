@@ -123,7 +123,9 @@ spec:
         {{- end }}
         {{- end }}
         {{- end }}
-
+        {{- if .Values.tls.defaultCertificateSpecs }}
+        - '--default-certificate-specs={{ toJson .Values.tls.defaultCertificateSpecs }}'
+        {{- end }}
         {{/* Observability */}}
         {{- if .Values.observability.enabled }}
         {{- if .Values.observability.podMetrics.enabled }}
