@@ -102,6 +102,7 @@ steps:
       - id: build-aarch64
         label: ":bazel: Build aarch64"
         env:
+          CI_BUILD_ARCH: "aarch64"
         command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
         inputs:
           - "*"
@@ -109,7 +110,7 @@ steps:
         depends_on: []
         timeout_in_minutes: 60
         agents:
-          queue: builder-linux-aarch64-mem
+          queue: builder-linux-x86_64
 
       - id: build-wasm
         label: Build WASM
