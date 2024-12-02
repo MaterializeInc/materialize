@@ -27,10 +27,19 @@ def main() -> None:
     sanitizer = Sanitizer[os.getenv("CI_SANITIZER", "none")]
     bazel = ui.env_is_truthy("CI_BAZEL_BUILD")
     bazel_remote_cache = os.getenv("CI_BAZEL_REMOTE_CACHE")
+    
+    maybe_arch = os.getenv("CI_BUILD_ARCH")
+    if maybe_arch and maybe_arch == "x86_64":
+        arch = Arch.X86_64
+    elif maybe_arch and maybe_arch in ["aarch64", "arm64"]:
+        arch = Arch.AARCH64
+    else:
+        arch = Arch.host()
 
     repo = mzbuild.Repository(
         Path("."),
         coverage=coverage,
+        arch=arch,
         sanitizer=sanitizer,
         bazel=bazel,
         bazel_remote_cache=bazel_remote_cache,
