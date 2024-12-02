@@ -8,8 +8,6 @@ menu:
     indentifier: "mysql-azure-db"
 ---
 
-{{< public-preview />}}
-
 This page shows you how to stream data from [Azure DB for MySQL](https://azure.microsoft.com/en-us/products/MySQL)
 to Materialize using the [MySQL source](/sql/create-source/mysql/).
 

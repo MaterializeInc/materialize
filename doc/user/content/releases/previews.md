@@ -186,18 +186,6 @@ your environment.
 Overview](/images/health-dashboard.png "Health Dashboard in the  Materialize
 Console Environment Overview")
 
-### Native connectors for MySQL
-
-Materialize provides native connectors for MySQL as a source.
-
-For more information, see:
-
-- [Ingest data: MySQL](/ingest-data/mysql/)
-
-- [Create Source: MySQL](/sql/create-source/mysql/)
-
-- [Create Connection: MySQL](/sql/create-connection/#mysql)
-
 ### AWS Connection for IAM authentication
 
 Materialize supports the use of an AWS Connection to perform:

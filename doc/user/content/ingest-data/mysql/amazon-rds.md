@@ -8,8 +8,6 @@ menu:
     identifier: "mysql-amazon-rds"
 ---
 
-{{< public-preview />}}
-
 This page shows you how to stream data from [Amazon RDS for MySQL](https://aws.amazon.com/rds/mysql/)
 to Materialize using the [MySQL source](/sql/create-source/mysql).
 
