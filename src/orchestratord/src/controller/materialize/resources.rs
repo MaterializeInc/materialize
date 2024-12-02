@@ -888,6 +888,9 @@ fn create_environmentd_statefulset_object(
     if !config.cloud_provider.is_cloud() {
         args.push("--system-parameter-default=cluster_enable_topology_spread=false".into())
     }
+    if config.disable_authentication {
+        args.push("--system-parameter-default=enable_rbac_checks=false".into());
+    }
 
     // Add persist arguments.
 
@@ -1356,17 +1359,13 @@ fn create_balancerd_deployment_object(config: &super::Args, mz: &Materialize) ->
             "--https-resolver-template={}.{}.svc.cluster.local:{}",
             mz.environmentd_service_name(),
             mz.namespace(),
-            // TODO after implementing self-hosted auth,
-            // point at config.environmentd_http_port
-            config.environmentd_internal_http_port
+            config.environmentd_http_port
         ),
         format!(
             "--static-resolver-addr={}.{}.svc.cluster.local:{}",
             mz.environmentd_service_name(),
             mz.namespace(),
-            // TODO after implementing self-hosted auth,
-            // point at config.environmentd_sql_port
-            config.environmentd_internal_sql_port
+            config.environmentd_sql_port
         ),
     ];
 

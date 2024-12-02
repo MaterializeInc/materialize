@@ -70,6 +70,11 @@ spec:
         - "--console-image-tag-map={{ $key }}={{ $value }}"
         {{- end }}
 
+        {{/* Authentication */}}
+        {{- if not .Values.rbac.enabled }}
+        - "--disable-authentication"
+        {{- end }}
+
         {{/* Cluster Configuration */}}
         {{- if .Values.operator.clusters }}
         {{- if .Values.operator.clusters.sizes }}

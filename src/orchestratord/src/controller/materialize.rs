@@ -49,6 +49,8 @@ pub struct Args {
     secrets_controller: String,
     #[clap(long)]
     collect_pod_metrics: bool,
+    #[clap(long)]
+    disable_authentication: bool,
 
     #[clap(long)]
     console_image_tag_default: String,
