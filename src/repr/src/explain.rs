@@ -154,22 +154,30 @@ impl From<serde_json::Error> for ExplainError {
 /// A set of options for controlling the output of [`Explain`] implementations.
 #[derive(Clone, Debug)]
 pub struct ExplainConfig {
-    /// Show the number of columns.
+    // Analyses:
+    // (These are shown only if the Analysis is supported by the backing IR.)
+    /// Show the `SubtreeSize` Analysis in the explanation.
+    pub subtree_size: bool,
+    /// Show the number of columns, i.e., the `Arity` Analysis.
     pub arity: bool,
-    /// Show cardinality information.
+    /// Show the types, i.e., the `RelationType` Analysis.
+    pub types: bool,
+    /// Show the sets of unique keys, i.e., the `UniqueKeys` Analysis.
+    pub keys: bool,
+    /// Show the `NonNegative` Analysis.
+    pub non_negative: bool,
+    /// Show the `Cardinality` Analysis.
     pub cardinality: bool,
-    /// Show inferred column names.
+    /// Show the `ColumnNames` Analysis.
     pub column_names: bool,
+
+    // Other display options:
     /// Render implemented MIR `Join` nodes in a way which reflects the implementation.
     pub join_impls: bool,
     /// Use inferred column names when rendering scalar and aggregate expressions.
     pub humanized_exprs: bool,
-    /// Show the sets of unique keys.
-    pub keys: bool,
     /// Restrict output trees to linear chains. Ignored if `raw_plans` is set.
     pub linear_chains: bool,
-    /// Show the `non_negative` in the explanation if it is supported by the backing IR.
-    pub non_negative: bool,
     /// Show the slow path plan even if a fast path plan was created. Useful for debugging.
     /// Enforced if `timing` is set.
     pub no_fast_path: bool,
@@ -183,14 +191,11 @@ pub struct ExplainConfig {
     pub raw_syntax: bool,
     /// Anonymize literals in the plan.
     pub redacted: bool,
-    /// Show the `subtree_size` attribute in the explanation if it is supported by the backing IR.
-    pub subtree_size: bool,
     /// Print optimization timings.
     pub timing: bool,
-    /// Show the `type` attribute in the explanation.
-    pub types: bool,
     /// Show MFP pushdown information.
     pub filter_pushdown: bool,
+
     /// Optimizer feature flags.
     pub features: OptimizerFeatureOverrides,
 }
