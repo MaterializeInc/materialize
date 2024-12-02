@@ -109,6 +109,6 @@ pub mod __private {
     pub use tracing;
 }
 
-pub fn foobar(x: usize) -> String {
+pub fn foobar2(x: usize) -> String {
     format!("hello world {x}")
 }
