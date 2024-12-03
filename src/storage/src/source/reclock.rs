@@ -440,7 +440,7 @@ pub struct ReclockOperator<
     remap_handle: Handle,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ReclockBatch<FromTime, IntoTime> {
     pub updates: Vec<(FromTime, IntoTime, Diff)>,
     pub upper: Antichain<IntoTime>,
@@ -534,7 +534,8 @@ where
 
         while *self.upper == [IntoTime::minimum()]
             || (PartialOrder::less_equal(&self.source_upper.frontier(), &new_from_upper)
-                && PartialOrder::less_than(&self.upper, &new_into_upper))
+                && PartialOrder::less_than(&self.upper, &new_into_upper)
+                && self.upper.less_equal(&binding_ts))
         {
             // If source is closed, close remap shard as well.
             if new_from_upper.is_empty() {
@@ -1538,6 +1539,35 @@ mod tests {
                 (4, 11000.into())
             ]
         );
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
+    async fn test_concurrency_stale_binding_ts() {
+        // Create two operators pointing to the same shard
+        let shared_shard = ShardId::new();
+        let (mut op_a, _) = make_test_operator(shared_shard, Antichain::from_elem(0.into())).await;
+        let (mut op_b, _) = make_test_operator(shared_shard, Antichain::from_elem(0.into())).await;
+
+        let source_upper = partitioned_frontier([(0, MzOffset::from(3))]);
+        let batch1 = op_a
+            .mint(
+                1000.into(),
+                Antichain::from_elem(1001.into()),
+                source_upper.borrow(),
+            )
+            .await;
+
+        // This should be a no-op since the binding ts 1000 is already minted
+        let source_upper = partitioned_frontier([(0, MzOffset::from(4))]);
+        let batch2 = op_b
+            .mint(
+                1000.into(),
+                Antichain::from_elem(1002.into()),
+                source_upper.borrow(),
+            )
+            .await;
+        assert_eq!(batch1, batch2);
     }
 
     #[mz_ore::test(tokio::test)]

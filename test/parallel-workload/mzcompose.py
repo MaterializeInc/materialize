@@ -93,6 +93,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     ):
         toxiproxy_start(c)
         c.up(*service_names)
+
         c.up("mc", persistent=True)
         c.exec(
             "mc",
@@ -123,6 +124,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             scenario,
             args.threads,
             args.naughty_identifiers,
+            args.replicas,
             c,
             sanity_restart,
         )

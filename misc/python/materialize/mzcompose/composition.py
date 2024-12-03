@@ -1078,6 +1078,24 @@ class Composition:
             f"No external metadata store found: {self.compose['services']}"
         )
 
+    def setup_quickstart_cluster(self, replicas: int = 2) -> None:
+        replica_names = [f"r{replica_id}" for replica_id in range(0, 2)]
+        replica_string = ",".join(
+            f"{replica_name} (SIZE '4')" for replica_name in replica_names
+        )
+        self.sql(
+            f"""
+            DROP CLUSTER quickstart CASCADE;
+            CREATE CLUSTER quickstart REPLICAS ({replica_string});
+            GRANT ALL PRIVILEGES ON CLUSTER quickstart TO materialize;
+            DROP CLUSTER IF EXISTS singlereplica;
+            CREATE CLUSTER singlereplica SIZE '4', REPLICATION FACTOR 1;
+            GRANT ALL PRIVILEGES ON CLUSTER singlereplica TO materialize;
+            """,
+            user="mz_system",
+            port=6877,
+        )
+
     def capture_logs(self, *services: str) -> None:
         # Capture logs into services.log since they will be lost otherwise
         # after dowing a composition.

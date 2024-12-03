@@ -55,7 +55,7 @@ SERVICES = [
     Minio(setup_materialize=True),
     # Fixed port so that we keep the same port after restarting Mz in disruptions
     Materialized(
-        ports=["16875:6875"],
+        ports=["16875:6875", "16877:6877"],
         external_minio=True,
         external_metadata_store=True,
         system_parameter_defaults=get_default_system_parameters(zero_downtime=True),
@@ -64,7 +64,7 @@ SERVICES = [
     ),
     Materialized(
         name="materialized2",
-        ports=["26875:6875"],
+        ports=["26875:6875", "26877:6877"],
         external_minio=True,
         external_metadata_store=True,
         system_parameter_defaults=get_default_system_parameters(zero_downtime=True),
@@ -90,6 +90,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         action="append",
         help="Workload(s) to run.",
     )
+    parser.add_argument("--replicas", type=int, default=2, help="use multiple replicas")
 
     args = parser.parse_args()
 
@@ -119,6 +120,23 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     executor_classes = [MySqlExecutor, KafkaRoundtripExecutor, KafkaExecutor]
 
     c.up(*services)
+
+    if args.replicas > 1:
+        c.sql("DROP CLUSTER quickstart CASCADE", user="mz_system", port=6877)
+        replica_names = [f"r{replica_id}" for replica_id in range(0, args.replicas)]
+        replica_string = ",".join(
+            f"{replica_name} (SIZE '4')" for replica_name in replica_names
+        )
+        c.sql(
+            f"CREATE CLUSTER quickstart REPLICAS ({replica_string})",
+            user="mz_system",
+            port=6877,
+        )
+
+    c.sql(
+        "CREATE CLUSTER singlereplica SIZE = '4', REPLICATION FACTOR = 1",
+    )
+
     conn = c.sql_connection()
     conn.autocommit = True
     with conn.cursor() as cur:

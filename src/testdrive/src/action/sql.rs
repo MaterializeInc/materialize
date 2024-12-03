@@ -65,6 +65,7 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
         | CreateMaterializedView(_)
         | CreateView(_)
         | CreateTable(_)
+        | CreateTableFromSource(_)
         | CreateIndex(_)
         | CreateType(_)
         | CreateRole(_)
