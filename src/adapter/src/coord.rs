@@ -2786,7 +2786,7 @@ impl Coordinator {
                                 if global_expressions.optimizer_features
                                     == optimizer_config.features =>
                             {
-                                info!("global expression cache hit for {global_id:?}");
+                                debug!("global expression cache hit for {global_id:?}");
                                 (
                                     global_expressions.global_mir,
                                     global_expressions.physical_plan,
@@ -2871,7 +2871,7 @@ impl Coordinator {
                                 if global_expressions.optimizer_features
                                     == optimizer_config.features =>
                             {
-                                info!("global expression cache hit for {global_id:?}");
+                                debug!("global expression cache hit for {global_id:?}");
                                 (
                                     global_expressions.global_mir,
                                     global_expressions.physical_plan,
@@ -2964,7 +2964,7 @@ impl Coordinator {
                                 if global_expressions.optimizer_features
                                     == optimizer_config.features =>
                             {
-                                info!("global expression cache hit for {global_id:?}");
+                                debug!("global expression cache hit for {global_id:?}");
                                 (
                                     global_expressions.global_mir,
                                     global_expressions.physical_plan,

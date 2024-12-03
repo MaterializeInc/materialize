@@ -87,7 +87,7 @@ use mz_storage_types::connections::ConnectionContext;
 use serde::Serialize;
 use timely::progress::Antichain;
 use tokio::sync::mpsc;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
 use crate::catalog::{Catalog, ConnCatalog};
@@ -1145,7 +1145,7 @@ impl CatalogState {
                     Some(local_expr)
                         if local_expr.optimizer_features == optimizer_config.features =>
                     {
-                        info!("local expression cache hit for {global_id:?}");
+                        debug!("local expression cache hit for {global_id:?}");
                         (view.expr, local_expr.local_mir)
                     }
                     Some(_) | None => {
@@ -1195,7 +1195,7 @@ impl CatalogState {
                     Some(local_expr)
                         if local_expr.optimizer_features == optimizer_config.features =>
                     {
-                        info!("local expression cache hit for {global_id:?}");
+                        debug!("local expression cache hit for {global_id:?}");
                         (materialized_view.expr, local_expr.local_mir)
                     }
                     Some(_) | None => {
