@@ -112,6 +112,7 @@ files+="
 rust-version:$rust_version
 rust-date:$rust_date
 arch:$arch_gcc
+nonce=1
 "
 tag=$(echo "$files" | python3 -c '
 import base64
