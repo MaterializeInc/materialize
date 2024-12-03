@@ -20,6 +20,7 @@ use anyhow::bail;
 use serde::{Deserialize, Serialize};
 
 pub mod client;
+pub mod metrics;
 
 /// A function that computes the lag between the given time and wallclock time.
 pub type WallclockLagFn<T> = Arc<dyn Fn(&T) -> Duration + Send + Sync>;

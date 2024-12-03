@@ -11,6 +11,7 @@
 
 use std::sync::Arc;
 
+use mz_cluster_client::metrics::{ControllerMetrics, WallclockLagMetrics};
 use mz_cluster_client::ReplicaId;
 use mz_ore::cast::{CastFrom, TryCastFrom};
 use mz_ore::metric;
@@ -19,6 +20,7 @@ use mz_ore::metrics::{
     MetricsRegistry, UIntGaugeVec,
 };
 use mz_ore::stats::HISTOGRAM_BYTE_BUCKETS;
+use mz_repr::GlobalId;
 use mz_service::codec::StatsCollector;
 use mz_storage_types::instances::StorageInstanceId;
 use prometheus::core::AtomicU64;
@@ -35,10 +37,13 @@ pub struct StorageControllerMetrics {
     startup_prepared_statements_kept: prometheus::IntGauge,
     regressed_offset_known: IntCounterVec,
     history_command_count: UIntGaugeVec,
+
+    /// Metrics shared with the compute controller.
+    shared: ControllerMetrics,
 }
 
 impl StorageControllerMetrics {
-    pub fn new(metrics_registry: MetricsRegistry) -> Self {
+    pub fn new(metrics_registry: &MetricsRegistry, shared: ControllerMetrics) -> Self {
         Self {
             messages_sent_bytes: metrics_registry.register(metric!(
                 name: "mz_storage_messages_sent_bytes",
@@ -66,6 +71,8 @@ impl StorageControllerMetrics {
                 help: "The number of commands in the controller's command history.",
                 var_labels: ["instance_id", "command_type"],
             )),
+
+            shared,
         }
     }
 
@@ -75,6 +82,15 @@ impl StorageControllerMetrics {
     ) -> DeleteOnDropCounter<'static, prometheus::core::AtomicU64, Vec<String>> {
         self.regressed_offset_known
             .get_delete_on_drop_metric(vec![id.to_string()])
+    }
+
+    pub fn wallclock_lag_metrics(
+        &self,
+        id: GlobalId,
+        instance_id: Option<StorageInstanceId>,
+    ) -> WallclockLagMetrics {
+        self.shared
+            .wallclock_lag_metrics(id.to_string(), instance_id.map(|x| x.to_string()), None)
     }
 
     pub fn for_instance(&self, id: StorageInstanceId) -> InstanceMetrics {
