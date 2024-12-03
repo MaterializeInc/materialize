@@ -18,7 +18,6 @@ use std::fmt::Display;
 use std::sync::Arc;
 
 use differential_dataflow::lattice::Lattice;
-use mz_dyncfg::ConfigSet;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::read::ListenEvent;
 use mz_persist_client::Diagnostics;
@@ -27,7 +26,6 @@ use mz_persist_types::Codec64;
 use mz_repr::{Diff, GlobalId, Row};
 use mz_service::local::Activatable;
 use mz_storage_types::controller::CollectionMetadata;
-use mz_storage_types::dyncfgs;
 use mz_storage_types::sources::{
     GenericSourceConnection, IngestionDescription, KafkaSourceConnection,
     LoadGeneratorSourceConnection, MySqlSourceConnection, PostgresSourceConnection,
@@ -38,7 +36,6 @@ use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, Timestamp};
 use tokio::sync::mpsc;
 
-use crate::source::reclock::{ReclockBatch, ReclockFollower};
 use crate::source::types::SourceRender;
 
 /// A worker that can execute commands that come in on a channel and returns
@@ -84,7 +81,6 @@ async fn reclock_resume_uppers<C, IntoTime>(
     ingestion_description: &IngestionDescription<CollectionMetadata>,
     as_of: Antichain<IntoTime>,
     resume_uppers: &BTreeMap<GlobalId, Antichain<IntoTime>>,
-    config_set: Arc<ConfigSet>,
 ) -> BTreeMap<GlobalId, Antichain<C::Time>>
 where
     C: SourceConnection + SourceRender,
@@ -153,41 +149,25 @@ where
         }
     }
 
-    let use_reclock_v2 = dyncfgs::STORAGE_USE_RECLOCK_V2.get(&config_set);
-    let source_upper_at_frontier: &mut dyn FnMut(_) -> _ = if use_reclock_v2 {
-        remap_updates.sort_unstable_by(|a, b| a.1.cmp(&b.1));
+    remap_updates.sort_unstable_by(|a, b| a.1.cmp(&b.1));
 
-        // The conversion of an IntoTime frontier to a FromTime frontier has the property that all
-        // messages that would be reclocked to times beyond the provided `IntoTime` frontier will be
-        // beyond the returned `FromTime` frontier. This can be used to compute a safe starting point
-        // to resume producing an `IntoTime` collection at a particular frontier.
-        let mut source_upper = MutableAntichain::new();
-        &mut move |upper: &Antichain<IntoTime>| {
-            if PartialOrder::less_equal(upper, &as_of) {
-                Antichain::from_elem(Timestamp::minimum())
-            } else {
-                let idx = remap_updates.partition_point(|(_, t, _)| !upper.less_equal(t));
-                source_upper.clear();
-                source_upper.update_iter(
-                    remap_updates[0..idx]
-                        .iter()
-                        .map(|(from_time, _, diff)| (from_time.clone(), *diff)),
-                );
-                source_upper.frontier().to_owned()
-            }
-        }
-    } else {
-        // This cannot be instantiated earlier because `AsyncStorageWorker` then needs to be `+ Send +
-        // Sync` and capturing the timestamper in the Future makes it non-Send since it contains an Rc.
-        let mut timestamper = ReclockFollower::new(as_of);
-        timestamper.push_trace_batch(ReclockBatch {
-            updates: remap_updates,
-            upper: remap_upper.clone(),
-        });
-        &mut move |upper: &Antichain<IntoTime>| {
-            timestamper
-                .source_upper_at_frontier(upper.borrow())
-                .expect("enough data is loaded")
+    // The conversion of an IntoTime frontier to a FromTime frontier has the property that all
+    // messages that would be reclocked to times beyond the provided `IntoTime` frontier will be
+    // beyond the returned `FromTime` frontier. This can be used to compute a safe starting point
+    // to resume producing an `IntoTime` collection at a particular frontier.
+    let mut source_upper = MutableAntichain::new();
+    let mut source_upper_at_frontier = move |upper: &Antichain<IntoTime>| {
+        if PartialOrder::less_equal(upper, &as_of) {
+            Antichain::from_elem(Timestamp::minimum())
+        } else {
+            let idx = remap_updates.partition_point(|(_, t, _)| !upper.less_equal(t));
+            source_upper.clear();
+            source_upper.update_iter(
+                remap_updates[0..idx]
+                    .iter()
+                    .map(|(from_time, _, diff)| (from_time.clone(), *diff)),
+            );
+            source_upper.frontier().to_owned()
         }
     };
 
@@ -209,7 +189,6 @@ impl<T: Timestamp + Lattice + Codec64 + Display + Sync> AsyncStorageWorker<T> {
     pub fn new<A: Activatable + Send + 'static>(
         activatable: A,
         persist_clients: Arc<PersistClientCache>,
-        config_set: Arc<ConfigSet>,
     ) -> Self {
         let (command_tx, mut command_rx) = mpsc::unbounded_channel();
         let (response_tx, response_rx) = crossbeam_channel::unbounded();
@@ -368,7 +347,6 @@ impl<T: Timestamp + Lattice + Codec64 + Display + Sync> AsyncStorageWorker<T> {
                                     &ingestion_description,
                                     as_of.clone(),
                                     &resume_uppers,
-                                    Arc::clone(&config_set),
                                 )
                                 .await;
                                 to_vec_row(uppers)
@@ -380,7 +358,6 @@ impl<T: Timestamp + Lattice + Codec64 + Display + Sync> AsyncStorageWorker<T> {
                                     &ingestion_description,
                                     as_of.clone(),
                                     &resume_uppers,
-                                    Arc::clone(&config_set),
                                 )
                                 .await;
                                 to_vec_row(uppers)
@@ -392,7 +369,6 @@ impl<T: Timestamp + Lattice + Codec64 + Display + Sync> AsyncStorageWorker<T> {
                                     &ingestion_description,
                                     as_of.clone(),
                                     &resume_uppers,
-                                    Arc::clone(&config_set),
                                 )
                                 .await;
                                 to_vec_row(uppers)
@@ -405,7 +381,6 @@ impl<T: Timestamp + Lattice + Codec64 + Display + Sync> AsyncStorageWorker<T> {
                                         &ingestion_description,
                                         as_of.clone(),
                                         &resume_uppers,
-                                        Arc::clone(&config_set),
                                     )
                                     .await;
                                 to_vec_row(uppers)

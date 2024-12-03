@@ -161,7 +161,6 @@ def get_default_system_parameters(
         "storage_statistics_collection_interval": "1000",
         "storage_statistics_interval": "2000",
         "storage_use_continual_feedback_upsert": "true",
-        "storage_use_reclock_v2": "true",
         "timestamp_oracle": "postgres",
         "wait_catalog_consolidation_on_startup": "true",
         "with_0dt_deployment_max_wait": "900s",

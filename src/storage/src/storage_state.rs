@@ -203,7 +203,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
         let async_worker = async_storage_worker::AsyncStorageWorker::new(
             thread::current(),
             Arc::clone(&persist_clients),
-            Arc::clone(storage_configuration.config_set()),
         );
         let cluster_memory_limit = instance_context.cluster_memory_limit;
 
