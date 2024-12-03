@@ -139,6 +139,9 @@ spec:
         {{- if .Values.observability.podMetrics.enabled }}
         - "--collect-pod-metrics"
         {{- end }}
+        {{- if .Values.observability.prometheus.scrapeAnnotations.enabled }}
+        - "--enable-prometheus-scrape-annotations"
+        {{- end }}
         {{- end }}
         resources:
           {{- toYaml .Values.operator.resources | nindent 10 }}

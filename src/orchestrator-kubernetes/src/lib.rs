@@ -97,6 +97,8 @@ pub struct KubernetesOrchestratorConfig {
     pub name_prefix: Option<String>,
     /// Whether we should attempt to collect metrics from kubernetes
     pub collect_pod_metrics: bool,
+    /// Whether to annotate pods for prometheus service discovery.
+    pub enable_prometheus_scrape_annotations: bool,
 }
 
 impl KubernetesOrchestratorConfig {
@@ -820,7 +822,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             None
         };
 
-        let pod_annotations = btreemap! {
+        let mut pod_annotations = btreemap! {
             // Prevent the cluster-autoscaler (or karpenter) from evicting these pods in attempts to scale down
             // and terminate nodes.
             // This will cost us more money, but should give us better uptime.
@@ -832,6 +834,19 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             // It's called do-not-disrupt in newer versions of karpenter, so adding for forward/backward compatibility
             "karpenter.sh/do-not-disrupt".to_owned() => "true".to_string(),
         };
+        if self.config.enable_prometheus_scrape_annotations {
+            if let Some(internal_http_port) = ports_in
+                .iter()
+                .find(|port| port.name == "internal-http")
+                .map(|port| port.port_hint.to_string())
+            {
+                // Enable prometheus scrape discovery
+                pod_annotations.insert("prometheus.io/scrape".to_owned(), "true".to_string());
+                pod_annotations.insert("prometheus.io/port".to_owned(), internal_http_port);
+                pod_annotations.insert("prometheus.io/path".to_owned(), "/metrics".to_string());
+                pod_annotations.insert("prometheus.io/scheme".to_owned(), "http".to_string());
+            }
+        }
 
         let default_node_selector = if disk {
             vec![("materialize.cloud/disk".to_string(), disk.to_string())]

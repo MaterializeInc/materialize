@@ -50,6 +50,8 @@ pub struct Args {
     #[clap(long)]
     collect_pod_metrics: bool,
     #[clap(long)]
+    enable_prometheus_scrape_annotations: bool,
+    #[clap(long)]
     disable_authentication: bool,
 
     #[clap(long)]

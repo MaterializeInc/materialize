@@ -118,9 +118,9 @@ The following table lists the configurable parameters of the Materialize operato
 | `networkPolicies.ingress.cidrs[0]` |  | ``"0.0.0.0/0"`` |
 | `networkPolicies.ingress.enabled` |  | ``false`` |
 | `networkPolicies.internal.enabled` |  | ``false`` |
-| `observability.enabled` |  | ``false`` |
+| `observability.enabled` |  | ``true`` |
 | `observability.podMetrics.enabled` |  | ``false`` |
-| `observability.prometheus.enabled` |  | ``false`` |
+| `observability.prometheus.scrapeAnnotations.enabled` |  | ``true`` |
 | `operator.args.enableInternalStatementLogging` |  | ``true`` |
 | `operator.args.startupLogFilter` |  | ``"INFO,mz_orchestratord=TRACE"`` |
 | `operator.cloudProvider.providers.aws.accountID` |  | ``""`` |

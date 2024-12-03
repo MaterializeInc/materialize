@@ -1079,6 +1079,9 @@ fn create_environmentd_statefulset_object(
     if !config.collect_pod_metrics {
         args.push("--orchestrator-kubernetes-disable-pod-metrics-collection".into());
     }
+    if config.enable_prometheus_scrape_annotations {
+        args.push("--orchestrator-kubernetes-enable-prometheus-scrape-annotations".into());
+    }
 
     // Add user-specified extra arguments.
     if let Some(extra_args) = &mz.spec.environmentd_extra_args {
@@ -1170,7 +1173,7 @@ fn create_environmentd_statefulset_object(
     );
     pod_template_labels.insert("app".to_owned(), "environmentd".to_string());
 
-    let annotations = btreemap! {
+    let mut pod_template_annotations = btreemap! {
         // We can re-enable eviction once we have HA
         "cluster-autoscaler.kubernetes.io/safe-to-evict".to_owned() => "false".to_string(),
 
@@ -1179,6 +1182,15 @@ fn create_environmentd_statefulset_object(
         "karpenter.sh/do-not-disrupt".to_owned() => "true".to_string(),
         "materialize.cloud/generation".to_owned() => generation.to_string(),
     };
+    if config.enable_prometheus_scrape_annotations {
+        pod_template_annotations.insert("prometheus.io/scrape".to_owned(), "true".to_string());
+        pod_template_annotations.insert(
+            "prometheus.io/port".to_owned(),
+            config.environmentd_internal_http_port.to_string(),
+        );
+        pod_template_annotations.insert("prometheus.io/path".to_owned(), "/metrics".to_string());
+        pod_template_annotations.insert("prometheus.io/scheme".to_owned(), "http".to_string());
+    }
 
     let tolerations = Some(vec![
         // When the node becomes `NotReady` it indicates there is a problem with the node,
@@ -1205,7 +1217,7 @@ fn create_environmentd_statefulset_object(
         // by the statefulset, not the materialize instance
         metadata: Some(ObjectMeta {
             labels: Some(pod_template_labels),
-            annotations: Some(annotations), // This is inserted into later, do not delete.
+            annotations: Some(pod_template_annotations), // This is inserted into later, do not delete.
             ..Default::default()
         }),
         spec: Some(PodSpec {
@@ -1322,6 +1334,16 @@ fn create_balancerd_deployment_object(config: &super::Args, mz: &Materialize) ->
         None
     };
 
+    let pod_template_annotations = if config.enable_prometheus_scrape_annotations {
+        Some(btreemap! {
+            "prometheus.io/scrape".to_owned() => "true".to_string(),
+            "prometheus.io/port".to_owned() => config.balancerd_internal_http_port.to_string(),
+            "prometheus.io/path".to_owned() => "/metrics".to_string(),
+            "prometheus.io/scheme".to_owned() => "http".to_string(),
+        })
+    } else {
+        None
+    };
     let mut pod_template_labels = mz.default_labels();
     pod_template_labels.insert(
         "materialize.cloud/name".to_owned(),
@@ -1482,6 +1504,7 @@ fn create_balancerd_deployment_object(config: &super::Args, mz: &Materialize) ->
             // not using managed_resource_meta because the pod should be
             // owned by the deployment, not the materialize instance
             metadata: Some(ObjectMeta {
+                annotations: pod_template_annotations,
                 labels: Some(pod_template_labels),
                 ..Default::default()
             }),
