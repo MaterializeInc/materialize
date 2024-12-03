@@ -1200,13 +1200,12 @@ impl CatalogState {
                     }
                     Some(_) | None => {
                         let optimizer_features = optimizer_config.features.clone();
-                        // Build an optimizer for this VIEW.
                         // TODO(aalexandrov): ideally this should be a materialized_view::Optimizer.
                         let mut optimizer = optimize::view::Optimizer::new(optimizer_config, None);
 
                         let raw_expr = materialized_view.expr;
                         let optimized_expr = match optimizer.optimize(raw_expr.clone()) {
-                            Ok(optimzed_expr) => optimzed_expr,
+                            Ok(optimized_expr) => optimized_expr,
                             Err(err) => return Err((err.into(), cached_expr)),
                         };
 

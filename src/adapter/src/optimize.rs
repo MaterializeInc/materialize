@@ -359,6 +359,22 @@ fn optimize_mir_local(
     Ok::<_, OptimizerError>(expr)
 }
 
+/// This is just a wrapper around [mz_transform::Optimizer::constant_optimizer],
+/// running it, and tracing the result plan.
+#[mz_ore::instrument(target = "optimizer", level = "debug", name = "constant")]
+fn optimize_mir_constant(
+    expr: MirRelationExpr,
+    ctx: &mut TransformCtx,
+) -> Result<MirRelationExpr, OptimizerError> {
+    let optimizer = mz_transform::Optimizer::constant_optimizer(ctx);
+    let expr = optimizer.optimize(expr, ctx)?;
+
+    // Trace the result of this phase.
+    mz_repr::explain::trace_plan(expr.as_inner());
+
+    Ok::<_, OptimizerError>(expr.0)
+}
+
 macro_rules! trace_plan {
     (at: $span:literal, $plan:expr) => {
         tracing::debug_span!(target: "optimizer", $span).in_scope(|| {
