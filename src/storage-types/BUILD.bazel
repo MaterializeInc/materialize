@@ -156,7 +156,6 @@ filegroup(
         "src/errors.proto",
         "src/instances.proto",
         "src/parameters.proto",
-        "src/shim.proto",
         "src/sinks.proto",
         "src/sources.proto",
         "src/sources/encoding.proto",
