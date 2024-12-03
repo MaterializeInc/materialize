@@ -103,6 +103,11 @@ where
         instance
     }
 
+    /// Returns the number of replicas of this storage instance.
+    pub fn replica_count(&self) -> usize {
+        self.replicas.len()
+    }
+
     /// Returns the IDs of all replicas connected to this storage instance.
     pub fn replica_ids(&self) -> impl Iterator<Item = ReplicaId> + '_ {
         self.replicas.keys().copied()
