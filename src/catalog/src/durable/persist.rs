@@ -906,7 +906,7 @@ impl ApplyUpdate<StateUpdateKindJson> for UnopenedCatalogStateInner {
         current_fence_token: &mut FenceableToken,
         _metrics: &Arc<Metrics>,
     ) -> Result<Option<StateUpdate<StateUpdateKindJson>>, FenceError> {
-        if update.kind.is_always_deserializable() {
+        if !update.kind.is_audit_log() && update.kind.is_always_deserializable() {
             let kind = TryInto::try_into(&update.kind).expect("kind is known to be deserializable");
             match (kind, update.diff) {
                 (StateUpdateKind::Config(key, value), 1) => {
