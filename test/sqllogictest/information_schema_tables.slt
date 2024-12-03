@@ -281,6 +281,10 @@ mz_aws_privatelink_connection_statuses
 VIEW
 materialize
 mz_internal
+mz_cluster_deployment_lineage
+VIEW
+materialize
+mz_internal
 mz_cluster_replica_history
 VIEW
 materialize

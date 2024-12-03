@@ -8248,6 +8248,116 @@ FROM max_memory
     }
 });
 
+/**
+ * Traces the blue/green deployment lineage in the audit log to determine all cluster
+ * IDs that are logically the same cluster.
+ * cluster_id: The ID of a cluster.
+ * current_deployment_cluster_id: The cluster ID of the last cluster in
+ *   cluster_id's blue/green lineage.
+ * cluster_name: The name of the cluster.
+ * The approach taken is as follows. First, find all extant clusters and add them
+ * to the result set. Per cluster, we do the following:
+ * 1. Find the most recent create or rename event. This moment represents when the
+ *    cluster took on its final logical identity.
+ * 2. Look for a cluster that had the same name (or the same name with `_dbt_deploy`
+ *    appended) that was dropped within one minute of that moment. That cluster is
+ *    almost certainly the logical predecessor of the current cluster. Add the cluster
+ *    to the result set.
+ * 3. Repeat the procedure until a cluster with no logical predecessor is discovered.
+ * Limiting the search for a dropped cluster to a window of one minute is a heuristic,
+ * but one that's likely to be pretty good one. If a name is reused after more
+ * than one minute, that's a good sign that it wasn't an automatic blue/green
+ * process, but someone turning on a new use case that happens to have the same
+ * name as a previous but logically distinct use case.
+ */
+pub static MZ_CLUSTER_DEPLOYMENT_LINEAGE: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+    name: "mz_cluster_deployment_lineage",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_CLUSTER_DEPLOYMENT_LINEAGE_OID,
+    column_defs: Some(r#"cluster_id, current_deployment_cluster_id, cluster_name"#),
+    sql: r#"WITH MUTUALLY RECURSIVE cluster_events (
+  cluster_id text,
+  cluster_name text,
+  event_type text,
+  occurred_at timestamptz
+) AS (
+  SELECT coalesce(details->>'id', details->>'cluster_id') AS cluster_id,
+    coalesce(details->>'name', details->>'new_name') AS cluster_name,
+    event_type,
+    occurred_at
+  FROM mz_audit_events
+  WHERE (
+      event_type IN ('create', 'drop')
+      OR (
+        event_type = 'alter'
+        AND details ? 'new_name'
+      )
+    )
+    AND object_type = 'cluster'
+    AND mz_now() < occurred_at + INTERVAL '30 days'
+),
+mz_cluster_deployment_lineage (
+  cluster_id text,
+  current_deployment_cluster_id text,
+  cluster_name text
+) AS (
+  SELECT c.id,
+    c.id,
+    c.name
+  FROM mz_clusters c
+  WHERE c.id LIKE 'u%'
+  UNION
+  SELECT *
+  FROM dropped_clusters
+),
+-- Closest create or rename event based on the current clusters in the result set
+most_recent_create_or_rename (
+  cluster_id text,
+  current_deployment_cluster_id text,
+  cluster_name text,
+  occurred_at timestamptz
+) AS (
+  SELECT DISTINCT ON (e.cluster_id) e.cluster_id,
+    c.current_deployment_cluster_id,
+    e.cluster_name,
+    e.occurred_at
+  FROM mz_cluster_deployment_lineage c
+    JOIN cluster_events e ON c.cluster_id = e.cluster_id
+    AND c.cluster_name = e.cluster_name
+  WHERE e.event_type <> 'drop'
+  ORDER BY e.cluster_id,
+    e.occurred_at DESC
+),
+-- Clusters that were dropped most recently within 1 minute of most_recent_create_or_rename
+dropped_clusters (
+  cluster_id text,
+  current_deployment_cluster_id text,
+  cluster_name text
+) AS (
+  SELECT DISTINCT ON (cr.cluster_id) e.cluster_id,
+    cr.current_deployment_cluster_id,
+    cr.cluster_name
+  FROM most_recent_create_or_rename cr
+    JOIN cluster_events e ON e.occurred_at BETWEEN cr.occurred_at - interval '1 minute'
+    AND cr.occurred_at + interval '1 minute'
+    AND (
+      e.cluster_name = cr.cluster_name
+      OR e.cluster_name = cr.cluster_name || '_dbt_deploy'
+    )
+  WHERE e.event_type = 'drop'
+  ORDER BY cr.cluster_id,
+    abs(
+      extract(
+        epoch
+        FROM cr.occurred_at - e.occurred_at
+      )
+    )
+)
+SELECT *
+FROM mz_cluster_deployment_lineage"#,
+    access: vec![PUBLIC_SELECT],
+});
+
 pub const MZ_SHOW_DATABASES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_databases_ind",
     schema: MZ_INTERNAL_SCHEMA,
@@ -8479,6 +8589,15 @@ pub const MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW_IND: BuiltinIndex = BuiltinInd
     oid: oid::INDEX_MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW_IND_OID,
     sql: "IN CLUSTER mz_catalog_server
 ON mz_internal.mz_console_cluster_utilization_overview (cluster_id)",
+    is_retained_metrics_object: false,
+};
+
+pub const MZ_CLUSTER_DEPLOYMENT_LINEAGE_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_cluster_deployment_lineage_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_CLUSTER_DEPLOYMENT_LINEAGE_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_internal.mz_cluster_deployment_lineage (cluster_id)",
     is_retained_metrics_object: false,
 };
 
@@ -9420,6 +9539,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_HYDRATION_STATUSES),
         Builtin::View(&MZ_SHOW_CLUSTER_REPLICAS),
         Builtin::View(&MZ_SHOW_NETWORK_POLICIES),
+        Builtin::View(&MZ_CLUSTER_DEPLOYMENT_LINEAGE),
         Builtin::Index(&MZ_SHOW_DATABASES_IND),
         Builtin::Index(&MZ_SHOW_SCHEMAS_IND),
         Builtin::Index(&MZ_SHOW_CONNECTIONS_IND),
@@ -9475,6 +9595,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Index(&MZ_SECRETS_IND),
         Builtin::Index(&MZ_VIEWS_IND),
         Builtin::Index(&MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW_IND),
+        Builtin::Index(&MZ_CLUSTER_DEPLOYMENT_LINEAGE_IND),
         Builtin::View(&MZ_RECENT_STORAGE_USAGE),
         Builtin::Index(&MZ_RECENT_STORAGE_USAGE_IND),
         Builtin::Connection(&MZ_ANALYTICS),

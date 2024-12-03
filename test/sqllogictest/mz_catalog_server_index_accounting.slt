@@ -37,6 +37,7 @@ mz_arrangement_heap_capacity_raw_s2_primary_idx  CREATE␠INDEX␠"mz_arrangemen
 mz_arrangement_heap_size_raw_s2_primary_idx  CREATE␠INDEX␠"mz_arrangement_heap_size_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_arrangement_heap_size_raw"␠("operator_id",␠"worker_id")
 mz_arrangement_records_raw_s2_primary_idx  CREATE␠INDEX␠"mz_arrangement_records_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_arrangement_records_raw"␠("operator_id",␠"worker_id")
 mz_arrangement_sharing_raw_s2_primary_idx  CREATE␠INDEX␠"mz_arrangement_sharing_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_arrangement_sharing_raw"␠("operator_id",␠"worker_id")
+mz_cluster_deployment_lineage_ind  CREATE␠INDEX␠"mz_cluster_deployment_lineage_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s717␠AS␠"mz_internal"."mz_cluster_deployment_lineage"]␠("cluster_id")
 mz_cluster_replica_history_ind  CREATE␠INDEX␠"mz_cluster_replica_history_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s579␠AS␠"mz_internal"."mz_cluster_replica_history"]␠("dropped_at")
 mz_cluster_replica_metrics_history_ind  CREATE␠INDEX␠"mz_cluster_replica_metrics_history_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s492␠AS␠"mz_internal"."mz_cluster_replica_metrics_history"]␠("replica_id")
 mz_cluster_replica_metrics_ind  CREATE␠INDEX␠"mz_cluster_replica_metrics_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s491␠AS␠"mz_internal"."mz_cluster_replica_metrics"]␠("replica_id")
@@ -74,7 +75,7 @@ mz_message_batch_counts_received_raw_s2_primary_idx  CREATE␠INDEX␠"mz_messag
 mz_message_batch_counts_sent_raw_s2_primary_idx  CREATE␠INDEX␠"mz_message_batch_counts_sent_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_message_batch_counts_sent_raw"␠("channel_id",␠"from_worker_id",␠"to_worker_id")
 mz_message_counts_received_raw_s2_primary_idx  CREATE␠INDEX␠"mz_message_counts_received_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_message_counts_received_raw"␠("channel_id",␠"from_worker_id",␠"to_worker_id")
 mz_message_counts_sent_raw_s2_primary_idx  CREATE␠INDEX␠"mz_message_counts_sent_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_message_counts_sent_raw"␠("channel_id",␠"from_worker_id",␠"to_worker_id")
-mz_notices_ind  CREATE␠INDEX␠"mz_notices_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s780␠AS␠"mz_internal"."mz_notices"]␠("id")
+mz_notices_ind  CREATE␠INDEX␠"mz_notices_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s782␠AS␠"mz_internal"."mz_notices"]␠("id")
 mz_object_dependencies_ind  CREATE␠INDEX␠"mz_object_dependencies_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s454␠AS␠"mz_internal"."mz_object_dependencies"]␠("object_id")
 mz_object_history_ind  CREATE␠INDEX␠"mz_object_history_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s518␠AS␠"mz_internal"."mz_object_history"]␠("id")
 mz_object_lifetimes_ind  CREATE␠INDEX␠"mz_object_lifetimes_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s519␠AS␠"mz_internal"."mz_object_lifetimes"]␠("id")
@@ -83,7 +84,7 @@ mz_objects_ind  CREATE␠INDEX␠"mz_objects_ind"␠IN␠CLUSTER␠[s2]␠ON␠[
 mz_peek_durations_histogram_raw_s2_primary_idx  CREATE␠INDEX␠"mz_peek_durations_histogram_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_peek_durations_histogram_raw"␠("worker_id",␠"type",␠"duration_ns")
 mz_recent_activity_log_thinned_ind  CREATE␠INDEX␠"mz_recent_activity_log_thinned_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s678␠AS␠"mz_internal"."mz_recent_activity_log_thinned"]␠("sql_hash")
 mz_recent_sql_text_ind  CREATE␠INDEX␠"mz_recent_sql_text_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s674␠AS␠"mz_internal"."mz_recent_sql_text"]␠("sql_hash")
-mz_recent_storage_usage_ind  CREATE␠INDEX␠"mz_recent_storage_usage_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s772␠AS␠"mz_catalog"."mz_recent_storage_usage"]␠("object_id")
+mz_recent_storage_usage_ind  CREATE␠INDEX␠"mz_recent_storage_usage_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s774␠AS␠"mz_catalog"."mz_recent_storage_usage"]␠("object_id")
 mz_roles_ind  CREATE␠INDEX␠"mz_roles_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s477␠AS␠"mz_catalog"."mz_roles"]␠("id")
 mz_scheduling_elapsed_raw_s2_primary_idx  CREATE␠INDEX␠"mz_scheduling_elapsed_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_scheduling_elapsed_raw"␠("id",␠"worker_id")
 mz_scheduling_parks_histogram_raw_s2_primary_idx  CREATE␠INDEX␠"mz_scheduling_parks_histogram_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_scheduling_parks_histogram_raw"␠("worker_id",␠"slept_for_ns",␠"requested_ns")
@@ -203,6 +204,9 @@ mz_audit_events  object_type
 mz_audit_events  occurred_at
 mz_audit_events  user
 mz_base_types  id
+mz_cluster_deployment_lineage  cluster_id
+mz_cluster_deployment_lineage  cluster_name
+mz_cluster_deployment_lineage  current_deployment_cluster_id
 mz_cluster_replica_frontiers  object_id
 mz_cluster_replica_frontiers  replica_id
 mz_cluster_replica_frontiers  write_frontier

@@ -625,6 +625,7 @@ mz_webhook_sources                       ""
 name                                     comment
 ------------------------------------------------
 mz_activity_log_thinned                  ""
+mz_cluster_deployment_lineage            ""
 mz_cluster_replica_history               ""
 mz_cluster_replica_name_history          ""
 mz_cluster_replica_utilization           ""
@@ -800,7 +801,7 @@ test_table ""
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-254
+255
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2

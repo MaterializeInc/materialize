@@ -96,6 +96,13 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 4  status  text
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_deployment_lineage' ORDER BY position
+----
+1  cluster_id  text
+2  current_deployment_cluster_id  text
+3  cluster_name  text
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_schedules' ORDER BY position
 ----
 1  cluster_id  text
@@ -651,6 +658,7 @@ mz_aggregates
 mz_aws_connections
 mz_aws_privatelink_connection_status_history
 mz_aws_privatelink_connection_statuses
+mz_cluster_deployment_lineage
 mz_cluster_replica_history
 mz_cluster_replica_metrics
 mz_cluster_replica_metrics_history
