@@ -76,6 +76,7 @@ gid=$(id -g)
 
 build() {
     docker buildx build --pull \
+        --output type=image,compression=zstd,compression-level=22,force-compression=true \
         --cache-from=materialize/ci-builder:"$cache_tag" \
         --cache-to=type=inline,mode=max \
         --build-arg "ARCH_GCC=$arch_gcc" \
