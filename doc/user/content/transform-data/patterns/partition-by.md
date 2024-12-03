@@ -77,10 +77,11 @@ SELECT * FROM events WHERE mz_now() <= event_ts + INTERVAL '5min';
 This query returns only rows with similar values for `event_ts`: timestamps in the last five minutes.
 Since we declared that our `events` table is partitioned by `event_ts`, Materialize can determine that all the rows that pass this filter must also be _stored_ close together, and fetch only the exact parts it needs to satisfy the query.
 
-This optimization is called _filter pushdown_... and it can save a substantial amount of time and computation given a large collection and a selective filter. This tends to be common for append-only timeseries datasets and temporal filters, but it can be useful for any dataset where most queries look at only a particular "range" of the data.
+This optimization is called _filter pushdown_, and it can save a substantial amount of time and computation given a large collection and a selective filter.
+This tends to be common for append-only timeseries datasets and temporal filters, but it can be useful for any dataset where most queries look at only a particular "range" of the data.
 
 Materialize will always try to filter out parts it doesn't need for a particular query, but that filtering is usually only effective when similar rows are stored together.
-If you want to make sure that filter pushdown reliably kicks in for your query, you can:
+If you want to make sure that the filter pushdown optimization applies to your query, you can:
 
 - Use a `PARTITION BY` clause on the relevant column to ensure that data with similar values for that column are stored close together.
 - Add a filter to your query that only returns true for a narrow range of values in that column.
@@ -125,7 +126,7 @@ For timeseries or "event"-type collections, it's often useful to partition the d
     INSERT INTO events VALUES (now(), 'world');
     ```
 
-1. Run a select statement against the data sometime in the next few minutes. This should return only the more recent of the two rows.
+1. Run a select statement against the data within the next five minutes. This should return only the more recent of the two rows.
     ```mzsql
     SELECT * FROM events WHERE event_ts + '2 minutes' > mz_now();
     ```
@@ -155,7 +156,8 @@ Other datasets don't have a strong timeseries component, but they do have a clea
     -- Once again, the partition column is listed first.
     CREATE TABLE venues (
         country_code text,
-        id uuid,
+        id bigint,
+        name text
     ) WITH (
         PARTITION BY (country_code)
     );
@@ -163,19 +165,19 @@ Other datasets don't have a strong timeseries component, but they do have a clea
 
 1. Insert a few records with different country codes.
     ```mzsql
-    INSERT INTO venues VALUES ('US', uuid_generate_v5('venue', 'Rock World'));
-    INSERT INTO venues VALUES ('CA', uuid_generate_v5('venue', 'Friendship Cove'));
+    INSERT INTO venues VALUES ('US', 1, 'Rock World');
+    INSERT INTO venues VALUES ('CA', 2, 'Friendship Cove');
     ```
 
-1. Query for venues in a specific country.
+1. Query for venues in particular countries.
     ```mzsql
-    SELECT * FROM venues WHERE country_code = 'US';
+    SELECT * FROM venues WHERE country_code IN ('US', 'MX');
     ```
 
-1. Run `EXPLAIN FILTER PUSHDOWN` to check that we're fetching only parts that contain data from the `US`.
+1. Run `EXPLAIN FILTER PUSHDOWN` to check that we're filtering out parts that don't include data that's relevant to the query.
     ```mzsql
     EXPLAIN FILTER PUSHDOWN FOR
-    SELECT * FROM venues WHERE country_code = 'US';
+    SELECT * FROM venues WHERE country_code IN ('US', 'MX');
     ```
 
 {{< note >}}
