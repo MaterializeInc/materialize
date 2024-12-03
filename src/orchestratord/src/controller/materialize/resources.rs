@@ -1373,6 +1373,13 @@ fn create_balancerd_deployment_object(config: &super::Args, mz: &Materialize) ->
         ),
     ];
 
+    if issuer_ref_defined(
+        &config.default_certificate_specs.internal,
+        &mz.spec.internal_certificate_spec,
+    ) {
+        args.push("--internal-tls".to_owned())
+    }
+
     let mut volumes = Vec::new();
     let mut volume_mounts = Vec::new();
     if issuer_ref_defined(
