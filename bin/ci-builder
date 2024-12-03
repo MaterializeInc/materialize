@@ -42,10 +42,12 @@ fi
 cmd=$1 && shift
 flavor=$1 && shift
 
-rust_version=
 rust_date=
 case "$flavor" in
-    min) docker_target=ci-builder-min ;;
+    min)
+        docker_target=ci-builder-min
+        rust_version=$(sed -n 's/rust-version = "\(.*\)"/\1/p' Cargo.toml)
+        ;;
     stable)
         docker_target=ci-builder-full
         rust_version=$(sed -n 's/rust-version = "\(.*\)"/\1/p' Cargo.toml)

@@ -52,6 +52,8 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     python3-setuptools \
     xz-utils \
     zstd \
+    # TODO(parkmycar): Include libclang in our Bazel sysroot.
+    libclang-18-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies. These are necessary to run some of our base tooling.
@@ -61,7 +63,14 @@ RUN curl -LsSf https://astral.sh/uv/0.4.25/install.sh | UV_INSTALL_DIR=/usr/loca
 
 # Install extra tools not available in apt repositories.
 
+COPY rust.asc .
+RUN gpg --import rust.asc \
+    && rm rust.asc \
+    && echo "trusted-key 85AB96E6FA1BE5FE" >> ~/.gnupg/gpg.conf
+
 ARG BAZEL_VERSION
+ARG RUST_DATE
+ARG RUST_VERSION
 
 RUN \
     # 1. autouseradd
@@ -85,7 +94,18 @@ RUN \
     && curl -fsSL https://github.com/docker/compose/releases/download/v2.15.1/docker-compose-linux-$ARCH_GCC > /usr/local/lib/docker/cli-plugins/docker-compose \
     && chmod +x /usr/local/lib/docker/cli-plugins/docker-compose \
     && curl -fsSL https://github.com/christian-korneck/docker-pushrm/releases/download/v1.9.0/docker-pushrm_linux_$ARCH_GO > /usr/local/lib/docker/cli-plugins/docker-pushrm \
-    && chmod +x /usr/local/lib/docker/cli-plugins/docker-pushrm
+    && chmod +x /usr/local/lib/docker/cli-plugins/docker-pushrm \
+    # 4. Cargo
+    #
+    # Some parts of our stack use 'cargo' to read metadata, so we install just that. Importantly we
+    # do not install 'rustc' or any of the other tools, this keeps the Docker image small.
+    && mkdir rust \
+    && curl -fsSL https://static.rust-lang.org/dist$RUST_DATE/rust-$RUST_VERSION-$ARCH_GCC-unknown-linux-gnu.tar.gz > rust.tar.gz \
+    && curl -fsSL https://static.rust-lang.org/dist$RUST_DATE/rust-$RUST_VERSION-$ARCH_GCC-unknown-linux-gnu.tar.gz.asc > rust.asc \
+    && gpg --verify rust.asc rust.tar.gz \
+    && tar -xzf rust.tar.gz -C rust --strip-components=1 \
+    && rust/install.sh --components=cargo \
+    && rm -rf rust.asc rust.tar.gz rust
 
 # Make the image as small as possible.
 RUN find /workdir /root -mindepth 1 -maxdepth 1 -exec rm -rf {} +
