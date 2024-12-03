@@ -143,7 +143,7 @@ IGNORE_RE = re.compile(
     # Will print a separate panic line which will be handled and contains the relevant information (new style)
     | internal\ error:\ unexpected\ panic\ during\ query\ optimization
     # redpanda INFO logging
-    | larger\ sizes\ prevent\ running\ out\ of\ memory
+    | [Ll]arger\ sizes\ prevent\ running\ out\ of\ memory
     # Old versions won't support new parameters
     | (platform-checks|legacy-upgrade|upgrade-matrix|feature-benchmark)-materialized-.* \| .*cannot\ load\ unknown\ system\ parameter\ from\ catalog\ storage
     # Fencing warnings are OK in fencing/0dt tests

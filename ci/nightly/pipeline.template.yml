@@ -543,7 +543,8 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: zippy
-              args: [--scenario=KafkaSources, --actions=10000, --cockroach-tag=latest, --max-execution-time=30m]
+              # TODO: Reenable --cockroach-tag=latest when https://github.com/cockroachdb/cockroach/issues/136678 is fixed
+              args: [--scenario=KafkaSources, --actions=10000, --max-execution-time=30m]
 
       - id: zippy-alter-connection
         label: "Zippy w/ alter connection"

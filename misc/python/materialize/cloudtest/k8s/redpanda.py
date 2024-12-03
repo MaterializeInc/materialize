@@ -24,6 +24,7 @@ from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
 from materialize.cloudtest.k8s.api.k8s_deployment import K8sDeployment
 from materialize.cloudtest.k8s.api.k8s_resource import K8sResource
 from materialize.cloudtest.k8s.api.k8s_service import K8sService
+from materialize.mzcompose.services.redpanda import REDPANDA_VERSION
 
 
 class RedpandaDeployment(K8sDeployment):
@@ -31,7 +32,7 @@ class RedpandaDeployment(K8sDeployment):
         super().__init__(namespace)
         container = V1Container(
             name="redpanda",
-            image="vectorized/redpanda:v24.2.2",
+            image=f"redpandadata/redpanda:{REDPANDA_VERSION}",
             command=[
                 "/usr/bin/rpk",
                 "redpanda",
