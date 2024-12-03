@@ -3883,6 +3883,7 @@ pub enum ExplainPlanOptionName {
     SubtreeSize,
     Timing,
     Types,
+    Equivalences,
     ReoptimizeImportedViews,
     EnableNewOuterJoinLowering,
     EnableEagerDeltaJoins,
@@ -3917,6 +3918,7 @@ impl WithOptionName for ExplainPlanOptionName {
             | Self::SubtreeSize
             | Self::Timing
             | Self::Types
+            | Self::Equivalences
             | Self::ReoptimizeImportedViews
             | Self::EnableNewOuterJoinLowering
             | Self::EnableEagerDeltaJoins

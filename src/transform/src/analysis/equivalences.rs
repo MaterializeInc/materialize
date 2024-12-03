@@ -16,8 +16,10 @@
 //! equivalences classes, each a list of equivalent expressions.
 
 use std::collections::BTreeMap;
+use std::fmt::Formatter;
 
 use mz_expr::{Id, MirRelationExpr, MirScalarExpr};
+use mz_ore::str::{bracketed, separated};
 use mz_repr::{ColumnType, Datum};
 
 use crate::analysis::{Analysis, Lattice};
@@ -318,7 +320,7 @@ pub struct EquivalenceClasses {
     /// The first element should be the "canonical" simplest element, that any other element
     /// can be replaced by.
     /// These classes are unified whenever possible, to minimize the number of classes.
-    /// They are only guaranteed to form an equivalence relation after a call to `minimimize`,
+    /// They are only guaranteed to form an equivalence relation after a call to `minimize`,
     /// which refreshes both `self.classes` and `self.remap`.
     pub classes: Vec<Vec<MirScalarExpr>>,
 
@@ -332,6 +334,17 @@ pub struct EquivalenceClasses {
     /// appending to `self.classes`. This will be corrected in the next call to `self.refresh()`,
     /// but until then `remap` could be arbitrarily wrong. This should be improved in the future.
     remap: BTreeMap<MirScalarExpr, MirScalarExpr>,
+}
+
+impl std::fmt::Display for EquivalenceClasses {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        // Only show `classes`.
+        let classes = self
+            .classes
+            .iter()
+            .map(|class| format!("{}", bracketed("[", "]", separated(", ", class))));
+        write!(f, "{}", bracketed("[", "]", separated(", ", classes)))
+    }
 }
 
 impl EquivalenceClasses {

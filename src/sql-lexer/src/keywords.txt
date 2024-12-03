@@ -151,6 +151,7 @@ End
 Endpoint
 Enforced
 Envelope
+Equivalences
 Error
 Errors
 Escape
