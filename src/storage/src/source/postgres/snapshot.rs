@@ -309,7 +309,6 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                     %id,
                     "timely-{worker_id} exporting snapshot info {snapshot_info:?}");
                 snapshot_handle.give(&snapshot_cap_set[0], snapshot_info);
-                *slot_ready_cap_set = CapabilitySet::new();
 
                 client
             } else {
@@ -321,6 +320,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                     )
                     .await?
             };
+            *slot_ready_cap_set = CapabilitySet::new();
 
             // Configure statement_timeout based on param. We want to be able to
             // override the server value here in case it's set too low,
