@@ -66,6 +66,8 @@ pub struct Args {
     scheduler_name: Option<String>,
     #[clap(long)]
     enable_security_context: bool,
+    #[clap(long)]
+    enable_internal_statement_logging: bool,
 
     #[clap(long)]
     orchestratord_pod_selector_labels: Vec<KeyValueArg<String, String>>,

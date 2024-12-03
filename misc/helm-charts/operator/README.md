@@ -121,6 +121,7 @@ The following table lists the configurable parameters of the Materialize operato
 | `observability.enabled` |  | ``false`` |
 | `observability.podMetrics.enabled` |  | ``false`` |
 | `observability.prometheus.enabled` |  | ``false`` |
+| `operator.args.enableInternalStatementLogging` |  | ``true`` |
 | `operator.args.startupLogFilter` |  | ``"INFO,mz_orchestratord=TRACE"`` |
 | `operator.cloudProvider.providers.aws.accountID` |  | ``""`` |
 | `operator.cloudProvider.providers.aws.enabled` |  | ``false`` |

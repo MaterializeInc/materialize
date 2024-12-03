@@ -20,6 +20,7 @@ operator:
   args:
     # Log filtering settings for startup logs
     startupLogFilter: "INFO,mz_orchestratord=TRACE"
+    enableInternalStatementLogging: true
 
   features:
     # Flag to indicate whether to create balancerd pods for the environments

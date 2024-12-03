@@ -886,7 +886,11 @@ fn create_environmentd_statefulset_object(
     ));
 
     if !config.cloud_provider.is_cloud() {
-        args.push("--system-parameter-default=cluster_enable_topology_spread=false".into())
+        args.push("--system-parameter-default=cluster_enable_topology_spread=false".into());
+    }
+
+    if config.enable_internal_statement_logging {
+        args.push("--system-parameter-default=enable_internal_statement_logging=true".into());
     }
     if config.disable_authentication {
         args.push("--system-parameter-default=enable_rbac_checks=false".into());
