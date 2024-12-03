@@ -10,6 +10,7 @@
 //! Implementation of the storage controller trait.
 
 use std::any::Any;
+use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Debug, Display};
 use std::num::NonZeroI64;
@@ -474,14 +475,28 @@ where
             location,
             grpc_client: self.config.parameters.grpc_client.clone(),
         };
+        for id in instance.active_ingestions() {
+            self.collections
+                .get_mut(id)
+                .expect("instance contains unknown ingestion")
+                .active_copies += 1;
+        }
         instance.add_replica(replica_id, config);
     }
 
     fn drop_replica(&mut self, instance_id: StorageInstanceId, replica_id: ReplicaId) {
-        self.instances
+        let instance = self
+            .instances
             .get_mut(&instance_id)
-            .unwrap_or_else(|| panic!("instance {instance_id} does not exist"))
-            .drop_replica(replica_id);
+            .unwrap_or_else(|| panic!("instance {instance_id} does not exist"));
+
+        for id in instance.active_ingestions() {
+            self.collections
+                .get_mut(id)
+                .expect("instance contains unknown ingestion")
+                .active_copies -= 1;
+        }
+        instance.drop_replica(replica_id);
     }
 
     async fn evolve_nullability_for_bootstrap(
@@ -948,6 +963,7 @@ where
                 data_source,
                 collection_metadata: metadata,
                 extra_state,
+                active_copies: 1,
                 wallclock_lag_max: Default::default(),
                 wallclock_lag_metrics,
             };
@@ -1902,7 +1918,11 @@ where
                 for id in ids.iter() {
                     tracing::debug!("DroppedIds for collections {id}");
 
-                    if let Some(_collection) = self.collections.remove(id) {
+                    if let Entry::Occupied(mut entry) = self.collections.entry(*id) {
+                        entry.get_mut().active_copies -= 1;
+                        if entry.get().active_copies == 0 {
+                            entry.remove();
+                        }
                         // Nothing to do, we already dropped read holds in
                         // `drop_sources_unvalidated`.
                     } else if let Some(export) = self.exports.get_mut(id) {
@@ -3130,6 +3150,13 @@ where
                 ingestion_id: id,
             })?;
 
+        let collection = self
+            .collections
+            .get_mut(&id)
+            .ok_or(StorageError::IdentifierMissing(id))?;
+        // This collection will run in as many copies as there are replicas
+        collection.active_copies = instance.replica_count();
+
         let augmented_ingestion = RunIngestionCommand { id, description };
         instance.send(StorageCommand::RunIngestions(vec![augmented_ingestion]));
 
@@ -3477,6 +3504,10 @@ struct CollectionState<T: TimelyTimestamp> {
     pub collection_metadata: CollectionMetadata,
 
     pub extra_state: CollectionStateExtra<T>,
+
+    /// A counter for the number of replicas this collection is running on. This is used to track
+    /// the number of DroppedIds responses we expect to receive before dropping the tracked state.
+    active_copies: usize,
 
     /// Maximum frontier wallclock lag since the last introspection update.
     wallclock_lag_max: Duration,
