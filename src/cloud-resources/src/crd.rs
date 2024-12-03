@@ -25,6 +25,7 @@ use mz_ore::retry::Retry;
 
 pub mod gen;
 pub mod materialize;
+#[cfg(feature = "vpc-endpoints")]
 pub mod vpc_endpoint;
 
 #[derive(Debug, Clone)]

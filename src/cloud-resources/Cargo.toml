@@ -11,13 +11,11 @@ workspace = true
 
 [dependencies]
 anyhow = "1.0.66"
-async-trait = "0.1.68"
-k8s-openapi = { version = "0.22.0", features = ["schemars", "v1_29"] }
-kube = { version = "0.92.1", default-features = false, features = ["client", "derive", "openssl-tls", "ws"] }
 chrono = { version = "0.4.35", default-features = false }
 futures = "0.3.25"
-mz-ore = { path = "../ore", features = [] }
-mz-repr = { path = "../repr" }
+k8s-openapi = { version = "0.22.0", features = ["schemars", "v1_29"] }
+kube = { version = "0.92.1", default-features = false, features = ["client", "derive", "openssl-tls", "ws"] }
+mz-ore = { path = "../ore", default-features = false }
 rand = "0.8.5"
 schemars = { version = "0.8", features = ["uuid1"] }
 semver = "1.0.16"
@@ -25,7 +23,14 @@ serde = "1.0.152"
 serde_json = "1.0.125"
 tracing = "0.1.37"
 uuid = { version = "1.2", features = ["serde", "v4"] }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+
+async-trait = { version = "0.1.68", optional = true }
+mz-repr = { path = "../repr", optional = true }
+
+[features]
+default = ["workspace-hack", "vpc-endpoints"]
+vpc-endpoints = ["async-trait", "mz-repr"]
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
