@@ -53,6 +53,11 @@ pub struct Args {
     disable_authentication: bool,
 
     #[clap(long)]
+    segment_api_key: Option<String>,
+    #[clap(long)]
+    segment_client_side: bool,
+
+    #[clap(long)]
     console_image_tag_default: String,
     #[clap(long)]
     console_image_tag_map: Vec<KeyValueArg<String, String>>,

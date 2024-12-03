@@ -140,5 +140,12 @@ spec:
         - "--collect-pod-metrics"
         {{- end }}
         {{- end }}
+        {{/* Telemetry */}}
+        {{- if .Values.telemetry.enabled }}
+        - "--segment-api-key={{ .Values.telemetry.segmentApiKey }}"
+        {{- if .Values.telemetry.segmentClientSide }}
+        - "--segment-client-side"
+        {{- end }}
+        {{- end }}
         resources:
           {{- toYaml .Values.operator.resources | nindent 10 }}
