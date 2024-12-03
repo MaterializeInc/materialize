@@ -42,6 +42,7 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     ca-certificates \
     curl \
     docker.io \
+    gdb \
     git \
     gnupg2 \
     libxml2 \
