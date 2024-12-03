@@ -421,7 +421,7 @@ usage. For example:
   the the reference documentation for [query optimization](/transform-data/optimization/#indexes)
   instead.
 - If a view is depended on by multiple objects that use very selective filters,
-  or a multiple projections that can be pushed into or even beyond the view,
+  or multiple projections that can be pushed into or even beyond the view,
   adding an index may increase resource usage.
 - If an index has been created to [enable delta joins](/transform-data/optimization/#optimize-multi-way-joins-with-delta-joins),
   removing it may lead to lower memory utilization, but the delta join
