@@ -979,6 +979,13 @@ fn create_environmentd_statefulset_object(
         ]);
     }
 
+    if let Some(segment_api_key) = &config.segment_api_key {
+        args.push(format!("--segment-api-key={}", segment_api_key));
+        if config.segment_client_side {
+            args.push("--segment-client-side".into());
+        }
+    }
+
     let mut volumes = Vec::new();
     let mut volume_mounts = Vec::new();
     if issuer_ref_defined(

@@ -238,6 +238,11 @@ observability:
     # Whether to enable Prometheus integration for monitoring (disabled here)
     enabled: false
 
+telemetry:
+  enabled: true
+  segmentApiKey: hMWi3sZ17KFMjn2sPWo9UJGpOQqiba4A
+  segmentClientSide: true
+
 # Network policies configuration
 networkPolicies:
   # Whether to enable network policies for securing communication between pods
