@@ -1100,6 +1100,7 @@ impl StorageState {
                 self.read_only_tx
                     .send(false)
                     .expect("we're holding one other end");
+                self.persist_clients.cfg().enable_compaction();
             }
             StorageCommand::UpdateConfiguration(params) => {
                 // These can be done from all workers safely.

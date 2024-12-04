@@ -875,6 +875,9 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
 
     let mut persist_config =
         PersistConfig::new(&BUILD_INFO, now.clone(), mz_dyncfgs::all_dyncfgs());
+    // Start with compaction disabled, later enable it if we're not in read-only mode.
+    persist_config.disable_compaction();
+
     let persist_pubsub_server = PersistGrpcPubSubServer::new(&persist_config, &metrics_registry);
     let persist_pubsub_client = persist_pubsub_server.new_same_process_connection();
 

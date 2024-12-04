@@ -11,6 +11,7 @@
 
 //! The tunable knobs for persist.
 
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -108,6 +109,8 @@ pub struct PersistConfig {
     configs_synced_once: Arc<watch::Sender<bool>>,
     /// Whether to physically and logically compact batches in blob storage.
     pub compaction_enabled: bool,
+    /// Whether the `Compactor` will process compaction requests, or drop them on the floor.
+    pub compaction_process_requests: Arc<AtomicBool>,
     /// In Compactor::compact_and_apply_background, the maximum number of concurrent
     /// compaction requests that can execute for a given shard.
     pub compaction_concurrency_limit: usize,
@@ -180,6 +183,7 @@ impl PersistConfig {
             configs: Arc::new(configs),
             configs_synced_once: Arc::new(configs_synced_once),
             compaction_enabled: !compaction_disabled,
+            compaction_process_requests: Arc::new(AtomicBool::new(true)),
             compaction_concurrency_limit: 5,
             compaction_queue_size: 20,
             compaction_yield_after_n_updates: 100_000,
@@ -270,6 +274,18 @@ impl PersistConfig {
         self.set_config(&NEXT_LISTEN_BATCH_RETRYER_CLAMP, val.clamp);
     }
 
+    pub fn disable_compaction(&self) {
+        tracing::info!("Disabling Persist Compaction");
+        self.compaction_process_requests
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn enable_compaction(&self) {
+        tracing::info!("Enabling Persist Compaction");
+        self.compaction_process_requests
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
     /// Returns a new instance of [PersistConfig] for tests.
     pub fn new_for_tests() -> Self {
         use mz_build_info::DUMMY_BUILD_INFO;
@@ -330,6 +346,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::internal::cache::BLOB_CACHE_MEM_LIMIT_BYTES)
         .add(&crate::internal::compact::COMPACTION_MINIMUM_TIMEOUT)
         .add(&crate::internal::compact::COMPACTION_USE_MOST_RECENT_SCHEMA)
+        .add(&crate::internal::compact::COMPACTION_CHECK_PROCESS_FLAG)
         .add(&crate::internal::machine::CLAIM_UNCLAIMED_COMPACTIONS)
         .add(&crate::internal::machine::CLAIM_COMPACTION_PERCENT)
         .add(&crate::internal::machine::CLAIM_COMPACTION_MIN_VERSION)
