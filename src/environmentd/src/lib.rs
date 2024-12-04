@@ -586,9 +586,7 @@ impl Listeners {
         };
 
         // Enable Persist compaction if we're not in read only.
-        if read_only {
-            config.controller.persist_clients.cfg().disable_compaction();
-        } else {
+        if !read_only {
             config.controller.persist_clients.cfg().enable_compaction();
         }
 
