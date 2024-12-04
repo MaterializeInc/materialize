@@ -147,8 +147,8 @@ pub(crate) const COMPACTION_USE_MOST_RECENT_SCHEMA: Config<bool> = Config::new(
 pub(crate) const COMPACTION_CHECK_PROCESS_FLAG: Config<bool> = Config::new(
     "persist_compaction_check_process_flag",
     true,
-    "CYA. Whether or not Compactor will check the process_requests flag in PersistConfig,\
-        which allows dynamically disabling compaction.",
+    "Whether Compactor will obey the process_requests flag in PersistConfig, \
+        which allows dynamically disabling compaction. If false, all compaction requests will be processed.",
 );
 
 impl<K, V, T, D> Compactor<K, V, T, D>
