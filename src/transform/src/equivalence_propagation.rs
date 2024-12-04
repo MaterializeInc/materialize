@@ -136,7 +136,7 @@ impl EquivalencePropagation {
             }
         }
 
-        outer_equivalences.minimize(expr_type);
+        outer_equivalences.minimize(expr_type.as_ref().map(|x| &x[..]));
         if outer_equivalences.unsatisfiable() {
             expr.take_safely();
             return;
@@ -239,7 +239,7 @@ impl EquivalencePropagation {
                             expr.clone(),
                             MirScalarExpr::column(input_arity + index),
                         ]);
-                        input_equivalences.minimize(&Some(input_types.clone()));
+                        input_equivalences.minimize(Some(input_types));
                     }
                     let input_arity = *derived
                         .last_child()
@@ -309,7 +309,7 @@ impl EquivalencePropagation {
                         mz_repr::ScalarType::Bool,
                     ));
                     outer_equivalences.classes.push(class);
-                    outer_equivalences.minimize(input_types);
+                    outer_equivalences.minimize(input_types.as_ref().map(|x| &x[..]));
                     self.apply(
                         input,
                         derived.last_child(),
@@ -368,7 +368,7 @@ impl EquivalencePropagation {
                     if let Some(mut equivalences) = equivalences {
                         let permutation = (columns..(columns + child_arity)).collect::<Vec<_>>();
                         equivalences.permute(&permutation);
-                        equivalences.minimize(&input_types);
+                        equivalences.minimize(input_types.as_ref().map(|x| &x[..]));
                         input_equivalences.push(equivalences);
                     }
                     columns += child_arity;
@@ -409,7 +409,7 @@ impl EquivalencePropagation {
                         col.nullable = true;
                     }
                 }
-                join_equivalences.minimize(&input_types);
+                join_equivalences.minimize(input_types.as_ref().map(|x| &x[..]));
 
                 // Revisit each child, determining the information to present to it, and recurring.
                 let mut columns = 0;

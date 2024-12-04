@@ -219,7 +219,7 @@ impl Analysis for Equivalences {
 
                     // Having added classes to `equivalences`, we should minimize the classes to fold the
                     // information in before applying the `project`, to set it up for success.
-                    equivalences.minimize(&None);
+                    equivalences.minimize(None);
 
                     // Grab a copy of the equivalences with key columns added to use in aggregate reasoning.
                     let extended = equivalences.clone();
@@ -239,7 +239,7 @@ impl Analysis for Equivalences {
                                 MirScalarExpr::column(input_arity + group_key.len()),
                                 aggregate.expr.clone(),
                             ]);
-                            temp_equivs.minimize(&None);
+                            temp_equivs.minimize(None);
                             temp_equivs.project(input_arity..(input_arity + group_key.len() + 1));
                             let columns = (0..group_key.len())
                                 .chain(std::iter::once(group_key.len() + index))
@@ -268,8 +268,10 @@ impl Analysis for Equivalences {
             MirRelationExpr::ArrangeBy { .. } => results.get(index - 1).unwrap().clone(),
         };
 
-        let expr_type = depends.results::<RelationType>()[index].clone();
-        equivalences.as_mut().map(|e| e.minimize(&expr_type));
+        let expr_type = depends.results::<RelationType>()[index].as_ref();
+        equivalences
+            .as_mut()
+            .map(|e| e.minimize(expr_type.map(|x| &x[..])));
         equivalences
     }
 
@@ -455,7 +457,7 @@ impl EquivalenceClasses {
     /// Update `self` to maintain the same equivalences which potentially reducing along `Ord::le`.
     ///
     /// Informally this means simplifying constraints, removing redundant constraints, and unifying equivalence classes.
-    pub fn minimize(&mut self, columns: &Option<Vec<ColumnType>>) {
+    pub fn minimize(&mut self, columns: Option<&[ColumnType]>) {
         // Repeatedly, we reduce each of the classes themselves, then unify the classes.
         // This should strictly reduce complexity, and reach a fixed point.
         // Ideally it is *confluent*, arriving at the same fixed point no matter the order of operations.
@@ -463,7 +465,7 @@ impl EquivalenceClasses {
         // We should not rely on nullability information present in `column_types`. (Doing this
         // every time just before calling `reduce` was found to be a bottleneck during incident-217,
         // so now we do this nullability tweaking only once here.)
-        let mut columns = columns.clone();
+        let mut columns = columns.map(|x| x.to_vec());
         let mut nonnull = Vec::new();
         if let Some(columns) = columns.as_mut() {
             for (index, col) in columns.iter_mut().enumerate() {
@@ -504,7 +506,7 @@ impl EquivalenceClasses {
             // An expression can be simplified, a duplication found, or two classes unified.
             let mut stable = false;
             while !stable {
-                stable = !self.minimize_once(&columns);
+                stable = !self.minimize_once(columns.as_ref().map(|x| &x[..]));
             }
 
             // Termination detection.
@@ -645,7 +647,7 @@ impl EquivalenceClasses {
     ///   1. Performs per-expression reduction, including the class structure to replace subexpressions.
     ///   2. Applies idiom detection to e.g. unpack expressions equivalence to literal true or false.
     ///   3. Restores the equivalence class invariants.
-    fn minimize_once(&mut self, columns: &Option<Vec<ColumnType>>) -> bool {
+    fn minimize_once(&mut self, columns: Option<&[ColumnType]>) -> bool {
         // 1. Reduce each expression
         //
         // This reduction first looks for subexpression substitutions that can be performed,
@@ -798,7 +800,7 @@ impl EquivalenceClasses {
             classes,
             remap: Default::default(),
         };
-        equivalences.minimize(&None);
+        equivalences.minimize(None);
         equivalences
     }
 
@@ -810,7 +812,7 @@ impl EquivalenceClasses {
             }
         }
         self.remap.clear();
-        self.minimize(&None);
+        self.minimize(None);
     }
 
     /// Subject the constraints to the column projection, reworking and removing equivalences.
@@ -894,7 +896,7 @@ impl EquivalenceClasses {
             ]);
         }
         self.remap.clear();
-        self.minimize(&None);
+        self.minimize(None);
     }
 
     /// True if any equivalence class contains two distinct non-error literals.
