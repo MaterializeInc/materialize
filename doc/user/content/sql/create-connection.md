@@ -23,8 +23,6 @@ certificates) can be specified as plain `text`, or also stored as secrets.
 
 ### AWS
 
-{{< public-preview />}}
-
 An Amazon Web Services (AWS) connection provides Materialize with access to an
 Identity and Access Management (IAM) user or role in your AWS account. You can
 use AWS connections to perform [bulk exports to Amazon S3](/serve-results/s3/),
@@ -312,7 +310,7 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 
 {{< tab "AWS IAM">}}
 
-{{< public-preview />}}
+{{< private-preview />}}
 
 ```mzsql
 CREATE CONNECTION aws_msk TO AWS (

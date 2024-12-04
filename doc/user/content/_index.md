@@ -22,7 +22,7 @@ offering the fastest way to get hands-on experience with Materialize in a local
 environment. For more information, see [Materialize
 Emulator](/get-started/install-materialize-emulator/).
 
-- [Changelog](/https://materialize.com/changelog/)
+- [Changelog](https://materialize.com/changelog/)
 
 {{</ callout >}}
 
