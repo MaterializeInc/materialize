@@ -94,7 +94,7 @@ use mz_storage_client::healthcheck::{
 };
 use mz_storage_client::metrics::StorageControllerMetrics;
 use mz_storage_client::statistics::{SinkStatisticsUpdate, SourceStatisticsUpdate};
-use mz_storage_client::storage_collections::StorageCollections;
+use mz_storage_client::storage_collections::StorageCollectionsImpl;
 use mz_storage_types::controller::InvalidUpper;
 use mz_storage_types::dyncfgs::{
     REPLICA_METRICS_HISTORY_RETENTION_INTERVAL, WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL,
@@ -189,7 +189,12 @@ where
 ///     - Closed collections will not panic if they continue receiving these requests.
 impl<T> CollectionManager<T>
 where
-    T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation,
+    T: Timestamp
+        + Lattice
+        + Codec64
+        + From<EpochMillis>
+        + TimestampManipulation
+        + Into<mz_repr::Timestamp>,
 {
     pub(super) fn new(read_only: bool, now: NowFn) -> CollectionManager<T> {
         let batch_duration_ms: u64 = STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT
@@ -452,7 +457,7 @@ where
 {
     pub(crate) recent_upper: Antichain<T>,
     pub(crate) introspection_type: IntrospectionType,
-    pub(crate) storage_collections: Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
+    pub(crate) storage_collections: Arc<StorageCollectionsImpl<T>>,
     pub(crate) txns_read: TxnsRead<T>,
     pub(crate) persist: Arc<PersistClientCache>,
     pub(crate) collection_manager: collection_mgmt::CollectionManager<T>,
@@ -527,7 +532,12 @@ where
 
 impl<T, R> DifferentialWriteTask<T, R>
 where
-    T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation,
+    T: Timestamp
+        + Lattice
+        + Codec64
+        + From<EpochMillis>
+        + TimestampManipulation
+        + Into<mz_repr::Timestamp>,
     R: FnMut() -> Pin<Box<dyn Future<Output = ReadHandle<SourceData, (), T, Diff>> + Send>>
         + Send
         + Sync
@@ -1027,7 +1037,7 @@ where
     pub(crate) introspection_type: IntrospectionType,
     pub(crate) config_set: Arc<ConfigSet>,
     pub(crate) parameters: StorageParameters,
-    pub(crate) storage_collections: Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
+    pub(crate) storage_collections: Arc<StorageCollectionsImpl<T>>,
     pub(crate) txns_read: TxnsRead<T>,
     pub(crate) persist: Arc<PersistClientCache>,
 }
@@ -1060,7 +1070,7 @@ where
 
 impl<T> AppendOnlyWriteTask<T>
 where
-    T: Lattice + Codec64 + From<EpochMillis> + TimestampManipulation,
+    T: Lattice + Codec64 + From<EpochMillis> + TimestampManipulation + Into<mz_repr::Timestamp>,
 {
     /// Spawns an [`AppendOnlyWriteTask`] in an [`mz_ore::task`] that will continuously bump the
     /// upper for the specified collection,
@@ -1474,12 +1484,12 @@ async fn partially_truncate_metrics_history<T>(
     write_handle: &mut WriteHandle<SourceData, (), T, Diff>,
     config_set: Arc<ConfigSet>,
     now: NowFn,
-    storage_collections: Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
+    storage_collections: Arc<StorageCollectionsImpl<T>>,
     txns_read: TxnsRead<T>,
     persist: Arc<PersistClientCache>,
 ) -> Result<(), anyhow::Error>
 where
-    T: Codec64 + From<EpochMillis> + TimestampManipulation,
+    T: Codec64 + From<EpochMillis> + TimestampManipulation + Into<mz_repr::Timestamp>,
 {
     let (keep_duration, occurred_at_col) = match introspection_type {
         IntrospectionType::ReplicaMetricsHistory => (
@@ -1567,12 +1577,12 @@ pub(crate) async fn partially_truncate_status_history<T, K>(
     write_handle: &mut WriteHandle<SourceData, (), T, Diff>,
     status_history_desc: StatusHistoryDesc<K>,
     now: NowFn,
-    storage_collections: &Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
+    storage_collections: &Arc<StorageCollectionsImpl<T>>,
     txns_read: &TxnsRead<T>,
     persist: &Arc<PersistClientCache>,
 ) -> BTreeMap<K, Row>
 where
-    T: Codec64 + From<EpochMillis> + TimestampManipulation,
+    T: Codec64 + From<EpochMillis> + TimestampManipulation + Into<mz_repr::Timestamp>,
     K: Clone + Debug + Ord + Send + Sync,
 {
     let upper = write_handle.fetch_recent_upper().await.clone();

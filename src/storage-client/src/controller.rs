@@ -56,6 +56,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::client::{AppendOnlyUpdate, StatusUpdate, TimestamplessUpdate};
 use crate::statistics::WebhookStatistics;
+use crate::storage_collections::StorageCollections;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, Eq, PartialEq, Hash, PartialOrd, Ord)]
 pub enum IntrospectionType {
@@ -299,6 +300,11 @@ pub trait StorageController: Debug {
 
     /// Get the current configuration, including parameters updated with `update_parameters`.
     fn config(&self) -> &StorageConfiguration;
+
+    /// Returns a handle to the corresponding StorageCollections implementation of this controller.
+    fn storage_collections(
+        &self,
+    ) -> Arc<dyn StorageCollections<Timestamp = Self::Timestamp> + Send + Sync>;
 
     /// Returns the [CollectionMetadata] of the collection identified by `id`.
     fn collection_metadata(

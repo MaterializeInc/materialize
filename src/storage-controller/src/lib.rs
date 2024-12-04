@@ -66,7 +66,7 @@ use mz_storage_client::metrics::StorageControllerMetrics;
 use mz_storage_client::statistics::{
     SinkStatisticsUpdate, SourceStatisticsUpdate, WebhookStatistics,
 };
-use mz_storage_client::storage_collections::StorageCollections;
+use mz_storage_client::storage_collections::{self, StorageCollections, StorageCollectionsImpl};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::inline::InlinedConnection;
 use mz_storage_types::connections::ConnectionContext;
@@ -218,7 +218,7 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     wallclock_lag_last_refresh: Instant,
 
     /// Handle to a [StorageCollections].
-    storage_collections: Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
+    storage_collections: Arc<StorageCollectionsImpl<T>>,
     /// Migrated storage collections that can be written even in read only mode.
     migrated_storage_collections: BTreeSet<GlobalId>,
 
@@ -277,6 +277,7 @@ where
         + From<EpochMillis>
         + TimestampManipulation
         + Into<Datum<'static>>
+        + Into<mz_repr::Timestamp>
         + Display,
     StorageCommand<T>: RustType<ProtoStorageCommand>,
     StorageResponse<T>: RustType<ProtoStorageResponse>,
@@ -316,6 +317,12 @@ where
     /// Get the current configuration
     fn config(&self) -> &StorageConfiguration {
         &self.config
+    }
+
+    fn storage_collections(
+        &self,
+    ) -> Arc<dyn StorageCollections<Timestamp = Self::Timestamp> + Send + Sync> {
+        Arc::clone(&self.storage_collections) as Arc<_>
     }
 
     fn collection_metadata(
@@ -2383,7 +2390,8 @@ where
         + Codec64
         + From<EpochMillis>
         + TimestampManipulation
-        + Into<Datum<'static>>,
+        + Into<Datum<'static>>
+        + Into<mz_repr::Timestamp>,
     StorageCommand<T>: RustType<ProtoStorageCommand>,
     StorageResponse<T>: RustType<ProtoStorageResponse>,
 
@@ -2409,8 +2417,20 @@ where
         controller_metrics: ControllerMetrics,
         connection_context: ConnectionContext,
         txn: &dyn StorageTxn<T>,
-        storage_collections: Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
     ) -> Self {
+        let storage_collections = storage_collections::StorageCollectionsImpl::new(
+            persist_location.clone(),
+            Arc::clone(&persist_clients),
+            &metrics_registry,
+            now.clone(),
+            Arc::clone(&txns_metrics),
+            envd_epoch,
+            read_only,
+            connection_context.clone(),
+            txn,
+        )
+        .await;
+
         let txns_client = persist_clients
             .open(persist_location.clone())
             .await
@@ -2511,7 +2531,7 @@ where
             recorded_replica_frontiers: BTreeMap::new(),
             wallclock_lag,
             wallclock_lag_last_refresh: Instant::now(),
-            storage_collections,
+            storage_collections: Arc::new(storage_collections),
             migrated_storage_collections: BTreeSet::new(),
             maintenance_ticker,
             maintenance_scheduled: false,
@@ -3551,12 +3571,12 @@ impl From<&IntrospectionType> for CollectionManagerKind {
 async fn snapshot_statistics<T>(
     id: GlobalId,
     upper: Antichain<T>,
-    storage_collections: &Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
+    storage_collections: &Arc<StorageCollectionsImpl<T>>,
     txns_read: &TxnsRead<T>,
     persist: &Arc<PersistClientCache>,
 ) -> Vec<Row>
 where
-    T: Codec64 + From<EpochMillis> + TimestampManipulation,
+    T: Codec64 + From<EpochMillis> + TimestampManipulation + Into<mz_repr::Timestamp>,
 {
     match upper.as_option() {
         Some(f) if f > &T::minimum() => {
@@ -3587,12 +3607,12 @@ where
 pub(crate) fn snapshot<T>(
     id: GlobalId,
     as_of: T,
-    storage_collections: &Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
+    storage_collections: &Arc<StorageCollectionsImpl<T>>,
     txns_read: &TxnsRead<T>,
     persist: &Arc<PersistClientCache>,
 ) -> BoxFuture<Result<Vec<(Row, Diff)>, StorageError<T>>>
 where
-    T: Codec64 + From<EpochMillis> + TimestampManipulation,
+    T: Codec64 + From<EpochMillis> + TimestampManipulation + Into<mz_repr::Timestamp>,
 {
     let metadata = match storage_collections.collection_metadata(id) {
         Ok(metadata) => metadata,
