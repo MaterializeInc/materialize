@@ -22,7 +22,12 @@ rust_library(
         proc_macro = True,
     ),
     compile_data = [],
-    crate_features = [],
+    crate_features = [
+        "async-trait",
+        "default",
+        "mz-repr",
+        "vpc-endpoints",
+    ],
     data = [],
     proc_macro_deps = [] + all_crate_deps(proc_macro = True),
     rustc_env = {},
@@ -50,7 +55,12 @@ rust_test(
     ),
     compile_data = [],
     crate = ":mz_cloud_resources",
-    crate_features = [],
+    crate_features = [
+        "async-trait",
+        "default",
+        "mz-repr",
+        "vpc-endpoints",
+    ],
     data = [],
     env = {},
     proc_macro_deps = [] + all_crate_deps(

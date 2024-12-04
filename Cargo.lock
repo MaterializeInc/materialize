@@ -11089,6 +11089,8 @@ dependencies = [
  "globset",
  "hashbrown 0.14.5",
  "hyper 0.14.27",
+ "hyper 1.4.1",
+ "hyper-util",
  "indexmap 1.9.1",
  "insta",
  "k8s-openapi",
