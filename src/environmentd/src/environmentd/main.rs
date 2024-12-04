@@ -256,6 +256,12 @@ pub struct Args {
     /// Whether to enable pod metrics collection.
     #[clap(long, env = "ORCHESTRATOR_KUBERNETES_DISABLE_POD_METRICS_COLLECTION")]
     orchestrator_kubernetes_disable_pod_metrics_collection: bool,
+    /// Whether to annotate pods for prometheus service discovery.
+    #[clap(
+        long,
+        env = "ORCHESTRATOR_KUBERNETES_ENABLE_PROMETHEUS_SCRAPE_ANNOTATIONS"
+    )]
+    orchestrator_kubernetes_enable_prometheus_scrape_annotations: bool,
     #[clap(long, env = "ORCHESTRATOR_PROCESS_WRAPPER")]
     orchestrator_process_wrapper: Option<String>,
     /// Where the process orchestrator should store secrets.
@@ -743,6 +749,8 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                         name_prefix: args.orchestrator_kubernetes_name_prefix.clone(),
                         collect_pod_metrics: !args
                             .orchestrator_kubernetes_disable_pod_metrics_collection,
+                        enable_prometheus_scrape_annotations: args
+                            .orchestrator_kubernetes_enable_prometheus_scrape_annotations,
                     }))
                     .context("creating kubernetes orchestrator")?,
             );

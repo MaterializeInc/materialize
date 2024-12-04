@@ -228,15 +228,16 @@ serviceAccount:
 
 # Observability settings (disabled in this case)
 observability:
-  enabled: false
+  enabled: true
   podMetrics:
     # Whether to enable the pod metrics scraper which populates the
     # Environment Overview Monitoring tab in the web console (requires
     # metrics-server to be installed)
     enabled: false
   prometheus:
-    # Whether to enable Prometheus integration for monitoring (disabled here)
-    enabled: false
+    scrapeAnnotations:
+        # Whether to annotate pods with common keys used for prometheus scraping.
+        enabled: true
 
 telemetry:
   enabled: true
