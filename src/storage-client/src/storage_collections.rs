@@ -47,8 +47,8 @@ use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::read_holds::{ReadHold, ReadHoldError};
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sources::{
-    GenericSourceConnection, IngestionDescription, SourceData, SourceDesc, SourceExport,
-    SourceExportDataConfig, Timeline,
+    GenericSourceConnection, IngestionDescription, SourceData, SourceDesc, SourceEnvelope,
+    SourceExport, SourceExportDataConfig, Timeline,
 };
 use mz_storage_types::time_dependence::{TimeDependence, TimeDependenceError};
 use mz_txn_wal::metrics::Metrics as TxnMetrics;
@@ -828,20 +828,23 @@ where
             | DataSource::Table
             | DataSource::Progress
             | DataSource::Other => Vec::new(),
-            DataSource::IngestionExport { ingestion_id, .. } => {
+            DataSource::IngestionExport {
+                ingestion_id,
+                data_config,
+                ..
+            } => {
                 // Ingestion exports depend on their primary source's remap
-                // collection.
-                let source_collection = self_collections
+                // collection, except when they use a CDCv2 envelope.
+                let source = self_collections
                     .get(ingestion_id)
                     .ok_or(StorageError::IdentifierMissing(*ingestion_id))?;
-                match &source_collection.description {
-                    CollectionDescription {
-                        data_source: DataSource::Ingestion(ingestion_desc),
-                        ..
-                    } => vec![ingestion_desc.remap_collection_id],
-                    _ => unreachable!(
-                        "SourceExport must only refer to primary sources that already exist"
-                    ),
+                let DataSource::Ingestion(ingestion) = &source.description.data_source else {
+                    panic!("SourceExport must refer to a primary source that already exists");
+                };
+
+                match data_config.envelope {
+                    SourceEnvelope::CdcV2 => Vec::new(),
+                    _ => vec![ingestion.remap_collection_id],
                 }
             }
             // Ingestions depend on their remap collection.
