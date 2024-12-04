@@ -31,11 +31,11 @@ You can use `SUBSCRIBE` to:
 
 ```mzsql
 SUBSCRIBE [TO] <object_name | (SELECT ...)>
-  [ENVELOPE UPSERT (KEY (<key1>, ...)) | ENVELOPE DEBEZIUM (KEY (<key1>, ...))]
-  [WITHIN TIMESTAMP ORDER BY <column1> [ASC | DESC] [NULLS LAST | NULLS FIRST], ...]
-  [AS OF [AT LEAST] <timestamp_expression>]
-  [UP TO <timestamp_expression>]
-  [WITH (<option_name> [= <option_value>], ...)]
+[ENVELOPE UPSERT (KEY (<key1>, ...)) | ENVELOPE DEBEZIUM (KEY (<key1>, ...))]
+[WITHIN TIMESTAMP ORDER BY <column1> [ASC | DESC] [NULLS LAST | NULLS FIRST], ...]
+[AS OF [AT LEAST] <timestamp_expression>]
+[UP TO <timestamp_expression>]
+[WITH (<option_name> [= <option_value>], ...)]
 ```
 
 where:
