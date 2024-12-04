@@ -1342,7 +1342,7 @@ mod explain {
             if config.equivalences {
                 for (expr, equivs) in std::iter::zip(
                     subtree_refs.iter(),
-                    derived.results::<Equivalences>().unwrap().into_iter(),
+                    derived.results::<Equivalences>().into_iter(),
                 ) {
                     let analyses = annotations.entry(expr).or_default();
                     analyses.equivalences = Some(match equivs.as_ref() {
