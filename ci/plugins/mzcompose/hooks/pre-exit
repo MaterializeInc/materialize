@@ -91,7 +91,7 @@ if [ ! -s services.log ] && [ "$BUILDKITE_LABEL" != "Maelstrom coverage of persi
 fi
 
 export_cov() {
-    bin/ci-builder run stable rust-cov export \
+    bin/ci-builder run min rust-cov export \
       --ignore-filename-regex=.cargo/ \
       --ignore-filename-regex=target/release/ \
       --ignore-filename-regex=/cargo/ \
@@ -110,9 +110,9 @@ if [ -n "${CI_COVERAGE_ENABLED:-}" ] && [ -z "${BUILDKITE_MZCOMPOSE_PLUGIN_SKIP_
         find . -name '*.profraw' | while read -r i; do
             cp "$i" profraws
             rm "$i"
-            bin/ci-builder run stable rust-profdata show profraws/"$(basename "$i")" > /dev/null || rm profraws/"$(basename "$i")"
+            bin/ci-builder run min rust-profdata show profraws/"$(basename "$i")" > /dev/null || rm profraws/"$(basename "$i")"
         done
-        find profraws -name '*.profraw' -exec bin/ci-builder run stable rust-profdata merge -sparse -o coverage/"$BUILDKITE_JOB_ID".profdata {} +
+        find profraws -name '*.profraw' -exec bin/ci-builder run min rust-profdata merge -sparse -o coverage/"$BUILDKITE_JOB_ID".profdata {} +
         find . -name '*.profraw' -delete
 
         ARGS=()
@@ -124,9 +124,9 @@ if [ -n "${CI_COVERAGE_ENABLED:-}" ] && [ -z "${BUILDKITE_MZCOMPOSE_PLUGIN_SKIP_
         done
         rm coverage/"$BUILDKITE_JOB_ID".profdata
         if [ "${#ARGS[@]}" != 0 ]; then
-            bin/ci-builder run stable lcov "${ARGS[@]}" -o coverage/"$BUILDKITE_JOB_ID".lcov
+            bin/ci-builder run min lcov "${ARGS[@]}" -o coverage/"$BUILDKITE_JOB_ID".lcov
             rm coverage/"$BUILDKITE_JOB_ID"-*.lcov
-            bin/ci-builder run stable zstd coverage/"$BUILDKITE_JOB_ID".lcov
+            bin/ci-builder run min zstd coverage/"$BUILDKITE_JOB_ID".lcov
             buildkite-agent artifact upload coverage/"$BUILDKITE_JOB_ID".lcov.zst
         fi
     fi
