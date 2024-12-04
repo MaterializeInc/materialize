@@ -42,8 +42,6 @@ pub struct CollectionMetadata {
     pub remap_shard: Option<ShardId>,
     /// The persist shard containing the contents of this storage collection.
     pub data_shard: ShardId,
-    /// The persist shard containing the status updates for this storage collection.
-    pub status_shard: Option<ShardId>,
     /// The `RelationDesc` that describes the contents of the `data_shard`.
     pub relation_desc: RelationDesc,
     /// The shard id of the txn-wal shard, if `self.data_shard` is managed
@@ -64,7 +62,6 @@ impl crate::AlterCompatible for CollectionMetadata {
             persist_location: _,
             remap_shard,
             data_shard,
-            status_shard,
             relation_desc,
             txns_shard,
         } = self;
@@ -72,7 +69,6 @@ impl crate::AlterCompatible for CollectionMetadata {
         let compatibility_checks = [
             (remap_shard == &other.remap_shard, "remap_shard"),
             (data_shard == &other.data_shard, "data_shard"),
-            (status_shard == &other.status_shard, "status_shard"),
             (relation_desc == &other.relation_desc, "relation_desc"),
             (txns_shard == &other.txns_shard, "txns_shard"),
         ];
@@ -100,7 +96,6 @@ impl RustType<ProtoCollectionMetadata> for CollectionMetadata {
             consensus_uri: self.persist_location.consensus_uri.to_string_unredacted(),
             data_shard: self.data_shard.to_string(),
             remap_shard: self.remap_shard.map(|s| s.to_string()),
-            status_shard: self.status_shard.map(|s| s.to_string()),
             relation_desc: Some(self.relation_desc.into_proto()),
             txns_shard: self.txns_shard.map(|x| x.to_string()),
         }
@@ -120,10 +115,6 @@ impl RustType<ProtoCollectionMetadata> for CollectionMetadata {
                 .data_shard
                 .parse()
                 .map_err(TryFromProtoError::InvalidShardId)?,
-            status_shard: value
-                .status_shard
-                .map(|s| s.parse().map_err(TryFromProtoError::InvalidShardId))
-                .transpose()?,
             relation_desc: value
                 .relation_desc
                 .into_rust_if_some("ProtoCollectionMetadata::relation_desc")?,

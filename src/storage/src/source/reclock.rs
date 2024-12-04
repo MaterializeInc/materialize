@@ -669,7 +669,6 @@ mod tests {
             },
             remap_shard: Some(shard),
             data_shard: ShardId::new(),
-            status_shard: None,
             relation_desc: RelationDesc::empty(),
             txns_shard: None,
         };
