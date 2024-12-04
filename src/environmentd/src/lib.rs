@@ -550,7 +550,6 @@ impl Listeners {
             let (adapter_storage, audit_logs_handle) = openable_adapter_storage
                 .open_savepoint(boot_ts, &bootstrap_args)
                 .await?;
-
             // In read-only mode, we intentionally do not call `set_is_leader`,
             // because we are by definition not the leader if we are in
             // read-only mode.
@@ -568,6 +567,11 @@ impl Listeners {
 
             (adapter_storage, audit_logs_handle)
         };
+
+        // Enable Persist compaction if we're not in read only.
+        if !read_only {
+            config.controller.persist_clients.cfg().enable_compaction();
+        }
 
         info!(
             "startup: envd serve: durable catalog open complete in {:?}",

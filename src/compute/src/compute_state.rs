@@ -410,6 +410,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                     .read_only_tx
                     .send(false)
                     .expect("we're holding one other end");
+                self.compute_state.persist_clients.cfg().enable_compaction();
             }
         }
 

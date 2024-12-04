@@ -144,6 +144,13 @@ pub(crate) const COMPACTION_USE_MOST_RECENT_SCHEMA: Config<bool> = Config::new(
     ",
 );
 
+pub(crate) const COMPACTION_CHECK_PROCESS_FLAG: Config<bool> = Config::new(
+    "persist_compaction_check_process_flag",
+    true,
+    "Whether Compactor will obey the process_requests flag in PersistConfig, \
+        which allows dynamically disabling compaction. If false, all compaction requests will be processed.",
+);
+
 impl<K, V, T, D> Compactor<K, V, T, D>
 where
     K: Debug + Codec,
@@ -166,6 +173,8 @@ where
         let concurrency_limit = Arc::new(tokio::sync::Semaphore::new(
             cfg.compaction_concurrency_limit,
         ));
+        let check_process_requests = COMPACTION_CHECK_PROCESS_FLAG.handle(&cfg.configs);
+        let process_requests = Arc::clone(&cfg.compaction_process_requests);
 
         // spin off a single task responsible for executing compaction requests.
         // work is enqueued into the task through a channel
@@ -174,6 +183,19 @@ where
             {
                 assert_eq!(req.shard_id, machine.shard_id());
                 let metrics = Arc::clone(&machine.applier.metrics);
+
+                // Only allow skipping compaction requests if the dyncfg is enabled.
+                if check_process_requests.get()
+                    && !process_requests.load(std::sync::atomic::Ordering::Relaxed)
+                {
+                    // Respond to the requester, track in our metrics, and log
+                    // that compaction is disabled.
+                    let _ = completer.send(Err(anyhow::anyhow!("compaction disabled")));
+                    metrics.compaction.disabled.inc();
+                    tracing::warn!(shard_id = ?req.shard_id, "Dropping compaction request on the floor.");
+
+                    continue;
+                }
 
                 let permit = {
                     let inner = Arc::clone(&concurrency_limit);
@@ -980,6 +1002,7 @@ impl Timings {
 #[cfg(test)]
 mod tests {
     use mz_dyncfg::ConfigUpdates;
+    use mz_ore::{assert_contains, assert_err};
     use mz_persist_types::codec_impls::StringSchema;
     use timely::order::Product;
     use timely::progress::Antichain;
@@ -1135,5 +1158,99 @@ mod tests {
         .await;
         assert_eq!(part.desc, res.output.desc);
         assert_eq!(updates, all_ok(&data, Product::new(10, 0)));
+    }
+
+    #[mz_persist_proc::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    async fn disable_compaction(dyncfgs: ConfigUpdates) {
+        let data = [
+            (("0".to_owned(), "zero".to_owned()), 0, 1),
+            (("0".to_owned(), "zero".to_owned()), 1, -1),
+            (("1".to_owned(), "one".to_owned()), 1, 1),
+        ];
+
+        let cache = new_test_client_cache(&dyncfgs);
+        cache.cfg.set_config(&BLOB_TARGET_SIZE, 100);
+        let (mut write, _) = cache
+            .open(PersistLocation::new_in_mem())
+            .await
+            .expect("client construction failed")
+            .expect_open::<String, String, u64, i64>(ShardId::new())
+            .await;
+        let b0 = write
+            .expect_batch(&data[..1], 0, 1)
+            .await
+            .into_hollow_batch();
+        let b1 = write
+            .expect_batch(&data[1..], 1, 2)
+            .await
+            .into_hollow_batch();
+
+        let req = CompactReq {
+            shard_id: write.machine.shard_id(),
+            desc: Description::new(
+                b0.desc.lower().clone(),
+                b1.desc.upper().clone(),
+                Antichain::from_elem(10u64),
+            ),
+            inputs: vec![b0, b1],
+        };
+        write.cfg.set_config(&COMPACTION_HEURISTIC_MIN_INPUTS, 1);
+        let compactor = write.compact.as_ref().expect("compaction hard disabled");
+
+        write.cfg.disable_compaction();
+        let result = compactor
+            .compact_and_apply_background(req.clone(), &write.machine)
+            .expect("listener")
+            .await
+            .expect("channel closed");
+        assert_err!(result);
+        assert_contains!(result.unwrap_err().to_string(), "compaction disabled");
+
+        write.cfg.enable_compaction();
+        compactor
+            .compact_and_apply_background(req, &write.machine)
+            .expect("listener")
+            .await
+            .expect("channel closed")
+            .expect("compaction success");
+
+        // Make sure our CYA dyncfg works.
+        let data2 = [
+            (("2".to_owned(), "two".to_owned()), 2, 1),
+            (("2".to_owned(), "two".to_owned()), 3, -1),
+            (("3".to_owned(), "three".to_owned()), 3, 1),
+        ];
+
+        let b2 = write
+            .expect_batch(&data2[..1], 2, 3)
+            .await
+            .into_hollow_batch();
+        let b3 = write
+            .expect_batch(&data2[1..], 3, 4)
+            .await
+            .into_hollow_batch();
+
+        let req = CompactReq {
+            shard_id: write.machine.shard_id(),
+            desc: Description::new(
+                b2.desc.lower().clone(),
+                b3.desc.upper().clone(),
+                Antichain::from_elem(20u64),
+            ),
+            inputs: vec![b2, b3],
+        };
+        let compactor = write.compact.as_ref().expect("compaction hard disabled");
+
+        // When the dyncfg is set to false we should ignore the process flag.
+        write.cfg.set_config(&COMPACTION_CHECK_PROCESS_FLAG, false);
+        write.cfg.disable_compaction();
+        // Compaction still succeeded!
+        compactor
+            .compact_and_apply_background(req, &write.machine)
+            .expect("listener")
+            .await
+            .expect("channel closed")
+            .expect("compaction success");
     }
 }

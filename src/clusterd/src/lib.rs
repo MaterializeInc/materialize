@@ -272,6 +272,9 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone(), mz_dyncfgs::all_dyncfgs());
     persist_cfg.is_cc_active = args.is_cc;
     persist_cfg.announce_memory_limit = args.announce_memory_limit;
+    // Start with compaction disabled, will get enabled once a cluster receives AllowWrites.
+    persist_cfg.disable_compaction();
+
     let persist_clients = Arc::new(PersistClientCache::new(
         persist_cfg,
         &metrics_registry,
