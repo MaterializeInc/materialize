@@ -147,7 +147,7 @@ impl Analysis for Equivalences {
                 // introduce equivalences for new columns and expressions that define them.
                 let mut equivalences = results.get(index - 1).unwrap().clone();
                 if let Some(equivalences) = &mut equivalences {
-                    let input_arity = depends.results::<Arity>().unwrap()[index - 1];
+                    let input_arity = depends.results::<Arity>()[index - 1];
                     for (pos, expr) in scalars.iter().enumerate() {
                         equivalences
                             .classes
@@ -177,7 +177,7 @@ impl Analysis for Equivalences {
                     .collect::<Vec<_>>();
                 children.reverse();
 
-                let arity = depends.results::<Arity>().unwrap();
+                let arity = depends.results::<Arity>();
                 let mut columns = 0;
                 let mut result = Some(EquivalenceClasses::default());
                 for child in children.into_iter() {
@@ -206,7 +206,7 @@ impl Analysis for Equivalences {
                 aggregates,
                 ..
             } => {
-                let input_arity = depends.results::<Arity>().unwrap()[index - 1];
+                let input_arity = depends.results::<Arity>()[index - 1];
                 let mut equivalences = results.get(index - 1).unwrap().clone();
                 if let Some(equivalences) = &mut equivalences {
                     // Introduce keys column equivalences as if a map, then project to those columns.
@@ -268,7 +268,7 @@ impl Analysis for Equivalences {
             MirRelationExpr::ArrangeBy { .. } => results.get(index - 1).unwrap().clone(),
         };
 
-        let expr_type = depends.results::<RelationType>().unwrap()[index].clone();
+        let expr_type = depends.results::<RelationType>()[index].clone();
         equivalences.as_mut().map(|e| e.minimize(&expr_type));
         equivalences
     }
