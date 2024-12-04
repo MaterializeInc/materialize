@@ -28,7 +28,8 @@ REDPANDA_VERSIONS = [
     "v23.1.21",
     "v23.2.29",
     "v23.3.21",
-    "v24.1.17",
+    "v24.1.18",
+    "v24.2.12",
     REDPANDA_VERSION,
     "latest",
 ]
