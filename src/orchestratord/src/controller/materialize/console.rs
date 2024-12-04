@@ -12,8 +12,8 @@ use k8s_openapi::{
         apps::v1::{Deployment, DeploymentSpec},
         core::v1::{
             Capabilities, Container, ContainerPort, EnvVar, HTTPGetAction, PodSpec,
-            PodTemplateSpec, Probe, SeccompProfile, SecurityContext, Service, ServicePort,
-            ServiceSpec,
+            PodTemplateSpec, Probe, SeccompProfile, SecretVolumeSource, SecurityContext, Service,
+            ServicePort, ServiceSpec, Volume, VolumeMount,
         },
         networking::v1::{
             IPBlock, NetworkPolicy, NetworkPolicyIngressRule, NetworkPolicyPeer, NetworkPolicyPort,
@@ -33,9 +33,6 @@ use crate::{
 use mz_cloud_resources::crd::{
     gen::cert_manager::certificates::Certificate, materialize::v1alpha1::Materialize,
 };
-
-// corresponds to the `EXPOSE` line in the console dockerfile
-const CONSOLE_IMAGE_HTTP_PORT: i32 = 8080;
 
 pub struct Resources {
     network_policies: Vec<NetworkPolicy>,
@@ -119,7 +116,7 @@ fn create_network_policies(config: &super::Args, mz: &Materialize) -> Vec<Networ
                             .collect(),
                     ),
                     ports: Some(vec![NetworkPolicyPort {
-                        port: Some(IntOrString::Int(CONSOLE_IMAGE_HTTP_PORT)),
+                        port: Some(IntOrString::Int(config.console_http_port)),
                         protocol: Some("TCP".to_string()),
                         ..Default::default()
                     }]),
@@ -162,20 +159,11 @@ fn create_console_deployment_object(
     pod_template_labels.insert("materialize.cloud/app".to_owned(), mz.console_app_name());
 
     let ports = vec![ContainerPort {
-        container_port: CONSOLE_IMAGE_HTTP_PORT,
+        container_port: config.console_http_port,
         name: Some("http".into()),
         protocol: Some("TCP".into()),
         ..Default::default()
     }];
-
-    let probe = Probe {
-        http_get: Some(HTTPGetAction {
-            path: Some("/".to_string()),
-            port: IntOrString::Int(CONSOLE_IMAGE_HTTP_PORT),
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
 
     let scheme = if issuer_ref_defined(
         &config.default_certificate_specs.balancerd_external,
@@ -185,7 +173,7 @@ fn create_console_deployment_object(
     } else {
         "http"
     };
-    let env = vec![EnvVar {
+    let mut env = vec![EnvVar {
         name: "MZ_ENDPOINT".to_string(),
         value: Some(format!(
             "{}://{}.{}.svc.cluster.local:{}",
@@ -197,15 +185,55 @@ fn create_console_deployment_object(
         ..Default::default()
     }];
 
-    //if issuer_ref_defined(
-    //    &config.default_certificate_specs.console_external,
-    //    &mz.spec.console_external_certificate_spec,
-    //) {
-    //    // TODO define volumes, volume_mounts, and any arg changes
-    //    unimplemented!();
-    //} else {
-    //    // currently the docker image just doesn't implement tls
-    //}
+    let (volumes, volume_mounts, scheme) = if issuer_ref_defined(
+        &config.default_certificate_specs.console_external,
+        &mz.spec.console_external_certificate_spec,
+    ) {
+        let volumes = Some(vec![Volume {
+            name: "external-certificate".to_owned(),
+            secret: Some(SecretVolumeSource {
+                default_mode: Some(0o400),
+                secret_name: Some(mz.console_external_certificate_secret_name()),
+                items: None,
+                optional: Some(false),
+            }),
+            ..Default::default()
+        }]);
+        let volume_mounts = Some(vec![VolumeMount {
+            name: "external-certificate".to_owned(),
+            mount_path: "/nginx/tls".to_owned(),
+            read_only: Some(true),
+            ..Default::default()
+        }]);
+        env.push(EnvVar {
+            name: "MZ_NGINX_LISTENER_CONFIG".to_string(),
+            value: Some(format!(
+                "listen {} ssl;
+ssl_certificate /nginx/tls/tls.crt;
+ssl_certificate_key /nginx/tls/tls.key;",
+                config.console_http_port
+            )),
+            ..Default::default()
+        });
+        (volumes, volume_mounts, Some("HTTPS".to_owned()))
+    } else {
+        env.push(EnvVar {
+            name: "MZ_NGINX_LISTENER_CONFIG".to_string(),
+            value: Some(format!("listen {};", config.console_http_port)),
+            ..Default::default()
+        });
+        (None, None, Some("HTTP".to_owned()))
+    };
+
+    let probe = Probe {
+        http_get: Some(HTTPGetAction {
+            path: Some("/".to_string()),
+            port: IntOrString::Int(config.console_http_port),
+            scheme,
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
 
     let security_context = if config.enable_security_context {
         // Since we want to adhere to the most restrictive security context, all
@@ -250,6 +278,7 @@ fn create_console_deployment_object(
         }),
         resources: mz.spec.console_resource_requirements.clone(),
         security_context,
+        volume_mounts,
         ..Default::default()
     };
 
@@ -277,6 +306,7 @@ fn create_console_deployment_object(
                 ),
                 scheduler_name: config.scheduler_name.clone(),
                 service_account_name: Some(mz.service_account_name()),
+                volumes,
                 ..Default::default()
             }),
         },
@@ -299,7 +329,7 @@ fn create_console_service_object(config: &super::Args, mz: &Materialize) -> Serv
         name: Some("http".to_string()),
         protocol: Some("TCP".to_string()),
         port: config.console_http_port,
-        target_port: Some(IntOrString::Int(CONSOLE_IMAGE_HTTP_PORT)),
+        target_port: Some(IntOrString::Int(config.console_http_port)),
         ..Default::default()
     }];
 
