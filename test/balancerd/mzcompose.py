@@ -196,17 +196,35 @@ def workflow_plaintext(c: Composition) -> None:
     """Test plaintext internal connections"""
     c.down(destroy_volumes=True)
     with c.override(
+        Materialized(
+            options=[
+                # Enable TLS on the public port to verify that balancerd is connecting to the balancerd
+                # port.
+                "--tls-mode=disable",
+                f"--frontegg-tenant={TENANT_ID}",
+                "--frontegg-jwk-file=/secrets/frontegg-mock.crt",
+                f"--frontegg-api-token-url={FRONTEGG_URL}/identity/resources/auth/v1/api-token",
+                f"--frontegg-admin-role={ADMIN_ROLE}",
+            ],
+            # We do not do anything interesting on the Mz side
+            # to justify the extra restarts
+            sanity_restart=False,
+            depends_on=["test-certs"],
+            volumes_extra=[
+                "secrets:/secrets",
+            ],
+        ),
         Balancerd(
             command=[
                 "service",
                 "--pgwire-listen-addr=0.0.0.0:6875",
                 "--https-listen-addr=0.0.0.0:6876",
                 "--internal-http-listen-addr=0.0.0.0:6878",
-                "--frontegg-resolver-template=materialized:6880",
+                "--frontegg-resolver-template=materialized:6875",
                 "--frontegg-jwk-file=/secrets/frontegg-mock.crt",
                 f"--frontegg-api-token-url={FRONTEGG_URL}/identity/resources/auth/v1/api-token",
                 f"--frontegg-admin-role={ADMIN_ROLE}",
-                "--https-resolver-template=materialized:6881",
+                "--https-resolver-template=materialized:6876",
                 "--tls-key=/secrets/balancerd.key",
                 "--tls-cert=/secrets/balancerd.crt",
                 "--default-config=balancerd_inject_proxy_protocol_header_http=true",
