@@ -176,6 +176,19 @@ build:release-dev --config=release --config=release-lto --config=debuginfo-limit
 # tradeoff is not worth it when developing locally, but is for builds we ship to production.
 build:release-local --config=release --config=debuginfo-limited
 
+build:optimized --cxxopt=-D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_FAST
+build:optimized --copt=-O3
+build:optimized --copt=-DNDEBUG
+build:optimized --compilation_mode=opt
+build:optimized --strip=never
+build:optimized --@rules_rust//:extra_rustc_flag=-Cstrip=none
+build:optimized --@rules_rust//:extra_rustc_flag=-Cdebuginfo=0
+build:optimized --copt=-g0
+build:optimized --copt=-flto=off
+build:optimized --linkopt=-flto=off
+build:optimized --@rules_rust//:extra_rustc_flag=-Clto=off
+build:optimized --@rules_rust//:extra_rustc_flag=-Cincremental=on
+
 # Build with the Rust Nightly Toolchain
 build:rust-nightly --@rules_rust//rust/toolchain/channel=nightly
 

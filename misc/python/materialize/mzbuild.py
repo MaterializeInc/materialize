@@ -32,6 +32,7 @@ import tarfile
 import time
 from collections import OrderedDict
 from collections.abc import Callable, Iterable, Iterator, Sequence
+from enum import Enum, auto
 from functools import cache
 from pathlib import Path
 from tempfile import TemporaryFile
@@ -57,6 +58,12 @@ class Fingerprint(bytes):
         return base64.b32encode(self).decode()
 
 
+class Profile(Enum):
+    RELEASE = auto()
+    OPTIMIZED = auto()
+    DEV = auto()
+
+
 class RepositoryDetails:
     """Immutable details about a `Repository`.
 
@@ -65,7 +72,7 @@ class RepositoryDetails:
     Attributes:
         root: The path to the root of the repository.
         arch: The CPU architecture to build for.
-        release_mode: Whether the repository is being built in release mode.
+        profile: What profile the repository is being built with.
         coverage: Whether the repository has code coverage instrumentation
             enabled.
         sanitizer: Whether to use a sanitizer (address, hwaddress, cfi, thread, leak, memory, none)
@@ -81,7 +88,7 @@ class RepositoryDetails:
         self,
         root: Path,
         arch: Arch,
-        release_mode: bool,
+        profile: Profile,
         coverage: bool,
         sanitizer: Sanitizer,
         image_registry: str,
@@ -91,7 +98,7 @@ class RepositoryDetails:
     ):
         self.root = root
         self.arch = arch
-        self.release_mode = release_mode
+        self.profile = profile
         self.coverage = coverage
         self.sanitizer = sanitizer
         self.cargo_workspace = cargo.Workspace(root)
@@ -144,7 +151,7 @@ class RepositoryDetails:
         """Returns a set of Bazel config flags to set for the build."""
         flags = []
 
-        if self.release_mode:
+        if self.profile == Profile.RELEASE:
             # If we're a tagged build, then we'll use stamping to update our
             # build info, otherwise we'll use our side channel/best-effort
             # approach to update it.
@@ -156,6 +163,8 @@ class RepositoryDetails:
             else:
                 flags.extend(["--config=release-local"])
                 bazel_utils.write_git_hash()
+        elif self.profile == Profile.OPTIMIZED:
+            flags.extend(["--config=optimized"])
 
         if self.bazel_remote_cache:
             flags.append(f"--remote_cache={self.bazel_remote_cache}")
@@ -312,8 +321,10 @@ class CargoPreImage(PreImage):
         # Cargo images depend on the release mode and whether
         # coverage/sanitizer is enabled.
         flags: list[str] = []
-        if self.rd.release_mode:
+        if self.rd.profile == Profile.RELEASE:
             flags += "release"
+        if self.rd.profile == Profile.OPTIMIZED:
+            flags += "optimized"
         if self.rd.coverage:
             flags += "coverage"
         if self.rd.sanitizer != Sanitizer.none:
@@ -463,8 +474,10 @@ class CargoBuild(CargoPreImage):
             packages.add(rd.cargo_workspace.crate_for_example(example).name)
         cargo_build.extend(f"--package={p}" for p in packages)
 
-        if rd.release_mode:
+        if rd.profile == Profile.RELEASE:
             cargo_build.append("--release")
+        if rd.profile == Profile.OPTIMIZED:
+            cargo_build.extend(["--profile", "optimized"])
         if rd.sanitizer != Sanitizer.none:
             # ASan doesn't work with jemalloc
             cargo_build.append("--no-default-features")
@@ -544,7 +557,11 @@ class CargoBuild(CargoPreImage):
         return prep
 
     def build(self, build_output: dict[str, Any]) -> None:
-        cargo_profile = "release" if self.rd.release_mode else "debug"
+        cargo_profile = (
+            "release"
+            if self.rd.profile == Profile.RELEASE
+            else "optimized" if self.rd.profile == Profile.OPTIMIZED else "debug"
+        )
 
         def copy(src: Path, relative_dst: Path) -> None:
             exe_path = self.path / relative_dst
@@ -1131,7 +1148,7 @@ class Repository:
     Args:
         root: The path to the root of the repository.
         arch: The CPU architecture to build for.
-        release_mode: Whether to build the repository in release mode.
+        profile: What profile to build the repository in.
         coverage: Whether to enable code coverage instrumentation.
         sanitizer: Whether to a sanitizer (address, thread, leak, memory, none)
         image_registry: The Docker image registry to pull images from and push
@@ -1147,7 +1164,7 @@ class Repository:
         self,
         root: Path,
         arch: Arch = Arch.host(),
-        release_mode: bool = True,
+        profile: Profile = Profile.RELEASE,
         coverage: bool = False,
         sanitizer: Sanitizer = Sanitizer.none,
         image_registry: str = "materialize",
@@ -1158,7 +1175,7 @@ class Repository:
         self.rd = RepositoryDetails(
             root,
             arch,
-            release_mode,
+            profile,
             coverage,
             sanitizer,
             image_registry,
@@ -1210,8 +1227,8 @@ class Repository:
 
         This function installs the following options:
 
-          * The mutually-exclusive `--dev`/`--release` options to control the
-            `release_mode` repository attribute.
+          * The mutually-exclusive `--dev`/`--optimized`/`--release` options to control the
+            `profile` repository attribute.
           * The `--coverage` boolean option to control the `coverage` repository
             attribute.
 
@@ -1229,6 +1246,11 @@ class Repository:
             "--release",
             action="store_true",
             help="build Rust binaries with the release profile (default)",
+        )
+        build_mode.add_argument(
+            "--optimized",
+            action="store_true",
+            help="build Rust binaries with the optimized profile (optimizations, no LTO, no debug symbols)",
         )
         parser.add_argument(
             "--coverage",
@@ -1280,7 +1302,11 @@ class Repository:
         """
         return cls(
             root,
-            release_mode=args.release,
+            profile=(
+                Profile.RELEASE
+                if args.release
+                else Profile.OPTIMIZED if args.optimized else Profile.DEV
+            ),
             coverage=args.coverage,
             sanitizer=args.sanitizer,
             image_registry=args.image_registry,
