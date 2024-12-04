@@ -2,6 +2,7 @@
 title: "Preview features"
 description: ""
 disable_list: true
+draft: true
 menu:
   main:
     parent: releases-previews
