@@ -1,0 +1,1153 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+reset-server
+
+# When updating this file, make sure that the number of arrangements doesn't
+# increase unexpectedly. This is to prevent issues like this:
+# https://github.com/MaterializeInc/database-issues/issues/6038
+
+# Introspection subscribes add noise to the introspection sources, so disable them.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_introspection_subscribes = false;
+----
+COMPLETE 0
+
+# Run the majority of this test on its own cluster to ensure it doesn't
+# interfere with any other tests.
+statement ok
+CREATE CLUSTER distinct_arrangements REPLICAS (r1 (SIZE '1'))
+
+statement ok
+SET cluster TO distinct_arrangements
+
+statement ok
+SET cluster_replica = r1
+
+# from attributes/mir_unique_keys.slt
+statement ok
+CREATE TABLE u (c int, d int)
+
+statement ok
+CREATE VIEW v as SELECT c, d FROM u GROUP BY c, d
+
+statement ok
+CREATE DEFAULT INDEX on v
+
+statement ok
+SELECT mz_unsafe.mz_sleep(4)
+
+query T
+SELECT mdo.name FROM mz_introspection.mz_arrangement_sharing mash JOIN mz_introspection.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
+----
+Arrange bundle err
+Arranged DistinctBy
+DistinctBy
+DistinctByErrorCheck
+
+statement ok
+DROP TABLE u CASCADE
+
+# from cte.slt
+statement ok
+CREATE TABLE squares (x int, y int)
+
+statement ok
+CREATE TABLE roots (x int, y int);
+
+statement ok
+CREATE MATERIALIZED VIEW v AS
+SELECT * FROM squares
+WHERE x IN (
+    WITH squares_y AS (
+        SELECT squares.y
+    )
+    SELECT y FROM roots
+    WHERE y IN (
+        SELECT y FROM squares_y
+    )
+);
+
+statement ok
+SELECT mz_unsafe.mz_sleep(4)
+
+query T
+SELECT mdo.name FROM mz_introspection.mz_arrangement_sharing mash JOIN mz_introspection.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
+----
+ArrangeBy[[Column(0), Column(1)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+Arranged DistinctBy
+Arranged DistinctBy
+DistinctBy
+DistinctBy
+DistinctByErrorCheck
+DistinctByErrorCheck
+
+statement ok
+DROP TABLE squares CASCADE
+
+statement ok
+DROP TABLE roots CASCADE
+
+# from explain/decorrelated_plan_as_json.slt
+statement ok
+CREATE TABLE t (
+  a int,
+  b int
+)
+
+statement ok
+CREATE VIEW v AS SELECT * FROM t ORDER BY b asc, a desc LIMIT 5
+
+statement ok
+CREATE DEFAULT INDEX ON v
+
+statement ok
+CREATE MATERIALIZED VIEW mv AS
+SELECT * FROM t WHERE a IS NOT NULL
+
+statement ok
+SELECT mz_unsafe.mz_sleep(4)
+
+query T
+SELECT mdo.name FROM mz_introspection.mz_arrangement_sharing mash JOIN mz_introspection.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
+----
+ArrangeBy[[Column(0), Column(1)]]
+ArrangeBy[[Column(0), Column(1)]]-errors
+Arranged TopK input
+Arranged TopK input
+Arranged TopK input
+Arranged TopK input
+Arranged TopK input
+Arranged TopK input
+Arranged TopK input
+Arranged TopK input
+Reduced TopK input
+Reduced TopK input
+Reduced TopK input
+Reduced TopK input
+Reduced TopK input
+Reduced TopK input
+Reduced TopK input
+Reduced TopK input
+
+statement ok
+DROP TABLE t CASCADE
+
+# from list.slt
+statement ok
+CREATE TABLE t3(f1 int, f2 int, f3 int, f4 int, f5 int, f6 int, f7 int, f8 int, n int, m int, l int list)
+
+statement ok
+CREATE VIEW m3 AS SELECT * FROM t3
+
+statement ok
+CREATE DEFAULT INDEX ON m3
+
+statement ok
+SELECT mz_unsafe.mz_sleep(4)
+
+query T
+SELECT mdo.name FROM mz_introspection.mz_arrangement_sharing mash JOIN mz_introspection.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
+----
+ArrangeBy[[Column(0), Column(1), Column(2), Column(3), Column(4), Column(5), Column(6), Column(7), Column(8), Column(9), Column(10)]]
+ArrangeBy[[Column(0), Column(1), Column(2), Column(3), Column(4), Column(5), Column(6), Column(7), Column(8), Column(9), Column(10)]]-errors
+
+statement ok
+DROP TABLE t3 CASCADE
+
+# from mztimestamp.slt
+statement ok
+CREATE VIEW intervals (a, b) AS VALUES (1, 10), (1, 2), (2, 13), (3, 1), (-3, 10), (5, 18446744073709551616)
+
+statement ok
+CREATE MATERIALIZED VIEW valid AS
+SELECT *
+FROM intervals
+WHERE mz_now() BETWEEN a AND b;
+
+statement ok
+SELECT mz_unsafe.mz_sleep(4)
+
+query T
+SELECT mdo.name FROM mz_introspection.mz_arrangement_sharing mash JOIN mz_introspection.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
+----
+
+statement ok
+DROP VIEW intervals CASCADE
+
+# from outer_join_simpliciation.slt
+statement ok
+create table foo_raw (a int4, b int8, u text)
+
+statement ok
+create table bar_raw (a int4, v text)
+
+statement ok
+create materialized view foo as select * from foo_raw where a is not null and b is not null;
+
+statement ok
+create materialized view bar as select distinct on (a) a, v from bar_raw
+
+statement ok
+create materialized view ban_nn as select * from bar where a is not null
+
+statement ok
+create table baz_raw (b int8, c int2, w text)
+
+statement ok
+create materialized view baz as select distinct on (b) b, c, w from baz_raw where b is not null
+
+statement ok
+create table quux_raw (c int2, x text)
+
+statement ok
+create materialized view quux as select distinct on (c) c, x from quux_raw where c is not null
+
+statement ok
+SELECT mz_unsafe.mz_sleep(4)
+
+query T
+SELECT mdo.name FROM mz_introspection.mz_arrangement_sharing mash JOIN mz_introspection.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
+----
+Arranged TopK input
+Arranged TopK input
+Arranged TopK input
+Arranged TopK input
+Arranged TopK input
+Arranged TopK input
+Arranged TopK input
+Arranged TopK input
+Arranged TopK input
+Arranged TopK input
+Arranged TopK input
+Arranged TopK input
+Arranged TopK input
+Arranged TopK input
+Arranged TopK input
+Arranged TopK input
+Arranged TopK input
+Arranged TopK input
+Arranged TopK input
+Arranged TopK input
+Arranged TopK input
+Arranged TopK input
+Arranged TopK input
+Arranged TopK input
+Reduced TopK input
+Reduced TopK input
+Reduced TopK input
+Reduced TopK input
+Reduced TopK input
+Reduced TopK input
+Reduced TopK input
+Reduced TopK input
+Reduced TopK input
+Reduced TopK input
+Reduced TopK input
+Reduced TopK input
+Reduced TopK input
+Reduced TopK input
+Reduced TopK input
+Reduced TopK input
+Reduced TopK input
+Reduced TopK input
+Reduced TopK input
+Reduced TopK input
+Reduced TopK input
+Reduced TopK input
+Reduced TopK input
+Reduced TopK input
+
+statement ok
+DROP TABLE foo_raw CASCADE
+
+statement ok
+DROP TABLE bar_raw CASCADE
+
+statement ok
+DROP TABLE baz_raw CASCADE
+
+statement ok
+DROP TABLE quux_raw CASCADE
+
+# from session-window-wmr.slt
+statement ok
+CREATE TABLE events (
+    id int,
+    event_time timestamp,
+    user_id int,
+    worth decimal
+);
+
+statement ok
+CREATE MATERIALIZED VIEW event_session AS
+    WITH MUTUALLY RECURSIVE
+        make_session (user_id int4, session tsrange)
+            AS (
+                SELECT
+                    user_id, tsrange(event_time, event_time + '5 m'::INTERVAL) AS session
+                FROM
+                    events
+            ),
+        merge_session (user_id int4, session tsrange)
+            AS (
+                SELECT
+                    DISTINCT user_id, l_session + r_session
+                FROM
+                    (
+                        SELECT
+                            l.user_id AS user_id, l.session AS l_session, r.session AS r_session
+                        FROM
+                            make_session AS l, make_session AS r
+                        WHERE
+                            l.user_id = r.user_id
+                            AND (l.session && r.session OR l.session -|- r.session)
+                        UNION ALL
+                            SELECT
+                                make_session.user_id, make_session.session, merge_session.session
+                            FROM
+                                make_session, merge_session
+                            WHERE
+                                make_session.user_id = merge_session.user_id
+                                AND (
+                                        make_session.session && merge_session.session
+                                        OR make_session.session -|- merge_session.session
+                                    )
+                    )
+            ),
+        reduce_session (user_id int4, session tsrange)
+            AS (
+                SELECT
+                    user_id, tsrange(lower, upper)
+                FROM
+                    (
+                        SELECT
+                            user_id, min(lower) AS lower, upper
+                        FROM
+                            (
+                                SELECT
+                                    user_id, lower(session), max(upper(session)) AS upper
+                                FROM
+                                    merge_session
+                                GROUP BY
+                                    user_id, lower(session)
+                            )
+                        GROUP BY
+                            user_id, upper
+                    )
+            )
+    SELECT
+        *
+    FROM
+        reduce_session;
+
+statement ok
+CREATE MATERIALIZED VIEW user_session_worth AS
+    SELECT
+        user_id, id, count, upper(session) - lower(session) AS session_len, sum AS worth
+    FROM
+        (
+            SELECT
+                events.user_id, session, min(id) AS id, count(id), sum(worth)
+            FROM
+                events
+                JOIN event_session ON
+                        events.user_id = event_session.user_id
+                        AND event_session.session @> events.event_time
+            GROUP BY
+                events.user_id, session
+        );
+
+statement ok
+SELECT mz_unsafe.mz_sleep(4)
+
+query T
+SELECT mdo.name FROM mz_introspection.mz_arrangement_sharing mash JOIN mz_introspection.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
+----
+AccumulableErrorCheck
+Arrange ReduceMinsMaxes
+Arrange ReduceMinsMaxes
+Arrange ReduceMinsMaxes
+Arrange recursive err
+Arrange recursive err
+ArrangeAccumulable [val: empty]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(2)]]
+Arranged DistinctBy
+Arranged MinsMaxesHierarchical input
+Arranged MinsMaxesHierarchical input
+Arranged MinsMaxesHierarchical input
+Arranged MinsMaxesHierarchical input
+Arranged MinsMaxesHierarchical input
+Arranged MinsMaxesHierarchical input
+Arranged MinsMaxesHierarchical input
+Arranged MinsMaxesHierarchical input
+Arranged MinsMaxesHierarchical input
+Arranged MinsMaxesHierarchical input
+Arranged MinsMaxesHierarchical input
+Arranged MinsMaxesHierarchical input
+Arranged MinsMaxesHierarchical input
+Arranged MinsMaxesHierarchical input
+Arranged MinsMaxesHierarchical input
+Arranged MinsMaxesHierarchical input
+Arranged MinsMaxesHierarchical input
+Arranged MinsMaxesHierarchical input
+Arranged MinsMaxesHierarchical input
+Arranged MinsMaxesHierarchical input
+Arranged MinsMaxesHierarchical input
+Distinct recursive err
+Distinct recursive err
+DistinctBy
+DistinctByErrorCheck
+ReduceAccumulable
+ReduceMinsMaxes
+ReduceMinsMaxes
+ReduceMinsMaxes
+Reduced Fallibly MinsMaxesHierarchical
+Reduced Fallibly MinsMaxesHierarchical
+Reduced Fallibly MinsMaxesHierarchical
+Reduced Fallibly MinsMaxesHierarchical
+Reduced Fallibly MinsMaxesHierarchical
+Reduced Fallibly MinsMaxesHierarchical
+Reduced Fallibly MinsMaxesHierarchical
+Reduced Fallibly MinsMaxesHierarchical
+Reduced Fallibly MinsMaxesHierarchical
+Reduced Fallibly MinsMaxesHierarchical
+Reduced Fallibly MinsMaxesHierarchical
+Reduced Fallibly MinsMaxesHierarchical
+Reduced Fallibly MinsMaxesHierarchical
+Reduced Fallibly MinsMaxesHierarchical
+Reduced Fallibly MinsMaxesHierarchical
+Reduced Fallibly MinsMaxesHierarchical
+Reduced Fallibly MinsMaxesHierarchical
+Reduced Fallibly MinsMaxesHierarchical
+Reduced Fallibly MinsMaxesHierarchical
+Reduced Fallibly MinsMaxesHierarchical
+Reduced Fallibly MinsMaxesHierarchical
+
+statement ok
+DROP TABLE events CASCADE
+
+# from transactions.slt
+statement ok
+CREATE TABLE t (a int)
+
+statement ok
+CREATE MATERIALIZED VIEW v AS SELECT COUNT(*) FROM T
+
+statement ok
+SELECT mz_unsafe.mz_sleep(4)
+
+query T
+SELECT mdo.name FROM mz_introspection.mz_arrangement_sharing mash JOIN mz_introspection.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
+----
+AccumulableErrorCheck
+ArrangeAccumulable [val: empty]
+ReduceAccumulable
+
+statement ok
+DROP TABLE t CASCADE
+
+# from with mutually_recursive.slt
+statement ok
+CREATE TABLE t1 (f1 INTEGER);
+
+statement ok
+CREATE MATERIALIZED VIEW v1 AS
+WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT 2)
+  cnt (f1 INTEGER) AS (
+    SELECT f1 FROM t1 UNION ALL SELECT f1+1 AS f1 FROM cnt
+  )
+SELECT * FROM cnt;
+
+statement ok
+SELECT mz_unsafe.mz_sleep(4)
+
+query T
+SELECT mdo.name FROM mz_introspection.mz_arrangement_sharing mash JOIN mz_introspection.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
+----
+Arrange recursive err
+Distinct recursive err
+
+statement ok
+DROP TABLE t1 CASCADE
+
+statement ok
+CREATE TABLE t1 (f1 INTEGER);
+
+statement ok
+CREATE VIEW v1 AS
+WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT 2)
+  cnt (f1 INTEGER) AS (
+    SELECT f1 FROM t1 UNION ALL SELECT f1+1 AS f1 FROM cnt
+  )
+SELECT * FROM cnt;
+
+statement ok
+CREATE DEFAULT INDEX ON v1;
+
+statement ok
+SELECT mz_unsafe.mz_sleep(4)
+
+query T
+SELECT mdo.name FROM mz_introspection.mz_arrangement_sharing mash JOIN mz_introspection.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
+----
+Arrange export iterative
+Arrange export iterative err
+Arrange recursive err
+Distinct recursive err
+
+statement ok
+DROP TABLE t1 CASCADE
+
+# from fetch-tail-as-of.td
+statement ok
+CREATE TABLE t1 (f1 INTEGER)
+
+statement ok
+CREATE DEFAULT INDEX ON t1
+
+statement ok
+SELECT mz_unsafe.mz_sleep(4)
+
+query T
+SELECT mdo.name FROM mz_introspection.mz_arrangement_sharing mash JOIN mz_introspection.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
+----
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]-errors
+
+statement ok
+DROP TABLE t1 CASCADE
+
+# from fetch-tail-query.td
+statement ok
+CREATE TABLE t1 (f1 INTEGER)
+
+statement ok
+CREATE MATERIALIZED VIEW v1 AS SELECT count(*) FROM t1
+
+statement ok
+SELECT mz_unsafe.mz_sleep(4)
+
+query T
+SELECT mdo.name FROM mz_introspection.mz_arrangement_sharing mash JOIN mz_introspection.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
+----
+AccumulableErrorCheck
+ArrangeAccumulable [val: empty]
+ReduceAccumulable
+
+statement ok
+DROP TABLE t1 CASCADE
+
+# from fetch-tail-retraction.td
+statement ok
+CREATE TABLE inserts (f1 INTEGER)
+
+statement ok
+CREATE TABLE deletes (f1 INTEGER)
+
+statement ok
+CREATE MATERIALIZED VIEW v1 AS SELECT * FROM inserts EXCEPT ALL SELECT * FROM deletes
+
+statement ok
+SELECT mz_unsafe.mz_sleep(4)
+
+query T
+SELECT mdo.name FROM mz_introspection.mz_arrangement_sharing mash JOIN mz_introspection.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
+----
+ArrangeBy[[Column(0)]]
+Threshold local
+
+statement ok
+DROP TABLE inserts CASCADE
+
+statement ok
+DROP TABLE deletes CASCADE
+
+# from introspection-sources.td
+statement ok
+CREATE TABLE t (a int)
+
+statement ok
+CREATE MATERIALIZED VIEW mv AS SELECT * FROM t
+
+statement ok
+CREATE VIEW vv AS SELECT * FROM t
+
+statement ok
+CREATE DEFAULT INDEX ON vv
+
+statement ok
+CREATE MATERIALIZED VIEW mvv AS SELECT * FROM vv
+
+statement ok
+CREATE TABLE t1 (a int)
+
+statement ok
+CREATE TABLE t2 (b int)
+
+statement ok
+CREATE MATERIALIZED VIEW mv1 AS SELECT * FROM t1, t2
+
+statement ok
+CREATE DEFAULT INDEX ON mv1
+
+statement ok
+CREATE MATERIALIZED VIEW mv2 AS SELECT 1
+
+statement ok
+CREATE MATERIALIZED VIEW my_unique_mv_name AS SELECT * FROM t1
+
+statement ok
+CREATE VIEW vv_arr AS SELECT sum(a) FROM t JOIN t2 ON t.a = t2.b
+
+statement ok
+CREATE MATERIALIZED VIEW mv_arr AS SELECT * FROM vv_arr
+
+statement ok
+CREATE DEFAULT INDEX ii_arr ON vv_arr
+
+statement ok
+CREATE TABLE t3 (c int)
+
+statement ok
+CREATE DEFAULT INDEX ii_empty ON t3
+
+statement ok
+SELECT mz_unsafe.mz_sleep(4)
+
+query T
+SELECT mdo.name FROM mz_introspection.mz_arrangement_sharing mash JOIN mz_introspection.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
+----
+AccumulableErrorCheck
+AccumulableErrorCheck
+ArrangeAccumulable [val: empty]
+ArrangeAccumulable [val: empty]
+ArrangeBy[[Column(0), Column(1)]]
+ArrangeBy[[Column(0), Column(1)]]-errors
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]-errors
+ArrangeBy[[Column(0)]]-errors
+ArrangeBy[[Column(0)]]-errors
+ArrangeBy[[]]
+ArrangeBy[[]]
+ReduceAccumulable
+ReduceAccumulable
+
+statement ok
+DROP TABLE t3 CASCADE
+
+statement ok
+DROP TABLE t2 CASCADE
+
+statement ok
+DROP TABLE t1 CASCADE
+
+statement ok
+DROP TABLE t CASCADE
+
+# from joins.td
+statement ok
+CREATE TABLE names (num bigint, name text)
+
+statement ok
+CREATE TABLE mods (num bigint, mod text)
+
+statement ok
+CREATE MATERIALIZED VIEW test1 AS
+SELECT * FROM names JOIN mods USING (num)
+
+statement ok
+CREATE MATERIALIZED VIEW test2 (names_num, names_name, mods_num, mods_mod) AS
+SELECT * FROM names JOIN mods ON names.num = mods.num
+
+statement ok
+CREATE MATERIALIZED VIEW test3 (names_num, names_name, mods_num, mods_mod) AS
+SELECT * FROM names, mods WHERE names.num = mods.num
+
+statement ok
+CREATE MATERIALIZED VIEW test4 (names_num, names_name, mods_num, mods_mod) AS
+SELECT * FROM names, mods WHERE names.num = mods.num AND mods.mod = 'even'
+
+statement ok
+CREATE MATERIALIZED VIEW test5 (names_num, names_name, mods_num, mods_mod) AS
+SELECT * FROM names LEFT JOIN mods ON names.num = mods.num
+
+statement ok
+CREATE MATERIALIZED VIEW test6 (names_num, names_name, mods_num, mods_mod) AS
+SELECT * FROM names RIGHT JOIN mods ON names.num = mods.num
+
+statement ok
+CREATE MATERIALIZED VIEW test7 (names_num, names_name, mods_num, mods_mod) AS
+SELECT * FROM names, mods WHERE names.num = mods.num AND mods.mod = 'even'
+
+statement ok
+CREATE MATERIALIZED VIEW test8 AS
+SELECT mods.* FROM names, mods WHERE names.num = mods.num AND mods.mod = 'even'
+
+statement ok
+CREATE MATERIALIZED VIEW test9 AS
+SELECT foo.mod, foo.num, bar.name FROM names as bar, mods as foo
+WHERE bar.num = foo.num AND foo.mod = 'even'
+
+statement ok
+CREATE MATERIALIZED VIEW test10 (names_num, names_name, mods_num, mods_mod) AS
+SELECT * FROM names, mods
+
+statement ok
+CREATE MATERIALIZED VIEW test11 (names_num, names_name, mods_num, mods_mod) AS
+SELECT * FROM names CROSS JOIN mods
+
+statement ok
+CREATE MATERIALIZED VIEW test12 (names_num, names_name, mods_num, mods_mod) AS
+SELECT * FROM names LEFT JOIN mods ON 1 = 0
+
+statement ok
+CREATE MATERIALIZED VIEW test13 (names_num, names_name, mods_num, mods_mod) AS
+SELECT * FROM names RIGHT JOIN mods ON 1 = 0
+
+statement ok
+CREATE MATERIALIZED VIEW test14 (names_num, names_name, mods_num, mods_mod) AS
+SELECT * FROM names FULL OUTER JOIN mods ON 1 = 0
+
+statement ok
+SELECT mz_unsafe.mz_sleep(4)
+
+query T
+SELECT mdo.name FROM mz_introspection.mz_arrangement_sharing mash JOIN mz_introspection.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
+----
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[]]
+ArrangeBy[[]]
+ArrangeBy[[]]
+ArrangeBy[[]]
+Arranged DistinctBy
+Arranged DistinctBy
+DistinctBy
+DistinctBy
+DistinctByErrorCheck
+DistinctByErrorCheck
+
+statement ok
+DROP TABLE names CASCADE
+
+statement ok
+DROP TABLE mods CASCADE
+
+# from linear-join-fuel.td
+statement ok
+CREATE CLUSTER linear_join REPLICAS (r1 (SIZE '1'))
+
+statement ok
+SET cluster=linear_join
+
+statement ok
+CREATE TABLE t1 (a int)
+
+statement ok
+CREATE MATERIALIZED VIEW v1 IN CLUSTER linear_join AS
+SELECT SUM(a1.a + a2.a * 10000) FROM t1 AS a1, t1 AS a2
+
+statement ok
+CREATE DEFAULT INDEX ON v1
+
+statement ok
+SELECT mz_unsafe.mz_sleep(4)
+
+query T
+SELECT mdo.name FROM mz_introspection.mz_arrangement_sharing mash JOIN mz_introspection.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
+----
+AccumulableErrorCheck
+ArrangeAccumulable [val: empty]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]-errors
+ArrangeBy[[]]
+ReduceAccumulable
+
+statement ok
+DROP TABLE t1 CASCADE
+
+statement ok
+SET cluster=distinct_arrangements
+
+statement ok
+DROP CLUSTER linear_join CASCADE
+
+# from negative-multiplicities.td
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_repeat_row  = true
+----
+COMPLETE 0
+
+statement ok
+CREATE TABLE base (data bigint, diff bigint)
+
+statement ok
+CREATE MATERIALIZED VIEW data AS SELECT data FROM base, repeat_row(diff)
+
+statement ok
+CREATE VIEW topk AS
+SELECT grp.id, count(t.data) AS top_2_count,
+         (SELECT COUNT(d.data) FROM data d WHERE d.data % 2 = grp.id) AS total_count
+  FROM (SELECT generate_series(0,1) id) grp,
+         LATERAL (SELECT data FROM data WHERE data % 2 = grp.id ORDER BY data LIMIT 2) t
+  GROUP BY grp.id
+
+statement ok
+CREATE DEFAULT INDEX ON topk
+
+statement ok
+CREATE VIEW max_data AS
+SELECT MAX(data) FROM data
+
+statement ok
+CREATE DEFAULT INDEX ON max_data
+
+statement ok
+CREATE VIEW collation AS
+SELECT
+    data,
+    COUNT(DISTINCT data),
+    STRING_AGG(data::text || '1',  ',') AS data_1,
+    MIN(data),
+    MAX(DISTINCT data),
+    SUM(data),
+    STRING_AGG(data::text || '2',  ',') AS data_2
+  FROM data
+  GROUP BY data
+
+statement ok
+CREATE DEFAULT INDEX ON collation
+
+statement ok
+SELECT mz_unsafe.mz_sleep(4)
+
+query T
+SELECT mdo.name FROM mz_introspection.mz_arrangement_sharing mash JOIN mz_introspection.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
+----
+AccumulableErrorCheck
+AccumulableErrorCheck
+AccumulableErrorCheck
+Arrange ReduceMinsMaxes
+Arrange ReduceMinsMaxes
+ArrangeAccumulable [val: empty]
+ArrangeAccumulable [val: empty]
+ArrangeAccumulable [val: empty]
+ArrangeBy[[CallBinary { func: ModInt64, expr1: Column(0), expr2: Literal(Ok(Row{[Int64(2)]}), ColumnType { scalar_type: Int64, nullable: false }) }]]
+ArrangeBy[[CallUnary { func: CastInt32ToInt64(CastInt32ToInt64), expr: Column(0) }]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0)]]-errors
+ArrangeBy[[Column(0)]]-errors
+ArrangeBy[[Column(0)]]-errors
+Arranged Accumulable Distinct [val: empty]
+Arranged MinsMaxesHierarchical input
+Arranged MinsMaxesHierarchical input
+Arranged MinsMaxesHierarchical input
+Arranged MinsMaxesHierarchical input
+Arranged MinsMaxesHierarchical input
+Arranged MinsMaxesHierarchical input
+Arranged MinsMaxesHierarchical input
+Arranged MinsMaxesHierarchical input
+Arranged MinsMaxesHierarchical input
+Arranged MinsMaxesHierarchical input
+Arranged MinsMaxesHierarchical input
+Arranged MinsMaxesHierarchical input
+Arranged MinsMaxesHierarchical input
+Arranged MinsMaxesHierarchical input
+Arranged ReduceInaccumulable
+Arranged ReduceInaccumulable
+Arranged TopK input
+Arranged TopK input
+Arranged TopK input
+Arranged TopK input
+Arranged TopK input
+Arranged TopK input
+Arranged TopK input
+Arranged TopK input
+ReduceAccumulable
+ReduceAccumulable
+ReduceAccumulable
+ReduceInaccumulable
+ReduceInaccumulable
+ReduceInaccumulable Error Check
+ReduceInaccumulable Error Check
+ReduceMinsMaxes
+ReduceMinsMaxes
+Reduced Accumulable Distinct [val: empty]
+Reduced Fallibly MinsMaxesHierarchical
+Reduced Fallibly MinsMaxesHierarchical
+Reduced Fallibly MinsMaxesHierarchical
+Reduced Fallibly MinsMaxesHierarchical
+Reduced Fallibly MinsMaxesHierarchical
+Reduced Fallibly MinsMaxesHierarchical
+Reduced Fallibly MinsMaxesHierarchical
+Reduced Fallibly MinsMaxesHierarchical
+Reduced Fallibly MinsMaxesHierarchical
+Reduced Fallibly MinsMaxesHierarchical
+Reduced Fallibly MinsMaxesHierarchical
+Reduced Fallibly MinsMaxesHierarchical
+Reduced Fallibly MinsMaxesHierarchical
+Reduced Fallibly MinsMaxesHierarchical
+Reduced TopK input
+Reduced TopK input
+Reduced TopK input
+Reduced TopK input
+Reduced TopK input
+Reduced TopK input
+Reduced TopK input
+Reduced TopK input
+
+statement ok
+DROP TABLE base CASCADE
+
+# from orms.td
+statement ok
+CREATE TABLE t (i bigint, t text)
+
+statement ok
+CREATE DEFAULT INDEX ON t
+
+statement ok
+CREATE INDEX complex_index ON t (t::varchar, i::string)
+
+statement ok
+SELECT mz_unsafe.mz_sleep(4)
+
+query T
+SELECT mdo.name FROM mz_introspection.mz_arrangement_sharing mash JOIN mz_introspection.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
+----
+ArrangeBy[[CallUnary { func: CastStringToVarChar(CastStringToVarChar { length: None, fail_on_len: false }), expr: Column(1) }, CallUnary { func: CastInt64ToString(CastInt64ToString), expr: Column(0) }]]
+ArrangeBy[[CallUnary { func: CastStringToVarChar(CastStringToVarChar { length: None, fail_on_len: false }), expr: Column(1) }, CallUnary { func: CastInt64ToString(CastInt64ToString), expr: Column(0) }]]-errors
+ArrangeBy[[Column(0), Column(1)]]
+ArrangeBy[[Column(0), Column(1)]]-errors
+
+statement ok
+DROP TABLE t CASCADE
+
+statement ok
+BEGIN
+
+# Check mz_catalog_server
+statement ok
+SET cluster TO mz_catalog_server
+
+statement ok
+SELECT mz_unsafe.mz_sleep(16)
+
+query TI
+SELECT mdod.name, count(*)
+FROM mz_introspection.mz_arrangement_sharing mash
+JOIN mz_introspection.mz_dataflow_operator_dataflows mdod ON mash.operator_id = mdod.id
+WHERE mdod.dataflow_name NOT LIKE '%introspection-subscribe%'
+GROUP BY mdod.name
+ORDER BY mdod.name;
+----
+AccumulableErrorCheck  9
+Arrange␠ReduceMinsMaxes  3
+Arrange␠export␠iterative  1
+Arrange␠export␠iterative␠err  1
+Arrange␠recursive␠err  1
+ArrangeAccumulable␠[val:␠empty]  9
+ArrangeBy[[CallBinary␠{␠func:␠JsonbGetString␠{␠stringify:␠true␠},␠expr1:␠Column(1),␠expr2:␠Literal(Ok(Row{[String("id")]}),␠ColumnType␠{␠scalar_type:␠String,␠nullable:␠false␠})␠}]]  2
+ArrangeBy[[CallBinary␠{␠func:␠JsonbGetString␠{␠stringify:␠true␠},␠expr1:␠Column(2),␠expr2:␠Literal(Ok(Row{[String("id")]}),␠ColumnType␠{␠scalar_type:␠String,␠nullable:␠false␠})␠}]]  1
+ArrangeBy[[CallVariadic␠{␠func:␠Coalesce,␠exprs:␠[Column(2),␠Column(3)]␠}]]  2
+ArrangeBy[[Column(0),␠CallUnary␠{␠func:␠CastInt32ToNumeric(CastInt32ToNumeric(None)),␠expr:␠Column(1)␠}]]  1
+ArrangeBy[[Column(0),␠CallUnary␠{␠func:␠CastUint64ToNumeric(CastUint64ToNumeric(None)),␠expr:␠Column(2)␠}]]  1
+ArrangeBy[[Column(0),␠CallUnary␠{␠func:␠Lower(Lower),␠expr:␠Column(1)␠}]]  1
+ArrangeBy[[Column(0),␠CallUnary␠{␠func:␠Lower(Lower),␠expr:␠Column(2)␠}]]  1
+ArrangeBy[[Column(0),␠Column(1),␠Column(2),␠Column(3),␠Column(4),␠Column(5),␠Column(6),␠Column(7),␠Column(8),␠Column(9),␠Column(10),␠Column(11),␠Column(12),␠Column(13),␠Column(14),␠Column(15),␠Column(16),␠Column(17),␠Column(18),␠Column(19),␠Column(20),␠Column(21),␠Column(22),␠Column(23),␠Column(24),␠Column(25),␠Column(26),␠Column(27)]]  2
+ArrangeBy[[Column(0),␠Column(1),␠Column(2),␠Column(3),␠Column(4),␠Column(5),␠Column(6),␠Column(7),␠Column(8),␠Column(9),␠Column(10),␠Column(11),␠Column(12),␠Column(13)]]  1
+ArrangeBy[[Column(0),␠Column(1),␠Column(2),␠Column(3),␠Column(4),␠Column(5),␠Column(6),␠Column(7),␠Column(8),␠Column(9),␠Column(10),␠Column(11),␠Column(12),␠Column(13)]]-errors  1
+ArrangeBy[[Column(0),␠Column(1),␠Column(2),␠Column(3),␠Column(4),␠Column(5)]]  1
+ArrangeBy[[Column(0),␠Column(1),␠Column(2),␠Column(3),␠Column(4),␠Column(5)]]-errors  1
+ArrangeBy[[Column(0),␠Column(1),␠Column(2),␠Column(3),␠Column(4)]]  1
+ArrangeBy[[Column(0),␠Column(1),␠Column(2),␠Column(3),␠Column(4)]]-errors  1
+ArrangeBy[[Column(0),␠Column(1)]]  2
+ArrangeBy[[Column(0),␠Column(2)]]  3
+ArrangeBy[[Column(0),␠Column(3)]]  4
+ArrangeBy[[Column(0),␠Column(4)]]  1
+ArrangeBy[[Column(0)]]  152
+ArrangeBy[[Column(0)]]-errors  42
+ArrangeBy[[Column(1),␠Column(0)]]  1
+ArrangeBy[[Column(1),␠Column(2)]]  1
+ArrangeBy[[Column(1),␠Column(3)]]  1
+ArrangeBy[[Column(1)]]  25
+ArrangeBy[[Column(1)]]-errors  7
+ArrangeBy[[Column(13)]]  1
+ArrangeBy[[Column(15)]]  1
+ArrangeBy[[Column(15)]]-errors  1
+ArrangeBy[[Column(2)]]  20
+ArrangeBy[[Column(2)]]-errors  7
+ArrangeBy[[Column(21)]]  1
+ArrangeBy[[Column(21)]]-errors  1
+ArrangeBy[[Column(3)]]  6
+ArrangeBy[[Column(3)]]-errors  2
+ArrangeBy[[Column(4)]]  5
+ArrangeBy[[Column(4)]]-errors  2
+ArrangeBy[[Column(5)]]  2
+ArrangeBy[[Column(6)]]  3
+ArrangeBy[[Column(6)]]-errors  2
+ArrangeBy[[Column(9)]]  1
+ArrangeBy[[]]  9
+Arranged␠DistinctBy  46
+Arranged␠MinsMaxesHierarchical␠input  14
+Arranged␠ReduceInaccumulable  3
+Arranged␠TopK␠input  52
+Distinct␠recursive␠err  1
+DistinctBy  46
+DistinctByErrorCheck  46
+ReduceAccumulable  9
+ReduceInaccumulable  3
+ReduceInaccumulable␠Error␠Check  3
+ReduceMinsMaxes  3
+ReduceMinsMaxes␠Error␠Check  1
+Reduced␠Fallibly␠MinsMaxesHierarchical  14
+Reduced␠TopK␠input  52
+Threshold␠local  10
+
+statement ok
+COMMIT
+
+# Check dataflows of our logging infrastructure with log_logging
+statement ok
+ALTER CLUSTER distinct_arrangements SET (MANAGED = false);
+
+statement ok
+CREATE CLUSTER REPLICA distinct_arrangements.replica SIZE = '2', INTROSPECTION DEBUGGING = true;
+
+statement ok
+BEGIN
+
+statement ok
+SET cluster = distinct_arrangements
+
+statement ok
+SET cluster_replica = replica
+
+statement ok
+SELECT mz_unsafe.mz_sleep(4)
+
+query T
+SELECT mdo.name FROM mz_introspection.mz_arrangement_sharing mash JOIN mz_introspection.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
+----
+Arrange Compute(ArrangementHeapAllocations)
+Arrange Compute(ArrangementHeapCapacity)
+Arrange Compute(ArrangementHeapSize)
+Arrange Compute(DataflowCurrent)
+Arrange Compute(DataflowGlobal)
+Arrange Compute(ErrorCount)
+Arrange Compute(FrontierCurrent)
+Arrange Compute(HydrationTime)
+Arrange Compute(ImportFrontierCurrent)
+Arrange Compute(LirMapping)
+Arrange Compute(PeekCurrent)
+Arrange Compute(PeekDuration)
+Arrange Compute(ShutdownDuration)
+Arrange Differential(ArrangementBatches)
+Arrange Differential(ArrangementRecords)
+Arrange Differential(BatcherAllocations)
+Arrange Differential(BatcherCapacity)
+Arrange Differential(BatcherRecords)
+Arrange Differential(BatcherSize)
+Arrange Differential(Sharing)
+Arrange Timely(Addresses)
+Arrange Timely(BatchesReceived)
+Arrange Timely(BatchesSent)
+Arrange Timely(Channels)
+Arrange Timely(Elapsed)
+Arrange Timely(Histogram)
+Arrange Timely(MessagesReceived)
+Arrange Timely(MessagesSent)
+Arrange Timely(Operates)
+Arrange Timely(Parks)
+Arrange Timely(Reachability)
+
+statement ok
+COMMIT
+
+# Check dataflows installed by introspection subscribes.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_introspection_subscribes = true
+----
+COMPLETE 0
+
+# Flipping `enable_introspection_subscribes` affects new replicas, so force a
+# restart.
+statement ok
+DROP CLUSTER REPLICA distinct_arrangements.replica
+
+statement ok
+ALTER CLUSTER distinct_arrangements SET (MANAGED = true)
+
+statement ok
+ALTER CLUSTER distinct_arrangements SET (REPLICATION FACTOR = 0)
+
+statement ok
+ALTER CLUSTER distinct_arrangements SET (REPLICATION FACTOR = 1)
+
+statement ok
+RESET cluster_replica
+
+statement ok
+SELECT mz_unsafe.mz_sleep(4)
+
+statement ok
+BEGIN
+
+statement ok
+SET cluster = distinct_arrangements
+
+query TI
+SELECT mdod.name, count(*)
+FROM mz_introspection.mz_arrangement_sharing mash
+JOIN mz_introspection.mz_dataflow_operator_dataflows mdod ON mash.operator_id = mdod.id
+GROUP BY mdod.name
+ORDER BY mdod.name
+----
+AccumulableErrorCheck  2
+Arrange␠ReduceMinsMaxes  1
+ArrangeAccumulable␠[val:␠empty]  2
+ReduceAccumulable  2
+ReduceMinsMaxes  1
+ReduceMinsMaxes␠Error␠Check  1
+
+statement ok
+COMMIT
