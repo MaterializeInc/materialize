@@ -205,13 +205,6 @@ pub const STORAGE_SUSPEND_AND_RESTART_DELAY: Config<Duration> = Config::new(
     "Delay interval when reconnecting to a source / sink after halt.",
 );
 
-/// Whether to use the new reclock implementation.
-pub const STORAGE_USE_RECLOCK_V2: Config<bool> = Config::new(
-    "storage_use_reclock_v2",
-    true,
-    "Whether to use the new reclock implementation.",
-);
-
 /// Whether to mint reclock bindings based on the latest probed frontier or the currently ingested
 /// frontier.
 pub const STORAGE_RECLOCK_TO_LATEST: Config<bool> = Config::new(
@@ -249,7 +242,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&STORAGE_UPSERT_MAX_SNAPSHOT_BATCH_BUFFERING)
         .add(&STORAGE_ROCKSDB_CLEANUP_TRIES)
         .add(&STORAGE_SUSPEND_AND_RESTART_DELAY)
-        .add(&STORAGE_USE_RECLOCK_V2)
         .add(&STORAGE_RECLOCK_TO_LATEST)
         .add(&STORAGE_USE_CONTINUAL_FEEDBACK_UPSERT)
 }
