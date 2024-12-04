@@ -723,7 +723,7 @@ impl CatalogState {
         self.get_entry(item_id)
     }
 
-    pub fn get_entries(&self) -> impl Iterator<Item = (&GlobalId, &CatalogEntry)> + '_ {
+    pub fn get_entries(&self) -> impl Iterator<Item = (&CatalogItemId, &CatalogEntry)> + '_ {
         self.entry_by_id.iter()
     }
 
