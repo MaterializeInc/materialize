@@ -245,6 +245,7 @@ def compileFastSltConfig() -> SltRunConfig:
         "test/sqllogictest/default_privileges.slt",
         "test/sqllogictest/degenerate.slt",
         "test/sqllogictest/disambiguate_columns.slt",
+        "test/sqllogictest/distinct_arrangements.slt",
         "test/sqllogictest/distinct_from.slt",
         "test/sqllogictest/distinct_on.slt",
         "test/sqllogictest/encode.slt",
