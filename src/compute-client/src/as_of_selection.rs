@@ -766,25 +766,18 @@ mod tests {
     use std::collections::BTreeSet;
 
     use async_trait::async_trait;
-    use futures::future::BoxFuture;
     use mz_compute_types::dataflows::{IndexDesc, IndexImport};
     use mz_compute_types::sinks::ComputeSinkConnection;
     use mz_compute_types::sinks::ComputeSinkDesc;
     use mz_compute_types::sinks::MaterializedViewSinkConnection;
     use mz_compute_types::sources::SourceInstanceArguments;
     use mz_compute_types::sources::SourceInstanceDesc;
-    use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
     use mz_repr::RelationDesc;
     use mz_repr::RelationType;
     use mz_repr::Timestamp;
-    use mz_storage_client::controller::{CollectionDescription, StorageMetadata, StorageTxn};
     use mz_storage_client::storage_collections::CollectionFrontiers;
-    use mz_storage_types::connections::inline::InlinedConnection;
     use mz_storage_types::controller::{CollectionMetadata, StorageError};
-    use mz_storage_types::parameters::StorageParameters;
     use mz_storage_types::read_holds::ReadHoldError;
-    use mz_storage_types::sources::SourceExportDataConfig;
-    use mz_storage_types::sources::{GenericSourceConnection, SourceDesc};
     use mz_storage_types::time_dependence::{TimeDependence, TimeDependenceError};
 
     use super::*;
@@ -806,27 +799,10 @@ mod tests {
     impl StorageCollections for StorageFrontiers {
         type Timestamp = Timestamp;
 
-        async fn initialize_state(
-            &self,
-            _txn: &mut (dyn StorageTxn<Self::Timestamp> + Send),
-            _init_ids: BTreeSet<GlobalId>,
-            _drop_ids: BTreeSet<GlobalId>,
-        ) -> Result<(), StorageError<Self::Timestamp>> {
-            unimplemented!()
-        }
-
-        fn update_parameters(&self, _config_params: StorageParameters) {
-            unimplemented!()
-        }
-
         fn collection_metadata(
             &self,
             _id: GlobalId,
         ) -> Result<CollectionMetadata, StorageError<Self::Timestamp>> {
-            unimplemented!()
-        }
-
-        fn active_collection_metadatas(&self) -> Vec<(GlobalId, CollectionMetadata)> {
             unimplemented!()
         }
 
@@ -848,88 +824,7 @@ mod tests {
             Ok(frontiers)
         }
 
-        fn active_collection_frontiers(&self) -> Vec<CollectionFrontiers<Self::Timestamp>> {
-            unimplemented!()
-        }
-
         fn check_exists(&self, _id: GlobalId) -> Result<(), StorageError<Self::Timestamp>> {
-            unimplemented!()
-        }
-
-        async fn snapshot_stats(
-            &self,
-            _id: GlobalId,
-            _as_of: Antichain<Self::Timestamp>,
-        ) -> Result<SnapshotStats, StorageError<Self::Timestamp>> {
-            unimplemented!()
-        }
-
-        async fn snapshot_parts_stats(
-            &self,
-            _id: GlobalId,
-            _as_of: Antichain<Self::Timestamp>,
-        ) -> BoxFuture<'static, Result<SnapshotPartsStats, StorageError<Self::Timestamp>>> {
-            unimplemented!()
-        }
-
-        async fn prepare_state(
-            &self,
-            _txn: &mut (dyn StorageTxn<Self::Timestamp> + Send),
-            _ids_to_add: BTreeSet<GlobalId>,
-            _ids_to_drop: BTreeSet<GlobalId>,
-        ) -> Result<(), StorageError<Self::Timestamp>> {
-            unimplemented!()
-        }
-
-        async fn create_collections_for_bootstrap(
-            &self,
-            _storage_metadata: &StorageMetadata,
-            _register_ts: Option<Self::Timestamp>,
-            _collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
-            _migrated_storage_collections: &BTreeSet<GlobalId>,
-        ) -> Result<(), StorageError<Self::Timestamp>> {
-            unimplemented!()
-        }
-
-        async fn alter_ingestion_source_desc(
-            &self,
-            _ingestion_id: GlobalId,
-            _source_desc: SourceDesc,
-        ) -> Result<(), StorageError<Self::Timestamp>> {
-            unimplemented!()
-        }
-
-        async fn alter_ingestion_export_data_configs(
-            &self,
-            _source_exports: BTreeMap<GlobalId, SourceExportDataConfig>,
-        ) -> Result<(), StorageError<Self::Timestamp>> {
-            unimplemented!()
-        }
-
-        async fn alter_ingestion_connections(
-            &self,
-            _source_connections: BTreeMap<GlobalId, GenericSourceConnection<InlinedConnection>>,
-        ) -> Result<(), StorageError<Self::Timestamp>> {
-            unimplemented!()
-        }
-
-        fn alter_table_desc(
-            &self,
-            _table_id: GlobalId,
-            _new_desc: RelationDesc,
-        ) -> Result<(), StorageError<Self::Timestamp>> {
-            unimplemented!()
-        }
-
-        fn drop_collections_unvalidated(
-            &self,
-            _storage_metadata: &StorageMetadata,
-            _identifiers: Vec<GlobalId>,
-        ) {
-            unimplemented!()
-        }
-
-        fn set_read_policies(&self, _policies: Vec<(GlobalId, ReadPolicy<Self::Timestamp>)>) {
             unimplemented!()
         }
 

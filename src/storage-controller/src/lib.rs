@@ -322,7 +322,8 @@ where
     fn storage_collections(
         &self,
     ) -> Arc<dyn StorageCollections<Timestamp = Self::Timestamp> + Send + Sync> {
-        Arc::clone(&self.storage_collections) as Arc<_>
+        let ret: _ = Arc::clone(&self.storage_collections);
+        ret
     }
 
     fn collection_metadata(
@@ -1010,8 +1011,7 @@ where
     ) -> Result<(), StorageError<Self::Timestamp>> {
         // Also have to let StorageCollections know!
         self.storage_collections
-            .alter_ingestion_connections(source_connections.clone())
-            .await?;
+            .alter_ingestion_connections(source_connections.clone())?;
 
         let mut ingestions_to_run = BTreeSet::new();
 
@@ -1055,8 +1055,7 @@ where
     ) -> Result<(), StorageError<Self::Timestamp>> {
         // Also have to let StorageCollections know!
         self.storage_collections
-            .alter_ingestion_export_data_configs(source_exports.clone())
-            .await?;
+            .alter_ingestion_export_data_configs(source_exports.clone())?;
 
         let mut ingestions_to_run = BTreeSet::new();
 
@@ -2241,7 +2240,6 @@ where
     ) -> Result<(), StorageError<T>> {
         self.storage_collections
             .initialize_state(txn, init_ids, drop_ids)
-            .await
     }
 
     async fn prepare_state(
@@ -2252,7 +2250,6 @@ where
     ) -> Result<(), StorageError<T>> {
         self.storage_collections
             .prepare_state(txn, ids_to_add, ids_to_drop)
-            .await
     }
 
     async fn real_time_recent_timestamp(
@@ -2421,7 +2418,7 @@ where
         let storage_collections = storage_collections::StorageCollectionsImpl::new(
             persist_location.clone(),
             Arc::clone(&persist_clients),
-            &metrics_registry,
+            metrics_registry,
             now.clone(),
             Arc::clone(&txns_metrics),
             envd_epoch,

@@ -86,37 +86,11 @@ mod metrics;
 pub trait StorageCollections: Debug {
     type Timestamp: TimelyTimestamp;
 
-    /// On boot, reconcile this [StorageCollections] with outside state. We get
-    /// a [StorageTxn] where we can record any durable state that we need.
-    ///
-    /// We get `init_ids`, which tells us about all collections that currently
-    /// exist, so that we can record durable state for those that _we_ don't
-    /// know yet about.
-    ///
-    /// We also get `drop_ids`, which tells us about all collections that we
-    /// might have known about before and have now been dropped.
-    async fn initialize_state(
-        &self,
-        txn: &mut (dyn StorageTxn<Self::Timestamp> + Send),
-        init_ids: BTreeSet<GlobalId>,
-        drop_ids: BTreeSet<GlobalId>,
-    ) -> Result<(), StorageError<Self::Timestamp>>;
-
-    /// Update storage configuration with new parameters.
-    fn update_parameters(&self, config_params: StorageParameters);
-
     /// Returns the [CollectionMetadata] of the collection identified by `id`.
     fn collection_metadata(
         &self,
         id: GlobalId,
     ) -> Result<CollectionMetadata, StorageError<Self::Timestamp>>;
-
-    /// Acquire an iterator over [CollectionMetadata] for all active
-    /// collections.
-    ///
-    /// A collection is "active" when it has a non empty frontier of read
-    /// capabilties.
-    fn active_collection_metadatas(&self) -> Vec<(GlobalId, CollectionMetadata)>;
 
     /// Returns the frontiers of the identified collection.
     fn collection_frontiers(
@@ -137,165 +111,9 @@ pub trait StorageCollections: Debug {
         id: Vec<GlobalId>,
     ) -> Result<Vec<CollectionFrontiers<Self::Timestamp>>, StorageError<Self::Timestamp>>;
 
-    /// Atomically gets and returns the frontiers of all active collections.
-    ///
-    /// A collection is "active" when it has a non empty frontier of read
-    /// capabilties.
-    fn active_collection_frontiers(&self) -> Vec<CollectionFrontiers<Self::Timestamp>>;
-
     /// Checks whether a collection exists under the given `GlobalId`. Returns
     /// an error if the collection does not exist.
     fn check_exists(&self, id: GlobalId) -> Result<(), StorageError<Self::Timestamp>>;
-
-    /// Returns aggregate statistics about the contents of the local input named
-    /// `id` at `as_of`.
-    async fn snapshot_stats(
-        &self,
-        id: GlobalId,
-        as_of: Antichain<Self::Timestamp>,
-    ) -> Result<SnapshotStats, StorageError<Self::Timestamp>>;
-
-    /// Returns aggregate statistics about the contents of the local input named
-    /// `id` at `as_of`.
-    ///
-    /// Note that this async function itself returns a future. We may
-    /// need to block on the stats being available, but don't want to hold a reference
-    /// to the controller for too long... so the outer future holds a reference to the
-    /// controller but returns quickly, and the inner future is slow but does not
-    /// reference the controller.
-    async fn snapshot_parts_stats(
-        &self,
-        id: GlobalId,
-        as_of: Antichain<Self::Timestamp>,
-    ) -> BoxFuture<'static, Result<SnapshotPartsStats, StorageError<Self::Timestamp>>>;
-
-    /// Update the given [`StorageTxn`] with the appropriate metadata given the
-    /// IDs to add and drop.
-    ///
-    /// The data modified in the `StorageTxn` must be made available in all
-    /// subsequent calls that require [`StorageMetadata`] as a parameter.
-    async fn prepare_state(
-        &self,
-        txn: &mut (dyn StorageTxn<Self::Timestamp> + Send),
-        ids_to_add: BTreeSet<GlobalId>,
-        ids_to_drop: BTreeSet<GlobalId>,
-    ) -> Result<(), StorageError<Self::Timestamp>>;
-
-    /// Create the collections described by the individual
-    /// [CollectionDescriptions](CollectionDescription).
-    ///
-    /// Each command carries the source id, the source description, and any
-    /// associated metadata needed to ingest the particular source.
-    ///
-    /// This command installs collection state for the indicated sources, and
-    /// they are now valid to use in queries at times beyond the initial `since`
-    /// frontiers. Each collection also acquires a read capability at this
-    /// frontier, which will need to be repeatedly downgraded with
-    /// `allow_compaction()` to permit compaction.
-    ///
-    /// This method is NOT idempotent; It can fail between processing of
-    /// different collections and leave the [StorageCollections] in an
-    /// inconsistent state. It is almost always wrong to do anything but abort
-    /// the process on `Err`.
-    ///
-    /// The `register_ts` is used as the initial timestamp that tables are
-    /// available for reads. (We might later give non-tables the same treatment,
-    /// but hold off on that initially.) Callers must provide a Some if any of
-    /// the collections is a table. A None may be given if none of the
-    /// collections are a table (i.e. all materialized views, sources, etc).
-    async fn create_collections(
-        &self,
-        storage_metadata: &StorageMetadata,
-        register_ts: Option<Self::Timestamp>,
-        collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
-    ) -> Result<(), StorageError<Self::Timestamp>> {
-        self.create_collections_for_bootstrap(
-            storage_metadata,
-            register_ts,
-            collections,
-            &BTreeSet::new(),
-        )
-        .await
-    }
-
-    /// Like [`Self::create_collections`], except used specifically for bootstrap.
-    ///
-    /// `migrated_storage_collections` is a set of migrated storage collections to be excluded
-    /// from the txn-wal sub-system.
-    async fn create_collections_for_bootstrap(
-        &self,
-        storage_metadata: &StorageMetadata,
-        register_ts: Option<Self::Timestamp>,
-        collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
-        migrated_storage_collections: &BTreeSet<GlobalId>,
-    ) -> Result<(), StorageError<Self::Timestamp>>;
-
-    /// Alters the identified ingestion to use the provided [`SourceDesc`].
-    ///
-    /// NOTE: Ideally, [StorageCollections] would not care about these, but we
-    /// have to learn about changes such that when new subsources are created we
-    /// can correctly determine a since based on its depenencies' sinces. This
-    /// is really only relevant because newly created subsources depend on the
-    /// remap shard, and we can't just have them start at since 0.
-    async fn alter_ingestion_source_desc(
-        &self,
-        ingestion_id: GlobalId,
-        source_desc: SourceDesc,
-    ) -> Result<(), StorageError<Self::Timestamp>>;
-
-    /// Alters the data config for the specified source exports of the specified ingestions.
-    async fn alter_ingestion_export_data_configs(
-        &self,
-        source_exports: BTreeMap<GlobalId, SourceExportDataConfig>,
-    ) -> Result<(), StorageError<Self::Timestamp>>;
-
-    /// Alters each identified collection to use the correlated
-    /// [`GenericSourceConnection`].
-    ///
-    /// See NOTE on [StorageCollections::alter_ingestion_source_desc].
-    async fn alter_ingestion_connections(
-        &self,
-        source_connections: BTreeMap<GlobalId, GenericSourceConnection<InlinedConnection>>,
-    ) -> Result<(), StorageError<Self::Timestamp>>;
-
-    /// Updates the [`RelationDesc`] for the specified table.
-    fn alter_table_desc(
-        &self,
-        table_id: GlobalId,
-        new_desc: RelationDesc,
-    ) -> Result<(), StorageError<Self::Timestamp>>;
-
-    /// Drops the read capability for the sources and allows their resources to
-    /// be reclaimed.
-    ///
-    /// TODO(jkosh44): This method does not validate the provided identifiers.
-    /// Currently when the controller starts/restarts it has no durable state.
-    /// That means that it has no way of remembering any past commands sent. In
-    /// the future we plan on persisting state for the controller so that it is
-    /// aware of past commands. Therefore this method is for dropping sources
-    /// that we know to have been previously created, but have been forgotten by
-    /// the controller due to a restart. Once command history becomes durable we
-    /// can remove this method and use the normal `drop_sources`.
-    fn drop_collections_unvalidated(
-        &self,
-        storage_metadata: &StorageMetadata,
-        identifiers: Vec<GlobalId>,
-    );
-
-    /// Assigns a read policy to specific identifiers.
-    ///
-    /// The policies are assigned in the order presented, and repeated
-    /// identifiers should conclude with the last policy. Changing a policy will
-    /// immediately downgrade the read capability if appropriate, but it will
-    /// not "recover" the read capability if the prior capability is already
-    /// ahead of it.
-    ///
-    /// This [StorageCollections] may include its own overrides on these
-    /// policies.
-    ///
-    /// Identifiers not present in `policies` retain their existing read
-    /// policies.
-    fn set_read_policies(&self, policies: Vec<(GlobalId, ReadPolicy<Self::Timestamp>)>);
 
     /// Acquires and returns the earliest possible read holds for the specified
     /// collections.
@@ -1105,8 +923,7 @@ where
 }
 
 // See comments on the above impl for StorageCollectionsImpl.
-#[async_trait]
-impl<T> StorageCollections for StorageCollectionsImpl<T>
+impl<T> StorageCollectionsImpl<T>
 where
     T: TimelyTimestamp
         + Lattice
@@ -1116,9 +933,7 @@ where
         + Into<mz_repr::Timestamp>
         + Sync,
 {
-    type Timestamp = T;
-
-    async fn initialize_state(
+    pub fn initialize_state(
         &self,
         txn: &mut (dyn StorageTxn<T> + Send),
         init_ids: BTreeSet<GlobalId>,
@@ -1131,7 +946,7 @@ where
         let new_collections: BTreeSet<GlobalId> =
             init_ids.difference(&existing_metadata).cloned().collect();
 
-        self.prepare_state(txn, new_collections, drop_ids).await?;
+        self.prepare_state(txn, new_collections, drop_ids)?;
 
         // All shards that belong to collections dropped in the last epoch are
         // eligible for finalization. This intentionally includes any built-in
@@ -1150,7 +965,7 @@ where
         Ok(())
     }
 
-    fn update_parameters(&self, config_params: StorageParameters) {
+    pub fn update_parameters(&self, config_params: StorageParameters) {
         // We serialize the dyncfg updates in StorageParameters, but configure
         // persist separately.
         config_params.dyncfg_updates.apply(self.persist.cfg());
@@ -1161,10 +976,7 @@ where
             .update(config_params);
     }
 
-    fn collection_metadata(
-        &self,
-        id: GlobalId,
-    ) -> Result<CollectionMetadata, StorageError<Self::Timestamp>> {
+    pub fn collection_metadata(&self, id: GlobalId) -> Result<CollectionMetadata, StorageError<T>> {
         let collections = self.collections.lock().expect("lock poisoned");
 
         collections
@@ -1173,7 +985,7 @@ where
             .ok_or(StorageError::IdentifierMissing(id))
     }
 
-    fn active_collection_metadatas(&self) -> Vec<(GlobalId, CollectionMetadata)> {
+    pub fn active_collection_metadatas(&self) -> Vec<(GlobalId, CollectionMetadata)> {
         let collections = self.collections.lock().expect("lock poisoned");
 
         collections
@@ -1183,10 +995,10 @@ where
             .collect()
     }
 
-    fn collections_frontiers(
+    pub fn collections_frontiers(
         &self,
         ids: Vec<GlobalId>,
-    ) -> Result<Vec<CollectionFrontiers<Self::Timestamp>>, StorageError<Self::Timestamp>> {
+    ) -> Result<Vec<CollectionFrontiers<T>>, StorageError<T>> {
         let collections = self.collections.lock().expect("lock poisoned");
 
         let res = ids
@@ -1207,7 +1019,7 @@ where
         Ok(res)
     }
 
-    fn active_collection_frontiers(&self) -> Vec<CollectionFrontiers<Self::Timestamp>> {
+    pub fn active_collection_frontiers(&self) -> Vec<CollectionFrontiers<T>> {
         let collections = self.collections.lock().expect("lock poisoned");
 
         let res = collections
@@ -1224,11 +1036,11 @@ where
         res
     }
 
-    async fn snapshot_stats(
+    pub async fn snapshot_stats(
         &self,
         id: GlobalId,
-        as_of: Antichain<Self::Timestamp>,
-    ) -> Result<SnapshotStats, StorageError<Self::Timestamp>> {
+        as_of: Antichain<T>,
+    ) -> Result<SnapshotStats, StorageError<T>> {
         let metadata = self.collection_metadata(id)?;
 
         // See the comments in StorageController::snapshot for what's going on
@@ -1251,11 +1063,11 @@ where
         self.snapshot_stats_inner(id, as_of).await
     }
 
-    async fn snapshot_parts_stats(
+    pub async fn snapshot_parts_stats(
         &self,
         id: GlobalId,
-        as_of: Antichain<Self::Timestamp>,
-    ) -> BoxFuture<'static, Result<SnapshotPartsStats, StorageError<Self::Timestamp>>> {
+        as_of: Antichain<T>,
+    ) -> BoxFuture<'static, Result<SnapshotPartsStats, StorageError<T>>> {
         let metadata = {
             let self_collections = self.collections.lock().expect("lock poisoned");
 
@@ -1305,7 +1117,7 @@ where
         })
     }
 
-    fn check_exists(&self, id: GlobalId) -> Result<(), StorageError<Self::Timestamp>> {
+    pub fn check_exists(&self, id: GlobalId) -> Result<(), StorageError<T>> {
         let collections = self.collections.lock().expect("lock poisoned");
 
         if collections.contains_key(&id) {
@@ -1315,9 +1127,9 @@ where
         }
     }
 
-    async fn prepare_state(
+    pub fn prepare_state(
         &self,
-        txn: &mut (dyn StorageTxn<Self::Timestamp> + Send),
+        txn: &mut (dyn StorageTxn<T> + Send),
         ids_to_add: BTreeSet<GlobalId>,
         ids_to_drop: BTreeSet<GlobalId>,
     ) -> Result<(), StorageError<T>> {
@@ -1349,13 +1161,13 @@ where
     // TODO(aljoscha): It would be swell if we could refactor this Leviathan of
     // a method/move individual parts to their own methods.
     #[instrument(level = "debug")]
-    async fn create_collections_for_bootstrap(
+    pub async fn create_collections_for_bootstrap(
         &self,
         storage_metadata: &StorageMetadata,
-        register_ts: Option<Self::Timestamp>,
-        mut collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
+        register_ts: Option<T>,
+        mut collections: Vec<(GlobalId, CollectionDescription<T>)>,
         migrated_storage_collections: &BTreeSet<GlobalId>,
-    ) -> Result<(), StorageError<Self::Timestamp>> {
+    ) -> Result<(), StorageError<T>> {
         let is_in_txns = |id, metadata: &CollectionMetadata| {
             metadata.txns_shard.is_some()
                 && !(self.read_only && migrated_storage_collections.contains(&id))
@@ -1446,7 +1258,7 @@ where
         use futures::stream::{StreamExt, TryStreamExt};
         let this = &*self;
         let mut to_register: Vec<_> = futures::stream::iter(enriched_with_metadata)
-            .map(|data: Result<_, StorageError<Self::Timestamp>>| {
+            .map(|data: Result<_, StorageError<T>>| {
                 let register_ts = register_ts.clone();
                 async move {
                     let (id, description, metadata) = data?;
@@ -1503,14 +1315,7 @@ where
                             }
                         }
                     }
-
-                    Ok::<_, StorageError<Self::Timestamp>>((
-                        id,
-                        description,
-                        write,
-                        since_handle,
-                        metadata,
-                    ))
+                    Ok::<_, StorageError<T>>((id, description, write, since_handle, metadata))
                 }
             })
             // Poll each future for each collection concurrently, maximum of 50 at a time.
@@ -1702,11 +1507,11 @@ where
         Ok(())
     }
 
-    async fn alter_ingestion_source_desc(
+    pub fn alter_ingestion_source_desc(
         &self,
         ingestion_id: GlobalId,
         source_desc: SourceDesc,
-    ) -> Result<(), StorageError<Self::Timestamp>> {
+    ) -> Result<(), StorageError<T>> {
         // The StorageController checks the validity of these. And we just
         // accept them.
 
@@ -1726,10 +1531,10 @@ where
         Ok(())
     }
 
-    async fn alter_ingestion_export_data_configs(
+    pub fn alter_ingestion_export_data_configs(
         &self,
         source_exports: BTreeMap<GlobalId, SourceExportDataConfig>,
-    ) -> Result<(), StorageError<Self::Timestamp>> {
+    ) -> Result<(), StorageError<T>> {
         let mut self_collections = self.collections.lock().expect("lock poisoned");
 
         for (source_export_id, new_data_config) in source_exports {
@@ -1786,10 +1591,10 @@ where
         Ok(())
     }
 
-    async fn alter_ingestion_connections(
+    pub fn alter_ingestion_connections(
         &self,
         source_connections: BTreeMap<GlobalId, GenericSourceConnection<InlinedConnection>>,
-    ) -> Result<(), StorageError<Self::Timestamp>> {
+    ) -> Result<(), StorageError<T>> {
         let mut self_collections = self.collections.lock().expect("lock poisoned");
 
         for (id, conn) in source_connections {
@@ -1821,11 +1626,11 @@ where
         Ok(())
     }
 
-    fn alter_table_desc(
+    pub fn alter_table_desc(
         &self,
         table_id: GlobalId,
         new_desc: RelationDesc,
-    ) -> Result<(), StorageError<Self::Timestamp>> {
+    ) -> Result<(), StorageError<T>> {
         let mut self_collections = self.collections.lock().expect("lock poisoned");
         let collection = self_collections
             .get_mut(&table_id)
@@ -1846,7 +1651,7 @@ where
         Ok(())
     }
 
-    fn drop_collections_unvalidated(
+    pub fn drop_collections_unvalidated(
         &self,
         storage_metadata: &StorageMetadata,
         identifiers: Vec<GlobalId>,
@@ -1923,7 +1728,7 @@ where
         self.synchronize_finalized_shards(storage_metadata);
     }
 
-    fn set_read_policies(&self, policies: Vec<(GlobalId, ReadPolicy<Self::Timestamp>)>) {
+    pub fn set_read_policies(&self, policies: Vec<(GlobalId, ReadPolicy<T>)>) {
         let mut collections = self.collections.lock().expect("lock poisoned");
 
         let user_capabilities = collections
@@ -1951,10 +1756,10 @@ where
         trace!(?user_capabilities, "after! set_read_policies");
     }
 
-    fn acquire_read_holds(
+    pub fn acquire_read_holds(
         &self,
         desired_holds: Vec<GlobalId>,
-    ) -> Result<Vec<ReadHold<Self::Timestamp>>, ReadHoldError> {
+    ) -> Result<Vec<ReadHold<T>>, ReadHoldError> {
         let mut collections = self.collections.lock().expect("lock poisoned");
 
         let mut advanced_holds = Vec::new();
@@ -2002,7 +1807,7 @@ where
     }
 
     /// Determine time dependence information for the object.
-    fn determine_time_dependence(
+    pub fn determine_time_dependence(
         &self,
         id: GlobalId,
     ) -> Result<Option<TimeDependence>, TimeDependenceError> {
@@ -2047,6 +1852,54 @@ where
             };
         }
         Ok(result)
+    }
+}
+
+// See comments on the above impl for StorageCollectionsImpl.
+#[async_trait]
+impl<T> StorageCollections for StorageCollectionsImpl<T>
+where
+    T: TimelyTimestamp
+        + Lattice
+        + Codec64
+        + From<EpochMillis>
+        + TimestampManipulation
+        + Into<mz_repr::Timestamp>
+        + Sync,
+{
+    type Timestamp = T;
+
+    fn collection_metadata(
+        &self,
+        id: GlobalId,
+    ) -> Result<CollectionMetadata, StorageError<Self::Timestamp>> {
+        self.collection_metadata(id)
+    }
+
+    fn collections_frontiers(
+        &self,
+        ids: Vec<GlobalId>,
+    ) -> Result<Vec<CollectionFrontiers<Self::Timestamp>>, StorageError<Self::Timestamp>> {
+        self.collections_frontiers(ids)
+    }
+
+    fn check_exists(&self, id: GlobalId) -> Result<(), StorageError<Self::Timestamp>> {
+        self.check_exists(id)
+    }
+
+    fn acquire_read_holds(
+        &self,
+        desired_holds: Vec<GlobalId>,
+    ) -> Result<Vec<ReadHold<Self::Timestamp>>, ReadHoldError> {
+        self.acquire_read_holds(desired_holds)
+    }
+
+    /// Determine time dependence information for the object.
+    fn determine_time_dependence(
+        &self,
+        id: GlobalId,
+    ) -> Result<Option<TimeDependence>, TimeDependenceError> {
+        self.determine_time_dependence(id)
     }
 }
 
