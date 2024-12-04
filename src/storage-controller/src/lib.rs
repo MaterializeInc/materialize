@@ -189,21 +189,12 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     initialized: bool,
     /// Storage configuration to apply to newly provisioned instances, and use during purification.
     config: StorageConfiguration,
-    /// Mechanism for returning frontier advancement for tables.
-    internal_response_queue: tokio::sync::mpsc::UnboundedReceiver<StorageResponse<T>>,
     /// The persist location where all storage collections are being written to
     persist_location: PersistLocation,
     /// A persist client used to write to storage collections
     persist: Arc<PersistClientCache>,
     /// Metrics of the Storage controller
     metrics: StorageControllerMetrics,
-    /// Mechanism for the storage controller to send itself feedback, potentially emulating the
-    /// responses we expect from clusters.
-    ///
-    /// Note: This is used for finalizing shards of webhook sources, once webhook sources are
-    /// installed on a `clusterd` this can likely be refactored away.
-    internal_response_sender: tokio::sync::mpsc::UnboundedSender<StorageResponse<T>>,
-
     /// `(read, write)` frontiers that have been recorded in the `Frontiers` collection, kept to be
     /// able to retract old rows.
     recorded_frontiers: BTreeMap<GlobalId, (Antichain<T>, Antichain<T>)>,
@@ -1882,7 +1873,6 @@ where
             // before processing external commands.
             biased;
 
-            Some(m) = self.internal_response_queue.recv() => Some(m),
             Some(m) = self.instance_response_rx.recv() => Some(m),
             _ = self.maintenance_ticker.tick() => {
                 self.maintenance_scheduled = true;
@@ -2053,19 +2043,6 @@ where
             // be cleared out, before we do this post-processing!
             let instance = cluster_id.and_then(|cluster_id| self.instances.get_mut(&cluster_id));
 
-            let internal_response_sender = self.internal_response_sender.clone();
-            let spawn_cleanup_task = |drop_fut| {
-                mz_ore::task::spawn(|| format!("storage-table-cleanup-{id}"), async move {
-                    // Wait for the relevant component to drop its resources and handles, this
-                    // guarantees we won't see any more writes.
-                    drop_fut.await;
-
-                    // Notify that this ID has been dropped, which will start finalization of
-                    // the shard.
-                    let _ = internal_response_sender.send(StorageResponse::DroppedIds([id].into()));
-                });
-            };
-
             if read_frontier.is_empty() {
                 if instance.is_some() && self.collections.contains_key(&id) {
                     let collection = self.collections.get(&id).expect("known to exist");
@@ -2081,25 +2058,13 @@ where
                     match collection.data_source {
                         DataSource::Table => {
                             pending_collection_drops.push(id);
-
-                            // Hacky, return an empty future so the IDs are finalized below.
-                            let drop_fut = async move {}.boxed();
-                            spawn_cleanup_task(drop_fut);
                         }
                         DataSource::Webhook => {
                             pending_collection_drops.push(id);
-
                             // TODO(parkmycar): The Collection Manager and PersistMonotonicWriter
                             // could probably use some love and maybe get merged together?
-                            let unregister_notif =
-                                self.collection_manager.unregister_collection(id);
-                            let drop_fut = async move {
-                                // Wait for the collection manager to stop writing.
-                                unregister_notif.await;
-                            };
-                            let drop_fut = drop_fut.boxed();
-
-                            spawn_cleanup_task(drop_fut);
+                            let fut = self.collection_manager.unregister_collection(id);
+                            mz_ore::task::spawn(|| format!("storage-webhook-cleanup-{id}"), fut);
                         }
                         DataSource::Ingestion(_) => (),
                         DataSource::IngestionExport { .. } => (),
@@ -2139,6 +2104,12 @@ where
             .cloned()
             .collect();
         self.append_shard_mappings(shards_to_update.into_iter(), -1);
+
+        for id in pending_collection_drops {
+            self.collections
+                .remove(&id)
+                .expect("list populated after checking that self.collections contains it");
+        }
 
         // Record the drop status for all pending source and sink drops.
         //
@@ -2427,8 +2398,6 @@ where
         );
         let persist_warm_task = Some(persist_warm_task.abort_on_drop());
 
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-
         // This value must be already installed because we must ensure it's
         // durably recorded before it is used, otherwise we risk leaking persist
         // state.
@@ -2507,8 +2476,6 @@ where
             instances: BTreeMap::new(),
             initialized: false,
             config: StorageConfiguration::new(connection_context, mz_dyncfgs::all_dyncfgs()),
-            internal_response_sender: tx,
-            internal_response_queue: rx,
             persist_location,
             persist: persist_clients,
             metrics,
