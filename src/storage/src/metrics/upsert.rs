@@ -49,9 +49,6 @@ pub(crate) struct UpsertMetricDefs {
     pub(crate) multi_put_latency: HistogramVec,
     pub(crate) multi_put_size: IntCounterVec,
 
-    /// The number of legacy errors encountered during rehydration
-    pub(crate) legacy_value_errors: UIntGaugeVec,
-
     // These are used by `rocksdb`.
     pub(crate) rocksdb_multi_get_latency: HistogramVec,
     pub(crate) rocksdb_multi_get_size: IntCounterVec,
@@ -247,12 +244,6 @@ impl UpsertMetricDefs {
                 var_labels: ["source_id", "worker_id"],
             )),
             rocksdb_shared,
-            legacy_value_errors: registry.register(metric!(
-                name: "mz_storage_upsert_legacy_value_errors",
-                help: "The total number of legacy errors encountered during \
-                    rehydration for this source",
-                var_labels: ["source_id", "worker_id"],
-            )),
         }
     }
 
@@ -387,8 +378,6 @@ pub struct UpsertMetrics {
     pub(crate) multi_get_result_count: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub(crate) multi_put_size: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
 
-    pub(crate) legacy_value_errors: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-
     pub(crate) shared: Arc<UpsertSharedMetrics>,
     pub(crate) rocksdb_shared: Arc<mz_rocksdb::RocksDBSharedMetrics>,
     pub(crate) rocksdb_instance_metrics: Arc<mz_rocksdb::RocksDBInstanceMetrics>,
@@ -450,10 +439,6 @@ impl UpsertMetrics {
                 .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
             multi_put_size: defs
                 .multi_put_size
-                .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
-
-            legacy_value_errors: defs
-                .legacy_value_errors
                 .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
 
             shared: defs.shared(&source_id),
