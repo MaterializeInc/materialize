@@ -1401,11 +1401,6 @@ where
                     Ok(shard)
                 };
 
-                let status_shard = match description.status_collection_id {
-                    Some(status_collection_id) => Some(get_shard(status_collection_id)?),
-                    None => None,
-                };
-
                 let remap_shard = match &description.data_source {
                     // Only ingestions can have remap shards.
                     DataSource::Ingestion(IngestionDescription {
@@ -1431,7 +1426,6 @@ where
                     persist_location: self.persist_location.clone(),
                     remap_shard,
                     data_shard,
-                    status_shard,
                     relation_desc: description.desc.clone(),
                     txns_shard,
                 };
@@ -1455,54 +1449,70 @@ where
             .map(|data: Result<_, StorageError<Self::Timestamp>>| {
                 let register_ts = register_ts.clone();
                 async move {
-                let (id, description, metadata) = data?;
+                    let (id, description, metadata) = data?;
 
-                // should be replaced with real introspection
-                // (https://github.com/MaterializeInc/database-issues/issues/4078)
-                // but for now, it's helpful to have this mapping written down
-                // somewhere
-                debug!(
-                    "mapping GlobalId={} to remap shard ({:?}), data shard ({}), status shard ({:?})",
-                    id, metadata.remap_shard, metadata.data_shard, metadata.status_shard
-                );
+                    // should be replaced with real introspection
+                    // (https://github.com/MaterializeInc/database-issues/issues/4078)
+                    // but for now, it's helpful to have this mapping written down
+                    // somewhere
+                    debug!(
+                        "mapping GlobalId={} to remap shard ({:?}), data shard ({})",
+                        id, metadata.remap_shard, metadata.data_shard
+                    );
 
-                let (write, mut since_handle) = this
-                    .open_data_handles(
-                        &id,
-                        metadata.data_shard,
-                        description.since.as_ref(),
-                        metadata.relation_desc.clone(),
-                        persist_client,
-                    )
-                    .await;
+                    let (write, mut since_handle) = this
+                        .open_data_handles(
+                            &id,
+                            metadata.data_shard,
+                            description.since.as_ref(),
+                            metadata.relation_desc.clone(),
+                            persist_client,
+                        )
+                        .await;
 
-                // Present tables as springing into existence at the register_ts
-                // by advancing the since. Otherwise, we could end up in a
-                // situation where a table with a long compaction window appears
-                // to exist before the environment (and this the table) existed.
-                //
-                // We could potentially also do the same thing for other
-                // sources, in particular storage's internal sources and perhaps
-                // others, but leave them for now.
-                match description.data_source {
-                    DataSource::Introspection(_)
-                    | DataSource::IngestionExport { .. }
-                    | DataSource::Webhook
-                    | DataSource::Ingestion(_)
-                    | DataSource::Progress
-                    | DataSource::Other => {},
-                    DataSource::Table => {
-                        let register_ts = register_ts.expect("caller should have provided a register_ts when creating a table");
-                        if since_handle.since().elements() == &[T::minimum()] && !migrated_storage_collections.contains(&id) {
-                            debug!("advancing {} to initial since of {:?}", id, register_ts);
-                            let token = since_handle.opaque();
-                            let _ = since_handle.compare_and_downgrade_since(&token, (&token, &Antichain::from_elem(register_ts.clone()))).await;
+                    // Present tables as springing into existence at the register_ts
+                    // by advancing the since. Otherwise, we could end up in a
+                    // situation where a table with a long compaction window appears
+                    // to exist before the environment (and this the table) existed.
+                    //
+                    // We could potentially also do the same thing for other
+                    // sources, in particular storage's internal sources and perhaps
+                    // others, but leave them for now.
+                    match description.data_source {
+                        DataSource::Introspection(_)
+                        | DataSource::IngestionExport { .. }
+                        | DataSource::Webhook
+                        | DataSource::Ingestion(_)
+                        | DataSource::Progress
+                        | DataSource::Other => {}
+                        DataSource::Table => {
+                            let register_ts = register_ts.expect(
+                                "caller should have provided a register_ts when creating a table",
+                            );
+                            if since_handle.since().elements() == &[T::minimum()]
+                                && !migrated_storage_collections.contains(&id)
+                            {
+                                debug!("advancing {} to initial since of {:?}", id, register_ts);
+                                let token = since_handle.opaque();
+                                let _ = since_handle
+                                    .compare_and_downgrade_since(
+                                        &token,
+                                        (&token, &Antichain::from_elem(register_ts.clone())),
+                                    )
+                                    .await;
+                            }
                         }
                     }
-                }
 
-                Ok::<_, StorageError<Self::Timestamp>>((id, description, write, since_handle, metadata))
-            }})
+                    Ok::<_, StorageError<Self::Timestamp>>((
+                        id,
+                        description,
+                        write,
+                        since_handle,
+                        metadata,
+                    ))
+                }
+            })
             // Poll each future for each collection concurrently, maximum of 50 at a time.
             .buffer_unordered(50)
             // HERE BE DRAGONS:

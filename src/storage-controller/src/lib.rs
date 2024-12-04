@@ -552,11 +552,6 @@ where
                     Ok(shard)
                 };
 
-                let status_shard = match description.status_collection_id {
-                    Some(status_collection_id) => Some(get_shard(status_collection_id)?),
-                    None => None,
-                };
-
                 let remap_shard = match &description.data_source {
                     // Only ingestions can have remap shards.
                     DataSource::Ingestion(IngestionDescription {
@@ -581,7 +576,6 @@ where
                     persist_location: self.persist_location.clone(),
                     remap_shard,
                     data_shard,
-                    status_shard,
                     relation_desc: description.desc.clone(),
                     txns_shard,
                 };
@@ -605,26 +599,27 @@ where
         let mut to_register: Vec<_> = futures::stream::iter(enriched_with_metadata)
             .map(|data: Result<_, StorageError<Self::Timestamp>>| {
                 async move {
-                let (id, description, metadata) = data?;
+                    let (id, description, metadata) = data?;
 
-                // should be replaced with real introspection (https://github.com/MaterializeInc/database-issues/issues/4078)
-                // but for now, it's helpful to have this mapping written down somewhere
-                debug!(
-                    "mapping GlobalId={} to remap shard ({:?}), data shard ({}), status shard ({:?})",
-                    id, metadata.remap_shard, metadata.data_shard, metadata.status_shard
-                );
+                    // should be replaced with real introspection (https://github.com/MaterializeInc/database-issues/issues/4078)
+                    // but for now, it's helpful to have this mapping written down somewhere
+                    debug!(
+                        "mapping GlobalId={} to remap shard ({:?}), data shard ({})",
+                        id, metadata.remap_shard, metadata.data_shard
+                    );
 
-                let write = this
-                    .open_data_handles(
-                        &id,
-                        metadata.data_shard,
-                        metadata.relation_desc.clone(),
-                        persist_client,
-                    )
-                    .await;
+                    let write = this
+                        .open_data_handles(
+                            &id,
+                            metadata.data_shard,
+                            metadata.relation_desc.clone(),
+                            persist_client,
+                        )
+                        .await;
 
-                Ok::<_, StorageError<T>>((id, description, write, metadata))
-            }})
+                    Ok::<_, StorageError<T>>((id, description, write, metadata))
+                }
+            })
             // Poll each future for each collection concurrently, maximum of 50 at a time.
             .buffer_unordered(50)
             // HERE BE DRAGONS:

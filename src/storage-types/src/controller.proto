@@ -16,11 +16,11 @@ package mz_storage_types.controller;
 import "repr/src/relation_and_scalar.proto";
 
 message ProtoCollectionMetadata {
+  reserved 5;
   string blob_uri = 1;
   string consensus_uri = 2;
   string data_shard = 3;
   optional string remap_shard = 4;
-  optional string status_shard = 5;
   optional string txns_shard = 7;
 
   mz_repr.relation_and_scalar.ProtoRelationDesc relation_desc = 6;

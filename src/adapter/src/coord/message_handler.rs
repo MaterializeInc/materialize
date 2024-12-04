@@ -215,7 +215,6 @@ impl Coordinator {
                 let CollectionMetadata {
                     data_shard,
                     remap_shard,
-                    status_shard,
                     // No wildcards, to improve the odds that the addition of a
                     // new shard type results in a compiler error here.
                     //
@@ -227,7 +226,7 @@ impl Coordinator {
                     relation_desc: _,
                     txns_shard: _,
                 } = collection_metadata;
-                [remap_shard, status_shard, Some(data_shard)].into_iter()
+                [remap_shard, Some(data_shard)].into_iter()
             })
             .filter_map(|shard| shard)
             .collect();

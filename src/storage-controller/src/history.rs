@@ -258,7 +258,6 @@ mod tests {
                         },
                         remap_shard: Default::default(),
                         data_shard: Default::default(),
-                        status_shard: Default::default(),
                         relation_desc: RelationDesc::new(
                             RelationType {
                                 column_types: Default::default(),
@@ -301,7 +300,6 @@ mod tests {
                 },
                 remap_shard: Default::default(),
                 data_shard: Default::default(),
-                status_shard: Default::default(),
                 relation_desc: RelationDesc::new(
                     RelationType {
                         column_types: Default::default(),
@@ -373,7 +371,6 @@ mod tests {
                 },
                 remap_shard: Default::default(),
                 data_shard: Default::default(),
-                status_shard: Default::default(),
                 relation_desc: RelationDesc::new(
                     RelationType {
                         column_types: Default::default(),
