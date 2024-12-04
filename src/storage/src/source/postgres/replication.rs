@@ -172,11 +172,8 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
         PostgresFlavor::Yugabyte => None,
     };
 
-    let mut rewind_input = builder.new_input_for(
-        rewind_stream,
-        Exchange::new(move |_| slot_reader),
-        &data_output,
-    );
+    let mut rewind_input =
+        builder.new_disconnected_input(rewind_stream, Exchange::new(move |_| slot_reader));
     let mut slot_ready_input = builder.new_disconnected_input(slot_ready_stream, Pipeline);
     let mut output_uppers = table_info
         .iter()
@@ -313,14 +310,12 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             let Some(resume_lsn) = resume_upper.into_option() else {
                 return Ok(());
             };
-            data_cap_set.downgrade([&resume_lsn]);
             upper_cap_set.downgrade([&resume_lsn]);
-            trace!(%id, "timely-{worker_id} replication \
-                   reader started lsn={}", resume_lsn);
+            trace!(%id, "timely-{worker_id} replication reader started lsn={resume_lsn}");
 
             let mut rewinds = BTreeMap::new();
             while let Some(event) = rewind_input.next().await {
-                if let AsyncEvent::Data(cap, data) = event {
+                if let AsyncEvent::Data(_, data) = event {
                     for req in data {
                         if resume_lsn > req.snapshot_lsn + 1 {
                             let err = DefiniteError::SlotCompactedPastResumePoint(
@@ -351,7 +346,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                             );
                             return Ok(());
                         }
-                        rewinds.insert(req.output_index, (cap.clone(), req));
+                        rewinds.insert(req.output_index, req);
                     }
                 }
             }
@@ -366,7 +361,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 &connection.publication_details.slot,
                 &connection.publication_details.timeline_id,
                 &connection.publication,
-                *data_cap_set[0].time(),
+                resume_lsn,
                 committed_uppers.as_mut(),
                 &stats_output,
                 &stats_cap[0],
@@ -408,7 +403,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             // if we're about to yield, which is checked at the bottom of the loop. This avoids
             // creating excessive progress tracking traffic when there are multiple small
             // transactions ready to go.
-            let mut data_upper = *data_cap_set[0].time();
+            let mut data_upper = resume_lsn;
             // A stash of reusable vectors to convert from bytes::Bytes based data, which is not
             // compatible with `columnation`, to Vec<u8> data that is.
             let mut col_temp: Vec<Vec<u8>> = vec![];
@@ -469,10 +464,10 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                                     Err(err) => Err(err.into()),
                                 };
                                 let mut data = (oid, output_index, event);
-                                if let Some((data_cap, req)) = rewinds.get(&output_index) {
+                                if let Some(req) = rewinds.get(&output_index) {
                                     if commit_lsn <= req.snapshot_lsn {
                                         let update = (data, MzOffset::from(0), -diff);
-                                        data_output.give_fueled(data_cap, &update).await;
+                                        data_output.give_fueled(&data_cap_set[0], &update).await;
                                         data = update.0;
                                     }
                                 }
@@ -502,14 +497,14 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 
                 let will_yield = stream.as_mut().peek().now_or_never().is_none();
                 if will_yield {
+                    trace!(%id, "timely-{worker_id} yielding at lsn={data_upper}");
+                    rewinds.retain(|_, req| data_upper <= req.snapshot_lsn);
+                    // As long as there are pending rewinds we can't downgrade our data capability
+                    // since we must be able to produce data at offset 0.
+                    if rewinds.is_empty() {
+                        data_cap_set.downgrade([&data_upper]);
+                    }
                     upper_cap_set.downgrade([&data_upper]);
-                    data_cap_set.downgrade([&data_upper]);
-                    trace!(
-                        %id,
-                        "timely-{worker_id} yielding at lsn={}",
-                        data_upper
-                    );
-                    rewinds.retain(|_, (_, req)| data_cap_set[0].time() <= &req.snapshot_lsn);
                 }
             }
             // We never expect the replication stream to gracefully end
