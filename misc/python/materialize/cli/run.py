@@ -94,6 +94,11 @@ def main() -> int:
         action="store_true",
     )
     parser.add_argument(
+        "--optimized",
+        help="Build artifacts in optimized mode, with optimizations (but no LTO and debug symbols)",
+        action="store_true",
+    )
+    parser.add_argument(
         "--timings",
         help="Output timing information",
         action="store_true",
@@ -484,6 +489,8 @@ def _cargo_command(args: argparse.Namespace, subcommand: str) -> list[str]:
     command += [subcommand]
     if args.release:
         command += ["--release"]
+    if args.optimized:
+        command += ["--profile", "optimized"]
     if args.timings:
         command += ["--timings"]
     if args.no_default_features:
@@ -494,16 +501,11 @@ def _cargo_command(args: argparse.Namespace, subcommand: str) -> list[str]:
 
 
 def _cargo_artifact_path(args: argparse.Namespace, program: str) -> pathlib.Path:
-    if args.release:
-        if args.sanitizer != "none":
-            artifact_path = MZ_ROOT / "target" / SANITIZER_TARGET / "release"
-        else:
-            artifact_path = MZ_ROOT / "target" / "release"
+    dir_name = "release" if args.release else "optimized" if args.optimized else "debug"
+    if args.sanitizer != "none":
+        artifact_path = MZ_ROOT / "target" / SANITIZER_TARGET / dir_name
     else:
-        if args.sanitizer != "none":
-            artifact_path = MZ_ROOT / "target" / SANITIZER_TARGET / "debug"
-        else:
-            artifact_path = MZ_ROOT / "target" / "debug"
+        artifact_path = MZ_ROOT / "target" / dir_name
 
     return artifact_path / program
 

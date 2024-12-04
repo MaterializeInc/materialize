@@ -119,7 +119,13 @@ def get_bin_path(repo: Repository, bin: str, bazel_bins: dict[str, str]) -> Path
         assert len(paths) == 1, f"{bazel_bins[bin]} output more than 1 file"
         return paths[0]
     else:
-        cargo_profile = "release" if repo.rd.release_mode else "debug"
+        cargo_profile = (
+            "release"
+            if repo.rd.profile == mzbuild.Profile.RELEASE
+            else (
+                "optimized" if repo.rd.profile == mzbuild.Profile.OPTIMIZED else "debug"
+            )
+        )
         return repo.rd.cargo_target_dir() / cargo_profile / bin
 
 
