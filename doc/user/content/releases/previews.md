@@ -76,12 +76,6 @@ For more information, see:
 - [`CREATE CLUSTER`](/sql/create-cluster).
 - [`ALTER CLUSTER`](/sql/alter-cluster).
 
-### COMMENT ON
-
-Materialize adds the `COMMENT ON` command to allow commenting on an object.
-
-For more information, see [`COMMENT ON`](/sql/comment-on).
-
 ### Support for Fivetran
 
 Materialize adds support for Fivetran to sync data into Materialize.
@@ -185,18 +179,6 @@ your environment.
 ![Image of the Health Dashboard in the Materialize Console Environment
 Overview](/images/health-dashboard.png "Health Dashboard in the  Materialize
 Console Environment Overview")
-
-### Native connectors for MySQL
-
-Materialize provides native connectors for MySQL as a source.
-
-For more information, see:
-
-- [Ingest data: MySQL](/ingest-data/mysql/)
-
-- [Create Source: MySQL](/sql/create-source/mysql/)
-
-- [Create Connection: MySQL](/sql/create-connection/#mysql)
 
 ### AWS Connection for IAM authentication
 

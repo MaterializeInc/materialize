@@ -166,11 +166,11 @@ steps:
     steps:
       - id: feature-benchmark-scale-plus-one
         label: "Feature benchmark against 'common-ancestor' with --scale=+1 %N"
-        depends_on: build-aarch64
+        depends_on: build-x86_64
         timeout_in_minutes: 2880
         parallelism: 8
         agents:
-          queue: linux-aarch64-medium
+          queue: hetzner-x86-64-dedi-16cpu-64gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: feature-benchmark
@@ -178,10 +178,10 @@ steps:
 
       - id: long-parallel-benchmark
         label: "Long Parallel Benchmark"
-        depends_on: build-aarch64
+        depends_on: build-x86_64
         timeout_in_minutes: 1200
         agents:
-          queue: linux-aarch64-medium
+          queue: hetzner-x86-64-dedi-8cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-benchmark
@@ -438,10 +438,9 @@ steps:
               args: [--scenario=KillClusterdStorage, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-restart-source-postgres
-        label: "Checks + restart source Postgres %N"
+        label: "Checks + restart source Postgres"
         depends_on: build-aarch64
         timeout_in_minutes: 180
-        parallelism: 2
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         plugins:
@@ -473,6 +472,18 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
               args: [--scenario=DropCreateDefaultReplica, "--seed=$BUILDKITE_JOB_ID"]
+
+      - id: checks-0dt-restart-entire-mz
+        label: "Checks 0dt restart of the entire Mz %N"
+        depends_on: build-aarch64
+        timeout_in_minutes: 60
+        parallelism: 2
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=ZeroDowntimeRestartEntireMz, "--seed=$BUILDKITE_JOB_ID"]
 
   - id: limits
     label: "Product limits (finding new limits) %N"

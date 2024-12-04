@@ -491,11 +491,13 @@ impl crate::coord::Coordinator {
                 max_returned_query_size,
                 &duration_histogram,
             ) {
-                Ok(rows) => {
+                Ok((rows, row_size_bytes)) => {
+                    let result_size = u64::cast_from(row_size_bytes);
                     let rows_returned = u64::cast_from(rows.count());
                     (
                         Ok(Self::send_immediate_rows(rows)),
                         StatementEndedExecutionReason::Success {
+                            result_size: Some(result_size),
                             rows_returned: Some(rows_returned),
                             execution_strategy: Some(StatementExecutionStrategy::Constant),
                         },
@@ -651,7 +653,7 @@ impl crate::coord::Coordinator {
                         max_returned_query_size,
                         &duration_histogram,
                     ) {
-                        Ok(rows) => PeekResponseUnary::Rows(Box::new(rows)),
+                        Ok((rows, _size_bytes)) => PeekResponseUnary::Rows(Box::new(rows)),
                         Err(e) => PeekResponseUnary::Error(e),
                     }
                 }
@@ -729,13 +731,17 @@ impl crate::coord::Coordinator {
         }) = self.remove_pending_peek(&uuid)
         {
             let reason = match notification {
-                PeekNotification::Success { rows: num_rows } => {
+                PeekNotification::Success {
+                    rows: num_rows,
+                    result_size,
+                } => {
                     let strategy = if is_fast_path {
                         StatementExecutionStrategy::FastPath
                     } else {
                         StatementExecutionStrategy::Standard
                     };
                     StatementEndedExecutionReason::Success {
+                        result_size: Some(result_size),
                         rows_returned: Some(num_rows),
                         execution_strategy: Some(strategy),
                     }

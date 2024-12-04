@@ -338,11 +338,11 @@ impl DurableType for IntrospectionSourceIndex {
                 catalog_id: self
                     .item_id
                     .try_into()
-                    .expect("cluster introspection source index mapping must be a System ID"),
+                    .expect("cluster introspection source index mapping must be an Introspection Source Index ID"),
                 global_id: self
                     .index_id
                     .try_into()
-                    .expect("cluster introspection source index mapping must be a System ID"),
+                    .expect("cluster introspection source index mapping must be a Introspection Source Index ID"),
                 oid: self.oid,
             },
         )
@@ -603,6 +603,7 @@ impl TryFrom<CatalogItemId> for SystemCatalogItemId {
     fn try_from(val: CatalogItemId) -> Result<Self, Self::Error> {
         match val {
             CatalogItemId::System(x) => Ok(SystemCatalogItemId(x)),
+            CatalogItemId::IntrospectionSourceIndex(_) => Err("introspection_source_index"),
             CatalogItemId::User(_) => Err("user"),
             CatalogItemId::Transient(_) => Err("transient"),
         }
@@ -612,6 +613,31 @@ impl TryFrom<CatalogItemId> for SystemCatalogItemId {
 impl From<SystemCatalogItemId> for CatalogItemId {
     fn from(val: SystemCatalogItemId) -> Self {
         CatalogItemId::System(val.0)
+    }
+}
+
+/// A newtype wrapper for [`CatalogItemId`] that is only for the "introspection source index" namespace.
+#[derive(Debug, Copy, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct IntrospectionSourceIndexCatalogItemId(u64);
+
+impl TryFrom<CatalogItemId> for IntrospectionSourceIndexCatalogItemId {
+    type Error = &'static str;
+
+    fn try_from(val: CatalogItemId) -> Result<Self, Self::Error> {
+        match val {
+            CatalogItemId::System(_) => Err("system"),
+            CatalogItemId::IntrospectionSourceIndex(x) => {
+                Ok(IntrospectionSourceIndexCatalogItemId(x))
+            }
+            CatalogItemId::User(_) => Err("user"),
+            CatalogItemId::Transient(_) => Err("transient"),
+        }
+    }
+}
+
+impl From<IntrospectionSourceIndexCatalogItemId> for CatalogItemId {
+    fn from(val: IntrospectionSourceIndexCatalogItemId) -> Self {
+        CatalogItemId::IntrospectionSourceIndex(val.0)
     }
 }
 
@@ -625,6 +651,7 @@ impl TryFrom<GlobalId> for SystemGlobalId {
     fn try_from(val: GlobalId) -> Result<Self, Self::Error> {
         match val {
             GlobalId::System(x) => Ok(SystemGlobalId(x)),
+            GlobalId::IntrospectionSourceIndex(_) => Err("introspection_source_index"),
             GlobalId::User(_) => Err("user"),
             GlobalId::Transient(_) => Err("transient"),
             GlobalId::Explain => Err("explain"),
@@ -635,6 +662,30 @@ impl TryFrom<GlobalId> for SystemGlobalId {
 impl From<SystemGlobalId> for GlobalId {
     fn from(val: SystemGlobalId) -> Self {
         GlobalId::System(val.0)
+    }
+}
+
+/// A newtype wrapper for [`GlobalId`] that is only for the "introspection source index" namespace.
+#[derive(Debug, Copy, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct IntrospectionSourceIndexGlobalId(u64);
+
+impl TryFrom<GlobalId> for IntrospectionSourceIndexGlobalId {
+    type Error = &'static str;
+
+    fn try_from(val: GlobalId) -> Result<Self, Self::Error> {
+        match val {
+            GlobalId::System(_) => Err("system"),
+            GlobalId::IntrospectionSourceIndex(x) => Ok(IntrospectionSourceIndexGlobalId(x)),
+            GlobalId::User(_) => Err("user"),
+            GlobalId::Transient(_) => Err("transient"),
+            GlobalId::Explain => Err("explain"),
+        }
+    }
+}
+
+impl From<IntrospectionSourceIndexGlobalId> for GlobalId {
+    fn from(val: IntrospectionSourceIndexGlobalId) -> Self {
+        GlobalId::IntrospectionSourceIndex(val.0)
     }
 }
 
@@ -1164,8 +1215,8 @@ pub struct ClusterIntrospectionSourceIndexKey {
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct ClusterIntrospectionSourceIndexValue {
-    pub(crate) catalog_id: SystemCatalogItemId,
-    pub(crate) global_id: SystemGlobalId,
+    pub(crate) catalog_id: IntrospectionSourceIndexCatalogItemId,
+    pub(crate) global_id: IntrospectionSourceIndexGlobalId,
     pub(crate) oid: u32,
 }
 

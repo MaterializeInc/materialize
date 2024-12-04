@@ -19,7 +19,6 @@ pub mod instances;
 pub mod parameters;
 pub mod read_holds;
 pub mod read_policy;
-pub mod shim;
 pub mod sinks;
 pub mod sources;
 pub mod stats;

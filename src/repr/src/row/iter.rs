@@ -10,6 +10,7 @@
 //! Defines a "lending iterator" for [`Row`]
 
 use std::fmt::Debug;
+use std::sync::Arc;
 
 use crate::row::{Row, RowRef};
 
@@ -41,6 +42,9 @@ pub trait RowIterator: Debug {
     /// will not change the value returned from this method.
     fn count(&self) -> usize;
 
+    /// Returns a clone of `self` as a `Box<dyn RowIterator>`.
+    fn box_clone(&self) -> Box<dyn RowIterator>;
+
     /// Maps the returned [`RowRef`]s from this [`RowIterator`].
     fn map<T, F>(self, f: F) -> MappedRowIterator<Self, F>
     where
@@ -66,6 +70,10 @@ impl<I: RowIterator + ?Sized> RowIterator for Box<I> {
     fn count(&self) -> usize {
         (**self).count()
     }
+
+    fn box_clone(&self) -> Box<dyn RowIterator> {
+        (**self).box_clone()
+    }
 }
 
 impl<I: RowIterator + ?Sized> RowIterator for &mut I {
@@ -79,6 +87,10 @@ impl<I: RowIterator + ?Sized> RowIterator for &mut I {
 
     fn count(&self) -> usize {
         (**self).count()
+    }
+
+    fn box_clone(&self) -> Box<dyn RowIterator> {
+        (**self).box_clone()
     }
 }
 
@@ -114,9 +126,9 @@ impl<T: RowIterator> IntoRowIterator for T {
 }
 
 /// A [`RowIterator`] for a single [`Row`].
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SingleRowIter {
-    row: Row,
+    row: Arc<Row>,
     finished: bool,
 }
 
@@ -141,6 +153,10 @@ impl RowIterator for SingleRowIter {
     fn count(&self) -> usize {
         1
     }
+
+    fn box_clone(&self) -> Box<dyn RowIterator> {
+        Box::new(self.clone())
+    }
 }
 
 impl IntoRowIterator for Row {
@@ -148,7 +164,7 @@ impl IntoRowIterator for Row {
 
     fn into_row_iter(self) -> Self::Iter {
         SingleRowIter {
-            row: self,
+            row: Arc::new(self),
             finished: false,
         }
     }
@@ -157,7 +173,7 @@ impl IntoRowIterator for Row {
 /// A [`RowIterator`] for a [`Vec`] of [`Row`]s.
 #[derive(Debug, Clone)]
 pub struct VecRowIter {
-    rows: Vec<Row>,
+    rows: Arc<[Row]>,
     index: usize,
 }
 
@@ -176,6 +192,10 @@ impl RowIterator for VecRowIter {
     fn count(&self) -> usize {
         self.rows.len()
     }
+
+    fn box_clone(&self) -> Box<dyn RowIterator> {
+        Box::new(self.clone())
+    }
 }
 
 impl IntoRowIterator for Vec<Row> {
@@ -183,7 +203,7 @@ impl IntoRowIterator for Vec<Row> {
 
     fn into_row_iter(self) -> Self::Iter {
         VecRowIter {
-            rows: self,
+            rows: self.into(),
             index: 0,
         }
     }

@@ -18,7 +18,7 @@ use mz_ore::soft_assert_eq_or_log;
 use mz_ore::str::{closure_to_display, separated, Indent, IndentLike, StrExt};
 use mz_repr::explain::text::DisplayText;
 use mz_repr::explain::{
-    CompactScalars, ExprHumanizer, HumanizedAttributes, IndexUsageType, Indices,
+    CompactScalars, ExprHumanizer, HumanizedAnalyses, IndexUsageType, Indices,
     PlanRenderingContext, RenderingContext, ScalarOps,
 };
 use mz_repr::{Datum, Diff, GlobalId, Row};
@@ -46,8 +46,10 @@ where
 
         if let Some(finishing) = &self.context.finishing {
             if ctx.config.humanized_exprs {
-                let attrs = ctx.annotations.get(&self.plan.plan);
-                let cols = attrs.map(|attrs| attrs.column_names.clone()).flatten();
+                let analyses = ctx.annotations.get(&self.plan.plan);
+                let cols = analyses
+                    .map(|analyses| analyses.column_names.clone())
+                    .flatten();
                 mode.expr(finishing, cols.as_ref()).fmt_text(f, &mut ctx)?;
             } else {
                 mode.expr(finishing, None).fmt_text(f, &mut ctx)?;
@@ -112,8 +114,10 @@ where
                     // If present, a RowSetFinishing always applies to the first rendered plan.
                     Some(finishing) if no == 0 => {
                         if ctx.config.humanized_exprs {
-                            let attrs = ctx.annotations.get(plan.plan);
-                            let cols = attrs.map(|attrs| attrs.column_names.clone()).flatten();
+                            let analyses = ctx.annotations.get(plan.plan);
+                            let cols = analyses
+                                .map(|analyses| analyses.column_names.clone())
+                                .flatten();
                             mode.expr(finishing, cols.as_ref()).fmt_text(f, ctx)?;
                         } else {
                             mode.expr(finishing, None).fmt_text(f, ctx)?;
@@ -295,7 +299,7 @@ impl MirRelationExpr {
                 Ok(rows) => {
                     if !rows.is_empty() {
                         write!(f, "{}Constant", ctx.indent)?;
-                        self.fmt_attributes(f, ctx)?;
+                        self.fmt_analyses(f, ctx)?;
                         ctx.indented(|ctx| {
                             fmt_text_constant_rows(
                                 f,
@@ -306,7 +310,7 @@ impl MirRelationExpr {
                         })?;
                     } else {
                         write!(f, "{}Constant <empty>", ctx.indent)?;
-                        self.fmt_attributes(f, ctx)?;
+                        self.fmt_analyses(f, ctx)?;
                     }
                 }
                 Err(err) => {
@@ -338,11 +342,11 @@ impl MirRelationExpr {
                         Ok(())
                     })?;
                     write!(f, "{}Return", ctx.indent)?;
-                    self.fmt_attributes(f, ctx)?;
+                    self.fmt_analyses(f, ctx)?;
                     ctx.indented(|ctx| head.fmt_text(f, ctx))?;
                 } else {
                     write!(f, "{}Return", ctx.indent)?;
-                    self.fmt_attributes(f, ctx)?;
+                    self.fmt_analyses(f, ctx)?;
                     ctx.indented(|ctx| head.fmt_text(f, ctx))?;
                     writeln!(f, "{}With", ctx.indent)?;
                     ctx.indented(|ctx| {
@@ -379,7 +383,7 @@ impl MirRelationExpr {
                     unreachable!(); // We exclude this case in `as_explain_single_plan`.
                 } else {
                     write!(f, "{}Return", ctx.indent)?;
-                    self.fmt_attributes(f, ctx)?;
+                    self.fmt_analyses(f, ctx)?;
                     ctx.indented(|ctx| head.fmt_text(f, ctx))?;
                     write!(f, "{}With Mutually Recursive", ctx.indent)?;
                     if let Some(limit) = all_limits_same {
@@ -475,7 +479,7 @@ impl MirRelationExpr {
                         }
                     }
                 }
-                self.fmt_attributes(f, ctx)?;
+                self.fmt_analyses(f, ctx)?;
             }
             Project { outputs, input } => {
                 FmtNode {
@@ -483,7 +487,7 @@ impl MirRelationExpr {
                         let outputs = mode.seq(outputs, self.column_names(ctx));
                         let outputs = CompactScalars(outputs);
                         write!(f, "{}Project ({})", ctx.indent, outputs)?;
-                        self.fmt_attributes(f, ctx)
+                        self.fmt_analyses(f, ctx)
                     },
                     fmt_children: |f, ctx| input.fmt_text(f, ctx),
                 }
@@ -495,7 +499,7 @@ impl MirRelationExpr {
                         let scalars = mode.seq(scalars, self.column_names(ctx));
                         let scalars = CompactScalars(scalars);
                         write!(f, "{}Map ({})", ctx.indent, scalars)?;
-                        self.fmt_attributes(f, ctx)
+                        self.fmt_analyses(f, ctx)
                     },
                     fmt_children: |f, ctx| input.fmt_text(f, ctx),
                 }
@@ -507,7 +511,7 @@ impl MirRelationExpr {
                         let exprs = mode.seq(exprs, input.column_names(ctx));
                         let exprs = CompactScalars(exprs);
                         write!(f, "{}FlatMap {}({})", ctx.indent, func, exprs)?;
-                        self.fmt_attributes(f, ctx)
+                        self.fmt_analyses(f, ctx)
                     },
                     fmt_children: |f, ctx| input.fmt_text(f, ctx),
                 }
@@ -524,7 +528,7 @@ impl MirRelationExpr {
                             let predicates = separated(" AND ", predicates);
                             write!(f, "{}Filter {}", ctx.indent, predicates)?;
                         }
-                        self.fmt_attributes(f, ctx)
+                        self.fmt_analyses(f, ctx)
                     },
                     fmt_children: |f, ctx| input.fmt_text(f, ctx),
                 }
@@ -557,7 +561,7 @@ impl MirRelationExpr {
                     write!(f, " type={}", name)?;
                 }
 
-                self.fmt_attributes(f, ctx)?;
+                self.fmt_analyses(f, ctx)?;
 
                 if ctx.config.join_impls {
                     let input_name = &|pos: usize| -> String {
@@ -712,7 +716,7 @@ impl MirRelationExpr {
                     Some(literal_constraints.clone()),
                     cse_id,
                 )?;
-                self.fmt_attributes(f, ctx)?;
+                self.fmt_analyses(f, ctx)?;
             }
             Reduce {
                 group_key,
@@ -749,7 +753,7 @@ impl MirRelationExpr {
                         if let Some(expected_group_size) = expected_group_size {
                             write!(f, " exp_group_size={}", expected_group_size)?;
                         }
-                        self.fmt_attributes(f, ctx)
+                        self.fmt_analyses(f, ctx)
                     },
                     fmt_children: |f, ctx| input.fmt_text(f, ctx),
                 }
@@ -794,7 +798,7 @@ impl MirRelationExpr {
                         if let Some(expected_group_size) = expected_group_size {
                             write!(f, " exp_group_size={}", expected_group_size)?;
                         }
-                        self.fmt_attributes(f, ctx)
+                        self.fmt_analyses(f, ctx)
                     },
                     fmt_children: |f, ctx| input.fmt_text(f, ctx),
                 }
@@ -804,7 +808,7 @@ impl MirRelationExpr {
                 FmtNode {
                     fmt_root: |f, ctx| {
                         write!(f, "{}Negate", ctx.indent)?;
-                        self.fmt_attributes(f, ctx)
+                        self.fmt_analyses(f, ctx)
                     },
                     fmt_children: |f, ctx| input.fmt_text(f, ctx),
                 }
@@ -814,7 +818,7 @@ impl MirRelationExpr {
                 FmtNode {
                     fmt_root: |f, ctx| {
                         write!(f, "{}Threshold", ctx.indent)?;
-                        self.fmt_attributes(f, ctx)
+                        self.fmt_analyses(f, ctx)
                     },
                     fmt_children: |f, ctx| input.fmt_text(f, ctx),
                 }
@@ -822,7 +826,7 @@ impl MirRelationExpr {
             }
             Union { base, inputs } => {
                 write!(f, "{}Union", ctx.indent)?;
-                self.fmt_attributes(f, ctx)?;
+                self.fmt_analyses(f, ctx)?;
                 ctx.indented(|ctx| {
                     base.fmt_text(f, ctx)?;
                     for input in inputs.iter() {
@@ -843,7 +847,7 @@ impl MirRelationExpr {
                         let keys = separated("], [", keys);
                         write!(f, " keys=[[{}]]", keys)?;
 
-                        self.fmt_attributes(f, ctx)
+                        self.fmt_analyses(f, ctx)
                     },
                     fmt_children: |f, ctx| input.fmt_text(f, ctx),
                 }
@@ -854,16 +858,16 @@ impl MirRelationExpr {
         Ok(())
     }
 
-    fn fmt_attributes(
+    fn fmt_analyses(
         &self,
         f: &mut fmt::Formatter<'_>,
         ctx: &PlanRenderingContext<'_, MirRelationExpr>,
     ) -> fmt::Result {
-        if ctx.config.requires_attributes() {
-            if let Some(attrs) = ctx.annotations.get(self) {
-                writeln!(f, " {}", HumanizedAttributes::new(attrs, ctx))
+        if ctx.config.requires_analyses() {
+            if let Some(analyses) = ctx.annotations.get(self) {
+                writeln!(f, " {}", HumanizedAnalyses::new(analyses, ctx))
             } else {
-                writeln!(f, " // error: no attrs for subtree in map")
+                writeln!(f, " // error: no analyses for subtree in map")
             }
         } else {
             writeln!(f)
@@ -876,8 +880,8 @@ impl MirRelationExpr {
     ) -> Option<&Vec<String>> {
         if !ctx.config.humanized_exprs {
             None
-        } else if let Some(attrs) = ctx.annotations.get(self) {
-            attrs.column_names.as_ref()
+        } else if let Some(analyses) = ctx.annotations.get(self) {
+            analyses.column_names.as_ref()
         } else {
             None
         }

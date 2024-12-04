@@ -13,7 +13,7 @@ from materialize.mzcompose.service import (
     ServiceConfig,
 )
 
-REDPANDA_VERSION = "v24.2.7"
+REDPANDA_VERSION = "v24.3.1"
 
 
 class Redpanda(Service):
@@ -27,7 +27,7 @@ class Redpanda(Service):
         ports: list[int] | None = None,
     ) -> None:
         if image is None:
-            image = f"vectorized/redpanda:{version}"
+            image = f"redpandadata/redpanda:{version}"
 
         if ports is None:
             ports = [9092, 8081]
@@ -37,7 +37,7 @@ class Redpanda(Service):
             aliases = ["kafka", "schema-registry"]
 
         # Most of these options are simply required when using Redpanda in Docker.
-        # See: https://vectorized.io/docs/quick-start-docker/#Single-command-for-a-1-node-cluster
+        # See: https://docs.redpanda.com/current/get-started/quick-start/#Single-command-for-a-1-node-cluster
         # The `enable_transactions` and `enable_idempotence` feature flags enable
         # features Materialize requires that are present by default in Apache Kafka
         # but not in Redpanda.

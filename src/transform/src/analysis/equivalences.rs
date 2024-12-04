@@ -16,8 +16,10 @@
 //! equivalences classes, each a list of equivalent expressions.
 
 use std::collections::BTreeMap;
+use std::fmt::Formatter;
 
 use mz_expr::{Id, MirRelationExpr, MirScalarExpr};
+use mz_ore::str::{bracketed, separated};
 use mz_repr::{ColumnType, Datum};
 
 use crate::analysis::{Analysis, Lattice};
@@ -145,7 +147,7 @@ impl Analysis for Equivalences {
                 // introduce equivalences for new columns and expressions that define them.
                 let mut equivalences = results.get(index - 1).unwrap().clone();
                 if let Some(equivalences) = &mut equivalences {
-                    let input_arity = depends.results::<Arity>().unwrap()[index - 1];
+                    let input_arity = depends.results::<Arity>()[index - 1];
                     for (pos, expr) in scalars.iter().enumerate() {
                         equivalences
                             .classes
@@ -175,7 +177,7 @@ impl Analysis for Equivalences {
                     .collect::<Vec<_>>();
                 children.reverse();
 
-                let arity = depends.results::<Arity>().unwrap();
+                let arity = depends.results::<Arity>();
                 let mut columns = 0;
                 let mut result = Some(EquivalenceClasses::default());
                 for child in children.into_iter() {
@@ -204,7 +206,7 @@ impl Analysis for Equivalences {
                 aggregates,
                 ..
             } => {
-                let input_arity = depends.results::<Arity>().unwrap()[index - 1];
+                let input_arity = depends.results::<Arity>()[index - 1];
                 let mut equivalences = results.get(index - 1).unwrap().clone();
                 if let Some(equivalences) = &mut equivalences {
                     // Introduce keys column equivalences as if a map, then project to those columns.
@@ -266,7 +268,7 @@ impl Analysis for Equivalences {
             MirRelationExpr::ArrangeBy { .. } => results.get(index - 1).unwrap().clone(),
         };
 
-        let expr_type = depends.results::<RelationType>().unwrap()[index].as_ref();
+        let expr_type = depends.results::<RelationType>()[index].as_ref();
         equivalences
             .as_mut()
             .map(|e| e.minimize(expr_type.map(|x| &x[..])));
@@ -320,7 +322,7 @@ pub struct EquivalenceClasses {
     /// The first element should be the "canonical" simplest element, that any other element
     /// can be replaced by.
     /// These classes are unified whenever possible, to minimize the number of classes.
-    /// They are only guaranteed to form an equivalence relation after a call to `minimimize`,
+    /// They are only guaranteed to form an equivalence relation after a call to `minimize`,
     /// which refreshes both `self.classes` and `self.remap`.
     pub classes: Vec<Vec<MirScalarExpr>>,
 
@@ -334,6 +336,17 @@ pub struct EquivalenceClasses {
     /// appending to `self.classes`. This will be corrected in the next call to `self.refresh()`,
     /// but until then `remap` could be arbitrarily wrong. This should be improved in the future.
     remap: BTreeMap<MirScalarExpr, MirScalarExpr>,
+}
+
+impl std::fmt::Display for EquivalenceClasses {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        // Only show `classes`.
+        let classes = self
+            .classes
+            .iter()
+            .map(|class| format!("{}", bracketed("[", "]", separated(", ", class))));
+        write!(f, "{}", bracketed("[", "]", separated(", ", classes)))
+    }
 }
 
 impl EquivalenceClasses {

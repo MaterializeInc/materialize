@@ -30,6 +30,8 @@ breaking:
     # reason: does currently not require backward-compatibility
     - catalog/protos/objects_v72.proto
     # reason: does currently not require backward-compatibility
+    - catalog/protos/objects_v73.proto
+    # reason: does currently not require backward-compatibility
     - cluster-client/src/client.proto
     # reason: does currently not require backward-compatibility
     - compute-client/src/logging.proto
@@ -59,6 +61,8 @@ breaking:
     - storage-types/src/connections/aws.proto
     # reason: currently does not require backward-compatibility
     - storage-types/src/connections/string_or_secret.proto
+    # reason: remove after the commit that introduced it gets merged
+    - storage-types/src/errors.proto
 lint:
   use:
     - DEFAULT

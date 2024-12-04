@@ -6,8 +6,6 @@ menu:
     parent: 'commands'
 ---
 
-{{< public-preview />}}
-
 `COMMENT ON ...` adds or updates the comment of an object.
 
 ## Syntax

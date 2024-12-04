@@ -20,6 +20,7 @@
 //!   - Config
 //!   - Setting
 //!   - FenceToken
+//!   - AuditLog
 //!
 //! When you want to make a change to the `Catalog` you need to follow these steps:
 //!
@@ -57,8 +58,6 @@ mod tests;
 
 use mz_ore::{soft_assert_eq_or_log, soft_assert_ne_or_log};
 use mz_repr::Diff;
-use timely::progress::Timestamp as TimelyTimestamp;
-
 use paste::paste;
 #[cfg(test)]
 use proptest::prelude::*;
@@ -66,6 +65,7 @@ use proptest::prelude::*;
 use proptest::strategy::ValueTree;
 #[cfg(test)]
 use proptest_derive::Arbitrary;
+use timely::progress::Timestamp as TimelyTimestamp;
 
 use crate::durable::initialize::USER_VERSION_KEY;
 use crate::durable::objects::serialization::proto;
@@ -180,14 +180,14 @@ macro_rules! objects {
     }
 }
 
-objects!(v67, v68, v69, v70, v71, v72);
+objects!(v67, v68, v69, v70, v71, v72, v73);
 
 /// The current version of the `Catalog`.
 ///
 /// We will initialize new `Catalog`es with this version, and migrate existing `Catalog`es to this
 /// version. Whenever the `Catalog` changes, e.g. the protobufs we serialize in the `Catalog`
 /// change, we need to bump this version.
-pub const CATALOG_VERSION: u64 = 72;
+pub const CATALOG_VERSION: u64 = 73;
 
 /// The minimum `Catalog` version number that we support migrating from.
 ///
@@ -204,6 +204,7 @@ mod v68_to_v69;
 mod v69_to_v70;
 mod v70_to_v71;
 mod v71_to_v72;
+mod v72_to_v73;
 
 /// Describes a single action to take during a migration from `V1` to `V2`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -328,6 +329,15 @@ async fn run_upgrade(
             )
             .await
         }
+        72 => {
+            run_versioned_upgrade(
+                unopened_catalog_state,
+                version,
+                commit_ts,
+                v72_to_v73::upgrade,
+            )
+            .await
+        }
 
         // Up-to-date, no migration needed!
         CATALOG_VERSION => Ok((CATALOG_VERSION, commit_ts)),
@@ -367,6 +377,12 @@ async fn run_versioned_upgrade<V1: IntoStateUpdateKindJson, V2: IntoStateUpdateK
         .into_iter()
         .flat_map(|action| action.into_updates().into_iter())
         .collect();
+    // Validate that we're not migrating an un-migratable collection.
+    for (update, _) in &updates {
+        if update.is_always_deserializable() {
+            panic!("migration to un-migratable collection: {update:?}\nall updates: {updates:?}");
+        }
+    }
 
     // 3. Add a retraction for old version and insertion for new version into updates.
     let next_version = current_version + 1;

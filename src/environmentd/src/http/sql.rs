@@ -900,6 +900,7 @@ impl ResultSender for WebSocket {
                 }
 
                 let mut datum_vec = mz_repr::DatumVec::new();
+                let mut result_size: usize = 0;
                 let mut rows_returned = 0;
                 loop {
                     let res = match await_rows(self, client, rx.recv()).await {
@@ -929,6 +930,7 @@ impl ResultSender for WebSocket {
 
                             rows_returned += rows.count();
                             while let Some(row) = rows.next() {
+                                result_size += row.byte_len();
                                 let datums = datum_vec.borrow_with(row);
                                 let types = &desc.typ().column_types;
                                 if let Err(e) = send_ws_response(
@@ -977,6 +979,7 @@ impl ResultSender for WebSocket {
                                 vec![WebSocketResponse::CommandComplete(tag)],
                                 Some((
                                     StatementEndedExecutionReason::Success {
+                                        result_size: Some(u64::cast_from(result_size)),
                                         rows_returned: Some(u64::cast_from(rows_returned)),
                                         execution_strategy: Some(
                                             StatementExecutionStrategy::Standard,

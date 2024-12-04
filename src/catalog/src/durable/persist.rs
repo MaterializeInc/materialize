@@ -381,6 +381,8 @@ pub(crate) struct PersistHandle<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> {
     fenceable_token: FenceableToken,
     /// The semantic version of the current binary.
     catalog_content_version: semver::Version,
+    /// Flag to indicate if bootstrap is complete.
+    bootstrap_complete: bool,
     /// Metrics for the persist catalog.
     metrics: Arc<Metrics>,
 }
@@ -904,7 +906,7 @@ impl ApplyUpdate<StateUpdateKindJson> for UnopenedCatalogStateInner {
         current_fence_token: &mut FenceableToken,
         _metrics: &Arc<Metrics>,
     ) -> Result<Option<StateUpdate<StateUpdateKindJson>>, FenceError> {
-        if update.kind.is_always_deserializable() {
+        if !update.kind.is_audit_log() && update.kind.is_always_deserializable() {
             let kind = TryInto::try_into(&update.kind).expect("kind is known to be deserializable");
             match (kind, update.diff) {
                 (StateUpdateKind::Config(key, value), 1) => {
@@ -1072,6 +1074,7 @@ impl UnopenedPersistCatalogState {
             upper,
             fenceable_token: FenceableToken::new(deploy_generation),
             catalog_content_version: version,
+            bootstrap_complete: false,
             metrics,
         };
         // If the snapshot is not consolidated, and we see multiple epoch values while applying the
@@ -1115,7 +1118,13 @@ impl UnopenedPersistCatalogState {
         mode: Mode,
         initial_ts: Timestamp,
         bootstrap_args: &BootstrapArgs,
-    ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
+    ) -> Result<
+        (
+            Box<dyn DurableCatalogState>,
+            std::thread::JoinHandle<Vec<memory::objects::StateUpdate>>,
+        ),
+        CatalogError,
+    > {
         // It would be nice to use `initial_ts` here, but it comes from the system clock, not the
         // timestamp oracle.
         let mut commit_ts = self.upper;
@@ -1195,6 +1204,35 @@ impl UnopenedPersistCatalogState {
         }
         soft_assert_ne_or_log!(self.upper, Timestamp::minimum());
 
+        // Remove all audit log entries.
+        let (audit_logs, snapshot): (Vec<_>, Vec<_>) = self
+            .snapshot
+            .into_iter()
+            .partition(|(update, _, _)| update.is_audit_log());
+        self.snapshot = snapshot;
+
+        // Create thread to deserialize audit logs.
+        let audit_log_handle = std::thread::spawn(move || {
+            let updates: Vec<_> = audit_logs
+                .into_iter()
+                .map(|(kind, ts, diff)| {
+                    assert_eq!(
+                        diff, 1,
+                        "audit log is append only: ({kind:?}, {ts:?}, {diff:?})"
+                    );
+                    let diff = memory::objects::StateDiff::Addition;
+
+                    let kind = TryIntoStateUpdateKind::try_into(kind).expect("kind decoding error");
+                    let kind: Option<memory::objects::StateUpdateKind> = (&kind)
+                        .try_into()
+                        .expect("invalid persisted update: {update:#?}");
+                    let kind = kind.expect("audit log always produces im-memory updates");
+                    memory::objects::StateUpdate { kind, ts, diff }
+                })
+                .collect();
+            updates
+        });
+
         // Perform data migrations.
         if is_initialized && !read_only {
             commit_ts = upgrade(&mut self, commit_ts).await?;
@@ -1218,6 +1256,7 @@ impl UnopenedPersistCatalogState {
             snapshot: Vec::new(),
             update_applier: CatalogStateInner::new(),
             catalog_content_version: self.catalog_content_version,
+            bootstrap_complete: false,
             metrics: self.metrics,
         };
         catalog.metrics.collection_entries.reset();
@@ -1299,7 +1338,7 @@ impl UnopenedPersistCatalogState {
             });
         }
 
-        Ok(Box::new(catalog))
+        Ok((Box::new(catalog), audit_log_handle))
     }
 
     /// Reports if the catalog state has been initialized.
@@ -1363,7 +1402,13 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
         mut self: Box<Self>,
         initial_ts: Timestamp,
         bootstrap_args: &BootstrapArgs,
-    ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
+    ) -> Result<
+        (
+            Box<dyn DurableCatalogState>,
+            std::thread::JoinHandle<Vec<memory::objects::StateUpdate>>,
+        ),
+        CatalogError,
+    > {
         self.open_inner(Mode::Savepoint, initial_ts, bootstrap_args)
             .boxed()
             .await
@@ -1377,6 +1422,7 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
         self.open_inner(Mode::Readonly, EpochMillis::MIN.into(), bootstrap_args)
             .boxed()
             .await
+            .map(|(catalog, _)| catalog)
     }
 
     #[mz_ore::instrument]
@@ -1384,7 +1430,13 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
         mut self: Box<Self>,
         initial_ts: Timestamp,
         bootstrap_args: &BootstrapArgs,
-    ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
+    ) -> Result<
+        (
+            Box<dyn DurableCatalogState>,
+            std::thread::JoinHandle<Vec<memory::objects::StateUpdate>>,
+        ),
+        CatalogError,
+    > {
         self.open_inner(Mode::Writable, initial_ts, bootstrap_args)
             .boxed()
             .await
@@ -1577,6 +1629,10 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
         self.expire().await
     }
 
+    fn is_bootstrap_complete(&self) -> bool {
+        self.bootstrap_complete
+    }
+
     async fn get_audit_logs(&mut self) -> Result<Vec<VersionedEvent>, CatalogError> {
         self.sync_to_current_upper().await?;
         let audit_logs: Vec<_> = self
@@ -1678,6 +1734,10 @@ impl DurableCatalogState for PersistCatalogState {
 
     fn is_savepoint(&self) -> bool {
         matches!(self.mode, Mode::Savepoint)
+    }
+
+    fn mark_bootstrap_complete(&mut self) {
+        self.bootstrap_complete = true;
     }
 
     #[mz_ore::instrument(level = "debug")]

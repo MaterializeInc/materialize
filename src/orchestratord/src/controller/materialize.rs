@@ -10,16 +10,20 @@
 use std::{
     collections::BTreeSet,
     fmt::Display,
+    str::FromStr,
     sync::{Arc, Mutex},
 };
 
 use http::HeaderValue;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
 use kube::{api::PostParams, runtime::controller::Action, Api, Client, Resource, ResourceExt};
+use serde::Deserialize;
 use tracing::{debug, trace};
 
 use crate::metrics::Metrics;
-use mz_cloud_resources::crd::materialize::v1alpha1::{Materialize, MaterializeStatus};
+use mz_cloud_resources::crd::materialize::v1alpha1::{
+    Materialize, MaterializeCertSpec, MaterializeStatus,
+};
 use mz_orchestrator_kubernetes::KubernetesImagePullPolicy;
 use mz_orchestrator_tracing::TracingCliArgs;
 use mz_ore::{cast::CastFrom, cli::KeyValueArg, instrument};
@@ -27,6 +31,7 @@ use mz_sql::catalog::CloudProvider;
 
 mod console;
 mod resources;
+mod tls;
 
 #[derive(clap::Parser)]
 pub struct Args {
@@ -39,13 +44,20 @@ pub struct Args {
     #[clap(long)]
     create_console: bool,
     #[clap(long)]
-    enable_tls: bool,
-    #[clap(long)]
     helm_chart_version: Option<String>,
     #[clap(long, default_value = "kubernetes")]
     secrets_controller: String,
     #[clap(long)]
     collect_pod_metrics: bool,
+    #[clap(long)]
+    enable_prometheus_scrape_annotations: bool,
+    #[clap(long)]
+    disable_authentication: bool,
+
+    #[clap(long)]
+    segment_api_key: Option<String>,
+    #[clap(long)]
+    segment_client_side: bool,
 
     #[clap(long)]
     console_image_tag_default: String,
@@ -61,6 +73,8 @@ pub struct Args {
     scheduler_name: Option<String>,
     #[clap(long)]
     enable_security_context: bool,
+    #[clap(long)]
+    enable_internal_statement_logging: bool,
 
     #[clap(long)]
     orchestratord_pod_selector_labels: Vec<KeyValueArg<String, String>>,
@@ -112,10 +126,6 @@ pub struct Args {
     environmentd_internal_http_host_override: Option<String>,
     #[clap(long, default_value = "6879")]
     environmentd_internal_persist_pubsub_port: i32,
-    #[clap(long, default_value = "6880")]
-    environmentd_balancer_sql_port: i32,
-    #[clap(long, default_value = "6881")]
-    environmentd_balancer_http_port: i32,
 
     #[clap(long, default_value = "6875")]
     balancerd_sql_port: i32,
@@ -126,6 +136,25 @@ pub struct Args {
 
     #[clap(long, default_value = "9000")]
     console_http_port: i32,
+
+    #[clap(long, default_value = "{}")]
+    default_certificate_specs: DefaultCertificateSpecs,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct DefaultCertificateSpecs {
+    balancerd_external: Option<MaterializeCertSpec>,
+    console_external: Option<MaterializeCertSpec>,
+    internal: Option<MaterializeCertSpec>,
+}
+
+impl FromStr for DefaultCertificateSpecs {
+    type Err = serde_json::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        serde_json::from_str(s)
+    }
 }
 
 #[derive(clap::Parser)]
@@ -200,8 +229,6 @@ impl Context {
                 "--environmentd-iam-role-arn is required when using --cloud-provider=aws"
             );
         }
-
-        assert!(!config.enable_tls, "--enable-tls is not yet implemented");
 
         Self {
             config,

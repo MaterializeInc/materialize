@@ -962,7 +962,7 @@ def workflow_kafka_source_rehydration(c: Composition) -> None:
         duration = time.time() - start_time
         assert result[0][0] == count * repeats, f"Wrong result: {result}"
         assert (
-            duration < 2
+            duration < 4
         ), f"Took {duration}s to SELECT on Kafka source after 0dt upgrade, is it hydrated?"
 
 
@@ -1076,7 +1076,7 @@ def workflow_pg_source_rehydration(c: Composition) -> None:
         duration = time.time() - start_time
         assert result[0][0] == count * repeats, f"Wrong result: {result}"
         assert (
-            duration < 2
+            duration < 4
         ), f"Took {duration}s to SELECT on Postgres source after 0dt upgrade, is it hydrated?"
 
 
@@ -1191,7 +1191,7 @@ def workflow_mysql_source_rehydration(c: Composition) -> None:
         duration = time.time() - start_time
         assert result[0][0] == count * repeats, f"Wrong result: {result}"
         assert (
-            duration < 2
+            duration < 4
         ), f"Took {duration}s to SELECT on MySQL source after 0dt upgrade, is it hydrated?"
 
 

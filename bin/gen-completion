@@ -50,7 +50,7 @@ case "$cmd" in
         for name in "${python_autocompletions[@]}"; do
           for shell in "${supported_shells[@]}"; do
             if [ ! -f "$directory/../misc/completions/$shell/_$name" ]; then
-              printf "missing shell completion scripts. try running \`bin/completion generate\` and checking in the changes\n"
+              printf "missing shell completion scripts. try running \`bin/gen-completion generate\` and checking in the changes\n"
               exit 1
             fi
 
@@ -58,7 +58,7 @@ case "$cmd" in
             existing=$("$shasum" < "$directory"/../misc/completions/"$shell"/_"$name")
 
             if [[ "$latest" != "$existing" ]]; then
-              printf "shell completion scripts have uncommitted changes. try running \`bin/completion generate\` and checking in the changes\n"
+              printf "shell completion scripts have uncommitted changes. try running \`bin/gen-completion generate\` and checking in the changes\n"
               exit 1
             fi
           done

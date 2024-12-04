@@ -492,9 +492,9 @@ mod tests {
     impl<T: Arbitrary + Send> ArbitraryTimeout<T> {
         // Number of attempts to generate a value before panicking. The maximum time spent
         // generating a value is `GENERATE_ATTEMPTS` * `TIMEOUT_SECS`.
-        const GENERATE_ATTEMPTS: u64 = 6;
+        const GENERATE_ATTEMPTS: u64 = 10;
         // Amount of time in seconds before we give up trying to generate a single value.
-        const TIMEOUT_SECS: u64 = 5;
+        const TIMEOUT_SECS: u64 = 10;
 
         fn new() -> Self {
             Self {

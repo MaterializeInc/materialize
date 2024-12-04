@@ -162,30 +162,6 @@ pub struct Args {
         default_value = "127.0.0.1:6879"
     )]
     internal_persist_pubsub_listen_addr: SocketAddr,
-    /// The address on which to listen for SQL connections from the balancers.
-    ///
-    /// Connections to this address are not subject to encryption.
-    /// Care should be taken to not expose this address to the public internet
-    /// or other unauthorized parties.
-    #[clap(
-        long,
-        value_name = "HOST:PORT",
-        env = "BALANCER_SQL_LISTEN_ADDR",
-        default_value = "127.0.0.1:6880"
-    )]
-    balancer_sql_listen_addr: SocketAddr,
-    /// The address on which to listen for trusted HTTP connections.
-    ///
-    /// Connections to this address are not subject to encryption.
-    /// Care should be taken to not expose this address to the public internet
-    /// or other unauthorized parties.
-    #[clap(
-        long,
-        value_name = "HOST:PORT",
-        env = "BALANCER_HTTP_LISTEN_ADDR",
-        default_value = "127.0.0.1:6881"
-    )]
-    balancer_http_listen_addr: SocketAddr,
     /// Enable cross-origin resource sharing (CORS) for HTTP requests from the
     /// specified origin.
     ///
@@ -280,6 +256,12 @@ pub struct Args {
     /// Whether to enable pod metrics collection.
     #[clap(long, env = "ORCHESTRATOR_KUBERNETES_DISABLE_POD_METRICS_COLLECTION")]
     orchestrator_kubernetes_disable_pod_metrics_collection: bool,
+    /// Whether to annotate pods for prometheus service discovery.
+    #[clap(
+        long,
+        env = "ORCHESTRATOR_KUBERNETES_ENABLE_PROMETHEUS_SCRAPE_ANNOTATIONS"
+    )]
+    orchestrator_kubernetes_enable_prometheus_scrape_annotations: bool,
     #[clap(long, env = "ORCHESTRATOR_PROCESS_WRAPPER")]
     orchestrator_process_wrapper: Option<String>,
     /// Where the process orchestrator should store secrets.
@@ -767,6 +749,8 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                         name_prefix: args.orchestrator_kubernetes_name_prefix.clone(),
                         collect_pod_metrics: !args
                             .orchestrator_kubernetes_disable_pod_metrics_collection,
+                        enable_prometheus_scrape_annotations: args
+                            .orchestrator_kubernetes_enable_prometheus_scrape_annotations,
                     }))
                     .context("creating kubernetes orchestrator")?,
             );
@@ -1002,8 +986,6 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         let listeners = Listeners::bind(ListenersConfig {
             sql_listen_addr: args.sql_listen_addr,
             http_listen_addr: args.http_listen_addr,
-            balancer_sql_listen_addr: args.balancer_sql_listen_addr,
-            balancer_http_listen_addr: args.balancer_http_listen_addr,
             internal_sql_listen_addr: args.internal_sql_listen_addr,
             internal_http_listen_addr: args.internal_http_listen_addr,
         })
@@ -1108,14 +1090,6 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     println!(
         " Internal HTTP address: {}",
         server.internal_http_local_addr()
-    );
-    println!(
-        " Balancerd SQL address: {}",
-        server.balancer_sql_local_addr()
-    );
-    println!(
-        " Balancerd HTTP address: {}",
-        server.balancer_http_local_addr()
     );
     println!(
         " Internal Persist PubSub address: {}",

@@ -305,3 +305,10 @@ EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW whatever
 EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW whatever
 =>
 ExplainPushdown(ExplainPushdownStatement { explainee: MaterializedView(Name(UnresolvedItemName([Ident("whatever")]))) })
+
+parse-statement
+EXPLAIN WITH (ARITY, EQUIVALENCES, HUMANIZED EXPRESSIONS) CREATE MATERIALIZED VIEW mv AS SELECT 665
+----
+EXPLAIN WITH (ARITY, EQUIVALENCES, HUMANIZED EXPRESSIONS) CREATE MATERIALIZED VIEW mv AS SELECT 665
+=>
+ExplainPlan(ExplainPlanStatement { stage: None, with_options: [ExplainPlanOption { name: Arity, value: None }, ExplainPlanOption { name: Equivalences, value: None }, ExplainPlanOption { name: HumanizedExpressions, value: None }], format: None, explainee: CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name: UnresolvedItemName([Ident("mv")]), columns: [], in_cluster: None, query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None, with_options: [] }, false) })

@@ -3524,13 +3524,16 @@ impl<L> RowSetFinishing<L> {
 impl RowSetFinishing {
     /// Applies finishing actions to a [`RowCollection`], and reports the total
     /// time it took to run.
+    ///
+    /// Returns a [`SortedRowCollectionIter`] that contains all of the response data, as
+    /// well as the size of the response in bytes.
     pub fn finish(
         &self,
         rows: RowCollection,
         max_result_size: u64,
         max_returned_query_size: Option<u64>,
         duration_histogram: &Histogram,
-    ) -> Result<SortedRowCollectionIter, String> {
+    ) -> Result<(SortedRowCollectionIter, usize), String> {
         let now = Instant::now();
         let result = self.finish_inner(rows, max_result_size, max_returned_query_size);
         let duration = now.elapsed();
@@ -3545,7 +3548,7 @@ impl RowSetFinishing {
         rows: RowCollection,
         max_result_size: u64,
         max_returned_query_size: Option<u64>,
-    ) -> Result<SortedRowCollectionIter, String> {
+    ) -> Result<(SortedRowCollectionIter, usize), String> {
         // How much additional memory is required to make a sorted view.
         let sorted_view_mem = rows.entries().saturating_mul(std::mem::size_of::<usize>());
         let required_memory = rows.byte_len().saturating_add(sorted_view_mem);
@@ -3568,19 +3571,24 @@ impl RowSetFinishing {
             iter = iter.with_limit(limit);
         };
 
+        // TODO(parkmycar): Re-think how we can calculate the total response size without
+        // having to iterate through the entire collection of Rows, while still
+        // respecting the LIMIT, OFFSET, and projections.
+        //
+        // Note: It feels a bit bad always calculating the response size, but we almost
+        // always need it to either check the `max_returned_query_size`, or for reporting
+        // in the query history.
+        let response_size: usize = iter.clone().map(|row| row.data().len()).sum();
+
         // Bail if we would end up returning more data to the client than they can support.
         if let Some(max) = max_returned_query_size {
-            // TODO(parkmycar): Re-implement out LIMIT and OFFSET logic so we can calculate
-            // the remaining bytes via `(Row, Diff)` tuples.
-            let remaining_bytes: usize = iter.clone().map(|row| row.data().len()).sum();
-
-            if remaining_bytes > usize::cast_from(max) {
+            if response_size > usize::cast_from(max) {
                 let max_bytes = ByteSize::b(max);
                 return Err(format!("result exceeds max size of {max_bytes}"));
             }
         }
 
-        Ok(iter)
+        Ok((iter, response_size))
     }
 }
 

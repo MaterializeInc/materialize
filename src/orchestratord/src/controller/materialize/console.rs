@@ -24,9 +24,15 @@ use k8s_openapi::{
 };
 use kube::{api::ObjectMeta, Api, Client};
 use maplit::btreemap;
+use tracing::trace;
 
-use crate::k8s::apply_resource;
-use mz_cloud_resources::crd::materialize::v1alpha1::Materialize;
+use crate::{
+    controller::materialize::tls::{create_certificate, issuer_ref_defined},
+    k8s::apply_resource,
+};
+use mz_cloud_resources::crd::{
+    gen::cert_manager::certificates::Certificate, materialize::v1alpha1::Materialize,
+};
 
 // corresponds to the `EXPOSE` line in the console dockerfile
 const CONSOLE_IMAGE_HTTP_PORT: i32 = 8080;
@@ -35,6 +41,7 @@ pub struct Resources {
     network_policies: Vec<NetworkPolicy>,
     console_deployment: Box<Deployment>,
     console_service: Box<Service>,
+    console_external_certificate: Box<Option<Certificate>>,
 }
 
 impl Resources {
@@ -46,10 +53,13 @@ impl Resources {
             console_image_ref,
         ));
         let console_service = Box::new(create_console_service_object(config, mz));
+        let console_external_certificate =
+            Box::new(create_console_external_certificate(config, mz));
         Self {
             network_policies,
             console_deployment,
             console_service,
+            console_external_certificate,
         }
     }
 
@@ -57,12 +67,22 @@ impl Resources {
         let network_policy_api: Api<NetworkPolicy> = Api::namespaced(client.clone(), namespace);
         let deployment_api: Api<Deployment> = Api::namespaced(client.clone(), namespace);
         let service_api: Api<Service> = Api::namespaced(client.clone(), namespace);
+        let certificate_api: Api<Certificate> = Api::namespaced(client.clone(), namespace);
 
         for network_policy in &self.network_policies {
             apply_resource(&network_policy_api, network_policy).await?;
         }
+
+        trace!("creating new console deployment");
         apply_resource(&deployment_api, &self.console_deployment).await?;
+
+        trace!("creating new console service");
         apply_resource(&service_api, &self.console_service).await?;
+
+        if let Some(certificate) = &*self.console_external_certificate {
+            trace!("creating new console external certificate");
+            apply_resource(&certificate_api, certificate).await?;
+        }
 
         Ok(())
     }
@@ -114,6 +134,20 @@ fn create_network_policies(config: &super::Args, mz: &Materialize) -> Vec<Networ
     network_policies
 }
 
+fn create_console_external_certificate(
+    config: &super::Args,
+    mz: &Materialize,
+) -> Option<Certificate> {
+    create_certificate(
+        config.default_certificate_specs.console_external.clone(),
+        mz,
+        mz.spec.console_external_certificate_spec.clone(),
+        mz.console_external_certificate_name(),
+        mz.console_external_certificate_secret_name(),
+        None,
+    )
+}
+
 fn create_console_deployment_object(
     config: &super::Args,
     mz: &Materialize,
@@ -143,24 +177,35 @@ fn create_console_deployment_object(
         ..Default::default()
     };
 
+    let scheme = if issuer_ref_defined(
+        &config.default_certificate_specs.balancerd_external,
+        &mz.spec.balancerd_external_certificate_spec,
+    ) {
+        "https"
+    } else {
+        "http"
+    };
     let env = vec![EnvVar {
         name: "MZ_ENDPOINT".to_string(),
         value: Some(format!(
-            "http://{}.{}.svc.cluster.local:{}",
-            // TODO: this should talk to balancerd eventually, but for now we
-            // need to bypass auth which requires using the internal port
-            mz.environmentd_service_name(),
+            "{}://{}.{}.svc.cluster.local:{}",
+            scheme,
+            mz.balancerd_service_name(),
             mz.namespace(),
-            config.environmentd_internal_http_port,
+            config.balancerd_http_port,
         )),
         ..Default::default()
     }];
 
-    if config.enable_tls {
-        unimplemented!();
-    } else {
-        // currently the docker image just doesn't implement tls
-    }
+    //if issuer_ref_defined(
+    //    &config.default_certificate_specs.console_external,
+    //    &mz.spec.console_external_certificate_spec,
+    //) {
+    //    // TODO define volumes, volume_mounts, and any arg changes
+    //    unimplemented!();
+    //} else {
+    //    // currently the docker image just doesn't implement tls
+    //}
 
     let security_context = if config.enable_security_context {
         // Since we want to adhere to the most restrictive security context, all

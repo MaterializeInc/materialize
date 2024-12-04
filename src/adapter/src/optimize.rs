@@ -251,10 +251,6 @@ impl From<&OptimizerConfig> for mz_sql::plan::HirToMirConfig {
         Self {
             enable_new_outer_join_lowering: config.features.enable_new_outer_join_lowering,
             enable_variadic_left_join_lowering: config.features.enable_variadic_left_join_lowering,
-            enable_value_window_function_fusion: config
-                .features
-                .enable_value_window_function_fusion,
-            enable_window_aggregation_fusion: config.features.enable_window_aggregation_fusion,
         }
     }
 }
@@ -361,6 +357,22 @@ fn optimize_mir_local(
     mz_repr::explain::trace_plan(expr.as_inner());
 
     Ok::<_, OptimizerError>(expr)
+}
+
+/// This is just a wrapper around [mz_transform::Optimizer::constant_optimizer],
+/// running it, and tracing the result plan.
+#[mz_ore::instrument(target = "optimizer", level = "debug", name = "constant")]
+fn optimize_mir_constant(
+    expr: MirRelationExpr,
+    ctx: &mut TransformCtx,
+) -> Result<MirRelationExpr, OptimizerError> {
+    let optimizer = mz_transform::Optimizer::constant_optimizer(ctx);
+    let expr = optimizer.optimize(expr, ctx)?;
+
+    // Trace the result of this phase.
+    mz_repr::explain::trace_plan(expr.as_inner());
+
+    Ok::<_, OptimizerError>(expr.0)
 }
 
 macro_rules! trace_plan {

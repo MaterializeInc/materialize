@@ -13,13 +13,14 @@ operator:
     # The Docker repository for the operator image
     repository: materialize/orchestratord
     # The tag/version of the operator image to be used
-    tag: v0.125.2
+    tag: v0.127.0-dev.0
     # Policy for pulling the image: "IfNotPresent" avoids unnecessary re-pulling of images
     pullPolicy: IfNotPresent
 
   args:
     # Log filtering settings for startup logs
     startupLogFilter: "INFO,mz_orchestratord=TRACE"
+    enableInternalStatementLogging: true
 
   features:
     # Flag to indicate whether to create balancerd pods for the environments
@@ -214,6 +215,7 @@ clusterd:
 
 # RBAC (Role-Based Access Control) settings
 rbac:
+  enabled: true
   # Whether to create necessary RBAC roles and bindings
   create: true
 
@@ -226,15 +228,21 @@ serviceAccount:
 
 # Observability settings (disabled in this case)
 observability:
-  enabled: false
+  enabled: true
   podMetrics:
     # Whether to enable the pod metrics scraper which populates the
     # Environment Overview Monitoring tab in the web console (requires
     # metrics-server to be installed)
     enabled: false
   prometheus:
-    # Whether to enable Prometheus integration for monitoring (disabled here)
-    enabled: false
+    scrapeAnnotations:
+        # Whether to annotate pods with common keys used for prometheus scraping.
+        enabled: true
+
+telemetry:
+  enabled: true
+  segmentApiKey: hMWi3sZ17KFMjn2sPWo9UJGpOQqiba4A
+  segmentClientSide: true
 
 # Network policies configuration
 networkPolicies:
@@ -248,12 +256,31 @@ networkPolicies:
   ingress:
     enabled: false
     cidrs:
-      - 0.0.0.0/0
+    - 0.0.0.0/0
   # egress from Materialize pods to sources and sinks
   egress:
     enabled: false
     cidrs:
-      - 0.0.0.0/0
+    - 0.0.0.0/0
+
+tls:
+  defaultCertificateSpecs: {}
+    #balancerdExternal:
+    #  dnsNames:
+    #    - balancerd
+    #  issuerRef:
+    #    name: dns01
+    #    kind: ClusterIssuer
+    #consoleExternal:
+    #  dnsNames:
+    #    - console
+    #  issuerRef:
+    #    name: dns01
+    #    kind: ClusterIssuer
+    #internal:
+    #  issuerRef:
+    #    name: dns01
+    #    kind: ClusterIssuer
 
 # Namespace configuration
 namespace:

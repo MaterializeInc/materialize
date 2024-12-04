@@ -42,6 +42,9 @@ spec:
         {{- range $key, $value := include "materialize-operator.selectorLabels" . | fromYaml }}
         - "--orchestratord-pod-selector-labels={{ $key }}={{ $value }}"
         {{- end }}
+        {{- if .Values.operator.args.enableInternalStatementLogging }}
+        - "--enable-internal-statement-logging"
+        {{- end }}
 
         {{/* AWS Configuration */}}
         {{- if eq .Values.operator.cloudProvider.type "aws" }}
@@ -68,6 +71,11 @@ spec:
         - "--console-image-tag-default=25.1.0-beta.1"
         {{- range $key, $value := .Values.operator.features.consoleImageTagMapOverride }}
         - "--console-image-tag-map={{ $key }}={{ $value }}"
+        {{- end }}
+
+        {{/* Authentication */}}
+        {{- if not .Values.rbac.enabled }}
+        - "--disable-authentication"
         {{- end }}
 
         {{/* Cluster Configuration */}}
@@ -123,11 +131,23 @@ spec:
         {{- end }}
         {{- end }}
         {{- end }}
-
+        {{- if .Values.tls.defaultCertificateSpecs }}
+        - '--default-certificate-specs={{ toJson .Values.tls.defaultCertificateSpecs }}'
+        {{- end }}
         {{/* Observability */}}
         {{- if .Values.observability.enabled }}
         {{- if .Values.observability.podMetrics.enabled }}
         - "--collect-pod-metrics"
+        {{- end }}
+        {{- if .Values.observability.prometheus.scrapeAnnotations.enabled }}
+        - "--enable-prometheus-scrape-annotations"
+        {{- end }}
+        {{- end }}
+        {{/* Telemetry */}}
+        {{- if .Values.telemetry.enabled }}
+        - "--segment-api-key={{ .Values.telemetry.segmentApiKey }}"
+        {{- if .Values.telemetry.segmentClientSide }}
+        - "--segment-client-side"
         {{- end }}
         {{- end }}
         resources:

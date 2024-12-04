@@ -248,8 +248,6 @@ impl<T: Timestamp + Lattice + Codec64 + Display + Sync> AsyncStorageWorker<T> {
                                 persist_location,
                                 remap_shard,
                                 data_shard,
-                                // The status shard only contains non-definite status updates
-                                status_shard: _,
                                 relation_desc,
                                 txns_shard,
                             } = &export.storage_metadata;

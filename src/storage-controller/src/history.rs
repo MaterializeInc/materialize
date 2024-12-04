@@ -203,6 +203,7 @@ impl<T: std::fmt::Debug> CommandHistory<T> {
 mod tests {
     use std::str::FromStr;
 
+    use mz_cluster_client::metrics::ControllerMetrics;
     use mz_ore::metrics::MetricsRegistry;
     use mz_ore::url::SensitiveUrl;
     use mz_persist_types::PersistLocation;
@@ -231,8 +232,9 @@ mod tests {
 
     fn history() -> CommandHistory<u64> {
         let registry = MetricsRegistry::new();
-        let metrics = StorageControllerMetrics::new(registry)
-            .for_instance(StorageInstanceId::System(0))
+        let controller_metrics = ControllerMetrics::new(&registry);
+        let metrics = StorageControllerMetrics::new(&registry, controller_metrics)
+            .for_instance(StorageInstanceId::system(0).expect("0 is a valid ID"))
             .for_history();
 
         CommandHistory::new(metrics)
@@ -256,7 +258,6 @@ mod tests {
                         },
                         remap_shard: Default::default(),
                         data_shard: Default::default(),
-                        status_shard: Default::default(),
                         relation_desc: RelationDesc::new(
                             RelationType {
                                 column_types: Default::default(),
@@ -299,7 +300,6 @@ mod tests {
                 },
                 remap_shard: Default::default(),
                 data_shard: Default::default(),
-                status_shard: Default::default(),
                 relation_desc: RelationDesc::new(
                     RelationType {
                         column_types: Default::default(),
@@ -310,7 +310,7 @@ mod tests {
                 txns_shard: Default::default(),
             },
             source_exports,
-            instance_id: StorageInstanceId::System(0),
+            instance_id: StorageInstanceId::system(0).expect("0 is a valid ID"),
             remap_collection_id: GlobalId::User(remap_collection_id),
         }
     }
@@ -371,7 +371,6 @@ mod tests {
                 },
                 remap_shard: Default::default(),
                 data_shard: Default::default(),
-                status_shard: Default::default(),
                 relation_desc: RelationDesc::new(
                     RelationType {
                         column_types: Default::default(),

@@ -62,7 +62,7 @@ from materialize.test_analytics.test_analytics_db import TestAnalyticsDb
 from materialize.util import PgConnInfo, all_subclasses, parse_pg_conn_string
 from materialize.version_list import resolve_ancestor_image_tag
 
-PARALLEL_BENCHMARK_FRAMEWORK_VERSION = "1.1.0"
+PARALLEL_BENCHMARK_FRAMEWORK_VERSION = "1.2.0"
 
 
 def known_regression(scenario: str, other_tag: str) -> bool:

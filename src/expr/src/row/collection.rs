@@ -34,7 +34,7 @@ pub struct RowCollection {
     /// Contiguous blob of encoded Rows.
     encoded: Bytes,
     /// Metadata about an individual Row in the blob.
-    metadata: Vec<EncodedRowMetadata>,
+    metadata: Arc<[EncodedRowMetadata]>,
     /// Ends of non-empty, sorted runs of rows in index into `metadata`.
     runs: Vec<usize>,
 }
@@ -82,7 +82,7 @@ impl RowCollection {
 
         RowCollection {
             encoded: Bytes::from(encoded),
-            metadata,
+            metadata: metadata.into(),
             runs,
         }
     }
@@ -104,7 +104,7 @@ impl RowCollection {
         });
         let self_len = self.metadata.len();
 
-        self.metadata.extend(mapped_metas);
+        self.metadata = self.metadata.iter().cloned().chain(mapped_metas).collect();
         self.encoded = Bytes::from(new_bytes);
         self.runs.extend(other.runs.iter().map(|f| f + self_len));
     }
@@ -454,6 +454,10 @@ impl RowIterator for SortedRowCollectionIter {
     fn count(&self) -> usize {
         self.collection.collection.count(self.offset, self.limit)
     }
+
+    fn box_clone(&self) -> Box<dyn RowIterator> {
+        Box::new(self.clone())
+    }
 }
 
 impl IntoRowIterator for SortedRowCollection {
@@ -538,7 +542,7 @@ mod tests {
 
             RowCollection {
                 encoded: Bytes::from(encoded),
-                metadata,
+                metadata: metadata.into(),
                 runs,
             }
         }

@@ -625,8 +625,6 @@ CREATE CONNECTION csr_ssh TO CONFLUENT SCHEMA REGISTRY (
 
 ### MySQL
 
-{{< public-preview />}}
-
 A MySQL connection establishes a link to a [MySQL] server. You can use
 MySQL connections to create [sources](/sql/create-source/mysql).
 

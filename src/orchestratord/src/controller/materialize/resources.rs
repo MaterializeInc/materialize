@@ -20,8 +20,8 @@ use k8s_openapi::{
             Capabilities, Container, ContainerPort, EnvVar, EnvVarSource, EphemeralVolumeSource,
             HTTPGetAction, PersistentVolumeClaimSpec, PersistentVolumeClaimTemplate, Pod,
             PodSecurityContext, PodSpec, PodTemplateSpec, Probe, SeccompProfile, SecretKeySelector,
-            SecurityContext, Service, ServiceAccount, ServicePort, ServiceSpec, TCPSocketAction,
-            Toleration, Volume, VolumeMount, VolumeResourceRequirements,
+            SecretVolumeSource, SecurityContext, Service, ServiceAccount, ServicePort, ServiceSpec,
+            TCPSocketAction, Toleration, Volume, VolumeMount, VolumeResourceRequirements,
         },
         networking::v1::{
             IPBlock, NetworkPolicy, NetworkPolicyEgressRule, NetworkPolicyIngressRule,
@@ -39,7 +39,9 @@ use sha2::{Digest, Sha256};
 use tracing::trace;
 
 use super::matching_image_from_environmentd_image_ref;
+use crate::controller::materialize::tls::{create_certificate, issuer_ref_defined};
 use crate::k8s::{apply_resource, delete_resource, get_resource};
+use mz_cloud_resources::crd::gen::cert_manager::certificates::Certificate;
 use mz_cloud_resources::crd::materialize::v1alpha1::Materialize;
 use mz_environmentd::DeploymentStatus;
 use mz_orchestrator_tracing::TracingCliArgs;
@@ -56,7 +58,9 @@ pub struct Resources {
     public_service: Box<Service>,
     generation_service: Box<Service>,
     persist_pubsub_service: Box<Service>,
+    environmentd_certificate: Box<Option<Certificate>>,
     environmentd_statefulset: Box<StatefulSet>,
+    balancerd_external_certificate: Box<Option<Certificate>>,
     balancerd_deployment: Option<Box<Deployment>>,
     balancerd_service: Option<Box<Service>>,
 }
@@ -79,9 +83,12 @@ impl Resources {
         let generation_service = Box::new(create_generation_service_object(config, mz, generation));
         let persist_pubsub_service =
             Box::new(create_persist_pubsub_service(config, mz, generation));
+        let environmentd_certificate = Box::new(create_environmentd_certificate(config, mz));
         let environmentd_statefulset = Box::new(create_environmentd_statefulset_object(
             config, tracing, mz, generation,
         ));
+        let balancerd_external_certificate =
+            Box::new(create_balancerd_external_certificate(config, mz));
         let balancerd_deployment = config
             .create_balancers
             .then(|| Box::new(create_balancerd_deployment_object(config, mz)));
@@ -98,7 +105,9 @@ impl Resources {
             public_service,
             generation_service,
             persist_pubsub_service,
+            environmentd_certificate,
             environmentd_statefulset,
+            balancerd_external_certificate,
             balancerd_deployment,
             balancerd_service,
         }
@@ -120,6 +129,7 @@ impl Resources {
         let role_binding_api: Api<RoleBinding> = Api::namespaced(client.clone(), namespace);
         let statefulset_api: Api<StatefulSet> = Api::namespaced(client.clone(), namespace);
         let pod_api: Api<Pod> = Api::namespaced(client.clone(), namespace);
+        let certificate_api: Api<Certificate> = Api::namespaced(client.clone(), namespace);
 
         for policy in &self.environmentd_network_policies {
             trace!("applying network policy {}", policy.name_unchecked());
@@ -140,6 +150,16 @@ impl Resources {
 
         trace!("creating persist pubsub service");
         apply_resource(&service_api, &*self.persist_pubsub_service).await?;
+
+        if let Some(certificate) = &*self.balancerd_external_certificate {
+            trace!("creating new balancerd external certificate");
+            apply_resource(&certificate_api, certificate).await?;
+        }
+
+        if let Some(certificate) = &*self.environmentd_certificate {
+            trace!("creating new environmentd certificate");
+            apply_resource(&certificate_api, certificate).await?;
+        }
 
         trace!("creating new environmentd statefulset");
         apply_resource(&statefulset_api, &*self.environmentd_statefulset).await?;
@@ -668,18 +688,6 @@ fn create_base_service_object(
             name: Some("internal-http".to_string()),
             ..Default::default()
         },
-        ServicePort {
-            port: config.environmentd_balancer_sql_port,
-            protocol: Some("TCP".to_string()),
-            name: Some("balancer-sql".to_string()),
-            ..Default::default()
-        },
-        ServicePort {
-            port: config.environmentd_balancer_http_port,
-            protocol: Some("TCP".to_string()),
-            name: Some("balancer-http".to_string()),
-            ..Default::default()
-        },
     ];
 
     let selector = btreemap! {"materialize.cloud/name".to_string() => mz.environmentd_statefulset_name(generation)};
@@ -722,6 +730,20 @@ fn create_persist_pubsub_service(
         }),
         status: None,
     }
+}
+
+fn create_environmentd_certificate(config: &super::Args, mz: &Materialize) -> Option<Certificate> {
+    create_certificate(
+        config.default_certificate_specs.internal.clone(),
+        mz,
+        mz.spec.internal_certificate_spec.clone(),
+        mz.environmentd_certificate_name(),
+        mz.environmentd_certificate_secret_name(),
+        Some(vec![
+            mz.environmentd_service_name(),
+            mz.environmentd_service_internal_fqdn(),
+        ]),
+    )
 }
 
 fn create_environmentd_statefulset_object(
@@ -849,14 +871,6 @@ fn create_environmentd_statefulset_object(
             "--internal-http-listen-addr=0.0.0.0:{}",
             config.environmentd_internal_http_port
         ),
-        format!(
-            "--balancer-sql-listen-addr=0.0.0.0:{}",
-            config.environmentd_balancer_sql_port
-        ),
-        format!(
-            "--balancer-http-listen-addr=0.0.0.0:{}",
-            config.environmentd_balancer_http_port
-        ),
     ]);
 
     args.extend(
@@ -872,13 +886,14 @@ fn create_environmentd_statefulset_object(
     ));
 
     if !config.cloud_provider.is_cloud() {
-        args.push("--system-parameter-default=cluster_enable_topology_spread=false".into())
+        args.push("--system-parameter-default=cluster_enable_topology_spread=false".into());
     }
 
-    if config.enable_tls {
-        unimplemented!();
-    } else {
-        args.push("--tls-mode=disable".to_string());
+    if config.enable_internal_statement_logging {
+        args.push("--system-parameter-default=enable_internal_statement_logging=true".into());
+    }
+    if config.disable_authentication {
+        args.push("--system-parameter-default=enable_rbac_checks=false".into());
     }
 
     // Add persist arguments.
@@ -964,8 +979,43 @@ fn create_environmentd_statefulset_object(
         ]);
     }
 
-    let mut volumes = None;
-    let mut volume_mounts = None;
+    if let Some(segment_api_key) = &config.segment_api_key {
+        args.push(format!("--segment-api-key={}", segment_api_key));
+        if config.segment_client_side {
+            args.push("--segment-client-side".into());
+        }
+    }
+
+    let mut volumes = Vec::new();
+    let mut volume_mounts = Vec::new();
+    if issuer_ref_defined(
+        &config.default_certificate_specs.internal,
+        &mz.spec.internal_certificate_spec,
+    ) {
+        volumes.push(Volume {
+            name: "certificate".to_owned(),
+            secret: Some(SecretVolumeSource {
+                default_mode: Some(0o400),
+                secret_name: Some(mz.environmentd_certificate_secret_name()),
+                items: None,
+                optional: Some(false),
+            }),
+            ..Default::default()
+        });
+        volume_mounts.push(VolumeMount {
+            name: "certificate".to_owned(),
+            mount_path: "/etc/materialized".to_owned(),
+            read_only: Some(true),
+            ..Default::default()
+        });
+        args.extend([
+            "--tls-mode=require".into(),
+            "--tls-cert=/etc/materialized/tls.crt".into(),
+            "--tls-key=/etc/materialized/tls.key".into(),
+        ]);
+    } else {
+        args.push("--tls-mode=disable".to_string());
+    }
     if let Some(ephemeral_volume_class) = &config.ephemeral_volume_class {
         args.extend([
             format!(
@@ -974,7 +1024,7 @@ fn create_environmentd_statefulset_object(
             ),
             "--scratch-directory=/scratch".to_string(),
         ]);
-        volumes = Some(vec![Volume {
+        volumes.push(Volume {
             name: "scratch".to_string(),
             ephemeral: Some(EphemeralVolumeSource {
                 volume_claim_template: Some(PersistentVolumeClaimTemplate {
@@ -995,12 +1045,12 @@ fn create_environmentd_statefulset_object(
                 ..Default::default()
             }),
             ..Default::default()
-        }]);
-        volume_mounts = Some(vec![VolumeMount {
+        });
+        volume_mounts.push(VolumeMount {
             name: "scratch".to_string(),
             mount_path: "/scratch".to_string(),
             ..Default::default()
-        }]);
+        });
     }
     // The `materialize` user used by clusterd always has gid 999.
     args.push("--orchestrator-kubernetes-service-fs-group=999".to_string());
@@ -1035,6 +1085,9 @@ fn create_environmentd_statefulset_object(
 
     if !config.collect_pod_metrics {
         args.push("--orchestrator-kubernetes-disable-pod-metrics-collection".into());
+    }
+    if config.enable_prometheus_scrape_annotations {
+        args.push("--orchestrator-kubernetes-enable-prometheus-scrape-annotations".into());
     }
 
     // Add user-specified extra arguments.
@@ -1085,11 +1138,6 @@ fn create_environmentd_statefulset_object(
             ..Default::default()
         },
         ContainerPort {
-            container_port: config.environmentd_balancer_sql_port,
-            name: Some("balancer-sql".to_owned()),
-            ..Default::default()
-        },
-        ContainerPort {
             container_port: config.environmentd_http_port,
             name: Some("http".to_owned()),
             ..Default::default()
@@ -1097,11 +1145,6 @@ fn create_environmentd_statefulset_object(
         ContainerPort {
             container_port: config.environmentd_internal_http_port,
             name: Some("internal-http".to_owned()),
-            ..Default::default()
-        },
-        ContainerPort {
-            container_port: config.environmentd_balancer_http_port,
-            name: Some("balancer-http".to_owned()),
             ..Default::default()
         },
         ContainerPort {
@@ -1118,7 +1161,7 @@ fn create_environmentd_statefulset_object(
         ports: Some(ports),
         args: Some(args),
         env: Some(env),
-        volume_mounts,
+        volume_mounts: Some(volume_mounts),
         liveness_probe: Some(probe.clone()),
         readiness_probe: Some(probe),
         resources: mz.spec.environmentd_resource_requirements.clone(),
@@ -1137,7 +1180,7 @@ fn create_environmentd_statefulset_object(
     );
     pod_template_labels.insert("app".to_owned(), "environmentd".to_string());
 
-    let annotations = btreemap! {
+    let mut pod_template_annotations = btreemap! {
         // We can re-enable eviction once we have HA
         "cluster-autoscaler.kubernetes.io/safe-to-evict".to_owned() => "false".to_string(),
 
@@ -1146,6 +1189,15 @@ fn create_environmentd_statefulset_object(
         "karpenter.sh/do-not-disrupt".to_owned() => "true".to_string(),
         "materialize.cloud/generation".to_owned() => generation.to_string(),
     };
+    if config.enable_prometheus_scrape_annotations {
+        pod_template_annotations.insert("prometheus.io/scrape".to_owned(), "true".to_string());
+        pod_template_annotations.insert(
+            "prometheus.io/port".to_owned(),
+            config.environmentd_internal_http_port.to_string(),
+        );
+        pod_template_annotations.insert("prometheus.io/path".to_owned(), "/metrics".to_string());
+        pod_template_annotations.insert("prometheus.io/scheme".to_owned(), "http".to_string());
+    }
 
     let tolerations = Some(vec![
         // When the node becomes `NotReady` it indicates there is a problem with the node,
@@ -1172,7 +1224,7 @@ fn create_environmentd_statefulset_object(
         // by the statefulset, not the materialize instance
         metadata: Some(ObjectMeta {
             labels: Some(pod_template_labels),
-            annotations: Some(annotations), // This is inserted into later, do not delete.
+            annotations: Some(pod_template_annotations), // This is inserted into later, do not delete.
             ..Default::default()
         }),
         spec: Some(PodSpec {
@@ -1186,7 +1238,7 @@ fn create_environmentd_statefulset_object(
             ),
             scheduler_name: config.scheduler_name.clone(),
             service_account_name: Some(mz.service_account_name()),
-            volumes,
+            volumes: Some(volumes),
             security_context: Some(PodSecurityContext {
                 fs_group: Some(999),
                 run_as_user: Some(999),
@@ -1253,6 +1305,20 @@ fn create_environmentd_statefulset_object(
     }
 }
 
+fn create_balancerd_external_certificate(
+    config: &super::Args,
+    mz: &Materialize,
+) -> Option<Certificate> {
+    create_certificate(
+        config.default_certificate_specs.balancerd_external.clone(),
+        mz,
+        mz.spec.balancerd_external_certificate_spec.clone(),
+        mz.balancerd_external_certificate_name(),
+        mz.balancerd_external_certificate_secret_name(),
+        None,
+    )
+}
+
 fn create_balancerd_deployment_object(config: &super::Args, mz: &Materialize) -> Deployment {
     let security_context = if config.enable_security_context {
         // Since we want to adhere to the most restrictive security context, all
@@ -1275,6 +1341,16 @@ fn create_balancerd_deployment_object(config: &super::Args, mz: &Materialize) ->
         None
     };
 
+    let pod_template_annotations = if config.enable_prometheus_scrape_annotations {
+        Some(btreemap! {
+            "prometheus.io/scrape".to_owned() => "true".to_string(),
+            "prometheus.io/port".to_owned() => config.balancerd_internal_http_port.to_string(),
+            "prometheus.io/path".to_owned() => "/metrics".to_string(),
+            "prometheus.io/scheme".to_owned() => "http".to_string(),
+        })
+    } else {
+        None
+    };
     let mut pod_template_labels = mz.default_labels();
     pod_template_labels.insert(
         "materialize.cloud/name".to_owned(),
@@ -1316,18 +1392,50 @@ fn create_balancerd_deployment_object(config: &super::Args, mz: &Materialize) ->
             "--https-resolver-template={}.{}.svc.cluster.local:{}",
             mz.environmentd_service_name(),
             mz.namespace(),
-            config.environmentd_balancer_http_port
+            config.environmentd_http_port
         ),
         format!(
             "--static-resolver-addr={}.{}.svc.cluster.local:{}",
             mz.environmentd_service_name(),
             mz.namespace(),
-            config.environmentd_balancer_sql_port
+            config.environmentd_sql_port
         ),
     ];
 
-    if config.enable_tls {
-        unimplemented!();
+    if issuer_ref_defined(
+        &config.default_certificate_specs.internal,
+        &mz.spec.internal_certificate_spec,
+    ) {
+        args.push("--internal-tls".to_owned())
+    }
+
+    let mut volumes = Vec::new();
+    let mut volume_mounts = Vec::new();
+    if issuer_ref_defined(
+        &config.default_certificate_specs.balancerd_external,
+        &mz.spec.balancerd_external_certificate_spec,
+    ) {
+        volumes.push(Volume {
+            name: "external-certificate".to_owned(),
+            secret: Some(SecretVolumeSource {
+                default_mode: Some(0o400),
+                secret_name: Some(mz.balancerd_external_certificate_secret_name()),
+                items: None,
+                optional: Some(false),
+            }),
+            ..Default::default()
+        });
+        volume_mounts.push(VolumeMount {
+            name: "external-certificate".to_owned(),
+            mount_path: "/etc/external_tls".to_owned(),
+            read_only: Some(true),
+            ..Default::default()
+        });
+        args.extend([
+            "--tls-mode=require".into(),
+            "--tls-cert=/etc/external_tls/tls.crt".into(),
+            "--tls-key=/etc/external_tls/tls.key".into(),
+        ]);
     } else {
         args.push("--tls-mode=disable".to_string());
     }
@@ -1386,6 +1494,7 @@ fn create_balancerd_deployment_object(config: &super::Args, mz: &Materialize) ->
         liveness_probe: Some(liveness_probe),
         resources: mz.spec.balancerd_resource_requirements.clone(),
         security_context: security_context.clone(),
+        volume_mounts: Some(volume_mounts),
         ..Default::default()
     };
 
@@ -1409,6 +1518,7 @@ fn create_balancerd_deployment_object(config: &super::Args, mz: &Materialize) ->
             // not using managed_resource_meta because the pod should be
             // owned by the deployment, not the materialize instance
             metadata: Some(ObjectMeta {
+                annotations: pod_template_annotations,
                 labels: Some(pod_template_labels),
                 ..Default::default()
             }),
@@ -1429,6 +1539,7 @@ fn create_balancerd_deployment_object(config: &super::Args, mz: &Materialize) ->
                 }),
                 scheduler_name: config.scheduler_name.clone(),
                 service_account_name: Some(mz.service_account_name()),
+                volumes: Some(volumes),
                 ..Default::default()
             }),
         },

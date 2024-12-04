@@ -193,11 +193,6 @@ pub struct ListenersConfig {
     pub sql_listen_addr: SocketAddr,
     /// The IP address and port to listen for HTTP connections on.
     pub http_listen_addr: SocketAddr,
-    /// The IP address and port to listen on for pgwire connections from the cloud
-    /// balancer pods.
-    pub balancer_sql_listen_addr: SocketAddr,
-    /// The IP address and port to listen for HTTP connections from the cloud balancer pods.
-    pub balancer_http_listen_addr: SocketAddr,
     /// The IP address and port to listen for pgwire connections from the cloud
     /// system on.
     pub internal_sql_listen_addr: SocketAddr,
@@ -219,8 +214,6 @@ pub struct Listeners {
     // Drop order matters for these fields.
     sql: (ListenerHandle, Pin<Box<dyn ConnectionStream>>),
     http: (ListenerHandle, Pin<Box<dyn ConnectionStream>>),
-    balancer_sql: (ListenerHandle, Pin<Box<dyn ConnectionStream>>),
-    balancer_http: (ListenerHandle, Pin<Box<dyn ConnectionStream>>),
     internal_sql: (ListenerHandle, Pin<Box<dyn ConnectionStream>>),
     internal_http: (ListenerHandle, Pin<Box<dyn ConnectionStream>>),
 }
@@ -241,23 +234,17 @@ impl Listeners {
         ListenersConfig {
             sql_listen_addr,
             http_listen_addr,
-            balancer_sql_listen_addr,
-            balancer_http_listen_addr,
             internal_sql_listen_addr,
             internal_http_listen_addr,
         }: ListenersConfig,
     ) -> Result<Listeners, io::Error> {
         let sql = mz_server_core::listen(&sql_listen_addr).await?;
         let http = mz_server_core::listen(&http_listen_addr).await?;
-        let balancer_sql = mz_server_core::listen(&balancer_sql_listen_addr).await?;
-        let balancer_http = mz_server_core::listen(&balancer_http_listen_addr).await?;
         let internal_sql = mz_server_core::listen(&internal_sql_listen_addr).await?;
         let internal_http = mz_server_core::listen(&internal_http_listen_addr).await?;
         Ok(Listeners {
             sql,
             http,
-            balancer_sql,
-            balancer_http,
             internal_sql,
             internal_http,
         })
@@ -269,8 +256,6 @@ impl Listeners {
         Listeners::bind(ListenersConfig {
             sql_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             http_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
-            balancer_sql_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
-            balancer_http_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             internal_sql_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             internal_http_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
         })
@@ -289,8 +274,6 @@ impl Listeners {
         let Listeners {
             sql: (sql_listener, sql_conns),
             http: (http_listener, http_conns),
-            balancer_sql: (balancer_sql_listener, balancer_sql_conns),
-            balancer_http: (balancer_http_listener, balancer_http_conns),
             internal_sql: (internal_sql_listener, internal_sql_conns),
             internal_http: (internal_http_listener, internal_http_conns),
         } = self;
@@ -561,10 +544,10 @@ impl Listeners {
         };
 
         // Load the adapter durable storage.
-        let adapter_storage = if read_only {
+        let (adapter_storage, audit_logs_handle) = if read_only {
             // TODO: behavior of migrations when booting in savepoint mode is
             // not well defined.
-            let adapter_storage = openable_adapter_storage
+            let (adapter_storage, audit_logs_handle) = openable_adapter_storage
                 .open_savepoint(boot_ts, &bootstrap_args)
                 .await?;
 
@@ -572,9 +555,9 @@ impl Listeners {
             // because we are by definition not the leader if we are in
             // read-only mode.
 
-            adapter_storage
+            (adapter_storage, audit_logs_handle)
         } else {
-            let adapter_storage = openable_adapter_storage
+            let (adapter_storage, audit_logs_handle) = openable_adapter_storage
                 .open(boot_ts, &bootstrap_args)
                 .await?;
 
@@ -583,7 +566,7 @@ impl Listeners {
             // fenced out all other environments using the adapter storage.
             deployment_state.set_is_leader();
 
-            adapter_storage
+            (adapter_storage, audit_logs_handle)
         };
 
         info!(
@@ -633,6 +616,7 @@ impl Listeners {
             controller_config: config.controller,
             controller_envd_epoch: envd_epoch,
             storage: adapter_storage,
+            audit_logs_handle,
             timestamp_oracle_url: config.timestamp_oracle_url,
             unsafe_mode: config.unsafe_mode,
             all_features: config.all_features,
@@ -761,50 +745,6 @@ impl Listeners {
             })
         });
 
-        // Launch HTTP server exposed to balancers
-        task::spawn(|| "balancer_http_server", {
-            let balancer_http_server = HttpServer::new(HttpConfig {
-                source: "balancer",
-                // TODO(Alex): implement self-signed TLS for all internal connections
-                tls: None,
-                frontegg: config.frontegg.clone(),
-                adapter_client: adapter_client.clone(),
-                allowed_origin: config.cors_allowed_origin,
-                active_connection_counter: active_connection_counter.clone(),
-                helm_chart_version: config.helm_chart_version.clone(),
-                concurrent_webhook_req: webhook_concurrency_limit.semaphore(),
-                metrics: http_metrics,
-            });
-            mz_server_core::serve(ServeConfig {
-                conns: balancer_http_conns,
-                server: balancer_http_server,
-                // `environmentd` does not currently need to dynamically
-                // configure graceful termination behavior.
-                dyncfg: None,
-            })
-        });
-
-        // Launch SQL server exposed to balancers
-        task::spawn(|| "balancer_sql_server", {
-            let balancer_sql_server = mz_pgwire::Server::new(mz_pgwire::Config {
-                label: "balancer_pgwire",
-                tls: None,
-                adapter_client: adapter_client.clone(),
-                frontegg: config.frontegg.clone(),
-                metrics,
-                internal: false,
-                active_connection_counter: active_connection_counter.clone(),
-                helm_chart_version: config.helm_chart_version.clone(),
-            });
-            mz_server_core::serve(ServeConfig {
-                conns: balancer_sql_conns,
-                server: balancer_sql_server,
-                // `environmentd` does not currently need to dynamically
-                // configure graceful termination behavior.
-                dyncfg: None,
-            })
-        });
-
         // Start telemetry reporting loop.
         if let Some(segment_client) = segment_client {
             telemetry::start_reporting(telemetry::Config {
@@ -840,8 +780,6 @@ impl Listeners {
         Ok(Server {
             sql_listener,
             http_listener,
-            balancer_sql_listener,
-            balancer_http_listener,
             internal_sql_listener,
             internal_http_listener,
             _adapter_handle: adapter_handle,
@@ -884,8 +822,6 @@ pub struct Server {
     // Drop order matters for these fields.
     sql_listener: ListenerHandle,
     http_listener: ListenerHandle,
-    balancer_sql_listener: ListenerHandle,
-    balancer_http_listener: ListenerHandle,
     internal_sql_listener: ListenerHandle,
     internal_http_listener: ListenerHandle,
     _adapter_handle: mz_adapter::Handle,
@@ -898,14 +834,6 @@ impl Server {
 
     pub fn http_local_addr(&self) -> SocketAddr {
         self.http_listener.local_addr()
-    }
-
-    pub fn balancer_sql_local_addr(&self) -> SocketAddr {
-        self.balancer_sql_listener.local_addr()
-    }
-
-    pub fn balancer_http_local_addr(&self) -> SocketAddr {
-        self.balancer_http_listener.local_addr()
     }
 
     pub fn internal_sql_local_addr(&self) -> SocketAddr {

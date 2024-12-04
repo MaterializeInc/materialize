@@ -255,7 +255,7 @@ mod tests {
                         let PlanValidity::Checks { cluster_id, .. } = validity else {
                             panic!();
                         };
-                        *cluster_id = Some(ClusterId::User(3));
+                        *cluster_id = Some(ClusterId::user(3).expect("3 is a valid ID"));
                     }),
                     Box::new(|res| {
                         assert_contains!(

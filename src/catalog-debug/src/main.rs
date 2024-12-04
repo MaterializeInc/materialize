@@ -551,7 +551,8 @@ async fn upgrade_check(
                 cluster_replica_size_map: cluster_replica_sizes.clone(),
             },
         )
-        .await?;
+        .await?
+        .0;
 
     // If this upgrade has new builtin replicas, then we need to assign some size to it. It doesn't
     // really matter what size since it's not persisted, so we pick a random valid one.

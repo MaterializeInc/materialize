@@ -353,14 +353,8 @@ fn column_type(
 /// columns in the group.)
 pub fn fuse_window_functions(
     root: &mut HirRelationExpr,
-    context: &crate::plan::lowering::Context,
+    _context: &crate::plan::lowering::Context,
 ) -> Result<(), RecursionLimitError> {
-    if !(context.config.enable_value_window_function_fusion
-        || context.config.enable_window_aggregation_fusion)
-    {
-        return Ok(());
-    }
-
     impl HirScalarExpr {
         /// Similar to `MirScalarExpr::support`, but adapted to `HirScalarExpr` in a special way: it
         /// considers column references that target the root level.
@@ -589,7 +583,6 @@ pub fn fuse_window_functions(
                 // encounter these, because we just do one pass, but it's better to be
                 // robust against future code changes.)
                 !matches!(func, ValueWindowFunc::Fused(..))
-                    && context.config.enable_value_window_function_fusion
             }
             HirScalarExpr::Windowing(WindowExpr {
                 func:
@@ -598,10 +591,7 @@ pub fn fuse_window_functions(
                         ..
                     }),
                 ..
-            }) => {
-                !matches!(func, AggregateFunc::FusedWindowAgg { .. })
-                    && context.config.enable_window_aggregation_fusion
-            }
+            }) => !matches!(func, AggregateFunc::FusedWindowAgg { .. }),
             _ => false,
         }
     };

@@ -68,6 +68,7 @@ granted the [`mz_monitor` role](/manage/access-control/manage-roles#builtin-role
 | `finished_at`              | [`timestamp with time zone`] | The wall-clock time at which the statement finished executing.                                                                                                                                                                                                                |
 | `finished_status`          | [`text`]                     | The final status of the statement (e.g., `success`, `canceled`, `error`, or `aborted`). `aborted` means that Materialize exited before the statement finished executing.                                                                                                   |
 | `error_message`            | [`text`]                     | The error message, if the statement failed.                                                                                                                                                                                                                                   |
+| `result_size`              | [`bigint`]                   | The size in bytes of the result, for statements that return rows.                                                                                                                                                                                                                 |
 | `rows_returned`            | [`bigint`]                   | The number of rows returned, for statements that return rows.                                                                                                                                                                                                                 |
 | `execution_strategy`       | [`text`]                     | For `SELECT` queries, the strategy for executing the query. `constant` means computed in the control plane without the involvement of a cluster, `fast-path` means read by a cluster directly from an in-memory index, and `standard` means computed by a temporary dataflow. |
 | `transaction_id`           | [`uint8`]                    | The ID of the transaction that the statement was part of. Note that transaction IDs are only unique per session.                                                                                                                                                              |
@@ -288,14 +289,14 @@ The `mz_pending_cluster_replicas` table lists the replicas that were created dur
 
 ## `mz_comments`
 
-The `mz_comments` table stores optional comments (descriptions) for objects in the database.
+The `mz_comments` table stores optional comments (i.e., descriptions) for objects in the database.
 
 <!-- RELATION_SPEC mz_internal.mz_comments -->
 | Field          | Type        | Meaning                                                                                      |
 | -------------- |-------------| --------                                                                                     |
 | `id`           | [`text`]    | The ID of the object. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects).           |
 | `object_type`  | [`text`]    | The type of object the comment is associated with.                                           |
-| `object_sub_id`| [`integer`] | For a comment on a column of a relation, this is the column number. For all other object types this column is `NULL`. |
+| `object_sub_id`| [`integer`] | For a comment on a column of a relation, the column number. `NULL` for other object types.   |
 | `comment`      | [`text`]    | The comment itself.                                                                          |
 
 ## `mz_compute_dependencies`
@@ -420,7 +421,7 @@ usage. For example:
   the the reference documentation for [query optimization](/transform-data/optimization/#indexes)
   instead.
 - If a view is depended on by multiple objects that use very selective filters,
-  or a multiple projections that can be pushed into or even beyond the view,
+  or multiple projections that can be pushed into or even beyond the view,
   adding an index may increase resource usage.
 - If an index has been created to [enable delta joins](/transform-data/optimization/#optimize-multi-way-joins-with-delta-joins),
   removing it may lead to lower memory utilization, but the delta join
@@ -1176,6 +1177,7 @@ and cannot be changed by users), the latter is used instead.
 | `finished_at`           | [`timestamp with time zone`] | The time at which execution ended.                                                                                                                                                                                                                                                                         |
 | `finished_status`       | [`text`]                     | `'success'`, `'error'`, `'canceled'`, or `'aborted'`. `'aborted'` means that the database restarted (e.g., due to a crash or planned maintenance) before the query finished.                                                                                                                               |
 | `error_message`         | [`text`]                     | The error returned when executing the statement, or `NULL` if it was successful, canceled or aborted.                                                                                                                                                                                                      |
+| `result_size`           | [`bigint`]                   | The size in bytes of the result, for statements that return rows.                                                                                                                                                                                                                 |
 | `rows_returned`         | [`int8`]                     | The number of rows returned by the statement, if it finished successfully and was of a kind of statement that can return rows, or `NULL` otherwise.                                                                                                                                                        |
 | `execution_strategy`    | [`text`]                     | `'standard'`, `'fast-path'` `'constant'`, or `NULL`. `'standard'` means a dataflow was built on a cluster to compute the result. `'fast-path'` means a cluster read the result from an existing arrangement. `'constant'` means the result was computed in the serving layer, without involving a cluster. |
 -->

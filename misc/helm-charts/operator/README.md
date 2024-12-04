@@ -1,6 +1,6 @@
 # Materialize Kubernetes Operator Helm Chart
 
-![Version: 25.1.0-beta.1](https://img.shields.io/badge/Version-25.1.0--beta.1-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v0.125.2](https://img.shields.io/badge/AppVersion-v0.125.2-informational?style=flat-square)
+![Version: v25.1.0-beta.1](https://img.shields.io/badge/Version-v25.1.0--beta.1-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v0.127.0-dev.0](https://img.shields.io/badge/AppVersion-v0.127.0--dev.0-informational?style=flat-square)
 
 Materialize Kubernetes Operator Helm Chart
 
@@ -118,9 +118,10 @@ The following table lists the configurable parameters of the Materialize operato
 | `networkPolicies.ingress.cidrs[0]` |  | ``"0.0.0.0/0"`` |
 | `networkPolicies.ingress.enabled` |  | ``false`` |
 | `networkPolicies.internal.enabled` |  | ``false`` |
-| `observability.enabled` |  | ``false`` |
+| `observability.enabled` |  | ``true`` |
 | `observability.podMetrics.enabled` |  | ``false`` |
-| `observability.prometheus.enabled` |  | ``false`` |
+| `observability.prometheus.scrapeAnnotations.enabled` |  | ``true`` |
+| `operator.args.enableInternalStatementLogging` |  | ``true`` |
 | `operator.args.startupLogFilter` |  | ``"INFO,mz_orchestratord=TRACE"`` |
 | `operator.cloudProvider.providers.aws.accountID` |  | ``""`` |
 | `operator.cloudProvider.providers.aws.enabled` |  | ``false`` |
@@ -252,12 +253,13 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.features.createConsole` |  | ``true`` |
 | `operator.image.pullPolicy` |  | ``"IfNotPresent"`` |
 | `operator.image.repository` |  | ``"materialize/orchestratord"`` |
-| `operator.image.tag` |  | ``"v0.125.2"`` |
+| `operator.image.tag` |  | ``"v0.127.0-dev.0"`` |
 | `operator.nodeSelector` |  | ``{}`` |
 | `operator.resources.limits.memory` |  | ``"512Mi"`` |
 | `operator.resources.requests.cpu` |  | ``"100m"`` |
 | `operator.resources.requests.memory` |  | ``"512Mi"`` |
 | `rbac.create` |  | ``true`` |
+| `rbac.enabled` |  | ``true`` |
 | `serviceAccount.create` |  | ``true`` |
 | `serviceAccount.name` |  | ``"orchestratord"`` |
 | `storage.storageClass.allowVolumeExpansion` |  | ``false`` |
@@ -269,12 +271,16 @@ The following table lists the configurable parameters of the Materialize operato
 | `storage.storageClass.provisioner` |  | ``""`` |
 | `storage.storageClass.reclaimPolicy` |  | ``"Delete"`` |
 | `storage.storageClass.volumeBindingMode` |  | ``"WaitForFirstConsumer"`` |
+| `telemetry.enabled` |  | ``true`` |
+| `telemetry.segmentApiKey` |  | ``"hMWi3sZ17KFMjn2sPWo9UJGpOQqiba4A"`` |
+| `telemetry.segmentClientSide` |  | ``true`` |
+| `tls.defaultCertificateSpecs` |  | ``{}`` |
 
 Specify each parameter using the `--set key=value[,key=value]` argument to `helm install`. For example:
 
 ```shell
 helm install my-materialize-operator \
-  --set operator.image.tag=v0.125.2 \
+  --set operator.image.tag=v0.127.0-dev.0 \
   materialize/materialize-operator
 ```
 
@@ -309,7 +315,7 @@ metadata:
   name: 12345678-1234-1234-1234-123456789012
   namespace: materialize-environment
 spec:
-  environmentdImageRef: materialize/environmentd:v0.125.2
+  environmentdImageRef: materialize/environmentd:v0.127.0-dev.0
   backendSecretName: materialize-backend
   environmentdResourceRequirements:
     limits:
@@ -392,7 +398,7 @@ Or check the `Chart.yaml` file in the `misc/helm-charts/operator` directory:
 apiVersion: v2
 name: materialize-operator
 # ...
-version: 25.1.0-beta.1
+version: v25.1.0-beta.1
 appVersion: v0.125.2  # Use this version for your Materialize instances
 ```
 

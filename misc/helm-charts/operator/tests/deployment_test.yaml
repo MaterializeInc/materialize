@@ -9,155 +9,155 @@
 
 suite: test deployment
 templates:
-  - deployment.yaml
+- deployment.yaml
 tests:
-  - it: should create a deployment
-    asserts:
-      - isKind:
-          of: Deployment
-      - equal:
-          path: spec.template.spec.containers[0].image
-          value: materialize/orchestratord:v0.125.2
-      - equal:
-          path: spec.template.spec.containers[0].imagePullPolicy
-          value: IfNotPresent
-      - equal:
-          path: spec.template.spec.serviceAccountName
-          value: orchestratord
+- it: should create a deployment
+  asserts:
+  - isKind:
+      of: Deployment
+  - equal:
+      path: spec.template.spec.containers[0].image
+      value: materialize/orchestratord:v0.127.0-dev.0
+  - equal:
+      path: spec.template.spec.containers[0].imagePullPolicy
+      value: IfNotPresent
+  - equal:
+      path: spec.template.spec.serviceAccountName
+      value: orchestratord
 
-  - it: should set ephemeral volume class when storage class is configured
-    set:
-      storage.storageClass.name: "my-storage-class"
-    asserts:
-      - contains:
-          path: spec.template.spec.containers[0].args
-          content: "--ephemeral-volume-class=my-storage-class"
+- it: should set ephemeral volume class when storage class is configured
+  set:
+    storage.storageClass.name: "my-storage-class"
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: "--ephemeral-volume-class=my-storage-class"
 
-  - it: should not set ephemeral volume class when storage class is not configured
-    set:
-      storage.storageClass.name: ""
-    asserts:
-      - notContains:
-          path: spec.template.spec.containers[0].args
-          content: "--ephemeral-volume-class"
+- it: should not set ephemeral volume class when storage class is not configured
+  set:
+    storage.storageClass.name: ""
+  asserts:
+  - notContains:
+      path: spec.template.spec.containers[0].args
+      content: "--ephemeral-volume-class"
 
-  - it: should set correct base arguments
-    asserts:
-      - contains:
-          path: spec.template.spec.containers[0].args
-          content: "--startup-log-filter=INFO,mz_orchestratord=TRACE"
+- it: should set correct base arguments
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: "--startup-log-filter=INFO,mz_orchestratord=TRACE"
 
-  - it: should set resources correctly
-    asserts:
-      - equal:
-          path: spec.template.spec.containers[0].resources.requests.cpu
-          value: 100m
-      - equal:
-          path: spec.template.spec.containers[0].resources.requests.memory
-          value: 512Mi
-      - equal:
-          path: spec.template.spec.containers[0].resources.limits.memory
-          value: 512Mi
+- it: should set resources correctly
+  asserts:
+  - equal:
+      path: spec.template.spec.containers[0].resources.requests.cpu
+      value: 100m
+  - equal:
+      path: spec.template.spec.containers[0].resources.requests.memory
+      value: 512Mi
+  - equal:
+      path: spec.template.spec.containers[0].resources.limits.memory
+      value: 512Mi
 
-  - it: should set disk limit to 0 when no storage class is configured
-    set:
-      storage.storageClass.name: ""
-    asserts:
-      - matchRegex:
-          path: spec.template.spec.containers[0].args[9]  # Index of the environmentd-cluster-replica-sizes argument
-          pattern: disk_limit":"0"
-      - matchRegex:
-          path: spec.template.spec.containers[0].args[9]
-          pattern: is_cc":true
+- it: should set disk limit to 0 when no storage class is configured
+  set:
+    storage.storageClass.name: ""
+  asserts:
+  - matchRegex:
+      path: spec.template.spec.containers[0].args[10]      # Index of the environmentd-cluster-replica-sizes argument
+      pattern: disk_limit":"0"
+  - matchRegex:
+      path: spec.template.spec.containers[0].args[10]
+      pattern: is_cc":true
 
-  - it: should have a cluster with disk limit to 1552MiB when storage class is configured
-    set:
-      storage.storageClass.name: "my-storage-class"
-    asserts:
-      - matchRegex:
-          path: spec.template.spec.containers[0].args[9]
-          pattern: disk_limit":"1552MiB"
-      - matchRegex:
-          path: spec.template.spec.containers[0].args[9]
-          pattern: is_cc":true
+- it: should have a cluster with disk limit to 1552MiB when storage class is configured
+  set:
+    storage.storageClass.name: "my-storage-class"
+  asserts:
+  - matchRegex:
+      path: spec.template.spec.containers[0].args[10]
+      pattern: disk_limit":"1552MiB"
+  - matchRegex:
+      path: spec.template.spec.containers[0].args[10]
+      pattern: is_cc":true
 
-  - it: should configure for AWS provider correctly
-    set:
-      operator.cloudProvider.type: "aws"
-      operator.cloudProvider.region: "us-east-1"
-      operator.cloudProvider.providers.aws:
-        enabled: true
-        accountID: "123456789012"
-        iam:
-          roles:
-            environment: "arn:aws:iam::123456789012:role/env-role"
-            connection: "arn:aws:iam::123456789012:role/conn-role"
-    asserts:
-      - contains:
-          path: spec.template.spec.containers[0].args
-          content: "--cloud-provider=aws"
-      - contains:
-          path: spec.template.spec.containers[0].args
-          content: "--region=us-east-1"
-      - contains:
-          path: spec.template.spec.containers[0].args
-          content: "--aws-account-id=123456789012"
-      - contains:
-          path: spec.template.spec.containers[0].args
-          content: "--environmentd-iam-role-arn=arn:aws:iam::123456789012:role/env-role"
-      - contains:
-          path: spec.template.spec.containers[0].args
-          content: "--environmentd-connection-role-arn=arn:aws:iam::123456789012:role/conn-role"
+- it: should configure for AWS provider correctly
+  set:
+    operator.cloudProvider.type: "aws"
+    operator.cloudProvider.region: "us-east-1"
+    operator.cloudProvider.providers.aws:
+      enabled: true
+      accountID: "123456789012"
+      iam:
+        roles:
+          environment: "arn:aws:iam::123456789012:role/env-role"
+          connection: "arn:aws:iam::123456789012:role/conn-role"
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: "--cloud-provider=aws"
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: "--region=us-east-1"
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: "--aws-account-id=123456789012"
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: "--environmentd-iam-role-arn=arn:aws:iam::123456789012:role/env-role"
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: "--environmentd-connection-role-arn=arn:aws:iam::123456789012:role/conn-role"
 
-  - it: should configure for generic provider correctly
-    set:
-      operator.cloudProvider.type: "generic"
-      operator.cloudProvider.region: "local"
-    asserts:
-      - contains:
-          path: spec.template.spec.containers[0].args
-          content: "--cloud-provider=generic"
-      - contains:
-          path: spec.template.spec.containers[0].args
-          content: "--region=local"
-      - notContains:
-          path: spec.template.spec.containers[0].args
-          content: "--aws-account-id"
+- it: should configure for generic provider correctly
+  set:
+    operator.cloudProvider.type: "generic"
+    operator.cloudProvider.region: "local"
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: "--cloud-provider=generic"
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: "--region=local"
+  - notContains:
+      path: spec.template.spec.containers[0].args
+      content: "--aws-account-id"
 
   # Feature Flag Tests
-  - it: should enable balancer creation when configured
-    set:
-      operator.features.createBalancers: true
-    asserts:
-      - contains:
-          path: spec.template.spec.containers[0].args
-          content: "--create-balancers"
+- it: should enable balancer creation when configured
+  set:
+    operator.features.createBalancers: true
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: "--create-balancers"
 
-  - it: should not enable balancer creation when disabled
-    set:
-      operator.features.createBalancers: false
-    asserts:
-      - notContains:
-          path: spec.template.spec.containers[0].args
-          content: "--create-balancers"
+- it: should not enable balancer creation when disabled
+  set:
+    operator.features.createBalancers: false
+  asserts:
+  - notContains:
+      path: spec.template.spec.containers[0].args
+      content: "--create-balancers"
 
-  - it: should enable console creation when configured
-    set:
-      operator.features.createConsole: true
-    asserts:
-      - contains:
-          path: spec.template.spec.containers[0].args
-          content: "--create-console"
+- it: should enable console creation when configured
+  set:
+    operator.features.createConsole: true
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: "--create-console"
 
-  - it: should configure console image tag map override correctly
-    set:
-      operator.features.consoleImageTagMapOverride:
-        "v0.125.0": "25.1.0"
-        "v0.126.0": "25.2.0"
-    asserts:
-      - contains:
-          path: spec.template.spec.containers[0].args
-          content: "--console-image-tag-map=v0.125.0=25.1.0"
-      - contains:
-          path: spec.template.spec.containers[0].args
-          content: "--console-image-tag-map=v0.126.0=25.2.0"
+- it: should configure console image tag map override correctly
+  set:
+    operator.features.consoleImageTagMapOverride:
+      "v0.125.0": "25.1.0"
+      "v0.126.0": "25.2.0"
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: "--console-image-tag-map=v0.125.0=25.1.0"
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: "--console-image-tag-map=v0.126.0=25.2.0"

@@ -15,6 +15,7 @@ from materialize import buildkite
 from materialize.mzcompose import DEFAULT_MZ_VOLUMES, cluster_replica_size_map
 from materialize.mzcompose.service import (
     Service,
+    ServiceConfig,
     ServiceDependency,
 )
 from materialize.mzcompose.services.postgres import METADATA_STORE
@@ -59,6 +60,7 @@ class Testdrive(Service):
         metadata_store: str = METADATA_STORE,
         stop_grace_period: str = "120s",
         cluster_replica_size: dict[str, dict[str, Any]] | None = None,
+        network_mode: str | None = None,
     ) -> None:
         depends_graph: dict[str, ServiceDependency] = {}
 
@@ -174,16 +176,20 @@ class Testdrive(Service):
 
         entrypoint.extend(entrypoint_extra)
 
+        config: ServiceConfig = {
+            "depends_on": depends_graph,
+            "mzbuild": mzbuild,
+            "entrypoint": entrypoint,
+            "environment": environment,
+            "volumes": volumes,
+            "propagate_uid_gid": propagate_uid_gid,
+            "init": True,
+            "stop_grace_period": stop_grace_period,
+        }
+        if network_mode:
+            config["network_mode"] = network_mode
+
         super().__init__(
             name=name,
-            config={
-                "depends_on": depends_graph,
-                "mzbuild": mzbuild,
-                "entrypoint": entrypoint,
-                "environment": environment,
-                "volumes": volumes,
-                "propagate_uid_gid": propagate_uid_gid,
-                "init": True,
-                "stop_grace_period": stop_grace_period,
-            },
+            config=config,
         )

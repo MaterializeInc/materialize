@@ -3016,7 +3016,7 @@ pub static MZ_STATEMENT_EXECUTION_HISTORY_REDACTED: LazyLock<BuiltinView> = Lazy
 SELECT id, prepared_statement_id, sample_rate, cluster_id, application_name,
 cluster_name, database_name, search_path, transaction_isolation, execution_timestamp, transaction_id,
 transient_index_id, mz_version, began_at, finished_at, finished_status,
-rows_returned, execution_strategy
+result_size, rows_returned, execution_strategy
 FROM mz_internal.mz_statement_execution_history",
     access: vec![SUPPORT_SELECT, ANALYTICS_SELECT, MONITOR_REDACTED_SELECT, MONITOR_SELECT],
 }
@@ -3113,7 +3113,7 @@ pub static MZ_ACTIVITY_LOG_THINNED: LazyLock<BuiltinView> = LazyLock::new(|| {
         sql: "
 SELECT mseh.id AS execution_id, sample_rate, cluster_id, application_name, cluster_name, database_name, search_path,
 transaction_isolation, execution_timestamp, transient_index_id, params, mz_version, began_at, finished_at, finished_status,
-error_message, rows_returned, execution_strategy, transaction_id,
+error_message, result_size, rows_returned, execution_strategy, transaction_id,
 mpsh.id AS prepared_statement_id, sql_hash, mpsh.name AS prepared_statement_name,
 mpsh.session_id, prepared_at, statement_type, throttled_count,
 initial_application_name, authenticated_user
@@ -3161,7 +3161,7 @@ pub static MZ_RECENT_ACTIVITY_LOG_REDACTED: LazyLock<BuiltinView> = LazyLock::ne
     sql: "SELECT mralt.execution_id, mralt.sample_rate, mralt.cluster_id, mralt.application_name,
     mralt.cluster_name, mralt.database_name, mralt.search_path, mralt.transaction_isolation, mralt.execution_timestamp,
     mralt.transient_index_id, mralt.params, mralt.mz_version, mralt.began_at, mralt.finished_at,
-    mralt.finished_status, mralt.rows_returned, mralt.execution_strategy, mralt.transaction_id,
+    mralt.finished_status, mralt.result_size, mralt.rows_returned, mralt.execution_strategy, mralt.transaction_id,
     mralt.prepared_statement_id, mralt.sql_hash, mralt.prepared_statement_name, mralt.session_id,
     mralt.prepared_at, mralt.statement_type, mralt.throttled_count,
     mralt.initial_application_name, mralt.authenticated_user,
@@ -9136,6 +9136,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Log(&MZ_DATAFLOW_ADDRESSES_PER_WORKER),
         Builtin::Log(&MZ_DATAFLOW_OPERATOR_REACHABILITY_RAW),
         Builtin::Log(&MZ_COMPUTE_EXPORTS_PER_WORKER),
+        Builtin::Log(&MZ_COMPUTE_DATAFLOW_GLOBAL_IDS_PER_WORKER),
         Builtin::Log(&MZ_MESSAGE_COUNTS_RECEIVED_RAW),
         Builtin::Log(&MZ_MESSAGE_COUNTS_SENT_RAW),
         Builtin::Log(&MZ_MESSAGE_BATCH_COUNTS_RECEIVED_RAW),
@@ -9231,6 +9232,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_DATAFLOW_ADDRESSES),
         Builtin::View(&MZ_DATAFLOW_CHANNELS),
         Builtin::View(&MZ_DATAFLOW_OPERATORS),
+        Builtin::View(&MZ_DATAFLOW_GLOBAL_IDS),
         Builtin::View(&MZ_DATAFLOW_OPERATOR_DATAFLOWS_PER_WORKER),
         Builtin::View(&MZ_DATAFLOW_OPERATOR_DATAFLOWS),
         Builtin::View(&MZ_OBJECT_TRANSITIVE_DEPENDENCIES),
@@ -9410,6 +9412,8 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_COMPUTE_ERROR_COUNTS),
         Builtin::Source(&MZ_COMPUTE_ERROR_COUNTS_RAW_UNIFIED),
         Builtin::Source(&MZ_COMPUTE_HYDRATION_TIMES),
+        Builtin::Log(&MZ_COMPUTE_LIR_MAPPING_PER_WORKER),
+        Builtin::View(&MZ_LIR_MAPPING),
         Builtin::View(&MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES),
         Builtin::Source(&MZ_CLUSTER_REPLICA_FRONTIERS),
         Builtin::View(&MZ_COMPUTE_HYDRATION_STATUSES),

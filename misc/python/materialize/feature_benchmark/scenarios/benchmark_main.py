@@ -239,6 +239,10 @@ class Insert(DML):
     def benchmark(self) -> MeasurementSource:
         return Td(
             f"""
+$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET max_result_size = 17179869184;
+
 > DROP TABLE IF EXISTS t1;
 
 > CREATE TABLE t1 (f1 INTEGER)
@@ -311,7 +315,10 @@ class InsertBatch(DML):
 
 
 class InsertMultiRow(DML):
-    """Measure the time it takes for a single multi-row INSERT statement to return."""
+    """Measure the time it takes for a single multi-row INSERT statement to return.
+    When `sequence_insert` calls `constant_optimizer`, it should be able to reach a constant. Otherwise, we run the full
+    logical optimizer, which makes this test show a regression.
+    """
 
     SCALE = 4  # FATAL:  request larger than 2.0 MB
 
@@ -334,7 +341,7 @@ class InsertMultiRow(DML):
 class Update(DML):
     """Measure the time it takes for an UPDATE statement to return to client"""
 
-    SCALE = 6  # TODO: Increase scale when database-issues#8766 is fixed
+    SCALE = 7
 
     def init(self) -> list[Action]:
         return [
@@ -461,6 +468,10 @@ class InsertAndSelect(DML):
     def benchmark(self) -> MeasurementSource:
         return Td(
             f"""
+$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET max_result_size = 17179869184;
+
 > DROP TABLE IF EXISTS t1;
 
 > CREATE TABLE t1 (f1 INTEGER)

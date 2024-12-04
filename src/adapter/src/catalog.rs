@@ -518,11 +518,49 @@ impl Catalog {
         Fut: Future<Output = T>,
     {
         let persist_client = PersistClient::new_for_tests().await;
-        let environmentd_id = Uuid::new_v4();
+        let organization_id = Uuid::new_v4();
         let bootstrap_args = test_bootstrap_args();
-        let catalog = Self::open_debug_catalog(persist_client, environmentd_id, &bootstrap_args)
+        let catalog = Self::open_debug_catalog(persist_client, organization_id, &bootstrap_args)
             .await
             .expect("can open debug catalog");
+        f(catalog).await
+    }
+
+    /// Like [`Catalog::with_debug`], but the catalog created believes that bootstrap is still
+    /// in progress.
+    pub async fn with_debug_in_bootstrap<F, Fut, T>(f: F) -> T
+    where
+        F: FnOnce(Catalog) -> Fut,
+        Fut: Future<Output = T>,
+    {
+        let persist_client = PersistClient::new_for_tests().await;
+        let organization_id = Uuid::new_v4();
+        let bootstrap_args = test_bootstrap_args();
+        let mut catalog =
+            Self::open_debug_catalog(persist_client.clone(), organization_id, &bootstrap_args)
+                .await
+                .expect("can open debug catalog");
+
+        // Replace `storage` in `catalog` with one that doesn't think bootstrap is over.
+        let now = SYSTEM_TIME.clone();
+        let openable_storage = TestCatalogStateBuilder::new(persist_client)
+            .with_organization_id(organization_id)
+            .with_default_deploy_generation()
+            .build()
+            .await
+            .expect("can create durable catalog");
+        let mut storage = openable_storage
+            .open(now().into(), &bootstrap_args)
+            .await
+            .expect("can open durable catalog")
+            .0;
+        // Drain updates.
+        let _ = storage
+            .sync_to_current_updates()
+            .await
+            .expect("can sync to current updates");
+        catalog.storage = Arc::new(tokio::sync::Mutex::new(storage));
+
         f(catalog).await
     }
 
@@ -541,7 +579,7 @@ impl Catalog {
             .with_default_deploy_generation()
             .build()
             .await?;
-        let storage = openable_storage.open(now().into(), bootstrap_args).await?;
+        let storage = openable_storage.open(now().into(), bootstrap_args).await?.0;
         let system_parameter_defaults = BTreeMap::default();
         Self::open_debug_catalog_inner(
             persist_client,
@@ -731,13 +769,17 @@ impl Catalog {
         commit_ts: mz_repr::Timestamp,
     ) -> Result<(CatalogItemId, GlobalId), Error> {
         use mz_ore::collections::CollectionExt;
-        self.storage()
-            .await
-            .allocate_system_ids(1, commit_ts)
-            .await
-            .maybe_terminate("allocating system ids")
-            .map(|ids| ids.into_element())
-            .err_into()
+
+        let mut storage = self.storage().await;
+        let mut txn = storage.transaction().await?;
+        let id = txn
+            .allocate_system_item_ids(1)
+            .maybe_terminate("allocating system ids")?
+            .into_element();
+        // Drain transaction.
+        let _ = txn.get_and_commit_op_updates();
+        txn.commit(commit_ts).await?;
+        Ok(id)
     }
 
     /// Get the next system item ID without allocating it.
@@ -2649,7 +2691,7 @@ mod tests {
             assert_eq!(
                 mz_sql::catalog::ObjectType::ClusterReplica,
                 conn_catalog.get_object_type(&ObjectId::ClusterReplica((
-                    ClusterId::User(1),
+                    ClusterId::user(1).expect("1 is a valid ID"),
                     ReplicaId::User(1)
                 )))
             );
@@ -2671,7 +2713,7 @@ mod tests {
             assert_eq!(
                 None,
                 conn_catalog.get_privileges(&SystemObjectId::Object(ObjectId::ClusterReplica((
-                    ClusterId::User(1),
+                    ClusterId::user(1).expect("1 is a valid ID"),
                     ReplicaId::User(1),
                 ))))
             );

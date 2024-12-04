@@ -131,46 +131,76 @@ impl<C: DurableCacheCodec> DurableCache<C> {
 
     async fn sync_to(&mut self, progress: Option<u64>) -> u64 {
         let progress = progress.expect("cache shard should not be closed");
+        let mut updates: BTreeMap<_, Vec<_>> = BTreeMap::new();
+
         while self.local_progress < progress {
             let events = self.subscribe.fetch_next().await;
             for event in events {
                 match event {
-                    ListenEvent::Updates(mut x) => {
-                        consolidate_updates(&mut x);
-                        x.sort_by(|(_, ts1, d1), (_, ts2, d2)| ts1.cmp(ts2).then(d1.cmp(d2)));
-                        for ((k, v), t, d) in x {
-                            let encoded_key = k.unwrap();
-                            let encoded_val = v.unwrap();
-                            let (decoded_key, decoded_val) = C::decode(&encoded_key, &encoded_val);
-                            let val = LocalVal {
-                                encoded_key,
-                                decoded_val,
-                                encoded_val,
-                            };
-
-                            if d == 1 {
-                                self.local
-                                    .expect_insert(decoded_key, val, "duplicate cache entry");
-                            } else if d == -1 {
-                                let prev = self
-                                    .local
-                                    .expect_remove(&decoded_key, "entry does not exist");
-                                assert_eq!(val, prev, "removed val does not match expected val");
-                            } else {
-                                panic!(
-                                    "unexpected diff: (({:?}, {:?}), {}, {})",
-                                    decoded_key, val.decoded_val, t, d
-                                );
-                            }
+                    ListenEvent::Updates(batch_updates) => {
+                        debug!("syncing updates {batch_updates:?}");
+                        for update in batch_updates {
+                            updates.entry(update.1).or_default().push(update);
                         }
                     }
                     ListenEvent::Progress(x) => {
+                        debug!("synced up to {x:?}");
                         self.local_progress =
-                            x.into_option().expect("cache shard should not be closed")
+                            x.into_option().expect("cache shard should not be closed");
+                        // Apply updates in batches of complete timestamps so that we don't attempt
+                        // to apply a subset of the updates from a timestamp.
+                        while let Some((ts, mut updates)) = updates.pop_first() {
+                            assert!(
+                                ts < self.local_progress,
+                                "expected {} < {}",
+                                ts,
+                                self.local_progress
+                            );
+                            assert!(
+                                updates.iter().all(|(_, update_ts, _)| ts == *update_ts),
+                                "all updates should be for time {ts}, updates: {updates:?}"
+                            );
+
+                            consolidate_updates(&mut updates);
+                            updates.sort_by(|(_, _, d1), (_, _, d2)| d1.cmp(d2));
+                            for ((k, v), t, d) in updates {
+                                let encoded_key = k.unwrap();
+                                let encoded_val = v.unwrap();
+                                let (decoded_key, decoded_val) =
+                                    C::decode(&encoded_key, &encoded_val);
+                                let val = LocalVal {
+                                    encoded_key,
+                                    decoded_val,
+                                    encoded_val,
+                                };
+
+                                if d == 1 {
+                                    self.local.expect_insert(
+                                        decoded_key,
+                                        val,
+                                        "duplicate cache entry",
+                                    );
+                                } else if d == -1 {
+                                    let prev = self
+                                        .local
+                                        .expect_remove(&decoded_key, "entry does not exist");
+                                    assert_eq!(
+                                        val, prev,
+                                        "removed val does not match expected val"
+                                    );
+                                } else {
+                                    panic!(
+                                        "unexpected diff: (({:?}, {:?}), {}, {})",
+                                        decoded_key, val.decoded_val, t, d
+                                    );
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
+        assert_eq!(updates, BTreeMap::new(), "all updates should be applied");
         progress
     }
 

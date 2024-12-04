@@ -16,13 +16,13 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use mz_audit_log::VersionedEvent;
-use uuid::Uuid;
-
 use mz_controller_types::ClusterId;
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_persist_client::PersistClient;
 use mz_repr::{CatalogItemId, GlobalId};
+use mz_sql::catalog::CatalogError as SqlCatalogError;
+use uuid::Uuid;
 
 use crate::config::ClusterReplicaSizeMap;
 use crate::durable::debug::{DebugCatalogState, Trace};
@@ -99,11 +99,19 @@ pub trait OpenableDurableCatalogState: Debug + Send {
     ///   - Catalog migrations fail.
     ///
     /// `initial_ts` is used as the initial timestamp for new environments.
+    ///
+    /// Also returns a handle to a thread that is deserializing all of the audit logs.
     async fn open_savepoint(
         mut self: Box<Self>,
         initial_ts: Timestamp,
         bootstrap_args: &BootstrapArgs,
-    ) -> Result<Box<dyn DurableCatalogState>, CatalogError>;
+    ) -> Result<
+        (
+            Box<dyn DurableCatalogState>,
+            std::thread::JoinHandle<Vec<memory::objects::StateUpdate>>,
+        ),
+        CatalogError,
+    >;
 
     /// Opens the catalog in read only mode. All mutating methods
     /// will return an error.
@@ -120,11 +128,19 @@ pub trait OpenableDurableCatalogState: Debug + Send {
     /// needed.
     ///
     /// `initial_ts` is used as the initial timestamp for new environments.
+    ///
+    /// Also returns a handle to a thread that is deserializing all of the audit logs.
     async fn open(
         mut self: Box<Self>,
         initial_ts: Timestamp,
         bootstrap_args: &BootstrapArgs,
-    ) -> Result<Box<dyn DurableCatalogState>, CatalogError>;
+    ) -> Result<
+        (
+            Box<dyn DurableCatalogState>,
+            std::thread::JoinHandle<Vec<memory::objects::StateUpdate>>,
+        ),
+        CatalogError,
+    >;
 
     /// Opens the catalog for manual editing of the underlying data. This is helpful for
     /// fixing a corrupt catalog.
@@ -202,6 +218,9 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send {
     /// Politely releases all external resources that can only be released in an async context.
     async fn expire(self: Box<Self>);
 
+    /// Returns true if the system bootstrapping process is complete, false otherwise.
+    fn is_bootstrap_complete(&self) -> bool;
+
     /// Get all audit log events.
     ///
     /// Results are guaranteed to be sorted by ID.
@@ -273,6 +292,9 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     /// Returns true if the catalog is opened is savepoint mode, false otherwise.
     fn is_savepoint(&self) -> bool;
 
+    /// Marks the bootstrap process as complete.
+    fn mark_bootstrap_complete(&mut self);
+
     /// Creates a new durable catalog state transaction.
     async fn transaction(&mut self) -> Result<Transaction, CatalogError>;
 
@@ -313,23 +335,6 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
         Ok(ids)
     }
 
-    /// Allocates and returns `amount` system [`CatalogItemId`]s.
-    ///
-    /// See [`Self::commit_transaction`] for details on `commit_ts`.
-    async fn allocate_system_ids(
-        &mut self,
-        amount: u64,
-        commit_ts: Timestamp,
-    ) -> Result<Vec<(CatalogItemId, GlobalId)>, CatalogError> {
-        let id = self
-            .allocate_id(SYSTEM_ITEM_ALLOC_KEY, amount, commit_ts)
-            .await?;
-        Ok(id
-            .into_iter()
-            .map(|id| (CatalogItemId::System(id), GlobalId::System(id)))
-            .collect())
-    }
-
     /// Allocates and returns both a user [`CatalogItemId`] and [`GlobalId`].
     ///
     /// See [`Self::commit_transaction`] for details on `commit_ts`.
@@ -351,9 +356,9 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     ) -> Result<ClusterId, CatalogError> {
         let id = self
             .allocate_id(USER_CLUSTER_ID_ALLOC_KEY, 1, commit_ts)
-            .await?;
-        let id = id.into_element();
-        Ok(ClusterId::User(id))
+            .await?
+            .into_element();
+        Ok(ClusterId::user(id).ok_or(SqlCatalogError::IdExhaustion)?)
     }
 }
 

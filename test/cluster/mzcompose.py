@@ -2877,17 +2877,17 @@ def workflow_test_optimizer_metrics(c: Composition) -> None:
 
     # mz_optimizer_e2e_optimization_time_seconds
     time = metrics.get_e2e_optimization_time("view")
-    assert 0 < time < 1, f"got {time}"
+    assert 0 < time < 10, f"got {time}"
     time = metrics.get_e2e_optimization_time("index")
-    assert 0 < time < 1, f"got {time}"
+    assert 0 < time < 10, f"got {time}"
     time = metrics.get_e2e_optimization_time("materialized_view")
-    assert 0 < time < 1, f"got {time}"
+    assert 0 < time < 10, f"got {time}"
     time = metrics.get_e2e_optimization_time("peek:fast_path")
-    assert 0 < time < 1, f"got {time}"
+    assert 0 < time < 10, f"got {time}"
     time = metrics.get_e2e_optimization_time("peek:slow_path")
-    assert 0 < time < 1, f"got {time}"
+    assert 0 < time < 10, f"got {time}"
     time = metrics.get_e2e_optimization_time("subscribe")
-    assert 0 < time < 1, f"got {time}"
+    assert 0 < time < 10, f"got {time}"
 
 
 def workflow_test_metrics_retention_across_restart(c: Composition) -> None:

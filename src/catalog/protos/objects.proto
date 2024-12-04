@@ -78,12 +78,12 @@ message ClusterIntrospectionSourceIndexKey {
 }
 
 message ClusterIntrospectionSourceIndexValue {
-  // TODO(parkmycar): Ideally this is a SystemCatalogItemId but making this change panics 0dt
+  // TODO(parkmycar): Ideally this is a IntrospectionSourceCatalogItemId but making this change panics 0dt
   // upgrades if there were new builtin objects added since the older version of Materialize
-  // doesn't know how to read the new SystemCatalogItemId type.
+  // doesn't know how to read the new IntrospectionSourceCatalogItemId type.
   uint64 index_id = 1;
   uint32 oid = 2;
-  SystemGlobalId global_id = 3;
+  IntrospectionSourceIndexGlobalId global_id = 3;
 }
 
 message ClusterReplicaKey {
@@ -307,11 +307,17 @@ message CatalogItemId {
     uint64 system = 1;
     uint64 user = 2;
     uint64 transient = 3;
+    uint64 introspection_source_index = 4;
   }
 }
 
 /// A newtype wrapper for a `CatalogItemId` that is always in the "system" namespace.
 message SystemCatalogItemId {
+  uint64 value = 1;
+}
+
+/// A newtype wrapper for a `CatalogItemId` that is always in the "introspection source index" namespace.
+message IntrospectionSourceIndexCatalogItemId {
   uint64 value = 1;
 }
 
@@ -321,11 +327,17 @@ message GlobalId {
     uint64 user = 2;
     uint64 transient = 3;
     Empty explain = 4;
+    uint64 introspection_source_index = 5;
   }
 }
 
 /// A newtype wrapper for a `GlobalId` that is always in the "system" namespace.
 message SystemGlobalId {
+  uint64 value = 1;
+}
+
+/// A newtype wrapper for a `GlobalId` that is always in the "introspection source index" namespace.
+message IntrospectionSourceIndexGlobalId {
   uint64 value = 1;
 }
 

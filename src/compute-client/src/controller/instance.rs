@@ -564,7 +564,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
                 }
 
                 if let Some(metrics) = &mut collection.metrics {
-                    metrics.observe_wallclock_lag(lag);
+                    metrics.wallclock_lag.observe(lag);
                 };
             }
         }

@@ -230,6 +230,8 @@ struct TransactionalProducer {
     staged_bytes: u64,
     /// The timeout to use for network operations.
     socket_timeout: Duration,
+    /// The timeout to use for committing transactions.
+    transaction_timeout: Duration,
 }
 
 impl TransactionalProducer {
@@ -341,6 +343,7 @@ impl TransactionalProducer {
             staged_messages: 0,
             staged_bytes: 0,
             socket_timeout: timeout_config.socket_timeout,
+            transaction_timeout: timeout_config.transaction_timeout,
         };
 
         let timeout = timeout_config.socket_timeout;
@@ -499,7 +502,7 @@ impl TransactionalProducer {
 
         fail::fail_point!("kafka_sink_commit_transaction");
 
-        let timeout = self.socket_timeout;
+        let timeout = self.transaction_timeout;
         match self
             .spawn_blocking(move |p| p.commit_transaction(timeout))
             .await

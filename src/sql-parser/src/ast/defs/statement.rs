@@ -2328,9 +2328,6 @@ pub enum ClusterFeatureName {
     EnableEagerDeltaJoins,
     EnableVariadicLeftJoinLowering,
     EnableLetrecFixpointAnalysis,
-    EnableValueWindowFunctionFusion,
-    EnableReduceUnnestListFusion,
-    EnableWindowAggregationFusion,
 }
 
 impl WithOptionName for ClusterFeatureName {
@@ -2345,10 +2342,7 @@ impl WithOptionName for ClusterFeatureName {
             | Self::EnableNewOuterJoinLowering
             | Self::EnableEagerDeltaJoins
             | Self::EnableVariadicLeftJoinLowering
-            | Self::EnableLetrecFixpointAnalysis
-            | Self::EnableValueWindowFunctionFusion
-            | Self::EnableReduceUnnestListFusion
-            | Self::EnableWindowAggregationFusion => false,
+            | Self::EnableLetrecFixpointAnalysis => false,
         }
     }
 }
@@ -3889,14 +3883,12 @@ pub enum ExplainPlanOptionName {
     SubtreeSize,
     Timing,
     Types,
+    Equivalences,
     ReoptimizeImportedViews,
     EnableNewOuterJoinLowering,
     EnableEagerDeltaJoins,
     EnableVariadicLeftJoinLowering,
     EnableLetrecFixpointAnalysis,
-    EnableValueWindowFunctionFusion,
-    EnableReduceUnnestListFusion,
-    EnableWindowAggregationFusion,
 }
 
 impl WithOptionName for ExplainPlanOptionName {
@@ -3926,14 +3918,12 @@ impl WithOptionName for ExplainPlanOptionName {
             | Self::SubtreeSize
             | Self::Timing
             | Self::Types
+            | Self::Equivalences
             | Self::ReoptimizeImportedViews
             | Self::EnableNewOuterJoinLowering
             | Self::EnableEagerDeltaJoins
             | Self::EnableVariadicLeftJoinLowering
-            | Self::EnableLetrecFixpointAnalysis
-            | Self::EnableValueWindowFunctionFusion
-            | Self::EnableReduceUnnestListFusion
-            | Self::EnableWindowAggregationFusion => false,
+            | Self::EnableLetrecFixpointAnalysis => false,
         }
     }
 }

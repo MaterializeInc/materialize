@@ -532,7 +532,7 @@ class KafkaRecordsEnvelopeUpsertDistinctValues(Generator):
 class KafkaSinks(Generator):
     COUNT = min(Generator.COUNT, 50)  # $ kafka-verify-data is slow
 
-    MAX_COUNT = 3200  # Too long-running with 6400 sinks
+    MAX_COUNT = 1600  # Too long-running with 3200 sinks
 
     @classmethod
     def body(cls) -> None:
@@ -1414,6 +1414,8 @@ class RowsJoinOneToOne(Generator):
 class RowsJoinOneToMany(Generator):
     COUNT = 10_000_000
 
+    MAX_COUNT = 160_000_000  # Too long-running with 320_000_000
+
     @classmethod
     def body(cls) -> None:
         print(
@@ -1425,6 +1427,8 @@ class RowsJoinOneToMany(Generator):
 
 class RowsJoinCross(Generator):
     COUNT = 1_000_000
+
+    MAX_COUNT = 256_000_000  # Too long-running with 512_000_000
 
     @classmethod
     def body(cls) -> None:

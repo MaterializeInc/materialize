@@ -529,8 +529,13 @@ impl EquivalencePropagation {
                         .expect("RelationType required");
                     let reducer = input_equivalences.reducer();
                     if let Some(expr) = limit {
+                        let old_expr = expr.clone();
                         reducer.reduce_expr(expr);
+                        let acceptable_sub = literal_domination(&old_expr, expr);
                         expr.reduce(input_types.as_ref().unwrap());
+                        if !acceptable_sub && !literal_domination(&old_expr, expr) {
+                            expr.clone_from(&old_expr);
+                        }
                     }
                 }
 

@@ -9,21 +9,22 @@
 
 import argparse
 
-import boto3
-
 from materialize.cli.scratch import check_required_vars
-from materialize.scratch import mssh
+from materialize.scratch import get_instance, mssh
 
 
 def configure_parser(parser: argparse.ArgumentParser) -> None:
     check_required_vars()
 
-    parser.add_argument("instance", help="The ID of the instance to connect to")
+    parser.add_argument(
+        "instance",
+        help="The ID of the instance to connect to, or 'mine' to specify your only live instance",
+    )
     parser.add_argument("ports", nargs="*", help="The remote ports to forward locally")
 
 
 def run(args: argparse.Namespace) -> None:
-    instance = boto3.resource("ec2").Instance(args.instance)
+    instance = get_instance(args.instance)
     ssh_args = []
     for port in args.ports:
         ssh_args.extend(["-L", f"{port}:127.0.0.1:{port}"])
