@@ -9,9 +9,6 @@
 
 //! Migrations for builtin items.
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
-
 use futures::future::BoxFuture;
 use futures::FutureExt;
 use mz_catalog::builtin::{BuiltinTable, Fingerprint, BUILTINS};
@@ -35,8 +32,11 @@ use mz_persist_types::ShardId;
 use mz_repr::{CatalogItemId, Diff, GlobalId, Timestamp};
 use mz_sql::catalog::CatalogItem as _;
 use mz_storage_client::controller::StorageTxn;
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
+use std::time::Instant;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
-use tracing::{debug, error};
+use tracing::{debug, error, info};
 
 use crate::catalog::open::builtin_item_migration::persist_schema::{TableKey, TableKeySchema};
 use crate::catalog::state::LocalExpressionCache;
@@ -443,10 +443,13 @@ async fn migrate_builtin_items_0dt(
         .map(|gid| state.get_entry_by_global_id(&gid).id())
         .collect();
 
+    let apply_start = Instant::now();
     let updates = txn.get_and_commit_op_updates();
-    let builtin_table_updates = state
+    let (builtin_table_updates, apply_timings) = state
         .apply_updates_for_bootstrap(updates, local_expr_cache)
         .await;
+    let apply_elapsed = apply_start.elapsed();
+    info!("STARTUP LOOK: migrate builtin apply took {apply_elapsed:?}; : {apply_timings:?}");
 
     let cleanup_action = async move {
         if !read_only {
