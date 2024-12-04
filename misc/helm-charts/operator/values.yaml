@@ -29,6 +29,9 @@ operator:
     createConsole: true
     # Override the mapping of environmentd versions to console versions
     consoleImageTagMapOverride: {}
+    # Whether to enable environmentd rbac checks
+    # TODO: this is not yet supported in the helm chart
+    authentication: false
 
   # Cloud provider configuration
   cloudProvider:
@@ -215,7 +218,6 @@ clusterd:
 
 # RBAC (Role-Based Access Control) settings
 rbac:
-  enabled: true
   # Whether to create necessary RBAC roles and bindings
   create: true
 

@@ -248,6 +248,7 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.clusters.sizes.mz_probe.memory_limit` |  | ``"776MiB"`` |
 | `operator.clusters.sizes.mz_probe.scale` |  | ``1`` |
 | `operator.clusters.sizes.mz_probe.workers` |  | ``1`` |
+| `operator.features.authentication` |  | ``false`` |
 | `operator.features.consoleImageTagMapOverride` |  | ``{}`` |
 | `operator.features.createBalancers` |  | ``true`` |
 | `operator.features.createConsole` |  | ``true`` |
@@ -259,7 +260,6 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.resources.requests.cpu` |  | ``"100m"`` |
 | `operator.resources.requests.memory` |  | ``"512Mi"`` |
 | `rbac.create` |  | ``true`` |
-| `rbac.enabled` |  | ``true`` |
 | `serviceAccount.create` |  | ``true`` |
 | `serviceAccount.name` |  | ``"orchestratord"`` |
 | `storage.storageClass.allowVolumeExpansion` |  | ``false`` |
