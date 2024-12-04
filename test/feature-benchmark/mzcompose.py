@@ -117,8 +117,8 @@ def make_filter(args: argparse.Namespace) -> Filter:
 
 def make_termination_conditions(args: argparse.Namespace) -> list[TerminationCondition]:
     return [
-        NormalDistributionOverlap(threshold=0.95),
-        ProbForMin(threshold=0.90),
+        NormalDistributionOverlap(threshold=0.99),
+        ProbForMin(threshold=0.99),
         RunAtMost(threshold=args.max_measurements),
     ]
 
@@ -441,7 +441,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "--runs-per-scenario",
         metavar="N",
         type=int,
-        default=5,
+        default=1,
     )
 
     parser.add_argument(

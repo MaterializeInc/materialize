@@ -142,7 +142,7 @@ be reported.
 
 ## Retry policy
 
-Any scenario will be run exactly `--runs-per-scenario` times (default is 3). The run with the median wallclock duration
+Any scenario will be run exactly `--runs-per-scenario` times (default is 1). The run with the median wallclock duration
 will be chosen and other runs will be discarded.
 
 Reported performance improvements are not retried to establish reproducibility, so should be considered flakes if seen in the CI
