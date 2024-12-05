@@ -127,11 +127,12 @@ use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceData;
+use mz_timely_util::builder_async::PressOnDropButton;
 use mz_timely_util::builder_async::{Event, OperatorBuilder};
 use serde::{Deserialize, Serialize};
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::operators::{Broadcast, Capability, CapabilitySet, InspectCore};
+use timely::dataflow::operators::{Broadcast, Capability, CapabilitySet};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use timely::PartialOrder;
@@ -156,6 +157,9 @@ type DescsStream<S> = Stream<S, BatchDescription>;
 /// Type of the `batches` stream.
 type BatchesStream<S> = Stream<S, ProtoBatch>;
 
+/// Type of the shared sink write frontier.
+type SharedSinkFrontier = Rc<RefCell<Antichain<Timestamp>>>;
+
 /// Renders an MV sink writing the given desired collection into the `target` persist collection.
 pub(super) fn persist_sink<S>(
     sink_id: GlobalId,
@@ -173,7 +177,7 @@ where
     let desired = OkErr::new(ok_collection.inner, err_collection.inner);
 
     // Read back the persist shard.
-    let (mut persist, persist_token) = persist_source(
+    let (persist, persist_token) = persist_source(
         &mut scope,
         sink_id,
         target.clone(),
@@ -181,52 +185,33 @@ where
         start_signal,
     );
 
-    // Report sink frontier updates to the `ComputeState`.
-    let sink_frontier = Rc::new(RefCell::new(Antichain::from_elem(Timestamp::MIN)));
-    let collection = compute_state.expect_collection_mut(sink_id);
-    collection.sink_write_frontier = Some(Rc::clone(&sink_frontier));
-
-    persist.ok = persist.ok.inspect_container(move |event| {
-        if let Err(frontier) = event {
-            let mut borrow = sink_frontier.borrow_mut();
-            borrow.clear();
-            borrow.extend(frontier.iter().copied());
-        }
-    });
-
     // Determine the active worker for single-worker operators.
     let active_worker_id = usize::cast_from(sink_id.hashed()) % scope.peers();
 
-    let operator_name = |name| format!("persist_sink({sink_id})::{name}");
-    let persist_api = |purpose| PersistApi {
+    let persist_api = PersistApi {
         persist_clients: Arc::clone(&compute_state.persist_clients),
         collection: target.clone(),
         shard_name: sink_id.to_string(),
-        purpose,
+        purpose: format!("MV sink {sink_id}"),
     };
 
-    let name = operator_name("mint");
-    let (desired, descs, mint_token) = mint::render(
-        name.clone(),
-        persist_api(name),
+    let (desired, descs, sink_frontier, mint_token) = mint::render(
+        sink_id,
+        persist_api.clone(),
         as_of,
         active_worker_id,
         compute_state.read_only_rx.clone(),
         &desired,
     );
 
-    let name = operator_name("write");
     let (batches, write_token) =
-        write::render(name.clone(), persist_api(name), &desired, &persist, &descs);
+        write::render(sink_id, persist_api.clone(), &desired, &persist, &descs);
 
-    let name = operator_name("append");
-    let append_token = append::render(
-        name.clone(),
-        persist_api(name),
-        active_worker_id,
-        &descs,
-        &batches,
-    );
+    let append_token = append::render(sink_id, persist_api, active_worker_id, &descs, &batches);
+
+    // Report sink frontier updates to the `ComputeState`.
+    let collection = compute_state.expect_collection_mut(sink_id);
+    collection.sink_write_frontier = Some(sink_frontier);
 
     Rc::new((persist_token, mint_token, write_token, append_token))
 }
@@ -320,7 +305,7 @@ fn persist_source<S>(
     target: CollectionMetadata,
     compute_state: &ComputeState,
     start_signal: StartSignal,
-) -> (PersistStreams<S>, Box<dyn Any>)
+) -> (PersistStreams<S>, Vec<PressOnDropButton>)
 where
     S: Scope<Timestamp = Timestamp>,
 {
@@ -356,7 +341,6 @@ where
     );
 
     let streams = OkErr::new(ok_stream, err_stream);
-    let token = Box::new(token);
     (streams, token)
 }
 
@@ -372,7 +356,7 @@ struct BatchDescription {
 
 impl BatchDescription {
     fn new(lower: Antichain<Timestamp>, upper: Antichain<Timestamp>) -> Self {
-        debug_assert!(PartialOrder::less_than(&lower, &upper));
+        assert!(PartialOrder::less_than(&lower, &upper));
         Self { lower, upper }
     }
 }
@@ -388,24 +372,38 @@ impl std::fmt::Debug for BatchDescription {
     }
 }
 
+/// Construct a name for the given sub-operator.
+fn operator_name(sink_id: GlobalId, sub_operator: &str) -> String {
+    format!("mv_sink({sink_id})::{sub_operator}")
+}
+
 /// Implementation of the `mint` operator.
 mod mint {
     use super::*;
 
     pub fn render<S>(
-        name: String,
+        sink_id: GlobalId,
         persist_api: PersistApi,
         as_of: Antichain<Timestamp>,
         active_worker_id: usize,
         mut read_only_rx: watch::Receiver<bool>,
         desired: &DesiredStreams<S>,
-    ) -> (DesiredStreams<S>, DescsStream<S>, Box<dyn Any>)
+    ) -> (
+        DesiredStreams<S>,
+        DescsStream<S>,
+        SharedSinkFrontier,
+        PressOnDropButton,
+    )
     where
         S: Scope<Timestamp = Timestamp>,
     {
         let scope = desired.ok.scope();
         let worker_id = scope.index();
 
+        let sink_frontier = Rc::new(RefCell::new(Antichain::from_elem(Timestamp::MIN)));
+        let shared_frontier = Rc::clone(&sink_frontier);
+
+        let name = operator_name(sink_id, "mint");
         let mut op = OperatorBuilder::new(name, scope);
 
         let (ok_output, ok_stream) = op.new_output::<CapacityContainerBuilder<_>>();
@@ -429,6 +427,7 @@ mod mint {
             // Non-active workers just pass the `desired` and `persist` data through.
             if worker_id != active_worker_id {
                 drop(desc_cap);
+                shared_frontier.borrow_mut().clear();
 
                 loop {
                     tokio::select! {
@@ -451,15 +450,22 @@ mod mint {
             let mut cap_set = CapabilitySet::from_elem(desc_cap);
 
             let read_only = *read_only_rx.borrow_and_update();
-            let mut state = State::new(as_of, read_only);
+            let mut state = State::new(sink_id, as_of, read_only);
 
-            // Create a stream that reports advancements of the target shard's frontier.
+            // Create a stream that reports advancements of the target shard's frontier and updates
+            // the shared sink frontier.
+            //
+            // We collect the persist frontier from a write handle directly, rather than inspecting
+            // the `persist` stream, because the latter has two annoying glitches:
+            //  (a) It starts at the shard's read frontier, not its write frontier.
+            //  (b) It can lag behind if there are spikes in ingested data.
             let mut persist_frontiers = pin!(async_stream::stream! {
                 let mut writer = persist_api.open_writer().await;
                 let mut frontier = Antichain::from_elem(Timestamp::MIN);
                 while !frontier.is_empty() {
                     writer.wait_for_upper_past(&frontier).await;
                     frontier = writer.upper().clone();
+                    shared_frontier.borrow_mut().clone_from(&frontier);
                     yield frontier.clone();
                 }
             });
@@ -521,13 +527,17 @@ mod mint {
             }
         });
 
-        let token = Box::new(button.press_on_drop());
-
-        (desired_output_streams, desc_output_stream, token)
+        (
+            desired_output_streams,
+            desc_output_stream,
+            sink_frontier,
+            button.press_on_drop(),
+        )
     }
 
     /// State maintained by the `mint` operator.
     struct State {
+        sink_id: GlobalId,
         /// The frontiers of the `desired` inputs.
         desired_frontiers: OkErr<Antichain<Timestamp>, Antichain<Timestamp>>,
         /// The frontier of the target persist shard.
@@ -542,13 +552,14 @@ mod mint {
     }
 
     impl State {
-        fn new(as_of: Antichain<Timestamp>, read_only: bool) -> Self {
+        fn new(sink_id: GlobalId, as_of: Antichain<Timestamp>, read_only: bool) -> Self {
             // Initializing `persist_frontier` to the `as_of` ensures that the first minted batch
             // description will have a `lower` of `as_of` or beyond, and thus that we don't spend
             // work needlessly writing batches at previous times.
             let persist_frontier = as_of;
 
             Self {
+                sink_id,
                 desired_frontiers: OkErr::new_frontiers(),
                 persist_frontier,
                 last_lower: None,
@@ -559,6 +570,7 @@ mod mint {
         fn trace<S: AsRef<str>>(&self, message: S) {
             let message = message.as_ref();
             trace!(
+                sink_id = %self.sink_id,
                 desired_frontier = ?self.desired_frontiers.frontier().elements(),
                 persist_frontier = ?self.persist_frontier.elements(),
                 last_lower = ?self.last_lower.as_ref().map(|f| f.elements()),
@@ -625,18 +637,19 @@ mod write {
     use super::*;
 
     pub fn render<S>(
-        name: String,
+        sink_id: GlobalId,
         persist_api: PersistApi,
         desired: &DesiredStreams<S>,
         persist: &PersistStreams<S>,
         descs: &Stream<S, BatchDescription>,
-    ) -> (BatchesStream<S>, Box<dyn Any>)
+    ) -> (BatchesStream<S>, PressOnDropButton)
     where
         S: Scope<Timestamp = Timestamp>,
     {
         let scope = desired.ok.scope();
         let worker_id = scope.index();
 
+        let name = operator_name(sink_id, "write");
         let mut op = OperatorBuilder::new(name, scope);
 
         let (batches_output, batches_output_stream) = op.new_output();
@@ -663,7 +676,7 @@ mod write {
 
             let writer = persist_api.open_writer().await;
             let sink_metrics = persist_api.open_metrics().await;
-            let mut state = State::new(worker_id, writer, sink_metrics);
+            let mut state = State::new(sink_id, worker_id, writer, sink_metrics);
 
             loop {
                 // Read from the inputs, extract `desired` updates as positive contributions to
@@ -740,13 +753,12 @@ mod write {
             }
         });
 
-        let token = Box::new(button.press_on_drop());
-
-        (batches_output_stream, token)
+        (batches_output_stream, button.press_on_drop())
     }
 
     /// State maintained by the `write` operator.
     struct State {
+        sink_id: GlobalId,
         worker_id: usize,
         persist_writer: WriteHandle<SourceData, (), Timestamp, Diff>,
         /// Contains `desired - persist`, reflecting the updates we would like to commit to
@@ -758,11 +770,16 @@ mod write {
         /// The frontiers of the `persist` inputs.
         persist_frontiers: OkErr<Antichain<Timestamp>, Antichain<Timestamp>>,
         /// The current valid batch description and associated output capability, if any.
+        ///
+        /// Note that "valid" here implies that if a batch description is set, it must be true that
+        /// its `lower` is >= the `persist_frontier`. Otherwise the described batch couldn't be
+        /// appended anymore, rendering the batch description invalid.
         batch_description: Option<(BatchDescription, Capability<Timestamp>)>,
     }
 
     impl State {
         fn new(
+            sink_id: GlobalId,
             worker_id: usize,
             persist_writer: WriteHandle<SourceData, (), Timestamp, Diff>,
             metrics: SinkMetrics,
@@ -770,6 +787,7 @@ mod write {
             let worker_metrics = metrics.for_worker(worker_id);
 
             Self {
+                sink_id,
                 worker_id,
                 persist_writer,
                 corrections: OkErr::new(
@@ -785,6 +803,7 @@ mod write {
         fn trace<S: AsRef<str>>(&self, message: S) {
             let message = message.as_ref();
             trace!(
+                sink_id = %self.sink_id,
                 worker = %self.worker_id,
                 desired_frontier = ?self.desired_frontiers.frontier().elements(),
                 persist_frontier = ?self.persist_frontiers.frontier().elements(),
@@ -869,8 +888,8 @@ mod write {
 
             let (desc, cap) = self.batch_description.take()?;
 
-            debug_assert_eq!(desc.lower, *self.corrections.ok.since());
-            debug_assert_eq!(desc.lower, *self.corrections.err.since());
+            assert_eq!(desc.lower, *self.corrections.ok.since());
+            assert_eq!(desc.lower, *self.corrections.err.since());
 
             let ok_updates = self.corrections.ok.updates_before(&desc.upper);
             let err_updates = self.corrections.err.updates_before(&desc.upper);
@@ -904,18 +923,19 @@ mod append {
     use super::*;
 
     pub fn render<S>(
-        name: String,
+        sink_id: GlobalId,
         persist_api: PersistApi,
         active_worker_id: usize,
         descs: &DescsStream<S>,
         batches: &BatchesStream<S>,
-    ) -> Box<dyn Any>
+    ) -> PressOnDropButton
     where
         S: Scope<Timestamp = Timestamp>,
     {
         let scope = descs.scope();
         let worker_id = scope.index();
 
+        let name = operator_name(sink_id, "append");
         let mut op = OperatorBuilder::new(name, scope);
 
         let mut descs_input = op.new_disconnected_input(descs, Pipeline);
@@ -930,7 +950,7 @@ mod append {
             }
 
             let writer = persist_api.open_writer().await;
-            let mut state = State::new(writer);
+            let mut state = State::new(sink_id, writer);
 
             loop {
                 // Read from the inputs, absorb batch descriptions and batches. If the `batches`
@@ -964,12 +984,12 @@ mod append {
             }
         });
 
-        let token = Box::new(button.press_on_drop());
-        token
+        button.press_on_drop()
     }
 
     /// State maintained by the `append` operator.
     struct State {
+        sink_id: GlobalId,
         persist_writer: WriteHandle<SourceData, (), Timestamp, Diff>,
         /// The current input frontier of `batches`.
         batches_frontier: Antichain<Timestamp>,
@@ -982,8 +1002,12 @@ mod append {
     }
 
     impl State {
-        fn new(persist_writer: WriteHandle<SourceData, (), Timestamp, Diff>) -> Self {
+        fn new(
+            sink_id: GlobalId,
+            persist_writer: WriteHandle<SourceData, (), Timestamp, Diff>,
+        ) -> Self {
             Self {
+                sink_id,
                 persist_writer,
                 batches_frontier: Antichain::from_elem(Timestamp::MIN),
                 lower: Antichain::from_elem(Timestamp::MIN),
@@ -995,6 +1019,7 @@ mod append {
         fn trace<S: AsRef<str>>(&self, message: S) {
             let message = message.as_ref();
             trace!(
+                sink_id = %self.sink_id,
                 batches_frontier = ?self.batches_frontier.elements(),
                 lower = ?self.lower.elements(),
                 batch_description = ?self.batch_description,
@@ -1013,7 +1038,7 @@ mod append {
         /// Discards all currently stashed batches and batch descriptions, assuming that they are
         /// now invalid.
         async fn advance_lower(&mut self, frontier: Antichain<Timestamp>) {
-            debug_assert!(PartialOrder::less_than(&self.lower, &frontier));
+            assert!(PartialOrder::less_than(&self.lower, &frontier));
 
             self.lower = frontier;
             self.batch_description = None;

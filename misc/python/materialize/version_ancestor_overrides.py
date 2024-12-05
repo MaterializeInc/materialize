@@ -39,11 +39,6 @@ def get_ancestor_overrides_for_performance_regressions(
         min_ancestor_mz_version_per_commit[
             "a558d6bdc4b29abf79457eaba52914a0d6c805b7"
         ] = MzVersion.parse_mz("v0.127.0")
-    if scenario_class_name == "CrossJoin":
-        # PR#26745 (compute: MV sink refresh) increases wallclock
-        min_ancestor_mz_version_per_commit[
-            "9485261eae85fb7f12a2884fdac464a68798dc8b"
-        ] = MzVersion.parse_mz("v0.126.0")
     if "OptbenchTPCH" in scenario_class_name:
         # PR#30602 (Replace ColumnKnowledge with EquivalencePropagation) increases wallclock
         min_ancestor_mz_version_per_commit[

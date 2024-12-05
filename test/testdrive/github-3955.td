@@ -9,9 +9,7 @@
 
 # Regression test for https://github.com/MaterializeInc/database-issues/issues/3955
 
-# The contents of the introspection tables depend on the replica size
 > CREATE CLUSTER test (SIZE '4-4');
-
 > SET cluster = test;
 
 # In case the environment has other replicas
@@ -28,12 +26,12 @@
   FROM
     mz_materialized_views AS views,
     mz_introspection.mz_compute_exports AS compute_exports,
-    mz_introspection.mz_compute_frontiers_per_worker AS frontiers
+    mz_introspection.mz_compute_frontiers AS frontiers
   WHERE
     views.name = 'mv' AND
     views.id = compute_exports.export_id AND
     compute_exports.export_id = frontiers.export_id AND
     time > 0
-16
+1
 
 > DROP CLUSTER test CASCADE;
