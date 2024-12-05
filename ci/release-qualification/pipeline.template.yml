@@ -12,7 +12,7 @@ priority: 40
 
 env:
   CI_BAZEL_BUILD: 1
-  CI_BAZEL_REMOTE_CACHE: "https://bazel-remote.dev.materialize.com"
+  CI_BAZEL_REMOTE_CACHE: $BAZEL_REMOTE_CACHE
 
 steps:
   - group: Builds

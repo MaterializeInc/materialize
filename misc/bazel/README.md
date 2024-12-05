@@ -23,6 +23,7 @@ allows Bazel to aggressively cache artifacts, which reduces build times.
     * [Installing `bazelisk`](#installing-bazelisk)
     * [Using Bazel](#using-bazel)
       * [Defining your own `.bazelrc` file](#defining-your-own-bazelrc-file)
+      * [Remote caching](#remote-caching)
       * [Building a crate](#building-a-crate)
       * [Running a test](#running-a-test)
         * [Filtering tests](#filtering-tests)
@@ -90,6 +91,41 @@ build --disk_cache=~/.cache/bazel
 common --experimental_disk_cache_gc_max_size=40G
 common --experimental_disk_cache_gc_max_age=7d
 ```
+
+### Remote caching
+
+Bazel supports reading and writing artifacts to a [remote cache](https://bazel.build/remote/caching).
+We currently have two setup that are backed by S3 and running [`bazel-remote`](https://github.com/buchgr/bazel-remote).
+One is accessible by developers and used by PR builds in CI, we treat this as semi-poisoned. The
+other is only accessible by CI and used for builds from `main` and tagged builds.
+
+To enable remote caching as a developer you must to the following:
+
+1. Have Teleport setup and `tsh` installed
+2. Create `~/.config/materialize/build.toml` and add the following:
+
+```
+[bazel]
+remote_cache = "teleport:bazel-remote-cache"
+```
+
+When running Bazel via `bin/bazel` we will read the build config and spawn a Teleport proxy via
+`tsh` if one isn't already running, then specify `--remote_cache` to `bazel` with the correct URL.
+
+#### Teleport proxy fails to start
+
+In some cases you might see a warning printed when calling `bin/bazel` indicating the Teleport
+proxy failed to start, e.g.
+
+```
+Teleport proxy failed to start, 'tsh' process already running!
+  existing 'tsh' processes: [10001]
+  exit code: 1
+```
+
+Generally this means there is a Teleport proxy already running that we've lost track of. You can
+fix this issue by terminating the existing `tsh` process with the PID specified in the warning
+message.
 
 ### Building a crate
 
