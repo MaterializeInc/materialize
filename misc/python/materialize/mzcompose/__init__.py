@@ -66,7 +66,6 @@ def get_default_system_parameters(
         # -----
         # Unsafe functions
         "enable_unsafe_functions": "true",
-        "enable_dangerous_functions": "true",  # former name of 'enable_unsafe_functions'
         # -----
         # To reduce CRDB load as we are struggling with it in CI (values based on load test environment):
         "persist_next_listen_batch_retryer_clamp": "16s",
@@ -91,7 +90,6 @@ def get_default_system_parameters(
             "true" if version >= MzVersion.parse_mz("v0.125.0-dev") else "false"
         ),
         "enable_alter_swap": "true",
-        "enable_assert_not_null": "true",
         "enable_columnation_lgalloc": "true",
         "enable_comment": "true",
         "enable_compute_chunked_stack": "true",
@@ -101,7 +99,6 @@ def get_default_system_parameters(
         "enable_continual_task_retain": "true",
         "enable_continual_task_transform": "true",
         "enable_copy_to_expr": "true",
-        "enable_create_continual_task": "true",
         "enable_create_table_from_source": "true",
         "enable_disk_cluster_replicas": "true",
         "enable_eager_delta_joins": "true",
@@ -111,12 +108,10 @@ def get_default_system_parameters(
         "enable_kafka_sink_partition_by": "true",
         "enable_logical_compaction_window": "true",
         "enable_multi_worker_storage_persist_sink": "true",
-        "enable_mysql_source": "true",
         "enable_rbac_checks": "true",
         "enable_reduce_mfp_fusion": "true",
         "enable_refresh_every_mvs": "true",
         "enable_cluster_schedule_refresh": "true",
-        "enable_sink_doc_on_option": "true",
         "enable_statement_lifecycle_logging": "true",
         "enable_table_keys": "true",
         "enable_variadic_left_join_lowering": "true",
@@ -143,14 +138,9 @@ def get_default_system_parameters(
         "persist_pubsub_client_enabled": "true",
         "persist_pubsub_push_diff_enabled": "true",
         "persist_record_compactions": "true",
-        "persist_schema_register": (
-            "false" if version < MzVersion.parse_mz("v0.111.0-dev") else "true"
-        ),
         # 16 MiB - large enough to avoid a big perf hit, small enough to get more coverage...
         "persist_blob_target_size": "16777216",
-        "persist_schema_require": "true",
         "persist_stats_audit_percent": "100",
-        "persist_txn_tables": "lazy",  # removed, but keep value for older versions
         "persist_use_critical_since_catalog": "true",
         "persist_use_critical_since_snapshot": "false" if zero_downtime else "true",
         "persist_use_critical_since_source": "false" if zero_downtime else "true",
@@ -161,8 +151,7 @@ def get_default_system_parameters(
         "storage_statistics_collection_interval": "1000",
         "storage_statistics_interval": "2000",
         "storage_use_continual_feedback_upsert": "true",
-        "timestamp_oracle": "postgres",
-        "wait_catalog_consolidation_on_startup": "true",
+        "storage_use_reclock_v2": "true",
         "with_0dt_deployment_max_wait": "900s",
         # End of list (ordered by name)
     }
