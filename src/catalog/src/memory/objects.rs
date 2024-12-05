@@ -845,7 +845,7 @@ impl From<CatalogEntry> for durable::Item {
 pub struct Table {
     /// Parse-able SQL that defines this table.
     pub create_sql: Option<String>,
-    /// [`RelationDesc`] of this table, derived from the `create_sql`.
+    /// [`VersionedRelationDesc`] of this table, derived from the `create_sql`.
     pub desc: VersionedRelationDesc,
     /// Versions of this table, and the [`GlobalId`]s that refer to them.
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
