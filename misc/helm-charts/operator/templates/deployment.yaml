@@ -72,9 +72,7 @@ spec:
         {{- range $key, $value := .Values.operator.features.consoleImageTagMapOverride }}
         - "--console-image-tag-map={{ $key }}={{ $value }}"
         {{- end }}
-
-        {{/* Authentication */}}
-        {{- if not .Values.rbac.enabled }}
+        {{- if not .Values.operator.features.authentication }}
         - "--disable-authentication"
         {{- end }}
 
