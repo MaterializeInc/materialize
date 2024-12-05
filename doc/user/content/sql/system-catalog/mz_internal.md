@@ -1055,11 +1055,11 @@ The `mz_source_statistics` view contains statistics about each source.
 | `records_indexed`         | [`uint8`]    | The number of individual records indexed in the source envelope state. |
 | `bytes_indexed`           | [`uint8`]    | The number of bytes stored in the source's internal index, if any. |
 | `rehydration_latency`     | [`interval`] | The amount of time it took for the source to rehydrate its internal index, if any, after the source last restarted. |
-| `snapshot_records_known`  | [`uint8`]    | The size of the source's snapshot, measured in number of records. See below to learn what constitutes a record. |
-| `snapshot_records_staged` | [`uint8`]    | The number of records in the source's snapshot that Materialize has read. See below to learn what constitutes a record. |
+| `snapshot_records_known`  | [`uint8`]    | The size of the source's snapshot, measured in number of records. See [below](#meaning-record) to learn what constitutes a record. |
+| `snapshot_records_staged` | [`uint8`]    | The number of records in the source's snapshot that Materialize has read. See [below](#meaning-record) to learn what constitutes a record. |
 | `snapshot_committed`      | [`boolean`]  | Whether the source has committed the initial snapshot for a source. |
-| `offset_known`            | [`uint8`]    | The offset of the most recent data in the source's upstream service that Materialize knows about. See below to learn what constitutes an offset. |
-| `offset_committed`        | [`uint8`]    | The offset of the the data that Materialize has durably ingested. See below to learn what constitutes an offset. |
+| `offset_known`            | [`uint8`]    | The offset of the most recent data in the source's upstream service that Materialize knows about. See [below](#meaning-offset) to learn what constitutes an offset. |
+| `offset_committed`        | [`uint8`]    | The offset of the the data that Materialize has durably ingested. See [below](#meaning-offset) to learn what constitutes an offset. |
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_source_statistics_with_history -->
 
@@ -1099,6 +1099,8 @@ When a source is first created, it must process an initial snapshot of data.
 `snapshot_records_known` is the total number of records in the snapshot, and
 `snapshot_records_staged` is how many of the records the source has read so far.
 
+<a name="meaning-record"></a>
+
 The meaning of record depends on the source:
 - For Kafka sources, its the total number of offsets in the snapshot.
 - For Postgres and MySQL sources, its the number of rows in the snapshot.
@@ -1116,6 +1118,8 @@ source is making relative to its upstream source. `offset_known` is the maximum
 offset in the upstream system that Materialize knows about. `offset_committed`
 is the offset that Materialize has durably ingested. These metrics will never
 decrease over the lifetime of a source.
+
+<a name="meaning-offset"></a>
 
 The meaning of offset depends on the source:
 - For Kafka sources, an offset is the Kafka message offset.
