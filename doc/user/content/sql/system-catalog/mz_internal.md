@@ -1093,7 +1093,7 @@ restarted, as the index must be rehydrated.
 
 `rehydration_latency` represents the amount of time it took for the source to
 rehydrate its index after the latest restart. It is reset to `NULL` when a
-source is restarted and is populated with a duration after hydration finishes. 
+source is restarted and is populated with a duration after hydration finishes.
 
 When a source is first created, it must process an initial snapshot of data.
 `snapshot_records_known` is the total number of records in the snapshot, and
