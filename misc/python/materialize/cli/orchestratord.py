@@ -50,6 +50,7 @@ def main():
     parser_run.set_defaults(func=run)
 
     parser_reset = subparsers.add_parser("reset")
+    parser_reset.add_argument("--namespace", default="materialize")
     parser_reset.set_defaults(func=reset)
 
     parser_environment = subparsers.add_parser("environment")
@@ -89,8 +90,8 @@ def run(args: argparse.Namespace):
             "misc/helm-charts/operator",
             "--atomic",
             f"--set=operator.image.tag={DEV_IMAGE_TAG}",
-            "--set=namespace.create=true",
-            f"--set=namespace.name={args.namespace}",
+            "--create-namespace",
+            f"--namespace={args.namespace}",
         ]
     )
 
@@ -123,7 +124,20 @@ def reset(args: argparse.Namespace):
         env_kubectl("delete", "--wait=true", "secret", secret_name)
 
     try:
-        subprocess.check_call(["helm", "uninstall", "orchestratord"])
+        subprocess.check_call(
+            [
+                "helm",
+                "uninstall",
+                "orchestratord",
+                f"--namespace={args.namespace}",
+            ]
+        )
+        kubectl(
+            "delete",
+            "namespace",
+            args.namespace,
+            cluster=args.kind_cluster_name,
+        )
     except subprocess.CalledProcessError:
         pass
 
