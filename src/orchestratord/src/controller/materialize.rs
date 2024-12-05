@@ -174,16 +174,16 @@ pub struct AwsInfo {
 
 #[derive(clap::Parser)]
 pub struct NetworkPolicyConfig {
-    #[clap(long = "network-policies-internal-enabled", default_value = "false")]
+    #[clap(long = "network-policies-internal-enabled")]
     internal_enabled: bool,
 
-    #[clap(long = "network-policies-ingress-enabled", default_value = "false")]
+    #[clap(long = "network-policies-ingress-enabled")]
     ingress_enabled: bool,
 
     #[clap(long = "network-policies-ingress-cidrs")]
     ingress_cidrs: Vec<String>,
 
-    #[clap(long = "network-policies-egress-enabled", default_value = "false")]
+    #[clap(long = "network-policies-egress-enabled")]
     egress_enabled: bool,
 
     #[clap(long = "network-policies-egress-cidrs")]
