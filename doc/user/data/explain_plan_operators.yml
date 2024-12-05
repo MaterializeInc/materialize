@@ -1,0 +1,223 @@
+operators:
+  - operator: Constant
+    plan_types: "optimized,raw"
+    description: |
+      Always produces the same collection of rows.
+    uses_memory: False
+    memory_details: ""
+    expansive: False
+
+    example: |
+      ```mzsql
+      Constant
+      - ((1, 2) x 2)
+      - (3, 4)
+      ```
+
+  - operator: Get
+    plan_types: "optimized,raw"
+    description: |
+      Produces rows from either an existing source/view or from a previous
+      operator in the same plan.
+    uses_memory: False
+    memory_details: ""
+    expansive: False
+
+    example: "`Get materialize.public.ordered`"
+
+  - operator: Project
+    plan_types: "optimized,raw"
+    description: |
+      Produces a subset of the columns in the input rows.
+    uses_memory: False
+    memory_details: ""
+    expansive: False
+
+    example: "`Project (#2, #3)`"
+
+  - operator: Map
+    plan_types: "optimized,raw"
+    description: |
+      Appends the results of some scalar expressions to each row in the input.
+    uses_memory: False
+    memory_details: ""
+    expansive: True
+    expansive_details: |
+      Each row has more data (i.e., longer rows but same number of rows).
+    example: "`Map (((#1 * 10000000dec) / #2) * 1000dec)`"
+
+  - operator: FlatMap
+    plan_types: "optimized"
+    description: |
+      Appends the result of some [table function](/sql/functions/#table-functions) to each row in the input.
+    uses_memory: False
+    memory_details: ""
+    expansive: True
+    expansive_details: |
+      Depends on the [table function](/sql/functions/#table-functions) used.
+    example: "`FlatMap jsonb_foreach(#3)`"
+
+  - operator: CallTable
+    plan_types: "raw"
+    description: |
+      Appends the result of some [table function](/sql/functions/#table-functions) to each row in the input.
+    uses_memory: False
+    memory_details: ""
+    expansive: True
+    expansive_details: |
+      Depends on the [table function](/sql/functions/#table-functions) used.
+    example: "`CallTable generate_series(1, 7, 1)`"
+
+  - operator: Filter
+    plan_types: "optimized,raw"
+    description: |
+      Removes rows of the input for which some scalar predicates return `false`.
+    uses_memory: False
+    memory_details: ""
+    expansive: False
+    example: "`Filter (#20 < #21)`"
+
+  - operator: ~Join
+    plan_types: "raw"
+    description: |
+      Performs one of `INNER` / `LEFT` / `RIGHT` / `FULL OUTER` / `CROSS` join on the two inputs, using the given predicate.
+    uses_memory: True
+    memory_details: |
+      Uses memory for 3-way or more differential joins.
+    expansive: True
+    expansive_details: |
+      For `CROSSJOINS`, Cartesian product of the inputs (|N| x |M|).
+      For other join types, depends on the join order and facts about the joined collections.
+    example: "`Join on=(#1 = #2)`"
+
+  - operator: Join
+    plan_types: "optimized"
+    description: |
+      Returns combinations of rows from each input whenever some equality predicates are `true`.
+    uses_memory: True
+    memory_details: |
+      Uses memory for 3-way or more differential joins.
+    expansive: True
+    expansive_details: |
+      Depends on the join order and facts about the joined collections.
+    example: "`Join on=(#1 = #2)`"
+
+  - operator: CrossJoin
+    plan_types: "optimized"
+    description: |
+      An alias for a `Join` with an empty predicate (emits all combinations).
+    uses_memory: True
+    memory_details: |
+      Uses memory for 3-way or more differential joins.
+    expansive: True
+    expansive_details: |
+      Cartesian product of the inputs (|N| x |M|).
+    example: "`CrossJoin`"
+
+  - operator: Reduce
+    plan_types: "optimized"
+    description: |
+      Groups the input rows by some scalar expressions, reduces each group using some aggregate functions, and produces rows containing the group key and aggregate outputs.
+    uses_memory: True
+    memory_details: |
+      Can use significant amount as the operator can significantly overestimate
+      the size. For `MIN` and `MAX` aggregates, consult
+      [`mz_introspection.mz_expected_group_size_advice`](/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice).
+    expansive: False
+    example: "`Reduce group_by=[#0] aggregates=[max((#0 * #1))]`"
+
+  - operator: Reduce
+    plan_types: "raw"
+    description: |
+      Groups the input rows by some scalar expressions, reduces each group using
+      some aggregate functions, and produces rows containing the group key and
+      aggregate outputs.  In the case where the group key is empty and the input
+      is empty, returns a single row with the aggregate functions applied to the
+      empty input collection.
+    uses_memory: True
+    memory_details: |
+      Can use significant amount as the operator can significantly overestimate
+      the size. For `MIN` and `MAX` aggregates, consult
+      [`mz_introspection.mz_expected_group_size_advice`](/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice).
+    expansive: False
+    example: "`Reduce group_by=[#0] aggregates=[max((#0 * #1))]`"
+
+  - operator: Distinct
+    plan_types: "optimized"
+    description: |
+      Alias for a `Reduce` with an empty aggregate list.
+    uses_memory: True
+    memory_details: |
+      Uses memory proportional to the number of input updates, twice.
+    expansive: True
+    example: "`Distinct`"
+
+  - operator: Distinct
+    plan_types: "raw"
+    description: |
+      Removes duplicate copies of input rows.
+    uses_memory: True
+    memory_details: |
+      Uses memory proportional to the number of input updates, twice.
+    expansive: False
+    example: "`Distinct`"
+
+  - operator: TopK
+    plan_types: "optimized,raw"
+    description: |
+      Groups the input rows by some scalar expressions, sorts each group using the group key, removes the top `offset` rows in each group, and returns the next `limit` rows.
+    uses_memory: True
+    memory_details: |
+      Can use significant amount as the operator can significantly overestimate
+      the size. Consult
+      [`mz_introspection.mz_expected_group_size_advice`](/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice).
+    expansive: False
+    example: "`TopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5`"
+
+  - operator: Negate
+    plan_types: "optimized,raw"
+    description: |
+      Negates the row counts of the input. This is usually used in combination with union to remove rows from the other union input.
+    uses_memory: False
+    memory_details: ""
+    expansive: False
+    example: "`Negate`"
+
+  - operator: Threshold
+    plan_types: "optimized,raw"
+    description: |
+      Removes any rows with negative counts.
+    uses_memory: True
+    memory_details: |
+      Uses memory proportional to the number of input updates, twice.
+    expansive: False
+    example: "`Threshold`"
+
+  - operator: Union
+    plan_types: "optimized,raw"
+    description: |
+      Sums the counts of each row of all inputs.
+    uses_memory: True
+    memory_details: |
+      Moderate use of memory. Union stages force consolidation, which results in a memory spike, largely at hydration time.
+    expansive: False
+    example: "`Union`"
+
+  - operator: ArrangeBy
+    plan_types: "optimized"
+    description: |
+      Indicates a point that will become an arrangement in the dataflow engine (each `keys` element will be a different arrangement). Note that if the output of the previous operator is already arranged with a key that is also requested here, then this operator will just pass on that existing arrangement instead of creating a new one.
+    uses_memory: True
+    memory_details: |
+      Depends. When it does, uses memory proportional to the number of input updates.
+    expansive: False
+    example: "`ArrangeBy keys=[[#0]]`"
+
+  - operator: Return ... With ...
+    plan_types: "optimized,raw"
+    description: |
+      Binds sub-plans consumed multiple times by downstream operators.
+    uses_memory: False
+    memory_details: ""
+    expansive: False
+    example: "[See above](#reading-decorrelated-and-optimized-plans)"
