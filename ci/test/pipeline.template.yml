@@ -182,6 +182,7 @@ steps:
           - Cargo.toml
           - "**/Cargo.toml"
           - "**/*.rs"
+          - misc/helm-charts
         depends_on: []
         timeout_in_minutes: 40
         agents:
