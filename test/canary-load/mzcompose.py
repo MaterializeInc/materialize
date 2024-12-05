@@ -162,16 +162,25 @@ def fetch_token(user_name: str, password: str) -> str:
     )
 
 
-def http_sql_query(host: str, query: str, token: str) -> list[list[str]]:
+def http_sql_query(
+    host: str, query: str, token: str, retries: int = 10
+) -> list[list[str]]:
     try:
         r = requests.post(
             f'https://{host}/api/sql?options={{"application_name":"canary-load","cluster":"qa_canary_environment_compute"}}',
             headers={"authorization": f"Bearer {token}"},
             json={"queries": [{"params": [], "query": query}]},
+            timeout=60,
         )
     except requests.exceptions.HTTPError as e:
         res = e.response
         print(f"{e}\n{res}\n{res.text}")
+        raise
+    except requests.exceptions.Timeout:
+        # TODO: This should be an error once database-issues#8737 is fixed
+        if retries > 0:
+            print("Timed out after 60s, retrying")
+            return http_sql_query(host, query, token, retries - 1)
         raise
     assert r.status_code == 200, f"{r}\n{r.text}"
     results = r.json()["results"]
