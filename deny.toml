@@ -112,6 +112,9 @@ skip = [
     # `axum 0.7.5` depends on both `sync_wrapper 1.*` and `axum-core 0.4.3`.
     # The latter depends on `sync_wrapper 0.1.*`.
     { name = "sync_wrapper", version = "0.1.2" },
+
+    # lgalloc needs to be updated to use a new version of mmap2
+    { name = "memmap2", version = "0.5.4" }
 ]
 
 # Use `tracing` instead.
