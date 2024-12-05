@@ -15,7 +15,7 @@ from textwrap import dedent
 
 import psutil
 
-from materialize import config, ui
+from materialize import build_config, ui
 
 
 class TeleportProxy:
@@ -23,7 +23,7 @@ class TeleportProxy:
     def spawn(cls, app_name: str, port: str):
         """Spawn a Teleport proxy for the provided app_name."""
 
-        teleport_state = config.TeleportLocalState.read()
+        teleport_state = build_config.TeleportLocalState.read()
 
         # If there is already a Teleport proxy running, no need to restart one.
         running_pid = TeleportProxy.check(app_name)
@@ -86,7 +86,7 @@ class TeleportProxy:
     def check(cls, app_name: str) -> str | None:
         """Check if a Teleport proxy is already running for the specified app_name."""
 
-        teleport_state = config.TeleportLocalState.read()
+        teleport_state = build_config.TeleportLocalState.read()
         existing_pid = teleport_state.get_pid(app_name)
 
         if existing_pid and psutil.pid_exists(int(existing_pid)):

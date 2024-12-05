@@ -15,7 +15,7 @@ from typing import Any
 import toml
 
 
-class Config:
+class BuildConfig:
     """Configuration for builds of Materialize.
 
     Most things should be configured via a tool's native configuration file,
@@ -39,7 +39,7 @@ class Config:
         home = Path.home()
         path = home / ".config" / "materialize" / "build.toml"
 
-        return Config(path)
+        return BuildConfig(path)
 
     def __str__(self):
         return f"{self.bazel}"
@@ -53,7 +53,7 @@ class BazelConfig:
     for flags that Bazel does not have an easy way to configure itself.
 
     [bazel]
-    remote_cache = "localhost:8080"
+    remote_cache = "localhost:6889"
     """
 
     def __init__(self, data: dict[str, Any]):
