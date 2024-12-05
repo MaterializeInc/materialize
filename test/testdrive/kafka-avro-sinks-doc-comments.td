@@ -12,9 +12,6 @@ $ set-arg-default single-replica-cluster=quickstart
 
 # Test Avro UPSERT sinks doc comments
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_comment = true;
-
 > CREATE TYPE point AS (x integer, y integer);
 > CREATE TYPE custom_map AS MAP (KEY TYPE = text, VALUE TYPE = bool)
 > CREATE TABLE t (c1 point, c2 text NOT NULL, "c3_map[text=>text]" custom_map, c4 point list);

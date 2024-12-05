@@ -2014,12 +2014,6 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
-        name: enable_comment,
-        desc: "the COMMENT ON feature for objects",
-        default: true,
-        enable_for_item_parsing: true,
-    },
-    {
         name: enable_alter_swap,
         desc: "the ALTER SWAP feature for objects",
         default: true,

@@ -25,9 +25,6 @@ $ kafka-create-topic topic=v1 partitions=100
 $ set-arg-default default-storage-size=1
 $ set-arg-default single-replica-cluster=quickstart
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_comment = true;
-
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
