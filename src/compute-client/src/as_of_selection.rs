@@ -774,11 +774,10 @@ mod tests {
     use mz_compute_types::sources::SourceInstanceArguments;
     use mz_compute_types::sources::SourceInstanceDesc;
     use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
-    use mz_persist_types::schema::SchemaId;
     use mz_persist_types::ShardId;
-    use mz_repr::RelationDesc;
     use mz_repr::RelationType;
     use mz_repr::Timestamp;
+    use mz_repr::{RelationDesc, RelationVersion};
     use mz_storage_client::controller::{CollectionDescription, StorageMetadata, StorageTxn};
     use mz_storage_client::storage_collections::CollectionFrontiers;
     use mz_storage_types::connections::inline::InlinedConnection;
