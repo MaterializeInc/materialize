@@ -67,7 +67,8 @@ def workflow_disruptions(c: Composition) -> None:
         restart_mz_after_initial_snapshot,
         restart_mz_while_cdc_changes,
         drop_replication_slot_when_mz_is_on,
-        drop_replication_slot_when_mz_is_off,
+        # TODO: Reenable when database-issues#8669 is fixed
+        # drop_replication_slot_when_mz_is_off,
         # this does not work
         # drop_replication_slot_and_change_data_when_mz_is_off
     ]
