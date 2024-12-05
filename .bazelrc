@@ -169,12 +169,25 @@ build:release-tagged --config=release --config=release-lto --config=release-stam
 # PRs in CI.
 #
 # Not doing a full stamp nor omitting full debug info, greatly speeds up compile times.
-build:release-dev --config=release --config=release-lto --config=debuginfo-limited
+#build:release-dev --config=release --config=release-lto --config=debuginfo-limited
 # Local Release Builds.
 #
 # Building with LTO can improve performance but it significantly increases compile times. The
 # tradeoff is not worth it when developing locally, but is for builds we ship to production.
 build:release-local --config=release --config=debuginfo-limited
+
+build:release-dev --cxxopt=-D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_FAST
+build:release-dev --copt=-O3
+build:release-dev --copt=-DNDEBUG
+build:release-dev --compilation_mode=opt
+build:release-dev --strip=never
+build:release-dev --@rules_rust//:extra_rustc_flag=-Cstrip=none
+build:release-dev --@rules_rust//:extra_rustc_flag=-Cdebuginfo=0
+build:release-dev --copt=-g0
+build:release-dev --copt=-fno-lto
+build:release-dev --linkopt=-fno-lto
+build:release-dev --@rules_rust//:extra_rustc_flag=-Clto=off
+build:release-dev --@rules_rust//:extra_rustc_flag=-Cincremental=on
 
 build:optimized --cxxopt=-D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_FAST
 build:optimized --copt=-O3
@@ -184,8 +197,8 @@ build:optimized --strip=never
 build:optimized --@rules_rust//:extra_rustc_flag=-Cstrip=none
 build:optimized --@rules_rust//:extra_rustc_flag=-Cdebuginfo=0
 build:optimized --copt=-g0
-build:optimized --copt=-flto=off
-build:optimized --linkopt=-flto=off
+build:optimized --copt=-fno-lto
+build:optimized --linkopt=-fno-lto
 build:optimized --@rules_rust//:extra_rustc_flag=-Clto=off
 build:optimized --@rules_rust//:extra_rustc_flag=-Cincremental=on
 

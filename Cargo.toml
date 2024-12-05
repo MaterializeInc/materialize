@@ -254,17 +254,9 @@ object = { opt-level = 3 }
 rustc-demangle = { opt-level = 3 }
 
 [profile.release]
-# Compile time seems similar to "lto = false", runtime ~10% faster
-lto = "thin"
-
-# Emit full debug info, allowing us to easily analyze core dumps from
-# staging (and, in an emergency, also prod).
-#
-# This does not negatively impact the sizes of the main binaries
-# (clusterd and environmentd), since we split the debuginfo from those
-# and ship it separately to an s3 bucket before building their
-# docker containers.
-debug = 2
+lto = "off"
+debug = false
+incremental = true
 
 [profile.optimized]
 inherits = "release"
