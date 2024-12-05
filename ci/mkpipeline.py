@@ -110,6 +110,14 @@ so it is executed.""",
     with open(Path(__file__).parent / args.pipeline / "pipeline.template.yml") as f:
         raw = f.read()
     raw = raw.replace("$RUST_VERSION", rust_version())
+
+    # On 'main' or tagged branches, we use a separate remote cache that only CI can write to.
+    if os.environ["BUILDKITE_BRANCH"] == "main" or os.environ["BUILDKITE_TAG"]:
+        bazel_remote_cache = "https://bazel-remote-pa.dev.materialize.com"
+    else:
+        bazel_remote_cache = "https://bazel-remote.dev.materialize.com"
+    raw = raw.replace("$BAZEL_REMOTE_CACHE", bazel_remote_cache)
+
     pipeline = yaml.safe_load(raw)
 
     if args.pipeline == "test":

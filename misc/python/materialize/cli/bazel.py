@@ -13,8 +13,12 @@ import argparse
 import os
 import pathlib
 import subprocess
+from enum import Enum
+from pathlib import Path
 
 from materialize import MZ_ROOT, bazel, ui
+from materialize.config import Config
+from materialize.teleport import TeleportProxy
 
 
 def main() -> int:
@@ -25,25 +29,26 @@ def main() -> int:
     parser.add_argument("action", help="Action to run.")
 
     (args, sub_args) = parser.parse_known_args()
+    config = Config.read()
 
     # Always update our side-channel git hash incase some command needs it.
     bazel.write_git_hash()
 
     if args.action == "gen":
-        gen_cmd(sub_args)
+        gen_cmd(config, sub_args)
     elif args.action == "fmt":
-        fmt_cmd(sub_args)
+        fmt_cmd(config, sub_args)
     elif args.action == "output_path":
-        output_path_cmd(sub_args)
+        output_path_cmd(config, sub_args)
     elif args.action == "check":
-        check_cmd(sub_args)
+        check_cmd(config, sub_args)
     else:
-        bazel_cmd([args.action] + sub_args)
+        bazel_cmd(config, [args.action] + sub_args)
 
     return 0
 
 
-def check_cmd(args: list[str]):
+def check_cmd(config: Config, args: list[str]):
     """
     Invokes a `bazel build` with `cargo check` like behavior.
 
@@ -51,10 +56,10 @@ def check_cmd(args: list[str]):
     disabled.
     """
     check_args = ["build", "--config=check", *args]
-    bazel_cmd(check_args)
+    bazel_cmd(config, check_args)
 
 
-def gen_cmd(args: list[str]):
+def gen_cmd(config: Config, args: list[str]):
     """Invokes the gen function."""
 
     parser = argparse.ArgumentParser(
@@ -70,21 +75,21 @@ def gen_cmd(args: list[str]):
 
     gen_args = parser.parse_args(args=args)
     if gen_args.path:
-        path = str(os.path.abspath(gen_args.path))
+        path = Path(os.path.abspath(gen_args.path))
     else:
         path = None
 
-    gen(path, gen_args.check)
+    gen(config, path, gen_args.check)
 
 
-def fmt_cmd(args: list[str]):
+def fmt_cmd(config: Config, args: list[str]):
     """Invokes the fmt function."""
     assert len(args) <= 1, "expected at most one path to format"
     path = args[0] if len(args) == 1 else None
-    fmt(path)
+    fmt(config, path)
 
 
-def output_path_cmd(args: list[str]):
+def output_path_cmd(config: Config, args: list[str]):
     """Invokes the output_path function."""
     assert len(args) == 1, "expected a single Bazel target"
     target = args[0]
@@ -93,13 +98,13 @@ def output_path_cmd(args: list[str]):
         print(path)
 
 
-def bazel_cmd(args: list[str]):
+def bazel_cmd(config: Config, args: list[str]):
     """Forwards all arguments to Bazel, possibly with extra configuration."""
-    remote_cache = remote_cache_arg()
-    subprocess.run(["bazel", *remote_cache] + args, check=True)
+    remote_cache = remote_cache_arg(config)
+    subprocess.run(["bazel", *args, *remote_cache], check=True)
 
 
-def gen(path, check):
+def gen(config: Config, path: Path | None, check: bool):
     """
     Generates BUILD.bazel files from Cargo.toml.
 
@@ -113,7 +118,7 @@ def gen(path, check):
     check_arg = []
     if check:
         check_arg += ["--check"]
-    remote_cache = remote_cache_arg()
+    remote_cache = remote_cache_arg(config)
 
     cmd_args = [
         "bazel",
@@ -130,7 +135,7 @@ def gen(path, check):
     subprocess.run(cmd_args, check=True)
 
 
-def fmt(path):
+def fmt(config: Config, path):
     """
     Formats all of the `BUILD`, `.bzl`, and `WORKSPACE` files at the provided path.
 
@@ -168,16 +173,58 @@ def output_path(target) -> list[pathlib.Path]:
     return [pathlib.Path(path) for path in paths]
 
 
-def remote_cache_arg() -> list[str]:
+def remote_cache_arg(config: Config) -> list[str]:
     """List of arguments that could possibly enable use of a remote cache."""
 
-    # TODO(parkmycar): Setup access to the remote cache for developers with Teleport.
     ci_remote = os.getenv("CI_BAZEL_REMOTE_CACHE")
+    config_remote = config.bazel.remote_cache
 
     if ci_remote:
-        return [f"--remote_cache={ci_remote}"]
+        remote_cache = ci_remote
+    elif config_remote:
+        bazel_remote = RemoteCache(config_remote)
+        remote_cache = bazel_remote.address()
+    else:
+        remote_cache = None
+
+    if remote_cache:
+        return [f"--remote_cache={remote_cache}"]
     else:
         return []
+
+
+class RemoteCache:
+    """The remote cache we're conecting to."""
+
+    def __init__(self, value: str):
+        if value.startswith("teleport"):
+            app_name = value.split(":")[1]
+            self.kind = RemoteCacheKind.teleport
+            self.data = app_name
+        else:
+            self.kind = RemoteCacheKind.normal
+            self.data = value
+
+    def address(self) -> str:
+        """Address for connecting to this remote cache."""
+        if self.kind == RemoteCacheKind.normal:
+            return self.data
+        else:
+            TeleportProxy.spawn(self.data, "8080")
+            return "http://localhost:8080"
+
+
+class RemoteCacheKind(Enum):
+    """Kind of remote cache we're connecting to."""
+
+    teleport = "teleport"
+    """Connecting to a remote cache through a teleport proxy."""
+
+    normal = "normal"
+    """An HTTP address for the cache."""
+
+    def __str__(self):
+        return self.value
 
 
 if __name__ == "__main__":
