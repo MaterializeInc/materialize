@@ -155,11 +155,12 @@ build:release --compilation_mode=opt
 # `rules_rust` defaults to stripping debug symbols for release builds, undo that.
 build:release --strip=never
 build:release --@rules_rust//:extra_rustc_flag=-Cstrip=none
+build:release --@rules_rust//:extra_rustc_flag="-Ccodegen-units=1"
 
 # We only enable Link Time Optimization for CI builds and not local release builds.
-build:release-lto --copt=-flto=thin
-build:release-lto --linkopt=-flto=thin
-build:release-lto --@rules_rust//:extra_rustc_flag=-Clto=thin
+build:release-lto --copt=-flto
+build:release-lto --linkopt=-flto
+build:release-lto --@rules_rust//:extra_rustc_flag=-Clto
 
 # Builds from `main` or tagged builds.
 #

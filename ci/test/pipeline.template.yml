@@ -38,7 +38,7 @@ steps:
         inputs:
           - "*"
         depends_on: []
-        timeout_in_minutes: 60
+        timeout_in_minutes: 90
         priority: 50
         agents:
           queue: builder-linux-x86_64
@@ -67,7 +67,7 @@ steps:
           - "*"
         depends_on: []
         priority: 50
-        timeout_in_minutes: 60
+        timeout_in_minutes: 90
         agents:
           queue: builder-linux-aarch64-mem
 
@@ -95,7 +95,7 @@ steps:
           - "*"
         artifact_paths: bazel-explain.log
         depends_on: []
-        timeout_in_minutes: 60
+        timeout_in_minutes: 90
         agents:
           queue: builder-linux-x86_64
 
@@ -107,7 +107,7 @@ steps:
           - "*"
         artifact_paths: bazel-explain.log
         depends_on: []
-        timeout_in_minutes: 60
+        timeout_in_minutes: 90
         agents:
           queue: builder-linux-aarch64-mem
 
