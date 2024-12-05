@@ -1045,80 +1045,86 @@ messages and additional metadata helpful for debugging.
 The `mz_source_statistics` view contains statistics about each source.
 
 <!-- RELATION_SPEC mz_internal.mz_source_statistics -->
-| Field                    | Type        | Meaning                                                                                                                                                                                                                                                                             |
-| -------------------------|-------------| --------                                                                                                                                                                                                                                                                            |
-| `id`                     | [`text`]     | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).                                                                                                                                                                                        |
-| `messages_received`       | [`uint8`]    | The number of messages the worker has received from the external system. Messages are counted in a source type-specific manner. Messages do not correspond directly to updates: some messages produce multiple updates, while other messages may be coalesced into a single update. |
-| `bytes_received`          | [`uint8`]    | The number of bytes the worker has read from the external system. Bytes are counted in a source type-specific manner and may or may not include protocol overhead.                                                                                                                  |
-| `updates_staged`          | [`uint8`]    | The number of updates (insertions plus deletions) the worker has written but not yet committed to the storage layer.                                                                                                                                                                |
-| `updates_committed`       | [`uint8`]    | The number of updates (insertions plus deletions) the worker has committed to the storage layer.                                                                                                                                                                                    |
-| `records_indexed`         | [`uint8`]    | The number of individual records indexed in the source envelope state.                                                                                                                                                                                                              |
-| `bytes_indexed`           | [`uint8`]    | The number of bytes indexed in the source envelope state.                                                                                                                                                                                                                           |
-| `rehydration_latency`     | [`interval`] | The amount of time it took for the worker to rehydrate the source envelope state.                                                                                                                                                                                                   |
-| `snapshot_records_known`  | [`uint8`]    | The size of the source's snapshot. See above for its unit. |
-| `snapshot_records_staged` | [`uint8`]    | The amount of the source's snapshot Materialize has read. See above for its unit. |
-| `snapshot_committed`      | [`boolean`]  | Whether the worker has committed the initial snapshot for a source.                                                                                                                                                                                                                 |
-| `offset_known`            | [`uint8`]    | The offset of the most recent data in the source's upstream service that Materialize knows about. See above for its unit. |
-| `offset_committed`        | [`uint8`]    | The offset of the source's upstream service Materialize has fully committed. See above for its unit. |
+| Field                     | Type         | Meaning |
+| --------------------------|--------------|---------|
+| `id`                      | [`text`]     | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources). |
+| `messages_received`       | [`uint8`]    | The number of messages the source has received from the external system. Messages are counted in a source type-specific manner. Messages do not correspond directly to updates: some messages produce multiple updates, while other messages may be coalesced into a single update. |
+| `bytes_received`          | [`uint8`]    | The number of bytes the source has read from the external system. Bytes are counted in a source type-specific manner and may or may not include protocol overhead. |
+| `updates_staged`          | [`uint8`]    | The number of updates (insertions plus deletions) the source has written but not yet committed to the storage layer. |
+| `updates_committed`       | [`uint8`]    | The number of updates (insertions plus deletions) the source has committed to the storage layer. |
+| `records_indexed`         | [`uint8`]    | The number of individual records indexed in the source envelope state. |
+| `bytes_indexed`           | [`uint8`]    | The number of bytes stored in the source's internal index, if any. |
+| `rehydration_latency`     | [`interval`] | The amount of time it took for the source to rehydrate its internal index, if any, after the source last restarted. |
+| `snapshot_records_known`  | [`uint8`]    | The size of the source's snapshot, measured in number of records. See [below](#meaning-record) to learn what constitutes a record. |
+| `snapshot_records_staged` | [`uint8`]    | The number of records in the source's snapshot that Materialize has read. See [below](#meaning-record) to learn what constitutes a record. |
+| `snapshot_committed`      | [`boolean`]  | Whether the source has committed the initial snapshot for a source. |
+| `offset_known`            | [`uint8`]    | The offset of the most recent data in the source's upstream service that Materialize knows about. See [below](#meaning-offset) to learn what constitutes an offset. |
+| `offset_committed`        | [`uint8`]    | The offset of the the data that Materialize has durably ingested. See [below](#meaning-offset) to learn what constitutes an offset. |
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_source_statistics_with_history -->
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_source_references -->
 
-### Counters
-`messages_received`, `messages_staged`, `updates_staged`, and `updates_committed` are all counters that monotonically increase. They are _only
-useful for calculating rates_, to understand the general performance of your source.
+### Counter metrics
 
-Note that:
-- For Postgres and MySQL sources, currently, the former 2 are collected on the top-level source, and the latter 2 on the source's tables.
-- The non-rate values themselves are not directly comparable, because they are collected and aggregated across multiple threads/processes.
+`messages_received`, `bytes_received`, `updates_staged`, and `updates_committed`
+are counter metrics that monotonically increase over time.
 
-### Resetting gauges
-Resetting Gauges generally increase, but can periodically be reset to 0 or other numbers.
+Counters are updated in a best-effort manner. An ill-timed restart of the source
+may cause undercounting or overcounting. As a result, **counters are only useful
+for calculating rates to understand the general performance of your source.**
 
----
-**Indexed records**
+For Postgres and MySQL sources, `messages_received` and `bytes_received` are
+collected on the top-level source, and `updates_staged` and `updates_committed`
+are collected on the source's tables.
 
-`records_indexed` and `bytes_indexed` are the size (in records and bytes respectively) of the data the given source _indexes_. Currently, this is only
-`UPSERT` and `DEBEZIUM` sources. These reset to 0 when sources are restarted and must re-index their data.
+### Gauge metrics
 
----
-**Rehydration latency**
+Gauge metrics reflect values that can increase or decrease over time. Gauge
+metrics are eventually consistent. They may lag the true state of the source by
+seconds or minutes, but if the source stops ingesting messages, the gauges will
+eventually reflect the true state of the source.
 
-`rehydration_latency` is reset to `NULL` when sources are restarted, and is populated with a duration after rehydration finishes. This is typically
-the time it takes `UPSERT` and `DEBEZIUM` sources to re-index their data.
+`records_indexed` and `bytes_indexed` are the size (in records and bytes
+respectively) of the index the source must maintain internally to efficiently
+process incoming data. Currently, only sources that use the upsert and Debezium
+envelopes must maintain an index. These gauges reset to 0 when the source is
+restarted, as the index must be rehydrated.
 
----
-**Snapshot progress**
+`rehydration_latency` represents the amount of time it took for the source to
+rehydrate its index after the latest restart. It is reset to `NULL` when a
+source is restarted and is populated with a duration after hydration finishes.
 
-When a source is first created, it must process and initial snapshot of data. `snapshot_records_known` is the full size of that snapshot, and `snapshot_records_staged`
-is how much of that snapshot the source has read so far.
+When a source is first created, it must process an initial snapshot of data.
+`snapshot_records_known` is the total number of records in the snapshot, and
+`snapshot_records_staged` is how many of the records the source has read so far.
 
-The _size_ of the snapshot has a source-defined unit:
+<a name="meaning-record"></a>
+
+The meaning of record depends on the source:
 - For Kafka sources, its the total number of offsets in the snapshot.
 - For Postgres and MySQL sources, its the number of rows in the snapshot.
 
-Note that when tables are added to Postgres or MySQL sources, this statistics will reset as we snapshot those new tables.
+Note that when tables are added to Postgres or MySQL sources,
+`snapshot_records_known` and `snapshot_records_staged` will reset as the source
+snapshots those new tables. The metrics will also reset if the source is
+restarted while the snapshot is in progres.
 
-### Gauges
-Gauges never decrease/reset.
+`snapshot_committed` becomes true when we have fully committed the snapshot for
+the given source. <!-- TODO: when does this reset? -->
 
----
-**Snapshot Completion**
-`snapshot_committed` becomes true when we have fully _committed_ the snapshot for the given source.
+`offset_known` and `offset_committed` are used to represent the progress a
+source is making relative to its upstream source. `offset_known` is the maximum
+offset in the upstream system that Materialize knows about. `offset_committed`
+is the offset that Materialize has durably ingested. These metrics will never
+decrease over the lifetime of a source.
 
----
-**Steady-state progress**
+<a name="meaning-offset"></a>
 
-`offset_known` and `offset_committed` are used to represent the _progress_ a source is making,
-in comparison to its upstream source. They are designed to be turned into _rates_, and compared.
-
-`offset_known` is the maximum offset of upstream data knows about. `offset_committed` is the offset that Materialize has committed data up to.
-
-These statistics have a source-defined unit:
-- For Kafka sources, its the number of offsets.
-- For MySQL sources, its the number of transactions.
-- For Postgres sources, its the number of bytes in its replication stream.
+The meaning of offset depends on the source:
+- For Kafka sources, an offset is the Kafka message offset.
+- For MySQL sources, an offset is the number of transactions committed across all servers in the cluster.
+- For Postgres sources, an offset is a log sequence number (LSN).
 
 ## `mz_source_statuses`
 
