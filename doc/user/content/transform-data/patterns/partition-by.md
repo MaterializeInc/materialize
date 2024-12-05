@@ -141,7 +141,7 @@ If you wait a few minutes longer until there are no events that match the tempor
 
 {{< note >}}
 
-The exact numbers you see here may very: parts can be much larger than a single row, and the actual level of filtering may vary for small datasets as data is compacted together internally. However, datasets of a few gigabytes or larger should reliably see benefits from this optimization.
+The exact numbers you see here may vary: parts can be much larger than a single row, and the actual level of filtering may fluctuate for small datasets as data is compacted together internally. However, datasets of a few gigabytes or larger should reliably see benefits from this optimization.
 
 {{< /note >}}
 
