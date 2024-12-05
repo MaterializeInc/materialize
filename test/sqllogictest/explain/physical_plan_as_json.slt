@@ -204,10 +204,10 @@ SELECT * FROM t
                       "Column": 0
                     }
                   ],
-                  {
-                    "0": 0,
-                    "1": 1
-                  },
+                  [
+                    0,
+                    1
+                  ],
                   [
                     1
                   ]
@@ -301,10 +301,10 @@ SELECT a + b, 1 FROM t
                       "Column": 0
                     }
                   ],
-                  {
-                    "0": 0,
-                    "1": 1
-                  },
+                  [
+                    0,
+                    1
+                  ],
                   [
                     1
                   ]
@@ -498,10 +498,10 @@ SELECT * FROM ov
                                   "Column": 0
                                 }
                               ],
-                              {
-                                "0": 0,
-                                "1": 1
-                              },
+                              [
+                                0,
+                                1
+                              ],
                               [
                                 1
                               ]
@@ -628,10 +628,10 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
                                           "Column": 0
                                         }
                                       ],
-                                      {
-                                        "0": 0,
-                                        "1": 1
-                                      },
+                                      [
+                                        0,
+                                        1
+                                      ],
                                       [
                                         1
                                       ]
@@ -717,9 +717,9 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
                             "Column": 0
                           }
                         ],
-                        {
-                          "0": 0
-                        },
+                        [
+                          0
+                        ],
                         []
                       ]
                     ],
@@ -750,9 +750,9 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
                       "Column": 0
                     }
                   ],
-                  {
-                    "0": 0
-                  },
+                  [
+                    0
+                  ],
                   []
                 ]
               }
@@ -814,10 +814,10 @@ SELECT * FROM ov
                                   "Column": 0
                                 }
                               ],
-                              {
-                                "0": 0,
-                                "1": 1
-                              },
+                              [
+                                0,
+                                1
+                              ],
                               [
                                 1
                               ]
@@ -950,10 +950,10 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                                                 "Column": 0
                                               }
                                             ],
-                                            {
-                                              "0": 0,
-                                              "1": 1
-                                            },
+                                            [
+                                              0,
+                                              1
+                                            ],
                                             [
                                               1
                                             ]
@@ -1039,9 +1039,9 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                                   "Column": 0
                                 }
                               ],
-                              {
-                                "0": 0
-                              },
+                              [
+                                0
+                              ],
                               []
                             ]
                           ],
@@ -1072,9 +1072,9 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                             "Column": 0
                           }
                         ],
-                        {
-                          "0": 0
-                        },
+                        [
+                          0
+                        ],
                         []
                       ]
                     }
@@ -1103,9 +1103,9 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                                     "Column": 0
                                   }
                                 ],
-                                {
-                                  "0": 0
-                                },
+                                [
+                                  0
+                                ],
                                 []
                               ]
                             ],
@@ -1178,9 +1178,9 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                                     "Column": 0
                                   }
                                 ],
-                                {
-                                  "0": 0
-                                },
+                                [
+                                  0
+                                ],
                                 []
                               ]
                             ],
@@ -1315,10 +1315,10 @@ SELECT x * 5 FROM cte WHERE x = 5
                                                         "Column": 0
                                                       }
                                                     ],
-                                                    {
-                                                      "0": 0,
-                                                      "1": 1
-                                                    },
+                                                    [
+                                                      0,
+                                                      1
+                                                    ],
                                                     [
                                                       1
                                                     ]
@@ -1373,9 +1373,9 @@ SELECT x * 5 FROM cte WHERE x = 5
                                                         "Column": 0
                                                       }
                                                     ],
-                                                    {
-                                                      "0": 0
-                                                    },
+                                                    [
+                                                      0
+                                                    ],
                                                     []
                                                   ]
                                                 ],
@@ -1491,9 +1491,9 @@ SELECT x * 5 FROM cte WHERE x = 5
                                   "Column": 0
                                 }
                               ],
-                              {
-                                "0": 0
-                              },
+                              [
+                                0
+                              ],
                               []
                             ]
                           ],
@@ -1524,9 +1524,9 @@ SELECT x * 5 FROM cte WHERE x = 5
                             "Column": 0
                           }
                         ],
-                        {
-                          "0": 0
-                        },
+                        [
+                          0
+                        ],
                         []
                       ]
                     }
@@ -1649,10 +1649,10 @@ SELECT generate_series(a, b) from t
                             "Column": 0
                           }
                         ],
-                        {
-                          "0": 0,
-                          "1": 1
-                        },
+                        [
+                          0,
+                          1
+                        ],
                         [
                           1
                         ]
@@ -1751,10 +1751,10 @@ SELECT DISTINCT a, b FROM t
                             "Column": 0
                           }
                         ],
-                        {
-                          "0": 0,
-                          "1": 1
-                        },
+                        [
+                          0,
+                          1
+                        ],
                         [
                           1
                         ]
@@ -1856,10 +1856,10 @@ GROUP BY a
                             "Column": 0
                           }
                         ],
-                        {
-                          "0": 0,
-                          "1": 1
-                        },
+                        [
+                          0,
+                          1
+                        ],
                         [
                           1
                         ]
@@ -2012,10 +2012,10 @@ FROM t
                                   "Column": 0
                                 }
                               ],
-                              {
-                                "0": 0,
-                                "1": 1
-                              },
+                              [
+                                0,
+                                1
+                              ],
                               [
                                 1
                               ]
@@ -2154,10 +2154,10 @@ FROM t
                                   "arranged": [
                                     [
                                       [],
-                                      {
-                                        "0": 0,
-                                        "1": 1
-                                      },
+                                      [
+                                        0,
+                                        1
+                                      ],
                                       [
                                         0,
                                         1
@@ -2213,10 +2213,10 @@ FROM t
                                                 "arranged": [
                                                   [
                                                     [],
-                                                    {
-                                                      "0": 0,
-                                                      "1": 1
-                                                    },
+                                                    [
+                                                      0,
+                                                      1
+                                                    ],
                                                     [
                                                       0,
                                                       1
@@ -2355,10 +2355,10 @@ SELECT * FROM hierarchical_group_by
                             "Column": 0
                           }
                         ],
-                        {
-                          "0": 0,
-                          "1": 1
-                        },
+                        [
+                          0,
+                          1
+                        ],
                         [
                           1
                         ]
@@ -2477,10 +2477,10 @@ MATERIALIZED VIEW hierarchical_global_mv
                                   "Column": 0
                                 }
                               ],
-                              {
-                                "0": 0,
-                                "1": 1
-                              },
+                              [
+                                0,
+                                1
+                              ],
                               [
                                 1
                               ]
@@ -2596,10 +2596,10 @@ MATERIALIZED VIEW hierarchical_global_mv
                                   "arranged": [
                                     [
                                       [],
-                                      {
-                                        "0": 0,
-                                        "1": 1
-                                      },
+                                      [
+                                        0,
+                                        1
+                                      ],
                                       [
                                         0,
                                         1
@@ -2655,10 +2655,10 @@ MATERIALIZED VIEW hierarchical_global_mv
                                                 "arranged": [
                                                   [
                                                     [],
-                                                    {
-                                                      "0": 0,
-                                                      "1": 1
-                                                    },
+                                                    [
+                                                      0,
+                                                      1
+                                                    ],
                                                     [
                                                       0,
                                                       1
@@ -2802,10 +2802,10 @@ SELECT * FROM hierarchical_global
                                   "Column": 0
                                 }
                               ],
-                              {
-                                "0": 0,
-                                "1": 1
-                              },
+                              [
+                                0,
+                                1
+                              ],
                               [
                                 1
                               ]
@@ -2913,10 +2913,10 @@ SELECT * FROM hierarchical_global
                                   "arranged": [
                                     [
                                       [],
-                                      {
-                                        "0": 0,
-                                        "1": 1
-                                      },
+                                      [
+                                        0,
+                                        1
+                                      ],
                                       [
                                         0,
                                         1
@@ -2972,10 +2972,10 @@ SELECT * FROM hierarchical_global
                                                 "arranged": [
                                                   [
                                                     [],
-                                                    {
-                                                      "0": 0,
-                                                      "1": 1
-                                                    },
+                                                    [
+                                                      0,
+                                                      1
+                                                    ],
                                                     [
                                                       0,
                                                       1
@@ -3124,10 +3124,10 @@ GROUP BY a
                                     "Column": 0
                                   }
                                 ],
-                                {
-                                  "0": 0,
-                                  "1": 1
-                                },
+                                [
+                                  0,
+                                  1
+                                ],
                                 [
                                   1
                                 ]
@@ -3378,10 +3378,10 @@ GROUP BY a
                                     "Column": 0
                                   }
                                 ],
-                                {
-                                  "0": 0,
-                                  "1": 1
-                                },
+                                [
+                                  0,
+                                  1
+                                ],
                                 [
                                   1
                                 ]
@@ -3700,10 +3700,10 @@ FROM t
                             "Column": 0
                           }
                         ],
-                        {
-                          "0": 0,
-                          "1": 1
-                        },
+                        [
+                          0,
+                          1
+                        ],
                         [
                           1
                         ]
@@ -4409,10 +4409,10 @@ MATERIALIZED VIEW collated_group_by_mv
                                     "Column": 0
                                   }
                                 ],
-                                {
-                                  "0": 0,
-                                  "1": 1
-                                },
+                                [
+                                  0,
+                                  1
+                                ],
                                 [
                                   1
                                 ]
@@ -4519,10 +4519,10 @@ MATERIALIZED VIEW collated_group_by_mv
                                     "Column": 0
                                   }
                                 ],
-                                {
-                                  "0": 0,
-                                  "1": 1
-                                },
+                                [
+                                  0,
+                                  1
+                                ],
                                 [
                                   1
                                 ]
@@ -4652,10 +4652,10 @@ MATERIALIZED VIEW collated_group_by_mv
                                     "Column": 0
                                   }
                                 ],
-                                {
-                                  "0": 0,
-                                  "1": 1
-                                },
+                                [
+                                  0,
+                                  1
+                                ],
                                 [
                                   1
                                 ]
@@ -4906,10 +4906,10 @@ MATERIALIZED VIEW collated_group_by_mv
                                     "Column": 0
                                   }
                                 ],
-                                {
-                                  "0": 0,
-                                  "1": 1
-                                },
+                                [
+                                  0,
+                                  1
+                                ],
                                 [
                                   1
                                 ]
@@ -5738,10 +5738,10 @@ SELECT * FROM collated_group_by
                                     "Column": 0
                                   }
                                 ],
-                                {
-                                  "0": 0,
-                                  "1": 1
-                                },
+                                [
+                                  0,
+                                  1
+                                ],
                                 [
                                   1
                                 ]
@@ -5840,10 +5840,10 @@ SELECT * FROM collated_group_by
                                     "Column": 0
                                   }
                                 ],
-                                {
-                                  "0": 0,
-                                  "1": 1
-                                },
+                                [
+                                  0,
+                                  1
+                                ],
                                 [
                                   1
                                 ]
@@ -5973,10 +5973,10 @@ SELECT * FROM collated_group_by
                                     "Column": 0
                                   }
                                 ],
-                                {
-                                  "0": 0,
-                                  "1": 1
-                                },
+                                [
+                                  0,
+                                  1
+                                ],
                                 [
                                   1
                                 ]
@@ -6227,10 +6227,10 @@ SELECT * FROM collated_group_by
                                     "Column": 0
                                   }
                                 ],
-                                {
-                                  "0": 0,
-                                  "1": 1
-                                },
+                                [
+                                  0,
+                                  1
+                                ],
                                 [
                                   1
                                 ]
@@ -7055,10 +7055,10 @@ MATERIALIZED VIEW collated_global_mv
                             "Column": 0
                           }
                         ],
-                        {
-                          "0": 0,
-                          "1": 1
-                        },
+                        [
+                          0,
+                          1
+                        ],
                         [
                           1
                         ]
@@ -8397,10 +8397,10 @@ SELECT * FROM collated_global
                             "Column": 0
                           }
                         ],
-                        {
-                          "0": 0,
-                          "1": 1
-                        },
+                        [
+                          0,
+                          1
+                        ],
                         [
                           1
                         ]
@@ -9733,10 +9733,10 @@ WHERE a = c AND d = e AND b + d > 42
                               "Column": 0
                             }
                           ],
-                          {
-                            "0": 0,
-                            "1": 1
-                          },
+                          [
+                            0,
+                            1
+                          ],
                           [
                             1
                           ]
@@ -9798,10 +9798,10 @@ WHERE a = c AND d = e AND b + d > 42
                               "Column": 0
                             }
                           ],
-                          {
-                            "0": 0,
-                            "1": 1
-                          },
+                          [
+                            0,
+                            1
+                          ],
                           [
                             1
                           ]
@@ -9812,10 +9812,10 @@ WHERE a = c AND d = e AND b + d > 42
                               "Column": 1
                             }
                           ],
-                          {
-                            "0": 1,
-                            "1": 0
-                          },
+                          [
+                            1,
+                            0
+                          ],
                           [
                             0
                           ]
@@ -9885,9 +9885,9 @@ WHERE a = c AND d = e AND b + d > 42
                               "Column": 0
                             }
                           ],
-                          {
-                            "0": 0
-                          },
+                          [
+                            0
+                          ],
                           []
                         ]
                       ],
@@ -10512,10 +10512,10 @@ WHERE a = c AND d = e AND f = a
                               "Column": 0
                             }
                           ],
-                          {
-                            "0": 0,
-                            "1": 1
-                          },
+                          [
+                            0,
+                            1
+                          ],
                           [
                             1
                           ]
@@ -10558,10 +10558,10 @@ WHERE a = c AND d = e AND f = a
                                     "Column": 0
                                   }
                                 ],
-                                {
-                                  "0": 0,
-                                  "1": 1
-                                },
+                                [
+                                  0,
+                                  1
+                                ],
                                 [
                                   1
                                 ]
@@ -10650,10 +10650,10 @@ WHERE a = c AND d = e AND f = a
                               "Column": 0
                             }
                           ],
-                          {
-                            "0": 0,
-                            "1": 1
-                          },
+                          [
+                            0,
+                            1
+                          ],
                           [
                             1
                           ]
@@ -10667,10 +10667,10 @@ WHERE a = c AND d = e AND f = a
                               "Column": 1
                             }
                           ],
-                          {
-                            "0": 0,
-                            "1": 1
-                          },
+                          [
+                            0,
+                            1
+                          ],
                           []
                         ]
                       ],
@@ -10720,10 +10720,10 @@ WHERE a = c AND d = e AND f = a
                                     "Column": 0
                                   }
                                 ],
-                                {
-                                  "0": 0,
-                                  "1": 1
-                                },
+                                [
+                                  0,
+                                  1
+                                ],
                                 [
                                   1
                                 ]
@@ -10815,10 +10815,10 @@ WHERE a = c AND d = e AND f = a
                               "Column": 1
                             }
                           ],
-                          {
-                            "0": 0,
-                            "1": 1
-                          },
+                          [
+                            0,
+                            1
+                          ],
                           []
                         ]
                       ],
@@ -11223,10 +11223,10 @@ WHERE a = c and a = e
                               "Column": 0
                             }
                           ],
-                          {
-                            "0": 0,
-                            "1": 1
-                          },
+                          [
+                            0,
+                            1
+                          ],
                           [
                             1
                           ]
@@ -11265,10 +11265,10 @@ WHERE a = c and a = e
                               "Column": 0
                             }
                           ],
-                          {
-                            "0": 0,
-                            "1": 1
-                          },
+                          [
+                            0,
+                            1
+                          ],
                           [
                             1
                           ]
@@ -11307,10 +11307,10 @@ WHERE a = c and a = e
                               "Column": 0
                             }
                           ],
-                          {
-                            "0": 0,
-                            "1": 1
-                          },
+                          [
+                            0,
+                            1
+                          ],
                           [
                             1
                           ]

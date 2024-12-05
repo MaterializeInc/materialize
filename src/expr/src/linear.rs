@@ -542,7 +542,7 @@ impl MapFilterProject {
                     .map(|(new, old)| (old, new))
                     .collect::<BTreeMap<_, _>>();
                 for mfp in mfps.iter_mut() {
-                    mfp.permute(remap.clone(), common_demand.len());
+                    mfp.permute_fn(|c| remap[&c], common_demand.len());
                 }
                 result_mfp = result_mfp.project(common_demand);
 
@@ -817,21 +817,28 @@ impl MapFilterProject {
     /// The supplied `shuffle` might not list columns that are not "demanded" by the
     /// instance, and so we should ensure that `self` is optimized to not reference
     /// columns that are not demanded.
-    pub fn permute(&mut self, mut shuffle: BTreeMap<usize, usize>, new_input_arity: usize) {
+    pub fn permute_fn<F>(&mut self, remap: F, new_input_arity: usize)
+    where
+        F: Fn(usize) -> usize,
+    {
         let (mut map, mut filter, mut project) = self.as_map_filter_project();
-        for index in 0..map.len() {
-            // Intermediate columns are just shifted.
-            shuffle.insert(self.input_arity + index, new_input_arity + index);
-        }
+        let map_len = map.len();
+        let action = |col: &mut usize| {
+            if self.input_arity <= *col && *col < self.input_arity + map_len {
+                *col = new_input_arity + (*col - self.input_arity);
+            } else {
+                *col = remap(*col);
+            }
+        };
         for expr in map.iter_mut() {
-            expr.permute_map(&shuffle);
+            expr.visit_columns(action);
         }
         for pred in filter.iter_mut() {
-            pred.permute_map(&shuffle);
+            pred.visit_columns(action);
         }
         for proj in project.iter_mut() {
-            assert!(shuffle[proj] < new_input_arity + map.len());
-            *proj = shuffle[proj];
+            action(proj);
+            assert!(*proj < new_input_arity + map.len());
         }
         *self = Self::new(new_input_arity)
             .map(map)
@@ -1412,12 +1419,30 @@ pub mod util {
 
     use crate::MirScalarExpr;
 
-    /// Return the map associating columns in the logical,
-    /// unthinned representation of a collection to columns in the
-    /// thinned representation of the arrangement corresponding to `key`.
+    #[allow(dead_code)]
+    /// A triple of actions that map from rows to (key, val) pairs and back again.
+    struct KeyValRowMapping {
+        /// Expressions to apply to a row to produce key datums.
+        to_key: Vec<MirScalarExpr>,
+        /// Columns to project from a row to produce residual value datums.
+        to_val: Vec<usize>,
+        /// Columns to project from the concatenation of key and value to reconstruct the row.
+        to_row: Vec<usize>,
+    }
+
+    /// Derive supporting logic to support transforming rows to (key, val) pairs,
+    /// and back again.
     ///
-    /// Returns the permutation and the thinning
-    /// expression that should be used to create the arrangement.
+    /// We are given as input a list of key expressions and an input arity, and the
+    /// requirement the produced key should be the application of the key expressions.
+    /// To produce the `val` output, we will identify those input columns not found in
+    /// the key expressions, and name all other columns.
+    /// To reconstitute the original row, we identify the sequence of columns from the
+    /// concatenation of key and val which would reconstruct the original row.
+    ///
+    /// The output is a pair of column sequences, the first used to reconstruct a row
+    /// from the concatenation of key and value, and the second to identify the columns
+    /// of a row that should become the value associated with its key.
     ///
     /// The permutations and thinning expressions generated here will be tracked in
     /// `dataflow::plan::AvailableCollections`; see the
@@ -1425,7 +1450,7 @@ pub mod util {
     pub fn permutation_for_arrangement(
         key: &[MirScalarExpr],
         unthinned_arity: usize,
-    ) -> (BTreeMap<usize, usize>, Vec<usize>) {
+    ) -> (Vec<usize>, Vec<usize>) {
         let columns_in_key: BTreeMap<_, _> = key
             .iter()
             .enumerate()
@@ -1444,7 +1469,6 @@ pub mod util {
                     input_cursor - 1
                 }
             })
-            .enumerate()
             .collect();
         let thinning = (0..unthinned_arity)
             .filter(|c| !columns_in_key.contains_key(c))
@@ -1458,29 +1482,19 @@ pub mod util {
     /// computes the permutation for the result of joining them.
     pub fn join_permutations(
         key_arity: usize,
-        stream_permutation: BTreeMap<usize, usize>,
+        stream_permutation: Vec<usize>,
         thinned_stream_arity: usize,
-        lookup_permutation: BTreeMap<usize, usize>,
+        lookup_permutation: Vec<usize>,
     ) -> BTreeMap<usize, usize> {
-        let stream_arity = stream_permutation
-            .keys()
-            .cloned()
-            .max()
-            .map(|i| i + 1)
-            .unwrap_or(0);
-        let lookup_arity = lookup_permutation
-            .keys()
-            .cloned()
-            .max()
-            .map(|i| i + 1)
-            .unwrap_or(0);
+        let stream_arity = stream_permutation.len();
+        let lookup_arity = lookup_permutation.len();
 
         (0..stream_arity + lookup_arity)
             .map(|i| {
                 let location = if i < stream_arity {
-                    stream_permutation[&i]
+                    stream_permutation[i]
                 } else {
-                    let location_in_lookup = lookup_permutation[&(i - stream_arity)];
+                    let location_in_lookup = lookup_permutation[i - stream_arity];
                     if location_in_lookup < key_arity {
                         location_in_lookup
                     } else {
@@ -1494,7 +1508,6 @@ pub mod util {
 }
 
 pub mod plan {
-    use std::collections::BTreeMap;
     use std::iter;
 
     use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
@@ -1529,8 +1542,14 @@ pub mod plan {
     }
 
     impl SafeMfpPlan {
-        pub fn permute(&mut self, map: BTreeMap<usize, usize>, new_arity: usize) {
-            self.mfp.permute(map, new_arity);
+        /// Remaps references to input columns according to `remap`.
+        ///
+        /// Leaves other column references, e.g. to newly mapped columns, unchanged.
+        pub fn permute_fn<F>(&mut self, remap: F, new_arity: usize)
+        where
+            F: Fn(usize) -> usize,
+        {
+            self.mfp.permute_fn(remap, new_arity);
         }
         /// Evaluates the linear operator on a supplied list of datums.
         ///

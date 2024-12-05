@@ -560,11 +560,7 @@ impl MirScalarExpr {
     /// strict permutation, and it only needs to have entries for
     /// each column referenced in `self`.
     pub fn permute(&mut self, permutation: &[usize]) {
-        self.visit_pre_mut(|e| {
-            if let MirScalarExpr::Column(old_i) = e {
-                *old_i = permutation[*old_i];
-            }
-        });
+        self.visit_columns(|c| *c = permutation[*c]);
     }
 
     /// Rewrites column indices with their value in `permutation`.
@@ -573,9 +569,19 @@ impl MirScalarExpr {
     /// strict permutation, and it only needs to have entries for
     /// each column referenced in `self`.
     pub fn permute_map(&mut self, permutation: &BTreeMap<usize, usize>) {
+        self.visit_columns(|c| *c = permutation[c]);
+    }
+
+    /// Visits each column reference and applies `action` to the column.
+    ///
+    /// Useful for remapping columns, or for collecting expression support.
+    pub fn visit_columns<F>(&mut self, mut action: F)
+    where
+        F: FnMut(&mut usize),
+    {
         self.visit_pre_mut(|e| {
-            if let MirScalarExpr::Column(old_i) = e {
-                *old_i = permutation[old_i];
+            if let MirScalarExpr::Column(col) = e {
+                action(col);
             }
         });
     }
