@@ -23,7 +23,7 @@ audit-as-crates-io = true
 [policy.launchdarkly-server-sdk]
 audit-as-crates-io = true
 
-[policy.librocksdb-sys]
+[policy.mysql_async]
 audit-as-crates-io = true
 
 [policy.mz-avro]
@@ -69,16 +69,10 @@ audit-as-crates-io = true
 [policy.reqwest-retry]
 audit-as-crates-io = true
 
-[policy.rocksdb]
-audit-as-crates-io = true
-
 [policy.serde-value]
 audit-as-crates-io = true
 
 [policy.tokio-postgres]
-audit-as-crates-io = true
-
-[policy.tonic-build]
 audit-as-crates-io = true
 
 [policy.tracing-opentelemetry]
@@ -94,6 +88,10 @@ criteria = "safe-to-deploy"
 [[exemptions.ahash]]
 version = "0.8.11"
 criteria = "safe-to-deploy"
+
+[[exemptions.aligned-vec]]
+version = "0.6.1"
+criteria = "maintained-and-necessary"
 
 [[exemptions.allocator-api2]]
 version = "0.2.16"
@@ -391,6 +389,14 @@ criteria = "safe-to-deploy"
 version = "0.7.7"
 criteria = "safe-to-deploy"
 
+[[exemptions.equator]]
+version = "0.2.2"
+criteria = "maintained-and-necessary"
+
+[[exemptions.equator-macro]]
+version = "0.2.1"
+criteria = "maintained-and-necessary"
+
 [[exemptions.error-chain]]
 version = "0.12.4"
 criteria = "safe-to-deploy"
@@ -619,6 +625,10 @@ criteria = "safe-to-deploy"
 version = "0.5.4"
 criteria = "safe-to-deploy"
 
+[[exemptions.memmap2]]
+version = "0.9.5"
+criteria = "maintained-and-necessary"
+
 [[exemptions.memoffset]]
 version = "0.7.1"
 criteria = "safe-to-deploy"
@@ -646,6 +656,10 @@ criteria = "safe-to-deploy"
 [[exemptions.multimap]]
 version = "0.8.3"
 criteria = "safe-to-deploy"
+
+[[exemptions.mysql_async]]
+version = "0.34.1@git:a0dbdb7c76e6ff7a27dfa2523a398ca686413737"
+criteria = "maintained-and-necessary"
 
 [[exemptions.mz-avro]]
 version = "0.7.0"
@@ -810,6 +824,10 @@ criteria = "safe-to-deploy"
 [[exemptions.pprof]]
 version = "0.11.1"
 criteria = "safe-to-deploy"
+
+[[exemptions.pprof]]
+version = "0.14.0"
+criteria = "maintained-and-necessary"
 
 [[exemptions.ppv-lite86]]
 version = "0.2.10"
@@ -1131,9 +1149,17 @@ criteria = "safe-to-deploy"
 version = "10.2.0"
 criteria = "safe-to-deploy"
 
+[[exemptions.symbolic-common]]
+version = "12.12.3"
+criteria = "maintained-and-necessary"
+
 [[exemptions.symbolic-demangle]]
 version = "10.2.0"
 criteria = "safe-to-deploy"
+
+[[exemptions.symbolic-demangle]]
+version = "12.1.1"
+criteria = "maintained-and-necessary"
 
 [[exemptions.sysctl]]
 version = "0.5.4"
