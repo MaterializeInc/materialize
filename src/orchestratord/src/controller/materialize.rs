@@ -134,7 +134,7 @@ pub struct Args {
     #[clap(long, default_value = "8080")]
     balancerd_internal_http_port: i32,
 
-    #[clap(long, default_value = "9000")]
+    #[clap(long, default_value = "8080")]
     console_http_port: i32,
 
     #[clap(long, default_value = "{}")]
