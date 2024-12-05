@@ -266,6 +266,12 @@ lto = "thin"
 # docker containers.
 debug = 2
 
+[profile.optimized]
+inherits = "release"
+lto = "off"
+debug = false
+incremental = true
+
 # IMPORTANT: when patching a dependency, you should only depend on "main",
 # "master", or an upstream release branch (e.g., "v7.x"). Do *not* depend on a
 # feature/patch branch (e.g., "fix-thing" or "pr-1234"). Feature/patch branches
