@@ -1693,6 +1693,18 @@ steps:
     agents:
       queue: hetzner-aarch64-8cpu-16gb
 
+  - id: sqllogictest
+    label: ":bulb: SQL logic tests %N"
+    depends_on: build-aarch64
+    timeout_in_minutes: 240
+    parallelism: 10
+    agents:
+      queue: hetzner-aarch64-8cpu-16gb
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: sqllogictest
+          run: slow-tests
+
   - group: "Language tests"
     key: language-tests
     steps:
