@@ -672,7 +672,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                         })
                         .collect(),
                 ),
-                cluster_ip: None,
+                cluster_ip: Some("None".to_string()),
                 selector: Some(match_labels.clone()),
                 ..Default::default()
             }),
