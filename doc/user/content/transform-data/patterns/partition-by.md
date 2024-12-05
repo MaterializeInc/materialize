@@ -68,20 +68,19 @@ We intend to relax some of these restrictions in the future.
 
 ## Filter pushdown
 
-Suppose we're running a query against our `events` data with a [temporal filter](/transform-data/patterns/temporal-filters/).
+Suppose that our example `events` table has accumulated years' worth of data, but we're running a query with a [temporal filter](/transform-data/patterns/temporal-filters/) that matches only rows with recent timestamps.
 
 ```mzsql
 SELECT * FROM events WHERE mz_now() <= event_ts + INTERVAL '5min';
 ```
 
 This query returns only rows with similar values for `event_ts`: timestamps in the last five minutes.
-Since we declared that our `events` table is partitioned by `event_ts`, Materialize can determine that all the rows that pass this filter must also be _stored_ close together, and fetch only the exact parts it needs to satisfy the query.
+Since we declared that our `events` table is partitioned by `event_ts`, that means all the rows that pass this filter will be stored in the same small subset of parts.
 
-This optimization is called _filter pushdown_, and it can save a substantial amount of time and computation given a large collection and a selective filter.
-This tends to be common for append-only timeseries datasets and temporal filters, but it can be useful for any dataset where most queries look at only a particular "range" of the data.
+Materialize tracks a small amount of metadata for every part, including the range of possible values for many columns. When it can determine that none of the data in a part will match a filter, it will skip fetching that data from object storage. This optimization is called _filter pushdown_, and when you're querying with a selective filter against a large collection, it can save a great deal of time and computation.
 
-Materialize will always try to filter out parts it doesn't need for a particular query, but that filtering is usually only effective when similar rows are stored together.
-If you want to make sure that the filter pushdown optimization applies to your query, you can:
+Materialize will always try to apply filter pushdown to your query, but that filtering is usually only effective when similar rows are stored together.
+If you want to make sure that the filter pushdown optimization is effective for your query, you can:
 
 - Use a `PARTITION BY` clause on the relevant column to ensure that data with similar values for that column are stored close together.
 - Add a filter to your query that only returns true for a narrow range of values in that column.
