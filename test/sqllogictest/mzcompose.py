@@ -593,6 +593,7 @@ def compileSlowSltConfig() -> SltRunConfig:
         # https://github.com/MaterializeInc/database-issues/issues/6181
         "test/sqllogictest/list.slt",
         # transactions:
+        "test/sqllogictest/distinct_arrangements.slt",
         "test/sqllogictest/github-3374.slt",
         "test/sqllogictest/introspection/cluster_log_compaction.slt",
         "test/sqllogictest/introspection/attribution_sources.slt",
