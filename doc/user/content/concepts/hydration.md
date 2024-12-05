@@ -54,9 +54,10 @@ available offset, Materialize uses:
 
 - Log Sequence Number (LSN) for [PostgreSQL](/ingest-data/postgres/) sources
 
-- Global Transaction Identifier (GTID) for [MySQL](/ingest-data/mysql/) sources
+- The number of transactions committed across all servers in the cluster.for
+  [MySQL](/ingest-data/mysql/) sources.
 
-- Kafka offset for Kafka sources
+- Kafka message offset for Kafka sources
 
 Materialize then captures/commits a complete snapshot of all historical data up
 to that point. All records in this initial load have the same timestamp.
@@ -71,14 +72,15 @@ Generally, the snapshotting duration is proportional to data volume. However,
 for sources with upsert envelope, the snapshotting may take longer while the
 upsert envelope effectively dedupes your records.
 
-You can view the snapshotting status of an object in the [Materialize
-console](/console/). For an object, go to its **Overview** page in the [Database
+You can view the snapshotting status of a source in the [Materialize
+console](/console/). For a source, go to its **Overview** page in the [Database
 object explorer](/console/data/).
 
 Alternatively, you can query the following system catalog views,
-[`mz_hydration_statuses`](/sql/system-catalog/mz_internal/#mz_hydration_statuses)
-and
-[`mz_compute_hydration_statuses`](/sql/system-catalog/mz_internal/#mz_compute_hydration_statuses).
+[`mz_source_statistics`](/sql/system-catalog/mz_internal/#mz_source_statistics).
+However, note that objects in the `mz_internal` schema are not part of
+Materialize's stable interface, and backwards-incompatible changes to these
+objects may be made at any time.
 
 ### Reads during snapshotting
 
@@ -122,6 +124,9 @@ Alternatively, you can query the following system catalog views,
 [`mz_hydration_statuses`](/sql/system-catalog/mz_internal/#mz_hydration_statuses)
 and
 [`mz_compute_hydration_statuses`](/sql/system-catalog/mz_internal/#mz_compute_hydration_statuses).
+However, note that objects in the `mz_internal` schema are not part of
+Materialize's stable interface, and backwards-incompatible changes to these
+objects may be made at any time.
 
 ### Reads during hydration
 
