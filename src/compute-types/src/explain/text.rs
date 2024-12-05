@@ -585,16 +585,22 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for DeltaPathPlan {
             writeln!(f, "{}initial_closure", ctx.indent)?;
             ctx.indented(|ctx| plan.initial_closure.fmt_text(f, ctx))?;
         }
-        {
-            let source_relation = &plan.source_relation;
-            let source_key = mode.seq(&plan.source_key, None);
-            let source_key = CompactScalars(source_key);
-            writeln!(
+        match &plan.source_key {
+            Some(source_key) => {
+                let source_key = mode.seq(source_key, None);
+                let source_key = CompactScalars(source_key);
+                writeln!(
+                    f,
+                    "{}source={{ relation={}, key=[{}] }}",
+                    ctx.indent, &plan.source_relation, source_key
+                )?
+            }
+            None => writeln!(
                 f,
-                "{}source={{ relation={}, key=[{}] }}",
-                ctx.indent, source_relation, source_key
-            )?;
-        }
+                "{}source={{ relation={}, key=[] }}",
+                ctx.indent, &plan.source_relation
+            )?,
+        };
         Ok(())
     }
 }
