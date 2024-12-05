@@ -22,7 +22,7 @@ use k8s_openapi::{
     },
     apimachinery::pkg::{apis::meta::v1::LabelSelector, util::intstr::IntOrString},
 };
-use kube::{api::ObjectMeta, Api, Client};
+use kube::{api::ObjectMeta, runtime::controller::Action, Api, Client};
 use maplit::btreemap;
 use tracing::trace;
 
@@ -60,7 +60,11 @@ impl Resources {
         }
     }
 
-    pub async fn apply(&self, client: &Client, namespace: &str) -> Result<(), anyhow::Error> {
+    pub async fn apply(
+        &self,
+        client: &Client,
+        namespace: &str,
+    ) -> Result<Option<Action>, anyhow::Error> {
         let network_policy_api: Api<NetworkPolicy> = Api::namespaced(client.clone(), namespace);
         let deployment_api: Api<Deployment> = Api::namespaced(client.clone(), namespace);
         let service_api: Api<Service> = Api::namespaced(client.clone(), namespace);
@@ -81,7 +85,7 @@ impl Resources {
             apply_resource(&certificate_api, certificate).await?;
         }
 
-        Ok(())
+        Ok(None)
     }
 }
 

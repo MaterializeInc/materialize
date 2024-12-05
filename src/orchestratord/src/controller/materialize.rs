@@ -29,8 +29,9 @@ use mz_orchestrator_tracing::TracingCliArgs;
 use mz_ore::{cast::CastFrom, cli::KeyValueArg, instrument};
 use mz_sql::catalog::CloudProvider;
 
+mod balancer;
 mod console;
-mod resources;
+mod environmentd;
 mod tls;
 
 #[derive(clap::Parser)]
@@ -308,7 +309,7 @@ impl k8s_controller::Context for Context {
         // have been applied earlier, but we don't want to use these
         // environment resources because when we apply them, we want to apply
         // them with data that uses the new generation
-        let active_resources = resources::Resources::new(
+        let active_resources = environmentd::Resources::new(
             &self.config,
             &self.tracing,
             &self.orchestratord_namespace,
@@ -327,7 +328,7 @@ impl k8s_controller::Context for Context {
 
         // here we regenerate the environment resources using the
         // same inputs except with an updated generation
-        let resources = resources::Resources::new(
+        let resources = environmentd::Resources::new(
             &self.config,
             &self.tracing,
             &self.orchestratord_namespace,
@@ -336,7 +337,7 @@ impl k8s_controller::Context for Context {
         );
         let resources_hash = resources.generate_hash();
 
-        let result = if has_current_changes {
+        let mut result = if has_current_changes {
             if mz.rollout_requested() {
                 // we remove the environment resources hash annotation here
                 // because if we fail halfway through applying the resources,
@@ -530,39 +531,54 @@ impl k8s_controller::Context for Context {
             Ok(None)
         };
 
-        // console resources don't need to block on an explicit rollout, but
-        // we do want to wait to deploy the console until the environmentd is
-        // successfully up and running, or else it will crashloop trying to
-        // contact the service
-        if let Ok(None) = result {
-            if self.config.create_console {
-                let Some((_, environmentd_image_tag)) =
-                    mz.spec.environmentd_image_ref.rsplit_once(':')
-                else {
-                    return Err(Error::Anyhow(anyhow::anyhow!(
-                        "failed to parse environmentd image ref: {}",
-                        mz.spec.environmentd_image_ref
-                    )));
-                };
-                let console_image_tag = self
-                    .config
-                    .console_image_tag_map
-                    .iter()
-                    .find(|kv| kv.key == environmentd_image_tag)
-                    .map(|kv| kv.value.clone())
-                    .unwrap_or_else(|| self.config.console_image_tag_default.clone());
-                console::Resources::new(
-                    &self.config,
-                    mz,
-                    &matching_image_from_environmentd_image_ref(
-                        &mz.spec.environmentd_image_ref,
-                        "console",
-                        Some(&console_image_tag),
-                    ),
-                )
+        // balancers rely on the environmentd service existing, which is
+        // enforced by the environmentd rollout process being able to call
+        // into the promotion endpoint
+
+        if !matches!(result, Ok(None)) {
+            return result.map_err(Error::Anyhow);
+        }
+
+        if self.config.create_balancers {
+            result = balancer::Resources::new(&self.config, mz)
                 .apply(&client, &mz.namespace())
-                .await?;
-            }
+                .await;
+        }
+
+        // and the console relies on the balancer service existing, which is
+        // enforced by balancer::Resources::apply having a check for its pods
+        // being up, and not returning successfully until they are
+
+        if !matches!(result, Ok(None)) {
+            return result.map_err(Error::Anyhow);
+        }
+
+        if self.config.create_console {
+            let Some((_, environmentd_image_tag)) = mz.spec.environmentd_image_ref.rsplit_once(':')
+            else {
+                return Err(Error::Anyhow(anyhow::anyhow!(
+                    "failed to parse environmentd image ref: {}",
+                    mz.spec.environmentd_image_ref
+                )));
+            };
+            let console_image_tag = self
+                .config
+                .console_image_tag_map
+                .iter()
+                .find(|kv| kv.key == environmentd_image_tag)
+                .map(|kv| kv.value.clone())
+                .unwrap_or_else(|| self.config.console_image_tag_default.clone());
+            console::Resources::new(
+                &self.config,
+                mz,
+                &matching_image_from_environmentd_image_ref(
+                    &mz.spec.environmentd_image_ref,
+                    "console",
+                    Some(&console_image_tag),
+                ),
+            )
+            .apply(&client, &mz.namespace())
+            .await?;
         }
 
         result.map_err(Error::Anyhow)
