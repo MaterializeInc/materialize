@@ -1082,7 +1082,7 @@ are collected on the source's tables.
 
 Gauge metrics reflect values that can increase or decrease over time. Gauge
 metrics are eventually consistent. They may lag the true state of the source by
-seconds or minutes, but if the source stops ingesting messages the gauges will
+seconds or minutes, but if the source stops ingesting messages, the gauges will
 eventually reflect the true state of the source.
 
 `records_indexed` and `bytes_indexed` are the size (in records and bytes
