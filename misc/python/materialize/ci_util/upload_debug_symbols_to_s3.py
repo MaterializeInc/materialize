@@ -17,7 +17,7 @@ from materialize import elf
 DEBUGINFO_S3_BUCKET = "materialize-debuginfo"
 
 # The binaries for which debuginfo should be uploaded to S3 and Polar Signals.
-DEBUGINFO_BINS = {"environmentd", "clusterd", "balancerd", "materialized"}
+DEBUGINFO_BINS = {"environmentd", "clusterd", "balancerd"}
 
 
 def upload_debuginfo_to_s3(bin_path: Path, dbg_path: Path, is_tag_build: bool) -> str:
