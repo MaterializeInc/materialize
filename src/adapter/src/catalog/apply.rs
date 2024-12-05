@@ -1288,6 +1288,7 @@ impl CatalogState {
         retractions: &mut InProgressRetractions,
         local_expression_cache: &mut LocalExpressionCache,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
+        let mut builtin_table_updates = Vec::with_capacity(builtin_views.len());
         let (updates, additions): (Vec<_>, Vec<_>) =
             builtin_views
                 .into_iter()
@@ -1303,7 +1304,9 @@ impl CatalogState {
             // was parsed, planned, and optimized using the compiled in definition, not the
             // definition from a previous version. So we can just stick the old entry back into the
             // catalog.
+            let item_id = entry.id();
             state.insert_entry(entry);
+            builtin_table_updates.extend(state.pack_item_update(item_id, 1));
         }
 
         let mut handles = Vec::new();
@@ -1502,10 +1505,14 @@ impl CatalogState {
         assert!(awaiting_all.is_empty());
         assert!(views.is_empty());
 
-        item_ids
-            .into_iter()
-            .flat_map(|id| state.pack_item_update(id, 1))
-            .collect()
+        // Generate a builtin table update for all the new views.
+        builtin_table_updates.extend(
+            item_ids
+                .into_iter()
+                .flat_map(|id| state.pack_item_update(id, 1)),
+        );
+
+        builtin_table_updates
     }
 
     /// Associates a name, `CatalogItemId`, and entry.
