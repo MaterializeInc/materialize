@@ -113,9 +113,18 @@ build:macos --linkopt="-gdwarf-2"
 # (and, in an emergency, also prod).
 build:debuginfo-full --@rules_rust//:extra_rustc_flag=-Cdebuginfo=2
 build:debuginfo-full --copt=-g2
+build:debuginfo-full --strip=never
+build:debuginfo-full --@rules_rust//:extra_rustc_flag=-Cstrip=none
 
 build:debuginfo-limited --@rules_rust//:extra_rustc_flag=-Cdebuginfo=line-tables-only
 build:debuginfo-limited --copt=-gline-tables-only
+build:debuginfo-limited --strip=never
+build:debuginfo-limited --@rules_rust//:extra_rustc_flag=-Cstrip=none
+
+build:debuginfo-none --@rules_rust//:extra_rustc_flag=-Cdebuginfo=0
+build:debuginfo-none --copt=-g0
+build:debuginfo-none --strip=always
+build:debuginfo-none --@rules_rust//:extra_rustc_flag=-Cstrip=symbols
 
 #
 # Common Build Configuration
@@ -152,9 +161,6 @@ build:release --cxxopt=-D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_FAST
 build:release --copt=-O3
 build:release --copt=-DNDEBUG
 build:release --compilation_mode=opt
-# `rules_rust` defaults to stripping debug symbols for release builds, undo that.
-build:release --strip=never
-build:release --@rules_rust//:extra_rustc_flag=-Cstrip=none
 
 # We only enable Link Time Optimization for CI builds and not local release builds.
 build:release-lto --copt=-flto=thin
@@ -170,24 +176,21 @@ build:release-tagged --config=release --config=release-lto --config=release-stam
 #
 # Not doing a full stamp nor omitting full debug info, greatly speeds up compile times.
 build:release-dev --config=release --config=release-lto --config=debuginfo-limited
-# Local Release Builds.
-#
-# Building with LTO can improve performance but it significantly increases compile times. The
-# tradeoff is not worth it when developing locally, but is for builds we ship to production.
-build:release-local --config=release --config=debuginfo-limited
 
-build:optimized --cxxopt=-D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_FAST
-build:optimized --copt=-O3
-build:optimized --copt=-DNDEBUG
+# "Optimized" Build.
+#
+# Provides both reasonably fast compile times and runtimes.
 build:optimized --compilation_mode=opt
-build:optimized --strip=never
-build:optimized --@rules_rust//:extra_rustc_flag=-Cstrip=none
-build:optimized --@rules_rust//:extra_rustc_flag=-Cdebuginfo=0
-build:optimized --copt=-g0
+build:optimized --cxxopt=-D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_FAST
+build:optimized --copt=-O2
+build:optimized --copt=-DNDEBUG
+
+build:optimized --config=debuginfo-none
+
 build:optimized --copt=-fno-lto
 build:optimized --linkopt=-fno-lto
 build:optimized --@rules_rust//:extra_rustc_flag=-Clto=off
-build:optimized --@rules_rust//:extra_rustc_flag=-Cincremental=on
+build:optimized --@rules_rust//:extra_rustc_flag=-Cembed-bitcode=no
 
 # Build with the Rust Nightly Toolchain
 build:rust-nightly --@rules_rust//rust/toolchain/channel=nightly
