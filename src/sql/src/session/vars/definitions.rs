@@ -2012,13 +2012,7 @@ feature_flags!(
         desc: "emitting notices for indexes with an empty key (doesn't affect EXPLAIN)",
         default: true,
         enable_for_item_parsing: true,
-    },
-    {
-        name: enable_comment,
-        desc: "the COMMENT ON feature for objects",
-        default: true,
-        enable_for_item_parsing: true,
-    },
+    }
     {
         name: enable_alter_swap,
         desc: "the ALTER SWAP feature for objects",

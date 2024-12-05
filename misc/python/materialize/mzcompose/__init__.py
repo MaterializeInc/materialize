@@ -93,7 +93,6 @@ def get_default_system_parameters(
         "enable_alter_swap": "true",
         "enable_assert_not_null": "true",
         "enable_columnation_lgalloc": "true",
-        "enable_comment": "true",
         "enable_compute_chunked_stack": "true",
         "enable_connection_validation_syntax": "true",
         "enable_continual_task_builtins": "true",
