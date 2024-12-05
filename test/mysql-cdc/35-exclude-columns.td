@@ -65,5 +65,9 @@ contains:column "f2" does not exist
 $ mysql-execute name=mysql
 ALTER TABLE t1 DROP COLUMN f2;
 
+# TODO: Reenable when database-issues#8127 is fixed
+$ skip-if
+SELECT true
+
 ! select * from t1;
 contains:incompatible schema change
