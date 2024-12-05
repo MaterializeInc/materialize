@@ -274,6 +274,9 @@ pub fn plan_create_table(
     let names: Vec<_> = columns
         .iter()
         .filter(|c| {
+            // This set of `names` is used to create the initial RelationDesc.
+            // Columns that have been added at later versions of the table will
+            // get added further below.
             let is_versioned = c
                 .options
                 .iter()
