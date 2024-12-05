@@ -115,6 +115,7 @@ use std::sync::Arc;
 
 use differential_dataflow::{Collection, Hashable};
 use futures::StreamExt;
+use mz_compute_types::dyncfgs::ENABLE_CORRECTION_V2;
 use mz_ore::cast::CastFrom;
 use mz_persist_client::batch::{Batch, ProtoBatch};
 use mz_persist_client::cache::PersistClientCache;
@@ -216,8 +217,15 @@ where
     );
 
     let name = operator_name("write");
-    let (batches, write_token) =
-        write::render(name.clone(), persist_api(name), &desired, &persist, &descs);
+    let use_correction_v2 = ENABLE_CORRECTION_V2.get(&compute_state.worker_config);
+    let (batches, write_token) = write::render(
+        name.clone(),
+        persist_api(name),
+        &desired,
+        &persist,
+        &descs,
+        use_correction_v2,
+    );
 
     let name = operator_name("append");
     let append_token = append::render(
@@ -630,6 +638,7 @@ mod write {
         desired: &DesiredStreams<S>,
         persist: &PersistStreams<S>,
         descs: &Stream<S, BatchDescription>,
+        use_correction_v2: bool,
     ) -> (BatchesStream<S>, Box<dyn Any>)
     where
         S: Scope<Timestamp = Timestamp>,
@@ -663,7 +672,7 @@ mod write {
 
             let writer = persist_api.open_writer().await;
             let sink_metrics = persist_api.open_metrics().await;
-            let mut state = State::new(worker_id, writer, sink_metrics);
+            let mut state = State::new(worker_id, writer, sink_metrics, use_correction_v2);
 
             loop {
                 // Read from the inputs, extract `desired` updates as positive contributions to
@@ -766,6 +775,7 @@ mod write {
             worker_id: usize,
             persist_writer: WriteHandle<SourceData, (), Timestamp, Diff>,
             metrics: SinkMetrics,
+            use_correction_v2: bool,
         ) -> Self {
             let worker_metrics = metrics.for_worker(worker_id);
 
@@ -773,8 +783,8 @@ mod write {
                 worker_id,
                 persist_writer,
                 corrections: OkErr::new(
-                    Correction::new(metrics.clone(), worker_metrics.clone()),
-                    Correction::new(metrics, worker_metrics),
+                    Correction::new(metrics.clone(), worker_metrics.clone(), use_correction_v2),
+                    Correction::new(metrics, worker_metrics, use_correction_v2),
                 ),
                 desired_frontiers: OkErr::new_frontiers(),
                 persist_frontiers: OkErr::new_frontiers(),

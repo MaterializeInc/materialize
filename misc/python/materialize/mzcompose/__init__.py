@@ -95,6 +95,7 @@ def get_default_system_parameters(
         "enable_columnation_lgalloc": "true",
         "enable_comment": "true",
         "enable_compute_chunked_stack": "true",
+        "enable_compute_correction_v2": "true",
         "enable_connection_validation_syntax": "true",
         "enable_continual_task_builtins": "true",
         "enable_continual_task_create": "true",
