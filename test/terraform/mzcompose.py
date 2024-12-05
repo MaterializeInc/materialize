@@ -353,7 +353,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 f"pod/{environmentd_name}",
                 "-n",
                 "materialize-environment",
-                "6876:6876",
                 "6877:6877",
                 "6878:6878",
             ],
@@ -367,6 +366,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 "-n",
                 "materialize-environment",
                 "6875:6875",
+                "6876:6876",
             ],
             preexec_fn=os.setpgrp,
         )
