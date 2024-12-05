@@ -1235,8 +1235,7 @@ class Repository:
         build_mode = parser.add_mutually_exclusive_group()
         build_mode.add_argument(
             "--dev",
-            dest="release",
-            action="store_false",
+            action="store_true",
             help="build Rust binaries with the dev profile",
         )
         build_mode.add_argument(
@@ -1297,13 +1296,18 @@ class Repository:
         The provided namespace must contain the options installed by
         `Repository.install_arguments`.
         """
+        if args.release:
+            profile = Profile.RELEASE
+        elif args.optimized:
+            profile = Profile.OPTIMIZED
+        elif args.dev:
+            profile = Profile.DEV
+        else:
+            profile = Profile.RELEASE
+
         return cls(
             root,
-            profile=(
-                Profile.RELEASE
-                if args.release
-                else Profile.OPTIMIZED if args.optimized else Profile.DEV
-            ),
+            profile=profile,
             coverage=args.coverage,
             sanitizer=args.sanitizer,
             image_registry=args.image_registry,
