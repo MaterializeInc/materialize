@@ -192,6 +192,12 @@ impl StorageMetric for ResettingLatency {
     }
 }
 
+impl ResettingLatency {
+    fn reset(&mut self) {
+        self.0 = None;
+    }
+}
+
 /// A numerical gauge that is always resets, but can start out as `NULL`.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
 pub struct ResettingNullableTotal(Option<u64>);
@@ -234,6 +240,13 @@ impl From<Option<u64>> for ResettingNullableTotal {
         ResettingNullableTotal(f)
     }
 }
+
+impl ResettingNullableTotal {
+    fn reset(&mut self) {
+        self.0 = None;
+    }
+}
+
 /// A numerical gauge that is always resets.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
 pub struct ResettingTotal(u64);
@@ -257,6 +270,12 @@ impl StorageMetric for ResettingTotal {
 impl From<u64> for ResettingTotal {
     fn from(f: u64) -> Self {
         ResettingTotal(f)
+    }
+}
+
+impl ResettingTotal {
+    fn reset(&mut self) {
+        self.0 = 0;
     }
 }
 
@@ -528,6 +547,15 @@ impl SourceStatisticsUpdate {
         self.updates_committed.0 = 0;
     }
 
+    /// Reset all _resetable_ gauges to their default values.
+    pub fn reset_gauges(&mut self) {
+        self.records_indexed.0.reset();
+        self.bytes_indexed.0.reset();
+        self.rehydration_latency_ms.0.reset();
+        self.snapshot_records_known.0.reset();
+        self.snapshot_records_staged.0.reset();
+    }
+
     pub fn incorporate(&mut self, other: SourceStatisticsUpdate) {
         let SourceStatisticsUpdate {
             messages_received,
@@ -558,6 +586,22 @@ impl SourceStatisticsUpdate {
         snapshot_committed.incorporate(other.snapshot_committed, "snapshot_committed");
         offset_known.incorporate(other.offset_known, "offset_known");
         offset_committed.incorporate(other.offset_committed, "offset_committed");
+    }
+
+    /// Incorporate only the counters of the given update, ignoring gauge values.
+    pub fn incorporate_counters(&mut self, other: SourceStatisticsUpdate) {
+        let SourceStatisticsUpdate {
+            messages_received,
+            bytes_received,
+            updates_staged,
+            updates_committed,
+            ..
+        } = self;
+
+        messages_received.incorporate(other.messages_received, "messages_received");
+        bytes_received.incorporate(other.bytes_received, "bytes_received");
+        updates_staged.incorporate(other.updates_staged, "updates_staged");
+        updates_committed.incorporate(other.updates_committed, "updates_committed");
     }
 
     /// Enrich statistics that use prometheus metrics.
@@ -713,6 +757,22 @@ impl SinkStatisticsUpdate {
         bytes_committed.incorporate(other.bytes_committed, "bytes_committed");
     }
 
+    /// Incorporate only the counters of the given update, ignoring gauge values.
+    pub fn incorporate_counters(&mut self, other: SinkStatisticsUpdate) {
+        let SinkStatisticsUpdate {
+            messages_staged,
+            messages_committed,
+            bytes_staged,
+            bytes_committed,
+            ..
+        } = self;
+
+        messages_staged.incorporate(other.messages_staged, "messages_staged");
+        messages_committed.incorporate(other.messages_committed, "messages_committed");
+        bytes_staged.incorporate(other.bytes_staged, "bytes_staged");
+        bytes_committed.incorporate(other.bytes_committed, "bytes_committed");
+    }
+
     pub fn summarize<'a, I, F>(values: F) -> Self
     where
         I: IntoIterator<Item = &'a Self>,
@@ -737,6 +797,9 @@ impl SinkStatisticsUpdate {
         self.bytes_staged.0 = 0;
         self.bytes_committed.0 = 0;
     }
+
+    /// Reset all _resetable_ gauges to their default values.
+    pub fn reset_gauges(&self) {}
 }
 
 impl PackableStats for SinkStatisticsUpdate {
