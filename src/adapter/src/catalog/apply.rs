@@ -169,8 +169,14 @@ impl CatalogState {
             "all timestamps should be equal: {updates:?}"
         );
 
+        let mut update_system_config = false;
+
         let mut builtin_table_updates = Vec::with_capacity(updates.len());
         for StateUpdate { kind, ts: _, diff } in updates {
+            if matches!(kind, StateUpdateKind::SystemConfiguration(_)) {
+                update_system_config = true;
+            }
+
             match diff {
                 StateDiff::Retraction => {
                     // We want the builtin table retraction to match the state of the catalog
@@ -188,6 +194,11 @@ impl CatalogState {
                 }
             }
         }
+
+        if update_system_config {
+            self.system_configuration.dyncfg_updates();
+        }
+
         Ok(builtin_table_updates)
     }
 

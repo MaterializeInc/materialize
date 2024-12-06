@@ -435,7 +435,6 @@ impl Catalog {
             .apply_updates_for_bootstrap(pre_item_updates, &mut LocalExpressionCache::Closed)
             .await;
         builtin_table_updates.extend(builtin_table_update);
-        state.system_config_mut().dyncfg_updates();
 
         let expr_cache_start = Instant::now();
         info!("startup: coordinator init: catalog open: expr cache open beginning");
