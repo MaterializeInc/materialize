@@ -1414,7 +1414,7 @@ class RowsJoinOneToOne(Generator):
 class RowsJoinOneToMany(Generator):
     COUNT = 10_000_000
 
-    MAX_COUNT = 160_000_000  # Too long-running with 320_000_000
+    MAX_COUNT = 80_000_000  # Too long-running with 160_000_000
 
     @classmethod
     def body(cls) -> None:
@@ -1428,7 +1428,7 @@ class RowsJoinOneToMany(Generator):
 class RowsJoinCross(Generator):
     COUNT = 1_000_000
 
-    MAX_COUNT = 256_000_000  # Too long-running with 512_000_000
+    MAX_COUNT = 64_000_000  # Too long-running with 128_000_000
 
     @classmethod
     def body(cls) -> None:
