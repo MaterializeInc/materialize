@@ -1302,10 +1302,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37b2a672a2cb129a2e41c10b1224bb368f9f37a2b16b612598138befd7b37eb5"
 
 [[package]]
-name = "catalog-protos"
-version = "0.1.0"
-
-[[package]]
 name = "cc"
 version = "1.1.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4496,11 +4492,11 @@ dependencies = [
  "insta",
  "ipnet",
  "itertools 0.10.5",
- "md-5",
  "mz-adapter-types",
  "mz-audit-log",
  "mz-build-info",
  "mz-build-tools",
+ "mz-catalog-protos",
  "mz-cloud-resources",
  "mz-compute-client",
  "mz-compute-types",
@@ -4531,7 +4527,6 @@ dependencies = [
  "proptest",
  "proptest-derive",
  "prost",
- "prost-build",
  "rand",
  "semver",
  "serde",
@@ -4579,6 +4574,31 @@ dependencies = [
  "url",
  "uuid",
  "workspace-hack",
+]
+
+[[package]]
+name = "mz-catalog-protos"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "md-5",
+ "mz-audit-log",
+ "mz-build-tools",
+ "mz-compute-client",
+ "mz-controller-types",
+ "mz-ore",
+ "mz-proto",
+ "mz-repr",
+ "mz-sql",
+ "mz-storage-types",
+ "paste",
+ "proptest",
+ "proptest-derive",
+ "prost",
+ "prost-build",
+ "serde",
+ "serde_json",
+ "similar-asserts",
 ]
 
 [[package]]

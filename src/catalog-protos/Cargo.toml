@@ -1,10 +1,43 @@
 [package]
-name = "catalog-protos"
+name = "mz-catalog-protos"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+mz-audit-log = { path = "../audit-log" }
+mz-compute-client = { path = "../compute-client" }
+mz-controller-types = { path = "../controller-types" }
+mz-proto = { path = "../proto" }
+mz-repr = { path = "../repr" }
+mz-sql = { path = "../sql" }
+mz-storage-types = { path = "../storage-types" }
+paste = "1.0.11"
+proptest = { version = "1.0.0", default-features = false, features = ["std"] }
+proptest-derive = { version = "0.3.0", features = ["boxed_union"] }
+prost = "0.13.2"
+serde = { version = "1.0.152", features = ["derive"] }
+
+[dev-dependencies]
+mz-build-tools = { path = "../build-tools", default-features = false }
+mz-ore = { path = "../ore", features = ["test"] }
+mz-proto = { path = "../proto" }
+proptest = { version = "1.0.0", default-features = false, features = ["std"] }
+similar-asserts = "1.4"
+
+[build-dependencies]
+anyhow = "1.0.66"
+md-5 = "0.10.5"
+mz-build-tools = { path = "../build-tools", default-features = false }
+prost-build = "0.13.2"
+serde = { version = "1.0.152", features = ["derive"] }
+serde_json = "1.0.125"
 
 [lints]
 workspace = true
+
+[package.metadata.cargo-gazelle.build]
+data = ["protos/**"]
+
+[package.metadata.cargo-gazelle.test.lib]
+data = ["protos/**"]
