@@ -1075,6 +1075,9 @@ mod append {
                     batch.lower().elements(),
                     batch.upper().elements(),
                 ));
+
+                // Ensure the batch's data gets properly cleaned up before dropping it.
+                batch.delete().await;
                 return;
             }
 
