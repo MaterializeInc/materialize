@@ -299,16 +299,25 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 }
             }
 
-            let resume_upper = Antichain::from_iter(
-                output_uppers
-                    .iter()
-                    .flat_map(|f| f.elements())
-                    // Advance any upper as far as the slot_lsn.
-                    .map(|t| std::cmp::max(*t, slot_metadata.confirmed_flush_lsn)),
-            );
-
-            let Some(resume_lsn) = resume_upper.into_option() else {
-                return Ok(());
+            // The overall resumption point for this source is the minimum of the resumption points
+            // contributed by each of the outputs.
+            let resume_lsn = output_uppers.iter().flat_map(|f| f.elements()).map(|&lsn| {
+                // An output is either an output that has never had data committed to it or one
+                // that has and needs to resume. We differentiate between the two by checking
+                // whether an output wishes to "resume" from the minimum timestamp. In that case
+                // its contribution to the overal resumption point is the earliest point available
+                // in the slot. This information would normally be something that the storage
+                // controller figures out in the form of an as-of frontier, but at the moment the
+                // storage controller does not have visibility into what the replication slot is
+                // doing.
+                if lsn == MzOffset::from(0) {
+                    slot_metadata.confirmed_flush_lsn
+                } else {
+                    lsn
+                }
+            }).min();
+            let Some(resume_lsn) = resume_lsn else {
+                return Ok(())
             };
             upper_cap_set.downgrade([&resume_lsn]);
             trace!(%id, "timely-{worker_id} replication reader started lsn={resume_lsn}");

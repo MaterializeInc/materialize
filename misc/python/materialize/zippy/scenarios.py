@@ -202,6 +202,16 @@ class PostgresCdc(Scenario):
             PostgresDML: 100,
         }
 
+    def finalization(self) -> list[ActionOrFactory]:
+        # Postgres sources can't be backup up and restored since Postgres
+        # refuses to re-read previously confirmed LSNs
+        return [
+            MzStart,
+            BalancerdStart,
+            StoragedStart,
+            ValidateAll(),
+        ]
+
 
 class MySqlCdc(Scenario):
     """A Zippy test using MySQL CDC exclusively."""
@@ -396,6 +406,16 @@ class PostgresCdcLarge(Scenario):
             ValidateView: 20,
             PostgresDML: 100,
         }
+
+    def finalization(self) -> list[ActionOrFactory]:
+        # Postgres sources can't be backup up and restored since Postgres
+        # refuses to re-read previously confirmed LSNs
+        return [
+            MzStart,
+            BalancerdStart,
+            StoragedStart,
+            ValidateAll(),
+        ]
 
 
 class MySqlCdcLarge(Scenario):
