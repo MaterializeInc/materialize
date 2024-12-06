@@ -10,7 +10,6 @@
 # by the Apache License, Version 2.0.
 
 load("@crates_io//:defs.bzl", "aliases", "all_crate_deps")
-load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
 load("@rules_rust//rust:defs.bzl", "rust_doc_test", "rust_library", "rust_test")
 
 package(default_visibility = ["//visibility:public"])
@@ -30,10 +29,10 @@ rust_library(
     rustc_flags = [],
     version = "0.0.0",
     deps = [
-        ":mz_catalog_build_script",
         "//src/adapter-types:mz_adapter_types",
         "//src/audit-log:mz_audit_log",
         "//src/build-info:mz_build_info",
+        "//src/catalog-protos:mz_catalog_protos",
         "//src/cloud-resources:mz_cloud_resources",
         "//src/compute-client:mz_compute_client",
         "//src/compute-types:mz_compute_types",
@@ -94,6 +93,7 @@ rust_test(
         "//src/audit-log:mz_audit_log",
         "//src/build-info:mz_build_info",
         "//src/build-tools:mz_build_tools",
+        "//src/catalog-protos:mz_catalog_protos",
         "//src/cloud-resources:mz_cloud_resources",
         "//src/compute-client:mz_compute_client",
         "//src/compute-types:mz_compute_types",
@@ -132,6 +132,7 @@ rust_doc_test(
         "//src/audit-log:mz_audit_log",
         "//src/build-info:mz_build_info",
         "//src/build-tools:mz_build_tools",
+        "//src/catalog-protos:mz_catalog_protos",
         "//src/cloud-resources:mz_cloud_resources",
         "//src/compute-client:mz_compute_client",
         "//src/compute-types:mz_compute_types",
@@ -159,24 +160,6 @@ rust_doc_test(
     ] + all_crate_deps(
         normal = True,
         normal_dev = True,
-    ),
-)
-
-cargo_build_script(
-    name = "mz_catalog_build_script",
-    srcs = ["build.rs"],
-    build_script_env = {},
-    compile_data = [],
-    data = [] + glob(["protos/**"]),
-    proc_macro_deps = [] + all_crate_deps(
-        build_proc_macro = True,
-        proc_macro = True,
-    ),
-    rustc_env = {},
-    rustc_flags = [],
-    deps = ["//src/build-tools:mz_build_tools"] + all_crate_deps(
-        build = True,
-        normal = True,
     ),
 )
 
@@ -208,6 +191,7 @@ rust_test(
         "//src/audit-log:mz_audit_log",
         "//src/build-info:mz_build_info",
         "//src/build-tools:mz_build_tools",
+        "//src/catalog-protos:mz_catalog_protos",
         "//src/cloud-resources:mz_cloud_resources",
         "//src/compute-client:mz_compute_client",
         "//src/compute-types:mz_compute_types",
@@ -266,6 +250,7 @@ rust_test(
         "//src/audit-log:mz_audit_log",
         "//src/build-info:mz_build_info",
         "//src/build-tools:mz_build_tools",
+        "//src/catalog-protos:mz_catalog_protos",
         "//src/cloud-resources:mz_cloud_resources",
         "//src/compute-client:mz_compute_client",
         "//src/compute-types:mz_compute_types",
@@ -324,6 +309,7 @@ rust_test(
         "//src/audit-log:mz_audit_log",
         "//src/build-info:mz_build_info",
         "//src/build-tools:mz_build_tools",
+        "//src/catalog-protos:mz_catalog_protos",
         "//src/cloud-resources:mz_cloud_resources",
         "//src/compute-client:mz_compute_client",
         "//src/compute-types:mz_compute_types",

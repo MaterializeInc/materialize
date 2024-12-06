@@ -55,6 +55,7 @@
 
 #[cfg(test)]
 mod tests;
+pub mod wire_compatible;
 
 use mz_ore::{soft_assert_eq_or_log, soft_assert_ne_or_log};
 use mz_repr::Diff;
@@ -83,7 +84,7 @@ macro_rules! objects {
         paste! {
             $(
                 pub(crate) mod [<objects_ $x>] {
-                    include!(concat!(env!("OUT_DIR"), "/objects_", stringify!($x), ".rs"));
+                    pub use mz_catalog_protos::[<objects_ $x>]::*;
 
                     use crate::durable::objects::state_update::StateUpdateKindJson;
 
@@ -183,16 +184,9 @@ macro_rules! objects {
 objects!(v67, v68, v69, v70, v71, v72, v73);
 
 /// The current version of the `Catalog`.
-///
-/// We will initialize new `Catalog`es with this version, and migrate existing `Catalog`es to this
-/// version. Whenever the `Catalog` changes, e.g. the protobufs we serialize in the `Catalog`
-/// change, we need to bump this version.
-pub const CATALOG_VERSION: u64 = 73;
-
+pub use mz_catalog_protos::CATALOG_VERSION;
 /// The minimum `Catalog` version number that we support migrating from.
-///
-/// After bumping this we can delete the old migrations.
-pub(crate) const MIN_CATALOG_VERSION: u64 = 67;
+pub use mz_catalog_protos::MIN_CATALOG_VERSION;
 
 // Note(parkmycar): Ideally we wouldn't have to define these extra constants,
 // but const expressions aren't yet supported in match statements.
