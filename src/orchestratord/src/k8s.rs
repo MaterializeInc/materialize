@@ -68,7 +68,7 @@ where
 
 pub async fn register_crds(client: Client) -> Result<(), anyhow::Error> {
     tokio::time::timeout(
-        Duration::from_secs(10),
+        Duration::from_secs(120),
         register_versioned_crds(
             client.clone(),
             vec![
