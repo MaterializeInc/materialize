@@ -149,7 +149,7 @@ operators:
     uses_memory: True
     memory_details: |
       Uses memory proportional to the number of input updates, twice.
-    expansive: True
+    expansive: False
     example: "`Distinct`"
 
   - operator: Distinct
