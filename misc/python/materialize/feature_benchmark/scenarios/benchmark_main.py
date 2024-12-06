@@ -1501,6 +1501,92 @@ $ kafka-verify-topic sink=materialize.public.sink1 await-value-schema=true await
         )
 
 
+class MaterializedViewSink(Sink):
+    """Measure the time it takes to emit 1M records to a reuse_topic=true sink. As we have limited
+    means to figure out when the complete output has been emited, we have no option but to re-ingest
+    the data to determine completion.
+    """
+
+    def shared(self) -> Action:
+        return TdAction(
+            self.keyschema()
+            + self.schema()
+            + f"""
+$ kafka-create-topic topic=sink-input partitions=16
+
+$ kafka-ingest format=avro topic=sink-input key-format=avro key-schema=${{keyschema}} schema=${{schema}} repeat={self.n()}
+{{"f1": ${{kafka-ingest.iteration}} }} {{"f2": ${{kafka-ingest.iteration}} }}
+"""
+        )
+
+    def init(self) -> Action:
+        return TdAction(
+            f"""
+> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
+
+> DROP CLUSTER IF EXISTS source_cluster CASCADE
+
+> CREATE CONNECTION IF NOT EXISTS csr_conn
+  FOR CONFLUENT SCHEMA REGISTRY
+  URL '${{testdrive.schema-registry-url}}';
+
+> CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
+
+> CREATE SOURCE source1
+  IN CLUSTER source_cluster
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-input-${{testdrive.seed}}');
+
+> CREATE TABLE source1_tbl FROM SOURCE source1 (REFERENCE "testdrive-sink-input-${{testdrive.seed}}")
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE UPSERT;
+
+> CREATE MATERIALIZED VIEW mv IN CLUSTER source_cluster AS SELECT * FROM source1_tbl;
+
+> SELECT COUNT(*) FROM mv;
+{self.n()}
+"""
+        )
+
+    def benchmark(self) -> MeasurementSource:
+        return Td(
+            f"""
+> DROP SINK IF EXISTS sink1;
+> DROP SOURCE IF EXISTS sink1_check CASCADE;
+  /* A */
+
+> DROP CLUSTER IF EXISTS sink_cluster CASCADE
+> CREATE CLUSTER sink_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
+
+> CREATE SINK sink1
+  IN CLUSTER sink_cluster
+  FROM mv
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-output-${{testdrive.seed}}')
+  KEY (f1)
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
+
+$ kafka-verify-topic sink=materialize.public.sink1 await-value-schema=true await-key-schema=true
+
+# Wait until all the records have been emited from the sink, as observed by the sink1_check source
+
+> CREATE SOURCE sink1_check
+  IN CLUSTER source_cluster
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-output-${{testdrive.seed}}');
+
+> CREATE TABLE sink1_check_tbl FROM SOURCE sink1_check (REFERENCE "testdrive-sink-output-${{testdrive.seed}}")
+  KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE UPSERT;
+
+> CREATE MATERIALIZED VIEW sink1_check_v AS SELECT COUNT(*) FROM sink1_check_tbl;
+
+> SELECT * FROM sink1_check_v
+  /* B */
+"""
+            + str(self.n())
+        )
+
+
 class ManyKafkaSourcesOnSameCluster(Scenario):
     """Measure the time it takes to ingest data from many Kafka sources"""
 
