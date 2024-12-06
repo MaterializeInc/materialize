@@ -23,7 +23,7 @@ class AuditLogCT(Check):
     """Continual Task for audit logging"""
 
     def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion.parse_mz("v0.120.0-dev")
+        return self.base_version > MzVersion.parse_mz("v0.127.0-dev")
 
     def initialize(self) -> Testdrive:
         return Testdrive(
@@ -70,7 +70,7 @@ class StreamTableJoinCT(Check):
     """Continual Task for stream table join"""
 
     def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion.parse_mz("v0.120.0-dev")
+        return self.base_version > MzVersion.parse_mz("v0.127.0-dev")
 
     def initialize(self) -> Testdrive:
         return Testdrive(
@@ -136,7 +136,7 @@ class UpsertCT(Check):
     """Continual Task for upserts"""
 
     def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion.parse_mz("v0.120.0-dev")
+        return self.base_version > MzVersion.parse_mz("v0.127.0-dev")
 
     def initialize(self) -> Testdrive:
         return Testdrive(

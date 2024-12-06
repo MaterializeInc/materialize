@@ -393,6 +393,18 @@ pub trait StorageController: Debug {
     /// Disconnects the storage instance from the specified replica.
     fn drop_replica(&mut self, instance_id: StorageInstanceId, replica_id: ReplicaId);
 
+    /// Across versions of Materialize the nullability of columns for some objects can change based
+    /// on updates to our optimizer.
+    ///
+    /// During bootstrap we will register these new schemas with Persist.
+    ///
+    /// See: <https://github.com/MaterializeInc/database-issues/issues/2488>
+    async fn evolve_nullability_for_bootstrap(
+        &mut self,
+        storage_metadata: &StorageMetadata,
+        collections: Vec<(GlobalId, RelationDesc)>,
+    ) -> Result<(), StorageError<Self::Timestamp>>;
+
     /// Create the sources described in the individual RunIngestionCommand commands.
     ///
     /// Each command carries the source id, the source description, and any associated metadata

@@ -15,6 +15,7 @@ use itertools::Itertools;
 use mz_ore::assert_none;
 use mz_ore::url::SensitiveUrl;
 use mz_persist_types::codec_impls::UnitSchema;
+use mz_persist_types::schema::SchemaId;
 use mz_persist_types::stats::PartStats;
 use mz_persist_types::txn::{TxnsCodec, TxnsEntry};
 use mz_persist_types::{PersistLocation, ShardId};
@@ -192,6 +193,18 @@ pub enum StorageError<T> {
     CollectionMetadataAlreadyExists(GlobalId),
     /// Some other collection is already writing to this persist shard.
     PersistShardAlreadyInUse(ShardId),
+    /// Raced with some other process while trying to evolve the schema of a Persist shard.
+    PersistSchemaEvolveRace {
+        global_id: GlobalId,
+        shard_id: ShardId,
+        schema_id: SchemaId,
+        relation_desc: RelationDesc,
+    },
+    /// We tried to evolve the schema of a Persist shard in an invalid way.
+    PersistInvalidSchemaEvolve {
+        global_id: GlobalId,
+        shard_id: ShardId,
+    },
     /// Txn WAL shard already exists.
     TxnWalShardAlreadyExists,
     /// The item that a subsource refers to is unexpectedly missing from the
@@ -231,6 +244,8 @@ impl<T: Debug + Display + 'static> Error for StorageError<T> {
             Self::ShuttingDown(_) => None,
             Self::CollectionMetadataAlreadyExists(_) => None,
             Self::PersistShardAlreadyInUse(_) => None,
+            Self::PersistSchemaEvolveRace { .. } => None,
+            Self::PersistInvalidSchemaEvolve { .. } => None,
             Self::TxnWalShardAlreadyExists => None,
             Self::MissingSubsourceReference { .. } => None,
             Self::RtrTimeout(_) => None,
@@ -303,6 +318,22 @@ impl<T: fmt::Display + 'static> fmt::Display for StorageError<T> {
             }
             Self::PersistShardAlreadyInUse(shard) => {
                 write!(f, "persist shard already in use: {shard}")
+            }
+            Self::PersistSchemaEvolveRace {
+                global_id,
+                shard_id,
+                ..
+            } => {
+                write!(f, "persist raced when trying to evolve the schema of a shard: {global_id}, {shard_id}")
+            }
+            Self::PersistInvalidSchemaEvolve {
+                global_id,
+                shard_id,
+            } => {
+                write!(
+                    f,
+                    "persist shard evolved in an invalid way: {global_id}, {shard_id}"
+                )
             }
             Self::TxnWalShardAlreadyExists => {
                 write!(f, "txn WAL already exists")
