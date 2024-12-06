@@ -11,8 +11,6 @@ from textwrap import dedent
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
 from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
-from materialize.checks.executors import Executor
-from materialize.mz_version import MzVersion
 
 
 def schemas() -> str:
@@ -21,9 +19,6 @@ def schemas() -> str:
 
 class AuditLogCT(Check):
     """Continual Task for audit logging"""
-
-    def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion.parse_mz("v0.120.0-dev")
 
     def initialize(self) -> Testdrive:
         return Testdrive(
@@ -68,9 +63,6 @@ class AuditLogCT(Check):
 
 class StreamTableJoinCT(Check):
     """Continual Task for stream table join"""
-
-    def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion.parse_mz("v0.120.0-dev")
 
     def initialize(self) -> Testdrive:
         return Testdrive(
@@ -134,9 +126,6 @@ class StreamTableJoinCT(Check):
 
 class UpsertCT(Check):
     """Continual Task for upserts"""
-
-    def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion.parse_mz("v0.120.0-dev")
 
     def initialize(self) -> Testdrive:
         return Testdrive(

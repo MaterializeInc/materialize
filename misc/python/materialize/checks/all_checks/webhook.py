@@ -11,8 +11,6 @@ from textwrap import dedent
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
 from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
-from materialize.checks.executors import Executor
-from materialize.mz_version import MzVersion
 
 
 def schemas() -> str:
@@ -20,24 +18,9 @@ def schemas() -> str:
 
 
 class Webhook(Check):
-    def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion.parse_mz("v0.62.0-dev")
-
-    def enable(self) -> str:
-        if self.base_version < MzVersion.parse_mz("v0.76.0-dev"):
-            return dedent(
-                """
-                $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-                ALTER SYSTEM SET enable_webhook_sources = true
-                """
-            )
-        else:
-            return ""
-
     def initialize(self) -> Testdrive:
         return Testdrive(
             schemas()
-            + self.enable()
             + dedent(
                 """
                 > CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));
@@ -96,24 +79,14 @@ class Webhook(Check):
         return Testdrive(
             dedent(
                 """
-                >[version<11400] SHOW COLUMNS FROM webhook_text
-                body false text
-
-                >[version>=11400] SHOW COLUMNS FROM webhook_text
+                > SHOW COLUMNS FROM webhook_text
                 body false text ""
 
-                >[version<11400] SHOW COLUMNS FROM webhook_json
-                body false jsonb
-                headers false map
-
-                >[version>=11400] SHOW COLUMNS FROM webhook_json
+                > SHOW COLUMNS FROM webhook_json
                 body false jsonb ""
                 headers false map ""
 
-                >[version<11400] SHOW COLUMNS FROM webhook_bytes
-                body false bytea
-
-                >[version>=11400] SHOW COLUMNS FROM webhook_bytes
+                > SHOW COLUMNS FROM webhook_bytes
                 body false bytea ""
 
                 > SELECT * FROM webhook_text

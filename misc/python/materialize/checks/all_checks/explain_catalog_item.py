@@ -12,7 +12,6 @@ from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
-from materialize.mz_version import MzVersion
 
 
 class ExplainCatalogItem(Check):
@@ -90,9 +89,6 @@ class ExplainCatalogItem(Check):
             Target cluster: quickstart
             """
         )
-
-        if self.current_version < MzVersion.parse_mz("v0.96.0-dev"):
-            sql = remove_target_cluster_from_explain(sql)
 
         return Testdrive(sql)
 

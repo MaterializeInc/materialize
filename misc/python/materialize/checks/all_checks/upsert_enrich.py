@@ -56,14 +56,9 @@ class UpsertEnrichValue(Check):
                 $ kafka-ingest format=avro key-format=avro topic=upsert-enrich-value key-schema=${{keyschema}} schema=${{schema}} repeat=1000
                 {{"key1": "B${{kafka-ingest.iteration}}"}} {{"f1": {{"string":"{PAD_1K}"}}}}
 
-                >[version<11900] CREATE SOURCE upsert_enrich_value
+                > CREATE SOURCE upsert_enrich_value_src
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-enrich-value-${{testdrive.seed}}')
-                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-                  ENVELOPE UPSERT
-
-                >[version>=11900] CREATE SOURCE upsert_enrich_value_src
-                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-enrich-value-${{testdrive.seed}}')
-                >[version>=11900] CREATE TABLE upsert_enrich_value FROM SOURCE upsert_enrich_value_src (REFERENCE "testdrive-upsert-enrich-value-${{testdrive.seed}}")
+                > CREATE TABLE upsert_enrich_value FROM SOURCE upsert_enrich_value_src (REFERENCE "testdrive-upsert-enrich-value-${{testdrive.seed}}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 

@@ -10,28 +10,21 @@ from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
-from materialize.checks.executors import Executor
-from materialize.mz_version import MzVersion
 
 
 class LoadGeneratorAsOfUpTo(Check):
-    def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion.parse_mz("v0.101.0")
-
     def initialize(self) -> Testdrive:
         return Testdrive(
             dedent(
                 """
             > CREATE SOURCE counter1 FROM LOAD GENERATOR COUNTER (AS OF 100, UP TO 200);
 
-            >[version<11700] CREATE SOURCE auction1 FROM LOAD GENERATOR AUCTION (AS OF 100, UP TO 200) FOR ALL TABLES;
-
-            >[version>=11700] CREATE SOURCE auction1 FROM LOAD GENERATOR AUCTION (AS OF 100, UP TO 200);
-            >[version>=11700] CREATE TABLE accounts FROM SOURCE auction1 (REFERENCE accounts);
-            >[version>=11700] CREATE TABLE auctions FROM SOURCE auction1 (REFERENCE auctions);
-            >[version>=11700] CREATE TABLE bids FROM SOURCE auction1 (REFERENCE bids);
-            >[version>=11700] CREATE TABLE organizations FROM SOURCE auction1 (REFERENCE organizations);
-            >[version>=11700] CREATE TABLE users FROM SOURCE auction1 (REFERENCE users);
+            > CREATE SOURCE auction1 FROM LOAD GENERATOR AUCTION (AS OF 100, UP TO 200);
+            > CREATE TABLE accounts FROM SOURCE auction1 (REFERENCE accounts);
+            > CREATE TABLE auctions FROM SOURCE auction1 (REFERENCE auctions);
+            > CREATE TABLE bids FROM SOURCE auction1 (REFERENCE bids);
+            > CREATE TABLE organizations FROM SOURCE auction1 (REFERENCE organizations);
+            > CREATE TABLE users FROM SOURCE auction1 (REFERENCE users);
         """
             )
         )

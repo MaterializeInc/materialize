@@ -148,47 +148,16 @@ class ConfigureMz(MzcomposeAction):
 
         # Since we already test with RBAC enabled, we have to give materialize
         # user the relevant attributes so the existing tests keep working.
-        if (
-            MzVersion.parse_mz("v0.45.0")
-            <= e.current_mz_version
-            < MzVersion.parse_mz("v0.59.0-dev")
-        ):
-            system_settings.add(
-                "ALTER ROLE materialize CREATEROLE CREATEDB CREATECLUSTER;"
-            )
-        elif e.current_mz_version >= MzVersion.parse_mz("v0.59.0"):
-            system_settings.add("GRANT ALL PRIVILEGES ON SYSTEM TO materialize;")
+        system_settings.add("GRANT ALL PRIVILEGES ON SYSTEM TO materialize;")
 
-        if e.current_mz_version >= MzVersion.parse_mz("v0.47.0"):
-            # do not enable this by default for all checks
-            system_settings.add("ALTER SYSTEM SET enable_rbac_checks TO false;")
+        # do not enable this by default for all checks
+        system_settings.add("ALTER SYSTEM SET enable_rbac_checks TO false;")
 
-        if e.current_mz_version >= MzVersion.parse_mz(
-            "v0.51.0-dev"
-        ) and e.current_mz_version < MzVersion.parse_mz("v0.76.0-dev"):
-            system_settings.add("ALTER SYSTEM SET enable_ld_rbac_checks TO true;")
-
-        if e.current_mz_version >= MzVersion.parse_mz("v0.52.0-dev"):
-            # Since we already test with RBAC enabled, we have to give materialize
-            # user the relevant privileges so the existing tests keep working.
-            system_settings.add("GRANT CREATE ON DATABASE materialize TO materialize;")
-            system_settings.add(
-                "GRANT CREATE ON SCHEMA materialize.public TO materialize;"
-            )
-            if self.scenario.base_version() >= MzVersion.parse_mz("v0.82.0-dev"):
-                cluster_name = "quickstart"
-            else:
-                cluster_name = "default"
-            system_settings.add(
-                f"GRANT CREATE ON CLUSTER {cluster_name} TO materialize;"
-            )
-
-        if (
-            MzVersion.parse_mz("v0.58.0-dev")
-            <= e.current_mz_version
-            <= MzVersion.parse_mz("v0.63.99")
-        ):
-            system_settings.add("ALTER SYSTEM SET enable_managed_clusters = on;")
+        # Since we already test with RBAC enabled, we have to give materialize
+        # user the relevant privileges so the existing tests keep working.
+        system_settings.add("GRANT CREATE ON DATABASE materialize TO materialize;")
+        system_settings.add("GRANT CREATE ON SCHEMA materialize.public TO materialize;")
+        system_settings.add("GRANT CREATE ON CLUSTER quickstart TO materialize;")
 
         system_settings = system_settings - e.system_settings
 
@@ -198,10 +167,7 @@ class ConfigureMz(MzcomposeAction):
                 + "\n".join(system_settings)
             )
 
-        kafka_broker = "BROKER '${testdrive.kafka-addr}'"
-        print(e.current_mz_version)
-        if e.current_mz_version >= MzVersion.parse_mz("v0.78.0-dev"):
-            kafka_broker += ", SECURITY PROTOCOL PLAINTEXT"
+        kafka_broker = "BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT"
         input += dedent(
             f"""
             > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA {kafka_broker}
@@ -258,33 +224,18 @@ class UseClusterdCompute(MzcomposeAction):
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
 
-        storage_addresses = (
-            """STORAGECTL ADDRESSES ['clusterd_compute_1:2100'],
-                STORAGE ADDRESSES ['clusterd_compute_1:2103']"""
-            if self.base_version >= MzVersion(0, 44, 0)
-            else "STORAGECTL ADDRESS 'clusterd_compute_1:2100'"
-        )
-
-        if self.base_version >= MzVersion(0, 55, 0):
-            param = "enable_unmanaged_cluster_replicas"
-            if self.base_version >= MzVersion.parse_mz("v0.90.0-dev"):
-                param = "enable_unorchestrated_cluster_replicas"
-            c.sql(
-                f"ALTER SYSTEM SET {param} = on;",
-                port=6877,
-                user="mz_system",
-            )
-        if self.base_version >= MzVersion.parse_mz("v0.82.0-dev"):
-            cluster_name = "quickstart"
-        else:
-            cluster_name = "default"
-
         c.sql(
-            f"""
-            ALTER CLUSTER {cluster_name} SET (MANAGED = false);
-            DROP CLUSTER REPLICA {cluster_name}.r1;
-            CREATE CLUSTER REPLICA {cluster_name}.r1
-                {storage_addresses},
+            "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = on;",
+            port=6877,
+            user="mz_system",
+        )
+        c.sql(
+            """
+            ALTER CLUSTER quickstart SET (MANAGED = false);
+            DROP CLUSTER REPLICA quickstart.r1;
+            CREATE CLUSTER REPLICA quickstart.r1
+                STORAGECTL ADDRESSES ['clusterd_compute_1:2100'],
+                STORAGE ADDRESSES ['clusterd_compute_1:2103'],
                 COMPUTECTL ADDRESSES ['clusterd_compute_1:2101'],
                 COMPUTE ADDRESSES ['clusterd_compute_1:2102'],
                 WORKERS 1;
@@ -368,16 +319,11 @@ class DropCreateDefaultReplica(MzcomposeAction):
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
 
-        if self.base_version >= MzVersion.parse_mz("v0.82.0-dev"):
-            cluster_name = "quickstart"
-        else:
-            cluster_name = "default"
-
         c.sql(
-            f"""
-            ALTER CLUSTER {cluster_name} SET (MANAGED = false);
-            DROP CLUSTER REPLICA {cluster_name}.r1;
-            CREATE CLUSTER REPLICA {cluster_name}.r1 SIZE '1';
+            """
+            ALTER CLUSTER quickstart SET (MANAGED = false);
+            DROP CLUSTER REPLICA quickstart.r1;
+            CREATE CLUSTER REPLICA quickstart.r1 SIZE '1';
             """,
             port=6877,
             user="mz_system",

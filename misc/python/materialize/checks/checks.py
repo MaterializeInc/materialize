@@ -36,28 +36,19 @@ class Check:
         return True
 
     def _kafka_broker(self) -> str:
-        result = "BROKER '${testdrive.kafka-addr}'"
-        if self.current_version >= MzVersion.parse_mz("v0.78.0-dev"):
-            result += ", SECURITY PROTOCOL PLAINTEXT"
-        return result
+        return "BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT"
 
     def _unsafe_schema(self) -> str:
         """
         :return: the schema containing unsafe functions, such as `mz_sleep`.
         """
-        if self.current_version >= MzVersion.parse_mz("v0.79.0-dev"):
-            return "mz_unsafe"
-        else:
-            return "mz_internal"
+        return "mz_unsafe"
 
     def _default_cluster(self) -> str:
         """
         :return: name of the cluster created in all environments.
         """
-        if self.base_version >= MzVersion.parse_mz("v0.82.0-dev"):
-            return "quickstart"
-        else:
-            return "default"
+        return "quickstart"
 
     def initialize(self) -> Testdrive:
         return Testdrive(TESTDRIVE_NOP)

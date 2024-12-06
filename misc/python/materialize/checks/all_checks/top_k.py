@@ -10,7 +10,6 @@ from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check, externally_idempotent
-from materialize.mz_version import MzVersion
 
 
 def schema() -> str:
@@ -43,40 +42,26 @@ class BasicTopK(Check):
         return [
             Testdrive(dedent(s))
             for s in [
-                (
-                    """
+                """
                 > INSERT INTO basic_topk_table SELECT * FROM basic_topk_table
                 > CREATE MATERIALIZED VIEW basic_topk_view1 AS SELECT f1, COUNT(f1) FROM basic_topk_table GROUP BY f1 ORDER BY f1 DESC NULLS LAST LIMIT 2;
                 > INSERT INTO basic_topk_table SELECT * FROM basic_topk_table;
 
                 > CREATE VIEW view_with_limit_offset_1a AS SELECT DISTINCT f1 FROM basic_topk_table ORDER BY f1 DESC NULLS LAST LIMIT 2 OFFSET 1;
-                """
-                    + (
-                        """
+
                 # offset and limit reordered
                 > CREATE VIEW view_with_limit_offset_1b AS SELECT DISTINCT f1 FROM basic_topk_table ORDER BY f1 DESC NULLS LAST OFFSET 1 LIMIT 2;
+                    """,
                 """
-                        if self.base_version > MzVersion.parse_mz("v0.105.0")
-                        else ""
-                    )
-                ),
-                (
-                    """
                 > INSERT INTO basic_topk_table SELECT * FROM basic_topk_table;
                 > CREATE MATERIALIZED VIEW basic_topk_view2 AS SELECT f1, COUNT(f1) FROM basic_topk_table GROUP BY f1 ORDER BY f1 ASC NULLS FIRST LIMIT 2;
                 > INSERT INTO basic_topk_table SELECT * FROM basic_topk_table;
 
                 > CREATE VIEW view_with_limit_offset_2a AS SELECT DISTINCT f1 FROM basic_topk_table ORDER BY f1 DESC NULLS LAST LIMIT 2 OFFSET 1;
-                """
-                    + (
-                        """
+
                 # offset and limit reordered
                 > CREATE VIEW view_with_limit_offset_2b AS SELECT DISTINCT f1 FROM basic_topk_table ORDER BY f1 DESC NULLS LAST OFFSET 1 LIMIT 2;
-                """
-                        if self.base_version > MzVersion.parse_mz("v0.105.0")
-                        else ""
-                    )
-                ),
+                    """,
             ]
         ]
 
@@ -105,9 +90,7 @@ class BasicTopK(Check):
                 > SELECT * FROM view_with_limit_offset_2a;
                 2
                 1
-                """
-                + (
-                    """
+
                 > SELECT * FROM view_with_limit_offset_1b;
                 2
                 1
@@ -116,9 +99,6 @@ class BasicTopK(Check):
                 2
                 1
                 """
-                    if self.base_version > MzVersion.parse_mz("v0.105.0")
-                    else ""
-                )
             )
         )
 
@@ -135,14 +115,9 @@ class MonotonicTopK(Check):
                 $ kafka-ingest format=avro topic=monotonic-topk schema=${schema} repeat=1
                 {"f1": "A"}
 
-                >[version<11900] CREATE SOURCE monotonic_topk_source
+                > CREATE SOURCE monotonic_topk_source_src
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-monotonic-topk-${testdrive.seed}')
-                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-                  ENVELOPE NONE
-
-                >[version>=11900] CREATE SOURCE monotonic_topk_source_src
-                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-monotonic-topk-${testdrive.seed}')
-                >[version>=11900] CREATE TABLE monotonic_topk_source FROM SOURCE monotonic_topk_source_src (REFERENCE "testdrive-monotonic-topk-${testdrive.seed}")
+                > CREATE TABLE monotonic_topk_source FROM SOURCE monotonic_topk_source_src (REFERENCE "testdrive-monotonic-topk-${testdrive.seed}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE
             """
@@ -204,14 +179,9 @@ class MonotonicTop1(Check):
                 $ kafka-ingest format=avro topic=monotonic-top1 schema=${schema} repeat=1
                 {"f1": "A"}
 
-                >[version<11900] CREATE SOURCE monotonic_top1_source
+                > CREATE SOURCE monotonic_top1_source_src
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-monotonic-top1-${testdrive.seed}')
-                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-                  ENVELOPE NONE
-
-                >[version>=11900] CREATE SOURCE monotonic_top1_source_src
-                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-monotonic-top1-${testdrive.seed}')
-                >[version>=11900] CREATE TABLE monotonic_top1_source FROM SOURCE monotonic_top1_source_src (REFERENCE "testdrive-monotonic-top1-${testdrive.seed}")
+                > CREATE TABLE monotonic_top1_source FROM SOURCE monotonic_top1_source_src (REFERENCE "testdrive-monotonic-top1-${testdrive.seed}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE
             """

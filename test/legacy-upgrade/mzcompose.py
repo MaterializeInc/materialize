@@ -212,18 +212,12 @@ def test_upgrade_from_version(
         with c.override(mz_from):
             c.up(mz_service)
 
-    if from_version == "current_source" or MzVersion.parse_mz(
-        from_version
-    ) >= MzVersion.parse_mz("v0.82.0-dev"):
-        created_cluster = "quickstart"
-    else:
-        created_cluster = "default"
     temp_dir = f"--temp-dir=/share/tmp/upgrade-from-{from_version}"
     seed = f"--seed={random.getrandbits(32)}"
     c.run_testdrive_files(
         "--no-reset",
         f"--var=upgrade-from-version={from_version}",
-        f"--var=created-cluster={created_cluster}",
+        "--var=created-cluster=quickstart",
         f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
         "--var=mysql-user-password=us3rp4ssw0rd",
         temp_dir,
@@ -245,9 +239,6 @@ def test_upgrade_from_version(
             if version <= from_version:
                 continue
             if version >= MzVersion.parse_cargo():
-                continue
-            if version <= MzVersion.parse_mz("v0.87.0"):
-                # Old versions didn't care about upgrading the catalog one version at a time, so save some time
                 continue
 
             print(
@@ -324,7 +315,7 @@ def test_upgrade_from_version(
             "--no-reset",
             f"--var=upgrade-from-version={from_version}",
             f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
-            f"--var=created-cluster={created_cluster}",
+            "--var=created-cluster=quickstart",
             temp_dir,
             seed,
             f"check-from-{version_glob}-{filter}.td",

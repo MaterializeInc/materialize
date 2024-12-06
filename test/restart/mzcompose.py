@@ -302,13 +302,9 @@ def workflow_allowed_cluster_replica_sizes(c: Composition) -> None:
             # We can create a cluster with sizes '1' and '2'
             > CREATE CLUSTER test REPLICAS (r1 (SIZE '1'), r2 (SIZE '2'))
 
-            >[version>=11400] SHOW CLUSTER REPLICAS WHERE cluster = 'test'
+            > SHOW CLUSTER REPLICAS WHERE cluster = 'test'
             test r1 1 true ""
             test r2 2 true ""
-
-            >[version<11400] SHOW CLUSTER REPLICAS WHERE cluster = 'test'
-            test r1 1 true
-            test r2 2 true
 
             # We cannot create replicas with size '2' after restricting allowed_cluster_replica_sizes to '1'
             $ postgres-execute connection=mz_system
@@ -331,13 +327,9 @@ def workflow_allowed_cluster_replica_sizes(c: Composition) -> None:
             $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 
             # Cluster replica of disallowed sizes still exist
-            >[version>=11400] SHOW CLUSTER REPLICAS WHERE cluster = 'test'
+            > SHOW CLUSTER REPLICAS WHERE cluster = 'test'
             test r1 1 true ""
             test r2 2 true ""
-
-            >[version<11400] SHOW CLUSTER REPLICAS WHERE cluster = 'test'
-            test r1 1 true
-            test r2 2 true
 
             # We cannot create replicas with size '2' (system parameter value persists across restarts)
             ! CREATE CLUSTER REPLICA test.r3 SIZE '2'
@@ -349,15 +341,10 @@ def workflow_allowed_cluster_replica_sizes(c: Composition) -> None:
 
             > CREATE CLUSTER REPLICA test.r3 SIZE '2'
 
-            >[version>=11400] SHOW CLUSTER REPLICAS WHERE cluster = 'test'
+            > SHOW CLUSTER REPLICAS WHERE cluster = 'test'
             test r1 1 true ""
             test r2 2 true ""
             test r3 2 true ""
-
-            >[version<11400] SHOW CLUSTER REPLICAS WHERE cluster = 'test'
-            test r1 1 true
-            test r2 2 true
-            test r3 2 true
             """
         ),
     )

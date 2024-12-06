@@ -12,8 +12,6 @@ from textwrap import dedent
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check, disabled
 from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
-from materialize.checks.executors import Executor
-from materialize.mz_version import MzVersion
 
 # This duration needs to be long enough for running all scenarios and the CI build!
 RETAIN_HISTORY_DURATION = "60m"
@@ -27,9 +25,6 @@ def schemas() -> str:
     "database-issues#7310 and compaction not predicable and now() not appropriate while mz_now() not applicable"
 )
 class RetainHistoryOnMv(Check):
-    def _can_run(self, e: Executor) -> bool:
-        return e.current_mz_version >= MzVersion.parse_mz("v0.81.0")
-
     def initialize(self) -> Testdrive:
         return Testdrive(
             dedent(
@@ -255,9 +250,6 @@ class RetainHistoryOnMv(Check):
                 Target cluster: quickstart
                 """
 
-        if self.base_version < MzVersion.parse_mz("v0.96.0-dev"):
-            other_validations = remove_target_cluster_from_explain(other_validations)
-
         return Testdrive(
             dedent(
                 f"""
@@ -277,9 +269,6 @@ class RetainHistoryOnMv(Check):
     "database-issues#7310 and compaction not predicable and now() not appropriate while mz_now() not applicable"
 )
 class RetainHistoryOnKafkaSource(Check):
-    def _can_run(self, e: Executor) -> bool:
-        return e.current_mz_version >= MzVersion.parse_mz("v0.81.0")
-
     def initialize(self) -> Testdrive:
         return Testdrive(
             schemas()
@@ -315,16 +304,10 @@ class RetainHistoryOnKafkaSource(Check):
 
                 > INSERT INTO time_for_source VALUES (3, now());
 
-                >[version<11900] CREATE SOURCE retain_history_source
-                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-retain-history-${{testdrive.seed}}')
-                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-                  ENVELOPE UPSERT
-                  WITH (RETAIN HISTORY FOR '{RETAIN_HISTORY_DURATION}')
-
-                >[version>=11900] CREATE SOURCE retain_history_source_src
+                > CREATE SOURCE retain_history_source_src
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-retain-history-${{testdrive.seed}}')
                   WITH (RETAIN HISTORY FOR '{RETAIN_HISTORY_DURATION}')
-                >[version>=11900] CREATE TABLE retain_history_source FROM SOURCE retain_history_source_src (REFERENCE "testdrive-retain-history-${{testdrive.seed}}")
+                > CREATE TABLE retain_history_source FROM SOURCE retain_history_source_src (REFERENCE "testdrive-retain-history-${{testdrive.seed}}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 

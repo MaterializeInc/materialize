@@ -66,16 +66,10 @@ class PgCdcBase:
             Testdrive(dedent(s))
             for s in [
                 f"""
-                >[version<11700] CREATE SOURCE postgres_source1{self.suffix}
-                  FROM POSTGRES CONNECTION pg1{self.suffix}
-                  (PUBLICATION 'postgres_source{self.suffix}',
-                   TEXT COLUMNS = (postgres_source_table{self.suffix}.f4))
-                  FOR TABLES (postgres_source_table{self.suffix} AS postgres_source_tableA{self.suffix});
-
-                >[version>=11700] CREATE SOURCE postgres_source1{self.suffix}
+                > CREATE SOURCE postgres_source1{self.suffix}
                   FROM POSTGRES CONNECTION pg1{self.suffix}
                   (PUBLICATION 'postgres_source{self.suffix}');
-                >[version>=11700] CREATE TABLE postgres_source_tableA{self.suffix} FROM SOURCE postgres_source1{self.suffix} (REFERENCE postgres_source_table{self.suffix});
+                > CREATE TABLE postgres_source_tableA{self.suffix} FROM SOURCE postgres_source1{self.suffix} (REFERENCE postgres_source_table{self.suffix});
 
                 > CREATE DEFAULT INDEX ON postgres_source_tableA{self.suffix};
 
@@ -95,22 +89,17 @@ class PgCdcBase:
                 INSERT INTO postgres_source_table{self.suffix} SELECT 'C', i, REPEAT('C', {self.repeats} - i), NULL FROM generate_series(1,100) AS i;
                 UPDATE postgres_source_table{self.suffix} SET f2 = f2 + 100;
 
-                $[version>=5200] postgres-execute connection=postgres://mz_system@${{testdrive.materialize-internal-sql-addr}}
+                $ postgres-execute connection=postgres://mz_system@${{testdrive.materialize-internal-sql-addr}}
                 GRANT USAGE ON CONNECTION pg2{self.suffix} TO materialize
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO postgres_source_table{self.suffix} SELECT 'D', i, REPEAT('D', {self.repeats} - i), NULL FROM generate_series(1,100) AS i;
                 UPDATE postgres_source_table{self.suffix} SET f2 = f2 + 100;
 
-                >[version<11700] CREATE SOURCE postgres_source2{self.suffix}
-                  FROM POSTGRES CONNECTION pg2{self.suffix}
-                  (PUBLICATION 'postgres_source{self.suffix}')
-                  FOR TABLES (postgres_source_table{self.suffix} AS postgres_source_tableB{self.suffix});
-
-                >[version>=11700] CREATE SOURCE postgres_source2{self.suffix}
+                > CREATE SOURCE postgres_source2{self.suffix}
                   FROM POSTGRES CONNECTION pg2{self.suffix}
                   (PUBLICATION 'postgres_source{self.suffix}');
-                >[version>=11700] CREATE TABLE postgres_source_tableB{self.suffix} FROM SOURCE postgres_source2{self.suffix} (REFERENCE postgres_source_table{self.suffix});
+                > CREATE TABLE postgres_source_tableB{self.suffix} FROM SOURCE postgres_source2{self.suffix} (REFERENCE postgres_source_table{self.suffix});
 
                 # Create a view with a complex dependency structure
                 > CREATE VIEW IF NOT EXISTS table_a_b_count_sum AS SELECT SUM(total_count) AS total_rows FROM (
@@ -150,15 +139,10 @@ class PgCdcBase:
                   USER postgres1{self.suffix},
                   PASSWORD SECRET pgpass3{self.suffix}
 
-                >[version<11700] CREATE SOURCE postgres_source3{self.suffix}
-                  FROM POSTGRES CONNECTION pg3{self.suffix}
-                  (PUBLICATION 'postgres_source{self.suffix}')
-                  FOR TABLES (postgres_source_table{self.suffix} AS postgres_source_tableC{self.suffix});
-
-                >[version>=11700] CREATE SOURCE postgres_source3{self.suffix}
+                > CREATE SOURCE postgres_source3{self.suffix}
                   FROM POSTGRES CONNECTION pg3{self.suffix}
                   (PUBLICATION 'postgres_source{self.suffix}');
-                >[version>=11700] CREATE TABLE postgres_source_tableC{self.suffix} FROM SOURCE postgres_source3{self.suffix} (REFERENCE postgres_source_table{self.suffix});
+                > CREATE TABLE postgres_source_tableC{self.suffix} FROM SOURCE postgres_source3{self.suffix} (REFERENCE postgres_source_table{self.suffix});
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO postgres_source_table{self.suffix} SELECT 'G', i, REPEAT('G', {self.repeats} - i), NULL FROM generate_series(1,100) AS i;
@@ -230,30 +214,22 @@ class PgCdcBase:
             # TODO: Figure out the quoting here -- it returns "f4" when done using the SQL shell
             # > SELECT regexp_match(create_sql, 'TEXT COLUMNS = \\((.*?)\\)')[1] FROM (SHOW CREATE SOURCE postgres_source_tableA{self.suffix});
             # "\"f4\""
+
+            # Confirm that the primary key information has been propagated from Pg
+            > SELECT key FROM (SHOW INDEXES ON postgres_source_tableA{self.suffix});
+            {{f1,f2}}
+
+            ? EXPLAIN SELECT DISTINCT f1, f2 FROM postgres_source_tableA{self.suffix};
+            Explained Query (fast path):
+              Project (#0, #1)
+                ReadIndex on=materialize.public.postgres_source_tablea{self.suffix} postgres_source_tablea{self.suffix}_primary_idx=[*** full scan ***]
+
+            Used Indexes:
+              - materialize.public.postgres_source_tablea{self.suffix}_primary_idx (*** full scan ***)
+
+            Target cluster: quickstart
             """
         )
-
-        if self.base_version >= MzVersion.parse_mz("v0.50.0-dev"):
-            sql += dedent(
-                f"""
-                # Confirm that the primary key information has been propagated from Pg
-                > SELECT key FROM (SHOW INDEXES ON postgres_source_tableA{self.suffix});
-                {{f1,f2}}
-
-                ? EXPLAIN SELECT DISTINCT f1, f2 FROM postgres_source_tableA{self.suffix};
-                Explained Query (fast path):
-                  Project (#0, #1)
-                    ReadIndex on=materialize.public.postgres_source_tablea{self.suffix} postgres_source_tablea{self.suffix}_primary_idx=[*** full scan ***]
-
-                Used Indexes:
-                  - materialize.public.postgres_source_tablea{self.suffix}_primary_idx (*** full scan ***)
-
-                Target cluster: quickstart
-                """
-            )
-
-        if self.current_version < MzVersion.parse_mz("v0.96.0-dev"):
-            sql = remove_target_cluster_from_explain(sql)
 
         return Testdrive(sql)
 
@@ -302,15 +278,10 @@ class PgCdcMzNow(Check):
                   USER postgres2,
                   PASSWORD SECRET postgres_mz_now_pass
 
-                >[version<11700] CREATE SOURCE postgres_mz_now_source
-                  FROM POSTGRES CONNECTION postgres_mz_now_conn
-                  (PUBLICATION 'postgres_mz_now_publication')
-                  FOR TABLES (postgres_mz_now_table);
-
-                >[version>=11700] CREATE SOURCE postgres_mz_now_source
+                > CREATE SOURCE postgres_mz_now_source
                   FROM POSTGRES CONNECTION postgres_mz_now_conn
                   (PUBLICATION 'postgres_mz_now_publication');
-                >[version>=11700] CREATE TABLE postgres_mz_now_table FROM SOURCE postgres_mz_now_source (REFERENCE postgres_mz_now_table);
+                > CREATE TABLE postgres_mz_now_table FROM SOURCE postgres_mz_now_source (REFERENCE postgres_mz_now_table);
 
                 # Return all rows fresher than 60 seconds
                 > CREATE MATERIALIZED VIEW postgres_mz_now_view AS

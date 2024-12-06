@@ -33,14 +33,9 @@ class AlterIndex(Check):
                 $ kafka-ingest format=avro topic=alter-index schema=${schema} repeat=10000
                 {"f1": "A${kafka-ingest.iteration}"}
 
-                >[version<11900] CREATE SOURCE alter_index_source
+                > CREATE SOURCE alter_index_source_src
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-alter-index-${testdrive.seed}')
-                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-                  ENVELOPE NONE
-
-                >[version>=11900] CREATE SOURCE alter_index_source_src
-                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-alter-index-${testdrive.seed}')
-                >[version>=11900] CREATE TABLE alter_index_source FROM SOURCE alter_index_source_src (REFERENCE "testdrive-alter-index-${testdrive.seed}")
+                > CREATE TABLE alter_index_source FROM SOURCE alter_index_source_src (REFERENCE "testdrive-alter-index-${testdrive.seed}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE
 
@@ -54,7 +49,7 @@ class AlterIndex(Check):
             Testdrive(schema() + dedent(s))
             for s in [
                 """
-                $[version>=5500] postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+                $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
                 ALTER SYSTEM SET enable_index_options = true
                 ALTER SYSTEM SET enable_logical_compaction_window = true
 
@@ -62,22 +57,15 @@ class AlterIndex(Check):
                 $ kafka-ingest format=avro topic=alter-index schema=${schema} repeat=10000
                 {"f1": "B${kafka-ingest.iteration}"}
 
-                >[version>=8700] ALTER INDEX alter_index_table_primary_idx SET (RETAIN HISTORY = FOR '1s');
-                >[version>=8700] ALTER INDEX alter_index_source_primary_idx SET (RETAIN HISTORY = FOR '1s');
+                > ALTER INDEX alter_index_table_primary_idx SET (RETAIN HISTORY = FOR '1s');
+                > ALTER INDEX alter_index_source_primary_idx SET (RETAIN HISTORY = FOR '1s');
 
                 > INSERT INTO alter_index_table SELECT 'C' || generate_series FROM generate_series(1,10000);
                 $ kafka-ingest format=avro topic=alter-index schema=${schema} repeat=10000
                 {"f1": "C${kafka-ingest.iteration}"}
                 """,
                 """
-                # When upgrading from old version without roles the indexes are
-                # owned by default_role, thus we have to change the owner
-                # before altering them:
-                $[version>=4700] postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-                ALTER INDEX alter_index_table_primary_idx OWNER TO materialize;
-                ALTER INDEX alter_index_source_primary_idx OWNER TO materialize;
-
-                $[version>=5500] postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+                $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
                 ALTER SYSTEM SET enable_index_options = true
                 ALTER SYSTEM SET enable_logical_compaction_window = true
 
@@ -85,8 +73,8 @@ class AlterIndex(Check):
                 $ kafka-ingest format=avro topic=alter-index schema=${schema} repeat=10000
                 {"f1": "D${kafka-ingest.iteration}"}
 
-                >[version>=8700] ALTER INDEX alter_index_table_primary_idx SET (RETAIN HISTORY = FOR '1h');
-                >[version>=8700] ALTER INDEX alter_index_source_primary_idx SET (RETAIN HISTORY = FOR '1h');
+                > ALTER INDEX alter_index_table_primary_idx SET (RETAIN HISTORY = FOR '1h');
+                > ALTER INDEX alter_index_source_primary_idx SET (RETAIN HISTORY = FOR '1h');
 
                 > INSERT INTO alter_index_table SELECT 'E' || generate_series FROM generate_series(1,10000);
                 $ kafka-ingest format=avro topic=alter-index schema=${schema} repeat=10000

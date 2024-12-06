@@ -9,20 +9,12 @@
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
-from materialize.checks.executors import Executor
-from materialize.mz_version import MzVersion
 
 
 class UnifiedCluster(Check):
-    def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion.parse_mz("v0.71.0-dev")
-
     def initialize(self) -> Testdrive:
         return Testdrive(
             """
-            $[version<8100] postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-            ALTER SYSTEM SET enable_unified_clusters = true
-
             > CREATE CLUSTER shared_cluster_compute_first SIZE '1', REPLICATION FACTOR 1;
             > CREATE CLUSTER shared_cluster_storage_first SIZE '1', REPLICATION FACTOR 1;
             """
@@ -33,10 +25,7 @@ class UnifiedCluster(Check):
             # Create either a source or a view as first object in cluster
             Testdrive(
                 """
-                >[version<9300] CREATE SOURCE shared_cluster_storage_first_source
-                  IN CLUSTER shared_cluster_storage_first
-                  FROM LOAD GENERATOR COUNTER (SCALE FACTOR 0.01)
-                >[version>=9300] CREATE SOURCE shared_cluster_storage_first_source
+                > CREATE SOURCE shared_cluster_storage_first_source
                   IN CLUSTER shared_cluster_storage_first
                   FROM LOAD GENERATOR COUNTER
 
@@ -53,10 +42,7 @@ class UnifiedCluster(Check):
             # now already contains an object
             Testdrive(
                 """
-                >[version<9300] CREATE SOURCE shared_cluster_compute_first_source
-                  IN CLUSTER shared_cluster_compute_first
-                  FROM LOAD GENERATOR COUNTER (SCALE FACTOR 0.01)
-                >[version>=9300] CREATE SOURCE shared_cluster_compute_first_source
+                > CREATE SOURCE shared_cluster_compute_first_source
                   IN CLUSTER shared_cluster_compute_first
                   FROM LOAD GENERATOR COUNTER
 

@@ -15,7 +15,6 @@ from pg8000.converters import literal  # type: ignore
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
 from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
-from materialize.checks.executors import Executor
 from materialize.mz_version import MzVersion
 from materialize.util import naughty_strings
 
@@ -44,10 +43,6 @@ def cluster() -> str:
 
 
 class Identifiers(Check):
-    def _can_run(self, e: Executor) -> bool:
-        # CREATE ROLE not compatible with older releases
-        return self.base_version >= MzVersion.parse_mz("v0.47.0-dev")
-
     IDENT_KEYS = [
         "db",
         "schema",
@@ -108,16 +103,10 @@ class Identifiers(Check):
             > CREATE CONNECTION IF NOT EXISTS {dq(self.ident["kafka_conn"])} FOR KAFKA {self._kafka_broker()};
             > CREATE CONNECTION IF NOT EXISTS {dq(self.ident["csr_conn"])} FOR CONFLUENT SCHEMA REGISTRY URL '${{testdrive.schema-registry-url}}';
 
-            >[version<11900] CREATE SOURCE {dq(self.ident["source"])}
-              IN CLUSTER identifiers
-              FROM KAFKA CONNECTION {dq(self.ident["kafka_conn"])} (TOPIC 'testdrive-sink-source-ident-${{testdrive.seed}}')
-              FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION {dq(self.ident["csr_conn"])}
-              ENVELOPE UPSERT;
-
-            >[version>=11900] CREATE SOURCE {dq(self.ident["source"] + "_src")}
+            > CREATE SOURCE {dq(self.ident["source"] + "_src")}
               IN CLUSTER identifiers
               FROM KAFKA CONNECTION {dq(self.ident["kafka_conn"])} (TOPIC 'testdrive-sink-source-ident-${{testdrive.seed}}');
-            >[version>=11900] CREATE TABLE {dq(self.ident["source"])} FROM SOURCE {dq(self.ident["source"] + "_src")} (REFERENCE "testdrive-sink-source-ident-${{testdrive.seed}}")
+            > CREATE TABLE {dq(self.ident["source"])} FROM SOURCE {dq(self.ident["source"] + "_src")} (REFERENCE "testdrive-sink-source-ident-${{testdrive.seed}}")
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION {dq(self.ident["csr_conn"])}
               ENVELOPE UPSERT;
 
@@ -129,13 +118,9 @@ class Identifiers(Check):
               INTO KAFKA CONNECTION {dq(self.ident["kafka_conn"])} (TOPIC 'sink-sink-ident0')
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION {dq(self.ident["csr_conn"])}
               ENVELOPE DEBEZIUM;
-            """
-        if self.base_version >= MzVersion(0, 44, 0):
-            cmds += f"""
+
             > CREATE SECRET {dq(self.ident["secret"])} as {sq(self.ident["secret_value"])};
-            """
-        if self.base_version >= MzVersion(0, 72, 0):
-            cmds += f"""
+
             > COMMENT ON TABLE {dq(self.ident["schema"])}.{dq(self.ident["table"])} IS {sq(self.ident["comment_table"])};
 
             > COMMENT ON COLUMN {dq(self.ident["schema"])}.{dq(self.ident["table"])}.{dq(self.ident["column"])} IS {sq(self.ident["comment_column"])};
@@ -164,11 +149,7 @@ class Identifiers(Check):
 
     def validate(self) -> Testdrive:
         cmds = f"""
-        >[version<11400] SHOW DATABASES WHERE name NOT LIKE 'to_be_created%' AND name NOT LIKE 'owner_db%' AND name NOT LIKE 'privilege_db%' AND name <> 'defpriv_db';
-        materialize
-        {dq_print(self.ident["db"])}
-
-        >[version>=11400] SHOW DATABASES WHERE name NOT LIKE 'to_be_created%' AND name NOT LIKE 'owner_db%' AND name NOT LIKE 'privilege_db%' AND name <> 'defpriv_db';
+        > SHOW DATABASES WHERE name NOT LIKE 'to_be_created%' AND name NOT LIKE 'owner_db%' AND name NOT LIKE 'privilege_db%' AND name <> 'defpriv_db';
         materialize ""
         {dq_print(self.ident["db"])} ""
 
@@ -177,13 +158,10 @@ class Identifiers(Check):
         > SELECT name FROM mz_roles WHERE name = {sq(self.ident["role"])}
         {dq_print(self.ident["role"])}
 
-        >[version>=11400] SHOW TYPES;
+        > SHOW TYPES;
         {dq_print(self.ident["type"])} ""
 
-        >[version<11400] SHOW TYPES;
-        {dq_print(self.ident["type"])}
-
-        >[version>=11400] SHOW SCHEMAS FROM {dq(self.ident["db"])};
+        > SHOW SCHEMAS FROM {dq(self.ident["db"])};
         public ""
         information_schema ""
         mz_catalog ""
@@ -194,24 +172,10 @@ class Identifiers(Check):
         pg_catalog ""
         {dq_print(self.ident["schema"])} ""
 
-        >[version<10600] SHOW SCHEMAS FROM {dq(self.ident["db"])};
-        public
-        information_schema
-        mz_catalog
-        mz_unsafe
-        mz_internal
-        pg_catalog
-        {dq_print(self.ident["schema"])} ""
-
-        >[version>=11400] SHOW SINKS FROM {dq(self.ident["schema"])};
+        > SHOW SINKS FROM {dq(self.ident["schema"])};
         {dq_print(self.ident["sink0"])} kafka identifiers ""
         {dq_print(self.ident["sink1"])} kafka identifiers ""
         {dq_print(self.ident["sink2"])} kafka identifiers ""
-
-        >[version<11300] SHOW SINKS FROM {dq(self.ident["schema"])};
-        {dq_print(self.ident["sink0"])} kafka 4 identifiers
-        {dq_print(self.ident["sink1"])} kafka 4 identifiers
-        {dq_print(self.ident["sink2"])} kafka 4 identifiers
 
         > SELECT * FROM {dq(self.ident["schema"])}.{dq(self.ident["mv0"])};
         3
@@ -228,19 +192,12 @@ class Identifiers(Check):
 
         > SELECT * FROM {dq(self.ident["source_view"])};
         U2 A 1000
-        """
-        if self.base_version >= MzVersion(0, 72, 0):
-            cmds += f"""
+
         > SELECT object_sub_id, comment FROM mz_internal.mz_comments JOIN mz_tables ON mz_internal.mz_comments.id = mz_tables.id WHERE name = {sq(self.ident["table"])};
         <null> {dq_print(self.ident["comment_table"])}
         1 {dq_print(self.ident["comment_column"])}
-        """
-        if self.base_version >= MzVersion(0, 44, 0):
-            cmds += f"""
-        >[version<11400] SHOW SECRETS;
-        {dq_print(self.ident["secret"])}
 
-        >[version>=11400] SHOW SECRETS;
+        > SHOW SECRETS;
         {dq_print(self.ident["secret"])} ""
         """
         return Testdrive(dedent(cmds))

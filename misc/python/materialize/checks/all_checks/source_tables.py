@@ -10,16 +10,10 @@ from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check, externally_idempotent
-from materialize.checks.executors import Executor
-from materialize.mz_version import MzVersion
 from materialize.mzcompose.services.mysql import MySql
 
 
 class TableFromSourceBase(Check):
-
-    def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion.parse_mz("v0.116.0-dev")
-
     def generic_setup(self) -> str:
         return dedent(
             """
