@@ -341,7 +341,7 @@ class InsertMultiRow(DML):
 class Update(DML):
     """Measure the time it takes for an UPDATE statement to return to client"""
 
-    SCALE = 7
+    SCALE = 6
 
     def init(self) -> list[Action]:
         return [
@@ -915,6 +915,7 @@ class DeltaJoinMaintained(Dataflow):
     initialized as a constant view"""
 
     SCALE = 7
+    FIXED_SCALE = True
 
     def version(self) -> ScenarioVersion:
         return ScenarioVersion.create(1, 1, 0)
@@ -1153,7 +1154,8 @@ $ kafka-ingest format=avro topic=kafka-upsert key-format=avro key-schema=${{keys
 
 
 class KafkaUpsertUnique(Kafka):
-    SCALE = 7
+    SCALE = 6
+    FIXED_SCALE = True
 
     def version(self) -> ScenarioVersion:
         return ScenarioVersion.create(1, 1, 0)
