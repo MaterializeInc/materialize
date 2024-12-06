@@ -308,6 +308,7 @@ mz_arrangement_batcher_allocations_raw_s2_primary_idx       mz_arrangement_batch
 mz_arrangement_batcher_capacity_raw_s2_primary_idx          mz_arrangement_batcher_capacity_raw          mz_catalog_server    {operator_id,worker_id}                     ""
 mz_arrangement_batcher_records_raw_s2_primary_idx           mz_arrangement_batcher_records_raw           mz_catalog_server    {operator_id,worker_id}                     ""
 mz_arrangement_batcher_size_raw_s2_primary_idx              mz_arrangement_batcher_size_raw              mz_catalog_server    {operator_id,worker_id}                     ""
+mz_cluster_deployment_lineage_ind                           mz_cluster_deployment_lineage                mz_catalog_server    {cluster_id}                                ""
 mz_cluster_replica_history_ind                              mz_cluster_replica_history                   mz_catalog_server    {dropped_at}                                ""
 mz_cluster_replica_name_history_ind                         mz_cluster_replica_name_history              mz_catalog_server    {id}                                        ""
 mz_cluster_replica_metrics_ind                              mz_cluster_replica_metrics                   mz_catalog_server    {replica_id}                                ""

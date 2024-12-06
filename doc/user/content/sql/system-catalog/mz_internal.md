@@ -131,6 +131,17 @@ the most recent status for each AWS PrivateLink connection in the system.
 | `last_status_change_at` | [`timestamp with time zone`] | Wall-clock timestamp of the connection status change.|
 | `status` | [`text`] | | The status of the connection: one of `pending-service-discovery`, `creating-endpoint`, `recreating-endpoint`, `updating-endpoint`, `available`, `deleted`, `deleting`, `expired`, `failed`, `pending`, `pending-acceptance`, `rejected`, or `unknown`. |
 
+## `mz_cluster_deployment_lineage`
+
+The `mz_cluster_deployment_lineage` table shows the blue/green deployment lineage of all clusters in [`mz_clusters`](../mz_catalog/#mz_clusters). It determines all cluster IDs that are logically the same cluster.
+
+<!-- RELATION_SPEC mz_internal.mz_cluster_deployment_lineage -->
+| Field                               | Type         | Meaning                                                        |
+|-------------------------------------|--------------|----------------------------------------------------------------|
+| `cluster_id`                        | [`text`]     | The ID of the cluster. Corresponds to [`mz_clusters.id`](../mz_catalog/#mz_clusters) (though the cluster may no longer exist). |
+| `current_deployment_cluster_id`                              | [`text`]     | The cluster ID of the last cluster in `cluster_id`'s blue/green lineage (the cluster is guaranteed to exist). |
+| `cluster_name`   | [`text`] | The name of the cluster |
+
 ## `mz_cluster_schedules`
 
 The `mz_cluster_schedules` table shows the `SCHEDULE` option specified for each cluster.

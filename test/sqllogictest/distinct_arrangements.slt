@@ -982,9 +982,9 @@ ORDER BY mdod.name;
 ----
 AccumulableErrorCheck  9
 Arrange␠ReduceMinsMaxes  3
-Arrange␠export␠iterative  1
-Arrange␠export␠iterative␠err  1
-Arrange␠recursive␠err  1
+Arrange␠export␠iterative  2
+Arrange␠export␠iterative␠err  2
+Arrange␠recursive␠err  4
 ArrangeAccumulable␠[val:␠empty]  9
 ArrangeBy[[CallBinary␠{␠func:␠JsonbGetString␠{␠stringify:␠true␠},␠expr1:␠Column(1),␠expr2:␠Literal(Ok(Row{[String("id")]}),␠ColumnType␠{␠scalar_type:␠String,␠nullable:␠false␠})␠}]]  2
 ArrangeBy[[CallBinary␠{␠func:␠JsonbGetString␠{␠stringify:␠true␠},␠expr1:␠Column(2),␠expr2:␠Literal(Ok(Row{[String("id")]}),␠ColumnType␠{␠scalar_type:␠String,␠nullable:␠false␠})␠}]]  1
@@ -1001,13 +1001,13 @@ ArrangeBy[[Column(0),␠Column(1),␠Column(2),␠Column(3),␠Column(4),␠Colu
 ArrangeBy[[Column(0),␠Column(1),␠Column(2),␠Column(3),␠Column(4)]]  1
 ArrangeBy[[Column(0),␠Column(1),␠Column(2),␠Column(3),␠Column(4)]]-errors  1
 ArrangeBy[[Column(0),␠Column(1)]]  2
-ArrangeBy[[Column(0),␠Column(2)]]  3
+ArrangeBy[[Column(0),␠Column(2)]]  4
 ArrangeBy[[Column(0),␠Column(3)]]  4
 ArrangeBy[[Column(0),␠Column(4)]]  1
 ArrangeBy[[Column(0)]]  152
 ArrangeBy[[Column(0)]]-errors  42
 ArrangeBy[[Column(1),␠Column(0)]]  1
-ArrangeBy[[Column(1),␠Column(2)]]  1
+ArrangeBy[[Column(1),␠Column(2)]]  2
 ArrangeBy[[Column(1),␠Column(3)]]  1
 ArrangeBy[[Column(1)]]  25
 ArrangeBy[[Column(1)]]-errors  7
@@ -1026,21 +1026,21 @@ ArrangeBy[[Column(5)]]  2
 ArrangeBy[[Column(6)]]  3
 ArrangeBy[[Column(6)]]-errors  2
 ArrangeBy[[Column(9)]]  1
-ArrangeBy[[]]  9
-Arranged␠DistinctBy  46
+ArrangeBy[[]]  11
+Arranged␠DistinctBy  47
 Arranged␠MinsMaxesHierarchical␠input  14
 Arranged␠ReduceInaccumulable  3
-Arranged␠TopK␠input  52
-Distinct␠recursive␠err  1
-DistinctBy  46
-DistinctByErrorCheck  46
+Arranged␠TopK␠input  68
+Distinct␠recursive␠err  4
+DistinctBy  47
+DistinctByErrorCheck  47
 ReduceAccumulable  9
 ReduceInaccumulable  3
 ReduceInaccumulable␠Error␠Check  3
 ReduceMinsMaxes  3
 ReduceMinsMaxes␠Error␠Check  1
 Reduced␠Fallibly␠MinsMaxesHierarchical  14
-Reduced␠TopK␠input  52
+Reduced␠TopK␠input  68
 Threshold␠local  10
 
 statement ok

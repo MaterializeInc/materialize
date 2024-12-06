@@ -1153,3 +1153,5 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 17045  mz_compute_dataflow_global_ids_per_worker
 17046  mz_lir_mapping
 17047  mz_dataflow_global_ids
+17049  mz_cluster_deployment_lineage
+17050  mz_cluster_deployment_lineage_ind
