@@ -198,14 +198,20 @@ where
     let (desired, descs, sink_frontier, mint_token) = mint::render(
         sink_id,
         persist_api.clone(),
-        as_of,
+        as_of.clone(),
         active_worker_id,
         compute_state.read_only_rx.clone(),
         &desired,
     );
 
-    let (batches, write_token) =
-        write::render(sink_id, persist_api.clone(), &desired, &persist, &descs);
+    let (batches, write_token) = write::render(
+        sink_id,
+        persist_api.clone(),
+        as_of,
+        &desired,
+        &persist,
+        &descs,
+    );
 
     let append_token = append::render(sink_id, persist_api, active_worker_id, &descs, &batches);
 
@@ -639,6 +645,7 @@ mod write {
     pub fn render<S>(
         sink_id: GlobalId,
         persist_api: PersistApi,
+        as_of: Antichain<Timestamp>,
         desired: &DesiredStreams<S>,
         persist: &PersistStreams<S>,
         descs: &Stream<S, BatchDescription>,
@@ -676,7 +683,7 @@ mod write {
 
             let writer = persist_api.open_writer().await;
             let sink_metrics = persist_api.open_metrics().await;
-            let mut state = State::new(sink_id, worker_id, writer, sink_metrics);
+            let mut state = State::new(sink_id, worker_id, writer, sink_metrics, as_of);
 
             loop {
                 // Read from the inputs, extract `desired` updates as positive contributions to
@@ -775,6 +782,14 @@ mod write {
         /// its `lower` is >= the `persist_frontier`. Otherwise the described batch couldn't be
         /// appended anymore, rendering the batch description invalid.
         batch_description: Option<(BatchDescription, Capability<Timestamp>)>,
+        /// A request to force a consolidation of `corrections` once both frontiers become greater
+        /// than the given frontier.
+        ///
+        /// Normally we force a consolidation whenever we write a batch, but there are periods
+        /// (like read-only) mode when that doesn't happen, and we need to manually force
+        /// consolidation instead. Currently this is only used to ensure we quickly get rid of the
+        /// snapshot updates.
+        force_consolidation_after: Option<Antichain<Timestamp>>,
     }
 
     impl State {
@@ -783,8 +798,13 @@ mod write {
             worker_id: usize,
             persist_writer: WriteHandle<SourceData, (), Timestamp, Diff>,
             metrics: SinkMetrics,
+            as_of: Antichain<Timestamp>,
         ) -> Self {
             let worker_metrics = metrics.for_worker(worker_id);
+
+            // Force a consolidation of `corrections` after the snapshot updates have been fully
+            // processed, to ensure we get rid of those as quickly as possible.
+            let force_consolidation_after = Some(as_of);
 
             Self {
                 sink_id,
@@ -797,6 +817,7 @@ mod write {
                 desired_frontiers: OkErr::new_frontiers(),
                 persist_frontiers: OkErr::new_frontiers(),
                 batch_description: None,
+                force_consolidation_after,
             }
         }
 
@@ -814,12 +835,14 @@ mod write {
 
         fn advance_desired_ok_frontier(&mut self, frontier: Antichain<Timestamp>) {
             if advance(&mut self.desired_frontiers.ok, frontier) {
+                self.apply_desired_frontier_advancement();
                 self.trace("advanced `desired` ok frontier");
             }
         }
 
         fn advance_desired_err_frontier(&mut self, frontier: Antichain<Timestamp>) {
             if advance(&mut self.desired_frontiers.err, frontier) {
+                self.apply_desired_frontier_advancement();
                 self.trace("advanced `desired` err frontier");
             }
         }
@@ -838,6 +861,11 @@ mod write {
             }
         }
 
+        /// Apply the effects of a previous `desired` frontier advancement.
+        fn apply_desired_frontier_advancement(&mut self) {
+            self.maybe_force_consolidation();
+        }
+
         /// Apply the effects of a previous `persist` frontier advancement.
         fn apply_persist_frontier_advancement(&mut self) {
             let frontier = self.persist_frontiers.frontier();
@@ -854,6 +882,25 @@ mod write {
                 if PartialOrder::less_than(&desc.lower, frontier) {
                     self.batch_description = None;
                 }
+            }
+
+            self.maybe_force_consolidation();
+        }
+
+        /// If the current consolidation request has become applicable, apply it.
+        fn maybe_force_consolidation(&mut self) {
+            let Some(request) = &self.force_consolidation_after else {
+                return;
+            };
+
+            let desired_frontier = self.desired_frontiers.frontier();
+            let persist_frontier = self.persist_frontiers.frontier();
+            if PartialOrder::less_than(request, desired_frontier)
+                && PartialOrder::less_than(request, persist_frontier)
+            {
+                self.trace("forcing correction consolidation");
+                self.corrections.ok.consolidate_at_since();
+                self.corrections.err.consolidate_at_since();
             }
         }
 
