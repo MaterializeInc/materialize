@@ -115,20 +115,12 @@ def get_default_system_parameters(
         "enable_table_keys": "true",
         "enable_variadic_left_join_lowering": "true",
         "enable_worker_core_affinity": "true",
-        "persist_batch_columnar_format": (
-            "both_v2" if version >= MzVersion.parse_mz("v0.112.0-dev") else "row"
-        ),
+        "persist_batch_columnar_format": "both_v2",
         "persist_batch_columnar_format_percent": "100",
         "persist_batch_delete_enabled": "true",
-        "persist_batch_structured_order": (
-            "true" if version >= MzVersion.parse_mz("v0.119.0-dev") else "false"
-        ),
-        "persist_batch_structured_key_lower_len": (
-            "256" if version >= MzVersion.parse_mz("v0.117.0-dev") else "0"
-        ),
-        "persist_batch_max_run_len": (
-            "4" if version >= MzVersion.parse_mz("v0.122.0-dev") else "1000000"
-        ),
+        "persist_batch_structured_order": "true",
+        "persist_batch_structured_key_lower_len": "256",
+        "persist_batch_max_run_len": "4",
         "persist_catalog_force_compaction_fuel": "1024",
         "persist_catalog_force_compaction_wait": "1s",
         "persist_fast_path_limit": "1000",

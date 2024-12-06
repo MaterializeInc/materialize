@@ -10,15 +10,10 @@ from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check, externally_idempotent
-from materialize.checks.executors import Executor
-from materialize.mz_version import MzVersion
 
 
 @externally_idempotent(False)
 class KafkaProtocols(Check):
-    def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion.parse_mz("v0.78.0-dev")
-
     def initialize(self) -> Testdrive:
         return Testdrive(
             dedent(
@@ -85,59 +80,34 @@ class KafkaProtocols(Check):
                     SSL CERTIFICATE AUTHORITY '${ca-crt}'
                   )
 
-                >[version<11900] CREATE SOURCE kafka_plaintext_1 FROM KAFKA CONNECTION kafka_plaintext (
+                > CREATE SOURCE kafka_plaintext_1_src FROM KAFKA CONNECTION kafka_plaintext (
                     TOPIC 'testdrive-kafka-protocols-1-${testdrive.seed}'
                   )
+                > CREATE TABLE kafka_plaintext_1 FROM SOURCE kafka_plaintext_1_src (REFERENCE "testdrive-kafka-protocols-1-${testdrive.seed}")
                   FORMAT TEXT
 
-                >[version>=11900] CREATE SOURCE kafka_plaintext_1_src FROM KAFKA CONNECTION kafka_plaintext (
+                > CREATE SOURCE kafka_ssl_1_src FROM KAFKA CONNECTION kafka_ssl (
                     TOPIC 'testdrive-kafka-protocols-1-${testdrive.seed}'
                   )
-                >[version>=11900] CREATE TABLE kafka_plaintext_1 FROM SOURCE kafka_plaintext_1_src (REFERENCE "testdrive-kafka-protocols-1-${testdrive.seed}")
+                > CREATE TABLE kafka_ssl_1 FROM SOURCE kafka_ssl_1_src (REFERENCE "testdrive-kafka-protocols-1-${testdrive.seed}")
                   FORMAT TEXT
 
-                >[version<11900] CREATE SOURCE kafka_ssl_1 FROM KAFKA CONNECTION kafka_ssl (
+                > CREATE SOURCE kafka_scram_sha_512_1_src FROM KAFKA CONNECTION kafka_scram_sha_512 (
                     TOPIC 'testdrive-kafka-protocols-1-${testdrive.seed}'
                   )
+                > CREATE TABLE kafka_scram_sha_512_1 FROM SOURCE kafka_scram_sha_512_1_src (REFERENCE "testdrive-kafka-protocols-1-${testdrive.seed}")
                   FORMAT TEXT
 
-                >[version>=11900] CREATE SOURCE kafka_ssl_1_src FROM KAFKA CONNECTION kafka_ssl (
+                > CREATE SOURCE kafka_ssl_scram_sha_512_1_src FROM KAFKA CONNECTION kafka_ssl_scram_sha_512 (
                     TOPIC 'testdrive-kafka-protocols-1-${testdrive.seed}'
                   )
-                >[version>=11900] CREATE TABLE kafka_ssl_1 FROM SOURCE kafka_ssl_1_src (REFERENCE "testdrive-kafka-protocols-1-${testdrive.seed}")
+                > CREATE TABLE kafka_ssl_scram_sha_512_1 FROM SOURCE kafka_ssl_scram_sha_512_1_src (REFERENCE "testdrive-kafka-protocols-1-${testdrive.seed}")
                   FORMAT TEXT
 
-                >[version<11900] CREATE SOURCE kafka_scram_sha_512_1 FROM KAFKA CONNECTION kafka_scram_sha_512 (
+                > CREATE SOURCE kafka_sasl_1_src FROM KAFKA CONNECTION kafka_sasl (
                     TOPIC 'testdrive-kafka-protocols-1-${testdrive.seed}'
                   )
-                  FORMAT TEXT
-
-                >[version>=11900] CREATE SOURCE kafka_scram_sha_512_1_src FROM KAFKA CONNECTION kafka_scram_sha_512 (
-                    TOPIC 'testdrive-kafka-protocols-1-${testdrive.seed}'
-                  )
-                >[version>=11900] CREATE TABLE kafka_scram_sha_512_1 FROM SOURCE kafka_scram_sha_512_1_src (REFERENCE "testdrive-kafka-protocols-1-${testdrive.seed}")
-                  FORMAT TEXT
-
-                >[version<11900] CREATE SOURCE kafka_ssl_scram_sha_512_1 FROM KAFKA CONNECTION kafka_ssl_scram_sha_512 (
-                    TOPIC 'testdrive-kafka-protocols-1-${testdrive.seed}'
-                  )
-                  FORMAT TEXT
-
-                >[version>=11900] CREATE SOURCE kafka_ssl_scram_sha_512_1_src FROM KAFKA CONNECTION kafka_ssl_scram_sha_512 (
-                    TOPIC 'testdrive-kafka-protocols-1-${testdrive.seed}'
-                  )
-                >[version>=11900] CREATE TABLE kafka_ssl_scram_sha_512_1 FROM SOURCE kafka_ssl_scram_sha_512_1_src (REFERENCE "testdrive-kafka-protocols-1-${testdrive.seed}")
-                  FORMAT TEXT
-
-                >[version<11900] CREATE SOURCE kafka_sasl_1 FROM KAFKA CONNECTION kafka_sasl (
-                    TOPIC 'testdrive-kafka-protocols-1-${testdrive.seed}'
-                  )
-                  FORMAT TEXT
-
-                >[version>=11900] CREATE SOURCE kafka_sasl_1_src FROM KAFKA CONNECTION kafka_sasl (
-                    TOPIC 'testdrive-kafka-protocols-1-${testdrive.seed}'
-                  )
-                >[version>=11900] CREATE TABLE kafka_sasl_1 FROM SOURCE kafka_sasl_1_src (REFERENCE "testdrive-kafka-protocols-1-${testdrive.seed}")
+                > CREATE TABLE kafka_sasl_1 FROM SOURCE kafka_sasl_1_src (REFERENCE "testdrive-kafka-protocols-1-${testdrive.seed}")
                   FORMAT TEXT
                 """
             )
@@ -148,59 +118,34 @@ class KafkaProtocols(Check):
             Testdrive(dedent(s))
             for s in [
                 """
-                >[version<11900] CREATE SOURCE kafka_plaintext_2 FROM KAFKA CONNECTION kafka_plaintext (
+                > CREATE SOURCE kafka_plaintext_2_src FROM KAFKA CONNECTION kafka_plaintext (
                     TOPIC 'testdrive-kafka-protocols-2-${testdrive.seed}'
                   )
+                > CREATE TABLE kafka_plaintext_2 FROM SOURCE kafka_plaintext_2_src (REFERENCE "testdrive-kafka-protocols-2-${testdrive.seed}")
                   FORMAT TEXT
 
-                >[version>=11900] CREATE SOURCE kafka_plaintext_2_src FROM KAFKA CONNECTION kafka_plaintext (
+                > CREATE SOURCE kafka_ssl_2_src FROM KAFKA CONNECTION kafka_ssl (
                     TOPIC 'testdrive-kafka-protocols-2-${testdrive.seed}'
                   )
-                >[version>=11900] CREATE TABLE kafka_plaintext_2 FROM SOURCE kafka_plaintext_2_src (REFERENCE "testdrive-kafka-protocols-2-${testdrive.seed}")
+                > CREATE TABLE kafka_ssl_2 FROM SOURCE kafka_ssl_2_src (REFERENCE "testdrive-kafka-protocols-2-${testdrive.seed}")
                   FORMAT TEXT
 
-                >[version<11900] CREATE SOURCE kafka_ssl_2 FROM KAFKA CONNECTION kafka_ssl (
+                > CREATE SOURCE kafka_scram_sha_512_2_src FROM KAFKA CONNECTION kafka_scram_sha_512 (
                     TOPIC 'testdrive-kafka-protocols-2-${testdrive.seed}'
                   )
+                > CREATE TABLE kafka_scram_sha_512_2 FROM SOURCE kafka_scram_sha_512_2_src (REFERENCE "testdrive-kafka-protocols-2-${testdrive.seed}")
                   FORMAT TEXT
 
-                >[version>=11900] CREATE SOURCE kafka_ssl_2_src FROM KAFKA CONNECTION kafka_ssl (
+                > CREATE SOURCE kafka_ssl_scram_sha_512_2_src FROM KAFKA CONNECTION kafka_ssl_scram_sha_512 (
                     TOPIC 'testdrive-kafka-protocols-2-${testdrive.seed}'
                   )
-                >[version>=11900] CREATE TABLE kafka_ssl_2 FROM SOURCE kafka_ssl_2_src (REFERENCE "testdrive-kafka-protocols-2-${testdrive.seed}")
+                > CREATE TABLE kafka_ssl_scram_sha_512_2 FROM SOURCE kafka_ssl_scram_sha_512_2_src (REFERENCE "testdrive-kafka-protocols-2-${testdrive.seed}")
                   FORMAT TEXT
 
-                >[version<11900] CREATE SOURCE kafka_scram_sha_512_2 FROM KAFKA CONNECTION kafka_scram_sha_512 (
+                > CREATE SOURCE kafka_sasl_2_src FROM KAFKA CONNECTION kafka_sasl (
                     TOPIC 'testdrive-kafka-protocols-2-${testdrive.seed}'
                   )
-                  FORMAT TEXT
-
-                >[version>=11900] CREATE SOURCE kafka_scram_sha_512_2_src FROM KAFKA CONNECTION kafka_scram_sha_512 (
-                    TOPIC 'testdrive-kafka-protocols-2-${testdrive.seed}'
-                  )
-                >[version>=11900] CREATE TABLE kafka_scram_sha_512_2 FROM SOURCE kafka_scram_sha_512_2_src (REFERENCE "testdrive-kafka-protocols-2-${testdrive.seed}")
-                  FORMAT TEXT
-
-                >[version<11900] CREATE SOURCE kafka_ssl_scram_sha_512_2 FROM KAFKA CONNECTION kafka_ssl_scram_sha_512 (
-                    TOPIC 'testdrive-kafka-protocols-2-${testdrive.seed}'
-                  )
-                  FORMAT TEXT
-
-                >[version>=11900] CREATE SOURCE kafka_ssl_scram_sha_512_2_src FROM KAFKA CONNECTION kafka_ssl_scram_sha_512 (
-                    TOPIC 'testdrive-kafka-protocols-2-${testdrive.seed}'
-                  )
-                >[version>=11900] CREATE TABLE kafka_ssl_scram_sha_512_2 FROM SOURCE kafka_ssl_scram_sha_512_2_src (REFERENCE "testdrive-kafka-protocols-2-${testdrive.seed}")
-                  FORMAT TEXT
-
-                >[version<11900] CREATE SOURCE kafka_sasl_2 FROM KAFKA CONNECTION kafka_sasl (
-                    TOPIC 'testdrive-kafka-protocols-2-${testdrive.seed}'
-                  )
-                  FORMAT TEXT
-
-                >[version>=11900] CREATE SOURCE kafka_sasl_2_src FROM KAFKA CONNECTION kafka_sasl (
-                    TOPIC 'testdrive-kafka-protocols-2-${testdrive.seed}'
-                  )
-                >[version>=11900] CREATE TABLE kafka_sasl_2 FROM SOURCE kafka_sasl_2_src (REFERENCE "testdrive-kafka-protocols-2-${testdrive.seed}")
+                > CREATE TABLE kafka_sasl_2 FROM SOURCE kafka_sasl_2_src (REFERENCE "testdrive-kafka-protocols-2-${testdrive.seed}")
                   FORMAT TEXT
 
                 $ kafka-ingest topic=kafka-protocols-1 format=bytes
@@ -213,59 +158,34 @@ class KafkaProtocols(Check):
                 two
                 """,
                 """
-                >[version<11900] CREATE SOURCE kafka_plaintext_3 FROM KAFKA CONNECTION kafka_plaintext (
+                > CREATE SOURCE kafka_plaintext_3_src FROM KAFKA CONNECTION kafka_plaintext (
                     TOPIC 'testdrive-kafka-protocols-3-${testdrive.seed}'
                   )
+                > CREATE TABLE kafka_plaintext_3 FROM SOURCE kafka_plaintext_3_src (REFERENCE "testdrive-kafka-protocols-3-${testdrive.seed}")
                   FORMAT TEXT
 
-                >[version>=11900] CREATE SOURCE kafka_plaintext_3_src FROM KAFKA CONNECTION kafka_plaintext (
+                > CREATE SOURCE kafka_ssl_3_src FROM KAFKA CONNECTION kafka_ssl (
                     TOPIC 'testdrive-kafka-protocols-3-${testdrive.seed}'
                   )
-                >[version>=11900] CREATE TABLE kafka_plaintext_3 FROM SOURCE kafka_plaintext_3_src (REFERENCE "testdrive-kafka-protocols-3-${testdrive.seed}")
+                > CREATE TABLE kafka_ssl_3 FROM SOURCE kafka_ssl_3_src (REFERENCE "testdrive-kafka-protocols-3-${testdrive.seed}")
                   FORMAT TEXT
 
-                >[version<11900] CREATE SOURCE kafka_ssl_3 FROM KAFKA CONNECTION kafka_ssl (
+                > CREATE SOURCE kafka_scram_sha_512_3_src FROM KAFKA CONNECTION kafka_scram_sha_512 (
                     TOPIC 'testdrive-kafka-protocols-3-${testdrive.seed}'
                   )
+                > CREATE TABLE kafka_scram_sha_512_3 FROM SOURCE kafka_scram_sha_512_3_src (REFERENCE "testdrive-kafka-protocols-3-${testdrive.seed}")
                   FORMAT TEXT
 
-                >[version>=11900] CREATE SOURCE kafka_ssl_3_src FROM KAFKA CONNECTION kafka_ssl (
+                > CREATE SOURCE kafka_ssl_scram_sha_512_3_src FROM KAFKA CONNECTION kafka_ssl_scram_sha_512 (
                     TOPIC 'testdrive-kafka-protocols-3-${testdrive.seed}'
                   )
-                >[version>=11900] CREATE TABLE kafka_ssl_3 FROM SOURCE kafka_ssl_3_src (REFERENCE "testdrive-kafka-protocols-3-${testdrive.seed}")
+                > CREATE TABLE kafka_ssl_scram_sha_512_3 FROM SOURCE kafka_ssl_scram_sha_512_3_src (REFERENCE "testdrive-kafka-protocols-3-${testdrive.seed}")
                   FORMAT TEXT
 
-                >[version<11900] CREATE SOURCE kafka_scram_sha_512_3 FROM KAFKA CONNECTION kafka_scram_sha_512 (
+                > CREATE SOURCE kafka_sasl_3_src FROM KAFKA CONNECTION kafka_sasl (
                     TOPIC 'testdrive-kafka-protocols-3-${testdrive.seed}'
                   )
-                  FORMAT TEXT
-
-                >[version>=11900] CREATE SOURCE kafka_scram_sha_512_3_src FROM KAFKA CONNECTION kafka_scram_sha_512 (
-                    TOPIC 'testdrive-kafka-protocols-3-${testdrive.seed}'
-                  )
-                >[version>=11900] CREATE TABLE kafka_scram_sha_512_3 FROM SOURCE kafka_scram_sha_512_3_src (REFERENCE "testdrive-kafka-protocols-3-${testdrive.seed}")
-                  FORMAT TEXT
-
-                >[version<11900] CREATE SOURCE kafka_ssl_scram_sha_512_3 FROM KAFKA CONNECTION kafka_ssl_scram_sha_512 (
-                    TOPIC 'testdrive-kafka-protocols-3-${testdrive.seed}'
-                  )
-                  FORMAT TEXT
-
-                >[version>=11900] CREATE SOURCE kafka_ssl_scram_sha_512_3_src FROM KAFKA CONNECTION kafka_ssl_scram_sha_512 (
-                    TOPIC 'testdrive-kafka-protocols-3-${testdrive.seed}'
-                  )
-                >[version>=11900] CREATE TABLE kafka_ssl_scram_sha_512_3 FROM SOURCE kafka_ssl_scram_sha_512_3_src (REFERENCE "testdrive-kafka-protocols-3-${testdrive.seed}")
-                  FORMAT TEXT
-
-                >[version<11900] CREATE SOURCE kafka_sasl_3 FROM KAFKA CONNECTION kafka_sasl (
-                    TOPIC 'testdrive-kafka-protocols-3-${testdrive.seed}'
-                  )
-                  FORMAT TEXT
-
-                >[version>=11900] CREATE SOURCE kafka_sasl_3_src FROM KAFKA CONNECTION kafka_sasl (
-                    TOPIC 'testdrive-kafka-protocols-3-${testdrive.seed}'
-                  )
-                >[version>=11900] CREATE TABLE kafka_sasl_3 FROM SOURCE kafka_sasl_3_src (REFERENCE "testdrive-kafka-protocols-3-${testdrive.seed}")
+                > CREATE TABLE kafka_sasl_3 FROM SOURCE kafka_sasl_3_src (REFERENCE "testdrive-kafka-protocols-3-${testdrive.seed}")
                   FORMAT TEXT
 
                 $ kafka-ingest topic=kafka-protocols-1 format=bytes

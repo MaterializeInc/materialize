@@ -59,9 +59,6 @@ class MySqlCdcBase:
 
                 INSERT INTO mysql_source_table{self.suffix} SELECT 'A', i, REPEAT('A', {self.repeats} - i), NULL FROM sequence{self.suffix} WHERE i <= 100;
 
-                $[version<9300] mysql-execute name=mysql
-                GRANT SELECT ON performance_schema.replication_connection_configuration TO mysql1{self.suffix};
-
                 > CREATE SECRET mysqlpass1{self.suffix} AS 'mysql';
 
                 > CREATE CONNECTION mysql1{self.suffix} TO MYSQL (
@@ -78,14 +75,9 @@ class MySqlCdcBase:
             Testdrive(dedent(s))
             for s in [
                 f"""
-                >[version<11700] CREATE SOURCE mysql_source1{self.suffix}
-                  FROM MYSQL CONNECTION mysql1{self.suffix}
-                  (TEXT COLUMNS = (public.mysql_source_table{self.suffix}.f4))
-                  FOR TABLES (public.mysql_source_table{self.suffix} AS mysql_source_tableA{self.suffix});
-
-                >[version>=11700] CREATE SOURCE mysql_source1{self.suffix}
+                > CREATE SOURCE mysql_source1{self.suffix}
                   FROM MYSQL CONNECTION mysql1{self.suffix};
-                >[version>=11700] CREATE TABLE mysql_source_tableA{self.suffix} FROM SOURCE mysql_source1{self.suffix} (REFERENCE public.mysql_source_table{self.suffix});
+                > CREATE TABLE mysql_source_tableA{self.suffix} FROM SOURCE mysql_source1{self.suffix} (REFERENCE public.mysql_source_table{self.suffix});
 
                 > CREATE DEFAULT INDEX ON mysql_source_tableA{self.suffix};
 
@@ -120,7 +112,7 @@ class MySqlCdcBase:
                     else ""
                 ),
                 f"""
-                $[version>=5200] postgres-execute connection=postgres://mz_system@${{testdrive.materialize-internal-sql-addr}}
+                $ postgres-execute connection=postgres://mz_system@${{testdrive.materialize-internal-sql-addr}}
                 GRANT USAGE ON CONNECTION mysql2{self.suffix} TO materialize
 
                 $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
@@ -131,13 +123,9 @@ class MySqlCdcBase:
                 INSERT INTO mysql_source_table{self.suffix} SELECT 'D', i, REPEAT('D', {self.repeats} - i), NULL FROM sequence{self.suffix} WHERE i <= 100;
                 UPDATE mysql_source_table{self.suffix} SET f2 = f2 + 100;
 
-                >[version<11700] CREATE SOURCE mysql_source2{self.suffix}
-                  FROM MYSQL CONNECTION mysql2{self.suffix}
-                  FOR TABLES (public.mysql_source_table{self.suffix} AS mysql_source_tableB{self.suffix});
-
-                >[version>=11700] CREATE SOURCE mysql_source2{self.suffix}
+                > CREATE SOURCE mysql_source2{self.suffix}
                   FROM MYSQL CONNECTION mysql2{self.suffix};
-                >[version>=11700] CREATE TABLE mysql_source_tableB{self.suffix} FROM SOURCE mysql_source2{self.suffix} (REFERENCE public.mysql_source_table{self.suffix});
+                > CREATE TABLE mysql_source_tableB{self.suffix} FROM SOURCE mysql_source2{self.suffix} (REFERENCE public.mysql_source_table{self.suffix});
 
                 $ mysql-execute name=mysql
                 SET @i:=0;
@@ -157,13 +145,9 @@ class MySqlCdcBase:
                     PASSWORD SECRET mysqlpass3{self.suffix}
                   )
 
-                >[version<11700] CREATE SOURCE mysql_source3{self.suffix}
-                  FROM MYSQL CONNECTION mysql3{self.suffix}
-                  FOR TABLES (public.mysql_source_table{self.suffix} AS mysql_source_tableC{self.suffix});
-
-                >[version>=11700] CREATE SOURCE mysql_source3{self.suffix}
+                > CREATE SOURCE mysql_source3{self.suffix}
                   FROM MYSQL CONNECTION mysql3{self.suffix};
-                >[version>=11700] CREATE TABLE mysql_source_tableC{self.suffix} FROM SOURCE mysql_source3{self.suffix} (REFERENCE public.mysql_source_table{self.suffix});
+                > CREATE TABLE mysql_source_tableC{self.suffix} FROM SOURCE mysql_source3{self.suffix} (REFERENCE public.mysql_source_table{self.suffix});
 
                 $ mysql-execute name=mysql
                 SET @i:=0;
@@ -231,30 +215,22 @@ class MySqlCdcBase:
             # TODO: Figure out the quoting here -- it returns "f4" when done using the SQL shell
             # > SELECT regexp_match(create_sql, 'TEXT COLUMNS = \\((.*?)\\)')[1] FROM (SHOW CREATE SOURCE mysql_source_tableA{self.suffix});
             # "\"f4\""
+
+            # Confirm that the primary key information has been propagated from MySQL
+            > SELECT key FROM (SHOW INDEXES ON mysql_source_tableA{self.suffix});
+            {{f1,f2}}
+
+            ? EXPLAIN SELECT DISTINCT f1, f2 FROM mysql_source_tableA{self.suffix};
+            Explained Query (fast path):
+              Project (#0, #1)
+                ReadIndex on=materialize.public.mysql_source_tablea{self.suffix} mysql_source_tablea{self.suffix}_primary_idx=[*** full scan ***]
+
+            Used Indexes:
+              - materialize.public.mysql_source_tablea{self.suffix}_primary_idx (*** full scan ***)
+
+            Target cluster: quickstart
             """
         )
-
-        if self.base_version >= MzVersion.parse_mz("v0.50.0-dev"):
-            sql += dedent(
-                f"""
-                # Confirm that the primary key information has been propagated from MySQL
-                > SELECT key FROM (SHOW INDEXES ON mysql_source_tableA{self.suffix});
-                {{f1,f2}}
-
-                ? EXPLAIN SELECT DISTINCT f1, f2 FROM mysql_source_tableA{self.suffix};
-                Explained Query (fast path):
-                  Project (#0, #1)
-                    ReadIndex on=materialize.public.mysql_source_tablea{self.suffix} mysql_source_tablea{self.suffix}_primary_idx=[*** full scan ***]
-
-                Used Indexes:
-                  - materialize.public.mysql_source_tablea{self.suffix}_primary_idx (*** full scan ***)
-
-                Target cluster: quickstart
-                """
-            )
-
-        if self.current_version < MzVersion.parse_mz("v0.96.0-dev"):
-            sql = remove_target_cluster_from_explain(sql)
 
         return Testdrive(sql)
 
@@ -298,9 +274,6 @@ class MySqlCdcMzNow(Check):
                 INSERT INTO mysql_mz_now_table VALUES (NOW(), 'D1');
                 INSERT INTO mysql_mz_now_table VALUES (NOW(), 'E1');
 
-                $[version<9300] mysql-execute name=mysql
-                GRANT SELECT ON performance_schema.replication_connection_configuration TO mysql2;
-
                 > CREATE SECRET mysql_mz_now_pass AS 'mysql';
                 > CREATE CONNECTION mysql_mz_now_conn TO MYSQL (
                     HOST 'mysql',
@@ -308,13 +281,9 @@ class MySqlCdcMzNow(Check):
                     PASSWORD SECRET mysql_mz_now_pass
                   )
 
-                >[version<11700] CREATE SOURCE mysql_mz_now_source
-                  FROM MYSQL CONNECTION mysql_mz_now_conn
-                  FOR TABLES (public.mysql_mz_now_table);
-
-                >[version>=11700] CREATE SOURCE mysql_mz_now_source
+                > CREATE SOURCE mysql_mz_now_source
                   FROM MYSQL CONNECTION mysql_mz_now_conn;
-                >[version>=11700] CREATE TABLE mysql_mz_now_table FROM SOURCE mysql_mz_now_source (REFERENCE public.mysql_mz_now_table);
+                > CREATE TABLE mysql_mz_now_table FROM SOURCE mysql_mz_now_source (REFERENCE public.mysql_mz_now_table);
 
                 # Return all rows fresher than 60 seconds
                 > CREATE MATERIALIZED VIEW mysql_mz_now_view AS

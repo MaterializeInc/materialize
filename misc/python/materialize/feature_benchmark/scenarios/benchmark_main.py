@@ -28,7 +28,6 @@ from materialize.feature_benchmark.scenario import (
     ScenarioDisabled,
 )
 from materialize.feature_benchmark.scenario_version import ScenarioVersion
-from materialize.mz_version import MzVersion
 
 # for pdoc ignores
 __pdoc__ = {}
@@ -786,12 +785,6 @@ Target cluster: idx_cluster
 > SET CLUSTER = default;
 """
 
-        if self._mz_version < MzVersion.parse_mz("v0.83.0-dev"):
-            sql = remove_arity_information_from_explain(sql)
-
-        if self._mz_version < MzVersion.parse_mz("v0.96.0-dev"):
-            sql = remove_target_cluster_from_explain(sql)
-
         return Td(sql)
 
 
@@ -1078,8 +1071,7 @@ $ kafka-ingest format=bytes topic=kafka-envelope-none-bytes repeat={self.n()}
 > DROP CONNECTION IF EXISTS s1_kafka_conn CASCADE
 > DROP CLUSTER IF EXISTS source_cluster CASCADE
 
->[version<7800]  CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
->[version>=7800] CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
+> CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
 
@@ -1126,8 +1118,7 @@ $ kafka-ingest format=avro topic=kafka-upsert key-format=avro key-schema=${{keys
 > DROP CONNECTION IF EXISTS s1_kafka_conn CASCADE
 > DROP CLUSTER IF EXISTS source_cluster CASCADE
 
->[version<7800]  CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
->[version>=7800] CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
+> CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${{testdrive.schema-registry-url}}'
@@ -1177,8 +1168,7 @@ $ kafka-ingest format=avro topic=upsert-unique key-format=avro key-schema=${{key
 > DROP CONNECTION IF EXISTS s1_csr_conn CASCADE
 > DROP CLUSTER IF EXISTS source_cluster CASCADE
 
->[version<7800]  CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
->[version>=7800] CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
+> CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CONNECTION IF NOT EXISTS s1_csr_conn
   TO CONFLUENT SCHEMA REGISTRY (URL '${{testdrive.schema-registry-url}}');
@@ -1227,8 +1217,7 @@ $ kafka-ingest format=avro topic=kafka-recovery key-format=avro key-schema=${{ke
 > DROP CONNECTION IF EXISTS s1_csr_conn CASCADE
 > DROP CLUSTER IF EXISTS source_cluster CASCADE
 
->[version<7800]  CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
->[version>=7800] CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
+> CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CONNECTION IF NOT EXISTS s1_csr_conn
   TO CONFLUENT SCHEMA REGISTRY (URL '${{testdrive.schema-registry-url}}');
@@ -1310,8 +1299,7 @@ class KafkaRestartBig(ScenarioBig):
     def init(self) -> Action:
         return TdAction(
             f"""
->[version<7800]  CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
->[version>=7800] CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
+> CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
 > DROP CLUSTER IF EXISTS source_cluster CASCADE
 > CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
@@ -1383,8 +1371,7 @@ $ kafka-create-topic topic=kafka-scalability partitions=8
 > DROP CONNECTION IF EXISTS s1_kafka_conn CASCADE
 > DROP CLUSTER IF EXISTS source_cluster CASCADE
 
->[version<7800]  CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
->[version>=7800] CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
+> CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
 
@@ -1437,8 +1424,7 @@ $ kafka-ingest format=avro topic=sink-input key-format=avro key-schema=${{keysch
     def init(self) -> Action:
         return TdAction(
             f"""
->[version<7800]  CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
->[version>=7800] CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
+> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
 > DROP CLUSTER IF EXISTS source_cluster CASCADE
 
@@ -1536,8 +1522,7 @@ ALTER SYSTEM SET max_tables = {self.n() * 4};
 
 > DROP OWNED BY materialize CASCADE;
 
->[version<7800]  CREATE CONNECTION IF NOT EXISTS s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
->[version>=7800] CREATE CONNECTION IF NOT EXISTS s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
+> CREATE CONNECTION IF NOT EXISTS s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CONNECTION IF NOT EXISTS s1_csr_conn
   FOR CONFLUENT SCHEMA REGISTRY
@@ -1795,10 +1780,6 @@ class MySqlStreaming(MySqlCdc):
 
     SCALE = 5
 
-    @classmethod
-    def can_run(cls, version: MzVersion) -> bool:
-        return version >= MzVersion.parse_mz("v0.88.0-dev")
-
     def shared(self) -> Action:
         return TdAction(
             """
@@ -2040,8 +2021,7 @@ ALTER SYSTEM SET max_clusters = {self.n() * 6};
 
 > DROP OWNED BY materialize CASCADE;
 
->[version<7800]  CREATE CONNECTION IF NOT EXISTS s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
->[version>=7800] CREATE CONNECTION IF NOT EXISTS s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
+> CREATE CONNECTION IF NOT EXISTS s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CONNECTION IF NOT EXISTS s1_csr_conn
   FOR CONFLUENT SCHEMA REGISTRY
@@ -2240,12 +2220,6 @@ Target cluster: idx_cluster
 {self._n}
 > SET CLUSTER = default
 """
-
-        if self._mz_version < MzVersion.parse_mz("v0.83.0-dev"):
-            sql = remove_arity_information_from_explain(sql)
-
-        if self._mz_version < MzVersion.parse_mz("v0.96.0-dev"):
-            sql = remove_target_cluster_from_explain(sql)
 
         return Td(sql)
 

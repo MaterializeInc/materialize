@@ -53,22 +53,16 @@ class DebeziumPostgres(Check):
                 $ kafka-wait-topic topic=postgres.public.debezium_table
 
                 # UPSERT is required due to https://github.com/MaterializeInc/database-issues/issues/4064
-                >[version<11900] CREATE SOURCE debezium_source1
-                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.debezium_table')
-                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-                  ENVELOPE DEBEZIUM;
-
-                >[version>=11900] CREATE SOURCE debezium_source1
+                > CREATE SOURCE debezium_source1
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.debezium_table');
-                >[version>=11900] CREATE TABLE debezium_source1_tbl FROM SOURCE debezium_source1 (REFERENCE "postgres.public.debezium_table")
+                > CREATE TABLE debezium_source1_tbl FROM SOURCE debezium_source1 (REFERENCE "postgres.public.debezium_table")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE DEBEZIUM;
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO debezium_table SELECT 'B', generate_series, 1, REPEAT('X', 16) FROM generate_series(1,1000);
 
-                >[version<11900] CREATE MATERIALIZED VIEW debezium_view1 AS SELECT f1, f3, SUM(LENGTH(f4)) FROM debezium_source1 GROUP BY f1, f3;
-                >[version>=11900] CREATE MATERIALIZED VIEW debezium_view1 AS SELECT f1, f3, SUM(LENGTH(f4)) FROM debezium_source1_tbl GROUP BY f1, f3;
+                > CREATE MATERIALIZED VIEW debezium_view1 AS SELECT f1, f3, SUM(LENGTH(f4)) FROM debezium_source1_tbl GROUP BY f1, f3;
 
                 > SELECT * FROM debezium_view1;
                 A 1 16000
@@ -88,14 +82,9 @@ class DebeziumPostgres(Check):
                 UPDATE debezium_table SET f3 = f3 + 1;
                 COMMIT;
 
-                >[version<11900] CREATE SOURCE debezium_source2
-                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.debezium_table')
-                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-                  ENVELOPE DEBEZIUM;
-
-                >[version>=11900] CREATE SOURCE debezium_source2
+                > CREATE SOURCE debezium_source2
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.debezium_table');
-                >[version>=11900] CREATE TABLE debezium_source2_tbl FROM SOURCE debezium_source2 (REFERENCE "postgres.public.debezium_table")
+                > CREATE TABLE debezium_source2_tbl FROM SOURCE debezium_source2 (REFERENCE "postgres.public.debezium_table")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE DEBEZIUM;
 
@@ -105,8 +94,7 @@ class DebeziumPostgres(Check):
                 UPDATE debezium_table SET f3 = f3 + 1;
                 COMMIT;
 
-                >[version<11900] CREATE MATERIALIZED VIEW debezium_view2 AS SELECT f1, f3, SUM(LENGTH(f4)) FROM debezium_source2 GROUP BY f1, f3;
-                >[version>=11900] CREATE MATERIALIZED VIEW debezium_view2 AS SELECT f1, f3, SUM(LENGTH(f4)) FROM debezium_source2_tbl GROUP BY f1, f3;
+                > CREATE MATERIALIZED VIEW debezium_view2 AS SELECT f1, f3, SUM(LENGTH(f4)) FROM debezium_source2_tbl GROUP BY f1, f3;
                 """,
                 """
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
@@ -115,14 +103,9 @@ class DebeziumPostgres(Check):
                 UPDATE debezium_table SET f3 = f3 + 1;
                 COMMIT;
 
-                >[version<11900] CREATE SOURCE debezium_source3
-                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.debezium_table')
-                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-                  ENVELOPE DEBEZIUM;
-
-                >[version>=11900] CREATE SOURCE debezium_source3
+                > CREATE SOURCE debezium_source3
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.debezium_table');
-                >[version>=11900] CREATE TABLE debezium_source3_tbl FROM SOURCE debezium_source3 (REFERENCE "postgres.public.debezium_table")
+                > CREATE TABLE debezium_source3_tbl FROM SOURCE debezium_source3 (REFERENCE "postgres.public.debezium_table")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE DEBEZIUM;
 
@@ -132,8 +115,7 @@ class DebeziumPostgres(Check):
                 UPDATE debezium_table SET f3 = f3 + 1;
                 COMMIT;
 
-                >[version<11900] CREATE MATERIALIZED VIEW debezium_view3 AS SELECT f1, f3, SUM(LENGTH(f4)) FROM debezium_source3 GROUP BY f1, f3;
-                >[version>=11900] CREATE MATERIALIZED VIEW debezium_view3 AS SELECT f1, f3, SUM(LENGTH(f4)) FROM debezium_source3_tbl GROUP BY f1, f3;
+                > CREATE MATERIALIZED VIEW debezium_view3 AS SELECT f1, f3, SUM(LENGTH(f4)) FROM debezium_source3_tbl GROUP BY f1, f3;
                 """,
             ]
         ]

@@ -11,8 +11,6 @@ from textwrap import dedent
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check, externally_idempotent
 from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
-from materialize.checks.executors import Executor
-from materialize.mz_version import MzVersion
 
 
 def schemas() -> str:
@@ -23,19 +21,12 @@ def schemas() -> str:
 class MultiplePartitions(Check):
     """Test that adds new partitions to a Kafka source"""
 
-    def _can_run(self, e: Executor) -> bool:
-        # v0.80.0 introduced backward incompatible changes to `TOPIC METADATA
-        # REFRESH INTERVAL`, which was never available to customers, so rather
-        # than try to introduce hacks to support it, we simply disable tests
-        # that used
-        return self.base_version >= MzVersion.parse_mz("v0.80.0-dev")
-
     def initialize(self) -> Testdrive:
         return Testdrive(
             schemas()
             + dedent(
                 """
-                $[version>=5500] postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+                $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
                 ALTER SYSTEM SET enable_create_source_denylist_with_options = true
 
                 $ kafka-create-topic topic=multiple-partitions-topic
@@ -44,11 +35,8 @@ class MultiplePartitions(Check):
                 $ kafka-ingest format=avro key-format=avro topic=multiple-partitions-topic key-schema=${keyschema} schema=${schema} repeat=100
                 {"key1": "A${kafka-ingest.iteration}"} {"f1": "A${kafka-ingest.iteration}"}
 
-                >[version<11900] CREATE SOURCE multiple_partitions_source FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-multiple-partitions-topic-${testdrive.seed}', TOPIC METADATA REFRESH INTERVAL '500ms')
-                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT;
-
-                >[version>=11900] CREATE SOURCE multiple_partitions_source_src FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-multiple-partitions-topic-${testdrive.seed}', TOPIC METADATA REFRESH INTERVAL '500ms');
-                >[version>=11900] CREATE TABLE multiple_partitions_source FROM SOURCE multiple_partitions_source_src (REFERENCE "testdrive-multiple-partitions-topic-${testdrive.seed}")
+                > CREATE SOURCE multiple_partitions_source_src FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-multiple-partitions-topic-${testdrive.seed}', TOPIC METADATA REFRESH INTERVAL '500ms');
+                > CREATE TABLE multiple_partitions_source FROM SOURCE multiple_partitions_source_src (REFERENCE "testdrive-multiple-partitions-topic-${testdrive.seed}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT;
 
                 $ kafka-add-partitions topic=multiple-partitions-topic total-partitions=2
@@ -107,16 +95,10 @@ class MultiplePartitions(Check):
         ]
 
     def validate(self) -> Testdrive:
-        source_name = (
-            "multiple_partitions_source"
-            if self.base_version < MzVersion.parse_mz("v0.119.0")
-            else "multiple_partitions_source_src"
-        )
-
         return Testdrive(
             dedent(
-                f"""
-                > SELECT partition FROM {source_name}_progress;
+                """
+                > SELECT partition FROM multiple_partitions_source_src_progress;
                 (3,)
                 [0,0]
                 [1,1]
@@ -124,7 +106,7 @@ class MultiplePartitions(Check):
                 [3,3]
 
                 # alias is needed to avoid error due to reserved keyword
-                > SELECT SUM(p.offset) FROM {source_name}_progress p;
+                > SELECT SUM(p.offset) FROM multiple_partitions_source_src_progress p;
                 420
 
                 # TODO: Reenable when database-issues#7695 is fixed

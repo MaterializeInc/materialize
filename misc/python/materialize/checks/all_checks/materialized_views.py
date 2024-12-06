@@ -11,8 +11,6 @@ from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
-from materialize.checks.executors import Executor
-from materialize.mz_version import MzVersion
 
 
 class MaterializedViews(Check):
@@ -23,15 +21,9 @@ class MaterializedViews(Check):
                 > CREATE TABLE materialized_views_table (f1 STRING);
                 > INSERT INTO materialized_views_table SELECT 'T1A' || generate_series FROM generate_series(1,10000);
                 > INSERT INTO materialized_views_table SELECT 'T1B' || generate_series FROM generate_series(1,10000);
-                """
-                + (
-                    """
                 # Regression test for database-issues#8032.
                 > CREATE MATERIALIZED VIEW zero_arity AS SELECT;
                 """
-                    if self.base_version >= MzVersion.parse_mz("v0.101.0")
-                    else ""
-                )
             )
         )
 
@@ -73,24 +65,14 @@ class MaterializedViews(Check):
                 T1B 10000
                 T2B 10000
                 T3B 10000
-                """
-                + (
-                    """
                 > SELECT 1, * FROM zero_arity
                 1
                 """
-                    if self.base_version >= MzVersion.parse_mz("v0.101.0")
-                    else ""
-                )
             )
         )
 
 
 class MaterializedViewsAssertNotNull(Check):
-    def _can_run(self, e: Executor) -> bool:
-        # ASSERT NOT NULL known broken in earlier releases
-        return self.base_version >= MzVersion.parse_mz("v0.74.0")
-
     def initialize(self) -> Testdrive:
         return Testdrive(
             dedent(
@@ -166,13 +148,7 @@ class MaterializedViewsAssertNotNull(Check):
 
             > DELETE FROM not_null_table WHERE z IS NULL;
 
-            ?[version<10300] EXPLAIN SELECT * FROM not_null_view1 WHERE x IS NOT NULL
-            Explained Query:
-              ReadStorage materialize.public.not_null_view1
-
-            Target cluster: quickstart
-
-            ?[version>=10300] EXPLAIN SELECT * FROM not_null_view1 WHERE x IS NOT NULL
+            ? EXPLAIN SELECT * FROM not_null_view1 WHERE x IS NOT NULL
             Explained Query:
               ReadStorage materialize.public.not_null_view1
 
@@ -180,13 +156,7 @@ class MaterializedViewsAssertNotNull(Check):
 
             Target cluster: quickstart
 
-            ?[version<10300] EXPLAIN SELECT * FROM not_null_view2 WHERE y IS NOT NULL
-            Explained Query:
-              ReadStorage materialize.public.not_null_view2
-
-            Target cluster: quickstart
-
-            ?[version>=10300] EXPLAIN SELECT * FROM not_null_view2 WHERE y IS NOT NULL
+            ? EXPLAIN SELECT * FROM not_null_view2 WHERE y IS NOT NULL
             Explained Query:
               ReadStorage materialize.public.not_null_view2
 
@@ -194,13 +164,7 @@ class MaterializedViewsAssertNotNull(Check):
 
             Target cluster: quickstart
 
-            ?[version<10300] EXPLAIN SELECT * FROM not_null_view3 WHERE z IS NOT NULL
-            Explained Query:
-              ReadStorage materialize.public.not_null_view3
-
-            Target cluster: quickstart
-
-            ?[version>=10300] EXPLAIN SELECT * FROM not_null_view3 WHERE z IS NOT NULL
+            ? EXPLAIN SELECT * FROM not_null_view3 WHERE z IS NOT NULL
             Explained Query:
               ReadStorage materialize.public.not_null_view3
 
@@ -227,16 +191,10 @@ class MaterializedViewsAssertNotNull(Check):
             """
         )
 
-        if self.current_version < MzVersion.parse_mz("v0.96.0-dev"):
-            sql = remove_target_cluster_from_explain(sql)
-
         return Testdrive(sql)
 
 
 class MaterializedViewsRefresh(Check):
-    def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion.parse_mz("v0.82.0-dev")
-
     def initialize(self) -> Testdrive:
         return Testdrive(
             dedent(

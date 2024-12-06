@@ -17,9 +17,6 @@ class WithMutuallyRecursive(Check):
         return Testdrive(
             dedent(
                 """
-                $[version<7100] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
-                ALTER SYSTEM SET enable_with_mutually_recursive = true
-
                 > CREATE MATERIALIZED VIEW wmr1 AS WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT 100)
                   foo (a int, b int) AS (SELECT 1, 2 UNION SELECT a, 7 FROM bar),
                   bar (a int) as (SELECT a FROM foo)

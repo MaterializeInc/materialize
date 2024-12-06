@@ -10,14 +10,9 @@ from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
-from materialize.checks.executors import Executor
-from materialize.mz_version import MzVersion
 
 
 class RenameSchema(Check):
-    def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion.parse_mz("v0.75.0-dev")
-
     def initialize(self) -> Testdrive:
         return Testdrive(
             dedent(
@@ -56,15 +51,10 @@ class RenameSchema(Check):
         return Testdrive(
             dedent(
                 """
-                >[version>=11400] SHOW SCHEMAS LIKE 'rename%';
+                > SHOW SCHEMAS LIKE 'rename%';
                 renamed1 ""
                 renamed2 ""
                 renamed3 ""
-
-                >[version<11400] SHOW SCHEMAS LIKE 'rename%';
-                renamed1
-                renamed2
-                renamed3
 
                 > SET SCHEMA = renamed1;
 

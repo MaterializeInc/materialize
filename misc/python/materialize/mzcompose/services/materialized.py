@@ -169,11 +169,7 @@ class Materialized(Service):
                 f"--unsafe-builtin-table-fingerprint-whitespace={force_migrations}",
             ]
 
-        self.default_storage_size = (
-            str(default_size)
-            if image_version and image_version < MzVersion.parse_mz("v0.41.0")
-            else "1" if default_size == 1 else f"{default_size}-1"
-        )
+        self.default_storage_size = "1" if default_size == 1 else f"{default_size}-1"
 
         self.default_replica_size = (
             "1"
@@ -231,21 +227,15 @@ class Materialized(Service):
             config["mzbuild"] = "materialized"
 
         if restart:
-            # Old images don't have the new entrypoint.sh with
-            # MZ_RESTART_ON_FAILURE yet, fall back to having docker handle the
-            # restart logic
-            if image_version and image_version < MzVersion.parse_mz("v0.113.0-dev"):
-                config["restart"] = restart
+            policy, _, max_tries = restart.partition(":")
+            if policy == "on-failure":
+                environment += ["MZ_RESTART_ON_FAILURE=1"]
+                if max_tries:
+                    environment += [f"MZ_RESTART_LIMIT={max_tries}"]
+            elif policy == "no":
+                pass
             else:
-                policy, _, max_tries = restart.partition(":")
-                if policy == "on-failure":
-                    environment += ["MZ_RESTART_ON_FAILURE=1"]
-                    if max_tries:
-                        environment += [f"MZ_RESTART_LIMIT={max_tries}"]
-                elif policy == "no":
-                    pass
-                else:
-                    raise RuntimeError(f"unknown restart policy: {policy}")
+                raise RuntimeError(f"unknown restart policy: {policy}")
 
         # Depending on the Docker Compose version, this may either work or be
         # ignored with a warning. Unfortunately no portable way of setting the
