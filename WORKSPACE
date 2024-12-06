@@ -562,6 +562,7 @@ crates_repository(
         "//:src/build-info/Cargo.toml",
         "//:src/build-tools/Cargo.toml",
         "//:src/catalog-debug/Cargo.toml",
+        "//:src/catalog-protos/Cargo.toml",
         "//:src/catalog/Cargo.toml",
         "//:src/ccsr/Cargo.toml",
         "//:src/cloud-api/Cargo.toml",
