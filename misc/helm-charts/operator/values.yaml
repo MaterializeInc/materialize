@@ -284,13 +284,6 @@ tls:
     #    name: dns01
     #    kind: ClusterIssuer
 
-# Namespace configuration
-namespace:
-  # Whether to create a new namespace for the deployment
-  create: false
-  # Name of the namespace where the operator and environment will be deployed
-  name: "materialize"
-
 # Storage configuration
 storage:
   storageClass:

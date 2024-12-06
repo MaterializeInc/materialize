@@ -97,8 +97,7 @@ storage:
 To install the chart with the release name `my-materialize-operator`:
 
 ```shell
-kubectl create namespace materialize
-helm install my-materialize-operator misc/helm-charts/operator
+helm install my-materialize-operator misc/helm-charts/operator --namespace materialize --create-namespace
 ```
 
 This command deploys the Materialize operator on the Kubernetes cluster with default configuration. The [Parameters](#parameters) section lists the parameters that can be configured during installation.

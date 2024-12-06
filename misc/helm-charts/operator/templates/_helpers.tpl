@@ -102,13 +102,6 @@ postgresql://{{ .Values.metadatadb.username }}:{{ .Values.metadatadb.password }}
 {{- end }}
 
 {{/*
-Create the name of the namespace to use
-*/}}
-{{- define "materialize-operator.namespaceName" -}}
-{{- default .Release.Namespace .Values.namespace.name }}
-{{- end }}
-
-{{/*
 Helper template to process cluster sizes based on storage class configuration
 */}}
 {{- define "materialize.processClusterSizes" -}}
