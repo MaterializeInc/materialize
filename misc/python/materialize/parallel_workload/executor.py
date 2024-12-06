@@ -145,6 +145,9 @@ class Executor:
                         if query == "commit;":
                             self.log("commit")
                             self.cur.connection.commit()
+                        elif query == "rollback;":
+                            self.log("rollback")
+                            self.cur.connection.rollback()
                         else:
                             self.cur.execute(query.encode())
                     except Exception as e:
