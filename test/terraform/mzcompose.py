@@ -346,6 +346,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         else:
             raise ValueError("Never completed")
 
+        time.sleep(10)
+
         environmentd_port_forward_process = subprocess.Popen(
             [
                 "kubectl",
