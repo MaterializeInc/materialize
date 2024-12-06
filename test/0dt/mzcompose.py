@@ -1311,3 +1311,79 @@ def workflow_builtin_item_migrations(c: Composition) -> None:
         assert (
             replaced == 0
         ), f"{replaced} dataflows have been replaced, expected all to be reused"
+
+
+def workflow_materialized_view_correction_pruning(c: Composition) -> None:
+    """
+    Verify that the MV sink consolidates away the snapshot updates in read-only
+    mode.
+    """
+
+    c.down(destroy_volumes=True)
+    c.up("mz_old")
+
+    c.sql(
+        "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
+        service="mz_old",
+        port=6877,
+        user="mz_system",
+    )
+    c.sql(
+        """
+        CREATE TABLE t (a int);
+        INSERT INTO t SELECT generate_series(1, 1000);
+        CREATE MATERIALIZED VIEW mv AS SELECT * FROM t;
+        SELECT * FROM mv LIMIT 1;
+        """,
+        service="mz_old",
+    )
+
+    c.up("mz_new")
+    c.sql("SELECT * FROM mv LIMIT 1", service="mz_new")
+
+    def get_correction_metrics():
+        for line in c.invoke("logs", "mz_new", capture=True).stdout.splitlines():
+            # quickstart must be u1 since it's the only non-system cluster
+            if "cluster-u1-replica-u1-gen-1" not in line:
+                continue
+            if "mz_clusterd: serving internal HTTP server on" not in line:
+                continue
+            socket = line.split(" ")[-1]
+            print(socket)
+            break
+        else:
+            raise RuntimeError("No HTTP socket for quickstart clusterd found in logs")
+
+        resp = c.exec(
+            "mz_new",
+            "curl",
+            "--unix-socket",
+            socket,
+            "http:/prof/metrics",
+            capture=True,
+        ).stdout
+
+        metrics = {}
+        for line in resp.splitlines():
+            key, value = line.split(maxsplit=1)
+            metrics[key] = value
+
+        insertions = int(metrics["mz_persist_sink_correction_insertions_total"])
+        deletions = int(metrics["mz_persist_sink_correction_deletions_total"])
+        return (insertions, deletions)
+
+    insertions = None
+    deletions = None
+
+    # The correction buffer should stabilize in a state where it has seen 2000
+    # insertions (positive + negative updates), and as many deletions. The
+    # absolute amount of records in the correction buffer should be zero.
+    for _ in range(10):
+        time.sleep(1)
+        insertions, deletions = get_correction_metrics()
+        if insertions > 2000 and insertions - deletions == 0:
+            break
+    else:
+        raise AssertionError(
+            f"unexpected correction metrics: {insertions=}, {deletions=}"
+        )
