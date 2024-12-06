@@ -114,16 +114,16 @@ spec:
         {{/* Network Policies */}}
         {{- if .Values.networkPolicies.enabled }}
         {{- if .Values.networkPolicies.internal.enabled }}
-        - "--network-policies-internal-enabled=true"
+        - "--network-policies-internal-enabled"
         {{- end }}
         {{- if .Values.networkPolicies.ingress.enabled }}
-        - "--network-policies-ingress-enabled=true"
+        - "--network-policies-ingress-enabled"
         {{- range $cidr := .Values.networkPolicies.ingress.cidrs }}
         - "--network-policies-ingress-cidrs={{$cidr}}"
         {{- end }}
         {{- end }}
         {{- if .Values.networkPolicies.egress.enabled }}
-        - "--network-policies-egress-enabled=true"
+        - "--network-policies-egress-enabled"
         {{- range $cidr := .Values.networkPolicies.egress.cidrs }}
         - "--network-policies-egress-cidrs={{$cidr}}"
         {{- end }}
