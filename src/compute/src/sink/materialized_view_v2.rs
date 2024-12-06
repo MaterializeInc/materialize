@@ -1075,6 +1075,7 @@ mod append {
                     batch.lower().elements(),
                     batch.upper().elements(),
                 ));
+                batch.delete().await;
                 return;
             }
 
