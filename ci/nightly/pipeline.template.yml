@@ -894,6 +894,7 @@ steps:
           # TODO(def-): Debezium DNS flakiness doesn't allow running on hetzner
           # queue: hetzner-aarch64-8cpu-16gb
           queue: linux-aarch64-medium
+        skip: "Fails until database-issues#8817 is fixed"
         plugins:
           - ./ci/plugins/cloudtest:
               args: [-m=long, test/cloudtest/test_upgrade.py]
