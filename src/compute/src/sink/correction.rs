@@ -11,7 +11,7 @@
 //! they are written into batches.
 
 use std::collections::BTreeMap;
-use std::ops::{AddAssign, Bound, SubAssign};
+use std::ops::{AddAssign, Bound, RangeBounds, SubAssign};
 
 use differential_dataflow::consolidation::{consolidate, consolidate_updates};
 use differential_dataflow::Data;
@@ -162,18 +162,7 @@ impl<D: Data> Correction<D> {
             None => Bound::Unbounded,
         };
 
-        let mut new_size = self.total_size;
-
-        // Consolidate relevant times and compute the total number of updates.
-        let range = self.updates.range_mut((start, end));
-        let update_count = range.fold(0, |acc, (_, data)| {
-            new_size -= (data.len(), data.capacity());
-            data.consolidate();
-            new_size += (data.len(), data.capacity());
-            acc + data.len()
-        });
-
-        self.update_metrics(new_size);
+        let update_count = self.consolidate((start, end));
 
         let range = self.updates.range((start, end));
         range
@@ -188,6 +177,27 @@ impl<D: Data> Correction<D> {
     ) -> impl Iterator<Item = (D, Timestamp, Diff)> + ExactSizeIterator + '_ {
         let lower = Antichain::from_elem(Timestamp::MIN);
         self.updates_within(&lower, upper)
+    }
+
+    /// Consolidate the updates at the times in the given range.
+    ///
+    /// Returns the number of updates remaining in the range afterwards.
+    fn consolidate<R>(&mut self, range: R) -> usize
+    where
+        R: RangeBounds<Timestamp>,
+    {
+        let mut new_size = self.total_size;
+
+        let updates = self.updates.range_mut(range);
+        let count = updates.fold(0, |acc, (_, data)| {
+            new_size -= (data.len(), data.capacity());
+            data.consolidate();
+            new_size += (data.len(), data.capacity());
+            acc + data.len()
+        });
+
+        self.update_metrics(new_size);
+        count
     }
 
     /// Return the current since frontier.
@@ -243,6 +253,21 @@ impl<D: Data> Correction<D> {
         }
 
         self.update_metrics(new_size);
+    }
+
+    /// Consolidate all updates at the current `since`.
+    pub fn consolidate_at_since(&mut self) {
+        let Some(since_ts) = self.since.as_option() else {
+            return;
+        };
+
+        let start = Bound::Included(*since_ts);
+        let end = match since_ts.try_step_forward() {
+            Some(ts) => Bound::Excluded(ts),
+            None => Bound::Unbounded,
+        };
+
+        self.consolidate((start, end));
     }
 }
 
