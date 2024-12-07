@@ -9,24 +9,47 @@ menu:
     parent: 'sql-patterns'
 ---
 
-A _temporal filter_ is a `WHERE` or `HAVING` clause which uses the [`mz_now()`](/sql/functions/now_and_mz_now) function.
-This function returns Materialize's current virtual timestamp, which works to keep up with real time as data is processed.
-Applying a temporal filter reduces the working dataset, saving memory resources and focusing results on the recent past.
+A **temporal filter** is a query condition/predicate that filters data based on
+a time-related (i.e., temporal) condition. Using a temporal filter reduces the
+working dataset, saving memory resources and focusing on results that are within
+the timeframe specified by the filter.
 
-Here is a typical temporal filter that considers records whose timestamps are within the last 5 minutes.
+In Materialize, you implement temporal filters using the
+[`mz_now()`](/sql/functions/now_and_mz_now) function (which returns
+Materialize's current virtual timestamp and keeps up with real time) in a
+`WHERE` or `HAVING` clause; specifically, you compare
+[`mz_now()`](/sql/functions/now_and_mz_now) to a numeric or timestamp column
+expression. As [`mz_now()`](/sql/functions/now_and_mz_now) progresses (every
+millisecond), records that fall outside the timeframe are retracted from the
+working dataset. That is, when using temporal filters, Materialize maintains (in
+memory) all future retractions of the data that is currently within the
+timeframe and applies the retraction when records fall out of the timeframe.
+
+For example, the following temporal filter reduces the working dataset to those
+records whose event timestamp column (`event_ts`) is within the last 5 minutes.
 
 ```mzsql
 WHERE mz_now() <= event_ts + INTERVAL '5min'
 ```
 
-Consider this diagram that shows a record `B` falling out of the result set as time moves forward:
-
-![temporal filter diagram](/images/temporal-filter.svg)
-
 {{< note >}}
 It may feel more natural to write this filter as the equivalent `WHERE event_ts >= mz_now() - INTERVAL '5min'`.
-However, there are currently no valid operators for the [`mz_timestamp` type](/sql/types/mz_timestamp) that would allow this.
+However, there are currently no valid operators for the [`mz_timestamp`
+type](/sql/types/mz_timestamp) that would allow this.  See [Requirements](#requirements).
 {{< /note >}}
+
+
+
+The following diagram shows record `B` falling out of the result set as time
+moves forward:
+
+- In the first timeline, record `B` is within the specified timeframe (occurred
+  less than 5 minutes from `mz_now()`).
+
+- In the second timeline, as `mz_now()` progresses, record `B` has fallen out
+  of the specified timeframe (occurred more than 5 minutes from `mz_now()`).
+
+![temporal filter diagram](/images/temporal-filter.svg)
 
 ## Requirements
 
