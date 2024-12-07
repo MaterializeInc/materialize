@@ -339,14 +339,17 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     ],
                     cwd=path,
                 )
-                break
+                # error: arguments in resource/name form must have a single resource and name
+                print(f"Got balancerd name: {balancerd_name}")
+                if " " in balancerd_name:
+                    time.sleep(1)
+                else:
+                    break
             except subprocess.CalledProcessError as e:
                 print(e)
                 time.sleep(1)
         else:
             raise ValueError("Never completed")
-
-        time.sleep(10)
 
         environmentd_port_forward_process = subprocess.Popen(
             [
