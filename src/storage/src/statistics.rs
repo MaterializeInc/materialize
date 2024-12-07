@@ -1010,35 +1010,39 @@ impl AggregatedStatistics {
         sink_statistics: Vec<(usize, SinkStatisticsRecord)>,
     ) {
         // Currently, only worker 0 ingest data from other workers.
-        if self.worker_id == 0 {
-            for (epoch, stat) in source_statistics {
-                self.global_source_statistics.entry(stat.id).and_modify(
-                    |(global_epoch, ref mut stats)| {
-                        if epoch >= *global_epoch {
-                            match &mut stats[stat.worker_id] {
-                                None => {
-                                    stats[stat.worker_id] = Some(stat.as_update());
-                                }
-                                Some(occupied) => occupied.incorporate(stat.as_update()),
-                            }
-                        }
-                    },
-                );
-            }
+        if self.worker_id != 0 {
+            return;
+        }
 
-            for (epoch, stat) in sink_statistics {
-                self.global_sink_statistics.entry(stat.id).and_modify(
-                    |(global_epoch, ref mut stats)| {
-                        if epoch >= *global_epoch {
-                            match &mut stats[stat.worker_id] {
-                                None => {
-                                    stats[stat.worker_id] = Some(stat.as_update());
-                                }
-                                Some(occupied) => occupied.incorporate(stat.as_update()),
-                            }
-                        }
-                    },
-                );
+        for (epoch, stat) in source_statistics {
+            if let Some((global_epoch, stats)) = self.global_source_statistics.get_mut(&stat.id) {
+                let epoch_match = epoch >= *global_epoch;
+                let mut update = stat.as_update();
+                match (&mut stats[stat.worker_id], epoch_match) {
+                    (None, true) => stats[stat.worker_id] = Some(update),
+                    (None, false) => {
+                        update.reset_gauges();
+                        stats[stat.worker_id] = Some(update);
+                    }
+                    (Some(occupied), true) => occupied.incorporate(update),
+                    (Some(occupied), false) => occupied.incorporate_counters(update),
+                }
+            }
+        }
+
+        for (epoch, stat) in sink_statistics {
+            if let Some((global_epoch, stats)) = self.global_sink_statistics.get_mut(&stat.id) {
+                let epoch_match = epoch >= *global_epoch;
+                let mut update = stat.as_update();
+                match (&mut stats[stat.worker_id], epoch_match) {
+                    (None, true) => stats[stat.worker_id] = Some(update),
+                    (None, false) => {
+                        update.reset_gauges();
+                        stats[stat.worker_id] = Some(update);
+                    }
+                    (Some(occupied), true) => occupied.incorporate(update),
+                    (Some(occupied), false) => occupied.incorporate_counters(update),
+                }
             }
         }
     }
