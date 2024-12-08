@@ -1,0 +1,4 @@
+pulumi==3.46.1
+pulumi-aws==5.20.0
+pulumi-awsx==1.0.0b11
+pulumi-command==0.6.0
