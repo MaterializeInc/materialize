@@ -1664,6 +1664,14 @@ impl SourceDataRowColumnarDecoder {
             }
         }
     }
+
+    pub fn byte_size(&self) -> usize {
+        let self_size = std::mem::size_of::<SourceDataRowColumnarDecoder>();
+        match self {
+            SourceDataRowColumnarDecoder::Row(decoder) => self_size + decoder.byte_size(),
+            SourceDataRowColumnarDecoder::EmptyRow => self_size,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -1752,6 +1760,12 @@ impl ColumnDecoder<SourceData> for SourceDataColumnarDecoder {
         assert!(!err_null || !row_null, "SourceData should never be null!");
 
         false
+    }
+
+    fn byte_size(&self) -> usize {
+        self.row_decoder.byte_size()
+            + self.err_decoder.get_array_memory_size()
+            + std::mem::size_of::<SourceDataColumnarDecoder>()
     }
 
     fn stats(&self) -> StructStats {
