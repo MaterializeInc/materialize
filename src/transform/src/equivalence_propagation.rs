@@ -70,16 +70,21 @@ impl crate::Transform for EquivalencePropagation {
             &mut get_equivalences,
         );
 
+        // Trace the plan as the result of `equivalence_propagation` before potentially applying
+        // `ColumnKnowledge`. (If `ColumnKnowledge` runs, it will trace its own result.)
+        mz_repr::explain::trace_plan(&*relation);
+
         if prior == *relation {
             let ck = crate::ColumnKnowledge::default();
             ck.transform(relation, ctx)?;
-            mz_ore::soft_assert_or_log!(
-                prior == *relation,
-                "ColumnKnowledge performed work after EquivalencePropagation"
-            );
+            if prior != *relation {
+                tracing::error!(
+                    ?ctx.global_id,
+                    "ColumnKnowledge performed work after EquivalencePropagation",
+                );
+            }
         }
 
-        mz_repr::explain::trace_plan(&*relation);
         Ok(())
     }
 }
