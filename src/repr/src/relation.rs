@@ -597,6 +597,11 @@ impl RelationDesc {
         self == &Self::empty()
     }
 
+    /// Returns the number of columns in this [`RelationDesc`].
+    pub fn len(&self) -> usize {
+        self.typ().column_types.len()
+    }
+
     /// Constructs a new `RelationDesc` from a `RelationType` and an iterator
     /// over column names.
     ///
@@ -754,6 +759,11 @@ impl RelationDesc {
         self.iter_names().filter(|n| n.is_similar(name))
     }
 
+    /// Returns whether this [`RelationDesc`] contains a column at the specified index.
+    pub fn contains_index(&self, idx: &ColumnIndex) -> bool {
+        self.metadata.contains_key(idx)
+    }
+
     /// Finds a column by name.
     ///
     /// Returns the index and type of the column named `name`. If no column with
@@ -894,6 +904,19 @@ impl Arbitrary for RelationDesc {
 pub fn arb_relation_desc(num_cols: std::ops::Range<usize>) -> impl Strategy<Value = RelationDesc> {
     proptest::collection::btree_map(any::<ColumnName>(), any::<ColumnType>(), num_cols)
         .prop_map(RelationDesc::from_names_and_types)
+}
+
+/// Returns a [`Strategy`] that generates a projection of the provided [`RelationDesc`].
+pub fn arb_relation_desc_projection(desc: RelationDesc) -> impl Strategy<Value = RelationDesc> {
+    let mask: Vec<_> = (0..desc.len()).map(|_| any::<bool>()).collect();
+    mask.prop_map(move |mask| {
+        let demands: BTreeSet<_> = mask
+            .into_iter()
+            .enumerate()
+            .filter_map(|(idx, keep)| keep.then_some(idx))
+            .collect();
+        desc.apply_demand(&demands)
+    })
 }
 
 impl IntoIterator for RelationDesc {
