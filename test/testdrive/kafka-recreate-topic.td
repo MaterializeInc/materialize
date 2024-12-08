@@ -88,10 +88,6 @@ $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=2s
 
 $ kafka-create-topic topic=topic1 partitions=1
 
-# TODO: Reenable when database-issues#8823 is fixed
-$ skip-if
-SELECT true
-
 ! SELECT * FROM source1_tbl
 contains:topic was recreated: high watermark of partition 0 regressed from 1 to 0
 
