@@ -7899,7 +7899,7 @@ dependencies = [
 [[package]]
 name = "postgres-protocol"
 version = "0.6.7"
-source = "git+https://github.com/MaterializeInc/rust-postgres#548f00c4cbcf7bd714c29cfd2fea7685040c9987"
+source = "git+https://github.com/MaterializeInc/rust-postgres#7d2f14e35e97973995c39662cde618036a0f9484"
 dependencies = [
  "base64 0.22.0",
  "byteorder",
@@ -7931,7 +7931,7 @@ dependencies = [
 [[package]]
 name = "postgres-types"
 version = "0.2.7"
-source = "git+https://github.com/MaterializeInc/rust-postgres#548f00c4cbcf7bd714c29cfd2fea7685040c9987"
+source = "git+https://github.com/MaterializeInc/rust-postgres#7d2f14e35e97973995c39662cde618036a0f9484"
 dependencies = [
  "bytes",
  "chrono",
@@ -8179,9 +8179,9 @@ dependencies = [
 
 [[package]]
 name = "prost-reflect"
-version = "0.14.2"
+version = "0.14.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4b7535b02f0e5efe3e1dbfcb428be152226ed0c66cad9541f2274c8ba8d4cd40"
+checksum = "20ae544fca2892fd4b7e9ff26cba1090cedf1d4d95c2aded1af15d2f93f270b8"
 dependencies = [
  "base64 0.22.0",
  "once_cell",
@@ -10018,7 +10018,7 @@ dependencies = [
 [[package]]
 name = "tokio-postgres"
 version = "0.7.11"
-source = "git+https://github.com/MaterializeInc/rust-postgres#548f00c4cbcf7bd714c29cfd2fea7685040c9987"
+source = "git+https://github.com/MaterializeInc/rust-postgres#7d2f14e35e97973995c39662cde618036a0f9484"
 dependencies = [
  "async-trait",
  "byteorder",
