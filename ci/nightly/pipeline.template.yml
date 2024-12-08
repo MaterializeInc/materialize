@@ -1191,7 +1191,6 @@ steps:
         timeout_in_minutes: 58
         agents:
           queue: hetzner-aarch64-4cpu-8gb
-        skip: "flaky until database-issues#8797 is fixed"
         plugins:
           - ./ci/plugins/mzcompose:
               composition: feature-flag-consistency
@@ -1219,7 +1218,6 @@ steps:
         timeout_in_minutes: 60
         agents:
           queue: hetzner-aarch64-4cpu-8gb
-        skip: "flaky until database-issues#8797 is fixed"
         plugins:
           - ./ci/plugins/mzcompose:
               composition: sqlsmith
