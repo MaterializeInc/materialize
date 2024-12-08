@@ -228,6 +228,12 @@ pub const STORAGE_USE_CONTINUAL_FEEDBACK_UPSERT: Config<bool> = Config::new(
     "Whether to use the new continual feedback upsert operator.",
 );
 
+pub const PERSIST_APPLY_PROJECTION_PUSHDOWN: Config<bool> = Config::new(
+    "persist_apply_projection_pushdown",
+    true,
+    "When enabled, passes column projection info down into Persist.",
+);
+
 /// Adds the full set of all storage `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -253,4 +259,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&STORAGE_SUSPEND_AND_RESTART_DELAY)
         .add(&STORAGE_RECLOCK_TO_LATEST)
         .add(&STORAGE_USE_CONTINUAL_FEEDBACK_UPSERT)
+        .add(&PERSIST_APPLY_PROJECTION_PUSHDOWN)
 }
