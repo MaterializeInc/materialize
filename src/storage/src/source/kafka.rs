@@ -374,6 +374,10 @@ impl SourceRender for KafkaSourceConnection {
                             // Allow Kafka monitoring tools to identify this
                             // consumer.
                             "client.id" => format!("{client_id}-metadata"),
+                            // For some currently unknown reason, the metadata thread can become
+                            // unable to fetch new offsets when no group ID is specified and the
+                            // topic gets recreated. See database-issues#8823.
+                            "group.id" => format!("{group_id}-metadata"),
                         },
                         InTask::Yes,
                     )
