@@ -281,6 +281,7 @@ where
                             export_id,
                             persist_clients,
                             storage_metadata,
+                            None,
                             Some(as_of),
                             SnapshotMode::Include,
                             Antichain::new(),
