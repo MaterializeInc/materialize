@@ -614,6 +614,14 @@ mod tests {
         fn is_null(&self, _: usize) -> bool {
             false
         }
+        fn byte_size(&self) -> usize {
+            let size_of_values = self
+                .0
+                .iter()
+                .map(|val| val.get_array_memory_size())
+                .sum::<usize>();
+            size_of_values + std::mem::size_of::<Vec<StringArray>>()
+        }
         fn stats(&self) -> StructStats {
             StructStats {
                 len: self.0[0].len(),

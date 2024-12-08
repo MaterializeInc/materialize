@@ -838,10 +838,23 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
                     }
                 }
                 match &migration {
-                    PartMigration::SameSchema { both } => (
-                        decode::<K>("key", &*both.key, &structured.key),
-                        decode::<V>("val", &*both.val, &structured.val),
-                    ),
+                    PartMigration::SameSchema { both } => {
+                        let key_size_before = structured.key.get_array_memory_size();
+
+                        let key = decode::<K>("key", &*both.key, &structured.key);
+                        let val = decode::<V>("val", &*both.val, &structured.val);
+
+                        if let Some(key_decoder) = key.as_ref() {
+                            let key_size_after = key_decoder.byte_size();
+                            let key_diff = key_size_before.saturating_sub(key_size_after);
+                            metrics
+                                .pushdown
+                                .parts_projection_trimmed_bytes
+                                .inc_by(u64::cast_from(key_diff));
+                        }
+
+                        (key, val)
+                    }
                     PartMigration::Codec { .. } => (None, None),
                     PartMigration::Either {
                         _write,
@@ -856,6 +869,14 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
                             .schema
                             .migration_migrate_seconds
                             .inc_by(start.elapsed().as_secs_f64());
+
+                        let key_before_size = structured.key.get_array_memory_size();
+                        let key_after_size = key.get_array_memory_size();
+                        let key_diff = key_before_size.saturating_sub(key_after_size);
+                        metrics
+                            .pushdown
+                            .parts_projection_trimmed_bytes
+                            .inc_by(u64::cast_from(key_diff));
 
                         (
                             decode::<K>("key", &*read.key, &key),

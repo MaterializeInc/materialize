@@ -1215,6 +1215,73 @@ impl DatumColumnDecoder {
             | DatumColumnDecoder::RecordEmpty(_) => ColumnStatKinds::None,
         }
     }
+
+    fn byte_size(&self) -> usize {
+        match self {
+            DatumColumnDecoder::Bool(a) => a.get_array_memory_size(),
+            DatumColumnDecoder::U8(a) => a.get_array_memory_size(),
+            DatumColumnDecoder::U16(a) => a.get_array_memory_size(),
+            DatumColumnDecoder::U32(a) => a.get_array_memory_size(),
+            DatumColumnDecoder::U64(a) => a.get_array_memory_size(),
+            DatumColumnDecoder::I16(a) => a.get_array_memory_size(),
+            DatumColumnDecoder::I32(a) => a.get_array_memory_size(),
+            DatumColumnDecoder::I64(a) => a.get_array_memory_size(),
+            DatumColumnDecoder::F32(a) => a.get_array_memory_size(),
+            DatumColumnDecoder::F64(a) => a.get_array_memory_size(),
+            DatumColumnDecoder::Numeric(a) => a.get_array_memory_size(),
+            DatumColumnDecoder::String(a) => a.get_array_memory_size(),
+            DatumColumnDecoder::Bytes(a) => a.get_array_memory_size(),
+            DatumColumnDecoder::Date(a) => a.get_array_memory_size(),
+            DatumColumnDecoder::Time(a) => a.get_array_memory_size(),
+            DatumColumnDecoder::Timestamp(a) => a.get_array_memory_size(),
+            DatumColumnDecoder::TimestampTz(a) => a.get_array_memory_size(),
+            DatumColumnDecoder::MzTimestamp(a) => a.get_array_memory_size(),
+            DatumColumnDecoder::Interval(a) => a.get_array_memory_size(),
+            DatumColumnDecoder::Uuid(a) => a.get_array_memory_size(),
+            DatumColumnDecoder::AclItem(a) => a.get_array_memory_size(),
+            DatumColumnDecoder::MzAclItem(a) => a.get_array_memory_size(),
+            DatumColumnDecoder::Range(a) => a.get_array_memory_size(),
+            DatumColumnDecoder::Json(a) => a.get_array_memory_size(),
+            DatumColumnDecoder::Array {
+                dim_offsets,
+                dims,
+                val_offsets,
+                vals,
+                nulls,
+            } => {
+                dim_offsets.inner().inner().len()
+                    + dims.get_array_memory_size()
+                    + val_offsets.inner().inner().len()
+                    + vals.byte_size()
+                    + nulls.as_ref().map(|b| b.len()).unwrap_or(0)
+            }
+            DatumColumnDecoder::List {
+                offsets,
+                values,
+                nulls,
+            } => {
+                offsets.inner().inner().len()
+                    + values.byte_size()
+                    + nulls.as_ref().map(|b| b.len()).unwrap_or(0)
+            }
+            DatumColumnDecoder::Map {
+                offsets,
+                keys,
+                vals,
+                nulls,
+            } => {
+                offsets.inner().inner().len()
+                    + keys.get_array_memory_size()
+                    + vals.byte_size()
+                    + nulls.as_ref().map(|b| b.len()).unwrap_or(0)
+            }
+            DatumColumnDecoder::Record { fields, nulls } => {
+                fields.iter().map(|f| f.byte_size()).sum::<usize>()
+                    + nulls.as_ref().map(|b| b.len()).unwrap_or(0)
+            }
+            DatumColumnDecoder::RecordEmpty(a) => a.get_array_memory_size(),
+        }
+    }
 }
 
 impl Schema2<Row> for RelationDesc {
@@ -1330,6 +1397,28 @@ impl ColumnDecoder<Row> for RowColumnarDecoder {
             return false;
         };
         nullability.is_null(idx)
+    }
+
+    fn byte_size(&self) -> usize {
+        let decoders_size: usize = self
+            .decoders
+            .iter()
+            .map(|(name, null_count, decoder)| {
+                name.len()
+                    + std::mem::size_of::<Arc<str>>()
+                    + std::mem::size_of_val(null_count)
+                    + decoder.byte_size()
+            })
+            .sum();
+
+        std::mem::size_of_val(&self.len)
+            + decoders_size
+            + std::mem::size_of_val(&self.nullability)
+            + self
+                .nullability
+                .as_ref()
+                .map(|nulls| nulls.inner().inner().len())
+                .unwrap_or(0)
     }
 
     fn stats(&self) -> StructStats {

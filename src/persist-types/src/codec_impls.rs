@@ -94,6 +94,10 @@ impl ColumnDecoder<()> for UnitColumnar {
         }
     }
 
+    fn byte_size(&self) -> usize {
+        std::mem::size_of::<UnitColumnar>()
+    }
+
     fn stats(&self) -> StructStats {
         StructStats {
             len: self.len,
@@ -281,6 +285,9 @@ impl<T: SimpleColumnarData> ColumnDecoder<T> for SimpleColumnarDecoder<T> {
     }
     fn is_null(&self, idx: usize) -> bool {
         self.0.is_null(idx)
+    }
+    fn byte_size(&self) -> usize {
+        self.0.get_array_memory_size()
     }
 
     fn stats(&self) -> StructStats {
@@ -599,6 +606,10 @@ impl<T> ColumnDecoder<T> for TodoColumnarDecoder<T> {
     }
 
     fn is_null(&self, _idx: usize) -> bool {
+        panic!("TODO")
+    }
+
+    fn byte_size(&self) -> usize {
         panic!("TODO")
     }
 
