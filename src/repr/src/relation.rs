@@ -367,6 +367,21 @@ pub struct ColumnIndex(usize);
 
 static_assertions::assert_not_impl_all!(ColumnIndex: Arbitrary);
 
+impl ColumnIndex {
+    /// Returns a stable identifier for this [`ColumnIndex`].
+    pub fn to_stable_name(&self) -> String {
+        self.0.to_string()
+    }
+
+    pub fn to_raw(&self) -> usize {
+        self.0
+    }
+
+    pub fn from_raw(val: usize) -> Self {
+        ColumnIndex(val)
+    }
+}
+
 /// The version a given column was added at.
 #[derive(
     Clone,
@@ -722,6 +737,14 @@ impl RelationDesc {
         self.metadata.values().map(|meta| &meta.name)
     }
 
+    /// Returns an iterator over the columns in this relation, with all their metadata.
+    pub fn iter_all(&self) -> impl Iterator<Item = (&ColumnIndex, &ColumnName, &ColumnType)> {
+        self.metadata.iter().map(|(col_idx, metadata)| {
+            let col_typ = &self.typ.columns()[metadata.typ_idx];
+            (col_idx, &metadata.name, col_typ)
+        })
+    }
+
     /// Returns an iterator over the names of the columns in this relation that are "similar" to
     /// the provided `name`.
     pub fn iter_similar_names<'a>(
@@ -747,13 +770,20 @@ impl RelationDesc {
     /// # Panics
     ///
     /// Panics if `i` is not a valid column index.
+    ///
+    /// TODO(parkmycar): Migrate all uses of this to [`RelationDesc::get_name_idx`].
     pub fn get_name(&self, i: usize) -> &ColumnName {
         // TODO(parkmycar): Refactor this to use `ColumnIndex`.
-        &self
-            .metadata
-            .get(&ColumnIndex(i))
-            .expect("should exist")
-            .name
+        self.get_name_idx(&ColumnIndex(i))
+    }
+
+    /// Gets the name of the column at `idx`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no column exists at `idx`.
+    pub fn get_name_idx(&self, idx: &ColumnIndex) -> &ColumnName {
+        &self.metadata.get(idx).expect("should exist").name
     }
 
     /// Mutably gets the name of the `i`th column.
@@ -768,6 +798,16 @@ impl RelationDesc {
             .get_mut(&ColumnIndex(i))
             .expect("should exist")
             .name
+    }
+
+    /// Gets the [`ColumnType`] of the column at `idx`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no column exists at `idx`.
+    pub fn get_type(&self, idx: &ColumnIndex) -> &ColumnType {
+        let typ_idx = self.metadata.get(idx).expect("should exist").typ_idx;
+        &self.typ.column_types[typ_idx]
     }
 
     /// Gets the name of the `i`th column if that column name is unambiguous.
@@ -799,6 +839,33 @@ impl RelationDesc {
         } else {
             Ok(())
         }
+    }
+
+    /// Creates a new [`RelationDesc`] retaining only the columns specified in `demands`.
+    pub fn apply_demand(&self, demands: &BTreeSet<usize>) -> RelationDesc {
+        let mut new_desc = self.clone();
+
+        // Update ColumnMetadata.
+        let mut removed = 0;
+        new_desc.metadata.retain(|idx, metadata| {
+            let retain = demands.contains(&idx.0);
+            if !retain {
+                removed += 1;
+            } else {
+                metadata.typ_idx -= removed;
+            }
+            retain
+        });
+
+        // Update ColumnType.
+        let mut idx = 0;
+        new_desc.typ.column_types.retain(|_| {
+            let keep = demands.contains(&idx);
+            idx += 1;
+            keep
+        });
+
+        new_desc
     }
 }
 
@@ -1654,6 +1721,28 @@ mod tests {
           }
         }
         "###);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn apply_demand() {
+        let desc = RelationDesc::builder()
+            .with_column("a", ScalarType::String.nullable(true))
+            .with_column("b", ScalarType::Int64.nullable(false))
+            .with_column("c", ScalarType::Time.nullable(false))
+            .finish();
+        let desc = desc.apply_demand(&BTreeSet::from([0, 2]));
+        assert_eq!(desc.arity(), 2);
+        // TODO(parkmycar): Move validate onto RelationDesc.
+        VersionedRelationDesc::new(desc).validate();
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn smoketest_column_index_stable_ident() {
+        let idx_a = ColumnIndex(42);
+        // Note(parkmycar): This should never change.
+        assert_eq!(idx_a.to_stable_name(), "42");
     }
 
     #[mz_ore::test]

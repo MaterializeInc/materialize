@@ -224,7 +224,20 @@ pub fn build_compute_dataflow<A: Allocate>(
             // Import declared sources into the rendering context.
             for (source_id, (source, _monotonic)) in dataflow.source_imports.iter() {
                 region.region_named(&format!("Source({:?})", source_id), |inner| {
-                    let mut mfp = source.arguments.operators.clone().map(|ops| {
+                    let mut read_schema = None;
+                    let mut mfp = source.arguments.operators.clone().map(|mut ops| {
+                        let demands = ops.demand();
+                        let new_desc = source.storage_metadata.relation_desc.apply_demand(&demands);
+                        let new_arity = demands.len();
+                        let remap = demands
+                            .into_iter()
+                            .enumerate()
+                            .map(|(new, old)| (old, new))
+                            .collect();
+                        ops.permute(remap, new_arity);
+
+                        read_schema = Some(new_desc);
+
                         mz_expr::MfpPlan::create_from(ops)
                             .expect("Linear operators should always be valid")
                     });
@@ -247,6 +260,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                         &compute_state.txns_ctx,
                         &compute_state.worker_config,
                         source.storage_metadata.clone(),
+                        read_schema,
                         dataflow.as_of.clone(),
                         snapshot_mode,
                         until.clone(),

@@ -337,6 +337,7 @@ where
         &compute_state.txns_ctx,
         &compute_state.worker_config,
         target,
+        None,
         as_of,
         SnapshotMode::Include,
         until,
