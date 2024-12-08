@@ -230,7 +230,7 @@ pub const STORAGE_USE_CONTINUAL_FEEDBACK_UPSERT: Config<bool> = Config::new(
 
 pub const PERSIST_APPLY_PROJECTION_PUSHDOWN: Config<bool> = Config::new(
     "persist_apply_projection_pushdown",
-    true,
+    false,
     "When enabled, passes column projection info down into Persist.",
 );
 
