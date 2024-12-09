@@ -139,7 +139,7 @@ name              hint                            details
 > SELECT o.name, a.hint, a.details FROM mz_internal.mz_index_advice AS a JOIN mz_objects AS o ON (a.object_id = o.id) ORDER BY name;
 name                  hint                            details
 ---------------------------------------------------------------------------------------------------------------------------------
- counter_primary_idx  "drop unless queried directly"  "associated object does not have any dependencies (maintained or not maintained)"
+ source_primary_idx  "drop unless queried directly"  "associated object does not have any dependencies (maintained or not maintained)"
 
 # verify that all indexes and materialized views have a recommendation
 > SELECT id FROM mz_objects WHERE id LIKE 'u%' AND type IN ('index', 'materialized-view')
