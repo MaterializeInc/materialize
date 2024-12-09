@@ -459,6 +459,16 @@ who = "Matt Jibson <matt.jibson@gmail.com>"
 criteria = "safe-to-deploy"
 version = "2.2.1"
 
+[[audits.idna_adapter]]
+who = "Alex Hunt <alex.hunt@materialize.com>"
+criteria = "maintained-and-necessary"
+version = "1.1.0"
+
+[[audits.idna_mapping]]
+who = "Alex Hunt <alex.hunt@materialize.com>"
+criteria = "maintained-and-necessary"
+version = "1.0.0"
+
 [[audits.im]]
 who = "Matt Jibson <matt.jibson@gmail.com>"
 criteria = "safe-to-deploy"
@@ -1331,10 +1341,20 @@ who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "safe-to-deploy"
 version = "0.1.6"
 
+[[audits.unicode-joining-type]]
+who = "Alex Hunt <alex.hunt@materialize.com>"
+criteria = "maintained-and-necessary"
+version = "0.7.0"
+
 [[audits.untrusted]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "maintained-and-necessary"
 delta = "0.7.1 -> 0.9.0"
+
+[[audits.url]]
+who = "Alex Hunt <alex.hunt@materialize.com>"
+criteria = "maintained-and-necessary"
+version = "2.5.4"
 
 [[audits.uuid]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
