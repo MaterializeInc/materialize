@@ -331,6 +331,7 @@ impl Listeners {
         let catalog_init_start = Instant::now();
         info!("startup: envd serve: catalog init beginning");
 
+        let init_start = Instant::now();
         // Get the current timestamp so we can record when we booted.
         let boot_ts = (config.now)().into();
 
@@ -340,6 +341,10 @@ impl Listeners {
             .open(config.controller.persist_location.clone())
             .await
             .context("opening persist client")?;
+        info!(
+            "CATALOG INIT LOOK: open persist client took {:?}",
+            init_start.elapsed()
+        );
         let mut openable_adapter_storage = mz_catalog::durable::persist_backed_catalog_state(
             persist_client.clone(),
             config.environment_id.organization_id(),
@@ -544,19 +549,19 @@ impl Listeners {
         };
 
         // Load the adapter durable storage.
-        let (adapter_storage, audit_logs_handle) = if read_only {
+        let (adapter_storage, audit_logs_iterator) = if read_only {
             // TODO: behavior of migrations when booting in savepoint mode is
             // not well defined.
-            let (adapter_storage, audit_logs_handle) = openable_adapter_storage
+            let (adapter_storage, audit_logs_iterator) = openable_adapter_storage
                 .open_savepoint(boot_ts, &bootstrap_args)
                 .await?;
             // In read-only mode, we intentionally do not call `set_is_leader`,
             // because we are by definition not the leader if we are in
             // read-only mode.
 
-            (adapter_storage, audit_logs_handle)
+            (adapter_storage, audit_logs_iterator)
         } else {
-            let (adapter_storage, audit_logs_handle) = openable_adapter_storage
+            let (adapter_storage, audit_logs_iterator) = openable_adapter_storage
                 .open(boot_ts, &bootstrap_args)
                 .await?;
 
@@ -565,7 +570,7 @@ impl Listeners {
             // fenced out all other environments using the adapter storage.
             deployment_state.set_is_leader();
 
-            (adapter_storage, audit_logs_handle)
+            (adapter_storage, audit_logs_iterator)
         };
 
         // Enable Persist compaction if we're not in read only.
@@ -620,7 +625,7 @@ impl Listeners {
             controller_config: config.controller,
             controller_envd_epoch: envd_epoch,
             storage: adapter_storage,
-            audit_logs_handle,
+            audit_logs_iterator,
             timestamp_oracle_url: config.timestamp_oracle_url,
             unsafe_mode: config.unsafe_mode,
             all_features: config.all_features,
