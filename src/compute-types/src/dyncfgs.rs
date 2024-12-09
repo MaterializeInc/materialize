@@ -149,6 +149,15 @@ pub const COMPUTE_REPLICA_EXPIRATION_OFFSET: Config<Duration> = Config::new(
     "The expiration time offset for replicas. Zero disables expiration.",
 );
 
+/// When enabled, applies the column demands from a MapFilterProject onto the RelationDesc used to
+/// read out of Persist. This allows Persist to prune unneeded columns as a performance
+/// optimization.
+pub const COMPUTE_APPLY_COLUMN_DEMANDS: Config<bool> = Config::new(
+    "compute_apply_column_demands",
+    false,
+    "When enabled, passes applys column demands to the RelationDesc used to read out of Persist.",
+);
+
 /// Adds the full set of all compute `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -169,4 +178,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&COPY_TO_S3_MULTIPART_PART_SIZE_BYTES)
         .add(&ENABLE_COMPUTE_REPLICA_EXPIRATION)
         .add(&COMPUTE_REPLICA_EXPIRATION_OFFSET)
+        .add(&COMPUTE_APPLY_COLUMN_DEMANDS)
 }
