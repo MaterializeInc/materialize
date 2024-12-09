@@ -160,6 +160,7 @@ impl ProjectionPushdown {
             updates: faked_data,
             ts_rewrite: None,
             schema_id: None,
+            deprecated_schema_id: None,
         })
     }
 }

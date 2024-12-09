@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use anyhow::ensure;
+use anyhow::{ensure, Context};
 use async_stream::{stream, try_stream};
 use std::borrow::Cow;
 use std::cmp::Ordering;
@@ -55,6 +55,7 @@ use crate::error::InvalidUsage;
 use crate::internal::encoding::{parse_id, LazyInlineBatchPart, LazyPartStats, LazyProto};
 use crate::internal::gc::GcReq;
 use crate::internal::machine::retry_external;
+use crate::internal::metrics::SchemaMetrics;
 use crate::internal::paths::{BlobKey, PartId, PartialBatchKey, PartialRollupKey, WriterKey};
 use crate::internal::trace::{
     ActiveCompaction, ApplyMergeResult, FueledMergeReq, FueledMergeRes, Trace,
@@ -208,6 +209,9 @@ pub enum BatchPart<T> {
         updates: LazyInlineBatchPart,
         ts_rewrite: Option<Antichain<T>>,
         schema_id: Option<SchemaId>,
+
+        /// ID of a schema that has since been deprecated and exists only to cleanly roundtrip.
+        deprecated_schema_id: Option<SchemaId>,
     },
 }
 
@@ -603,21 +607,25 @@ impl<T: Ord> Ord for BatchPart<T> {
                     updates: s_updates,
                     ts_rewrite: s_ts_rewrite,
                     schema_id: s_schema_id,
+                    deprecated_schema_id: s_deprecated_schema_id,
                 },
                 BatchPart::Inline {
                     updates: o_updates,
                     ts_rewrite: o_ts_rewrite,
                     schema_id: o_schema_id,
+                    deprecated_schema_id: o_deprecated_schema_id,
                 },
             ) => (
                 s_updates,
                 s_ts_rewrite.as_ref().map(|x| x.elements()),
                 s_schema_id,
+                s_deprecated_schema_id,
             )
                 .cmp(&(
                     o_updates,
                     o_ts_rewrite.as_ref().map(|x| x.elements()),
                     o_schema_id,
+                    o_deprecated_schema_id,
                 )),
             (BatchPart::Hollow(_), BatchPart::Inline { .. }) => Ordering::Less,
             (BatchPart::Inline { .. }, BatchPart::Hollow(_)) => Ordering::Greater,
@@ -643,6 +651,9 @@ pub struct RunMeta {
     pub(crate) order: Option<RunOrder>,
     /// All parts in a run should have the same schema.
     pub(crate) schema: Option<SchemaId>,
+
+    /// ID of a schema that has since been deprecated and exists only to cleanly roundtrip.
+    pub(crate) deprecated_schema: Option<SchemaId>,
 }
 
 /// A subset of a [HollowBatch] corresponding 1:1 to a blob.
@@ -689,6 +700,9 @@ pub struct HollowBatchPart<T> {
     /// Or None for historical data written before the schema registry was
     /// added.
     pub schema_id: Option<SchemaId>,
+
+    /// ID of a schema that has since been deprecated and exists only to cleanly roundtrip.
+    pub deprecated_schema_id: Option<SchemaId>,
 }
 
 /// A [Batch] but with the updates themselves stored externally.
@@ -1020,6 +1034,7 @@ impl<T: Ord> Ord for HollowBatchPart<T> {
             diffs_sum: self_diffs_sum,
             format: self_format,
             schema_id: self_schema_id,
+            deprecated_schema_id: self_deprecated_schema_id,
         } = self;
         let HollowBatchPart {
             key: other_key,
@@ -1031,6 +1046,7 @@ impl<T: Ord> Ord for HollowBatchPart<T> {
             diffs_sum: other_diffs_sum,
             format: other_format,
             schema_id: other_schema_id,
+            deprecated_schema_id: other_deprecated_schema_id,
         } = other;
         (
             self_key,
@@ -1042,6 +1058,7 @@ impl<T: Ord> Ord for HollowBatchPart<T> {
             self_diffs_sum,
             self_format,
             self_schema_id,
+            self_deprecated_schema_id,
         )
             .cmp(&(
                 other_key,
@@ -1053,6 +1070,7 @@ impl<T: Ord> Ord for HollowBatchPart<T> {
                 other_diffs_sum,
                 other_format,
                 other_schema_id,
+                other_deprecated_schema_id,
             ))
     }
 }
@@ -1126,7 +1144,7 @@ pub struct EncodedSchemas {
     /// The arrow `DataType` produced by this `K::Schema` at the time it was
     /// registered, encoded as a `ProtoDataType`.
     pub key_data_type: Bytes,
-    /// A full in-mem `K::Schema` impl encoded via [Codec::encode_schema].
+    /// A full in-mem `V::Schema` impl encoded via [Codec::encode_schema].
     pub val: Bytes,
     /// The arrow `DataType` produced by this `V::Schema` at the time it was
     /// registered, encoded as a `ProtoDataType`.
@@ -1293,14 +1311,17 @@ where
         &mut self,
         key_schema: &K::Schema,
         val_schema: &V::Schema,
+        metrics: &SchemaMetrics,
     ) -> ControlFlow<NoOpStateTransition<Option<SchemaId>>, Option<SchemaId>> {
-        fn data_type<T>(schema: &impl Schema2<T>) -> Bytes {
-            // To be defensive, create an empty batch and inspect the resulting
-            // data type (as opposed to something like allowing the `Schema2` to
-            // declare the DataType).
-            let array = Schema2::encoder(schema).expect("valid schema").finish();
-            let proto = Array::data_type(&array).into_proto();
+        fn encode_data_type(data_type: &DataType) -> Bytes {
+            let proto = data_type.into_proto();
             prost::Message::encode_to_vec(&proto).into()
+        }
+
+        fn decode_data_type(buf: Bytes) -> Result<DataType, anyhow::Error> {
+            let proto: mz_persist_types::arrow::ProtoDataType =
+                prost::Message::decode(buf).context("decoding schema DataType")?;
+            DataType::from_proto(proto).context("converting ProtoDataType into DataType")
         }
 
         // Look for an existing registered SchemaId for these schemas.
@@ -1318,12 +1339,65 @@ where
             K::decode_schema(&x.key) == *key_schema && V::decode_schema(&x.val) == *val_schema
         });
         match existing_id {
-            Some((schema_id, _)) => {
-                // TODO: Validate that the decoded schemas still produce records
-                // of the recorded DataType, to detect shenanigans. Probably
-                // best to wait until we've turned on Schema2 in prod and thus
-                // committed to the current mappings.
-                Break(NoOpStateTransition(Some(*schema_id)))
+            Some((schema_id, encoded_schemas)) => {
+                let schema_id = *schema_id;
+                let new_k_datatype = mz_persist_types::columnar::data_type::<K>(key_schema)
+                    .expect("valid key schema");
+                let new_v_datatype = mz_persist_types::columnar::data_type::<V>(val_schema)
+                    .expect("valid val schema");
+
+                let new_k_encoded_datatype = encode_data_type(&new_k_datatype);
+                let new_v_encoded_datatype = encode_data_type(&new_v_datatype);
+
+                // Check if the generated Arrow DataTypes have changed.
+                if encoded_schemas.key_data_type != new_k_encoded_datatype
+                    || encoded_schemas.val_data_type != new_v_encoded_datatype
+                {
+                    let old_k_datatype =
+                        decode_data_type(Bytes::clone(&encoded_schemas.key_data_type))
+                            .expect("failed to roundtrip Arrow DataType");
+                    let old_v_datatype =
+                        decode_data_type(Bytes::clone(&encoded_schemas.val_data_type))
+                            .expect("failed to roundtrip Arrow DataType");
+
+                    let k_atleast_as_nullable =
+                        crate::schema::is_atleast_as_nullable(&old_k_datatype, &new_k_datatype);
+                    let v_atleast_as_nullable =
+                        crate::schema::is_atleast_as_nullable(&old_v_datatype, &new_v_datatype);
+
+                    // If the Arrow DataType for `k` or `v` has changed, but it's only become more
+                    // nullable, then we allow in-place re-writing of the schema.
+                    match (k_atleast_as_nullable, v_atleast_as_nullable) {
+                        // TODO(parkmycar): Remove this one-time migration after v0.127 ships.
+                        (Ok(()), Ok(())) => {
+                            let key = Bytes::clone(&encoded_schemas.key);
+                            let val = Bytes::clone(&encoded_schemas.val);
+                            self.schemas.insert(
+                                schema_id,
+                                EncodedSchemas {
+                                    key,
+                                    key_data_type: new_k_encoded_datatype,
+                                    val,
+                                    val_data_type: new_v_encoded_datatype,
+                                },
+                            );
+                            metrics.one_time_migration_more_nullable.inc();
+                            Continue(Some(schema_id))
+                        }
+                        (k_err, _) => {
+                            tracing::info!(
+                                "register schemas, Arrow DataType changed\nkey: {:?}\nold: {:?}\nnew: {:?}",
+                                k_err,
+                                old_k_datatype,
+                                new_k_datatype,
+                            );
+                            Break(NoOpStateTransition(None))
+                        }
+                    }
+                } else {
+                    // Everything matches.
+                    Break(NoOpStateTransition(Some(schema_id)))
+                }
             }
             None if self.is_tombstone() => {
                 // TODO: Is this right?
@@ -1334,13 +1408,17 @@ where
                 // generate the next id if/when we start supporting the removal
                 // of schemas.
                 let id = SchemaId(self.schemas.len());
+                let key_data_type = mz_persist_types::columnar::data_type::<K>(key_schema)
+                    .expect("valid key schema");
+                let val_data_type = mz_persist_types::columnar::data_type::<V>(val_schema)
+                    .expect("valid val schema");
                 let prev = self.schemas.insert(
                     id,
                     EncodedSchemas {
                         key: K::encode_schema(key_schema),
-                        key_data_type: data_type(key_schema),
+                        key_data_type: encode_data_type(&key_data_type),
                         val: V::encode_schema(val_schema),
-                        val_data_type: data_type(val_schema),
+                        val_data_type: encode_data_type(&val_data_type),
                     },
                 );
                 assert_eq!(prev, None);
@@ -1388,16 +1466,25 @@ where
             }));
         }
 
+        let current_key = K::decode_schema(&current.key);
+        let current_key_dt = EncodedSchemas::decode_data_type(&current.key_data_type);
+        let current_val = V::decode_schema(&current.val);
+        let current_val_dt = EncodedSchemas::decode_data_type(&current.val_data_type);
+
         let key_dt = data_type(key_schema);
         let val_dt = data_type(val_schema);
-        let key_fn = backward_compatible(
-            &EncodedSchemas::decode_data_type(&current.key_data_type),
-            &key_dt,
-        );
-        let val_fn = backward_compatible(
-            &EncodedSchemas::decode_data_type(&current.val_data_type),
-            &val_dt,
-        );
+
+        // If the schema is exactly the same as the current one, no-op.
+        if current_key == *key_schema
+            && current_key_dt == key_dt
+            && current_val == *val_schema
+            && current_val_dt == val_dt
+        {
+            return Break(NoOpStateTransition(CaESchema::Ok(*current_id)));
+        }
+
+        let key_fn = backward_compatible(&current_key_dt, &key_dt);
+        let val_fn = backward_compatible(&current_val_dt, &val_dt);
         let (Some(key_fn), Some(val_fn)) = (key_fn, val_fn) else {
             return Break(NoOpStateTransition(CaESchema::Incompatible));
         };
@@ -2572,8 +2659,9 @@ pub(crate) mod tests {
                 any_hollow_batch_part(),
                 any::<Option<T>>(),
                 any::<Option<SchemaId>>(),
+                any::<Option<SchemaId>>(),
             ),
-            |(is_hollow, hollow, ts_rewrite, schema_id)| {
+            |(is_hollow, hollow, ts_rewrite, schema_id, deprecated_schema_id)| {
                 if is_hollow {
                     BatchPart::Hollow(hollow)
                 } else {
@@ -2583,6 +2671,7 @@ pub(crate) mod tests {
                         updates,
                         ts_rewrite,
                         schema_id,
+                        deprecated_schema_id,
                     }
                 }
             },
@@ -2605,6 +2694,7 @@ pub(crate) mod tests {
                 any::<[u8; 8]>(),
                 any::<Option<BatchColumnarFormat>>(),
                 any::<Option<SchemaId>>(),
+                any::<Option<SchemaId>>(),
             ),
             |(
                 key,
@@ -2615,6 +2705,7 @@ pub(crate) mod tests {
                 diffs_sum,
                 format,
                 schema_id,
+                deprecated_schema_id,
             )| {
                 HollowBatchPart {
                     key,
@@ -2626,6 +2717,7 @@ pub(crate) mod tests {
                     diffs_sum: Some(diffs_sum),
                     format,
                     schema_id,
+                    deprecated_schema_id,
                 }
             },
         )
@@ -2799,6 +2891,7 @@ pub(crate) mod tests {
                         diffs_sum: None,
                         format: None,
                         schema_id: None,
+                        deprecated_schema_id: None,
                     }))
                 })
                 .collect(),
@@ -3618,7 +3711,7 @@ pub(crate) mod tests {
     fn state_inspect_serde_json() {
         const STATE_SERDE_JSON: &str = include_str!("state_serde.json");
         let mut runner = proptest::test_runner::TestRunner::deterministic();
-        let tree = any_state::<u64>(5..6).new_tree(&mut runner).unwrap();
+        let tree = any_state::<u64>(6..8).new_tree(&mut runner).unwrap();
         let json = serde_json::to_string_pretty(&tree.current()).unwrap();
         assert_eq!(
             json.trim(),

@@ -93,7 +93,9 @@ def get_default_system_parameters(
         "enable_columnation_lgalloc": "true",
         "enable_compute_chunked_stack": "true",
         "enable_connection_validation_syntax": "true",
-        "enable_continual_task_builtins": "true",
+        "enable_continual_task_builtins": (
+            "true" if version > MzVersion.parse_mz("v0.127.0-dev") else "false"
+        ),
         "enable_continual_task_create": "true",
         "enable_continual_task_retain": "true",
         "enable_continual_task_transform": "true",
@@ -115,6 +117,9 @@ def get_default_system_parameters(
         "enable_table_keys": "true",
         "enable_variadic_left_join_lowering": "true",
         "enable_worker_core_affinity": "true",
+        "persist_record_schema_id": (
+            "true" if version > MzVersion.parse_mz("v0.127.0-dev") else "false"
+        ),
         "persist_batch_columnar_format": "both_v2",
         "persist_batch_columnar_format_percent": "100",
         "persist_batch_delete_enabled": "true",
