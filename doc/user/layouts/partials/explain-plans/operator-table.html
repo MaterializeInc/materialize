@@ -1,0 +1,26 @@
+<table>
+<thead>
+<tr>
+<th>Operator</th>
+<th>Description</th>
+<th>Example</th>
+</tr>
+</thead>
+<tbody>
+{{ range .operators }}
+<tr>
+<td><strong>{{ .operator }}</strong></td>
+<td>
+    {{ .description | markdownify }}<br/><br />
+    <strong>Can increase data size:</strong> {{ if .expansive
+    }} {{ .expansive_details | markdownify }}{{ else }}No{{ end }}
+    <br />
+    <strong>Uses memory:</strong> {{ if .uses_memory }} ✅ {{ .memory_details |
+    markdownify }} {{ else }}No{{ end }}
+
+</td>
+<td>{{ .example | markdownify }}</td>
+</tr>
+{{ end }}
+</tbody>
+</table>
