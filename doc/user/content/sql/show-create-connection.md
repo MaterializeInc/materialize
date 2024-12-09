@@ -10,11 +10,11 @@ menu:
 
 ## Syntax
 
-{{< diagram "show-create-connection.svg" >}}
+```sql
+SHOW CREATE CONNECTION <connection_name>
+```
 
-Field | Use
-------|-----
-_connection&lowbar;name_ | The connection you want to get the `CREATE` statement for. For available connections, see [`SHOW CONNECTIONS`](../show-connections).
+For available connection names, see [`SHOW CONNECTIONS`](/sql/show-connections).
 
 ## Examples
 
