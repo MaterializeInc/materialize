@@ -270,7 +270,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     time.sleep(1)
             else:
                 raise ValueError("Never completed")
-            for i in range(60):
+            for i in range(180):
                 try:
                     spawn.runv(
                         ["kubectl", "get", "pods", "-n", "materialize-environment"],
@@ -281,6 +281,32 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                             "kubectl",
                             "get",
                             "pods",
+                            "-l",
+                            "app=environmentd",
+                            "-n",
+                            "materialize-environment",
+                            "-o",
+                            "jsonpath={.items[0].status.phase}",
+                        ],
+                        cwd=path,
+                    )
+                    if status == "Running":
+                        break
+                except subprocess.CalledProcessError:
+                    time.sleep(1)
+            else:
+                raise ValueError("Never completed")
+
+            # Can take a while for balancerd to come up
+            for i in range(240):
+                try:
+                    status = spawn.capture(
+                        [
+                            "kubectl",
+                            "get",
+                            "pods",
+                            "-l",
+                            "app=balancerd",
                             "-n",
                             "materialize-environment",
                             "-o",
@@ -322,34 +348,23 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             ],
             cwd=path,
         )
-        # Can take a while for balancerd to come up
-        for i in range(120):
-            try:
-                balancerd_name = spawn.capture(
-                    [
-                        "kubectl",
-                        "get",
-                        "pods",
-                        "-l",
-                        "app=balancerd",
-                        "-n",
-                        "materialize-environment",
-                        "-o",
-                        "jsonpath={.items[*].metadata.name}",
-                    ],
-                    cwd=path,
-                )
-                # error: arguments in resource/name form must have a single resource and name
-                print(f"Got balancerd name: {balancerd_name}")
-                if " " in balancerd_name:
-                    time.sleep(1)
-                else:
-                    break
-            except subprocess.CalledProcessError as e:
-                print(e)
-                time.sleep(1)
-        else:
-            raise ValueError("Never completed")
+
+        balancerd_name = spawn.capture(
+            [
+                "kubectl",
+                "get",
+                "pods",
+                "-l",
+                "app=balancerd",
+                "-n",
+                "materialize-environment",
+                "-o",
+                "jsonpath={.items[*].metadata.name}",
+            ],
+            cwd=path,
+        )
+        # error: arguments in resource/name form must have a single resource and name
+        print(f"Got balancerd name: {balancerd_name}")
 
         environmentd_port_forward_process = subprocess.Popen(
             [
