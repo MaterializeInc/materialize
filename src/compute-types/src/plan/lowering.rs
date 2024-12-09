@@ -235,7 +235,7 @@ impl Context {
                     //   `LiteralConstraints` has already run.
                     // (Also note that a similar literal constraint handling machinery is also
                     // present when handling the leftover MFP after this big match.)
-                    mfp.permute(permutation.clone(), thinning.len() + key.len());
+                    mfp.permute_fn(|c| permutation[c], thinning.len() + key.len());
                     in_keys.arranged = vec![(key.clone(), permutation.clone(), thinning.clone())];
                     GetPlan::Arrangement(key.clone(), Some(val.clone()), mfp)
                 } else if !mfp.is_identity() {
@@ -243,7 +243,7 @@ impl Context {
                     if let Some((key, permutation, thinning)) =
                         in_keys.arbitrary_arrangement().cloned()
                     {
-                        mfp.permute(permutation.clone(), thinning.len() + key.len());
+                        mfp.permute_fn(|c| permutation[c], thinning.len() + key.len());
                         in_keys.arranged = vec![(key.clone(), permutation, thinning)];
                         GetPlan::Arrangement(key, None, mfp)
                     } else {
@@ -316,7 +316,7 @@ impl Context {
                         let (input_key, permutation, thinning) =
                             v_keys.arbitrary_arrangement().unwrap();
                         let mut input_mfp = MapFilterProject::new(value.arity());
-                        input_mfp.permute(permutation.clone(), thinning.len() + input_key.len());
+                        input_mfp.permute_fn(|c| permutation[c], thinning.len() + input_key.len());
                         let input_key = Some(input_key.clone());
 
                         let forms = AvailableCollections::new_raw();
@@ -473,10 +473,9 @@ impl Context {
                                 // to check this here for robustness against future code changes.
                                 break 'fusion None;
                             }
-                            mfp.permute(
-                                (1..mfp.input_arity).map(|col| (col, col - 1)).collect(),
-                                mfp.input_arity - 1,
-                            );
+                            let permutation: BTreeMap<_, _> =
+                                (1..mfp.input_arity).map(|col| (col, col - 1)).collect();
+                            mfp.permute_fn(|c| permutation[&c], mfp.input_arity - 1);
                             mfp
                         };
                         // We now put together the project that was before the FlatMap, and the
@@ -519,8 +518,9 @@ impl Context {
                         //
                         // We _do_, however, need to permute the `expr`s that provide input to the
                         // `func`.
+                        let permutation = permutation.iter().cloned().enumerate().collect();
                         for expr in &mut exprs {
-                            expr.permute_map(permutation);
+                            expr.permute_map(&permutation);
                         }
 
                         Some(k.clone())
@@ -576,7 +576,7 @@ impl Context {
                             (0..key.len())
                                 .map(MirScalarExpr::Column)
                                 .collect::<Vec<_>>(),
-                            (0..key.len()).map(|i| (i, i)).collect::<BTreeMap<_, _>>(),
+                            (0..key.len()).collect::<Vec<_>>(),
                             Vec::<usize>::new(),
                         );
                         let (ljp, missing) = LinearJoinPlan::create_from(
@@ -859,7 +859,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                         input_keys.arbitrary_arrangement()
                     {
                         let mut mfp = MapFilterProject::new(arity);
-                        mfp.permute(permutation.clone(), thinning.len() + input_key.len());
+                        mfp.permute_fn(|c| permutation[c], thinning.len() + input_key.len());
                         (Some(input_key.clone()), mfp)
                     } else {
                         (None, MapFilterProject::new(arity))
@@ -892,7 +892,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 .iter()
                 .filter_map(|(key, permutation, thinning)| {
                     let mut mfp = mfp.clone();
-                    mfp.permute(permutation.clone(), thinning.len() + key.len());
+                    mfp.permute_fn(|c| permutation[c], thinning.len() + key.len());
                     mfp.literal_constraints(key)
                         .map(|val| (key.clone(), permutation, thinning, val))
                 })
@@ -905,20 +905,20 @@ This is not expected to cause incorrect results, but could indicate a performanc
             // (3) Otherwise, if there is _some_ key, use that,
             // (4) Otherwise just read the raw collection.
             let input_key_val = if let Some((key, permutation, thinning, val)) = key_val {
-                mfp.permute(permutation.clone(), thinning.len() + key.len());
+                mfp.permute_fn(|c| permutation[c], thinning.len() + key.len());
 
                 Some((key, Some(val)))
             } else if let Some((key, permutation, thinning)) =
                 keys.arranged.iter().find(|(key, permutation, thinning)| {
                     let mut mfp = mfp.clone();
-                    mfp.permute(permutation.clone(), thinning.len() + key.len());
+                    mfp.permute_fn(|c| permutation[c], thinning.len() + key.len());
                     mfp.is_identity()
                 })
             {
-                mfp.permute(permutation.clone(), thinning.len() + key.len());
+                mfp.permute_fn(|c| permutation[c], thinning.len() + key.len());
                 Some((key.clone(), None))
             } else if let Some((key, permutation, thinning)) = keys.arbitrary_arrangement() {
-                mfp.permute(permutation.clone(), thinning.len() + key.len());
+                mfp.permute_fn(|c| permutation[c], thinning.len() + key.len());
                 Some((key.clone(), None))
             } else {
                 None
@@ -936,7 +936,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     .iter_mut()
                     .find(|(key2, _, _)| key2 == &key)
                     .unwrap();
-                *old_permutation = (0..mfp.input_arity).map(|i| (i, i)).collect();
+                *old_permutation = (0..mfp.input_arity).collect();
                 let old_thinned_arity = old_thinning.len();
                 *old_thinning = (0..old_thinned_arity).collect();
                 // Get rid of all other forms, as this is now the only one known to be valid.
@@ -1082,7 +1082,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 old_collections.arbitrary_arrangement()
             {
                 let mut mfp = MapFilterProject::new(arity);
-                mfp.permute(permutation.clone(), thinning.len() + input_key.len());
+                mfp.permute_fn(|c| permutation[c], thinning.len() + input_key.len());
                 (Some(input_key.clone()), mfp)
             } else {
                 (None, MapFilterProject::new(arity))
