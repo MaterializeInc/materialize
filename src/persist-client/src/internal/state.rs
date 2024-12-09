@@ -55,6 +55,7 @@ use crate::error::InvalidUsage;
 use crate::internal::encoding::{parse_id, LazyInlineBatchPart, LazyPartStats, LazyProto};
 use crate::internal::gc::GcReq;
 use crate::internal::machine::retry_external;
+use crate::internal::metrics::SchemaMetrics;
 use crate::internal::paths::{BlobKey, PartId, PartialBatchKey, PartialRollupKey, WriterKey};
 use crate::internal::trace::{
     ActiveCompaction, ApplyMergeResult, FueledMergeReq, FueledMergeRes, Trace,
@@ -1310,8 +1311,9 @@ where
         &mut self,
         key_schema: &K::Schema,
         val_schema: &V::Schema,
+        metrics: &SchemaMetrics,
     ) -> ControlFlow<NoOpStateTransition<Option<SchemaId>>, Option<SchemaId>> {
-        fn encoded_data_type(data_type: &DataType) -> Bytes {
+        fn encode_data_type(data_type: &DataType) -> Bytes {
             let proto = data_type.into_proto();
             prost::Message::encode_to_vec(&proto).into()
         }
@@ -1344,8 +1346,8 @@ where
                 let new_v_datatype = mz_persist_types::columnar::data_type::<V>(val_schema)
                     .expect("valid val schema");
 
-                let new_k_encoded_datatype = encoded_data_type(&new_k_datatype);
-                let new_v_encoded_datatype = encoded_data_type(&new_v_datatype);
+                let new_k_encoded_datatype = encode_data_type(&new_k_datatype);
+                let new_v_encoded_datatype = encode_data_type(&new_v_datatype);
 
                 // Check if the generated Arrow DataTypes have changed.
                 if encoded_schemas.key_data_type != new_k_encoded_datatype
@@ -1366,7 +1368,7 @@ where
                     // If the Arrow DataType for `k` or `v` has changed, but it's only become more
                     // nullable, then we allow in-place re-writing of the schema.
                     match (k_atleast_as_nullable, v_atleast_as_nullable) {
-                        // TODO(parkmycar): Remove this one-time migration after v0.123 ships.
+                        // TODO(parkmycar): Remove this one-time migration after v0.127 ships.
                         (Ok(()), Ok(())) => {
                             let key = Bytes::clone(&encoded_schemas.key);
                             let val = Bytes::clone(&encoded_schemas.val);
@@ -1379,6 +1381,7 @@ where
                                     val_data_type: new_v_encoded_datatype,
                                 },
                             );
+                            metrics.one_time_migration_more_nullable.inc();
                             Continue(Some(schema_id))
                         }
                         (k_err, _) => {
@@ -1413,9 +1416,9 @@ where
                     id,
                     EncodedSchemas {
                         key: K::encode_schema(key_schema),
-                        key_data_type: encoded_data_type(&key_data_type),
+                        key_data_type: encode_data_type(&key_data_type),
                         val: V::encode_schema(val_schema),
-                        val_data_type: encoded_data_type(&val_data_type),
+                        val_data_type: encode_data_type(&val_data_type),
                     },
                 );
                 assert_eq!(prev, None);

@@ -258,7 +258,7 @@ where
         let metrics = Arc::clone(&self.applier.metrics);
         let (_seqno, state, maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |_seqno, _cfg, state| {
-                state.register_schema::<K, V>(key_schema, val_schema)
+                state.register_schema::<K, V>(key_schema, val_schema, &metrics.schema)
             })
             .await;
         (state, maintenance)
