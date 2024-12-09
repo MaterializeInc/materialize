@@ -9,24 +9,25 @@ menu:
     parent: 'sql-patterns'
 ---
 
-A **temporal filter** is a query condition/predicate that filters data based on
-a time-related (i.e., temporal) condition. Using a temporal filter reduces the
-working dataset, saving memory resources and focusing on results that are within
-the timeframe specified by the filter.
+A **temporal filter** is a query condition/predicate that uses the
+[`mz_now()`](/sql/functions/now_and_mz_now) function to filter data based on a
+time-related condition. Using a temporal filter reduces the working dataset,
+saving memory resources and focusing on results that meet the condition.
 
 In Materialize, you implement temporal filters using the
 [`mz_now()`](/sql/functions/now_and_mz_now) function (which returns
-Materialize's current virtual timestamp and keeps up with real time) in a
-`WHERE` or `HAVING` clause; specifically, you compare
-[`mz_now()`](/sql/functions/now_and_mz_now) to a numeric or timestamp column
-expression. As [`mz_now()`](/sql/functions/now_and_mz_now) progresses (every
-millisecond), records that fall outside the timeframe are retracted from the
-working dataset. That is, when using temporal filters, Materialize maintains (in
-memory) all future retractions of the data that is currently within the
-timeframe and applies the retraction when records fall out of the timeframe.
+Materialize's current virtual timestamp) in a `WHERE` or `HAVING` clause;
+specifically, you compare [`mz_now()`](/sql/functions/now_and_mz_now) to a
+numeric or timestamp column expression. As
+[`mz_now()`](/sql/functions/now_and_mz_now) progresses (every millisecond),
+records for which the condition is no longer true are retracted from the working
+dataset while records for which the condition becomes true are included in the
+working dataset. When using temporal filters, Materialize must be prepared to
+retract updates in the near future and will need resources to maintain these
+retractions.
 
 For example, the following temporal filter reduces the working dataset to those
-records whose event timestamp column (`event_ts`) is within the last 5 minutes.
+records whose event timestamp column (`event_ts`) is no more than 5 minutes ago:
 
 ```mzsql
 WHERE mz_now() <= event_ts + INTERVAL '5min'
@@ -38,16 +39,14 @@ However, there are currently no valid operators for the [`mz_timestamp`
 type](/sql/types/mz_timestamp) that would allow this.  See [Requirements](#requirements).
 {{< /note >}}
 
-
-
 The following diagram shows record `B` falling out of the result set as time
 moves forward:
 
-- In the first timeline, record `B` is within the specified timeframe (occurred
+- In the first timeline, record `B` occurred less than 5 minutes ago (occurred
   less than 5 minutes from `mz_now()`).
 
-- In the second timeline, as `mz_now()` progresses, record `B` has fallen out
-  of the specified timeframe (occurred more than 5 minutes from `mz_now()`).
+- In the second timeline, as `mz_now()` progresses, record `B` occurred more
+  than 5 minutes from `mz_now()`.
 
 ![temporal filter diagram](/images/temporal-filter.svg)
 
