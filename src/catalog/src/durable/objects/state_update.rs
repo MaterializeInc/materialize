@@ -39,6 +39,7 @@ use std::sync::LazyLock;
 use mz_ore::collections::HashSet;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::jsonb::Jsonb;
+use mz_repr::adt::numeric::{Dec, Numeric};
 use mz_repr::Diff;
 use mz_storage_types::sources::SourceData;
 use proptest_derive::Arbitrary;
@@ -308,6 +309,35 @@ impl StateUpdateKindJson {
             .find_map(|(field, datum)| if field == "kind" { Some(datum) } else { None })
             .expect("kind field must exist");
         datum.unwrap_str()
+    }
+
+    pub(crate) fn audit_log_id(&self) -> u64 {
+        assert!(self.is_audit_log(), "unexpected update kind: {self:?}");
+        let row = self.0.row();
+        let mut iter = row.unpack_first().unwrap_map().iter();
+        let key = iter
+            .find_map(|(field, datum)| if field == "key" { Some(datum) } else { None })
+            .expect("key field must exist")
+            .unwrap_map();
+        let event = key
+            .iter()
+            .find_map(|(field, datum)| if field == "event" { Some(datum) } else { None })
+            .expect("event field must exist")
+            .unwrap_map();
+        let (event_version, versioned_datum) = event.iter().next().expect("event cannot be empty");
+        match event_version {
+            "V1" => {
+                let versioned_map = versioned_datum.unwrap_map();
+                let id = versioned_map
+                    .iter()
+                    .find_map(|(field, datum)| if field == "id" { Some(datum) } else { None })
+                    .expect("event field must exist")
+                    .unwrap_numeric();
+                let mut cx = Numeric::context();
+                cx.try_into_u64(id.into_inner()).expect("invalid id")
+            }
+            version => unimplemented!("unsupported event version: {version}"),
+        }
     }
 
     /// Returns true if this is an update kind that is always deserializable, even before migrations. Otherwise, returns false.
@@ -994,7 +1024,95 @@ mod tests {
     use mz_storage_types::sources::SourceData;
     use proptest::prelude::*;
 
+    use crate::durable::objects::serialization::proto;
     use crate::durable::objects::state_update::{StateUpdateKind, StateUpdateKindJson};
+    use crate::durable::objects::FenceToken;
+    use crate::durable::Epoch;
+
+    #[mz_ore::test]
+    fn kind_test() {
+        let test_cases = [
+            (
+                StateUpdateKind::FenceToken(FenceToken {
+                    deploy_generation: 1,
+                    epoch: Epoch::new(1).expect("non-zero"),
+                }),
+                "FenceToken",
+            ),
+            (
+                StateUpdateKind::Config(
+                    proto::ConfigKey { key: String::new() },
+                    proto::ConfigValue { value: 1 },
+                ),
+                "Config",
+            ),
+            (
+                StateUpdateKind::Setting(
+                    proto::SettingKey {
+                        name: String::new(),
+                    },
+                    proto::SettingValue {
+                        value: String::new(),
+                    },
+                ),
+                "Setting",
+            ),
+            (
+                StateUpdateKind::AuditLog(proto::AuditLogKey { event: None }, ()),
+                "AuditLog",
+            ),
+        ];
+
+        for (kind, expected) in test_cases {
+            let json_kind: StateUpdateKindJson = kind.into();
+            let kind = json_kind.kind().to_string();
+            assert_eq!(expected, kind);
+        }
+    }
+
+    #[mz_ore::test]
+    fn audit_log_id_test() {
+        let test_cases = [
+            (
+                StateUpdateKind::AuditLog(
+                    proto::AuditLogKey {
+                        event: Some(proto::audit_log_key::Event::V1(proto::AuditLogEventV1 {
+                            id: 1,
+                            event_type: 2,
+                            object_type: 3,
+                            user: None,
+                            occurred_at: None,
+                            details: None,
+                        })),
+                    },
+                    (),
+                ),
+                1,
+            ),
+            (
+                StateUpdateKind::AuditLog(
+                    proto::AuditLogKey {
+                        event: Some(proto::audit_log_key::Event::V1(proto::AuditLogEventV1 {
+                            id: 4,
+                            event_type: 5,
+                            object_type: 6,
+                            user: None,
+                            occurred_at: None,
+                            details: None,
+                        })),
+                    },
+                    (),
+                ),
+                4,
+            ),
+        ];
+
+        for (kind, expected) in test_cases {
+            let json_kind: StateUpdateKindJson = kind.into();
+            let id = json_kind.audit_log_id();
+            assert_eq!(expected, id);
+        }
+    }
 
     proptest! {
         #[mz_ore::test]
