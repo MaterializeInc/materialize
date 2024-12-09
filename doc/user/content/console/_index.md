@@ -17,8 +17,16 @@ view billing information.
 ![Image of the Materialize Console](/images/console/console.png
 "Materialize Console")
 
-- **Create New**: Shortcut menu to the **New Cluster**, **Create a
-  Source**, and **New app password** screens.
+## Key features
+
+- [**Create New**](/console/create-new/): Shortcut menu to the following
+  panels:
+
+  - [**New cluster**](/console/create-new/#create-new-cluster) panel
+
+  - [**New source**](/console/create-new/#create-new-source) panel
+
+  - [**New app password**](/console/create-new/#create-new-app-password) panel
 
 - [SQL Shell](/console/sql-shell/): Issue SQL queries.
 
