@@ -42,4 +42,7 @@ pub trait AsRunnableWorker<C, R> {
         txns_ctx: TxnsContext,
         tracing_handle: Arc<TracingHandle>,
     );
+
+    /// A debug name for the implementation.
+    fn server_name() -> &'static str;
 }
