@@ -35,7 +35,6 @@ use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::{Codec, Codec64};
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, RelationDesc, Row, RowArena, Timestamp};
 use mz_storage_types::controller::{CollectionMetadata, TxnsCodecRow};
-use mz_storage_types::dyncfgs::PERSIST_APPLY_PROJECTION_PUSHDOWN;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceData;
 use mz_storage_types::stats::RelationPartStats;
@@ -319,8 +318,8 @@ where
 
     // N.B. `read_schema` may be a subset of the total columns for this shard.
     let read_desc = match read_schema {
-        Some(desc) if PERSIST_APPLY_PROJECTION_PUSHDOWN.get(&cfg.configs) => desc,
-        None | Some(_) => metadata.relation_desc,
+        Some(desc) => desc,
+        None => metadata.relation_desc,
     };
 
     let desc_transformer = match flow_control {
