@@ -6047,7 +6047,7 @@ WITH MUTUALLY RECURSIVE
             ON (o.id = d.referenced_object_id)
         JOIN mz_catalog.mz_objects AS i
             ON (i.id = d.object_id AND i.type = 'index')
-        WHERE o.id LIKE 'u%' AND o.type IN ('materialized-view', 'view')
+        WHERE o.id LIKE 'u%' AND o.type IN ('materialized-view', 'view', 'source')
         GROUP BY o.id, o.type, o.cluster_id, i.cluster_id
     ),
 
@@ -6071,7 +6071,7 @@ WITH MUTUALLY RECURSIVE
             v.id,
             unnest(v.indexes) AS justification
         FROM objects AS v
-        WHERE v.type IN ('view', 'materialized-view') AND NOT EXISTS (
+        WHERE v.type IN ('view', 'materialized-view', 'source') AND NOT EXISTS (
             SELECT FROM mz_internal.mz_object_transitive_dependencies AS d
             INNER JOIN mz_catalog.mz_objects AS child
                 ON (d.object_id = child.id)
@@ -6247,11 +6247,11 @@ WITH MUTUALLY RECURSIVE
         SELECT
             unnest(indexes) AS id,
             'drop unless queried directly' AS hint,
-            'associated view does not have any dependencies (maintained or not maintained)' AS details,
+            'associated object does not have any dependencies (maintained or not maintained)' AS details,
             NULL::text list AS justification
         FROM objects_with_justification
         -- indexes can only be part of justification for leaf nodes
-        WHERE type IN ('view', 'materialized-view') AND NOT indexes = '{}'::text list AND justification @> indexes
+        WHERE type IN ('view', 'materialized-view', 'source') AND NOT indexes = '{}'::text list AND justification @> indexes
 
         UNION ALL
 
