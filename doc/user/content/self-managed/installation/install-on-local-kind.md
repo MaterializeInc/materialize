@@ -67,22 +67,18 @@ repo](https://github.com/MaterializeInc/materialize).
    kind create cluster
    ```
 
-1. Create the `materialize` namespace.
-
-   ```shell
-   kubectl create namespace materialize
-   ```
-
 1. Install the Materialize Helm chart using the files provided in the
    Materialize repo.
 
    1. Go to the Materialize repo directory.
 
    1. Install the Materialize operator with the release name
-      `my-materialize-operator`:
+      `my-materialize-operator` into the `materialize` namespace:
 
       ```shell
-      helm install my-materialize-operator -f misc/helm-charts/operator/values.yaml misc/helm-charts/operator
+      helm install my-materialize-operator \
+         -f misc/helm-charts/operator/values.yaml misc/helm-charts/operator \
+         --namespace materialize --create-namespace
       ```
 
    1. Verify the installation and check the status:
@@ -93,7 +89,7 @@ repo](https://github.com/MaterializeInc/materialize).
 
       Wait for the components to be in the `Running` state:
 
-      ```shell
+      ```none
       NAME                                           READY   STATUS              RESTARTS   AGE
       pod/my-materialize-operator-776b98455b-w9kkl   0/1     ContainerCreating   0          6s
 
@@ -150,42 +146,42 @@ repo](https://github.com/MaterializeInc/materialize).
 
        Wait for the components to be in the `Running` state.
 
-       ```shell
-       NAME                                             READY   STATUS     RESTARTS   AGE
-       pod/mzfhj38ptdjs-balancerd-6dd5bb645d-p7r2j      1/1     Running    0          3m21s
-       pod/mzfhj38ptdjs-cluster-s1-replica-s1-gen-1-0   1/1     Running    0          3m25s
-       pod/mzfhj38ptdjs-cluster-s2-replica-s2-gen-1-0   1/1     Running    0          3m25s
-       pod/mzfhj38ptdjs-cluster-s3-replica-s3-gen-1-0   1/1     Running    0          3m25s
-       pod/mzfhj38ptdjs-cluster-u1-replica-u1-gen-1-0   1/1     Running    0          3m25s
-       pod/mzfhj38ptdjs-console-84cb5c98d6-9zlc4        1/1     Running    0          3m21s
-       pod/mzfhj38ptdjs-console-84cb5c98d6-rjjcs        1/1     Running    0          3m21s
-       pod/mzfhj38ptdjs-environmentd-1-0                1/1     Running    0          3m29s
+       ```none
+       NAME                                             READY   STATUS    RESTARTS   AGE
+       pod/mzlvmx9h6dpx-balancerd-f5c689b95-kjtzf       1/1     Running   0          45s
+       pod/mzlvmx9h6dpx-cluster-s1-replica-s1-gen-1-0   1/1     Running   0          51s
+       pod/mzlvmx9h6dpx-cluster-s2-replica-s2-gen-1-0   1/1     Running   0          51s
+       pod/mzlvmx9h6dpx-cluster-s3-replica-s3-gen-1-0   1/1     Running   0          51s
+       pod/mzlvmx9h6dpx-cluster-u1-replica-u1-gen-1-0   1/1     Running   0          51s
+       pod/mzlvmx9h6dpx-console-6b746b7d57-p24n4        1/1     Running   0          32s
+       pod/mzlvmx9h6dpx-console-6b746b7d57-qjs4p        1/1     Running   0          32s
+       pod/mzlvmx9h6dpx-environmentd-1-0                1/1     Running   0          60s
 
-       NAME                                               TYPE         CLUSTER-IP      EXTERNAL-IP   PORT (S)                                                                                      AGE
-       service/mzfhj38ptdjs-balancerd                     NodePort    10.96.60. 152    <none>        6876:32386/TCP,6875:31334/ TCP                                                               3m21s
-       service/mzfhj38ptdjs-cluster-s1-replica-s1-gen-1   ClusterIP   10.96.162. 190   <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/ TCP                                                3m25s
-       service/mzfhj38ptdjs-cluster-s2-replica-s2-gen-1   ClusterIP   10.96.120. 116   <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/ TCP                                                3m25s
-       service/mzfhj38ptdjs-cluster-s3-replica-s3-gen-1   ClusterIP   10.96.187. 199   <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/ TCP                                                3m25s
-       service/mzfhj38ptdjs-cluster-u1-replica-u1-gen-1   ClusterIP   10.96.92. 133    <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/ TCP                                                3m25s
-       service/mzfhj38ptdjs-console                       NodePort    10.96.97. 5      <none>        9000:30847/ TCP                                                                               3m21s
-       service/mzfhj38ptdjs-environmentd                  NodePort    10.96.188. 140   <none>        6875:30525/TCP,6876:31052/TCP,6877:31711/TCP, 6878:31367/TCP,6880:30141/TCP,6881:30283/TCP   3m21s
-       service/mzfhj38ptdjs-environmentd-1                NodePort    10.96.228. 68    <none>        6875:32253/TCP,6876:31876/TCP,6877:31886/TCP, 6878:31643/TCP,6880:32409/TCP,6881:30932/TCP   3m29s
-       service/mzfhj38ptdjs-persist-pubsub-1              ClusterIP    None            <none>        6879/ TCP                                                                                     3m29s
+       NAME                                               TYPE        CLUSTER-IP   EXTERNAL-IP   PORT(S)                                        AGE
+       service/mzlvmx9h6dpx-balancerd                     ClusterIP   None         <none>        6876/TCP,6875 TCP                              45s
+       service/mzlvmx9h6dpx-cluster-s1-replica-s1-gen-1   ClusterIP   None         <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878 TCP   51s
+       service/mzlvmx9h6dpx-cluster-s2-replica-s2-gen-1   ClusterIP   None         <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878 TCP   51s
+       service/mzlvmx9h6dpx-cluster-s3-replica-s3-gen-1   ClusterIP   None         <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878 TCP   51s
+       service/mzlvmx9h6dpx-cluster-u1-replica-u1-gen-1   ClusterIP   None         <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878 TCP   51s
+       service/mzlvmx9h6dpx-console                       ClusterIP   None         <none>        8080 TCP                                       32s
+       service/mzlvmx9h6dpx-environmentd                  ClusterIP   None         <none>        6875/TCP,6876/TCP,6877/TCP,6878 TCP            45s
+       service/mzlvmx9h6dpx-environmentd-1                ClusterIP   None         <none>        6875/TCP,6876/TCP,6877/TCP,6878 TCP            60s
+       service/mzlvmx9h6dpx-persist-pubsub-1              ClusterIP   None         <none>        6879 TCP                                       60s
 
-       NAME                                     READY   UP-TO-DATE   AVAILABLE    AGE
-       deployment.apps/mzfhj38ptdjs-balancerd   1/1     1            1            3m21s
-       deployment.apps/mzfhj38ptdjs-console     2/2     2            2            3m21s
+       NAME                                     READY   UP-TO-DATE   AVAILABLE   AGE
+       deployment.apps/mzlvmx9h6dpx-balancerd   1/1     1            1           45s
+       deployment.apps/mzlvmx9h6dpx-console     2/2     2            2           32s
 
-       NAME                                                DESIRED   CURRENT    READY   AGE
-       replicaset.apps/mzfhj38ptdjs-balancerd-6dd5bb645d   1         1          1       3m21s
-       replicaset.apps/mzfhj38ptdjs-console-84cb5c98d6     2         2          2       3m21s
+       NAME                                               DESIRED   CURRENT   READY   AGE
+       replicaset.apps/mzlvmx9h6dpx-balancerd-f5c689b95   1         1         1       45s
+       replicaset.apps/mzlvmx9h6dpx-console-6b746b7d57    2         2         2       32s
 
-       NAME                                                      READY   AGE
-       statefulset.apps/mzfhj38ptdjs-cluster-s1-replica-s1-gen-1   1/1     3m25s
-       statefulset.apps/mzfhj38ptdjs-cluster-s2-replica-s2-gen-1   1/1     3m25s
-       statefulset.apps/mzfhj38ptdjs-cluster-s3-replica-s3-gen-1   1/1     3m25s
-       statefulset.apps/mzfhj38ptdjs-cluster-u1-replica-u1-gen-1   1/1     3m25s
-       statefulset.apps/mzfhj38ptdjs-environmentd-1                1/1     3m29s
+       NAME                                                        READY   AGE
+       statefulset.apps/mzlvmx9h6dpx-cluster-s1-replica-s1-gen-1   1/1     51s
+       statefulset.apps/mzlvmx9h6dpx-cluster-s2-replica-s2-gen-1   1/1     51s
+       statefulset.apps/mzlvmx9h6dpx-cluster-s3-replica-s3-gen-1   1/1     51s
+       statefulset.apps/mzlvmx9h6dpx-cluster-u1-replica-u1-gen-1   1/1     51s
+       statefulset.apps/mzlvmx9h6dpx-environmentd-1                1/1     60s
        ```
 
        If you run into an error during deployment, refer to the
@@ -193,21 +189,21 @@ repo](https://github.com/MaterializeInc/materialize).
 
 1. Open the Materialize console in your browser:
 
-   1. From the `kubectl` output, find the Materialize console service.
+   1. From the previous `kubectl` output, find the Materialize console service.
 
-      ```shell
-      NAME                           TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)
-      service/mzfhj38ptdjs-console   NodePort    10.96.97.5      <none>        9000:30847/TCP
+      ```none
+      NAME                           TYPE        CLUSTER-IP   EXTERNAL-IP   PORT(S)    AGE
+      service/mzlvmx9h6dpx-console   ClusterIP   None         <none>        8080 TCP   32s
       ```
 
    1. Forward the Materialize console service to your local machine:
 
       ```shell
-      kubectl port-forward svc/mzfhj38ptdjs-console 9000:9000 -n materialize-environment
+      kubectl port-forward svc/mzlvmx9h6dpx-console 8080:8080 -n materialize-environment
       ```
 
    1. Open a browser and navigate to
-      [https://localhost:9000](https://localhost:9000).
+      [https://localhost:8080](https://localhost:8080).
 
       ![Image of  self-managed Materialize console running on local kind](/images/self-managed/self-managed-console-kind.png)
 

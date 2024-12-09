@@ -72,12 +72,6 @@ repo](https://github.com/MaterializeInc/materialize).
    minikube start
    ```
 
-1. Create the `materialize` namespace.
-
-   ```shell
-   kubectl create namespace materialize
-   ```
-
 1. Install the Materialize Helm chart using the files provided in the
    Materialize repo.
 
@@ -91,10 +85,12 @@ repo](https://github.com/MaterializeInc/materialize).
       ```
 
    1. Install the Materialize operator with the release name
-      `my-materialize-operator`:
+      `my-materialize-operator` into the `materialize` namespace:
 
       ```shell
-      helm install my-materialize-operator -f misc/helm-charts/operator/values.yaml misc/helm-charts/operator
+      helm install my-materialize-operator \
+         -f misc/helm-charts/operator/values.yaml misc/helm-charts/operator \
+         --namespace materialize --create-namespace
       ```
 
    1. Verify the installation and check the status:
@@ -105,15 +101,15 @@ repo](https://github.com/MaterializeInc/materialize).
 
       Wait for the components to be in the `Running` state:
 
-      ```shell
-      NAME                                          READY   STATUS    RESTARTS   AGE
-      pod/my-materialize-operator-8fc75cd7d-vcvl8   1/1     Running   0          8s
+      ```none
+      NAME                                           READY   STATUS    RESTARTS   AGE
+      pod/my-materialize-operator-669d674ccf-h5842   1/1     Running   0          12m
 
       NAME                                      READY   UP-TO-DATE   AVAILABLE   AGE
-      deployment.apps/my-materialize-operator   1/1     1            1           8s
+      deployment.apps/my-materialize-operator   1/1     1            1           12m
 
-      NAME                                                DESIRED   CURRENT   READY   AGE
-      replicaset.apps/my-materialize-operator-8fc75cd7d   1         1         1       8s
+      NAME                                                 DESIRED   CURRENT         READY   AGE
+      replicaset.apps/my-materialize-operator-669d674ccf   1         1               1       12m
       ```
 
       If you run into an error during deployment, refer to the
@@ -163,42 +159,42 @@ repo](https://github.com/MaterializeInc/materialize).
        Wait for the components to be in the `Running` state.
 
 
-       ```shell
-       NAME                                             READY   STATUS    RESTARTS   AGE
-       pod/mz2f4guf58oj-balancerd-69b5486554-xdpzq      1/1     Running   0          4m38s
-       pod/mz2f4guf58oj-cluster-s1-replica-s1-gen-1-0   1/1     Running   0          4m43s
-       pod/mz2f4guf58oj-cluster-s2-replica-s2-gen-1-0   1/1     Running   0          4m43s
-       pod/mz2f4guf58oj-cluster-s3-replica-s3-gen-1-0   1/1     Running   0          4m43s
-       pod/mz2f4guf58oj-cluster-u1-replica-u1-gen-1-0   1/1     Running   0          4m43s
-       pod/mz2f4guf58oj-console-557fdb88db-gb7zn        1/1     Running   0          4m38s
-       pod/mz2f4guf58oj-console-557fdb88db-xfv8w        1/1     Running   0          4m38s
-       pod/mz2f4guf58oj-environmentd-1-0                1/1     Running   0          4m55s
+       ```none
+       NAME                                             READY   STATUS      RESTARTS   AGE
+       pod/mzk7x050omzi-balancerd-5b99dff555-7qltf      1/1     Running     0          19s
+       pod/mzk7x050omzi-cluster-s1-replica-s1-gen-1-0   1/1     Running     0          22s
+       pod/mzk7x050omzi-cluster-s2-replica-s2-gen-1-0   1/1     Running     0          22s
+       pod/mzk7x050omzi-cluster-s3-replica-s3-gen-1-0   1/1     Running     0          22s
+       pod/mzk7x050omzi-cluster-u1-replica-u1-gen-1-0   1/1     Running     0          22s
+       pod/mzk7x050omzi-console-8c45c4b95-8ng29         1/1     Running     0          12s
+       pod/mzk7x050omzi-console-8c45c4b95-jwj6c         1/1     Running     0          12s
+       pod/mzk7x050omzi-environmentd-1-0                1/1     Running     0          36s
 
-       NAME                                               TYPE        CLUSTER-IP       EXTERNAL-IP   PORT(S)                                                                                     AGE
-       service/mz2f4guf58oj-balancerd                     NodePort    10.102.116.95    <none>        6876:32161/TCP,6875:31896/TCP                                                               4m38s
-       service/mz2f4guf58oj-cluster-s1-replica-s1-gen-1   ClusterIP   10.105.24.34     <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP                                                4m43s
-       service/mz2f4guf58oj-cluster-s2-replica-s2-gen-1   ClusterIP   10.97.165.188    <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP                                                4m43s
-       service/mz2f4guf58oj-cluster-s3-replica-s3-gen-1   ClusterIP   10.107.119.66    <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP                                                4m43s
-       service/mz2f4guf58oj-cluster-u1-replica-u1-gen-1   ClusterIP   10.103.70.133    <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP                                                4m43s
-       service/mz2f4guf58oj-console                       NodePort    10.111.141.122   <none>        9000:30793/TCP                                                                              4m38s
-       service/mz2f4guf58oj-environmentd                  NodePort    10.100.113.144   <none>        6875:30588/TCP,6876:31828/TCP,6877:31859/TCP,6878:30579/TCP,6880:31895/TCP,6881:30263/TCP   4m38s
-       service/mz2f4guf58oj-environmentd-1                NodePort    10.96.37.132     <none>        6875:32689/TCP,6876:30816/TCP,6877:32014/TCP,6878:30266/TCP,6880:32366/TCP,6881:31536/TCP   4m55s
-       service/mz2f4guf58oj-persist-pubsub-1              ClusterIP   None             <none>        6879/TCP                                                                                    4m55s
+       NAME                                               TYPE          CLUSTER-IP   EXTERNAL-IP   PORT(S)                                          AGE
+       service/mzk7x050omzi-balancerd                     ClusterIP     None         <none>        6876/TCP,6875/TCP                                19s
+       service/mzk7x050omzi-cluster-s1-replica-s1-gen-1   ClusterIP     None         <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP     22s
+       service/mzk7x050omzi-cluster-s2-replica-s2-gen-1   ClusterIP     None         <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP     22s
+       service/mzk7x050omzi-cluster-s3-replica-s3-gen-1   ClusterIP     None         <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP     22s
+       service/mzk7x050omzi-cluster-u1-replica-u1-gen-1   ClusterIP     None         <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP     22s
+       service/mzk7x050omzi-console                       ClusterIP     None         <none>        8080/TCP                                         12s
+       service/mzk7x050omzi-environmentd                  ClusterIP     None         <none>        6875/TCP,6876/TCP,6877/TCP,6878/TCP              19s
+       service/mzk7x050omzi-environmentd-1                ClusterIP     None         <none>        6875/TCP,6876/TCP,6877/TCP,6878/TCP              36s
+       service/mzk7x050omzi-persist-pubsub-1              ClusterIP     None         <none>        6879/TCP                                         36s
 
-       NAME                                     READY   UP-TO-DATE   AVAILABLE   AGE
-       deployment.apps/mz2f4guf58oj-balancerd   1/1     1            1           4m38s
-       deployment.apps/mz2f4guf58oj-console     2/2     2            2           4m38s
+       NAME                                     READY   UP-TO-DATE   AVAILABLE     AGE
+       deployment.apps/mzk7x050omzi-balancerd   1/1     1            1             19s
+       deployment.apps/mzk7x050omzi-console     2/2     2            2             12s
 
-       NAME                                                DESIRED   CURRENT   READY   AGE
-       replicaset.apps/mz2f4guf58oj-balancerd-69b5486554   1         1         1       4m38s
-       replicaset.apps/mz2f4guf58oj-console-557fdb88db     2         2         2       4m38s
+       NAME                                                DESIRED   CURRENT     READY   AGE
+       replicaset.apps/mzk7x050omzi-balancerd-5b99dff555   1         1           1       19s
+       replicaset.apps/mzk7x050omzi-console-8c45c4b95      2         2           2       12s
 
        NAME                                                        READY   AGE
-       statefulset.apps/mz2f4guf58oj-cluster-s1-replica-s1-gen-1   1/1     4m43s
-       statefulset.apps/mz2f4guf58oj-cluster-s2-replica-s2-gen-1   1/1     4m43s
-       statefulset.apps/mz2f4guf58oj-cluster-s3-replica-s3-gen-1   1/1     4m43s
-       statefulset.apps/mz2f4guf58oj-cluster-u1-replica-u1-gen-1   1/1     4m43s
-       statefulset.apps/mz2f4guf58oj-environmentd-1                1/1     4m55s
+       statefulset.apps/mzk7x050omzi-cluster-s1-replica-s1-gen-1   1/1     22s
+       statefulset.apps/mzk7x050omzi-cluster-s2-replica-s2-gen-1   1/1     22s
+       statefulset.apps/mzk7x050omzi-cluster-s3-replica-s3-gen-1   1/1     22s
+       statefulset.apps/mzk7x050omzi-cluster-u1-replica-u1-gen-1   1/1     22s
+       statefulset.apps/mzk7x050omzi-environmentd-1                1/1     36s
        ```
 
        If you run into an error during deployment, refer to the
@@ -206,21 +202,21 @@ repo](https://github.com/MaterializeInc/materialize).
 
 1. Open the Materialize console in your browser:
 
-   1. From the `kubectl` output, find the Materialize console service.
+   1. From the previous `kubectl` output, find the Materialize console service.
 
-      ```shell
-      NAME                            TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)
-      service/mz2f4guf58oj-console    NodePort    10.111.141.122  <none>        9000:30793/TCP
+      ```none
+      NAME                            TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)       AGE
+      service/mzk7x050omzi-console    ClusterIP   None           <none>        8080/TCP      12s
       ```
 
    1. Forward the Materialize console service to your local machine:
 
       ```shell
-      kubectl port-forward service/mzfhj38ptdjs-console 9000:9000 -n materialize-environment
+      kubectl port-forward service/mzk7x050omzi-console 8080:8080 -n materialize-environment
       ```
 
    1. Open a browser and navigate to
-      [https://localhost:9000](https://localhost:9000).
+      [https://localhost:8080](https://localhost:8080).
 
       ![Image of self-managed Materialize console running on local minikube](/images/self-managed/self-managed-console-minkiube.png)
 
