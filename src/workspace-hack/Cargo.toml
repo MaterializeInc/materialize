@@ -46,6 +46,7 @@ dec = { version = "0.4.8", default-features = false, features = ["serde"] }
 digest = { version = "0.10.6", features = ["mac", "std"] }
 either = { version = "1.8.0", features = ["serde"] }
 flate2 = { version = "1.0.24", features = ["zlib"] }
+form_urlencoded = { version = "1.2.1" }
 futures = { version = "0.3.25" }
 futures-channel = { version = "0.3.30", features = ["sink"] }
 futures-core = { version = "0.3.30" }
@@ -88,6 +89,7 @@ openssl-sys = { version = "0.9.103", default-features = false, features = ["vend
 ordered-float = { version = "4.2.0", features = ["serde"] }
 parking_lot = { version = "0.12.1", features = ["send_guard"] }
 parquet = { version = "51.0.0", default-features = false, features = ["arrow", "brotli", "flate2", "lz4", "snap", "zstd"] }
+percent-encoding = { version = "2.3.1" }
 phf = { version = "0.11.1", features = ["uncased"] }
 phf_shared = { version = "0.11.1", features = ["uncased"] }
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4"] }
@@ -135,7 +137,7 @@ twox-hash = { version = "1.6.3" }
 uncased = { version = "0.9.7" }
 unicode-bidi = { version = "0.3.15" }
 unicode-normalization = { version = "0.1.23" }
-url = { version = "2.5.0", features = ["serde"] }
+url = { version = "2.5.4", features = ["serde"] }
 uuid = { version = "1.7.0", features = ["serde", "v4", "v5"] }
 zeroize = { version = "1.5.7", features = ["serde"] }
 zstd = { version = "0.13.0" }
@@ -176,6 +178,7 @@ dec = { version = "0.4.8", default-features = false, features = ["serde"] }
 digest = { version = "0.10.6", features = ["mac", "std"] }
 either = { version = "1.8.0", features = ["serde"] }
 flate2 = { version = "1.0.24", features = ["zlib"] }
+form_urlencoded = { version = "1.2.1" }
 futures = { version = "0.3.25" }
 futures-channel = { version = "0.3.30", features = ["sink"] }
 futures-core = { version = "0.3.30" }
@@ -218,6 +221,7 @@ openssl-sys = { version = "0.9.103", default-features = false, features = ["vend
 ordered-float = { version = "4.2.0", features = ["serde"] }
 parking_lot = { version = "0.12.1", features = ["send_guard"] }
 parquet = { version = "51.0.0", default-features = false, features = ["arrow", "brotli", "flate2", "lz4", "snap", "zstd"] }
+percent-encoding = { version = "2.3.1" }
 phf = { version = "0.11.1", features = ["uncased"] }
 phf_shared = { version = "0.11.1", features = ["uncased"] }
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4"] }
@@ -267,7 +271,7 @@ twox-hash = { version = "1.6.3" }
 uncased = { version = "0.9.7" }
 unicode-bidi = { version = "0.3.15" }
 unicode-normalization = { version = "0.1.23" }
-url = { version = "2.5.0", features = ["serde"] }
+url = { version = "2.5.4", features = ["serde"] }
 uuid = { version = "1.7.0", features = ["serde", "v4", "v5"] }
 zeroize = { version = "1.5.7", features = ["serde"] }
 zstd = { version = "0.13.0" }
