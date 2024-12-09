@@ -220,7 +220,7 @@ repo](https://github.com/MaterializeInc/materialize).
       ```
 
    1. Open a browser and navigate to
-      [http://localhost:9000](http://localhost:9000).
+      [https://localhost:9000](https://localhost:9000).
 
       ![Image of self-managed Materialize console running on local minikube](/images/self-managed/self-managed-console-minkiube.png)
 
