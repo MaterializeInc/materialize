@@ -357,6 +357,7 @@ fn backward_compatible_struct(old: &Fields, new: &Fields) -> Option<ArrayMigrati
                 fn recursively_all_nullable(migration: &ArrayMigration) -> bool {
                     match migration {
                         NoOp => true,
+                        ReplaceWithNull => false,
                         List(_field, child) => recursively_all_nullable(child),
                         Struct(children) => children.iter().all(|child| match child {
                             AddFieldNullableAtEnd { .. } | DropField { .. } => false,
