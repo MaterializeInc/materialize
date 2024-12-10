@@ -201,4 +201,4 @@ name                  hint                            details
   EXCEPT ALL
   SELECT o.id FROM mz_internal.mz_index_advice AS a INNER JOIN mz_objects AS o ON (a.object_id = o.id) WHERE o.type IN ('index', 'materialized-view');
 
-> DROP SOURCE source CASCADE;
+> DROP SOURCE s1 CASCADE;
