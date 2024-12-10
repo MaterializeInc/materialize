@@ -70,6 +70,9 @@ pub trait ColumnDecoder<T> {
     /// Returns if the value at `idx` is null.
     fn is_null(&self, idx: usize) -> bool;
 
+    /// Returns the number of bytes used by this decoder.
+    fn byte_size(&self) -> usize;
+
     /// Returns statistics for the column. This structure is defined by Persist,
     /// but the contents are determined by the client; Persist will preserve
     /// them in the part metadata and make them available to readers.
