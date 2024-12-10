@@ -796,6 +796,10 @@ impl S3Blob {
             .create_multipart_upload()
             .bucket(&self.bucket)
             .key(&path)
+            .customize()
+            .mutate_request(|req| {
+                req.headers_mut().insert("Content-Length", "0");
+            })
             .send()
             .instrument(debug_span!("s3set_multi_start"))
             .await
