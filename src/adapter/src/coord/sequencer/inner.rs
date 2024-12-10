@@ -1090,7 +1090,17 @@ impl Coordinator {
                             coord.set_statement_execution_timestamp(id, register_ts);
                         }
 
-                        let collection_desc = CollectionDescription::for_table(table.desc.clone());
+                        // Create the underlying collection with the latest schema from the Table.
+
+                        // When initially creating a table it should only have a single version.
+                        let relation_version = RelationVersion::root();
+                        assert_eq!(table.desc.latest_version(), relation_version);
+                        let relation_desc = table
+                            .desc
+                            .at_version(RelationVersionSelector::Specific(relation_version));
+
+                        let collection_desc =
+                            CollectionDescription::for_table(relation_desc, relation_version);
                         let storage_metadata = coord.catalog.state().storage_metadata();
                         coord
                             .controller
@@ -1141,8 +1151,9 @@ impl Coordinator {
                                 // this will always be a Source or a Table.
                                 let ingestion_id =
                                     coord.catalog().get_entry(&ingestion_id).latest_global_id();
+                                // Create the underlying collection with the latest schema from the Table.
                                 let collection_desc = CollectionDescription::<Timestamp> {
-                                    desc: table.desc.clone(),
+                                    desc: table.desc.at_version(RelationVersionSelector::Latest),
                                     data_source: DataSource::IngestionExport {
                                         ingestion_id,
                                         details,
@@ -2538,7 +2549,6 @@ impl Coordinator {
                 .resolve_full_name(&catalog_entry.name);
             let name = format!("{}", full_name);
             let relation_desc = catalog_entry
-                .item
                 .desc_opt()
                 .expect("source should have a proper desc")
                 .into_owned();
@@ -2666,14 +2676,16 @@ impl Coordinator {
             // All non-constant values must be planned as read-then-writes.
             _ => {
                 let desc_arity = match self.catalog().try_get_entry(&plan.id) {
-                    Some(table) => table
-                        .desc(
-                            &self
-                                .catalog()
-                                .resolve_full_name(table.name(), Some(ctx.session().conn_id())),
-                        )
-                        .expect("desc called on table")
-                        .arity(),
+                    Some(table) => {
+                        let fullname = self
+                            .catalog()
+                            .resolve_full_name(table.name(), Some(ctx.session().conn_id()));
+                        // Inserts always occur at the latest version of the table.
+                        table
+                            .desc_latest(&fullname)
+                            .expect("desc called on table")
+                            .arity()
+                    }
                     None => {
                         ctx.retire(Err(AdapterError::Catalog(
                             mz_catalog::memory::error::Error {
@@ -2777,14 +2789,16 @@ impl Coordinator {
 
         // Read then writes can be queued, so re-verify the id exists.
         let desc = match self.catalog().try_get_entry(&id) {
-            Some(table) => table
-                .desc(
-                    &self
-                        .catalog()
-                        .resolve_full_name(table.name(), Some(ctx.session().conn_id())),
-                )
-                .expect("desc called on table")
-                .into_owned(),
+            Some(table) => {
+                let full_name = self
+                    .catalog()
+                    .resolve_full_name(table.name(), Some(ctx.session().conn_id()));
+                // Inserts always occur at the latest version of the table.
+                table
+                    .desc_latest(&full_name)
+                    .expect("desc called on table")
+                    .into_owned()
+            }
             None => {
                 ctx.retire(Err(AdapterError::Catalog(
                     mz_catalog::memory::error::Error {
@@ -4750,13 +4764,71 @@ impl Coordinator {
     #[allow(clippy::unused_async)]
     pub(super) async fn sequence_alter_table(
         &mut self,
-        _session: &Session,
-        _plan: plan::AlterTablePlan,
+        session: &Session,
+        plan: plan::AlterTablePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        Err(AdapterError::PlanError(plan::PlanError::Unsupported {
-            feature: "ALTER TABLE ... ADD COLUMN ...".to_string(),
-            discussion_no: Some(29607),
-        }))
+        let plan::AlterTablePlan {
+            relation_id,
+            column_name,
+            column_type,
+            raw_sql_type,
+        } = plan;
+
+        // TODO(alter_table): Support allocating GlobalIds without a CatalogItemId.
+        let id_ts = self.get_catalog_write_ts().await;
+        let (_, new_global_id) = self.catalog.allocate_user_id(id_ts).await?;
+        let ops = vec![catalog::Op::AlterAddColumn {
+            id: relation_id,
+            new_global_id,
+            name: column_name,
+            typ: column_type,
+            sql: raw_sql_type,
+        }];
+
+        let entry = self.catalog().get_entry(&relation_id);
+        let CatalogItem::Table(table) = &entry.item else {
+            let err = format!("expected table, found {:?}", entry.item);
+            return Err(AdapterError::Internal(err));
+        };
+        // Expected schema version, before altering the table.
+        let expected_version = table.desc.latest_version();
+        let existing_global_id = table.global_id_writes();
+
+        self.catalog_transact_with_side_effects(Some(session), ops, |coord| async {
+            let entry = coord.catalog().get_entry(&relation_id);
+            let CatalogItem::Table(table) = &entry.item else {
+                panic!("programming error, expected table found {:?}", entry.item);
+            };
+
+            let new_version = table.desc.latest_version();
+            let new_desc = table
+                .desc
+                .at_version(RelationVersionSelector::Specific(new_version));
+            let forget_ts = coord.get_local_write_ts().await.timestamp;
+            let register_ts = coord.get_local_write_ts().await.timestamp;
+
+            assert!(forget_ts <= register_ts);
+
+            coord
+                .controller
+                .storage
+                .alter_table_desc(
+                    existing_global_id,
+                    new_global_id,
+                    new_desc,
+                    expected_version,
+                    new_version,
+                    forget_ts,
+                    register_ts,
+                )
+                .await
+                .expect("failed to alter desc of table");
+
+            coord.apply_local_write(register_ts).await;
+        })
+        .await?;
+
+        Ok(ExecuteResponse::AlteredObject(ObjectType::Table))
     }
 }
 
