@@ -7,14 +7,6 @@ parameters:
     description: ""
     default: "{}"
 
-  - parameter: namespace.create
-    description: ""
-    default: false
-
-  - parameter: namespace.name
-    description: ""
-    default: "materialize"
-
   - parameter: networkPolicies.egress.cidrs[0]
     description: ""
     default: "0.0.0.0/0"
