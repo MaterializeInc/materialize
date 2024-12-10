@@ -911,7 +911,7 @@ version = "0.13.2"
 [[audits.prost-reflect]]
 who = "Dennis Felsing <dennis@felsing.org>"
 criteria = "maintained-and-necessary"
-version = "0.14.2"
+version = "0.14.3"
 
 [[audits.prost-types]]
 who = "Jan Teske <jteske@posteo.net>"
