@@ -10,11 +10,11 @@ menu:
 
 ## Syntax
 
-{{< diagram "show-create-source.svg" >}}
+```sql
+SHOW CREATE SOURCE <source_name>
+```
 
-Field | Use
-------|-----
-_source&lowbar;name_ | The source you want use. You can find available source names through [`SHOW SOURCES`](../show-sources).
+For available source names, see [`SHOW SOURCES`](/sql/show-sources).
 
 ## Examples
 

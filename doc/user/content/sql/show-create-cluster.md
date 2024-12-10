@@ -10,11 +10,11 @@ menu:
 
 ## Syntax
 
-{{< diagram "show-create-cluster.svg" >}}
+```sql
+SHOW CREATE CLUSTER <cluster_name>
+```
 
- Field                 | Use
------------------------|-------------------------------------------------------------------------------------------------------------------------
- _cluster&lowbar;name_ | The cluster you want to get the `CREATE` statement for. For available clusters, see [`SHOW CLUSTERS`](../show-clusters).
+For available cluster names, see [`SHOW CLUSTERS`](/sql/show-clusters).
 
 ## Examples
 
