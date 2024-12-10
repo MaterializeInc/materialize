@@ -6071,7 +6071,7 @@ WITH MUTUALLY RECURSIVE
             v.id,
             unnest(v.indexes) AS justification
         FROM objects AS v
-        WHERE v.type IN ('view', 'materialized-view', 'source') AND NOT EXISTS (
+        WHERE v.type IN ('view', 'materialized-view') AND NOT EXISTS (
             SELECT FROM mz_internal.mz_object_transitive_dependencies AS d
             INNER JOIN mz_catalog.mz_objects AS child
                 ON (d.object_id = child.id)
@@ -6251,7 +6251,19 @@ WITH MUTUALLY RECURSIVE
             NULL::text list AS justification
         FROM objects_with_justification
         -- indexes can only be part of justification for leaf nodes
-        WHERE type IN ('view', 'materialized-view', 'source') AND NOT indexes = '{}'::text list AND justification @> indexes
+        WHERE type IN ('view', 'materialized-view') AND NOT indexes = '{}'::text list AND justification @> indexes
+
+        UNION ALL
+
+        -- index on a source
+        SELECT
+            unnest(indexes) AS id,
+            'drop unless queried directly' AS hint,
+            'sources do evaluate transformations and can expose data directly' AS details,
+            NULL::text list AS justification
+        FROM objects_with_justification
+        -- indexes can only be part of justification for leaf nodes
+        WHERE type = 'source' AND NOT indexes = '{}'::text list
 
         UNION ALL
 

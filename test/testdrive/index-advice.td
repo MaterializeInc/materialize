@@ -130,7 +130,7 @@ name              hint                            details
 
 
 
-> CREATE SOURCE source
+> CREATE SOURCE s1
   IN CLUSTER c1
   FROM LOAD GENERATOR COUNTER (UP TO 100);
 
@@ -139,7 +139,62 @@ name              hint                            details
 > SELECT o.name, a.hint, a.details FROM mz_internal.mz_index_advice AS a JOIN mz_objects AS o ON (a.object_id = o.id) ORDER BY name;
 name                  hint                            details
 ---------------------------------------------------------------------------------------------------------------------------------
- source_primary_idx  "drop unless queried directly"  "associated object does not have any dependencies (maintained or not maintained)"
+ s1_primary_idx  "drop unless queried directly"  "associated object does not have any dependencies (maintained or not maintained)"
+
+# verify that all indexes and materialized views have a recommendation
+> SELECT id FROM mz_objects WHERE id LIKE 'u%' AND type IN ('index', 'materialized-view')
+  EXCEPT ALL
+  SELECT o.id FROM mz_internal.mz_index_advice AS a INNER JOIN mz_objects AS o ON (a.object_id = o.id) WHERE o.type IN ('index', 'materialized-view');
+
+> DROP SOURCE s1 CASCADE;
+
+
+
+
+
+> CREATE SOURCE s1
+  IN CLUSTER c1
+  FROM LOAD GENERATOR COUNTER (UP TO 100);
+
+> CREATE VIEW v21 AS (SELECT * FROM s1);
+> CREATE DEFAULT INDEX IN CLUSTER c1 ON v21;
+
+> CREATE VIEW v22 AS (SELECT * FROM s1);
+> CREATE DEFAULT INDEX IN CLUSTER c1 ON v22;
+
+> SELECT o.name, a.hint, a.details FROM mz_internal.mz_index_advice AS a JOIN mz_objects AS o ON (a.object_id = o.id) ORDER BY name;
+name                  hint                            details
+---------------------------------------------------------------------------------------------------------------------------------
+ v21_primary_idx      "drop unless queried directly"  "associated object does not have any dependencies (maintained or not maintained)"
+ v22_primary_idx      "drop unless queried directly"  "associated object does not have any dependencies (maintained or not maintained)"
+
+# verify that all indexes and materialized views have a recommendation
+> SELECT id FROM mz_objects WHERE id LIKE 'u%' AND type IN ('index', 'materialized-view')
+  EXCEPT ALL
+  SELECT o.id FROM mz_internal.mz_index_advice AS a INNER JOIN mz_objects AS o ON (a.object_id = o.id) WHERE o.type IN ('index', 'materialized-view');
+
+> DROP SOURCE s1 CASCADE;
+
+
+
+> CREATE SOURCE s1
+  IN CLUSTER c1
+  FROM LOAD GENERATOR COUNTER (UP TO 100);
+
+> CREATE DEFAULT INDEX IN CLUSTER c1 ON s1;
+
+> CREATE VIEW v21 AS (SELECT * FROM s1);
+> CREATE DEFAULT INDEX IN CLUSTER c1 ON v21;
+
+> CREATE VIEW v22 AS (SELECT * FROM s1);
+> CREATE DEFAULT INDEX IN CLUSTER c1 ON v22;
+
+> SELECT o.name, a.hint, a.details FROM mz_internal.mz_index_advice AS a JOIN mz_objects AS o ON (a.object_id = o.id) ORDER BY name;
+name                  hint                            details
+---------------------------------------------------------------------------------------------------------------------------------
+ s1_primary_idx       "drop unless queried directly"  "associated object does not have any dependencies (maintained or not maintained)"
+ v21_primary_idx      "drop unless queried directly"  "associated object does not have any dependencies (maintained or not maintained)"
+ v22_primary_idx      "drop unless queried directly"  "associated object does not have any dependencies (maintained or not maintained)"
 
 # verify that all indexes and materialized views have a recommendation
 > SELECT id FROM mz_objects WHERE id LIKE 'u%' AND type IN ('index', 'materialized-view')
@@ -147,3 +202,4 @@ name                  hint                            details
   SELECT o.id FROM mz_internal.mz_index_advice AS a INNER JOIN mz_objects AS o ON (a.object_id = o.id) WHERE o.type IN ('index', 'materialized-view');
 
 > DROP SOURCE source CASCADE;
+
