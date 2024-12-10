@@ -22,6 +22,13 @@ user-id = 160111
 user-login = "aws-sdk-rust-ci"
 user-name = "AWS SDK Rust Bot"
 
+[[publisher.aws-config]]
+version = "1.2.1"
+when = "2024-04-22"
+user-id = 160111
+user-login = "aws-sdk-rust-ci"
+user-name = "AWS SDK Rust Bot"
+
 [[publisher.aws-credential-types]]
 version = "1.2.0"
 when = "2024-04-12"
@@ -50,6 +57,13 @@ user-id = 160111
 user-login = "aws-sdk-rust-ci"
 user-name = "AWS SDK Rust Bot"
 
+[[publisher.aws-sdk-sso]]
+version = "1.21.0"
+when = "2024-04-22"
+user-id = 160111
+user-login = "aws-sdk-rust-ci"
+user-name = "AWS SDK Rust Bot"
+
 [[publisher.aws-sdk-ssooidc]]
 version = "1.20.0"
 when = "2024-04-12"
@@ -57,9 +71,23 @@ user-id = 160111
 user-login = "aws-sdk-rust-ci"
 user-name = "AWS SDK Rust Bot"
 
+[[publisher.aws-sdk-ssooidc]]
+version = "1.21.0"
+when = "2024-04-22"
+user-id = 160111
+user-login = "aws-sdk-rust-ci"
+user-name = "AWS SDK Rust Bot"
+
 [[publisher.aws-sdk-sts]]
 version = "1.20.0"
 when = "2024-04-12"
+user-id = 160111
+user-login = "aws-sdk-rust-ci"
+user-name = "AWS SDK Rust Bot"
+
+[[publisher.aws-sdk-sts]]
+version = "1.21.0"
+when = "2024-04-22"
 user-id = 160111
 user-login = "aws-sdk-rust-ci"
 user-name = "AWS SDK Rust Bot"
