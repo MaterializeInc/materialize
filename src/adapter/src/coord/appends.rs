@@ -28,7 +28,7 @@ use mz_sql::session::metadata::SessionMetadata;
 use mz_storage_client::client::TimestamplessUpdate;
 use mz_timestamp_oracle::WriteTimestamp;
 use tokio::sync::{oneshot, Notify, OwnedMutexGuard, OwnedSemaphorePermit, Semaphore};
-use tracing::{debug_span, warn, Instrument, Span};
+use tracing::{debug_span, info, warn, Instrument, Span};
 
 use crate::catalog::BuiltinTableUpdate;
 use crate::coord::{Coordinator, Message, PendingTxn, PlanValidity};
@@ -520,6 +520,7 @@ impl Coordinator {
             .metrics
             .append_table_duration_seconds
             .with_label_values(&[]);
+        info!("Appending to tables at {timestamp}, advancing to {advance_to}");
         let append_fut = self
             .controller
             .storage
