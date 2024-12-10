@@ -634,7 +634,7 @@ version = "0.7.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.mime_guess]]
-version = "2.0.3"
+version = "2.0.5"
 criteria = "safe-to-deploy"
 
 [[exemptions.minimal-lexical]]
