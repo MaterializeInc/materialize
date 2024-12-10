@@ -102,11 +102,6 @@ true
 class FastPathFilterIndex(FastPath):
     """Measure the time it takes for the fast path to filter our all rows from a materialized view using an index and return"""
 
-    SCALE = 7
-
-    def version(self) -> ScenarioVersion:
-        return ScenarioVersion.create(1, 1, 0)
-
     def init(self) -> list[Action]:
         return [
             self.table_ten(),
@@ -153,11 +148,6 @@ true
 class FastPathOrderByLimit(FastPath):
     """Benchmark the case SELECT * FROM materialized_view ORDER BY <key> LIMIT <i>"""
 
-    SCALE = 7
-
-    def version(self) -> ScenarioVersion:
-        return ScenarioVersion.create(1, 1, 0)
-
     def init(self) -> list[Action]:
         return [
             self.table_ten(),
@@ -188,11 +178,6 @@ true
 
 class FastPathLimit(FastPath):
     """Benchmark the case SELECT * FROM source LIMIT <i> , optimized by materialize#21615"""
-
-    SCALE = 7
-
-    def version(self) -> ScenarioVersion:
-        return ScenarioVersion.create(1, 1, 0)
 
     def init(self) -> list[Action]:
         return [
@@ -226,11 +211,6 @@ class DML(Scenario):
 
 class Insert(DML):
     """Measure the time it takes for an INSERT statement to return."""
-
-    SCALE = 7
-
-    def version(self) -> ScenarioVersion:
-        return ScenarioVersion.create(1, 1, 0)
 
     def init(self) -> Action:
         return self.table_ten()
@@ -340,17 +320,11 @@ class InsertMultiRow(DML):
 class Update(DML):
     """Measure the time it takes for an UPDATE statement to return to client"""
 
-    SCALE = 6
-
     def init(self) -> list[Action]:
         return [
             self.table_ten(),
             TdAction(
                 f"""
-$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
-$ postgres-execute connection=mz_system
-ALTER SYSTEM SET max_result_size = 17179869184;
-
 > CREATE TABLE t1 (f1 BIGINT);
 
 > CREATE DEFAULT INDEX ON t1;
@@ -456,11 +430,6 @@ class InsertAndSelect(DML):
     dataflow to be completely caught up.
     """
 
-    SCALE = 7
-
-    def version(self) -> ScenarioVersion:
-        return ScenarioVersion.create(1, 1, 0)
-
     def init(self) -> Action:
         return self.table_ten()
 
@@ -530,11 +499,6 @@ true
 
 
 class CountDistinct(Dataflow):
-    SCALE = 7
-
-    def version(self) -> ScenarioVersion:
-        return ScenarioVersion.create(1, 1, 0)
-
     def init(self) -> list[Action]:
         return [
             self.view_ten(),
@@ -563,11 +527,6 @@ true
 
 
 class MinMax(Dataflow):
-    SCALE = 7
-
-    def version(self) -> ScenarioVersion:
-        return ScenarioVersion.create(1, 1, 0)
-
     def init(self) -> list[Action]:
         return [
             self.view_ten(),
@@ -692,11 +651,6 @@ true
 
 
 class CrossJoin(Dataflow):
-    SCALE = 7
-
-    def version(self) -> ScenarioVersion:
-        return ScenarioVersion.create(1, 1, 0)
-
     def init(self) -> Action:
         return self.view_ten()
 
@@ -828,20 +782,11 @@ class CreateIndex(Dataflow):
     it takes for a SELECT query that would use the index to return rows.
     """
 
-    SCALE = 7
-
-    def version(self) -> ScenarioVersion:
-        return ScenarioVersion.create(1, 1, 0)
-
     def init(self) -> list[Action]:
         return [
             self.table_ten(),
             TdAction(
                 f"""
-$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
-$ postgres-execute connection=mz_system
-ALTER SYSTEM SET max_result_size = 17179869184;
-
 > CREATE TABLE t1 (f1 INTEGER, f2 INTEGER);
 > INSERT INTO t1 (f1) SELECT {self.unique_values()} FROM {self.join()}
 
@@ -872,11 +817,6 @@ ALTER SYSTEM SET max_result_size = 17179869184;
 
 
 class DeltaJoin(Dataflow):
-    SCALE = 7
-
-    def version(self) -> ScenarioVersion:
-        return ScenarioVersion.create(1, 1, 0)
-
     def init(self) -> list[Action]:
         return [
             self.view_ten(),
@@ -907,12 +847,6 @@ class DeltaJoinMaintained(Dataflow):
     empty frontier is not emitted, in contrast with one-shot SELECT processing based on data
     initialized as a constant view"""
 
-    SCALE = 7
-    FIXED_SCALE = True
-
-    def version(self) -> ScenarioVersion:
-        return ScenarioVersion.create(1, 1, 0)
-
     def init(self) -> list[Action]:
         return [
             self.table_ten(),
@@ -942,11 +876,6 @@ class DeltaJoinMaintained(Dataflow):
 
 
 class DifferentialJoin(Dataflow):
-    SCALE = 7
-
-    def version(self) -> ScenarioVersion:
-        return ScenarioVersion.create(1, 1, 0)
-
     def init(self) -> list[Action]:
         return [
             self.view_ten(),
@@ -1018,11 +947,6 @@ class Finish(Scenario):
 class FinishOrderByLimit(Finish):
     """Benchmark ORDER BY + LIMIT without the benefit of an index"""
 
-    SCALE = 7
-
-    def version(self) -> ScenarioVersion:
-        return ScenarioVersion.create(1, 1, 0)
-
     def init(self) -> list[Action]:
         return [
             self.view_ten(),
@@ -1093,11 +1017,6 @@ true
 
 
 class KafkaUpsert(Kafka):
-    SCALE = 7
-
-    def version(self) -> ScenarioVersion:
-        return ScenarioVersion.create(1, 1, 0)
-
     def shared(self) -> Action:
         return TdAction(
             self.keyschema()
@@ -1145,12 +1064,6 @@ $ kafka-ingest format=avro topic=kafka-upsert key-format=avro key-schema=${{keys
 
 
 class KafkaUpsertUnique(Kafka):
-    SCALE = 6
-    FIXED_SCALE = True
-
-    def version(self) -> ScenarioVersion:
-        return ScenarioVersion.create(1, 1, 0)
-
     def shared(self) -> Action:
         return TdAction(
             self.keyschema()
@@ -1646,10 +1559,7 @@ ALTER TABLE pk_table REPLICA IDENTITY FULL;
 class PgCdcStreaming(PgCdc):
     """Measure the time it takes to ingest records from Postgres post-snapshot"""
 
-    SCALE = 6
-
-    def version(self) -> ScenarioVersion:
-        return ScenarioVersion.create(1, 1, 0)
+    SCALE = 5
 
     def shared(self) -> Action:
         return TdAction(
@@ -1864,12 +1774,8 @@ class Coordinator(Scenario):
 
 
 class QueryLatency(Coordinator):
+    SCALE = 3
     """Measure the time it takes to run SELECT 1 queries"""
-
-    SCALE = 4
-
-    def version(self) -> ScenarioVersion:
-        return ScenarioVersion.create(1, 1, 0)
 
     def benchmark(self) -> MeasurementSource:
         selects = "\n".join("> SELECT 1\n1\n" for i in range(0, self.n()))
