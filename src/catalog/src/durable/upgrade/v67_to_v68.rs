@@ -7,9 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use mz_proto::wire_compatible;
-use mz_proto::wire_compatible::WireCompatible;
-
+use crate::durable::traits::{UpgradeFrom, UpgradeInto};
+use crate::durable::upgrade::wire_compatible::{wire_compatible, WireCompatible};
 use crate::durable::upgrade::MigrationAction;
 use crate::durable::upgrade::{objects_v67 as v67, objects_v68 as v68};
 
@@ -45,7 +44,7 @@ pub fn upgrade(
         .filter_map(|update| match &update.kind {
             Some(v67::state_update_kind::Kind::Item(old_item)) => {
                 // ** MIGRATION **
-                let new_item = v68::state_update_kind::Item::from(old_item.clone());
+                let new_item = v68::state_update_kind::Item::upgrade_from(old_item.clone());
 
                 let old_item = v67::StateUpdateKind {
                     kind: Some(v67::state_update_kind::Kind::Item(old_item.clone())),
@@ -58,7 +57,8 @@ pub fn upgrade(
             }
             Some(v67::state_update_kind::Kind::Comment(old_comment)) => {
                 // ** MIGRATION **
-                let new_comment = v68::state_update_kind::Comment::from(old_comment.clone());
+                let new_comment =
+                    v68::state_update_kind::Comment::upgrade_from(old_comment.clone());
 
                 let old_comment = v67::StateUpdateKind {
                     kind: Some(v67::state_update_kind::Kind::Comment(old_comment.clone())),
@@ -72,7 +72,7 @@ pub fn upgrade(
             Some(v67::state_update_kind::Kind::SourceReferences(old_reference)) => {
                 // ** MIGRATION **
                 let new_reference =
-                    v68::state_update_kind::SourceReferences::from(old_reference.clone());
+                    v68::state_update_kind::SourceReferences::upgrade_from(old_reference.clone());
 
                 let old_reference = v67::StateUpdateKind {
                     kind: Some(v67::state_update_kind::Kind::SourceReferences(
@@ -94,7 +94,7 @@ pub fn upgrade(
                     value: old_mapping
                         .value
                         .as_ref()
-                        .map(|old| v68::GidMappingValue::from(old.clone())),
+                        .map(|old| v68::GidMappingValue::upgrade_from(old.clone())),
                 };
 
                 let old_mapping = v67::StateUpdateKind {
@@ -114,10 +114,9 @@ pub fn upgrade(
                         .key
                         .as_ref()
                         .map(v68::ClusterIntrospectionSourceIndexKey::convert),
-                    value: old_index
-                        .value
-                        .as_ref()
-                        .map(|old| v68::ClusterIntrospectionSourceIndexValue::from(old.clone())),
+                    value: old_index.value.as_ref().map(|old| {
+                        v68::ClusterIntrospectionSourceIndexValue::upgrade_from(old.clone())
+                    }),
                 };
 
                 let old_index = v67::StateUpdateKind {
@@ -140,10 +139,10 @@ pub fn upgrade(
         .collect()
 }
 
-impl From<v67::state_update_kind::Item> for v68::state_update_kind::Item {
-    fn from(value: v67::state_update_kind::Item) -> Self {
+impl UpgradeFrom<v67::state_update_kind::Item> for v68::state_update_kind::Item {
+    fn upgrade_from(value: v67::state_update_kind::Item) -> Self {
         let new_key = value.key.map(|k| v68::ItemKey {
-            gid: k.gid.map(v68::CatalogItemId::from),
+            gid: k.gid.map(v68::CatalogItemId::upgrade_from),
         });
         let new_val = value.value.map(|val| v68::ItemValue {
             global_id: value
@@ -172,11 +171,13 @@ impl From<v67::state_update_kind::Item> for v68::state_update_kind::Item {
     }
 }
 
-impl From<v67::state_update_kind::Comment> for v68::state_update_kind::Comment {
-    fn from(value: v67::state_update_kind::Comment) -> Self {
+impl UpgradeFrom<v67::state_update_kind::Comment> for v68::state_update_kind::Comment {
+    fn upgrade_from(value: v67::state_update_kind::Comment) -> Self {
         let new_key = value.key.map(|k| v68::CommentKey {
-            object: k.object.map(v68::comment_key::Object::from),
-            sub_component: k.sub_component.map(v68::comment_key::SubComponent::from),
+            object: k.object.map(v68::comment_key::Object::upgrade_from),
+            sub_component: k
+                .sub_component
+                .map(v68::comment_key::SubComponent::upgrade_from),
         });
         let new_val = value.value.map(|v| v68::CommentValue::convert(&v));
 
@@ -187,41 +188,43 @@ impl From<v67::state_update_kind::Comment> for v68::state_update_kind::Comment {
     }
 }
 
-impl From<v67::comment_key::Object> for v68::comment_key::Object {
-    fn from(value: v67::comment_key::Object) -> Self {
+impl UpgradeFrom<v67::comment_key::Object> for v68::comment_key::Object {
+    fn upgrade_from(value: v67::comment_key::Object) -> Self {
         match value {
             v67::comment_key::Object::Table(global_id) => {
-                v68::comment_key::Object::Table(v68::CatalogItemId::from(global_id))
+                v68::comment_key::Object::Table(v68::CatalogItemId::upgrade_from(global_id))
             }
             v67::comment_key::Object::View(global_id) => {
-                v68::comment_key::Object::View(v68::CatalogItemId::from(global_id))
+                v68::comment_key::Object::View(v68::CatalogItemId::upgrade_from(global_id))
             }
             v67::comment_key::Object::MaterializedView(global_id) => {
-                v68::comment_key::Object::MaterializedView(v68::CatalogItemId::from(global_id))
+                v68::comment_key::Object::MaterializedView(v68::CatalogItemId::upgrade_from(
+                    global_id,
+                ))
             }
             v67::comment_key::Object::Source(global_id) => {
-                v68::comment_key::Object::Source(v68::CatalogItemId::from(global_id))
+                v68::comment_key::Object::Source(v68::CatalogItemId::upgrade_from(global_id))
             }
             v67::comment_key::Object::Sink(global_id) => {
-                v68::comment_key::Object::Sink(v68::CatalogItemId::from(global_id))
+                v68::comment_key::Object::Sink(v68::CatalogItemId::upgrade_from(global_id))
             }
             v67::comment_key::Object::Index(global_id) => {
-                v68::comment_key::Object::Index(v68::CatalogItemId::from(global_id))
+                v68::comment_key::Object::Index(v68::CatalogItemId::upgrade_from(global_id))
             }
             v67::comment_key::Object::Func(global_id) => {
-                v68::comment_key::Object::Func(v68::CatalogItemId::from(global_id))
+                v68::comment_key::Object::Func(v68::CatalogItemId::upgrade_from(global_id))
             }
             v67::comment_key::Object::Connection(global_id) => {
-                v68::comment_key::Object::Connection(v68::CatalogItemId::from(global_id))
+                v68::comment_key::Object::Connection(v68::CatalogItemId::upgrade_from(global_id))
             }
             v67::comment_key::Object::Type(global_id) => {
-                v68::comment_key::Object::Type(v68::CatalogItemId::from(global_id))
+                v68::comment_key::Object::Type(v68::CatalogItemId::upgrade_from(global_id))
             }
             v67::comment_key::Object::Secret(global_id) => {
-                v68::comment_key::Object::Secret(v68::CatalogItemId::from(global_id))
+                v68::comment_key::Object::Secret(v68::CatalogItemId::upgrade_from(global_id))
             }
             v67::comment_key::Object::ContinualTask(global_id) => {
-                v68::comment_key::Object::ContinualTask(v68::CatalogItemId::from(global_id))
+                v68::comment_key::Object::ContinualTask(v68::CatalogItemId::upgrade_from(global_id))
             }
             v67::comment_key::Object::Role(role_id) => {
                 v68::comment_key::Object::Role(v68::RoleId::convert(&role_id))
@@ -244,8 +247,8 @@ impl From<v67::comment_key::Object> for v68::comment_key::Object {
     }
 }
 
-impl From<v67::comment_key::SubComponent> for v68::comment_key::SubComponent {
-    fn from(value: v67::comment_key::SubComponent) -> Self {
+impl UpgradeFrom<v67::comment_key::SubComponent> for v68::comment_key::SubComponent {
+    fn upgrade_from(value: v67::comment_key::SubComponent) -> Self {
         match value {
             v67::comment_key::SubComponent::ColumnPos(x) => {
                 v68::comment_key::SubComponent::ColumnPos(x)
@@ -254,8 +257,8 @@ impl From<v67::comment_key::SubComponent> for v68::comment_key::SubComponent {
     }
 }
 
-impl From<v67::GlobalId> for v68::CatalogItemId {
-    fn from(id: v67::GlobalId) -> Self {
+impl UpgradeFrom<v67::GlobalId> for v68::CatalogItemId {
+    fn upgrade_from(id: v67::GlobalId) -> Self {
         let value = match id.value {
             Some(v67::global_id::Value::System(x)) => Some(v68::catalog_item_id::Value::System(x)),
             Some(v67::global_id::Value::User(x)) => Some(v68::catalog_item_id::Value::User(x)),
@@ -269,27 +272,29 @@ impl From<v67::GlobalId> for v68::CatalogItemId {
     }
 }
 
-impl From<v67::state_update_kind::SourceReferences> for v68::state_update_kind::SourceReferences {
-    fn from(old: v67::state_update_kind::SourceReferences) -> Self {
+impl UpgradeFrom<v67::state_update_kind::SourceReferences>
+    for v68::state_update_kind::SourceReferences
+{
+    fn upgrade_from(old: v67::state_update_kind::SourceReferences) -> Self {
         v68::state_update_kind::SourceReferences {
-            key: old.key.map(|old| old.into()),
+            key: old.key.map(|old| old.upgrade_into()),
             value: old.value.map(|old| WireCompatible::convert(&old)),
         }
     }
 }
 
-impl From<v67::SourceReferencesKey> for v68::SourceReferencesKey {
-    fn from(value: v67::SourceReferencesKey) -> Self {
+impl UpgradeFrom<v67::SourceReferencesKey> for v68::SourceReferencesKey {
+    fn upgrade_from(value: v67::SourceReferencesKey) -> Self {
         let source = match value.source {
-            Some(gid) => Some(gid.into()),
+            Some(gid) => Some(gid.upgrade_into()),
             None => None,
         };
         v68::SourceReferencesKey { source }
     }
 }
 
-impl From<v67::GidMappingValue> for v68::GidMappingValue {
-    fn from(value: v67::GidMappingValue) -> Self {
+impl UpgradeFrom<v67::GidMappingValue> for v68::GidMappingValue {
+    fn upgrade_from(value: v67::GidMappingValue) -> Self {
         v68::GidMappingValue {
             id: value.id,
             global_id: Some(v68::SystemGlobalId { value: value.id }),
@@ -298,8 +303,10 @@ impl From<v67::GidMappingValue> for v68::GidMappingValue {
     }
 }
 
-impl From<v67::ClusterIntrospectionSourceIndexValue> for v68::ClusterIntrospectionSourceIndexValue {
-    fn from(value: v67::ClusterIntrospectionSourceIndexValue) -> Self {
+impl UpgradeFrom<v67::ClusterIntrospectionSourceIndexValue>
+    for v68::ClusterIntrospectionSourceIndexValue
+{
+    fn upgrade_from(value: v67::ClusterIntrospectionSourceIndexValue) -> Self {
         v68::ClusterIntrospectionSourceIndexValue {
             index_id: value.index_id,
             global_id: Some(v68::SystemGlobalId {

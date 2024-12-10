@@ -4487,11 +4487,11 @@ dependencies = [
  "insta",
  "ipnet",
  "itertools 0.10.5",
- "md-5",
  "mz-adapter-types",
  "mz-audit-log",
  "mz-build-info",
  "mz-build-tools",
+ "mz-catalog-protos",
  "mz-cloud-resources",
  "mz-compute-client",
  "mz-compute-types",
@@ -4522,7 +4522,6 @@ dependencies = [
  "proptest",
  "proptest-derive",
  "prost",
- "prost-build",
  "rand",
  "semver",
  "serde",
@@ -4570,6 +4569,31 @@ dependencies = [
  "url",
  "uuid",
  "workspace-hack",
+]
+
+[[package]]
+name = "mz-catalog-protos"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "md-5",
+ "mz-audit-log",
+ "mz-build-tools",
+ "mz-compute-client",
+ "mz-controller-types",
+ "mz-ore",
+ "mz-proto",
+ "mz-repr",
+ "mz-sql",
+ "mz-storage-types",
+ "paste",
+ "proptest",
+ "proptest-derive",
+ "prost",
+ "prost-build",
+ "serde",
+ "serde_json",
+ "similar-asserts",
 ]
 
 [[package]]
