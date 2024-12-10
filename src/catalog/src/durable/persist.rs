@@ -62,9 +62,9 @@ use crate::durable::objects::{AuditLogKey, FenceToken, Snapshot};
 use crate::durable::transaction::TransactionBatch;
 use crate::durable::upgrade::upgrade;
 use crate::durable::{
-    initialize, BootstrapArgs, CatalogError, DurableCatalogError, DurableCatalogState, Epoch,
-    OpenableDurableCatalogState, ReadOnlyDurableCatalogState, Transaction,
-    CATALOG_CONTENT_VERSION_KEY,
+    initialize, AuditLogIterator, BootstrapArgs, CatalogError, DurableCatalogError,
+    DurableCatalogState, Epoch, OpenableDurableCatalogState, ReadOnlyDurableCatalogState,
+    Transaction, CATALOG_CONTENT_VERSION_KEY,
 };
 use crate::memory;
 
@@ -1118,13 +1118,7 @@ impl UnopenedPersistCatalogState {
         mode: Mode,
         initial_ts: Timestamp,
         bootstrap_args: &BootstrapArgs,
-    ) -> Result<
-        (
-            Box<dyn DurableCatalogState>,
-            std::thread::JoinHandle<Vec<memory::objects::StateUpdate>>,
-        ),
-        CatalogError,
-    > {
+    ) -> Result<(Box<dyn DurableCatalogState>, AuditLogIterator), CatalogError> {
         // It would be nice to use `initial_ts` here, but it comes from the system clock, not the
         // timestamp oracle.
         let mut commit_ts = self.upper;
@@ -1210,28 +1204,7 @@ impl UnopenedPersistCatalogState {
             .into_iter()
             .partition(|(update, _, _)| update.is_audit_log());
         self.snapshot = snapshot;
-
-        // Create thread to deserialize audit logs.
-        let audit_log_handle = std::thread::spawn(move || {
-            let updates: Vec<_> = audit_logs
-                .into_iter()
-                .map(|(kind, ts, diff)| {
-                    assert_eq!(
-                        diff, 1,
-                        "audit log is append only: ({kind:?}, {ts:?}, {diff:?})"
-                    );
-                    let diff = memory::objects::StateDiff::Addition;
-
-                    let kind = TryIntoStateUpdateKind::try_into(kind).expect("kind decoding error");
-                    let kind: Option<memory::objects::StateUpdateKind> = (&kind)
-                        .try_into()
-                        .expect("invalid persisted update: {update:#?}");
-                    let kind = kind.expect("audit log always produces im-memory updates");
-                    memory::objects::StateUpdate { kind, ts, diff }
-                })
-                .collect();
-            updates
-        });
+        let audit_log_handle = AuditLogIterator::new(audit_logs);
 
         // Perform data migrations.
         if is_initialized && !read_only {
@@ -1402,13 +1375,7 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
         mut self: Box<Self>,
         initial_ts: Timestamp,
         bootstrap_args: &BootstrapArgs,
-    ) -> Result<
-        (
-            Box<dyn DurableCatalogState>,
-            std::thread::JoinHandle<Vec<memory::objects::StateUpdate>>,
-        ),
-        CatalogError,
-    > {
+    ) -> Result<(Box<dyn DurableCatalogState>, AuditLogIterator), CatalogError> {
         self.open_inner(Mode::Savepoint, initial_ts, bootstrap_args)
             .boxed()
             .await
@@ -1430,13 +1397,7 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
         mut self: Box<Self>,
         initial_ts: Timestamp,
         bootstrap_args: &BootstrapArgs,
-    ) -> Result<
-        (
-            Box<dyn DurableCatalogState>,
-            std::thread::JoinHandle<Vec<memory::objects::StateUpdate>>,
-        ),
-        CatalogError,
-    > {
+    ) -> Result<(Box<dyn DurableCatalogState>, AuditLogIterator), CatalogError> {
         self.open_inner(Mode::Writable, initial_ts, bootstrap_args)
             .boxed()
             .await
