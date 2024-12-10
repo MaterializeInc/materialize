@@ -11,7 +11,11 @@
 {{ range $.Site.Data.materialize_operator_chart_parameter.parameters }}
 <tr>
 <td><a href='#{{ replace .parameter "." "" | urlize}}'><code>{{ .parameter }}</code></a></td>
-<td><code>{{ .default }}</code></td>
+<td>
+{{ if .default }}
+<code>{{ .default }}</code>
+{{ end }}
+</td>
 </tr>
 {{ end }}
 </tbody>

@@ -1,13 +1,15 @@
-
 {{- $headings := slice -}}
 {{ range $.Site.Data.materialize_operator_chart_parameter.parameters }}
+
+{{/* Only if the .display field is true */}}
+{{ if .display }}
 
 {{ $parts := split .parameter "." }}
 {{ $heading := index $parts 0 }}
 
-{{if not (in $headings $heading) }}
+{{ if not (in $headings $heading) }}
 
-{{- $headings = $headings | append $heading -}}
+    {{- $headings = $headings | append $heading -}}
 
 ### `{{ $heading | $.Page.RenderString }}` parameters
 
@@ -15,7 +17,12 @@
 
 #### {{ .parameter }}
 
+{{ if .default }}
 **Default**: <code>{{ .default | $.Page.RenderString }}</code>
+{{ end }}
 
 {{.description  | $.Page.RenderString }}
-{{ end }}
+
+{{ end }} {{/* Only if the .display field is true */}}
+
+{{ end }} {{/* End of the loop over the parameters */}}

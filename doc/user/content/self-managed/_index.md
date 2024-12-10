@@ -23,15 +23,8 @@ Materialize has been tested to work on instances with the following properties:
 - 1:8 ratio of vCPU to GiB memory
 - 1:16 ratio of vCPU to GiB local instance storage (if enabling spill-to-disk)
 
-When operating in AWS, we recommend:
-
-- Using the `r7gd` and `r6gd` families of instances (and `r8gd` once available)
-  when running with local disk
-
-- Using the `r8g`, `r7g`, and `r6g` families when running without local disk
-
-See also the [operational guidelines](/self-managed/operational-guidelines/).
-
+For specific cloud provider recommendations, see the [Installation guide for the
+cloud provider](/self-managed/installation/) as well as the [operational guidelines](/self-managed/operational-guidelines/).
 
 ## Installation
 

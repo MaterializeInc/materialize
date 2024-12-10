@@ -14,9 +14,7 @@ For testing purposes only. For testing purposes only.  For testing purposes only
 
 ## Prerequisites
 
-### Required
-
-#### GCP Kubernetes environment
+### GCP Kubernetes environment
 
 Materialize provides a [Terraform
 module](https://github.com/MaterializeInc/terraform-google-materialize) to
@@ -30,13 +28,13 @@ See the
 [README](https://github.com/MaterializeInc/terraform-google-materialize/blob/main/README.md)
 for information on how to deploy the infrastructure.
 
-#### `kubectl`
+### `kubectl`
 
 Install `kubectl` and configure cluster access.
 For details, see the [GCP documentation](https://cloud.google.com/kubernetes-engine/docs/how-to/cluster-access-for-kubectl).
 
 
-#### Helm 3.2.0+
+### Helm 3.2.0+
 
 If you don't have Helm version 3.2.0+ installed, refer to the [Helm
 documentation](https://helm.sh/docs/intro/install/).
@@ -60,8 +58,6 @@ documentation](https://helm.sh/docs/intro/install/).
       # my-GCP-values.yaml
       # Note: Updated with recent config changes in main branch and not v0.125.2 branch
 
-
-      operator:
       operator:
         args:
           startupLogFilter: INFO

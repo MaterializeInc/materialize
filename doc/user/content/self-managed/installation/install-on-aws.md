@@ -14,11 +14,18 @@ For testing purposes only. For testing purposes only. For testing purposes only.
 
 ## Prerequisites
 
-### Required
+### AWS Kubernetes environment
 
-#### AWS Kubernetes environment
+When operating in AWS, we recommend:
 
-Materialize provides a [Terraform
+- Using the `r7gd` and `r6gd` families of instances (and `r8gd` once available)
+  when running with local disk
+
+- Using the `r8g`, `r7g`, and `r6g` families when running without local disk
+
+[//]: # "TODO: Add Terraform and non-Terraform instructions here (tabbed)."
+
+Materialize provides a [sampleTerraform
 module](https://github.com/MaterializeInc/terraform-aws-materialize/blob/main/README.md)
 to deploy a sample infrastructure on AWS with the following components:
 
@@ -31,7 +38,7 @@ See the
 [README](https://github.com/MaterializeInc/terraform-aws-materialize/blob/main/README.md)
 for information on how to deploy the infrastructure.
 
-#### `kubectl`
+### `kubectl`
 
 Install `kubectl` and configure cluster access. For details, see the [Amazon EKS
 documentation](https://docs.aws.amazon.com/eks/latest/userguide/install-kubectl.html).
@@ -55,82 +62,11 @@ To verify, run the following command:
 kubectl get nodes
 ```
 
-#### Helm 3.2.0+
+### Helm 3.2.0+
 
 If you don't have Helm version 3.2.0+ installed, refer to the [Helm
 documentation](https://helm.sh/docs/intro/install/).
 
-
-### Recommended but optional
-
-#### OpenEBS
-
-For optimal performance, Materialize requires fast, *locally-attached* NVMe
-storage. Having a locally-attached storage allows Materialize to spill to disk
-when operating on datasets larger than main memory as well as allows for a more
-graceful degradation rather than OOMing. *Network-attached* storage (like EBS
-volumes) can significantly degrade performance and is not supported.
-
-For locally-attached NVMe storage, we recommend using OpenEBS with LVM Local PV
-for managing local volumes. While other storage solutions may work, we have
-tested and recommend OpenEBS for optimal performance.
-
-For locally-attached NVMe storage, install OpenEBS to your running Kubernetes
-cluster.
-
-```bash
-# Add OpenEBS to Helm
-helm repo add openebs https://openebs.github.io/openebs
-helm repo update
-
-# Install only the Local PV Storage Engines
-helm install openebs --namespace openebs openebs/openebs \
-  --set engines.replicated.mayastor.enabled=false \
-  --create-namespace
-```
-
-Verify the installation:
-```bash
-kubectl get pods -n openebs -l role=openebs-lvm
-```
-
-#### Logical Volume Manager (LVM) configuration
-
-Logical Volume Manager (LVM) setup varies by environment. Below is our tested
-and recommended configuration:
-
-##### AWS EC2 with Bottlerocket AMI
-
-Tested configurations:
-
-|                                              |      |
-|----------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| **Instance types**                           | **r6g**, **r7g** families <br> **Note:** LVM setup may work on other instance types with local storage (like i3.xlarge, i4i.xlarge, r5d.xlarge), but we have not extensively tested these configurations. |
-| **AMI**                                      | AWS Bottlerocket |
-| **Instance store volumes**                   | Required |
-
-To setup:
-
-1. Use Bottlerocket bootstrap container for LVM configuration.
-1. Configure volume group name as `instance-store-vg`
-
-{{< tip >}}
-
-If you are using the recommended Bottlerocket AMI with the Terraform module,
-the LVM configuration is automatically handled by the EKS module using the
-provided user data script.
-
-{{< /tip >}}
-
-To verify the LVM setup, run the following:
-
-```bash
-kubectl debug -it node/<node-name> --image=amazonlinux:2
-chroot /host
-lvs
-```
-
-You should see a volume group named `instance-store-vg`.
 
 ## 1. Install the Materialize Operator
 
@@ -182,41 +118,8 @@ You should see a volume group named `instance-store-vg`.
           enabled: true
       ```
 
-   If you have [opted for locally-attached storage](#openebs), include the
-   storage configuration in your `my-AWS-values.yaml` file:
-
-   {{< tabs >}}
-   {{< tab "OpenEBS" >}}
-
-   If using OpenEBS, set up the storage class as follows:
-   ```yaml
-   storage:
-     storageClass:
-       create: true
-       name: "openebs-lvm-instance-store-ext4"
-       provisioner: "local.csi.openebs.io"
-       parameters:
-         storage: "lvm"
-         fsType: "ext4"
-         volgroup: "instance-store-vg"
-   ```
-   {{< /tab >}}
-   {{< tab "Other Storage" >}}
-   While OpenEBS is our recommended solution, you can use any storage  provisioner that meets your performance requirements by overriding the  provisioner and parameters values.
-
-   For example, to use a different storage provider:
-
-   ```yaml
-   storage:
-     storageClass:
-       create: true
-       name: "your-storage-class"
-       provisioner: "your.storage.provisioner"
-       parameters:
-         # Parameters specific to your chosen storage provisioner
-   ```
-   {{< /tab >}}
-   {{< /tabs >}}
+   For production, if you have [opted for locally-attached storage](/self-managed/operational-guidelines/#locally-attached-nvme-storage-openebs),
+   include the storage configuration your configuration file.  See the [Locally-attached NVMe storage (OpenEBS)](/self-managed/operational-guidelines/#locally-attached-nvme-storage-openebs)
 
 1. Clone/download the [Materialize
    repo](https://github.com/MaterializeInc/materialize).
