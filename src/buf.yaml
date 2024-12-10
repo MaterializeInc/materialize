@@ -49,6 +49,8 @@ breaking:
     - compute-types/src/plan/reduce.proto
     # reason: does not currently require backward-compatibility
     - compute-types/src/plan/render_plan.proto
+    # reason: does currently not require backward-compatibility
+    - compute-types/src/plan/threshold.proto
     # reason: does not currently require backward-compatibility
     - compute-types/src/sinks.proto
     # reason: Ignore because plans are currently not persisted.

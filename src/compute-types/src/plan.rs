@@ -51,53 +51,28 @@ pub mod transform;
 
 include!(concat!(env!("OUT_DIR"), "/mz_compute_types.plan.rs"));
 
-/// The forms in which an operator's output is available;
-/// it can be considered the plan-time equivalent of
-/// `render::context::CollectionBundle`.
+/// The forms in which an operator's output is available.
 ///
-/// These forms are either "raw", representing an unarranged collection,
-/// or "arranged", representing one that has been arranged by some key.
+/// These forms may include "raw", meaning as a streamed collection, but also any
+/// number of "arranged" representations.
 ///
-/// The raw collection, if it exists, may be consumed directly.
-///
-/// The arranged collections are slightly more complicated:
-/// Each key here is attached to a description of how the corresponding
-/// arrangement is permuted to remove value columns
-/// that are redundant with key columns. Thus, the first element in each
-/// tuple of `arranged` is the arrangement key; the second is the map of
-/// logical output columns to columns in the key or value of the deduplicated
-/// representation, and the third is a "thinning expression",
-/// or list of columns to include in the value
-/// when arranging.
-///
-/// For example, assume a 5-column collection is to be arranged by the key
-/// `[Column(2), Column(0) + Column(3), Column(1)]`.
-/// Then `Column(1)` and `Column(2)` in the value are redundant with the key, and
-/// only columns 0, 3, and 4 need to be stored separately.
-/// The thinning expression will then be `[0, 3, 4]`.
-///
-/// The permutation represents how to recover the
-/// original values (logically `[Column(0), Column(1), Column(2), Column(3), Column(4)]`)
-/// from the key and value of the arrangement, logically
-/// `[Column(2), Column(0) + Column(3), Column(1), Column(0), Column(3), Column(4)]`.
-/// Thus, the permutation in this case should be `{0: 3, 1: 2, 2: 0, 3: 4, 4: 5}`.
-///
-/// Note that this description, while true at the time of writing, is merely illustrative;
-/// users of this struct should not rely on the exact strategy used for generating
-/// the permutations. As long as clients apply the thinning expression
-/// when creating arrangements, and permute by the hashmap when reading them,
-/// the contract of the function where they are generated (`mz_expr::permutation_for_arrangement`)
-/// ensures that the correct values will be read.
+/// Each arranged representation is described by a `KeyValRowMapping`, or rather
+/// at the moment by its three fields in a triple. These fields explain how to form
+/// a "key" by applying some expressions to each row, how to select "values" from
+/// columns not explicitly captured by the key, and how to return to the original
+/// row from the concatenation of key and value. Further explanation is available
+/// in the documentation for `KeyValRowMapping`.
 #[derive(
     Arbitrary, Clone, Debug, Default, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
 )]
 pub struct AvailableCollections {
     /// Whether the collection exists in unarranged form.
     pub raw: bool,
-    /// The set of arrangements of the collection, along with a
-    /// column permutation mapping
+    /// The list of available arrangements, presented as a `KeyValRowMapping`,
+    /// but here represented by a triple `(to_key, to_val, to_row)` instead.
+    /// The documentation for `KeyValRowMapping` explains these fields better.
     #[proptest(strategy = "prop::collection::vec(any_arranged_thin(), 0..3)")]
-    pub arranged: Vec<(Vec<MirScalarExpr>, BTreeMap<usize, usize>, Vec<usize>)>,
+    pub arranged: Vec<(Vec<MirScalarExpr>, Vec<usize>, Vec<usize>)>,
     /// The types of the columns in the raw form of the collection, if known. We
     /// only capture types when necessary to support arrangement specialization,
     /// so this only done for specific LIR operators during lowering.
@@ -107,10 +82,10 @@ pub struct AvailableCollections {
 /// A strategy that produces arrangements that are thinner than the default. That is
 /// the number of direct children is limited to a maximum of 3.
 pub(crate) fn any_arranged_thin(
-) -> impl Strategy<Value = (Vec<MirScalarExpr>, BTreeMap<usize, usize>, Vec<usize>)> {
+) -> impl Strategy<Value = (Vec<MirScalarExpr>, Vec<usize>, Vec<usize>)> {
     (
         prop::collection::vec(MirScalarExpr::arbitrary(), 0..3),
-        BTreeMap::<usize, usize>::arbitrary(),
+        Vec::<usize>::arbitrary(),
         Vec::<usize>::arbitrary(),
     )
 }
@@ -161,7 +136,7 @@ impl AvailableCollections {
     /// specified ways, with optionally given types describing
     /// the rows that would be in the raw form of the collection.
     pub fn new_arranged(
-        arranged: Vec<(Vec<MirScalarExpr>, BTreeMap<usize, usize>, Vec<usize>)>,
+        arranged: Vec<(Vec<MirScalarExpr>, Vec<usize>, Vec<usize>)>,
         types: Option<Vec<ColumnType>>,
     ) -> Self {
         assert!(
@@ -176,9 +151,7 @@ impl AvailableCollections {
     }
 
     /// Get some arrangement, if one exists.
-    pub fn arbitrary_arrangement(
-        &self,
-    ) -> Option<&(Vec<MirScalarExpr>, BTreeMap<usize, usize>, Vec<usize>)> {
+    pub fn arbitrary_arrangement(&self) -> Option<&(Vec<MirScalarExpr>, Vec<usize>, Vec<usize>)> {
         assert!(
             self.raw || !self.arranged.is_empty(),
             "Invariant violated: at least one collection must exist"
