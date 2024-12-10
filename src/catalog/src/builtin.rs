@@ -6259,7 +6259,7 @@ WITH MUTUALLY RECURSIVE
         SELECT
             unnest(indexes) AS id,
             'drop unless queried directly' AS hint,
-            'sources do evaluate transformations and can expose data directly' AS details,
+            'sources do not transform data and can expose data directly' AS details,
             NULL::text list AS justification
         FROM objects_with_justification
         -- indexes can only be part of justification for leaf nodes
