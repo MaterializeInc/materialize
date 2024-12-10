@@ -1030,6 +1030,7 @@ mod tests {
     use crate::durable::Epoch;
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
     fn kind_test() {
         let test_cases = [
             (
@@ -1071,6 +1072,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
     fn audit_log_id_test() {
         let test_cases = [
             (
