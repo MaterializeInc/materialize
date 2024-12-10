@@ -54,7 +54,7 @@ use mz_sql_parser::ast::{
 use mz_storage_types::sources::Timeline;
 use opentelemetry::trace::TraceContextExt;
 use tokio::sync::{mpsc, oneshot};
-use tracing::{debug_span, warn, Instrument};
+use tracing::{debug_span, info, warn, Instrument};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::command::{
@@ -1149,6 +1149,7 @@ impl Coordinator {
                     warn!(%cmvs.name, %oracle_timestamp, %timestamp, "REFRESH MV's inputs are not readable at the oracle read ts");
                 }
 
+                info!("Resolved `mz_now()` to {timestamp} for REFRESH MV");
                 Ok(Some(timestamp))
             } else {
                 Ok(None)
