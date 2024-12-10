@@ -6071,7 +6071,7 @@ WITH MUTUALLY RECURSIVE
             v.id,
             unnest(v.indexes) AS justification
         FROM objects AS v
-        WHERE v.type IN ('view', 'materialized-view') AND NOT EXISTS (
+        WHERE v.type IN ('view', 'materialized-view', 'source') AND NOT EXISTS (
             SELECT FROM mz_internal.mz_object_transitive_dependencies AS d
             INNER JOIN mz_catalog.mz_objects AS child
                 ON (d.object_id = child.id)
