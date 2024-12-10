@@ -112,7 +112,7 @@ operators:
     expansive: True
     expansive_details: |
       Cartesian product of the inputs (|N| x |M|).
-    example: "`CrossJoin`"
+    example: "`CrossJoin type=differential`"
 
   - operator: Reduce
     plan_types: "optimized"
