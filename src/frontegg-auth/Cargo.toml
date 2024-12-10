@@ -16,7 +16,7 @@ clap = { version = "3.2.24", features = ["wrap_help", "env", "derive"] }
 derivative = "2.2.0"
 futures = "0.3.25"
 jsonwebtoken = "9.2.0"
-lru = "0.12.3"
+lru = "0.12.5"
 mz-ore = { path = "../ore", features = ["network", "metrics"] }
 mz-repr = { path = "../repr" }
 prometheus = { version = "0.13.3", default-features = false }
