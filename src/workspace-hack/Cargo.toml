@@ -72,7 +72,7 @@ libz-sys = { version = "1.1.8", features = ["static"] }
 log = { version = "0.4.22", default-features = false, features = ["std"] }
 lru = { version = "0.12.3" }
 memchr = { version = "2.7.2", features = ["use_std"] }
-mime_guess = { version = "2.0.3" }
+mime_guess = { version = "2.0.5" }
 minimal-lexical = { version = "0.2.1", default-features = false, features = ["std"] }
 mio = { version = "0.8.11", features = ["net", "os-ext"] }
 mysql_async = { git = "https://github.com/MaterializeInc/mysql_async", default-features = false, features = ["binlog", "minimal", "native-tls-tls", "tracing"] }
@@ -204,7 +204,7 @@ libz-sys = { version = "1.1.8", features = ["static"] }
 log = { version = "0.4.22", default-features = false, features = ["std"] }
 lru = { version = "0.12.3" }
 memchr = { version = "2.7.2", features = ["use_std"] }
-mime_guess = { version = "2.0.3" }
+mime_guess = { version = "2.0.5" }
 minimal-lexical = { version = "0.2.1", default-features = false, features = ["std"] }
 mio = { version = "0.8.11", features = ["net", "os-ext"] }
 mysql_async = { git = "https://github.com/MaterializeInc/mysql_async", default-features = false, features = ["binlog", "minimal", "native-tls-tls", "tracing"] }
