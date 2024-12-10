@@ -57,7 +57,7 @@ use mz_storage_client::client::{
 use mz_storage_client::controller::{
     IntrospectionType, StorageController, StorageMetadata, StorageTxn,
 };
-use mz_storage_client::storage_collections::{self, StorageCollections};
+use mz_storage_client::storage_collections::StorageCollections;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::StorageError;
@@ -653,21 +653,6 @@ where
         let controller_metrics = ControllerMetrics::new(&config.metrics_registry);
 
         let txns_metrics = Arc::new(TxnMetrics::new(&config.metrics_registry));
-        let collections_ctl = storage_collections::StorageCollectionsImpl::new(
-            config.persist_location.clone(),
-            Arc::clone(&config.persist_clients),
-            &config.metrics_registry,
-            config.now.clone(),
-            Arc::clone(&txns_metrics),
-            envd_epoch,
-            read_only,
-            config.connection_context.clone(),
-            storage_txn,
-        )
-        .await;
-
-        let collections_ctl: Arc<dyn StorageCollections<Timestamp = T> + Send + Sync> =
-            Arc::new(collections_ctl);
 
         let storage_controller = mz_storage_controller::Controller::new(
             config.build_info,
@@ -682,14 +667,12 @@ where
             controller_metrics.clone(),
             config.connection_context,
             storage_txn,
-            Arc::clone(&collections_ctl),
         )
         .await;
 
-        let storage_collections = Arc::clone(&collections_ctl);
         let compute_controller = ComputeController::new(
             config.build_info,
-            storage_collections,
+            storage_controller.storage_collections(),
             envd_epoch,
             read_only,
             &config.metrics_registry,
@@ -700,8 +683,8 @@ where
         let (metrics_tx, metrics_rx) = mpsc::unbounded_channel();
 
         let this = Self {
+            storage_collections: storage_controller.storage_collections(),
             storage: Box::new(storage_controller),
-            storage_collections: collections_ctl,
             compute: compute_controller,
             clusterd_image: config.clusterd_image,
             init_container_image: config.init_container_image,
