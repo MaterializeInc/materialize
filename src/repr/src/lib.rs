@@ -53,10 +53,10 @@ pub use crate::datum_vec::{DatumVec, DatumVecBorrow};
 pub use crate::diff::Diff;
 pub use crate::global_id::GlobalId;
 pub use crate::relation::{
-    arb_relation_desc_diff, arb_row_for_relation, ColumnName, ColumnType, NotNullViolation,
-    PropRelationDescDiff, ProtoColumnName, ProtoColumnType, ProtoRelationDesc, ProtoRelationType,
-    RelationDesc, RelationDescBuilder, RelationType, RelationVersion, RelationVersionSelector,
-    VersionedRelationDesc,
+    arb_relation_desc_diff, arb_relation_desc_projection, arb_row_for_relation, ColumnIndex,
+    ColumnName, ColumnType, NotNullViolation, PropRelationDescDiff, ProtoColumnName,
+    ProtoColumnType, ProtoRelationDesc, ProtoRelationType, RelationDesc, RelationDescBuilder,
+    RelationType, RelationVersion, RelationVersionSelector, VersionedRelationDesc,
 };
 pub use crate::row::encode::{preserves_order, RowColumnarDecoder, RowColumnarEncoder};
 pub use crate::row::iter::{IntoRowIterator, RowIterator};

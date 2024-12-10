@@ -1215,6 +1215,73 @@ impl DatumColumnDecoder {
             | DatumColumnDecoder::RecordEmpty(_) => ColumnStatKinds::None,
         }
     }
+
+    fn byte_size(&self) -> usize {
+        match self {
+            DatumColumnDecoder::Bool(a) => a.get_array_memory_size(),
+            DatumColumnDecoder::U8(a) => a.get_array_memory_size(),
+            DatumColumnDecoder::U16(a) => a.get_array_memory_size(),
+            DatumColumnDecoder::U32(a) => a.get_array_memory_size(),
+            DatumColumnDecoder::U64(a) => a.get_array_memory_size(),
+            DatumColumnDecoder::I16(a) => a.get_array_memory_size(),
+            DatumColumnDecoder::I32(a) => a.get_array_memory_size(),
+            DatumColumnDecoder::I64(a) => a.get_array_memory_size(),
+            DatumColumnDecoder::F32(a) => a.get_array_memory_size(),
+            DatumColumnDecoder::F64(a) => a.get_array_memory_size(),
+            DatumColumnDecoder::Numeric(a) => a.get_array_memory_size(),
+            DatumColumnDecoder::String(a) => a.get_array_memory_size(),
+            DatumColumnDecoder::Bytes(a) => a.get_array_memory_size(),
+            DatumColumnDecoder::Date(a) => a.get_array_memory_size(),
+            DatumColumnDecoder::Time(a) => a.get_array_memory_size(),
+            DatumColumnDecoder::Timestamp(a) => a.get_array_memory_size(),
+            DatumColumnDecoder::TimestampTz(a) => a.get_array_memory_size(),
+            DatumColumnDecoder::MzTimestamp(a) => a.get_array_memory_size(),
+            DatumColumnDecoder::Interval(a) => a.get_array_memory_size(),
+            DatumColumnDecoder::Uuid(a) => a.get_array_memory_size(),
+            DatumColumnDecoder::AclItem(a) => a.get_array_memory_size(),
+            DatumColumnDecoder::MzAclItem(a) => a.get_array_memory_size(),
+            DatumColumnDecoder::Range(a) => a.get_array_memory_size(),
+            DatumColumnDecoder::Json(a) => a.get_array_memory_size(),
+            DatumColumnDecoder::Array {
+                dim_offsets,
+                dims,
+                val_offsets,
+                vals,
+                nulls,
+            } => {
+                dim_offsets.inner().inner().len()
+                    + dims.get_array_memory_size()
+                    + val_offsets.inner().inner().len()
+                    + vals.byte_size()
+                    + nulls.as_ref().map(|b| b.len()).unwrap_or(0)
+            }
+            DatumColumnDecoder::List {
+                offsets,
+                values,
+                nulls,
+            } => {
+                offsets.inner().inner().len()
+                    + values.byte_size()
+                    + nulls.as_ref().map(|b| b.len()).unwrap_or(0)
+            }
+            DatumColumnDecoder::Map {
+                offsets,
+                keys,
+                vals,
+                nulls,
+            } => {
+                offsets.inner().inner().len()
+                    + keys.get_array_memory_size()
+                    + vals.byte_size()
+                    + nulls.as_ref().map(|b| b.len()).unwrap_or(0)
+            }
+            DatumColumnDecoder::Record { fields, nulls } => {
+                fields.iter().map(|f| f.byte_size()).sum::<usize>()
+                    + nulls.as_ref().map(|b| b.len()).unwrap_or(0)
+            }
+            DatumColumnDecoder::RecordEmpty(a) => a.get_array_memory_size(),
+        }
+    }
 }
 
 impl Schema2<Row> for RelationDesc {
@@ -1275,9 +1342,9 @@ impl RowColumnarDecoder {
         let inner_columns = col.columns();
         let desc_columns = desc.typ().columns();
 
-        if inner_columns.len() != desc_columns.len() {
+        if desc_columns.len() > inner_columns.len() {
             anyhow::bail!(
-                "provided array has {inner_columns:?}, relation desc has {desc_columns:?}"
+                "provided array has too few columns! {desc_columns:?} > {inner_columns:?}"
             );
         }
 
@@ -1287,8 +1354,8 @@ impl RowColumnarDecoder {
         let null_mask = col.nulls();
 
         // The columns of the `StructArray` are named with their column index.
-        for (col_idx, (col_name, col_type)) in desc.iter().enumerate() {
-            let field_name = col_idx.to_string();
+        for (col_idx, col_name, col_type) in desc.iter_all() {
+            let field_name = col_idx.to_stable_name();
             let column = col.column_by_name(&field_name).ok_or_else(|| {
                 anyhow::anyhow!(
                     "StructArray did not contain column name {field_name}, found {:?}",
@@ -1330,6 +1397,28 @@ impl ColumnDecoder<Row> for RowColumnarDecoder {
             return false;
         };
         nullability.is_null(idx)
+    }
+
+    fn byte_size(&self) -> usize {
+        let decoders_size: usize = self
+            .decoders
+            .iter()
+            .map(|(name, null_count, decoder)| {
+                name.len()
+                    + std::mem::size_of::<Arc<str>>()
+                    + std::mem::size_of_val(null_count)
+                    + decoder.byte_size()
+            })
+            .sum();
+
+        std::mem::size_of_val(&self.len)
+            + decoders_size
+            + std::mem::size_of_val(&self.nullability)
+            + self
+                .nullability
+                .as_ref()
+                .map(|nulls| nulls.inner().inner().len())
+                .unwrap_or(0)
     }
 
     fn stats(&self) -> StructStats {
@@ -1377,9 +1466,8 @@ impl RowColumnarEncoder {
         }
 
         let (col_names, encoders): (Vec<_>, Vec<_>) = desc
-            .iter()
-            .enumerate()
-            .map(|(idx, (col_name, col_type))| {
+            .iter_all()
+            .map(|(col_idx, col_name, col_type)| {
                 let encoder = scalar_type_to_encoder(&col_type.scalar_type)
                     .expect("failed to create encoder");
                 let encoder = DatumEncoder {
@@ -1389,7 +1477,7 @@ impl RowColumnarEncoder {
 
                 // We name the Fields in Parquet with the column index, but for
                 // backwards compat use the column name for stats.
-                let name = (idx, col_name.as_str().into());
+                let name = (col_idx.to_raw(), col_name.as_str().into());
 
                 (name, encoder)
             })
@@ -2157,6 +2245,8 @@ impl RustType<ProtoRow> for Row {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use arrow::array::{make_array, ArrayData};
     use arrow::compute::SortOptions;
     use arrow::datatypes::ArrowNativeType;
@@ -2665,5 +2755,48 @@ mod tests {
 
         let encoded = row.encode_to_vec();
         assert_eq!(Row::decode(&encoded, &desc), Ok(row));
+    }
+
+    #[mz_ore::test]
+    fn smoketest_projection() {
+        let desc = RelationDesc::builder()
+            .with_column("a", ScalarType::Int64.nullable(true))
+            .with_column("b", ScalarType::String.nullable(true))
+            .with_column("c", ScalarType::Bool.nullable(true))
+            .finish();
+        let mut encoder = <RelationDesc as Schema2<Row>>::encoder(&desc).unwrap();
+
+        let mut og_row = Row::default();
+        {
+            let mut packer = og_row.packer();
+            packer.push(Datum::Int64(100));
+            packer.push(Datum::String("hello world"));
+            packer.push(Datum::True);
+        }
+        let mut og_row_2 = Row::default();
+        {
+            let mut packer = og_row_2.packer();
+            packer.push(Datum::Null);
+            packer.push(Datum::Null);
+            packer.push(Datum::Null);
+        }
+
+        encoder.append(&og_row);
+        encoder.append(&og_row_2);
+        let col = encoder.finish();
+
+        let projected_desc = desc.apply_demand(&BTreeSet::from([0, 2]));
+
+        let decoder = <RelationDesc as Schema2<Row>>::decoder(&projected_desc, col).unwrap();
+
+        let mut rnd_row = Row::default();
+        decoder.decode(0, &mut rnd_row);
+        let expected_row = Row::pack_slice(&[Datum::Int64(100), Datum::True]);
+        assert_eq!(expected_row, rnd_row);
+
+        let mut rnd_row = Row::default();
+        decoder.decode(1, &mut rnd_row);
+        let expected_row = Row::pack_slice(&[Datum::Null, Datum::Null]);
+        assert_eq!(expected_row, rnd_row);
     }
 }
