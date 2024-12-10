@@ -15,12 +15,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use itertools::Itertools;
 use mz_audit_log::VersionedEvent;
 use mz_controller_types::ClusterId;
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_persist_client::PersistClient;
-use mz_repr::{CatalogItemId, GlobalId};
+use mz_repr::{CatalogItemId, Diff, GlobalId};
 use mz_sql::catalog::CatalogError as SqlCatalogError;
 use uuid::Uuid;
 
@@ -29,7 +30,8 @@ use crate::durable::debug::{DebugCatalogState, Trace};
 pub use crate::durable::error::{CatalogError, DurableCatalogError, FenceError};
 pub use crate::durable::metrics::Metrics;
 pub use crate::durable::objects::state_update::StateUpdate;
-use crate::durable::objects::Snapshot;
+use crate::durable::objects::state_update::{StateUpdateKindJson, TryIntoStateUpdateKind};
+use crate::durable::objects::{AuditLog, Snapshot};
 pub use crate::durable::objects::{
     Cluster, ClusterConfig, ClusterReplica, ClusterVariant, ClusterVariantManaged, Comment,
     Database, DefaultPrivilege, IntrospectionSourceIndex, Item, NetworkPolicy, ReplicaConfig,
@@ -105,13 +107,7 @@ pub trait OpenableDurableCatalogState: Debug + Send {
         mut self: Box<Self>,
         initial_ts: Timestamp,
         bootstrap_args: &BootstrapArgs,
-    ) -> Result<
-        (
-            Box<dyn DurableCatalogState>,
-            std::thread::JoinHandle<Vec<memory::objects::StateUpdate>>,
-        ),
-        CatalogError,
-    >;
+    ) -> Result<(Box<dyn DurableCatalogState>, AuditLogIterator), CatalogError>;
 
     /// Opens the catalog in read only mode. All mutating methods
     /// will return an error.
@@ -134,13 +130,7 @@ pub trait OpenableDurableCatalogState: Debug + Send {
         mut self: Box<Self>,
         initial_ts: Timestamp,
         bootstrap_args: &BootstrapArgs,
-    ) -> Result<
-        (
-            Box<dyn DurableCatalogState>,
-            std::thread::JoinHandle<Vec<memory::objects::StateUpdate>>,
-        ),
-        CatalogError,
-    >;
+    ) -> Result<(Box<dyn DurableCatalogState>, AuditLogIterator), CatalogError>;
 
     /// Opens the catalog for manual editing of the underlying data. This is helpful for
     /// fixing a corrupt catalog.
@@ -359,6 +349,63 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
             .await?
             .into_element();
         Ok(ClusterId::user(id).ok_or(SqlCatalogError::IdExhaustion)?)
+    }
+}
+
+trait AuditLogIteratorTrait: Iterator<Item = (AuditLog, Timestamp)> + Send + Sync + Debug {}
+impl<T: Iterator<Item = (AuditLog, Timestamp)> + Send + Sync + Debug> AuditLogIteratorTrait for T {}
+
+/// An iterator that returns audit log events in reverse ID order.
+#[derive(Debug)]
+pub struct AuditLogIterator {
+    // We store an interator instead of a sorted `Vec`, so we can lazily sort the contents on the
+    // first call to `next`, instead of sorting the contents on initialization.
+    audit_logs: Box<dyn AuditLogIteratorTrait>,
+}
+
+impl AuditLogIterator {
+    fn new(audit_logs: Vec<(StateUpdateKindJson, Timestamp, Diff)>) -> Self {
+        let audit_logs = audit_logs
+            .into_iter()
+            .map(|(kind, ts, diff)| {
+                assert_eq!(
+                    diff, 1,
+                    "audit log is append only: ({kind:?}, {ts:?}, {diff:?})"
+                );
+                assert!(
+                    kind.is_audit_log(),
+                    "unexpected update kind: ({kind:?}, {ts:?}, {diff:?})"
+                );
+                let id = kind.audit_log_id();
+                (kind, ts, id)
+            })
+            .sorted_by_key(|(_, ts, id)| (*ts, *id))
+            .map(|(kind, ts, _id)| (kind, ts))
+            .rev()
+            .map(|(kind, ts)| {
+                // Each event will be deserialized lazily on a call to `next`.
+                let kind = TryIntoStateUpdateKind::try_into(kind).expect("kind decoding error");
+                let kind: Option<memory::objects::StateUpdateKind> = (&kind)
+                    .try_into()
+                    .expect("invalid persisted update: {update:#?}");
+                let kind = kind.expect("audit log always produces im-memory updates");
+                let audit_log = match kind {
+                    memory::objects::StateUpdateKind::AuditLog(audit_log) => audit_log,
+                    kind => unreachable!("invalid kind: {kind:?}"),
+                };
+                (audit_log, ts)
+            });
+        Self {
+            audit_logs: Box::new(audit_logs),
+        }
+    }
+}
+
+impl Iterator for AuditLogIterator {
+    type Item = (AuditLog, Timestamp);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.audit_logs.next()
     }
 }
 
