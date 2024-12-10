@@ -26,6 +26,7 @@ RUN apt-get update \
     && if [ "$CI_SANITIZER" != "none" ]; then \
         TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get -qy install --no-install-recommends llvm; \
        fi \
+    && rm -rf /var/cache/apt \
     && mkdir /scratch \
     && chown materialize /scratch \
     && mkdir /mzdata \

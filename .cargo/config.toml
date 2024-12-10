@@ -1,3 +1,11 @@
+rustflags = [
+    "-Clink-arg=-Wl,--compress-debug-sections=zlib",
+    "-Clink-arg=-Wl,-O3",
+    "-Clink-arg=-fuse-ld=lld",
+    "-Csymbol-mangling-version=v0",
+    "--cfg=tokio_unstable",
+]
+
 [target."x86_64-unknown-linux-gnu"]
 # Compressing debug information can yield hundreds of megabytes of savings.
 # The Rust toolchain does not currently perform dead code elimination on

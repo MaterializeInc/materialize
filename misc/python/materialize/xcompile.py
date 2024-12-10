@@ -149,11 +149,15 @@ def cargo(
         **extra_env,
     }
 
+    print(_target)
+    sys.exit(1)
     rustflags += [
         "-Clink-arg=-Wl,--compress-debug-sections=zlib",
         "-Clink-arg=-Wl,-O3",
         "-Csymbol-mangling-version=v0",
         "--cfg=tokio_unstable",
+        "-Clink-arg=-fuse-ld=lld",
+        f"-L/opt/x-tools/{_target}/{_target}/sysroot/lib",
     ]
 
     if sys.platform == "darwin":
