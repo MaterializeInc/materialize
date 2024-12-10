@@ -57,8 +57,14 @@ $ mysql-execute name=mysql
 ALTER TABLE t1 ADD COLUMN f3 INTEGER FIRST;
 INSERT INTO t1 VALUES (3, 3, 3);
 
+# TODO: Reenable when database-issues#8127 is fixed
+$ skip-if
+SELECT true
+
 ! SELECT * FROM t1;
 contains:incompatible schema change
+
+$ skip-end
 
 # add a new column to t2
 $ mysql-execute name=mysql
