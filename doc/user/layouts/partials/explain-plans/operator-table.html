@@ -1,3 +1,13 @@
+The following table lists the operators that are available in the {{ .planType
+}} plan.
+
+<ul>
+<li>For those operators that require memory to maintain intermediate state,
+the <strong>Uses memory</strong> is marked with <strong>Yes</strong>. </li>
+<li>For those operators that expand the data size (either rows or columns),
+the <strong>Can increase data size</strong> is marked with <strong>Yes</strong>. </li>
+</ul>
+
 <table>
 <thead>
 <tr>
@@ -24,3 +34,13 @@
 {{ end }}
 </tbody>
 </table>
+
+<span class="caption">
+<ul >
+<li><strong>Can increase data size:</strong> Specifies whether the operator can
+increase the data size (can be the number of rows or the number of columns).
+</li>
+<li><strong>Uses memory:</strong> Specifies whether the operator use memory to
+maintain state for its inputs.</li>
+</ul>
+</span>

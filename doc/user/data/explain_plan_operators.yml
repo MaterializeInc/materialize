@@ -88,7 +88,7 @@ operators:
     expansive_details: |
       For `CROSSJOINS`, Cartesian product of the inputs (|N| x |M|).
       For other join types, depends on the join order and facts about the joined collections.
-    example: "`Join on=(#1 = #2)`"
+    example: "`Join on=(#1 = #2) type=delta`"
 
   - operator: Join
     plan_types: "optimized"
@@ -100,7 +100,7 @@ operators:
     expansive: True
     expansive_details: |
       Depends on the join order and facts about the joined collections.
-    example: "`Join on=(#1 = #2)`"
+    example: "`Join on=(#1 = #2) type=delta`"
 
   - operator: CrossJoin
     plan_types: "optimized"

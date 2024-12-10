@@ -249,6 +249,7 @@ Below the plan, a "Used indexes" section indicates which indexes will be used by
 
 {{< /tabs >}}
 
+
 ## Examples
 
 For the following examples, let's assume that you have [the auction house load generator](/sql/create-source/load-generator/#creating-an-auction-load-generator) created in your current environment.
