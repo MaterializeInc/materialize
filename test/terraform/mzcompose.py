@@ -160,7 +160,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     },
                 },
                 "rbac": {"enabled": False},
-                "namespace": {"create": True, "name": "materialize"},
                 "networkPolicies": {
                     "enabled": True,
                     "egress": {"enabled": True, "cidrs": ["0.0.0.0/0"]},
@@ -175,6 +174,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     "install",
                     "materialize-operator",
                     "misc/helm-charts/operator",
+                    "--namespace",
+                    "materialize",
+                    "--create-namespace",
                     "-f",
                     "-",
                 ],
