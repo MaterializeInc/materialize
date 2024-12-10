@@ -2292,7 +2292,7 @@ pub static MZ_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
         .with_key(vec![0])
         .with_key(vec![1])
         .finish(),
-    is_retained_metrics_object: false,
+    is_retained_metrics_object: true,
     access: vec![PUBLIC_SELECT],
 });
 pub static MZ_CONNECTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
