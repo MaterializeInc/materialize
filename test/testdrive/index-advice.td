@@ -134,7 +134,7 @@ name              hint                            details
   IN CLUSTER c1
   FROM LOAD GENERATOR COUNTER (UP TO 100);
 
-> CREATE DEFAULT INDEX IN CLUSTER c1 ON source;
+> CREATE DEFAULT INDEX IN CLUSTER c1 ON s1;
 
 > SELECT o.name, a.hint, a.details FROM mz_internal.mz_index_advice AS a JOIN mz_objects AS o ON (a.object_id = o.id) ORDER BY name;
 name                  hint                            details
