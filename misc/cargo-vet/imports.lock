@@ -16,13 +16,6 @@ user-login = "dtolnay"
 user-name = "David Tolnay"
 
 [[publisher.aws-config]]
-version = "1.2.0"
-when = "2024-04-12"
-user-id = 160111
-user-login = "aws-sdk-rust-ci"
-user-name = "AWS SDK Rust Bot"
-
-[[publisher.aws-config]]
 version = "1.2.1"
 when = "2024-04-22"
 user-id = 160111
@@ -51,13 +44,6 @@ user-login = "aws-sdk-rust-ci"
 user-name = "AWS SDK Rust Bot"
 
 [[publisher.aws-sdk-sso]]
-version = "1.20.0"
-when = "2024-04-12"
-user-id = 160111
-user-login = "aws-sdk-rust-ci"
-user-name = "AWS SDK Rust Bot"
-
-[[publisher.aws-sdk-sso]]
 version = "1.21.0"
 when = "2024-04-22"
 user-id = 160111
@@ -65,22 +51,8 @@ user-login = "aws-sdk-rust-ci"
 user-name = "AWS SDK Rust Bot"
 
 [[publisher.aws-sdk-ssooidc]]
-version = "1.20.0"
-when = "2024-04-12"
-user-id = 160111
-user-login = "aws-sdk-rust-ci"
-user-name = "AWS SDK Rust Bot"
-
-[[publisher.aws-sdk-ssooidc]]
 version = "1.21.0"
 when = "2024-04-22"
-user-id = 160111
-user-login = "aws-sdk-rust-ci"
-user-name = "AWS SDK Rust Bot"
-
-[[publisher.aws-sdk-sts]]
-version = "1.20.0"
-when = "2024-04-12"
 user-id = 160111
 user-login = "aws-sdk-rust-ci"
 user-name = "AWS SDK Rust Bot"
@@ -302,22 +274,8 @@ user-login = "dtolnay"
 user-name = "David Tolnay"
 
 [[publisher.differential-dataflow]]
-version = "0.13.0"
-when = "2024-10-29"
-user-id = 704
-user-login = "frankmcsherry"
-user-name = "Frank McSherry"
-
-[[publisher.differential-dataflow]]
 version = "0.13.1"
 when = "2024-11-11"
-user-id = 704
-user-login = "frankmcsherry"
-user-name = "Frank McSherry"
-
-[[publisher.differential-dogs3]]
-version = "0.1.0"
-when = "2024-10-29"
 user-id = 704
 user-login = "frankmcsherry"
 user-name = "Frank McSherry"
@@ -456,13 +414,6 @@ user-login = "dtolnay"
 user-name = "David Tolnay"
 
 [[publisher.jobserver]]
-version = "0.1.21"
-when = "2020-01-30"
-user-id = 1
-user-login = "alexcrichton"
-user-name = "Alex Crichton"
-
-[[publisher.jobserver]]
 version = "0.1.25"
 when = "2022-09-23"
 user-id = 1
@@ -481,13 +432,6 @@ version = "0.3.3"
 when = "2024-08-20"
 user-id = 274184
 user-login = "alex-hunt-materialize"
-
-[[publisher.linux-raw-sys]]
-version = "0.3.4"
-when = "2023-04-22"
-user-id = 6825
-user-login = "sunfishcode"
-user-name = "Dan Gohman"
 
 [[publisher.linux-raw-sys]]
 version = "0.4.12"
@@ -607,20 +551,6 @@ when = "2019-08-13"
 user-id = 1
 user-login = "alexcrichton"
 user-name = "Alex Crichton"
-
-[[publisher.rustix]]
-version = "0.37.15"
-when = "2023-04-26"
-user-id = 6825
-user-login = "sunfishcode"
-user-name = "Dan Gohman"
-
-[[publisher.rustix]]
-version = "0.38.21"
-when = "2023-10-26"
-user-id = 6825
-user-login = "sunfishcode"
-user-name = "Dan Gohman"
 
 [[publisher.scoped-tls]]
 version = "1.0.1"
@@ -1002,12 +932,6 @@ criteria = "safe-to-deploy"
 delta = "0.17.0 -> 0.18.1"
 notes = "No major changes, no unsafe code here."
 
-[[audits.bytecode-alliance.audits.cc]]
-who = "Alex Crichton <alex@alexcrichton.com>"
-criteria = "safe-to-deploy"
-version = "1.0.73"
-notes = "I am the author of this crate."
-
 [[audits.bytecode-alliance.audits.ciborium]]
 who = "Pat Hickey <phickey@fastly.com>"
 criteria = "safe-to-deploy"
@@ -1033,24 +957,6 @@ notes = "This library uses `forbid(unsafe_code)` and has no filesystem or networ
 who = "Benjamin Bouvier <public@benj.me>"
 criteria = "safe-to-deploy"
 version = "0.1.3"
-
-[[audits.bytecode-alliance.audits.errno]]
-who = "Dan Gohman <dev@sunfishcode.online>"
-criteria = "safe-to-deploy"
-version = "0.3.0"
-notes = "This crate uses libc and windows-sys APIs to get and set the raw OS error value."
-
-[[audits.bytecode-alliance.audits.errno]]
-who = "Dan Gohman <dev@sunfishcode.online>"
-criteria = "safe-to-deploy"
-delta = "0.3.0 -> 0.3.1"
-notes = "Just a dependency version bump and a bug fix for redox"
-
-[[audits.bytecode-alliance.audits.errno-dragonfly]]
-who = "Jamey Sharp <jsharp@fastly.com>"
-criteria = "safe-to-deploy"
-version = "0.1.2"
-notes = "This should be portable to any POSIX system and seems like it should be part of the libc crate, but at any rate it's safe as is."
 
 [[audits.bytecode-alliance.audits.fastrand]]
 who = "Alex Crichton <alex@alexcrichton.com>"
@@ -1204,12 +1110,6 @@ who = "Andrew Brown <andrew.brown@intel.com>"
 criteria = "safe-to-deploy"
 version = "1.1.0"
 notes = "No dependencies and completely a compile-time crate as advertised. Uses `unsafe` in one module as a compile-time check only: `mem::transmute` and `ptr::write` are wrapped in an impossible-to-run closure."
-
-[[audits.bytecode-alliance.audits.tempfile]]
-who = "Alex Crichton <alex@alexcrichton.com>"
-criteria = "safe-to-deploy"
-delta = "3.5.0 -> 3.6.0"
-notes = "Dependency updates and new optimized trait implementations, but otherwise everything looks normal."
 
 [[audits.bytecode-alliance.audits.thread_local]]
 who = "Pat Hickey <phickey@fastly.com>"
@@ -1490,20 +1390,6 @@ Previously reviewed during security review and the audit is grandparented in.
 """
 aggregated-from = "https://chromium.googlesource.com/chromium/src/+/main/third_party/rust/chromium_crates_io/supply-chain/audits.toml?format=TEXT"
 
-[[audits.google.audits.tokio-stream]]
-who = "David Koloski <dkoloski@google.com>"
-criteria = "safe-to-deploy"
-version = "0.1.11"
-notes = "Reviewed on https://fxrev.dev/804724"
-aggregated-from = "https://fuchsia.googlesource.com/fuchsia/+/refs/heads/main/third_party/rust_crates/supply-chain/audits.toml?format=TEXT"
-
-[[audits.google.audits.tokio-stream]]
-who = "David Koloski <dkoloski@google.com>"
-criteria = "safe-to-deploy"
-delta = "0.1.11 -> 0.1.14"
-notes = "Reviewed on https://fxrev.dev/907732."
-aggregated-from = "https://fuchsia.googlesource.com/fuchsia/+/refs/heads/main/third_party/rust_crates/supply-chain/audits.toml?format=TEXT"
-
 [[audits.google.audits.unicode-ident]]
 who = "Lukasz Anforowicz <lukasza@chromium.org>"
 criteria = "safe-to-deploy"
@@ -1684,18 +1570,6 @@ delta = "2.4.0 -> 2.4.1"
 notes = "Only allowing new clippy lints"
 aggregated-from = "https://raw.githubusercontent.com/mozilla/glean/main/supply-chain/audits.toml"
 
-[[audits.mozilla.audits.cc]]
-who = "Mike Hommey <mh+mozilla@glandium.org>"
-criteria = "safe-to-deploy"
-delta = "1.0.73 -> 1.0.78"
-aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
-
-[[audits.mozilla.audits.cc]]
-who = "Jan-Erik Rediger <jrediger@mozilla.com>"
-criteria = "safe-to-deploy"
-delta = "1.0.78 -> 1.0.83"
-aggregated-from = "https://raw.githubusercontent.com/mozilla/glean/main/supply-chain/audits.toml"
-
 [[audits.mozilla.audits.debugid]]
 who = "Gabriele Svelto <gsvelto@mozilla.com>"
 criteria = "safe-to-deploy"
@@ -1775,134 +1649,6 @@ criteria = "safe-to-deploy"
 version = "0.4.3"
 aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
 
-[[audits.mozilla.audits.icu_collections]]
-who = "Makoto Kato <m_kato@ga2.so-net.ne.jp>"
-criteria = "safe-to-deploy"
-version = "1.2.0"
-notes = "This crate is used by ICU4X for internal data structure. There is no fileaccess and network access. This uses unsafe block, but we confirm data is valid before."
-aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
-
-[[audits.mozilla.audits.icu_collections]]
-who = "Makoto Kato <m_kato@ga2.so-net.ne.jp>"
-criteria = "safe-to-deploy"
-delta = "1.2.0 -> 1.4.0"
-aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
-
-[[audits.mozilla.audits.icu_collections]]
-who = "Makoto Kato <m_kato@ga2.so-net.ne.jp>"
-criteria = "safe-to-deploy"
-delta = "1.4.0 -> 1.5.0"
-aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
-
-[[audits.mozilla.audits.icu_locid]]
-who = "Makoto Kato <m_kato@ga2.so-net.ne.jp>"
-criteria = "safe-to-deploy"
-version = "1.2.0"
-notes = "This has unsafe block to handle ascii string in utf-8 string. I've vetted the one instance of unsafe code."
-aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
-
-[[audits.mozilla.audits.icu_locid]]
-who = "Makoto Kato <m_kato@ga2.so-net.ne.jp>"
-criteria = "safe-to-deploy"
-delta = "1.2.0 -> 1.4.0"
-aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
-
-[[audits.mozilla.audits.icu_locid]]
-who = "Makoto Kato <m_kato@ga2.so-net.ne.jp>"
-criteria = "safe-to-deploy"
-delta = "1.4.0 -> 1.5.0"
-aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
-
-[[audits.mozilla.audits.icu_locid_transform]]
-who = "Makoto Kato <m_kato@ga2.so-net.ne.jp>"
-criteria = "safe-to-deploy"
-version = "1.4.0"
-notes = "This crate doesn't contain network and file access. Although this has unsafe block, the reason is added in the comment block. I audited code."
-aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
-
-[[audits.mozilla.audits.icu_locid_transform]]
-who = "Makoto Kato <m_kato@ga2.so-net.ne.jp>"
-criteria = "safe-to-deploy"
-delta = "1.4.0 -> 1.5.0"
-aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
-
-[[audits.mozilla.audits.icu_locid_transform_data]]
-who = "Jonathan Kew <jkew@mozilla.com>"
-criteria = "safe-to-deploy"
-version = "1.4.0"
-notes = "Compile-time static for the icu_locid_transform crate."
-aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
-
-[[audits.mozilla.audits.icu_locid_transform_data]]
-who = "Makoto Kato <m_kato@ga2.so-net.ne.jp>"
-criteria = "safe-to-deploy"
-delta = "1.4.0 -> 1.5.0"
-aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
-
-[[audits.mozilla.audits.icu_normalizer]]
-who = "Henri Sivonen <hsivonen@hsivonen.fi>"
-criteria = "safe-to-deploy"
-version = "1.5.0"
-notes = "I, Henri Sivonen, am the principal author of this crate."
-aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
-
-[[audits.mozilla.audits.icu_normalizer_data]]
-who = "Henri Sivonen <hsivonen@hsivonen.fi>"
-criteria = "safe-to-deploy"
-version = "1.5.0"
-aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
-
-[[audits.mozilla.audits.icu_properties_data]]
-who = "Jonathan Kew <jkew@mozilla.com>"
-criteria = "safe-to-deploy"
-version = "1.4.0"
-notes = "Compile-time static data for the icu_properties crate."
-aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
-
-[[audits.mozilla.audits.icu_properties_data]]
-who = "Makoto Kato <m_kato@ga2.so-net.ne.jp>"
-criteria = "safe-to-deploy"
-delta = "1.4.0 -> 1.5.0"
-aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
-
-[[audits.mozilla.audits.icu_provider]]
-who = "Makoto Kato <m_kato@ga2.so-net.ne.jp>"
-criteria = "safe-to-deploy"
-version = "1.2.0"
-notes = "Although this has unsafe block, this has a commnet why this is safety and I audited code. Also, this doesn't have file access and network access."
-aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
-
-[[audits.mozilla.audits.icu_provider]]
-who = "Makoto Kato <m_kato@ga2.so-net.ne.jp>"
-criteria = "safe-to-deploy"
-delta = "1.2.0 -> 1.4.0"
-aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
-
-[[audits.mozilla.audits.icu_provider]]
-who = "Makoto Kato <m_kato@ga2.so-net.ne.jp>"
-criteria = "safe-to-deploy"
-delta = "1.4.0 -> 1.5.0"
-aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
-
-[[audits.mozilla.audits.icu_provider_macros]]
-who = "Makoto Kato <m_kato@ga2.so-net.ne.jp>"
-criteria = "safe-to-deploy"
-version = "1.2.0"
-notes = "This crate is macros for ICU4X's data provider implementer. This has no unsafe code and uses no ambient capabilities."
-aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
-
-[[audits.mozilla.audits.icu_provider_macros]]
-who = "Makoto Kato <m_kato@ga2.so-net.ne.jp>"
-criteria = "safe-to-deploy"
-delta = "1.2.0 -> 1.4.0"
-aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
-
-[[audits.mozilla.audits.icu_provider_macros]]
-who = "Makoto Kato <m_kato@ga2.so-net.ne.jp>"
-criteria = "safe-to-deploy"
-delta = "1.4.0 -> 1.5.0"
-aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
-
 [[audits.mozilla.audits.idna]]
 who = "Valentin Gosu <valentin.gosu@gmail.com>"
 criteria = "safe-to-deploy"
@@ -1920,12 +1666,6 @@ aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-ch
 who = "Valentin Gosu <valentin.gosu@gmail.com>"
 criteria = "safe-to-deploy"
 delta = "1.0.2 -> 1.0.3"
-aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
-
-[[audits.mozilla.audits.idna_adapter]]
-who = "Valentin Gosu <valentin.gosu@gmail.com>"
-criteria = "safe-to-deploy"
-version = "1.2.0"
 aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
 
 [[audits.mozilla.audits.lazy_static]]
@@ -2018,35 +1758,6 @@ criteria = "safe-to-deploy"
 version = "0.10.5"
 aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
 
-[[audits.mozilla.audits.synstructure]]
-who = "Nika Layzell <nika@thelayzells.com>"
-criteria = "safe-to-deploy"
-version = "0.12.6"
-notes = """
-I am the primary author of the `synstructure` crate, and its current
-maintainer. The one use of `unsafe` is unnecessary, but documented and
-harmless. It will be removed in the next version.
-"""
-aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
-
-[[audits.mozilla.audits.synstructure]]
-who = "Mike Hommey <mh+mozilla@glandium.org>"
-criteria = "safe-to-deploy"
-delta = "0.12.6 -> 0.13.0"
-aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
-
-[[audits.mozilla.audits.synstructure]]
-who = "Mike Hommey <mh+mozilla@glandium.org>"
-criteria = "safe-to-deploy"
-delta = "0.13.0 -> 0.13.1"
-aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
-
-[[audits.mozilla.audits.tempfile]]
-who = "Mike Hommey <mh+mozilla@glandium.org>"
-criteria = "safe-to-deploy"
-delta = "3.6.0 -> 3.8.0"
-aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
-
 [[audits.mozilla.audits.textwrap]]
 who = "Jan-Erik Rediger <jrediger@mozilla.com>"
 criteria = "safe-to-deploy"
@@ -2077,29 +1788,26 @@ criteria = "safe-to-deploy"
 version = "0.2.6"
 aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
 
-[[audits.mozilla.audits.tinystr]]
-who = "Makoto Kato <m_kato@ga2.so-net.ne.jp>"
+[[audits.mozilla.audits.tracing]]
+who = "Alex Franchuk <afranchuk@mozilla.com>"
 criteria = "safe-to-deploy"
-version = "0.7.0"
-notes = "One of original auther was Zibi Braniecki who worked at Mozilla and maintained by ICU4X developers (Google and Mozilla). I've vetted the one instance of unsafe code."
+version = "0.1.37"
+notes = """
+There's only one unsafe impl, and its purpose is to ensure correct behavior by
+creating a non-Send marker type (it has nothing to do with soundness). All
+dependencies make sense, and no side-effectful std functions are used.
+"""
 aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
 
-[[audits.mozilla.audits.tinystr]]
-who = "Mike Hommey <mh+mozilla@glandium.org>"
+[[audits.mozilla.audits.tracing-core]]
+who = "Alex Franchuk <afranchuk@mozilla.com>"
 criteria = "safe-to-deploy"
-delta = "0.7.0 -> 0.7.1"
-aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
-
-[[audits.mozilla.audits.tinystr]]
-who = "Makoto Kato <m_kato@ga2.so-net.ne.jp>"
-criteria = "safe-to-deploy"
-delta = "0.7.1 -> 0.7.4"
-aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
-
-[[audits.mozilla.audits.tinystr]]
-who = "Makoto Kato <m_kato@ga2.so-net.ne.jp>"
-criteria = "safe-to-deploy"
-delta = "0.7.4 -> 0.7.6"
+version = "0.1.30"
+notes = """
+Most unsafe code is in implementing non-std sync primitives. Unsafe impls are
+logically correct and justified in comments, and unsafe code is sound and
+justified in comments.
+"""
 aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
 
 [[audits.mozilla.audits.unicode-bidi]]
@@ -2121,57 +1829,6 @@ criteria = "safe-to-deploy"
 delta = "0.3.14 -> 0.3.15"
 aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
 
-[[audits.mozilla.audits.url]]
-who = "Valentin Gosu <valentin.gosu@gmail.com>"
-criteria = "safe-to-deploy"
-version = "2.4.0"
-aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
-
-[[audits.mozilla.audits.url]]
-who = "Valentin Gosu <valentin.gosu@gmail.com>"
-criteria = "safe-to-deploy"
-delta = "2.4.0 -> 2.4.1"
-aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
-
-[[audits.mozilla.audits.url]]
-who = "Valentin Gosu <valentin.gosu@gmail.com>"
-criteria = "safe-to-deploy"
-delta = "2.4.1 -> 2.5.0"
-aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
-
-[[audits.mozilla.audits.utf16_iter]]
-who = "Henri Sivonen <hsivonen@hsivonen.fi>"
-criteria = "safe-to-deploy"
-version = "1.0.5"
-notes = "I, Henri Sivonen, wrote this crate."
-aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
-
-[[audits.mozilla.audits.write16]]
-who = "Henri Sivonen <hsivonen@hsivonen.fi>"
-criteria = "safe-to-deploy"
-version = "1.0.0"
-notes = "I, Henri Sivonen, wrote this (safe-code-only) crate."
-aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
-
-[[audits.mozilla.audits.writeable]]
-who = "Makoto Kato <m_kato@ga2.so-net.ne.jp>"
-criteria = "safe-to-deploy"
-version = "0.5.2"
-notes = "writeable is a variation of fmt::Write with sink version. This uses `unsafe` block to handle potentially-invalid UTF-8 character. I've vetted the one instance of unsafe code."
-aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
-
-[[audits.mozilla.audits.writeable]]
-who = "Makoto Kato <m_kato@ga2.so-net.ne.jp>"
-criteria = "safe-to-deploy"
-delta = "0.5.2 -> 0.5.4"
-aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
-
-[[audits.mozilla.audits.writeable]]
-who = "Makoto Kato <m_kato@ga2.so-net.ne.jp>"
-criteria = "safe-to-deploy"
-delta = "0.5.4 -> 0.5.5"
-aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
-
 [[audits.mozilla.audits.zerocopy]]
 who = "Alex Franchuk <afranchuk@mozilla.com>"
 criteria = "safe-to-deploy"
@@ -2190,47 +1847,4 @@ who = "Alex Franchuk <afranchuk@mozilla.com>"
 criteria = "safe-to-deploy"
 version = "0.7.32"
 notes = "Clean, safe macros for zerocopy."
-aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
-
-[[audits.mozilla.audits.zerovec]]
-who = "Makoto Kato <m_kato@ga2.so-net.ne.jp>"
-criteria = "safe-to-deploy"
-version = "0.9.4"
-notes = "This crate is zero-copy data structure implmentation. Although this uses unsafe block in several code, it requires for zero-copy. And this has a comment in code why this uses unsafe and I audited code."
-aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
-
-[[audits.mozilla.audits.zerovec]]
-who = "Makoto Kato <m_kato@ga2.so-net.ne.jp>"
-criteria = "safe-to-deploy"
-delta = "0.9.4 -> 0.10.1"
-aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
-
-[[audits.mozilla.audits.zerovec]]
-who = "Makoto Kato <m_kato@ga2.so-net.ne.jp>"
-criteria = "safe-to-deploy"
-delta = "0.10.1 -> 0.10.2"
-aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
-
-[[audits.mozilla.audits.zerovec]]
-who = "Mike Hommey <mh+mozilla@glandium.org>"
-criteria = "safe-to-deploy"
-delta = "0.10.2 -> 0.10.4"
-aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
-
-[[audits.mozilla.audits.zerovec-derive]]
-who = "Makoto Kato <m_kato@ga2.so-net.ne.jp>"
-criteria = "safe-to-deploy"
-version = "0.10.1"
-aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
-
-[[audits.mozilla.audits.zerovec-derive]]
-who = "Makoto Kato <m_kato@ga2.so-net.ne.jp>"
-criteria = "safe-to-deploy"
-delta = "0.10.1 -> 0.10.2"
-aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
-
-[[audits.mozilla.audits.zerovec-derive]]
-who = "Max Inden <mail@max-inden.de>"
-criteria = "safe-to-deploy"
-delta = "0.10.2 -> 0.10.3"
 aggregated-from = "https://hg.mozilla.org/mozilla-central/raw-file/tip/supply-chain/audits.toml"
