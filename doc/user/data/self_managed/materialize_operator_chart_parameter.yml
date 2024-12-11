@@ -719,7 +719,7 @@ parameters:
 
   - parameter: operator.image.tag
     description: ""
-    default: v0.125.2
+    default: v0.127.0-dev.0
     display: true
 
   - parameter: operator.nodeSelector
