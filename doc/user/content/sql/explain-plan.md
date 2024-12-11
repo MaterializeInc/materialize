@@ -182,6 +182,8 @@ With
         ReadStorage materialize.public.t
 ```
 
+<a name="explain-plan-columns"></a>
+
 Many operators need to refer to columns in their input. These are displayed like
 `#3` for column number 3. (Columns are numbered starting from column 0). To get a better sense of
 columns assigned to `Map` operators, it might be useful to request [the `arity` output modifier](#output-modifiers).
