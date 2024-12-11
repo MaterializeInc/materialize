@@ -31,7 +31,7 @@ use mz_ore::lgbytes::{LgBytes, MetricsRegion};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::task::RuntimeExt;
 use tokio::runtime::Handle as AsyncHandle;
-use tracing::{debug, debug_span, trace, trace_span, Instrument};
+use tracing::{debug, debug_span, info, trace, trace_span, Instrument};
 use uuid::Uuid;
 
 use crate::cfg::BlobKnobs;
@@ -68,6 +68,10 @@ impl ABSBlobConfig {
         // to periodically refresh credentials
         let client = if account == EMULATOR_ACCOUNT {
             let credentials = StorageCredentials::emulator();
+            info!(
+                "Account: {:?}, Container: {:?}, Credentials: {:?}",
+                account, container, credentials
+            );
             let service_client = BlobServiceClient::new(account, credentials);
             service_client.container_client(container)
         } else {
@@ -76,8 +80,6 @@ impl ABSBlobConfig {
             let service_client = BlobServiceClient::new(account, credentials);
             service_client.container_client(container)
         };
-
-        let credential = create_default_credential().expect("default Azure credentials working");
 
         Ok(ABSBlobConfig {
             metrics,
@@ -164,7 +166,7 @@ impl Blob for ABSBlob {
         let mut stream = blob.get().into_stream();
         while let Some(value) = stream.next().await {
             let response =
-                value.map_err(|e| ExternalError::from(anyhow!("Azure blob get error: {}", e)))?;
+                value.map_err(|e| ExternalError::from(anyhow!("Azure blob get error: {:?}", e)))?;
 
             let content_length = response.blob.properties.content_length;
             let mut buffer = self
