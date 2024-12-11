@@ -57,7 +57,7 @@ SELECT global_id, lir_id, parent_lir_id, REPEAT(' ', nesting * 2) || operator AS
 GROUP BY global_id, lir_id, operator, parent_lir_id, nesting
 ORDER BY global_id, lir_id DESC;
 ----
-u2  5  NULL  Join::Differential␠2»␠4
+u2  5  NULL  Join::Differential␠2␠»␠4
 u2  4  5  ␠␠Arrange␠3
 u2  3  4  ␠␠␠␠Get::Collection␠u1
 u2  2  5  ␠␠Arrange␠1
@@ -74,7 +74,7 @@ SELECT global_id, lir_id, parent_lir_id, repeat(' ', nesting * 2) || operator AS
 GROUP BY global_id, lir_id, operator, parent_lir_id, nesting
 ORDER BY global_id, lir_id DESC;
 ----
-u2  5  NULL  Join::Differential␠2»␠4
+u2  5  NULL  Join::Differential␠2␠»␠4
 u2  4  5  ␠␠Arrange␠3
 u2  3  4  ␠␠␠␠Get::Collection␠u1
 u2  2  5  ␠␠Arrange␠1
@@ -140,7 +140,7 @@ SELECT global_id, lir_id, parent_lir_id, REPEAT(' ', nesting * 2) || operator AS
 GROUP BY global_id, lir_id, operator, parent_lir_id, nesting
 ORDER BY global_id, lir_id DESC;
 ----
-t59  5  NULL  Join::Differential␠2»␠4
+t59  5  NULL  Join::Differential␠2␠»␠4
 t59  4  5  ␠␠Arrange␠3
 t59  3  4  ␠␠␠␠Get::Collection␠u4
 t59  2  5  ␠␠Arrange␠1
@@ -155,7 +155,7 @@ SELECT global_id, lir_id, parent_lir_id, REPEAT(' ', nesting * 2) || operator AS
 GROUP BY global_id, lir_id, operator, parent_lir_id, nesting
 ORDER BY global_id, lir_id DESC;
 ----
-t59  5  NULL  Join::Differential␠2»␠4
+t59  5  NULL  Join::Differential␠2␠»␠4
 t59  4  5  ␠␠Arrange␠3
 t59  3  4  ␠␠␠␠Get::Collection␠u4
 t59  2  5  ␠␠Arrange␠1
