@@ -51,7 +51,7 @@ mod tests {
             let features = OptimizerFeatures::default();
             let typecheck_ctx = typecheck::empty_context();
             let mut df_meta = DataflowMetainfo::default();
-            let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &mut df_meta);
+            let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &mut df_meta, None);
 
             #[allow(deprecated)]
             Optimizer::logical_optimizer(&mut transform_ctx)
@@ -179,7 +179,7 @@ mod tests {
         let features = OptimizerFeatures::default();
         let typecheck_ctx = typecheck::empty_context();
         let mut df_meta = DataflowMetainfo::default();
-        let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &mut df_meta);
+        let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &mut df_meta, None);
         let mut rel = parse_relation(s, cat, args)?;
         for t in args.get("apply").cloned().unwrap_or_else(Vec::new).iter() {
             get_transform(t)?.transform(&mut rel, &mut transform_ctx)?;
@@ -356,10 +356,11 @@ mod tests {
             let features = OptimizerFeatures::default();
             let typecheck_ctx = typecheck::empty_context();
             let mut df_meta = DataflowMetainfo::default();
-            let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &mut df_meta);
+            let mut transform_ctx =
+                TransformCtx::local(&features, &typecheck_ctx, &mut df_meta, None);
 
             #[allow(deprecated)]
-            let optimizer = Optimizer::logical_optimizer(&mut transform_ctx);
+            let mut optimizer = Optimizer::logical_optimizer(&mut transform_ctx);
             dataflow = dataflow
                 .into_iter()
                 .map(|(id, rel)| {
@@ -390,10 +391,11 @@ mod tests {
             let features = OptimizerFeatures::default();
             let typecheck_ctx = typecheck::empty_context();
             let mut df_meta = DataflowMetainfo::default();
-            let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &mut df_meta);
+            let mut transform_ctx =
+                TransformCtx::local(&features, &typecheck_ctx, &mut df_meta, None);
 
-            let log_optimizer = Optimizer::logical_cleanup_pass(&mut transform_ctx, true);
-            let phys_optimizer = Optimizer::physical_optimizer(&mut transform_ctx);
+            let mut log_optimizer = Optimizer::logical_cleanup_pass(&mut transform_ctx, true);
+            let mut phys_optimizer = Optimizer::physical_optimizer(&mut transform_ctx);
             dataflow = dataflow
                 .into_iter()
                 .map(|(id, rel)| {

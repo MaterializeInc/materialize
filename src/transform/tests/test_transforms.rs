@@ -263,7 +263,7 @@ fn apply_transform<T: mz_transform::Transform>(
     let typecheck_ctx = mz_transform::typecheck::empty_context();
     let mut df_meta = DataflowMetainfo::default();
     let mut transform_ctx =
-        mz_transform::TransformCtx::local(&features, &typecheck_ctx, &mut df_meta);
+        mz_transform::TransformCtx::local(&features, &typecheck_ctx, &mut df_meta, None);
 
     // Apply the transformation, returning early on TransformError.
     transform

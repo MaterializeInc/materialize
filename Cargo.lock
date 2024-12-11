@@ -7049,6 +7049,7 @@ dependencies = [
  "mz-lowertest",
  "mz-ore",
  "mz-repr",
+ "mz-sql",
  "num-traits",
  "ordered-float 4.2.0",
  "paste",

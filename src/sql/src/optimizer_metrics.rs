@@ -21,6 +21,9 @@ use prometheus::{HistogramVec, IntCounterVec};
 pub struct OptimizerMetrics {
     e2e_optimization_time_seconds: HistogramVec,
     outer_join_lowering_cases: IntCounterVec,
+    transform_hits: IntCounterVec,
+    transform_total: IntCounterVec,
+    transform_time_seconds: HistogramVec,
 }
 
 impl OptimizerMetrics {
@@ -36,6 +39,22 @@ impl OptimizerMetrics {
                 name: "outer_join_lowering_cases",
                 help: "How many times the different outer join lowering cases happened.",
                 var_labels: ["case"],
+            )),
+            transform_hits: registry.register(metric!(
+                name: "transform_hits",
+                help: "How many times a given transform changed the plan.",
+                var_labels: ["transform"],
+            )),
+            transform_total: registry.register(metric!(
+                name: "transform_total",
+                help: "How many times a given transform was applied.",
+                var_labels: ["transform"],
+            )),
+            transform_time_seconds: registry.register(metric!(
+                name: "transform_time_seconds",
+                help: "How long a given transform took.",
+                var_labels: ["transform"],
+                buckets: histogram_seconds_buckets(0.000_128, 8.0),
             )),
         }
     }
@@ -57,5 +76,28 @@ impl OptimizerMetrics {
         self.outer_join_lowering_cases
             .with_label_values(&[case])
             .inc()
+    }
+
+    pub fn inc_transform(&self, hit: bool, transform: &str) {
+        self.transform_hits
+            .with_label_values(&[transform])
+            .inc_by(hit as u64);
+        self.transform_total
+            .with_label_values(&[transform])
+            .inc();
+    }
+
+    pub fn observe_transform_time(&self, transform: &str, duration: Duration) {
+        self.transform_time_seconds
+            .with_label_values(&[transform])
+            .observe(duration.as_secs_f64());
+
+        if duration > Duration::from_millis(500) {
+            tracing::error!(
+                transform = transform,
+                duration = format!("{}ms", duration.as_millis()),
+                "a single optimizer transform took more than 500ms"
+            );
+        }
     }
 }

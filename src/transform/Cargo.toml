@@ -17,6 +17,7 @@ mz-compute-types = { path = "../compute-types" }
 mz-expr = { path = "../expr" }
 mz-ore = { path = "../ore" }
 mz-repr = { path = "../repr", features = ["tracing_"] }
+mz-sql = { path = "../sql" }
 num-traits = "0.2"
 ordered-float = { version = "4.2.0", features = ["serde"] }
 paste = "1.0.11"

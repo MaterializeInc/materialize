@@ -33,6 +33,7 @@ rust_library(
         "//src/expr:mz_expr",
         "//src/ore:mz_ore",
         "//src/repr:mz_repr",
+        "//src/sql:mz_sql",
     ] + all_crate_deps(normal = True),
 )
 
@@ -70,6 +71,7 @@ rust_test(
         "//src/lowertest:mz_lowertest",
         "//src/ore:mz_ore",
         "//src/repr:mz_repr",
+        "//src/sql:mz_sql",
     ] + all_crate_deps(
         normal = True,
         normal_dev = True,
@@ -87,6 +89,7 @@ rust_doc_test(
         "//src/lowertest:mz_lowertest",
         "//src/ore:mz_ore",
         "//src/repr:mz_repr",
+        "//src/sql:mz_sql",
     ] + all_crate_deps(
         normal = True,
         normal_dev = True,
@@ -124,6 +127,7 @@ rust_test(
         "//src/lowertest:mz_lowertest",
         "//src/ore:mz_ore",
         "//src/repr:mz_repr",
+        "//src/sql:mz_sql",
     ] + all_crate_deps(
         normal = True,
         normal_dev = True,
@@ -161,6 +165,7 @@ rust_test(
         "//src/lowertest:mz_lowertest",
         "//src/ore:mz_ore",
         "//src/repr:mz_repr",
+        "//src/sql:mz_sql",
     ] + all_crate_deps(
         normal = True,
         normal_dev = True,
