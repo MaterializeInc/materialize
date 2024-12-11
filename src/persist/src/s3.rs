@@ -16,7 +16,7 @@ use std::sync::atomic::{self, AtomicU64};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::anyhow;
+use anyhow::{anyhow, Context};
 use async_trait::async_trait;
 use aws_config::sts::AssumeRoleProvider;
 use aws_config::timeout::TimeoutConfig;
@@ -411,7 +411,7 @@ impl Blob for S3Blob {
         let first_part = match object {
             Ok(object) => object,
             Err(SdkError::ServiceError(err)) if err.err().is_no_such_key() => return Ok(None),
-            Err(err) => return Err(ExternalError::from(anyhow!("s3 get meta err: {}", err))),
+            Err(err) => Err(anyhow!(err).context("s3 get meta err"))?,
         };
 
         // Get the remaining number of parts
@@ -466,9 +466,7 @@ impl Blob for S3Blob {
                             .part_number(part_num)
                             .send()
                             .await
-                            .map_err(|err| {
-                                ExternalError::from(anyhow!("s3 get meta err: {}", err))
-                            })?;
+                            .context("s3 get meta err")?;
                         min_header_elapsed
                             .observe(header_start.elapsed(), "s3 download part header");
                         object
@@ -517,8 +515,7 @@ impl Blob for S3Blob {
                 };
 
                 while let Some(data) = object.body.next().await {
-                    let data =
-                        data.map_err(|err| Error::from(format!("s3 get body err: {}", err)))?;
+                    let data = data.context("s3 get body err")?;
                     match &mut buffer {
                         // Write to our single allocation, if it's enabled.
                         Some(buf) => buf.extend_from_slice(&data[..]),
@@ -553,7 +550,7 @@ impl Blob for S3Blob {
                 let body_elapsed = body_start.elapsed();
                 min_body_elapsed.observe(body_elapsed, "s3 download part body");
 
-                Ok::<_, Error>(body_parts)
+                Ok::<_, anyhow::Error>(body_parts)
             };
 
             body_futures.push_back(request_future);
@@ -562,9 +559,8 @@ impl Blob for S3Blob {
         // Await on all of our parts requests.
         let mut segments = vec![];
         while let Some(result) = body_futures.next().await {
-            let mut part_body = result
-                // Download failure, we failed to fetch the body from S3.
-                .map_err(|err| Error::from(format!("s3 get body err: {}", err)))?;
+            // Download failure, we failed to fetch the body from S3.
+            let mut part_body = result.context("s3 get body err")?;
 
             // Collect all of our segments.
             segments.append(&mut part_body);
@@ -601,7 +597,7 @@ impl Blob for S3Blob {
                 .set_continuation_token(continuation_token)
                 .send()
                 .await
-                .map_err(|err| Error::from(err.to_string()))?;
+                .context("list bucket error")?;
             if let Some(contents) = resp.contents {
                 for object in contents.iter() {
                     if let Some(key) = object.key.as_ref() {
@@ -678,7 +674,11 @@ impl Blob for S3Blob {
                 }
             },
             Err(SdkError::ServiceError(err)) if err.err().is_not_found() => return Ok(None),
-            Err(err) => return Err(ExternalError::from(anyhow!("s3 delete head err: {}", err))),
+            Err(err) => {
+                return Err(ExternalError::from(
+                    anyhow!(err).context("s3 delete head err"),
+                ))
+            }
         };
         self.metrics.delete_object.inc();
         let _ = self
@@ -688,7 +688,7 @@ impl Blob for S3Blob {
             .key(&path)
             .send()
             .await
-            .map_err(|err| Error::from(err.to_string()))?;
+            .context("s3 delete object err")?;
         Ok(Some(usize::cast_from(size_bytes)))
     }
 
@@ -710,7 +710,7 @@ impl Blob for S3Blob {
                 .max_keys(1)
                 .send()
                 .await
-                .map_err(|err| Error::from(err.to_string()))?;
+                .context("listing object versions during restore")?;
 
             let current_delete = list_res
                 .delete_markers()
@@ -732,7 +732,7 @@ impl Blob for S3Blob {
                     .version_id(version)
                     .send()
                     .await
-                    .map_err(|err| Error::from(err.to_string()))?;
+                    .context("deleting a delete marker")?;
                 assert!(
                     deleted.delete_marker().unwrap_or(false),
                     "deleting a delete marker"
@@ -772,7 +772,7 @@ impl S3Blob {
             .send()
             .instrument(part_span)
             .await
-            .map_err(|err| Error::from(err.to_string()))?;
+            .context("set single part")?;
         debug!(
             "s3 PutObject single done {}b / {:?}",
             value_len,
@@ -799,10 +799,10 @@ impl S3Blob {
             .send()
             .instrument(debug_span!("s3set_multi_start"))
             .await
-            .map_err(|err| Error::from(format!("create_multipart_upload err: {}", err)))?;
-        let upload_id = upload_res.upload_id().ok_or_else(|| {
-            Error::from("create_multipart_upload response missing upload_id".to_string())
-        })?;
+            .context("create_multipart_upload err")?;
+        let upload_id = upload_res
+            .upload_id()
+            .ok_or_else(|| anyhow!("create_multipart_upload response missing upload_id"))?;
         trace!(
             "s3 create_multipart_upload took {:?}",
             start_overall.elapsed()
@@ -855,12 +855,11 @@ impl S3Blob {
         for (part_num, part_fut) in part_futs.into_iter() {
             let (this_part_elapsed, part_res) = part_fut
                 .await
-                .map_err(|err| Error::from(format!("s3 spawn err: {}", err)))?;
-            let part_res =
-                part_res.map_err(|err| Error::from(format!("s3 upload_part err: {}", err)))?;
+                .map_err(|err| anyhow!(err).context("s3 spawn err"))?;
+            let part_res = part_res.context("s3 upload_part err")?;
             let part_e_tag = part_res
                 .e_tag()
-                .ok_or_else(|| Error::from("s3 upload part missing e_tag"))?;
+                .ok_or_else(|| anyhow!("s3 upload part missing e_tag"))?;
             parts.push(
                 CompletedPart::builder()
                     .e_tag(part_e_tag)
@@ -901,7 +900,7 @@ impl S3Blob {
             .send()
             .instrument(debug_span!("s3set_multi_complete", num_parts = parts_len))
             .await
-            .map_err(|err| Error::from(format!("complete_multipart_upload err: {}", err)))?;
+            .context("complete_multipart_upload err")?;
         trace!(
             "s3 complete_multipart_upload took {:?}",
             start_complete.elapsed()
