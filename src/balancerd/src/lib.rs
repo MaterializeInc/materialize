@@ -88,8 +88,8 @@ pub struct BalancerConfig {
     pgwire_listen_addr: SocketAddr,
     /// Listen address for HTTPS connections.
     https_listen_addr: SocketAddr,
-    /// Cancellation resolver configmap directory.
-    cancellation_resolver_dir: Option<PathBuf>,
+    /// DNS resolver for pgwire cancellation requests
+    cancellation_resolver: CancellationResolver,
     /// DNS resolver.
     resolver: Resolver,
     https_addr_template: String,
@@ -112,7 +112,7 @@ impl BalancerConfig {
         internal_http_listen_addr: SocketAddr,
         pgwire_listen_addr: SocketAddr,
         https_listen_addr: SocketAddr,
-        cancellation_resolver_dir: Option<PathBuf>,
+        cancellation_resolver: CancellationResolver,
         resolver: Resolver,
         https_addr_template: String,
         tls: Option<TlsCertConfig>,
@@ -132,7 +132,7 @@ impl BalancerConfig {
             internal_http_listen_addr,
             pgwire_listen_addr,
             https_listen_addr,
-            cancellation_resolver_dir,
+            cancellation_resolver,
             resolver,
             https_addr_template,
             tls,
@@ -285,15 +285,9 @@ impl BalancerService {
         let internal_http_addr = self.internal_http.0.local_addr();
 
         {
-            if let Some(dir) = &self.cfg.cancellation_resolver_dir {
-                if !dir.is_dir() {
-                    anyhow::bail!("{dir:?} is not a directory");
-                }
-            }
-            let cancellation_resolver = self.cfg.cancellation_resolver_dir.map(Arc::new);
             let pgwire = PgwireBalancer {
                 resolver: Arc::new(self.cfg.resolver),
-                cancellation_resolver,
+                cancellation_resolver: Arc::new(self.cfg.cancellation_resolver),
                 tls: pgwire_tls,
                 internal_tls: self.cfg.internal_tls,
                 metrics: ServerMetrics::new(metrics.clone(), "pgwire"),
@@ -568,10 +562,15 @@ impl ServerMetrics {
     }
 }
 
+pub enum CancellationResolver {
+    Directory(PathBuf),
+    Static(String),
+}
+
 struct PgwireBalancer {
     tls: Option<ReloadingTlsConfig>,
     internal_tls: bool,
-    cancellation_resolver: Option<Arc<PathBuf>>,
+    cancellation_resolver: Arc<CancellationResolver>,
     resolver: Arc<Resolver>,
     metrics: ServerMetrics,
 }
@@ -749,7 +748,7 @@ impl mz_server_core::Server for PgwireBalancer {
         let resolver = Arc::clone(&self.resolver);
         let inner_metrics = self.metrics.clone();
         let outer_metrics = self.metrics.clone();
-        let cancellation_resolver = self.cancellation_resolver.clone();
+        let cancellation_resolver = Arc::clone(&self.cancellation_resolver);
         let conn_uuid = Uuid::new_v4();
         let peer_addr = conn.peer_addr();
         conn.uuid_handle().set(conn_uuid);
@@ -823,11 +822,9 @@ impl mz_server_core::Server for PgwireBalancer {
                             conn_id,
                             secret_key,
                         }) => {
-                            if let Some(resolver) = cancellation_resolver {
-                                spawn(|| "cancel request", async move {
-                                    cancel_request(conn_id, secret_key, &resolver).await;
-                                });
-                            }
+                            spawn(|| "cancel request", async move {
+                                cancel_request(conn_id, secret_key, &cancellation_resolver).await;
+                            });
                             // Do not wait on cancel requests to return because cancellation is best
                             // effort.
                             return Ok(());
@@ -956,15 +953,24 @@ where
 /// bits of randomness, and the secret key the full 32, for a total of 51 bits. That is more than
 /// 2e15 combinations, enough to nearly certainly prevent two different envds generating identical
 /// combinations.
-async fn cancel_request(conn_id: u32, secret_key: u32, cancellation_resolver: &PathBuf) {
+async fn cancel_request(
+    conn_id: u32,
+    secret_key: u32,
+    cancellation_resolver: &CancellationResolver,
+) {
     let suffix = conn_id_org_uuid(conn_id);
-    let path = cancellation_resolver.join(&suffix);
-    let contents = match std::fs::read_to_string(&path) {
-        Ok(contents) => contents,
-        Err(err) => {
-            error!("could not read cancel file {path:?}: {err}");
-            return;
+    let contents = match cancellation_resolver {
+        CancellationResolver::Directory(dir) => {
+            let path = dir.join(&suffix);
+            match std::fs::read_to_string(&path) {
+                Ok(contents) => contents,
+                Err(err) => {
+                    error!("could not read cancel file {path:?}: {err}");
+                    return;
+                }
+            }
         }
+        CancellationResolver::Static(addr) => addr.to_owned(),
     };
     let mut all_ips = Vec::new();
     for addr in contents.lines() {

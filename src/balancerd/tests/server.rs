@@ -18,7 +18,9 @@ use std::time::Duration;
 use chrono::Utc;
 use futures::StreamExt;
 use jsonwebtoken::{DecodingKey, EncodingKey};
-use mz_balancerd::{BalancerConfig, BalancerService, FronteggResolver, Resolver, BUILD_INFO};
+use mz_balancerd::{
+    BalancerConfig, BalancerService, CancellationResolver, FronteggResolver, Resolver, BUILD_INFO,
+};
 use mz_environmentd::test_util::{self, make_pg_tls, Ca};
 use mz_frontegg_auth::{
     Authenticator as FronteggAuthentication, AuthenticatorConfig as FronteggConfig,
@@ -121,12 +123,31 @@ async fn test_balancer() {
     let envid = config.environment_id.clone();
     let envd_server = config.start().await;
 
+    let cancel_dir = tempfile::tempdir().unwrap();
+    let cancel_name = conn_id_org_uuid(org_id_conn_bits(&envid.organization_id()));
+    std::fs::write(
+        cancel_dir.path().join(cancel_name),
+        format!(
+            "{}\n{}",
+            envd_server.inner.sql_local_addr(),
+            // Ensure that multiline files and non-existent addresses both work.
+            "non-existent-addr:1234",
+        ),
+    )
+    .unwrap();
+
     let resolvers = vec![
-        Resolver::Static(envd_server.inner.sql_local_addr().to_string()),
-        Resolver::Frontegg(FronteggResolver {
-            auth: frontegg_auth,
-            addr_template: envd_server.inner.sql_local_addr().to_string(),
-        }),
+        (
+            Resolver::Static(envd_server.inner.sql_local_addr().to_string()),
+            CancellationResolver::Static(envd_server.inner.sql_local_addr().to_string()),
+        ),
+        (
+            Resolver::Frontegg(FronteggResolver {
+                auth: frontegg_auth,
+                addr_template: envd_server.inner.sql_local_addr().to_string(),
+            }),
+            CancellationResolver::Directory(cancel_dir.path().to_owned()),
+        ),
     ];
     let cert_config = Some(TlsCertConfig {
         cert: server_cert.clone(),
@@ -142,20 +163,8 @@ async fn test_balancer() {
         .tls_info(true)
         .build()
         .unwrap();
-    let cancel_dir = tempfile::tempdir().unwrap();
-    let cancel_name = conn_id_org_uuid(org_id_conn_bits(&envid.organization_id()));
-    std::fs::write(
-        cancel_dir.path().join(cancel_name),
-        format!(
-            "{}\n{}",
-            envd_server.inner.sql_local_addr(),
-            // Ensure that multiline files and non-existent addresses both work.
-            "non-existent-addr:1234",
-        ),
-    )
-    .unwrap();
 
-    for resolver in resolvers {
+    for (resolver, cancellation_resolver) in resolvers {
         let (mut reload_tx, reload_rx) = futures::channel::mpsc::channel(1);
         let ticker = Box::pin(reload_rx);
         let is_frontegg_resolver = matches!(resolver, Resolver::Frontegg(_));
@@ -164,7 +173,7 @@ async fn test_balancer() {
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
-            Some(cancel_dir.path().to_path_buf()),
+            cancellation_resolver,
             resolver,
             envd_server.inner.http_local_addr().to_string(),
             cert_config.clone(),
