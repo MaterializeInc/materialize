@@ -13,6 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::sync::Arc;
 
+use bytes::Bytes;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_durable_cache::{DurableCache, DurableCacheCodec};
 use mz_dyncfg::ConfigSet;
@@ -81,9 +82,9 @@ impl DurableCacheCodec for ExpressionCodec {
     type Key = CacheKey;
     // We use a raw bytes instead of `Expressions` so that there is no backwards compatibility
     // requirement on `Expressions` between versions.
-    type Val = Vec<u8>;
-    type KeyCodec = Vec<u8>;
-    type ValCodec = Vec<u8>;
+    type Val = Bytes;
+    type KeyCodec = Bytes;
+    type ValCodec = Bytes;
 
     fn schemas() -> (
         <Self::KeyCodec as Codec>::Schema,
@@ -94,7 +95,7 @@ impl DurableCacheCodec for ExpressionCodec {
 
     fn encode(key: &Self::Key, val: &Self::Val) -> (Self::KeyCodec, Self::ValCodec) {
         let key = bincode::serialize(key).expect("must serialize");
-        (key, val.clone())
+        (Bytes::from(key), val.clone())
     }
 
     fn decode(key: &Self::KeyCodec, val: &Self::ValCodec) -> (Self::Key, Self::Val) {
@@ -289,7 +290,7 @@ impl ExpressionCache {
         }
         for (id, expressions) in new_local_expressions {
             let expressions = match bincode::serialize(&expressions) {
-                Ok(expressions) => expressions,
+                Ok(expressions) => Bytes::from(expressions),
                 Err(err) => {
                     soft_panic_or_log!(
                         "unable to serialize local expressions: {expressions:?}: {err:?}"
@@ -308,7 +309,7 @@ impl ExpressionCache {
         }
         for (id, expressions) in new_global_expressions {
             let expressions = match bincode::serialize(&expressions) {
-                Ok(expressions) => expressions,
+                Ok(expressions) => Bytes::from(expressions),
                 Err(err) => {
                     soft_panic_or_log!(
                         "unable to serialize global expressions: {expressions:?}: {err:?}"
@@ -415,6 +416,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
+    use bytes::Bytes;
     use mz_compute_types::dataflows::DataflowDescription;
     use mz_durable_cache::DurableCacheCodec;
     use mz_dyncfg::ConfigSet;
@@ -836,7 +838,7 @@ mod tests {
             let local_tree: ArbitraryTimeout<LocalExpressions> = ArbitraryTimeout::new();
             let val = local_tree.generate();
 
-            let bincode_val = bincode::serialize(&val).expect("must serialize");
+            let bincode_val = Bytes::from(bincode::serialize(&val).expect("must serialize"));
             let (encoded_key, encoded_val) = ExpressionCodec::encode(&key, &bincode_val);
             let (decoded_key, decoded_val) = ExpressionCodec::decode(&encoded_key, &encoded_val);
             let decoded_val: LocalExpressions = bincode::deserialize(&decoded_val).expect("local expressions should roundtrip");
@@ -851,7 +853,7 @@ mod tests {
             let global_tree: ArbitraryTimeout<GlobalExpressions> = ArbitraryTimeout::new();
             let val = global_tree.generate();
 
-            let bincode_val = bincode::serialize(&val).expect("must serialize");
+            let bincode_val = Bytes::from(bincode::serialize(&val).expect("must serialize"));
             let (encoded_key, encoded_val) = ExpressionCodec::encode(&key, &bincode_val);
             let (decoded_key, decoded_val) = ExpressionCodec::decode(&encoded_key, &encoded_val);
             let decoded_val: GlobalExpressions = bincode::deserialize(&decoded_val).expect("global expressions should roundtrip");
