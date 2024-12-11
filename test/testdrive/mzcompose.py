@@ -123,9 +123,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         == "false"
         else "false"
     )
-    print(additional_system_parameter_defaults)
-    print(leaves_tombstones)
-
     materialized = Materialized(
         default_size=args.default_size,
         external_minio=True,
