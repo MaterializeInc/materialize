@@ -10,26 +10,27 @@
 # Operator configuration for orchestrating Materialize
 operator:
   image:
-    # The Docker repository for the operator image
+    # -- The Docker repository for the operator image
     repository: materialize/orchestratord
-    # The tag/version of the operator image to be used
+    # -- The tag/version of the operator image to be used
     tag: v0.128.0-dev.0
-    # Policy for pulling the image: "IfNotPresent" avoids unnecessary re-pulling of images
+    # -- Policy for pulling the image: "IfNotPresent" avoids unnecessary re-pulling of images
     pullPolicy: IfNotPresent
 
+
   args:
-    # Log filtering settings for startup logs
+    # -- Log filtering settings for startup logs
     startupLogFilter: "INFO,mz_orchestratord=TRACE"
     enableInternalStatementLogging: true
 
   features:
-    # Flag to indicate whether to create balancerd pods for the environments
+    # -- Flag to indicate whether to create balancerd pods for the environments
     createBalancers: true
-    # Flag to indicate whether to create console pods for the environments
+    # -- Flag to indicate whether to create console pods for the environments
     createConsole: true
-    # Override the mapping of environmentd versions to console versions
+    # -- Override the mapping of environmentd versions to console versions
     consoleImageTagMapOverride: {}
-    # Whether to enable environmentd rbac checks
+    # -- Whether to enable environmentd rbac checks
     # TODO: this is not yet supported in the helm chart
     authentication: false
 
@@ -37,7 +38,7 @@ operator:
   cloudProvider:
     type: "local"
 
-    # Common cloud provider settings
+    # -- Common cloud provider settings
     region: "kind"
 
     # Provider-specific configurations
@@ -45,21 +46,22 @@ operator:
       # AWS Configuration
       aws:
         enabled: false
-        # When using AWS, accountID is required
+        # -- When using AWS, accountID is required
         accountID: ""
         iam:
           roles:
-            # ARN of the IAM role for environmentd
+            # -- ARN of the IAM role for environmentd
             environment: ""
-            # ARN for CREATE CONNECTION feature
+            # -- ARN for CREATE CONNECTION feature
             connection: ""
 
-      # GCP Configuration (placeholder for future use)
+      # -- GCP Configuration (placeholder for future use)
       gcp:
         enabled: false
         # TODO: Add any other additions for GCP-specific configurations
 
   clusters:
+    # @ignored
     sizes:
       mz_probe:
         workers: 1
@@ -200,45 +202,45 @@ operator:
   # Node selector to use for the operator pod
   nodeSelector: {}
   resources:
-    # Resources requested by the operator for CPU and memory
+    # -- Resources requested by the operator for CPU and memory
     requests:
       cpu: 100m
       memory: 512Mi
-    # Resource limits for the operator's CPU and memory
+    # -- Resource limits for the operator's CPU and memory
     limits:
       memory: 512Mi
 
 environmentd:
-  # Node selector to use for environmentd pods spawned by the operator
+  # -- Node selector to use for environmentd pods spawned by the operator
   nodeSelector: {}
 
 clusterd:
-  # Node selector to use for clusterd pods spawned by the operator
+  # -- Node selector to use for clusterd pods spawned by the operator
   nodeSelector: {}
 
 # RBAC (Role-Based Access Control) settings
 rbac:
-  # Whether to create necessary RBAC roles and bindings
+  # -- Whether to create necessary RBAC roles and bindings
   create: true
 
 # Service account settings
 serviceAccount:
-  # Whether to create a new service account for the operator
+  # -- Whether to create a new service account for the operator
   create: true
-  # The name of the service account to be created
+  # -- The name of the service account to be created
   name: "orchestratord"
 
 # Observability settings (disabled in this case)
 observability:
   enabled: true
   podMetrics:
-    # Whether to enable the pod metrics scraper which populates the
+    # -- Whether to enable the pod metrics scraper which populates the
     # Environment Overview Monitoring tab in the web console (requires
     # metrics-server to be installed)
     enabled: false
   prometheus:
     scrapeAnnotations:
-        # Whether to annotate pods with common keys used for prometheus scraping.
+      # -- Whether to annotate pods with common keys used for prometheus scraping.
       enabled: true
 
 telemetry:
@@ -248,18 +250,18 @@ telemetry:
 
 # Network policies configuration
 networkPolicies:
-  # Whether to enable network policies for securing communication between pods
+  # -- Whether to enable network policies for securing communication between pods
   enabled: false
-  # internal communication between Materialize pods
+  # -- internal communication between Materialize pods
   internal:
     enabled: false
-  # ingress to the SQL and HTTP interfaces
+  # -- ingress to the SQL and HTTP interfaces
   # on environmentd or balancerd
   ingress:
     enabled: false
     cidrs:
     - 0.0.0.0/0
-  # egress from Materialize pods to sources and sinks
+  # -- egress from Materialize pods to sources and sinks
   egress:
     enabled: false
     cidrs:
@@ -287,16 +289,16 @@ tls:
 # Storage configuration
 storage:
   storageClass:
-    # Set to false to use an existing StorageClass instead
+    # -- Set to false to use an existing StorageClass instead
     create: false
 
-    # Name of the StorageClass to create/use: eg "openebs-lvm-instance-store-ext4"
+    # -- Name of the StorageClass to create/use: eg "openebs-lvm-instance-store-ext4"
     name: ""
 
-    # CSI driver to use, eg "local.csi.openebs.io"
+    # -- CSI driver to use, eg "local.csi.openebs.io"
     provisioner: ""
 
-    # Parameters for the CSI driver
+    # -- Parameters for the CSI driver
     parameters:
       storage: "lvm"
       fsType: "ext4"

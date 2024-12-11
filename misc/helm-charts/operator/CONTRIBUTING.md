@@ -23,6 +23,8 @@ This command updates the `README.md` file based on the chart's `values.yaml` fil
 
 Make sure you have `helm-docs` installed. You can install it by following the instructions [here](https://github.com/norwoodj/helm-docs).
 
+If you want to ignore a specific section in the `values.yaml` file, you can add the `# @ignored` tag to the section you want to ignore.
+
 ## Linting
 
 Before submitting a pull request, lint your changes using the `helm lint` command:
