@@ -798,6 +798,10 @@ impl S3Blob {
             .key(&path)
             .customize()
             .mutate_request(|req| {
+                // By default the Rust AWS SDK does not set the Content-Length
+                // header on POST calls with empty bodies. This is fine for S3,
+                // but when running against GCS's S3 interop mode these calls
+                // will be rejected unless we set this header manually.
                 req.headers_mut().insert("Content-Length", "0");
             })
             .send()
