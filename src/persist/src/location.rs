@@ -108,7 +108,11 @@ impl std::fmt::Display for Determinate {
     }
 }
 
-impl std::error::Error for Determinate {}
+impl std::error::Error for Determinate {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.inner.source()
+    }
+}
 
 impl Determinate {
     /// Return a new Determinate wrapping the given error.
@@ -142,7 +146,11 @@ impl std::fmt::Display for Indeterminate {
     }
 }
 
-impl std::error::Error for Indeterminate {}
+impl std::error::Error for Indeterminate {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.inner.source()
+    }
+}
 
 /// An impl of PartialEq purely for convenience in tests and debug assertions.
 #[cfg(any(test, debug_assertions))]
@@ -193,7 +201,14 @@ impl std::fmt::Display for ExternalError {
     }
 }
 
-impl std::error::Error for ExternalError {}
+impl std::error::Error for ExternalError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ExternalError::Determinate(e) => e.source(),
+            ExternalError::Indeterminate(e) => e.source(),
+        }
+    }
+}
 
 /// An impl of PartialEq purely for convenience in tests and debug assertions.
 #[cfg(any(test, debug_assertions))]
