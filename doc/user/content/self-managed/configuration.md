@@ -19,18 +19,15 @@ You can configure the Materialize operator chart. For example:
 
   Network policies can be enabled by setting
   [`networkPolicies.enabled=true`](/self-managed/configuration/#networkpoliciesenabled).
-  By default, the chart uses native Kubernetes network policies. To use Cilium
-  network policies instead, set
-  `networkPolicies.useNativeKubernetesPolicy=false`.
+  By default, the chart uses native Kubernetes network policies. For additional network policy configuration options, see [`networkPolicies` parameters](#networkpolicies-parameters).
 
 - **Observability**
 
   To enable observability features, set
   [`observability.enabled=true`](/self-managed/configuration/#observabilityenabled).
-  This will create the necessary resources for monitoring the operator. If you
-  want to use Prometheus, also set
-  [`observability.prometheus.enabled=true`](/self-managed/configuration/#observabilityprometheusenabled).
-
+  This will create the necessary resources for monitoring the operator. For
+  additional observability configuraiton options, see [`observability`
+  parameters](#observability-parameters).
 
 ## Configure the Materialize operator chart
 

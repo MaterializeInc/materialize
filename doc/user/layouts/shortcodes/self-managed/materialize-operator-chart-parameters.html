@@ -17,7 +17,7 @@
 
 #### {{ .parameter }}
 
-**Default**: {{ if .default }} <code>{{ .default | $.Page.RenderString }}</code> {{ end }}
+**Default**: <code>{{ .default | $.Page.RenderString }}</code>
 
 {{.description  | $.Page.RenderString }}
 

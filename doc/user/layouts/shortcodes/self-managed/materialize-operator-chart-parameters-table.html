@@ -12,9 +12,7 @@
 <tr>
 <td><a href='#{{ replace .parameter "." "" | urlize}}'><code>{{ .parameter }}</code></a></td>
 <td>
-{{ if .default }}
 <code>{{ .default }}</code>
-{{ end }}
 </td>
 </tr>
 {{ end }}

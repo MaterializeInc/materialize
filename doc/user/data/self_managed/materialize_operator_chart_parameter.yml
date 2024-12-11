@@ -45,9 +45,20 @@ parameters:
     default: false
     display: true
 
-  - parameter: observability.prometheus.enabled
+  - parameter: observability.podMetrics.enabled
     description: ""
     default: false
+    display: true
+
+
+  - parameter: observability.prometheus.scrapeAnnotations.enabled
+    description: ""
+    default: true
+    display: true
+
+  - parameter: operator.args.enableInternalStatementLogging
+    description: ""
+    default: true
     display: true
 
   - parameter: operator.args.startupLogFilter
@@ -83,8 +94,6 @@ parameters:
   - parameter: operator.cloudProvider.region
     description: |
       The region to use for the cloud provider.
-
-
     default: "kind"
     display: true
 
