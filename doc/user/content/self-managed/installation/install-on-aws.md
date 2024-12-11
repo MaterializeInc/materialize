@@ -68,7 +68,7 @@ If you don't have Helm version 3.2.0+ installed, refer to the [Helm
 documentation](https://helm.sh/docs/intro/install/).
 
 
-## 1. Install the Materialize Operator
+## A. Install the Materialize Operator
 
 1. If installing for the first time, create a namespace. The default
    configuration uses the `materialize` namespace.
@@ -144,7 +144,7 @@ documentation](https://helm.sh/docs/intro/install/).
     kubectl get all -n materialize
     ```
 
-## 2. Install Materialize
+## B. Install Materialize
 
 To deploy Materialize:
 

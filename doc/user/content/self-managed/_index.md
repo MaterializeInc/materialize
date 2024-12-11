@@ -15,6 +15,18 @@ Kubernetes environment. For self-managed Materialize, Materialize offers:
 - Materialize packaged as a containerized application that can be deployed in a
   Kubernetes cluster.
 
+## Requirements
+
+The self-managed Materialize requires the following:
+
+- Kubernetes (v1.19+) environment.
+
+- PostgreSQL or CockroachDB as a metadata database.
+
+- Blob storage.
+
+See the [Installation guide](/self-managed/installation/) for more information.
+
 ## Recommended instance types
 
 Materialize has been tested to work on instances with the following properties:

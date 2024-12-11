@@ -5,8 +5,16 @@ robots: "noindex, nofollow"
 ---
 
 The following tutorial deploys Materialize onto a local
-[`minikube`](https://minikube.sigs.k8s.io/docs/start/) cluster. The tutorial
-deploys the following components onto your local `minikube` cluster:
+[`minikube`](https://minikube.sigs.k8s.io/docs/start/) cluster. Self-managed Materialize requires:
+
+- A Kubernetes (v1.19+) environment.
+
+- PostgreSQL or CockroachDB as a metadata database.
+
+- Blob storage.
+
+The tutorial deploys the following components onto your local `minikube`
+cluster:
 
 - Materialize Operator using Helm into your local `minikube` cluster.
 - MinIO object storage as the blob storage for your Materialize.
@@ -40,10 +48,6 @@ the specific container/VM manager documentation.
 
 If you don't have Helm version 3.2.0+ installed, refer to the [Helm
 documentation](https://helm.sh/docs/intro/install/).
-
-### Kubernetes
-
-Materialize supports [Kubernetes 1.19+](https://kubernetes.io/docs/setup/).
 
 ### `kubectl`
 
