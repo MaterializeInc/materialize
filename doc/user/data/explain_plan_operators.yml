@@ -22,6 +22,8 @@ operators:
     uses_memory: False
     memory_details: ""
     expansive: False
+    expansive_details: |
+      Each row has _less_ data (i.e., shorter rows, but same number of rows).
 
     example: "`Get materialize.public.ordered`"
 
@@ -49,7 +51,7 @@ operators:
   - operator: FlatMap
     plan_types: "optimized"
     description: |
-      Appends the result of some [table function](/sql/functions/#table-functions) to each row in the input.
+      Appends the result of some (one-to-many) [table function](/sql/functions/#table-functions) to each row in the input.
     uses_memory: False
     memory_details: ""
     expansive: True
@@ -60,7 +62,7 @@ operators:
   - operator: CallTable
     plan_types: "raw"
     description: |
-      Appends the result of some [table function](/sql/functions/#table-functions) to each row in the input.
+      Appends the result of some (one-to-many) [table function](/sql/functions/#table-functions) to each row in the input.
     uses_memory: False
     memory_details: ""
     expansive: True
@@ -76,6 +78,8 @@ operators:
     memory_details: ""
     expansive: False
     example: "`Filter (#20 < #21)`"
+    expansive_details: |
+      May reduce the number of rows.
 
   - operator: ~Join
     plan_types: "raw"
