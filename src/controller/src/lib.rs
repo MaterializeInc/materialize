@@ -26,7 +26,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::mem;
 use std::num::NonZeroI64;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use futures::future::BoxFuture;
 use mz_build_info::BuildInfo;
@@ -65,6 +65,7 @@ use mz_txn_wal::metrics::Metrics as TxnMetrics;
 use serde::Serialize;
 use timely::progress::{Antichain, Timestamp};
 use tokio::sync::mpsc;
+use tracing::info;
 use uuid::Uuid;
 
 pub mod clusters;
@@ -638,6 +639,7 @@ where
         read_only: bool,
         storage_txn: &dyn StorageTxn<T>,
     ) -> Self {
+        let start = Instant::now();
         if read_only {
             tracing::info!("starting controllers in read-only mode!");
         }
@@ -652,6 +654,9 @@ where
 
         let controller_metrics = ControllerMetrics::new(&config.metrics_registry);
 
+        info!("CONTROLLER LOOK HERE: preamble took {:?}", start.elapsed());
+
+        let start = Instant::now();
         let txns_metrics = Arc::new(TxnMetrics::new(&config.metrics_registry));
         let collections_ctl = storage_collections::StorageCollectionsImpl::new(
             config.persist_location.clone(),
@@ -665,7 +670,12 @@ where
             storage_txn,
         )
         .await;
+        info!(
+            "CONTROLLER LOOK HERE: new storage collections took {:?}",
+            start.elapsed()
+        );
 
+        let start = Instant::now();
         let collections_ctl: Arc<dyn StorageCollections<Timestamp = T> + Send + Sync> =
             Arc::new(collections_ctl);
 
@@ -685,7 +695,12 @@ where
             Arc::clone(&collections_ctl),
         )
         .await;
+        info!(
+            "CONTROLLER LOOK HERE: new controller took {:?}",
+            start.elapsed()
+        );
 
+        let start = Instant::now();
         let storage_collections = Arc::clone(&collections_ctl);
         let compute_controller = ComputeController::new(
             config.build_info,
@@ -725,6 +740,7 @@ where
             this.remove_past_generation_replicas_in_background();
         }
 
+        info!("CONTROLLER LOOK HERE: postamble took {:?}", start.elapsed());
         this
     }
 }

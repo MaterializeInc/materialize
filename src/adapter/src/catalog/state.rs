@@ -90,6 +90,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
+use crate::catalog::apply::ApplyItemTimings;
 use crate::catalog::{Catalog, ConnCatalog};
 use crate::coord::ConnMeta;
 use crate::optimize::{self, Optimize, OptimizerCatalog};
@@ -934,12 +935,19 @@ impl CatalogState {
         create_sql: &str,
         pcx: Option<&PlanContext>,
         catalog: &ConnCatalog,
-    ) -> Result<(Plan, ResolvedIds), AdapterError> {
+    ) -> Result<(Plan, ResolvedIds, ApplyItemTimings), AdapterError> {
+        let mut item_timings = ApplyItemTimings::new();
+        let parse_start = Instant::now();
         let stmt = mz_sql::parse::parse(create_sql)?.into_element().ast;
+        item_timings.parse_duration += parse_start.elapsed();
+        let resolve_start = Instant::now();
         let (stmt, resolved_ids) = mz_sql::names::resolve(catalog, stmt)?;
+        item_timings.resolve_duration += resolve_start.elapsed();
+        let plan_start = Instant::now();
         let plan = mz_sql::plan::plan(pcx, catalog, stmt, &Params::empty(), &resolved_ids)?;
+        item_timings.plan_duration += plan_start.elapsed();
 
-        return Ok((plan, resolved_ids));
+        return Ok((plan, resolved_ids, item_timings));
     }
 
     /// Parses the given SQL string into a pair of [`CatalogItem`].
@@ -949,7 +957,7 @@ impl CatalogState {
         create_sql: &str,
         extra_versions: &BTreeMap<RelationVersion, GlobalId>,
         local_expression_cache: &mut LocalExpressionCache,
-    ) -> Result<CatalogItem, AdapterError> {
+    ) -> Result<(CatalogItem, ApplyItemTimings), AdapterError> {
         self.parse_item(
             global_id,
             create_sql,
@@ -972,7 +980,7 @@ impl CatalogState {
         is_retained_metrics_object: bool,
         custom_logical_compaction_window: Option<CompactionWindow>,
         local_expression_cache: &mut LocalExpressionCache,
-    ) -> Result<CatalogItem, AdapterError> {
+    ) -> Result<(CatalogItem, ApplyItemTimings), AdapterError> {
         let cached_expr = local_expression_cache.remove_cached_expression(&global_id);
         match self.parse_item_inner(
             global_id,
@@ -983,7 +991,7 @@ impl CatalogState {
             custom_logical_compaction_window,
             cached_expr,
         ) {
-            Ok((item, uncached_expr)) => {
+            Ok((item, item_timings, uncached_expr)) => {
                 if let Some((uncached_expr, optimizer_features)) = uncached_expr {
                     local_expression_cache.insert_uncached_expression(
                         global_id,
@@ -991,7 +999,7 @@ impl CatalogState {
                         optimizer_features,
                     );
                 }
-                Ok(item)
+                Ok((item, item_timings))
             }
             Err((err, cached_expr)) => {
                 if let Some(local_expr) = cached_expr {
@@ -1021,19 +1029,28 @@ impl CatalogState {
     ) -> Result<
         (
             CatalogItem,
+            ApplyItemTimings,
             Option<(OptimizedMirRelationExpr, OptimizerFeatures)>,
         ),
         (AdapterError, Option<LocalExpressions>),
     > {
+        let mut item_timings = ApplyItemTimings::new();
+
         let session_catalog = self.for_system_session();
 
-        let (plan, resolved_ids) = match Self::parse_plan(create_sql, pcx, &session_catalog) {
-            Ok((plan, resolved_ids)) => (plan, resolved_ids),
-            Err(err) => return Err((err, cached_expr)),
-        };
+        let (plan, resolved_ids, inner_item_timings) =
+            match Self::parse_plan(create_sql, pcx, &session_catalog) {
+                Ok((plan, resolved_ids, inner_item_timings)) => {
+                    (plan, resolved_ids, inner_item_timings)
+                }
+                Err(err) => return Err((err, cached_expr)),
+            };
 
         let mut uncached_expr = None;
 
+        item_timings.merge(inner_item_timings);
+
+        let start = Instant::now();
         let item = match plan {
             Plan::CreateTable(CreateTablePlan { table, .. }) => {
                 // TODO(alter_table): Support versioning tables.
@@ -1141,6 +1158,7 @@ impl CatalogState {
                 is_retained_metrics_object,
             }),
             Plan::CreateView(CreateViewPlan { view, .. }) => {
+                let optimize_start = Instant::now();
                 // Collect optimizer parameters.
                 let optimizer_config =
                     optimize::OptimizerConfig::from(session_catalog.system_vars());
@@ -1177,6 +1195,8 @@ impl CatalogState {
                     .map(|gid| self.get_entry_by_global_id(&gid).id())
                     .collect();
 
+                item_timings.optimize_duration += optimize_start.elapsed();
+
                 CatalogItem::View(View {
                     create_sql: view.create_sql,
                     global_id,
@@ -1191,6 +1211,7 @@ impl CatalogState {
             Plan::CreateMaterializedView(CreateMaterializedViewPlan {
                 materialized_view, ..
             }) => {
+                let optimize_start = Instant::now();
                 // Collect optimizer parameters.
                 let optimizer_config =
                     optimize::OptimizerConfig::from(session_catalog.system_vars());
@@ -1225,6 +1246,7 @@ impl CatalogState {
                 let desc = RelationDesc::new(typ, materialized_view.column_names);
 
                 let initial_as_of = materialized_view.as_of.map(Antichain::from_elem);
+                item_timings.optimize_duration += optimize_start.elapsed();
 
                 // Resolve all item dependencies from the HIR expression.
                 let dependencies = raw_expr
@@ -1329,8 +1351,9 @@ impl CatalogState {
                 ))
             }
         };
+        item_timings.misc_duration += start.elapsed();
 
-        Ok((item, uncached_expr))
+        Ok((item, item_timings, uncached_expr))
     }
 
     /// Execute function `f` on `self`, with all "enable_for_item_parsing" feature flags enabled.
