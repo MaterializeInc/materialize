@@ -4316,6 +4316,9 @@ dependencies = [
  "qcell",
  "rand",
  "rand_chacha",
+ "rdkafka",
+ "regex",
+ "reqwest",
  "semver",
  "serde",
  "serde_json",
@@ -4580,6 +4583,7 @@ dependencies = [
  "proptest",
  "proptest-derive",
  "prost",
+ "prost-build",
  "rand",
  "semver",
  "serde",
@@ -7940,7 +7944,7 @@ dependencies = [
 [[package]]
 name = "postgres-protocol"
 version = "0.6.7"
-source = "git+https://github.com/MaterializeInc/rust-postgres#7d2f14e35e97973995c39662cde618036a0f9484"
+source = "git+https://github.com/MaterializeInc/rust-postgres#548f00c4cbcf7bd714c29cfd2fea7685040c9987"
 dependencies = [
  "base64 0.22.0",
  "byteorder",
@@ -7972,7 +7976,7 @@ dependencies = [
 [[package]]
 name = "postgres-types"
 version = "0.2.7"
-source = "git+https://github.com/MaterializeInc/rust-postgres#7d2f14e35e97973995c39662cde618036a0f9484"
+source = "git+https://github.com/MaterializeInc/rust-postgres#548f00c4cbcf7bd714c29cfd2fea7685040c9987"
 dependencies = [
  "bytes",
  "chrono",
@@ -8157,6 +8161,7 @@ dependencies = [
  "bitflags 2.4.1",
  "lazy_static",
  "num-traits",
+ "quick-error",
  "rand",
  "rand_chacha",
  "rand_xorshift",
@@ -10060,7 +10065,7 @@ dependencies = [
 [[package]]
 name = "tokio-postgres"
 version = "0.7.11"
-source = "git+https://github.com/MaterializeInc/rust-postgres#7d2f14e35e97973995c39662cde618036a0f9484"
+source = "git+https://github.com/MaterializeInc/rust-postgres#548f00c4cbcf7bd714c29cfd2fea7685040c9987"
 dependencies = [
  "async-trait",
  "byteorder",
@@ -11187,6 +11192,7 @@ dependencies = [
  "futures-task",
  "futures-util",
  "getrandom",
+ "globset",
  "hashbrown 0.14.5",
  "hyper 0.14.27",
  "hyper 1.4.1",
