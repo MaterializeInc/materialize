@@ -387,6 +387,15 @@ fn operator_name(sink_id: GlobalId, sub_operator: &str) -> String {
 mod mint {
     use super::*;
 
+    /// Render the `mint` operator.
+    ///
+    /// The parameters passed in are:
+    ///  * `sink_id`: The `GlobalId` of the sink export.
+    ///  * `persist_api`: An object providing access to the output persist shard.
+    ///  * `as_of`: The first time for which the sink may produce output.
+    ///  * `active_worker_id`: The ID of the worker that runs this (single-threaded) operator.
+    ///  * `read_only_tx`: A receiver that reports the sink is in read-only mode.
+    ///  * `desired`: The ok/err streams that should be sinked to persist.
     pub fn render<S>(
         sink_id: GlobalId,
         persist_api: PersistApi,
@@ -642,6 +651,15 @@ mod mint {
 mod write {
     use super::*;
 
+    /// Render the `write` operator.
+    ///
+    /// The parameters passed in are:
+    ///  * `sink_id`: The `GlobalId` of the sink export.
+    ///  * `persist_api`: An object providing access to the output persist shard.
+    ///  * `as_of`: The first time for which the sink may produce output.
+    ///  * `desired`: The ok/err streams that should be sinked to persist.
+    ///  * `persist`: The ok/err streams read back from the output persist shard.
+    ///  * `descs`: The stream of batch descriptions produced by the `mint` operator.
     pub fn render<S>(
         sink_id: GlobalId,
         persist_api: PersistApi,
@@ -972,6 +990,13 @@ mod write {
 mod append {
     use super::*;
 
+    /// Render the `append` operator.
+    ///
+    /// The parameters passed in are:
+    ///  * `sink_id`: The `GlobalId` of the sink export.
+    ///  * `persist_api`: An object providing access to the output persist shard.
+    ///  * `descs`: The stream of batch descriptions produced by the `mint` operator.
+    ///  * `batches`: The stream of written batches produced by the `write` operator.
     pub fn render<S>(
         sink_id: GlobalId,
         persist_api: PersistApi,
