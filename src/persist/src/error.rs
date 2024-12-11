@@ -66,7 +66,8 @@ impl PartialEq for Error {
 
 impl From<ExternalError> for Error {
     fn from(e: ExternalError) -> Self {
-        Error::String(e.to_string())
+        // Print the chain of causes along with each error by default.
+        Error::String(format!("{e:#}"))
     }
 }
 
