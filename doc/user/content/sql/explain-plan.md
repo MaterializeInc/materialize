@@ -182,6 +182,8 @@ With
         ReadStorage materialize.public.t
 ```
 
+<a name="explain-plan-columns"></a>
+
 Many operators need to refer to columns in their input. These are displayed like
 `#3` for column number 3. (Columns are numbered starting from column 0). To get a better sense of
 columns assigned to `Map` operators, it might be useful to request [the `arity` output modifier](#output-modifiers).
@@ -236,45 +238,19 @@ Finish order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5 output=[#0, #1]
 
 Below the plan, a "Used indexes" section indicates which indexes will be used by the query, [and in what way](/transform-data/optimization/#use-explain-to-verify-index-usage).
 
-### Reference: Operators in raw plans
+### Reference: Plan operators
 
-Operator | Meaning | Example
----------|---------|---------
-**Constant** | Always produces the same collection of rows. |`Constant`<br />`- ((1, 2) x 2)`<br />`- (3, 4)`
-**Get** | Produces rows from either an existing source/view or from a previous operator in the same plan. | `Get materialize.public.ordered`
-**Project** | Produces a subset of the columns in the input rows. | `Project (#2, #3)`
-**Map** | Appends the results of some scalar expressions to each row in the input. | `Map (((#1 * 10000000dec) / #2) * 1000dec)`
-**CallTable** | Appends the result of some table function to each row in the input. | `CallTable generate_series(1, 7, 1)`
-**Filter** | Removes rows of the input for which some scalar predicates return false. | `Filter (#20 < #21)`
-**~Join** | Performs one of `INNER` / `LEFT` / `RIGHT` / `FULL OUTER` / `CROSS` join on the two inputs, using the given predicate. | `InnerJoin (#3 = #5)`.
-**Reduce** | Groups the input rows by some scalar expressions, reduces each group using some aggregate functions, and produces rows containing the group key and aggregate outputs. In the case where the group key is empty and the input is empty, returns a single row with the aggregate functions applied to the empty input collection. | `Reduce group_by=[#2] aggregates=[min(#0), max(#0)]`
-**Distinct** | Removes duplicate copies of input rows. | `Distinct`
-**TopK** | Groups the inputs rows by some scalar expressions, sorts each group using the group key, removes the top `offset` rows in each group, and returns the next `limit` rows. | `TopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5`
-**Negate** | Negates the row counts of the input. This is usually used in combination with union to remove rows from the other union input. | `Negate`
-**Threshold** | Removes any rows with negative counts. | `Threshold`
-**Union** | Sums the counts of each row of all inputs. | `Union`
-**Return ... With ...**  | Binds sub-plans consumed multiple times by downstream operators. | [See above](#reading-decorrelated-and-optimized-plans)
+{{< tabs >}}
+{{< tab "In decorrelated and optimized plans" >}}
+{{< explain-plans/operator-table data="explain_plan_operators" planType="optimized" >}}
+{{< /tab >}}
 
-### Reference: Operators in decorrelated and optimized plans
+{{< tab "In raw plans" >}}
+{{< explain-plans/operator-table data="explain_plan_operators" planType="raw" >}}
+{{< /tab >}}
 
-Operator | Meaning                                                                                                                                                                  | Example
----------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------
-**Constant** | Always produces the same collection of rows.                                                                                                                             | `Constant`<br />`- ((1, 2) x 2)`<br />`- (3, 4)`
-**Get** | Produces rows from either an existing source/view or from a previous operator in the same plan.                                                                          | `Get materialize.public.ordered`
-**Project** | Produces a subset of the columns in the input rows.                                                                                                                      | `Project (#2, #3)`
-**Map** | Appends the results of some scalar expressions to each row in the input.                                                                                                 | `Map (((#1 * 10000000dec) / #2) * 1000dec)`
-**FlatMap** | Appends the result of some table function to each row in the input.                                                                                                      | `FlatMap jsonb_foreach(#3)`
-**Filter** | Removes rows of the input for which some scalar predicates return `false`.                                                                                               | `Filter (#20 < #21)`
-**Join** | Returns combinations of rows from each input whenever some equality predicates are `true`.                                                                               | `Join on=(#1 = #2)`
-**CrossJoin** | An alias for a `Join` with an empty predicate (emits all combinations).                                                                                                  | `CrossJoin`
-**Reduce** | Groups the input rows by some scalar expressions, reduces each groups using some aggregate functions, and produce rows containing the group key and aggregate outputs.   | `Reduce group_by=[#0] aggregates=[max((#0 * #1))]`
-**Distinct** | Alias for a `Reduce` with an empty aggregate list.                                                                                                                       | `Distinct`
-**TopK** | Groups the inputs rows by some scalar expressions, sorts each group using the group key, removes the top `offset` rows in each group, and returns the next `limit` rows. | `TopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5`
-**Negate** | Negates the row counts of the input. This is usually used in combination with union to remove rows from the other union input.                                           | `Negate`
-**Threshold** | Removes any rows with negative counts.                                                                                                                                   | `Threshold`
-**Union** | Sums the counts of each row of all inputs.                                                                                                                               | `Union`
-**ArrangeBy** | Indicates a point that will become an arrangement in the dataflow engine (each `keys` element will be a different arrangement). Note that if the output of the previous operator is already arranged with a key that is also requested here, then this operator will just pass on that existing arrangement instead of creating a new one.                                         | `ArrangeBy keys=[[#0]]`
-**Return ... With ...**  | Binds sub-plans consumed multiple times by downstream operators.                                                                                                         | [See above](#reading-decorrelated-and-optimized-plans)
+{{< /tabs >}}
+
 
 ## Examples
 
