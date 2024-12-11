@@ -45,7 +45,11 @@ documentation](https://helm.sh/docs/intro/install/).
 
 ### `kubectl`
 
-This tutorial uses `kubectl`. To install, refer to the [`kubectl` documentationq](https://kubernetes.io/docs/tasks/tools/).
+This tutorial uses `kubectl`. To install, refer to the [`kubectl`
+documentationq](https://kubernetes.io/docs/tasks/tools/).
+
+For help with `kubectl` commands, see [kubectl Quick
+reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 
 ### Materialize repo
 
@@ -54,7 +58,7 @@ repo](https://github.com/MaterializeInc/materialize).
 
 {{< important >}}
 
-{{% self-managed/git-checkout-branch %}}
+Check out the {{% self-managed/latest_version %}} branch.
 
 {{< /important >}}
 

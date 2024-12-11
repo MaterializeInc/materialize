@@ -62,6 +62,9 @@ To verify, run the following command:
 kubectl get nodes
 ```
 
+For help with `kubectl` commands, see [kubectl Quick
+reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
+
 ### Helm 3.2.0+
 
 If you don't have Helm version 3.2.0+ installed, refer to the [Helm

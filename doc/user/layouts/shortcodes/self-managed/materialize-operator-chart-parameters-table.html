@@ -8,7 +8,7 @@
 </tr>
 </thead>
 <tbody>
-{{ range $.Site.Data.materialize_operator_chart_parameter.parameters }}
+{{ range $.Site.Data.self_managed.materialize_operator_chart_parameter.parameters }}
 <tr>
 <td><a href='#{{ replace .parameter "." "" | urlize}}'><code>{{ .parameter }}</code></a></td>
 <td>

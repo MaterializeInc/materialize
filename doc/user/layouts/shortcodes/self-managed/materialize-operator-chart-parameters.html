@@ -1,5 +1,5 @@
 {{- $headings := slice -}}
-{{ range $.Site.Data.materialize_operator_chart_parameter.parameters }}
+{{ range $.Site.Data.self_managed.materialize_operator_chart_parameter.parameters }}
 
 {{/* Only if the .display field is true */}}
 {{ if .display }}
@@ -17,9 +17,7 @@
 
 #### {{ .parameter }}
 
-{{ if .default }}
-**Default**: <code>{{ .default | $.Page.RenderString }}</code>
-{{ end }}
+**Default**: {{ if .default }} <code>{{ .default | $.Page.RenderString }}</code> {{ end }}
 
 {{.description  | $.Page.RenderString }}
 

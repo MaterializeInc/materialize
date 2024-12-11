@@ -18,6 +18,8 @@ To check the status of your Materialize deployment, run:
 kubectl get all -n materialize
 ```
 
+For additional `kubectl` commands, see [kubectl Quick reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
+
 ## See also
 
 - [Materialize Kubernetes Operator Helm Chart](/self-managed/)

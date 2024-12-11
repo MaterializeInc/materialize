@@ -33,6 +33,8 @@ for information on how to deploy the infrastructure.
 Install `kubectl` and configure cluster access.
 For details, see the [GCP documentation](https://cloud.google.com/kubernetes-engine/docs/how-to/cluster-access-for-kubectl).
 
+For help with `kubectl` commands, see [kubectl Quick
+reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 
 ### Helm 3.2.0+
 
