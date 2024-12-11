@@ -877,7 +877,7 @@ impl<'a, T> std::fmt::Display for RenderPlanExprHumanizer<'a, T> {
 
                     write!(f, "{}", inputs[*source_relation])?;
                     for dsp in stage_plans {
-                        write!(f, "» {}", inputs[dsp.lookup_relation])?;
+                        write!(f, " » {}", inputs[dsp.lookup_relation])?;
                     }
 
                     Ok(())
@@ -889,7 +889,7 @@ impl<'a, T> std::fmt::Display for RenderPlanExprHumanizer<'a, T> {
                         write!(f, "[{}", inputs[dpp.source_relation])?;
 
                         for dsp in &dpp.stage_plans {
-                            write!(f, "» {}", inputs[dsp.lookup_relation])?;
+                            write!(f, " » {}", inputs[dsp.lookup_relation])?;
                         }
                         write!(f, "] ")?;
                     }
