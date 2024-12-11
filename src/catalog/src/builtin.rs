@@ -5999,20 +5999,20 @@ pub static MZ_INDEX_ADVICE: LazyLock<BuiltinView> = LazyLock::new(|| {
 -- the following uses the terms leafs (instead of sinks) and roots (instead of sources)
 -- when referring to the object dependency graph.
 --
--- The basic idea is to walk up the debendency graph to propage the transitive dependencies
+-- The basic idea is to walk up the dependency graph to propagate the transitive dependencies
 -- of maintained objected upwards. The leaves of the dependency graph are maintained objects
 -- that are not depended on by other maintained objects and have a justification why they must
 -- be maintained (e.g. a materialized view that is depended on by a sink).
 -- Starting from these leaves, the dependencies are propagated upwards towards the roots according
--- to the object dependencies. Whenever there is a node that is beeing depended on by multiple
+-- to the object dependencies. Whenever there is a node that is being depended on by multiple
 -- downstream objects, that node is marked to be converted into a maintained object and this
 -- node is then propagated further up. Once completed, the list of objects that are marked as
--- maintained is checked agains all objects to generate appropriate recommendations.
+-- maintained is checked against all objects to generate appropriate recommendations.
 --
 -- Note that the recommendations only incorporate dependencies between objects.
 -- This can lead to bad recommendations, e.g. filters can no longer be pushed into (or close to)
--- a sink if an index is added in between the sink and the filter. For very selecive filters,
--- this can lead to tedundant work: the index is computing stuff only to dicarded by the selective
+-- a sink if an index is added in between the sink and the filter. For very selective filters,
+-- this can lead to redundant work: the index is computing stuff only to discarded by the selective
 -- filter later on. But these kind of aspects cannot be understood by merely looking at the
 -- dependencies.
 WITH MUTUALLY RECURSIVE
@@ -6047,7 +6047,7 @@ WITH MUTUALLY RECURSIVE
             ON (o.id = d.referenced_object_id)
         JOIN mz_catalog.mz_objects AS i
             ON (i.id = d.object_id AND i.type = 'index')
-        WHERE o.id LIKE 'u%' AND o.type IN ('materialized-view', 'view')
+        WHERE o.id LIKE 'u%' AND o.type IN ('materialized-view', 'view', 'source')
         GROUP BY o.id, o.type, o.cluster_id, i.cluster_id
     ),
 
@@ -6071,7 +6071,7 @@ WITH MUTUALLY RECURSIVE
             v.id,
             unnest(v.indexes) AS justification
         FROM objects AS v
-        WHERE v.type IN ('view', 'materialized-view') AND NOT EXISTS (
+        WHERE v.type IN ('view', 'materialized-view', 'source') AND NOT EXISTS (
             SELECT FROM mz_internal.mz_object_transitive_dependencies AS d
             INNER JOIN mz_catalog.mz_objects AS child
                 ON (d.object_id = child.id)
@@ -6247,11 +6247,23 @@ WITH MUTUALLY RECURSIVE
         SELECT
             unnest(indexes) AS id,
             'drop unless queried directly' AS hint,
-            'associated view does not have any dependencies (maintained or not maintained)' AS details,
+            'associated object does not have any dependencies (maintained or not maintained)' AS details,
             NULL::text list AS justification
         FROM objects_with_justification
         -- indexes can only be part of justification for leaf nodes
         WHERE type IN ('view', 'materialized-view') AND NOT indexes = '{}'::text list AND justification @> indexes
+
+        UNION ALL
+
+        -- index on a source
+        SELECT
+            unnest(indexes) AS id,
+            'drop unless queried directly' AS hint,
+            'sources do not transform data and can expose data directly' AS details,
+            NULL::text list AS justification
+        FROM objects_with_justification
+        -- indexes can only be part of justification for leaf nodes
+        WHERE type = 'source' AND NOT indexes = '{}'::text list
 
         UNION ALL
 
