@@ -11,6 +11,7 @@
 
 use std::fmt::Debug;
 
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
 use crate::stats::PartStats;
@@ -26,7 +27,7 @@ pub enum TxnsEntry {
     /// A batch written to a data shard in a txn.
     ///
     /// The `[u8; 8]` is a Codec64 encoded timestamp.
-    Append(ShardId, [u8; 8], Vec<u8>),
+    Append(ShardId, [u8; 8], Bytes),
 }
 
 impl TxnsEntry {

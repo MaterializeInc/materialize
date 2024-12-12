@@ -13,7 +13,9 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
+use std::time::Instant;
 
+use bytes::Bytes;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use futures::stream::FuturesUnordered;
@@ -31,7 +33,7 @@ use mz_persist_types::txn::{TxnsCodec, TxnsEntry};
 use mz_persist_types::{Codec, Codec64, Opaque, StepForward};
 use timely::order::TotalOrder;
 use timely::progress::Timestamp;
-use tracing::debug;
+use tracing::{debug, info};
 
 use crate::metrics::Metrics;
 use crate::txn_cache::{TxnsCache, Unapplied};
@@ -137,7 +139,13 @@ where
         metrics: Arc<Metrics>,
         txns_id: ShardId,
     ) -> Self {
+        let start = Instant::now();
         let (txns_key_schema, txns_val_schema) = C::schemas();
+        info!(
+            "TXNS HANDLE OPEN LOOK HERE: preamble took {:?}",
+            start.elapsed()
+        );
+        let start = Instant::now();
         let (mut txns_write, txns_read) = client
             .open(
                 txns_id,
@@ -151,6 +159,11 @@ where
             )
             .await
             .expect("txns schema shouldn't change");
+        info!(
+            "TXNS HANDLE OPEN LOOK HERE: open handles took {:?}",
+            start.elapsed()
+        );
+        let start = Instant::now();
         let txns_since = client
             .open_critical_since(
                 txns_id,
@@ -164,7 +177,16 @@ where
             )
             .await
             .expect("txns schema shouldn't change");
+        info!(
+            "TXNS HANDLE OPEN LOOK HERE: open critical since took {:?}",
+            start.elapsed()
+        );
+        let start = Instant::now();
         let txns_cache = TxnsCache::init(init_ts, txns_read, &mut txns_write).await;
+        info!(
+            "TXNS HANDLE OPEN LOOK HERE: txns cache init took {:?}",
+            start.elapsed()
+        );
         TxnsHandle {
             metrics,
             txns_cache,
@@ -568,10 +590,6 @@ where
                                 .await;
                             }
                             Unapplied::Batch(batch_raws) => {
-                                let batch_raws = batch_raws
-                                    .into_iter()
-                                    .map(|batch_raw| batch_raw.as_slice())
-                                    .collect();
                                 crate::apply_caa(
                                     &mut data_write,
                                     &batch_raws,
@@ -583,7 +601,7 @@ where
                                     // encoded bytes, so we intentionally use the raw batch so that
                                     // it definitely retracts.
                                     ret.push((
-                                        batch_raw.to_vec(),
+                                        batch_raw.clone(),
                                         (T::encode(unapplied_ts), data_id),
                                     ));
                                 }
@@ -672,7 +690,7 @@ where
 /// a normal txn with [Txn::tidy].
 #[derive(Debug, Default)]
 pub struct Tidy {
-    pub(crate) retractions: BTreeMap<Vec<u8>, ([u8; 8], ShardId)>,
+    pub(crate) retractions: BTreeMap<Bytes, ([u8; 8], ShardId)>,
 }
 
 impl Tidy {

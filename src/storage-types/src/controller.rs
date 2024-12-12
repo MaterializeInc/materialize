@@ -11,6 +11,7 @@ use std::error::Error;
 use std::fmt::{self, Debug, Display};
 use std::str::FromStr;
 
+use bytes::Bytes;
 use itertools::Itertools;
 use mz_ore::assert_none;
 use mz_ore::url::SensitiveUrl;
@@ -424,7 +425,7 @@ impl TxnsCodec for TxnsCodecRow {
             TxnsEntry::Append(data_id, ts, batch) => Row::pack([
                 Datum::from(data_id.to_string().as_str()),
                 Datum::from(u64::from_le_bytes(*ts)),
-                Datum::from(batch.as_slice()),
+                Datum::from(batch.iter().as_slice()),
             ]),
         };
         (SourceData(Ok(row)), ())
@@ -441,7 +442,7 @@ impl TxnsCodec for TxnsCodecRow {
         if batch.is_null() {
             TxnsEntry::Register(data_id, ts)
         } else {
-            TxnsEntry::Append(data_id, ts, batch.unwrap_bytes().to_vec())
+            TxnsEntry::Append(data_id, ts, Bytes::copy_from_slice(batch.unwrap_bytes()))
         }
     }
 

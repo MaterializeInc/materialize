@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
+use bytes::Bytes;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::Hashable;
@@ -218,7 +219,7 @@ where
                                 let update = C::encode(TxnsEntry::Append(
                                     data_id,
                                     T::encode(&commit_ts),
-                                    batch_raw,
+                                    Bytes::from(batch_raw),
                                 ));
                                 (batch, update)
                             })

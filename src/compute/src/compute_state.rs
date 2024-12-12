@@ -428,8 +428,6 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
     }
 
     fn handle_update_configuration(&mut self, params: ComputeParameters) {
-        info!("Applying configuration update: {params:?}");
-
         let ComputeParameters {
             workload_class,
             max_result_size,
@@ -475,34 +473,6 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
 
         // Add the dataflow expiration to `until`.
         let until = dataflow.until.meet(&dataflow_expiration);
-
-        if dataflow.is_transient() {
-            debug!(
-                name = %dataflow.debug_name,
-                import_ids = %dataflow.display_import_ids(),
-                export_ids = %dataflow.display_export_ids(),
-                as_of = ?as_of.elements(),
-                time_dependence = ?dataflow.time_dependence,
-                expiration = ?dataflow_expiration.elements(),
-                expiration_datetime = ?dataflow_expiration.as_option().map(|t| mz_ore::now::to_datetime(t.into())),
-                plan_until = ?dataflow.until.elements(),
-                until = ?until.elements(),
-                "creating dataflow",
-            );
-        } else {
-            info!(
-                name = %dataflow.debug_name,
-                import_ids = %dataflow.display_import_ids(),
-                export_ids = %dataflow.display_export_ids(),
-                as_of = ?as_of.elements(),
-                time_dependence = ?dataflow.time_dependence,
-                expiration = ?dataflow_expiration.elements(),
-                expiration_datetime = ?dataflow_expiration.as_option().map(|t| mz_ore::now::to_datetime(t.into())),
-                plan_until = ?dataflow.until.elements(),
-                until = ?until.elements(),
-                "creating dataflow",
-            );
-        };
 
         let subscribe_copy_ids: BTreeSet<_> = dataflow
             .subscribe_ids()
