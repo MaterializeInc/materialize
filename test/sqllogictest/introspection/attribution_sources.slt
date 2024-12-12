@@ -27,7 +27,7 @@ CREATE INDEX v_idx_x ON v(x);
 
 # let the introspection sources update
 statement ok
-SELECT mz_unsafe.mz_sleep(2)
+SELECT mz_unsafe.mz_sleep(8)
 
 query IT
 SELECT id, global_id FROM mz_internal.mz_dataflow_global_ids ORDER BY id, global_id;
@@ -112,7 +112,7 @@ CREATE MATERIALIZED VIEW w AS
 
 # let the introspection sources update
 statement ok
-SELECT mz_unsafe.mz_sleep(2)
+SELECT mz_unsafe.mz_sleep(8)
 
 query IT
 SELECT id, global_id FROM mz_internal.mz_dataflow_global_ids ORDER BY id, global_id;
@@ -190,20 +190,19 @@ statement ok
 CREATE INDEX v2_idx_x ON v2(x);
 
 statement ok
-SELECT mz_unsafe.mz_sleep(2)
+SELECT mz_unsafe.mz_sleep(8)
 
-# TODO: Reenable when databse-issues#8824 is fixed
-# query TIITIIIT
-# SELECT mlm.global_id AS global_id, lir_id, parent_lir_id, REPEAT(' ', nesting * 2) || operator AS operator, levels, to_cut, savings, hint
-#     FROM           mz_internal.mz_lir_mapping mlm
-#          JOIN      mz_introspection.mz_dataflow_global_ids mdgi
-#          ON (mlm.global_id = mdgi.global_id)
-#          LEFT JOIN mz_introspection.mz_expected_group_size_advice megsa
-#          ON (megsa.dataflow_id = mdgi.id AND
-#              mlm.operator_id_start <= megsa.region_id AND megsa.region_id < mlm.operator_id_end)
-# ORDER BY mlm.global_id, lir_id DESC;
-# ----
-# u7  2  NULL  TopK::Basic␠1  8  7  3584  15.000
-# u7  1  2  ␠␠Get::PassArrangements␠u6  NULL  NULL  NULL  NULL
-# u8  4  NULL  Arrange␠3  NULL  NULL  NULL  NULL
-# u8  3  4  ␠␠Get::PassArrangements␠u7  NULL  NULL  NULL  NULL
+query TIITIIIT
+SELECT mlm.global_id AS global_id, lir_id, parent_lir_id, REPEAT(' ', nesting * 2) || operator AS operator, levels, to_cut, savings, hint
+    FROM           mz_internal.mz_lir_mapping mlm
+         JOIN      mz_introspection.mz_dataflow_global_ids mdgi
+         ON (mlm.global_id = mdgi.global_id)
+         LEFT JOIN mz_introspection.mz_expected_group_size_advice megsa
+         ON (megsa.dataflow_id = mdgi.id AND
+             mlm.operator_id_start <= megsa.region_id AND megsa.region_id < mlm.operator_id_end)
+ORDER BY mlm.global_id, lir_id DESC;
+----
+u7  2  NULL  TopK::Basic␠1  8  7  3584  15.000
+u7  1  2  ␠␠Get::PassArrangements␠u6  NULL  NULL  NULL  NULL
+u8  4  NULL  Arrange␠3  NULL  NULL  NULL  NULL
+u8  3  4  ␠␠Get::PassArrangements␠u7  NULL  NULL  NULL  NULL
