@@ -1185,6 +1185,11 @@ who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "maintained-and-necessary"
 delta = "3.8.0 -> 3.8.1"
 
+[[audits.textwrap]]
+who = "Dennis Felsing <dennis@felsing.org>"
+criteria = "maintained-and-necessary"
+version = "0.16.1"
+
 [[audits.thiserror]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "safe-to-deploy"
