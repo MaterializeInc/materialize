@@ -1539,6 +1539,15 @@ pub static FORCE_SOURCE_TABLE_SYNTAX: VarDefinition = VarDefinition::new(
     true,
 );
 
+pub static OPTIMIZER_E2E_LATENCY_WARNING_THRESHOLD: VarDefinition = VarDefinition::new(
+    "optimizer_e2e_latency_warning_threshold",
+    value!(Duration; Duration::from_millis(500)),
+    "Sets the duration that a query can take to compile; queries that take longer \
+        will trigger a warning. If this value is specified without units, it is taken as \
+        milliseconds. A value of zero disables the timeout (Materialize).",
+    true,
+);
+
 /// Configuration for gRPC client connections.
 pub mod grpc_client {
     use super::*;

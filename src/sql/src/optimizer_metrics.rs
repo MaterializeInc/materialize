@@ -9,6 +9,7 @@
 
 //! Metrics collected by the optimizer.
 
+use std::cell::RefCell;
 use std::time::Duration;
 
 use mz_ore::metric;
@@ -20,14 +21,20 @@ use prometheus::{HistogramVec, IntCounterVec};
 #[derive(Debug, Clone)]
 pub struct OptimizerMetrics {
     e2e_optimization_time_seconds: HistogramVec,
+    e2e_optimization_time_seconds_log_threshold: Duration,
     outer_join_lowering_cases: IntCounterVec,
     transform_hits: IntCounterVec,
     transform_total: IntCounterVec,
-    transform_time_seconds: HistogramVec,
+    /// Local storage of transform times; these are emitted as part of the
+    /// log-line when end-to-end optimization times exceed the configured threshold.
+    transform_time_seconds: RefCell<std::collections::BTreeMap<String, Vec<Duration>>>,
 }
 
 impl OptimizerMetrics {
-    pub fn register_into(registry: &MetricsRegistry) -> Self {
+    pub fn register_into(
+        registry: &MetricsRegistry,
+        e2e_optimization_time_seconds_log_threshold: Duration,
+    ) -> Self {
         Self {
             e2e_optimization_time_seconds: registry.register(metric!(
                  name: "mz_optimizer_e2e_optimization_time_seconds",
@@ -35,6 +42,7 @@ impl OptimizerMetrics {
                  var_labels: ["object_type"],
                  buckets: histogram_seconds_buckets(0.000_128, 8.0),
             )),
+            e2e_optimization_time_seconds_log_threshold,
             outer_join_lowering_cases: registry.register(metric!(
                 name: "outer_join_lowering_cases",
                 help: "How many times the different outer join lowering cases happened.",
@@ -50,12 +58,7 @@ impl OptimizerMetrics {
                 help: "How many times a given transform was applied.",
                 var_labels: ["transform"],
             )),
-            transform_time_seconds: registry.register(metric!(
-                name: "transform_time_seconds",
-                help: "How long a given transform took.",
-                var_labels: ["transform"],
-                buckets: histogram_seconds_buckets(0.000_128, 8.0),
-            )),
+            transform_time_seconds: RefCell::new(std::collections::BTreeMap::new()),
         }
     }
 
@@ -63,9 +66,10 @@ impl OptimizerMetrics {
         self.e2e_optimization_time_seconds
             .with_label_values(&[object_type])
             .observe(duration.as_secs_f64());
-        if duration > Duration::from_millis(500) {
+        if duration > self.e2e_optimization_time_seconds_log_threshold {
             tracing::warn!(
                 object_type = object_type,
+                transform_times = ?self.transform_time_seconds.borrow(),
                 duration = format!("{}ms", duration.as_millis()),
                 "optimizer took more than 500ms"
             );
@@ -82,22 +86,15 @@ impl OptimizerMetrics {
         self.transform_hits
             .with_label_values(&[transform])
             .inc_by(hit as u64);
-        self.transform_total
-            .with_label_values(&[transform])
-            .inc();
+        self.transform_total.with_label_values(&[transform]).inc();
     }
 
     pub fn observe_transform_time(&self, transform: &str, duration: Duration) {
-        self.transform_time_seconds
-            .with_label_values(&[transform])
-            .observe(duration.as_secs_f64());
-
-        if duration > Duration::from_millis(500) {
-            tracing::error!(
-                transform = transform,
-                duration = format!("{}ms", duration.as_millis()),
-                "a single optimizer transform took more than 500ms"
-            );
+        let mut transform_time_seconds = self.transform_time_seconds.borrow_mut();
+        if let Some(times) = transform_time_seconds.get_mut(transform) {
+            times.push(duration);
+        } else {
+            transform_time_seconds.insert(transform.to_string(), vec![duration]);
         }
     }
 }

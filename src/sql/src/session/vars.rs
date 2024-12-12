@@ -1215,6 +1215,7 @@ impl SystemVars {
             &USER_STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION,
             &ENABLE_CREATE_TABLE_FROM_SOURCE,
             &FORCE_SOURCE_TABLE_SYNTAX,
+            &OPTIMIZER_E2E_LATENCY_WARNING_THRESHOLD,
         ];
 
         let dyncfgs = mz_dyncfgs::all_dyncfgs();
@@ -2194,6 +2195,10 @@ impl SystemVars {
 
     pub fn force_source_table_syntax(&self) -> bool {
         *self.expect_value(&FORCE_SOURCE_TABLE_SYNTAX)
+    }
+
+    pub fn optimizer_e2e_latency_warning_threshold(&self) -> Duration {
+        *self.expect_value(&OPTIMIZER_E2E_LATENCY_WARNING_THRESHOLD)
     }
 
     /// Returns whether the named variable is a compute configuration parameter
