@@ -24,6 +24,11 @@ use crate::columnar::{ColumnDecoder, ColumnEncoder, Schema2};
 use crate::stats::{ColumnStatKinds, ColumnarStats, NoneStats, StructStats};
 use crate::{Codec, Codec64, Opaque, ShardId};
 
+/// All codecs that are compatible with a blob of bytes use that same name. This allows us to
+/// switch between the codecs without any incompatibility errors. The name is chosen for historical
+/// reasons.
+const BYTES_CODEC_NAME: &str = "Vec<u8>";
+
 /// An implementation of [Schema2] for [()].
 #[derive(Debug, Default, PartialEq)]
 pub struct UnitSchema;
@@ -192,6 +197,25 @@ impl SimpleColumnarData for Vec<u8> {
     }
 }
 
+impl SimpleColumnarData for Bytes {
+    type ArrowBuilder = BinaryBuilder;
+    type ArrowColumn = BinaryArray;
+
+    fn goodbytes(builder: &Self::ArrowBuilder) -> usize {
+        builder.values_slice().len()
+    }
+
+    fn push(&self, builder: &mut Self::ArrowBuilder) {
+        builder.append_value(&self)
+    }
+    fn push_null(builder: &mut Self::ArrowBuilder) {
+        builder.append_null()
+    }
+    fn read(&mut self, idx: usize, column: &Self::ArrowColumn) {
+        *self = Bytes::copy_from_slice(column.value(idx));
+    }
+}
+
 impl SimpleColumnarData for ShardId {
     type ArrowBuilder = StringBuilder;
     type ArrowColumn = StringArray;
@@ -333,12 +357,28 @@ impl Schema2<Vec<u8>> for VecU8Schema {
     }
 }
 
+impl Schema2<Bytes> for VecU8Schema {
+    type ArrowColumn = BinaryArray;
+    type Statistics = NoneStats;
+
+    type Decoder = SimpleColumnarDecoder<Bytes>;
+    type Encoder = SimpleColumnarEncoder<Bytes>;
+
+    fn encoder(&self) -> Result<Self::Encoder, anyhow::Error> {
+        Ok(SimpleColumnarEncoder::default())
+    }
+
+    fn decoder(&self, col: Self::ArrowColumn) -> Result<Self::Decoder, anyhow::Error> {
+        Ok(SimpleColumnarDecoder::new(col))
+    }
+}
+
 impl Codec for Vec<u8> {
     type Storage = ();
     type Schema = VecU8Schema;
 
     fn codec_name() -> String {
-        "Vec<u8>".into()
+        BYTES_CODEC_NAME.into()
     }
 
     fn encode<B>(&self, buf: &mut B)
@@ -350,6 +390,35 @@ impl Codec for Vec<u8> {
 
     fn decode<'a>(buf: &'a [u8], _schema: &VecU8Schema) -> Result<Self, String> {
         Ok(buf.to_owned())
+    }
+
+    fn encode_schema(_schema: &Self::Schema) -> Bytes {
+        Bytes::new()
+    }
+
+    fn decode_schema(buf: &Bytes) -> Self::Schema {
+        assert_eq!(*buf, Bytes::new());
+        VecU8Schema
+    }
+}
+
+impl Codec for Bytes {
+    type Storage = ();
+    type Schema = VecU8Schema;
+
+    fn codec_name() -> String {
+        BYTES_CODEC_NAME.into()
+    }
+
+    fn encode<B>(&self, buf: &mut B)
+    where
+        B: BufMut,
+    {
+        buf.put(self.into_iter().as_slice())
+    }
+
+    fn decode<'a>(buf: &'a [u8], _schema: &VecU8Schema) -> Result<Self, String> {
+        Ok(Bytes::copy_from_slice(buf))
     }
 
     fn encode_schema(_schema: &Self::Schema) -> Bytes {
