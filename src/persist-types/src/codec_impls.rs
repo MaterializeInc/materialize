@@ -24,6 +24,11 @@ use crate::columnar::{ColumnDecoder, ColumnEncoder, Schema2};
 use crate::stats::{ColumnStatKinds, ColumnarStats, NoneStats, StructStats};
 use crate::{Codec, Codec64, Opaque, ShardId};
 
+/// All codecs that are compatible with a blob of bytes use that same name. This allows us to
+/// switch between the codecs without any incompatibility errors. The name is chosen for historical
+/// reasons.
+const BYTES_CODEC_NAME: &str = "Vec<u8>";
+
 /// An implementation of [Schema2] for [()].
 #[derive(Debug, Default, PartialEq)]
 pub struct UnitSchema;
@@ -373,7 +378,7 @@ impl Codec for Vec<u8> {
     type Schema = VecU8Schema;
 
     fn codec_name() -> String {
-        "Vec<u8>".into()
+        BYTES_CODEC_NAME.into()
     }
 
     fn encode<B>(&self, buf: &mut B)
@@ -402,8 +407,7 @@ impl Codec for Bytes {
     type Schema = VecU8Schema;
 
     fn codec_name() -> String {
-        // Intentionally the same as the `Vec<u8>` codec for compatibility.
-        "Vec<u8>".into()
+        BYTES_CODEC_NAME.into()
     }
 
     fn encode<B>(&self, buf: &mut B)
