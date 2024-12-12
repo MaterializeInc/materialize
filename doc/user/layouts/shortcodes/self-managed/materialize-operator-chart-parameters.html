@@ -1,0 +1,22 @@
+{{- $headings := slice -}}
+{{ range $.Site.Data.self_managed.materialize_operator_chart_parameter.parameters }}
+
+
+{{ $parts := split .parameter "." }}
+{{ $heading := index $parts 0 }}
+
+{{ if not (in $headings $heading) }}
+
+    {{- $headings = $headings | append $heading -}}
+
+### `{{ $heading | $.Page.RenderString }}` parameters
+
+{{ end }}
+
+#### {{ .parameter }}
+
+**Default**: <code>{{ .default | $.Page.RenderString }}</code>
+
+{{.description  | $.Page.RenderString }}
+
+{{ end }} {{/* End of the loop over the parameters */}}
