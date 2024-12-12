@@ -100,6 +100,8 @@ SERVICES = [
             "--tls-cert=/secrets/balancerd.crt",
             "--default-config=balancerd_inject_proxy_protocol_header_http=true",
             "--internal-tls",
+            # Nonsensical but we don't need cancellations here
+            "--cancellation-resolver-dir=/secrets/",
         ],
         depends_on=["test-certs"],
         volumes=[
@@ -228,6 +230,8 @@ def workflow_plaintext(c: Composition) -> None:
                 "--tls-key=/secrets/balancerd.key",
                 "--tls-cert=/secrets/balancerd.crt",
                 "--default-config=balancerd_inject_proxy_protocol_header_http=true",
+                # Nonsensical but we don't need cancellations here
+                "--cancellation-resolver-dir=/secrets/",
             ],
             depends_on=["test-certs"],
             volumes=[
