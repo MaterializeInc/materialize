@@ -67,9 +67,23 @@ impl OptimizerMetrics {
             .with_label_values(&[object_type])
             .observe(duration.as_secs_f64());
         if duration > self.e2e_optimization_time_seconds_log_threshold {
+            let transform_times = self
+                .transform_time_seconds
+                .take()
+                .into_iter()
+                .map(|(k, v)| {
+                    (
+                        k,
+                        v.into_iter()
+                            .map(|duration| duration.as_nanos())
+                            .collect::<Vec<_>>(),
+                    )
+                })
+                .collect::<Vec<_>>();
             tracing::warn!(
                 object_type = object_type,
-                transform_times = ?self.transform_time_seconds.borrow(),
+                transform_times = serde_json::to_string(&transform_times)
+                    .unwrap_or_else(|_| format!("{:?}", transform_times)),
                 duration = format!("{}ms", duration.as_millis()),
                 "optimizer took more than 500ms"
             );

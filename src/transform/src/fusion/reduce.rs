@@ -17,12 +17,16 @@ use crate::{TransformCtx, TransformError};
 pub struct Reduce;
 
 impl crate::Transform for Reduce {
+    fn name(&self) -> &'static str {
+        "ReduceFusion"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "reduce_fusion")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         _: &mut TransformCtx,

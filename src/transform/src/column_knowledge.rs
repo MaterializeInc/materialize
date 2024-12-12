@@ -45,13 +45,17 @@ impl CheckedRecursion for ColumnKnowledge {
 }
 
 impl crate::Transform for ColumnKnowledge {
+    fn name(&self) -> &'static str {
+        "ColumnKnowledge"
+    }
+
     /// Transforms an expression through accumulated knowledge.
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "column_knowledge")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         expr: &mut MirRelationExpr,
         _: &mut TransformCtx,

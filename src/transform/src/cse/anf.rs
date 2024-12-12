@@ -30,12 +30,16 @@ pub struct ANF;
 use crate::TransformCtx;
 
 impl crate::Transform for ANF {
+    fn name(&self) -> &'static str {
+        "ANF"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "anf")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         _ctx: &mut TransformCtx,

@@ -32,12 +32,16 @@ use crate::TransformCtx;
 pub struct ReduceScalars;
 
 impl crate::Transform for ReduceScalars {
+    fn name(&self) -> &'static str {
+        "ReduceScalars"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "reduce_scalars")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         ctx: &mut TransformCtx,

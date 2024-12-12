@@ -302,7 +302,11 @@ fn parse_explain_config(mut flags: BTreeSet<String>) -> Result<ExplainConfig, St
 struct Identity;
 
 impl mz_transform::Transform for Identity {
-    fn transform(
+    fn name(&self) -> &'static str {
+        "Identity"
+    }
+
+    fn actually_perform_transform(
         &self,
         _relation: &mut mz_expr::MirRelationExpr,
         _ctx: &mut mz_transform::TransformCtx,

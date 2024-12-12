@@ -56,12 +56,16 @@ use crate::TransformCtx;
 pub struct Filter;
 
 impl crate::Transform for Filter {
+    fn name(&self) -> &'static str {
+        "FilterFusion"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "filter_fusion")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         _: &mut TransformCtx,

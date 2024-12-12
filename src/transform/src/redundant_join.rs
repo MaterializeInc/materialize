@@ -53,12 +53,16 @@ impl CheckedRecursion for RedundantJoin {
 }
 
 impl crate::Transform for RedundantJoin {
+    fn name(&self) -> &'static str {
+        "RedundantJoin"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "redundant_join")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         _: &mut TransformCtx,

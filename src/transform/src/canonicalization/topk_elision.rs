@@ -19,12 +19,16 @@ use crate::TransformCtx;
 pub struct TopKElision;
 
 impl crate::Transform for TopKElision {
+    fn name(&self) -> &'static str {
+        "TopKElision"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "topk_elision")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         _: &mut TransformCtx,

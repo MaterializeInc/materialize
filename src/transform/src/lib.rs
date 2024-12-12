@@ -191,8 +191,35 @@ impl<'a> TransformCtx<'a> {
 
 /// Types capable of transforming relation expressions.
 pub trait Transform: fmt::Debug {
-    /// Transform a relation into a functionally equivalent relation.
+    /// Transforms a relation into a functionally equivalent relation.
+    ///
+    /// This is a wrapper around `actually_perform_transform` that also
+    /// measures the time taken and updates the optimizer metrics.
     fn transform(
+        &self,
+        relation: &mut MirRelationExpr,
+        args: &mut TransformCtx,
+    ) -> Result<(), TransformError> {
+        let before = relation.hash_to_u64();
+        let start = std::time::Instant::now();
+        let res = self.actually_perform_transform(relation, args);
+        let duration = start.elapsed();
+        let after = relation.hash_to_u64();
+
+        if let Some(metrics) = args.metrics {
+            let transform_name = self.name();
+            metrics.observe_transform_time(transform_name, duration);
+            metrics.inc_transform(before != after, transform_name);
+        }
+
+        res
+    }
+
+    /// Transform a relation into a functionally equivalent relation.
+    ///
+    /// You transform should implement this method, but users should call
+    /// [`transform`] instead.
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         ctx: &mut TransformCtx,
@@ -205,6 +232,9 @@ pub trait Transform: fmt::Debug {
     fn debug(&self) -> String {
         format!("{:?}", self)
     }
+
+    /// A short string naming the transform, as it will be reported in metrics.
+    fn name(&self) -> &'static str;
 }
 
 /// Errors that can occur during a transformation.
@@ -332,12 +362,16 @@ impl Fixpoint {
 }
 
 impl Transform for Fixpoint {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = self.name)
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         ctx: &mut TransformCtx,
@@ -533,12 +567,16 @@ impl Default for FuseAndCollapse {
 }
 
 impl Transform for FuseAndCollapse {
+    fn name(&self) -> &'static str {
+        "FuseAndCollapse"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "fuse_and_collapse")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         ctx: &mut TransformCtx,
@@ -889,17 +927,7 @@ impl Optimizer {
         args: &mut TransformCtx,
     ) -> Result<(), TransformError> {
         for transform in self.transforms.iter() {
-            let before = relation.hash_to_u64();
-            let start = std::time::Instant::now();
             transform.transform(relation, args)?;
-            let duration = start.elapsed();
-            let after = relation.hash_to_u64();
-
-            if let Some(metrics) = args.metrics {
-                let transform_name = transform.debug();
-                metrics.observe_transform_time(&transform_name, duration);
-                metrics.inc_transform(before != after, &transform_name);
-            }
         }
 
         Ok(())

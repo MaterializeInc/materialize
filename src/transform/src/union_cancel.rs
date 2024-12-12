@@ -29,12 +29,16 @@ use crate::{TransformCtx, TransformError};
 pub struct UnionBranchCancellation;
 
 impl crate::Transform for UnionBranchCancellation {
+    fn name(&self) -> &'static str {
+        "UnionBranchCancellation"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "union_branch_cancellation")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         _: &mut TransformCtx,

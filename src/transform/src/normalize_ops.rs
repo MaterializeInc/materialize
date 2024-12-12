@@ -19,12 +19,16 @@ use crate::TransformCtx;
 pub struct NormalizeOps;
 
 impl crate::Transform for NormalizeOps {
+    fn name(&self) -> &'static str {
+        "NormalizeOps"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "normalize_ops")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         _ctx: &mut TransformCtx,

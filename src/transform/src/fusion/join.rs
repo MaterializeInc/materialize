@@ -40,12 +40,16 @@ use crate::{TransformCtx, TransformError};
 pub struct Join;
 
 impl crate::Transform for Join {
+    fn name(&self) -> &'static str {
+        "JoinFusion"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "join_fusion")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         _: &mut TransformCtx,

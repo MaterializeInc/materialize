@@ -117,12 +117,16 @@ impl CheckedRecursion for PredicatePushdown {
 }
 
 impl crate::Transform for PredicatePushdown {
+    fn name(&self) -> &'static str {
+        "PredicatePushdown"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "predicate_pushdown")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         _: &mut TransformCtx,

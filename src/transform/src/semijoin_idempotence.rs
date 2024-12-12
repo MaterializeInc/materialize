@@ -55,12 +55,16 @@ impl CheckedRecursion for SemijoinIdempotence {
 }
 
 impl crate::Transform for SemijoinIdempotence {
+    fn name(&self) -> &'static str {
+        "SemijoinIdempotence"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "semijoin_idempotence")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         _: &mut TransformCtx,

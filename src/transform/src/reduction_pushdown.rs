@@ -60,12 +60,16 @@ use crate::TransformCtx;
 pub struct ReductionPushdown;
 
 impl crate::Transform for ReductionPushdown {
+    fn name(&self) -> &'static str {
+        "ReductionPushdown"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "reduction_pushdown")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         _: &mut TransformCtx,

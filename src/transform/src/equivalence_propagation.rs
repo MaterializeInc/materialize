@@ -43,12 +43,16 @@ use crate::{TransformCtx, TransformError};
 pub struct EquivalencePropagation;
 
 impl crate::Transform for EquivalencePropagation {
+    fn name(&self) -> &'static str {
+        "EquivalencePropagation"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer"
         level = "trace",
         fields(path.segment = "equivalence_propagation")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         ctx: &mut TransformCtx,

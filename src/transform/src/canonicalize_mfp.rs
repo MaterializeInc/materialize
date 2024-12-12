@@ -38,12 +38,16 @@ use crate::TransformCtx;
 pub struct CanonicalizeMfp;
 
 impl crate::Transform for CanonicalizeMfp {
+    fn name(&self) -> &'static str {
+        "CanonicalizeMfp"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "canonicalize_mfp")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         _: &mut TransformCtx,

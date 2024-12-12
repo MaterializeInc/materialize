@@ -20,12 +20,16 @@ use crate::TransformCtx;
 pub struct ProjectionExtraction;
 
 impl crate::Transform for ProjectionExtraction {
+    fn name(&self) -> &'static str {
+        "ProjectionExtraction"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "projection_extraction")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         _: &mut TransformCtx,
