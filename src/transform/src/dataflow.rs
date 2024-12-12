@@ -217,7 +217,7 @@ fn inline_views(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
 )]
 fn optimize_dataflow_relations(
     dataflow: &mut DataflowDesc,
-    optimizer: &mut Optimizer,
+    optimizer: &Optimizer,
     ctx: &mut TransformCtx,
 ) -> Result<(), TransformError> {
     // Re-optimize each dataflow

@@ -64,7 +64,7 @@ max_sinks                                25                      "The maximum nu
 max_sources                              200                     "The maximum number of sources in the region, across all schemas (Materialize)."
 max_tables                               200                     "The maximum number of tables in the region, across all schemas (Materialize)."
 network_policy                           default                 "Sets the fallback network policy applied to all users without an explicit policy."
-optimizer_e2e_latency_warning_threshold  500 ms                  "Sets the duration that a query can take to compile; queries that take longer will trigger a warning. If this value is specified without units, it is taken as milliseconds. A value of zero disables the timeout (Materialize)."
+optimizer_e2e_latency_warning_threshold  "500 ms"                "Sets the duration that a query can take to compile; queries that take longer will trigger a warning. If this value is specified without units, it is taken as milliseconds. A value of zero disables the timeout (Materialize)."
 mz_version                               <VARIES>                "Shows the Materialize server version (Materialize)."
 real_time_recency                        off                     "Feature flag indicating whether real time recency is enabled (Materialize)."
 real_time_recency_timeout                "10 s"                  "Sets the maximum allowed duration of SELECTs that actively use real-time recency, i.e. reach out to an external system to determine their most recencly exposed data (Materialize)."

@@ -79,7 +79,6 @@ pub mod normalize_lets;
 pub mod normalize_ops;
 pub mod notice;
 pub mod ordering;
-
 pub mod predicate_pushdown;
 pub mod reduce_elision;
 pub mod reduce_reduction;
@@ -218,7 +217,7 @@ pub trait Transform: fmt::Debug {
     /// Transform a relation into a functionally equivalent relation.
     ///
     /// You transform should implement this method, but users should call
-    /// [`transform`] instead.
+    /// `transform` instead.
     fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
