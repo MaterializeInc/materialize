@@ -928,10 +928,12 @@ fn create_environmentd_statefulset_object(
         ));
     }
     if let Some(status) = &mz.status {
-        args.push(format!(
-            "--orchestrator-kubernetes-name-prefix=mz{}-",
-            status.resource_id
-        ));
+        if !mz.spec.disable_resource_id_prefixing {
+            args.push(format!(
+                "--orchestrator-kubernetes-name-prefix=mz{}-",
+                status.resource_id
+            ));
+        }
     }
 
     // Add logging and tracing arguments.

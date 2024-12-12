@@ -149,6 +149,10 @@ pub mod v1alpha1 {
         // The issuer_ref field is required.
         // This currently is only used for environmentd, but will eventually support clusterd.
         pub internal_certificate_spec: Option<MaterializeCertSpec>,
+        // Disable `mz{resource_id}-` prefixing of kubernetes objects.
+        // This will disable support for running multiple Materializes in a single namespace.
+        #[serde(default)]
+        pub disable_resource_id_prefixing: bool,
     }
 
     impl Materialize {
@@ -249,7 +253,11 @@ pub mod v1alpha1 {
         }
 
         pub fn name_prefixed(&self, suffix: &str) -> String {
-            format!("mz{}-{}", self.resource_id(), suffix)
+            if self.spec.disable_resource_id_prefixing {
+                suffix.to_owned()
+            } else {
+                format!("mz{}-{}", self.resource_id(), suffix)
+            }
         }
 
         pub fn resource_id(&self) -> &str {
