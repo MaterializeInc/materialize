@@ -1684,6 +1684,8 @@ SERVICES = [
             "--tls-key=/secrets/balancerd.key",
             "--tls-cert=/secrets/balancerd.crt",
             "--internal-tls",
+            # Nonsensical but we don't need cancellations here
+            "--cancellation-resolver-dir=/secrets",
         ],
         depends_on=["test-certs"],
         volumes=[
