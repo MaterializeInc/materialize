@@ -884,7 +884,7 @@ impl Optimizer {
     /// This method should only be called with non-empty `indexes` when optimizing a dataflow,
     /// as the optimizations may lock in the use of arrangements that may cease to exist.
     fn transform(
-        &mut self,
+        &self,
         relation: &mut MirRelationExpr,
         args: &mut TransformCtx,
     ) -> Result<(), TransformError> {
