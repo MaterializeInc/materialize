@@ -503,11 +503,11 @@ impl Coordinator {
         for table in self.catalog().entries().filter(|entry| entry.is_table()) {
             appends.entry(table.id()).or_default();
         }
-        let appends = appends
+        let appends: Vec<_> = appends
             .into_iter()
             .map(|(id, updates)| {
                 let gid = self.catalog().get_entry(&id).latest_global_id();
-                let updates = updates
+                let updates: Vec<_> = updates
                     .into_iter()
                     .map(|(row, diff)| TimestamplessUpdate { row, diff })
                     .collect();
@@ -520,7 +520,13 @@ impl Coordinator {
             .metrics
             .append_table_duration_seconds
             .with_label_values(&[]);
-        info!("Appending to tables at {timestamp}, advancing to {advance_to}");
+        let modified_tables: Vec<_> = appends
+            .iter()
+            .filter_map(|(id, updates)| if !updates.is_empty() { Some(id) } else { None })
+            .collect();
+        if !modified_tables.is_empty() {
+            info!("Appending to tables, {modified_tables:?}, at {timestamp}, advancing to {advance_to}");
+        }
         let append_fut = self
             .controller
             .storage
