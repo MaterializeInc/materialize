@@ -54,7 +54,7 @@ pub fn optimize_dataflow(
     if fast_path_optimizer {
         optimize_dataflow_relations(
             dataflow,
-            &mut Optimizer::fast_path_optimizer(transform_ctx),
+            &Optimizer::fast_path_optimizer(transform_ctx),
             transform_ctx,
         )?;
     } else {
@@ -62,7 +62,7 @@ pub fn optimize_dataflow(
         optimize_dataflow_relations(
             dataflow,
             #[allow(deprecated)]
-            &mut Optimizer::logical_optimizer(transform_ctx),
+            &Optimizer::logical_optimizer(transform_ctx),
             transform_ctx,
         )?;
 
@@ -79,14 +79,14 @@ pub fn optimize_dataflow(
         // pushed down across views.
         optimize_dataflow_relations(
             dataflow,
-            &mut Optimizer::logical_cleanup_pass(transform_ctx, false),
+            &Optimizer::logical_cleanup_pass(transform_ctx, false),
             transform_ctx,
         )?;
 
         // Physical optimization pass
         optimize_dataflow_relations(
             dataflow,
-            &mut Optimizer::physical_optimizer(transform_ctx),
+            &Optimizer::physical_optimizer(transform_ctx),
             transform_ctx,
         )?;
 
