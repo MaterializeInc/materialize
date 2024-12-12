@@ -28,7 +28,7 @@ def get_ancestor_overrides_for_performance_regressions(
 
     min_ancestor_mz_version_per_commit = dict()
 
-    if scenario_class_name in ("KafkaUpsertUnique", "ParallelIngestion"):
+    if scenario_class_name in ("KafkaUpsert", "KafkaUpsertUnique", "ParallelIngestion"):
         # PR#30617 (storage/kafka: use separate consumer for metadata probing)
         # adds 1s of delay to Kafka source startup
         min_ancestor_mz_version_per_commit[
