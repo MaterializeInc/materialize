@@ -205,6 +205,7 @@
 use std::fmt::Debug;
 use std::fmt::Write;
 
+use bytes::Bytes;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::Hashable;
@@ -282,16 +283,17 @@ pub struct TxnsCodecDefault;
 
 impl TxnsCodec for TxnsCodecDefault {
     type Key = ShardId;
-    type Val = Vec<u8>;
+    type Val = Bytes;
     fn schemas() -> (<Self::Key as Codec>::Schema, <Self::Val as Codec>::Schema) {
         (ShardIdSchema, VecU8Schema)
     }
     fn encode(e: TxnsEntry) -> (Self::Key, Self::Val) {
         match e {
-            TxnsEntry::Register(data_id, ts) => (data_id, ts.to_vec()),
+            TxnsEntry::Register(data_id, ts) => (data_id, Bytes::from(ts.to_vec())),
             TxnsEntry::Append(data_id, ts, batch) => {
                 // Put the ts at the end to let decode truncate it off.
-                (data_id, batch.into_iter().chain(ts).collect())
+                let batch = batch.into_iter().chain(ts).collect::<Vec<_>>();
+                (data_id, Bytes::from(batch))
             }
         }
     }
@@ -437,7 +439,7 @@ pub(crate) async fn empty_caa<S, F, K, V, T, D>(
 #[instrument(level = "debug", fields(shard=%data_write.shard_id(), ts=?commit_ts))]
 async fn apply_caa<K, V, T, D>(
     data_write: &mut DataWriteApply<K, V, T, D>,
-    batch_raws: &Vec<&[u8]>,
+    batch_raws: &Vec<Bytes>,
     commit_ts: T,
 ) where
     K: Debug + Codec,
