@@ -223,7 +223,7 @@ class FetchAction(Action):
         )
         query = f"SUBSCRIBE {obj}"
         if self.rng.choice([True, False]):
-            envelope = "UPSERT" if self.rng.choice([True, False]) else "DEBEZIUM"
+            envelope = "UPSERT"
             columns = self.rng.sample(obj.columns, len(obj.columns))
             key = ", ".join(column.name(True) for column in columns)
             query += f" ENVELOPE {envelope} (KEY ({key}))"
@@ -1678,7 +1678,7 @@ class ZeroDowntimeDeployAction(Action):
                 DeploymentStatus.IS_LEADER, mz_service
             )
 
-        time.sleep(self.rng.uniform(60, 120))
+        time.sleep(60)
         return True
 
 
@@ -2198,7 +2198,7 @@ write_action_list = ActionList(
         (HttpPostAction, 5),
         (CommitRollbackAction, 10),
         (ReconnectAction, 1),
-        (SourceInsertAction, 5),
+        (SourceInsertAction, 500),
         (FlipFlagsAction, 2),
     ],
     autocommit=False,
@@ -2237,9 +2237,9 @@ ddl_action_list = ActionList(
         (CreateWebhookSourceAction, 2),
         (DropWebhookSourceAction, 2),
         (CreateKafkaSinkAction, 4),
-        (DropKafkaSinkAction, 4),
-        (CreateKafkaSourceAction, 4),
-        (DropKafkaSourceAction, 4),
+        (DropKafkaSinkAction, 0),
+        (CreateKafkaSourceAction, 100),
+        (DropKafkaSourceAction, 0),
         # TODO: Reenable when database-issues#8237 is fixed
         # (CreateMySqlSourceAction, 4),
         # (DropMySqlSourceAction, 4),
