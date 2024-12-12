@@ -1417,6 +1417,7 @@ steps:
       - id: parallel-workload-dml
         label: "Parallel Workload (DML)"
         depends_on: build-aarch64
+        parallelism: 10
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 90
         agents:
@@ -1429,6 +1430,7 @@ steps:
       - id: parallel-workload-ddl
         label: "Parallel Workload (DDL)"
         depends_on: build-aarch64
+        parallelism: 10
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 90
         agents:
@@ -1441,6 +1443,7 @@ steps:
       - id: parallel-workload-ddl-only
         label: "Parallel Workload (DDL Only)"
         depends_on: build-aarch64
+        parallelism: 10
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 90
         agents:
@@ -1453,6 +1456,7 @@ steps:
       - id: parallel-workload-many-threads
         label: "Parallel Workload (many threads)"
         depends_on: build-aarch64
+        parallelism: 10
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 90
         agents:
@@ -1467,6 +1471,7 @@ steps:
       - id: parallel-workload-rename-naughty
         label: "Parallel Workload (rename + naughty identifiers)"
         depends_on: build-aarch64
+        parallelism: 10
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 90
         agents:
@@ -1479,6 +1484,7 @@ steps:
       - id: parallel-workload-rename
         label: "Parallel Workload (rename)"
         depends_on: build-aarch64
+        parallelism: 10
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 90
         agents:
@@ -1491,6 +1497,7 @@ steps:
       - id: parallel-workload-cancel
         label: "Parallel Workload (cancel)"
         depends_on: build-aarch64
+        parallelism: 10
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 90
         skip: "TODO(def-): Reenable when database-issues#835 is fixed"
@@ -1504,6 +1511,7 @@ steps:
       - id: parallel-workload-kill
         label: "Parallel Workload (kill)"
         depends_on: build-aarch64
+        parallelism: 10
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 90
         agents:
@@ -1516,6 +1524,7 @@ steps:
       - id: parallel-workload-backup-restore
         label: "Parallel Workload (backup & restore)"
         depends_on: build-aarch64
+        parallelism: 10
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 90
         skip: "TODO(def-): Properly stop all db actions during backup & restore"
@@ -1529,6 +1538,7 @@ steps:
       - id: parallel-workload-0dt
         label: "Parallel Workload (0dt deploy)"
         depends_on: build-x86_64
+        parallelism: 10
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 90
         agents:
