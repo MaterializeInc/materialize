@@ -85,7 +85,7 @@ impl OptimizerMetrics {
     pub fn inc_transform(&self, hit: bool, transform: &str) {
         self.transform_hits
             .with_label_values(&[transform])
-            .inc_by(hit as u64);
+            .inc_by(if hit { 1 } else { 0 });
         self.transform_total.with_label_values(&[transform]).inc();
     }
 
