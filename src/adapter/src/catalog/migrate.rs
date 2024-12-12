@@ -31,7 +31,7 @@ fn rewrite_ast_items<F>(tx: &mut Transaction<'_>, mut f: F) -> Result<(), anyhow
 where
     F: for<'a> FnMut(
         &'a mut Transaction<'_>,
-        GlobalId,
+        CatalogItemId,
         &'a mut Statement<Raw>,
     ) -> Result<(), anyhow::Error>,
 {
@@ -39,8 +39,8 @@ where
 
     for mut item in tx.get_items() {
         let mut stmt = mz_sql::parse::parse(&item.create_sql)?.into_element().ast;
-        // TODO(alter_table): Switch this to CatalogItemId.
-        f(tx, item.global_id, &mut stmt).await?;
+        f(tx, item.id, &mut stmt)?;
+
         item.create_sql = stmt.to_ast_string_stable();
 
         updated_items.insert(item.id, item);
@@ -110,8 +110,7 @@ pub(crate) async fn migrate(
         ast_rewrite_sources_to_tables(tx, now)?;
     }
 
-    rewrite_ast_items(tx, |tx, item, stmt, all_items_and_statements| {
-        let now = now.clone();
+    rewrite_ast_items(tx, |_tx, _id, _stmt| {
         // Add per-item AST migrations below.
         //
         // Each migration should be a function that takes `stmt` (the AST
@@ -121,7 +120,7 @@ pub(crate) async fn migrate(
         // Migration functions may also take `tx` as input to stage
         // arbitrary changes to the catalog.
 
-            Ok(())
+        Ok(())
     })?;
 
     // Load items into catalog. We make sure to consolidate the old updates with the new updates to
