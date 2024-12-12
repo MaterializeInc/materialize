@@ -107,6 +107,14 @@ pub const KAFKA_DEFAULT_AWS_PRIVATELINK_ENDPOINT_IDENTIFICATION_ALGORITHM: Confi
     Connection config. default: 'none'",
     );
 
+pub const KAFKA_BUFFERED_EVENT_RESIZE_THRESHOLD_ELEMENTS: Config<usize> = Config::new(
+    "kafka_buffered_event_resize_threshold_elements",
+    1000,
+    "In the Kafka sink operator we might need to buffer messages before emitting them. As a \
+        performance optimization we reuse the buffer allocations, but shrink it to retain at \
+        most this number of elements.",
+);
+
 // MySQL
 
 /// Replication heartbeat interval requested from the MySQL server.
@@ -232,6 +240,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&KAFKA_CLIENT_ID_ENRICHMENT_RULES)
         .add(&KAFKA_POLL_MAX_WAIT)
         .add(&KAFKA_DEFAULT_AWS_PRIVATELINK_ENDPOINT_IDENTIFICATION_ALGORITHM)
+        .add(&KAFKA_BUFFERED_EVENT_RESIZE_THRESHOLD_ELEMENTS)
         .add(&MYSQL_REPLICATION_HEARTBEAT_INTERVAL)
         .add(&MYSQL_OFFSET_KNOWN_INTERVAL)
         .add(&PG_FETCH_SLOT_RESUME_LSN_INTERVAL)

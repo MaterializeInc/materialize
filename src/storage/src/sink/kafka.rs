@@ -101,6 +101,7 @@ use mz_ore::vec::VecExt;
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row, RowArena, Timestamp};
 use mz_storage_client::sink::progress_key::ProgressKey;
 use mz_storage_types::configuration::StorageConfiguration;
+use mz_storage_types::dyncfgs::KAFKA_BUFFERED_EVENT_RESIZE_THRESHOLD_ELEMENTS;
 use mz_storage_types::errors::{ContextCreationError, ContextCreationErrorExt, DataflowError};
 use mz_storage_types::sinks::{
     KafkaSinkConnection, KafkaSinkFormatType, MetadataFilled, SinkEnvelope, SinkPartitionStrategy,
@@ -625,6 +626,8 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
     // We want exactly one worker to send all the data to the sink topic.
     let hashed_id = sink_id.hashed();
     let is_active_worker = usize::cast_from(hashed_id) % scope.peers() == scope.index();
+    let buffer_min_capacity =
+        KAFKA_BUFFERED_EVENT_RESIZE_THRESHOLD_ELEMENTS.handle(storage_configuration.config_set());
 
     let mut input = builder.new_disconnected_input(&input.inner, Exchange::new(move |_| hashed_id));
 
@@ -748,11 +751,20 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
                         if !transaction_begun {
                             producer.begin_transaction().await?;
                         }
+
+                        // N.B. Shrinking the Vec here is important because when starting the Sink
+                        // we might buffer a ton of updates into these collections, e.g. if someone
+                        // deleted the progress topic and the resume upper is 0, and we don't want
+                        // to keep around a massively oversized VEc.
+                        deferred_updates.shrink_to(buffer_min_capacity.get());
                         extra_updates.extend(
                             deferred_updates
                                 .drain_filter_swapping(|(_, time, _)| !progress.less_equal(time)),
                         );
                         extra_updates.sort_unstable_by(|a, b| a.1.cmp(&b.1));
+
+                        // N.B. See the comment above.
+                        extra_updates.shrink_to(buffer_min_capacity.get());
                         for (message, time, diff) in extra_updates.drain(..) {
                             producer.send(&message, time, diff)?;
                         }
