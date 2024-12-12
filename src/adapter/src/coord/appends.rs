@@ -515,18 +515,25 @@ impl Coordinator {
             })
             .collect();
 
+        // Log non-empty user appends.
+        let modified_tables: Vec<_> = appends
+            .iter()
+            .filter_map(|(id, updates)| {
+                if id.is_user() && !updates.is_empty() {
+                    Some(id)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        if !modified_tables.is_empty() {
+            info!("Appending to tables, {modified_tables:?}, at {timestamp}, advancing to {advance_to}");
+        }
         // Instrument our table writes since they can block the coordinator.
         let histogram = self
             .metrics
             .append_table_duration_seconds
             .with_label_values(&[]);
-        let modified_tables: Vec<_> = appends
-            .iter()
-            .filter_map(|(id, updates)| if !updates.is_empty() { Some(id) } else { None })
-            .collect();
-        if !modified_tables.is_empty() {
-            info!("Appending to tables, {modified_tables:?}, at {timestamp}, advancing to {advance_to}");
-        }
         let append_fut = self
             .controller
             .storage
