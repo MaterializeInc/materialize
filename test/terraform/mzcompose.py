@@ -70,7 +70,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         nargs="*",
         default=[
             "array.td",
-            "cancel-subscribe.td" "char-varchar-distinct.td",
+            "cancel-subscribe.td",
+            "char-varchar-distinct.td",
             "char-varchar-joins.td",
             "char-varchar-multibyte.td",
             "constants.td",
