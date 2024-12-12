@@ -16,6 +16,7 @@ use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use std::time::Instant;
 
+use bytes::Bytes;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
@@ -96,9 +97,9 @@ pub struct TxnsCacheState<T> {
     /// timestamps are not unique.
     ///
     /// Invariant: Values are sorted by timestamp.
-    pub(crate) unapplied_batches: BTreeMap<usize, (ShardId, Vec<u8>, T)>,
+    pub(crate) unapplied_batches: BTreeMap<usize, (ShardId, Bytes, T)>,
     /// An index into `unapplied_batches` keyed by the serialized batch.
-    batch_idx: HashMap<Vec<u8>, usize>,
+    batch_idx: HashMap<Bytes, usize>,
     /// The times at which each data shard has been written.
     ///
     /// Invariant: Contains all unapplied writes and registers.
@@ -430,7 +431,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync> TxnsCac
             .fold(
                 BTreeMap::new(),
                 |mut accum: BTreeMap<_, Vec<_>>, (data_id, batch, ts)| {
-                    accum.entry((ts, data_id)).or_default().push(batch);
+                    accum.entry((ts, data_id)).or_default().push(batch.clone());
                     accum
                 },
             )
@@ -460,8 +461,8 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync> TxnsCac
     pub(crate) fn filter_retractions<'a>(
         &'a self,
         expected_txns_upper: &T,
-        retractions: impl Iterator<Item = (&'a Vec<u8>, &'a ([u8; 8], ShardId))>,
-    ) -> impl Iterator<Item = (&'a Vec<u8>, &'a ([u8; 8], ShardId))> {
+        retractions: impl Iterator<Item = (&'a Bytes, &'a ([u8; 8], ShardId))>,
+    ) -> impl Iterator<Item = (&'a Bytes, &'a ([u8; 8], ShardId))> {
         assert_eq!(self.only_data_id, None);
         assert!(&self.progress_exclusive >= expected_txns_upper);
         retractions.filter(|(batch_raw, _)| self.batch_idx.contains_key(*batch_raw))
@@ -542,7 +543,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync> TxnsCac
         debug_assert_eq!(self.validate(), Ok(()));
     }
 
-    fn push_append(&mut self, data_id: ShardId, batch: Vec<u8>, ts: T, diff: i64) {
+    fn push_append(&mut self, data_id: ShardId, batch: Bytes, ts: T, diff: i64) {
         self.assert_only_data_id(&data_id);
         // Since we keep the original non-advanced timestamp around, retractions
         // necessarily might be for times in the past, so `|| diff < 0`.
@@ -1152,9 +1153,9 @@ impl<T: Timestamp + TotalOrder> DataTimes<T> {
 }
 
 #[derive(Debug)]
-pub(crate) enum Unapplied<'a> {
+pub(crate) enum Unapplied {
     RegisterForget,
-    Batch(Vec<&'a Vec<u8>>),
+    Batch(Vec<Bytes>),
 }
 
 #[cfg(test)]

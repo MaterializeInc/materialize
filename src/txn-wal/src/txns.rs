@@ -15,6 +15,7 @@ use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use std::time::Instant;
 
+use bytes::Bytes;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use futures::stream::FuturesUnordered;
@@ -589,10 +590,6 @@ where
                                 .await;
                             }
                             Unapplied::Batch(batch_raws) => {
-                                let batch_raws = batch_raws
-                                    .into_iter()
-                                    .map(|batch_raw| batch_raw.as_slice())
-                                    .collect();
                                 crate::apply_caa(
                                     &mut data_write,
                                     &batch_raws,
@@ -604,7 +601,7 @@ where
                                     // encoded bytes, so we intentionally use the raw batch so that
                                     // it definitely retracts.
                                     ret.push((
-                                        batch_raw.to_vec(),
+                                        batch_raw.clone(),
                                         (T::encode(unapplied_ts), data_id),
                                     ));
                                 }
@@ -693,7 +690,7 @@ where
 /// a normal txn with [Txn::tidy].
 #[derive(Debug, Default)]
 pub struct Tidy {
-    pub(crate) retractions: BTreeMap<Vec<u8>, ([u8; 8], ShardId)>,
+    pub(crate) retractions: BTreeMap<Bytes, ([u8; 8], ShardId)>,
 }
 
 impl Tidy {
