@@ -54,3 +54,17 @@ steps:
             - --benchmarking-env
             - --scenario=StagingBench
             - --sqlite-store
+
+  - id: terraform-aws-persistent-test
+    label: "Terraform AWS Persistent Test"
+    timeout_in_minutes: 1440 # 24 hours
+    concurrency: 1
+    concurrency_group: 'terraform-aws-persistent-test'
+    plugins:
+      - ./ci/plugins/scratch-aws-access: ~
+      - ./ci/plugins/mzcompose:
+          composition: terraform
+          run: aws-persistent-test
+          args: ["--runtime=82800"] # 23 hours
+    agents:
+      queue: linux-aarch64-small
