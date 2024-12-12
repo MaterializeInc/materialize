@@ -128,5 +128,4 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&DEFAULT_SINK_PARTITION_STRATEGY)
         .add(&ENABLE_CONTINUAL_TASK_BUILTINS)
         .add(&ENABLE_EXPRESSION_CACHE)
-        .add(&ENABLE_SOURCE_TABLE_MIGRATION)
 }
