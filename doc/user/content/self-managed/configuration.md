@@ -10,10 +10,7 @@ You can configure the Materialize operator chart. For example:
 
 - **RBAC**
 
-  The chart creates a `ClusterRole` and `ClusterRoleBinding` by default. To use
-  an existing `ClusterRole`, set [`rbac.create=false`](/self-managed/configuration/#rbaccreate) and specify the name of
-  the existing `ClusterRole` using the
-  [`rbac.clusterRole`](/self-managed/configuration/#rbacclusterrole) parameter.
+  The chart creates a `ClusterRole` and `ClusterRoleBinding` by default.
 
 - **Network Policies**
 
