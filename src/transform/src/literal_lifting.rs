@@ -52,12 +52,16 @@ impl CheckedRecursion for LiteralLifting {
 }
 
 impl crate::Transform for LiteralLifting {
+    fn name(&self) -> &'static str {
+        "LiteralLifting"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "literal_lifting")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         _: &mut TransformCtx,

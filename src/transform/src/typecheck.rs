@@ -1159,7 +1159,11 @@ macro_rules! type_error {
 }
 
 impl crate::Transform for Typecheck {
-    fn transform(
+    fn name(&self) -> &'static str {
+        "Typecheck"
+    }
+
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         transform_ctx: &mut crate::TransformCtx,

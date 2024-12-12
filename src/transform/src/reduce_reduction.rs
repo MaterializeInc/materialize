@@ -23,13 +23,17 @@ use mz_expr::MirRelationExpr;
 pub struct ReduceReduction;
 
 impl crate::Transform for ReduceReduction {
+    fn name(&self) -> &'static str {
+        "ReduceReduction"
+    }
+
     /// Transforms an expression through accumulated knowledge.
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "reduce_reduction")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         ctx: &mut TransformCtx,

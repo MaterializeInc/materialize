@@ -56,12 +56,16 @@ impl CheckedRecursion for JoinImplementation {
 }
 
 impl crate::Transform for JoinImplementation {
+    fn name(&self) -> &'static str {
+        "JoinImplementation"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "join_implementation")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         ctx: &mut TransformCtx,

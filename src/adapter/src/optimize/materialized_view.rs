@@ -194,8 +194,12 @@ impl Optimize<HirRelationExpr> for Optimizer {
 
         // MIR ⇒ MIR optimization (local)
         let mut df_meta = DataflowMetainfo::default();
-        let mut transform_ctx =
-            TransformCtx::local(&self.config.features, &self.typecheck_ctx, &mut df_meta);
+        let mut transform_ctx = TransformCtx::local(
+            &self.config.features,
+            &self.typecheck_ctx,
+            &mut df_meta,
+            Some(&self.metrics),
+        );
         let expr = optimize_mir_local(expr, &mut transform_ctx)?.into_inner();
 
         self.duration += time.elapsed();
@@ -282,6 +286,7 @@ impl Optimize<LocalMirPlan> for Optimizer {
             &self.config.features,
             &self.typecheck_ctx,
             &mut df_meta,
+            Some(&self.metrics),
         );
         // Apply source monotonicity overrides.
         for id in self.force_source_non_monotonic.iter() {

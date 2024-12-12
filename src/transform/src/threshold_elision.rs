@@ -25,12 +25,16 @@ use crate::TransformCtx;
 pub struct ThresholdElision;
 
 impl crate::Transform for ThresholdElision {
+    fn name(&self) -> &'static str {
+        "ThresholdElision"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "threshold_elision")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         ctx: &mut TransformCtx,

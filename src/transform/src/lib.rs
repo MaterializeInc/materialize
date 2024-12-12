@@ -32,6 +32,7 @@ use mz_ore::stack::RecursionLimitError;
 use mz_ore::{soft_assert_or_log, soft_panic_or_log};
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::GlobalId;
+use mz_sql::optimizer_metrics::OptimizerMetrics;
 use tracing::error;
 
 use crate::canonicalize_mfp::CanonicalizeMfp;
@@ -121,6 +122,8 @@ pub struct TransformCtx<'a> {
     pub typecheck_ctx: &'a SharedContext,
     /// Transforms can use this field to communicate information outside the result plans.
     pub df_meta: &'a mut DataflowMetainfo,
+    /// Metrics for the optimizer.
+    pub metrics: Option<&'a OptimizerMetrics>,
 }
 
 const FOLD_CONSTANTS_LIMIT: usize = 10000;
@@ -136,6 +139,7 @@ impl<'a> TransformCtx<'a> {
         features: &'a OptimizerFeatures,
         typecheck_ctx: &'a SharedContext,
         df_meta: &'a mut DataflowMetainfo,
+        metrics: Option<&'a OptimizerMetrics>,
     ) -> Self {
         Self {
             indexes: &EmptyIndexOracle,
@@ -144,6 +148,7 @@ impl<'a> TransformCtx<'a> {
             features,
             typecheck_ctx,
             df_meta,
+            metrics,
         }
     }
 
@@ -157,6 +162,7 @@ impl<'a> TransformCtx<'a> {
         features: &'a OptimizerFeatures,
         typecheck_ctx: &'a SharedContext,
         df_meta: &'a mut DataflowMetainfo,
+        metrics: Option<&'a OptimizerMetrics>,
     ) -> Self {
         Self {
             indexes,
@@ -165,6 +171,7 @@ impl<'a> TransformCtx<'a> {
             features,
             df_meta,
             typecheck_ctx,
+            metrics,
         }
     }
 
@@ -183,8 +190,35 @@ impl<'a> TransformCtx<'a> {
 
 /// Types capable of transforming relation expressions.
 pub trait Transform: fmt::Debug {
-    /// Transform a relation into a functionally equivalent relation.
+    /// Transforms a relation into a functionally equivalent relation.
+    ///
+    /// This is a wrapper around `actually_perform_transform` that also
+    /// measures the time taken and updates the optimizer metrics.
     fn transform(
+        &self,
+        relation: &mut MirRelationExpr,
+        args: &mut TransformCtx,
+    ) -> Result<(), TransformError> {
+        let before = relation.hash_to_u64();
+        let start = std::time::Instant::now();
+        let res = self.actually_perform_transform(relation, args);
+        let duration = start.elapsed();
+        let after = relation.hash_to_u64();
+
+        if let Some(metrics) = args.metrics {
+            let transform_name = self.name();
+            metrics.observe_transform_time(transform_name, duration);
+            metrics.inc_transform(before != after, transform_name);
+        }
+
+        res
+    }
+
+    /// Transform a relation into a functionally equivalent relation.
+    ///
+    /// You transform should implement this method, but users should call
+    /// `transform` instead.
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         ctx: &mut TransformCtx,
@@ -197,6 +231,9 @@ pub trait Transform: fmt::Debug {
     fn debug(&self) -> String {
         format!("{:?}", self)
     }
+
+    /// A short string naming the transform, as it will be reported in metrics.
+    fn name(&self) -> &'static str;
 }
 
 /// Errors that can occur during a transformation.
@@ -324,12 +361,16 @@ impl Fixpoint {
 }
 
 impl Transform for Fixpoint {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = self.name)
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         ctx: &mut TransformCtx,
@@ -525,12 +566,16 @@ impl Default for FuseAndCollapse {
 }
 
 impl Transform for FuseAndCollapse {
+    fn name(&self) -> &'static str {
+        "FuseAndCollapse"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "fuse_and_collapse")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         ctx: &mut TransformCtx,

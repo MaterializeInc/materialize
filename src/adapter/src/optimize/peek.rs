@@ -178,8 +178,12 @@ impl Optimize<HirRelationExpr> for Optimizer {
 
         // MIR ⇒ MIR optimization (local)
         let mut df_meta = DataflowMetainfo::default();
-        let mut transform_ctx =
-            TransformCtx::local(&self.config.features, &self.typecheck_ctx, &mut df_meta);
+        let mut transform_ctx = TransformCtx::local(
+            &self.config.features,
+            &self.typecheck_ctx,
+            &mut df_meta,
+            Some(&self.metrics),
+        );
         let expr = optimize_mir_local(expr, &mut transform_ctx)?.into_inner();
 
         self.duration += time.elapsed();
@@ -313,6 +317,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
             &self.config.features,
             &self.typecheck_ctx,
             &mut df_meta,
+            Some(&self.metrics),
         );
 
         // Let's already try creating a fast path plan. If successful, we don't need to run the

@@ -25,12 +25,16 @@ use crate::TransformCtx;
 pub struct ReduceElision;
 
 impl crate::Transform for ReduceElision {
+    fn name(&self) -> &'static str {
+        "ReduceElision"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "reduce_elision")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         ctx: &mut TransformCtx,

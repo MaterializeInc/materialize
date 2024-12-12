@@ -20,12 +20,16 @@ use crate::TransformCtx;
 pub struct Project;
 
 impl crate::Transform for Project {
+    fn name(&self) -> &'static str {
+        "ProjectFusion"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "project_fusion")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         _: &mut TransformCtx,

@@ -19,12 +19,16 @@ use crate::TransformCtx;
 pub struct TopK;
 
 impl crate::Transform for TopK {
+    fn name(&self) -> &'static str {
+        "TopKFusion"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "topk_fusion")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         _: &mut TransformCtx,

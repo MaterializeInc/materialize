@@ -25,12 +25,16 @@ use crate::TransformCtx;
 pub struct UnionNegateFusion;
 
 impl crate::Transform for UnionNegateFusion {
+    fn name(&self) -> &'static str {
+        "UnionNegateFusion"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "union_negate")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         _: &mut TransformCtx,

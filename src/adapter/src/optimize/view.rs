@@ -64,8 +64,12 @@ impl Optimize<HirRelationExpr> for Optimizer {
         let mut expr = expr.lower(&self.config, self.metrics.as_ref())?;
 
         let mut df_meta = DataflowMetainfo::default();
-        let mut transform_ctx =
-            TransformCtx::local(&self.config.features, &self.typecheck_ctx, &mut df_meta);
+        let mut transform_ctx = TransformCtx::local(
+            &self.config.features,
+            &self.typecheck_ctx,
+            &mut df_meta,
+            self.metrics.as_ref(),
+        );
 
         // First, we run a very simple optimizer pipeline, which only folds constants. This takes
         // care of constant INSERTs. (This optimizer is also used for INSERTs, not just VIEWs.)

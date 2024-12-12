@@ -70,12 +70,16 @@ impl CheckedRecursion for Demand {
 }
 
 impl crate::Transform for Demand {
+    fn name(&self) -> &'static str {
+        "Demand"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "demand")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         _: &mut TransformCtx,

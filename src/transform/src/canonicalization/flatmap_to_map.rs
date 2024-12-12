@@ -20,12 +20,16 @@ use crate::TransformCtx;
 pub struct FlatMapToMap;
 
 impl crate::Transform for FlatMapToMap {
+    fn name(&self) -> &'static str {
+        "FlatMapToMap"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "flatmap_to_map")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         _: &mut TransformCtx,

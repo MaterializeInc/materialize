@@ -28,12 +28,16 @@ use crate::TransformCtx;
 pub struct Map;
 
 impl crate::Transform for Map {
+    fn name(&self) -> &'static str {
+        "MapFusion"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "map_fusion")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         _: &mut TransformCtx,

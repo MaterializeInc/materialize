@@ -41,12 +41,16 @@ impl RelationCSE {
 }
 
 impl crate::Transform for RelationCSE {
+    fn name(&self) -> &'static str {
+        "RelationCSE"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "relation_cse")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         rel: &mut MirRelationExpr,
         ctx: &mut TransformCtx,

@@ -52,12 +52,16 @@ impl CheckedRecursion for NonNullRequirements {
 }
 
 impl crate::Transform for NonNullRequirements {
+    fn name(&self) -> &'static str {
+        "NonNullRequirements"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "non_null_requirements")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         _: &mut TransformCtx,

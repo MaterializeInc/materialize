@@ -4019,7 +4019,10 @@ pub fn serve(
 
         let metrics = Metrics::register_into(&metrics_registry);
         let metrics_clone = metrics.clone();
-        let optimizer_metrics = OptimizerMetrics::register_into(&metrics_registry);
+        let optimizer_metrics = OptimizerMetrics::register_into(
+            &metrics_registry,
+            catalog.system_config().optimizer_e2e_latency_warning_threshold(),
+        );
         let segment_client_clone = segment_client.clone();
         let coord_now = now.clone();
         let advance_timelines_interval = tokio::time::interval(catalog.config().timestamp_interval);

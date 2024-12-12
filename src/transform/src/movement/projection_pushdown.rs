@@ -60,13 +60,17 @@ impl CheckedRecursion for ProjectionPushdown {
 }
 
 impl crate::Transform for ProjectionPushdown {
+    fn name(&self) -> &'static str {
+        "ProjectionPushdown"
+    }
+
     // This method is only used during unit testing.
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "projection_pushdown")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         _: &mut TransformCtx,

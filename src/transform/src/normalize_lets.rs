@@ -64,12 +64,16 @@ impl NormalizeLets {
 }
 
 impl crate::Transform for NormalizeLets {
+    fn name(&self) -> &'static str {
+        "NormalizeLets"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "normalize_lets")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         ctx: &mut TransformCtx,

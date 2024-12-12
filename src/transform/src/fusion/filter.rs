@@ -37,7 +37,7 @@
 //! let features = OptimizerFeatures::default();
 //! let typecheck_ctx = typecheck::empty_context();
 //! let mut df_meta = DataflowMetainfo::default();
-//! let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &mut df_meta);
+//! let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &mut df_meta, None);
 //!
 //! // Filter.transform() will deduplicate any predicates
 //! Filter.transform(&mut expr, &mut transform_ctx);
@@ -56,12 +56,16 @@ use crate::TransformCtx;
 pub struct Filter;
 
 impl crate::Transform for Filter {
+    fn name(&self) -> &'static str {
+        "FilterFusion"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "filter_fusion")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         _: &mut TransformCtx,

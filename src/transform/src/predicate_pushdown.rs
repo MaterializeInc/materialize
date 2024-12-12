@@ -66,7 +66,7 @@
 //! let features = OptimizerFeatures::default();
 //! let typecheck_ctx = typecheck::empty_context();
 //! let mut df_meta = DataflowMetainfo::default();
-//! let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &mut df_meta);
+//! let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &mut df_meta, None);
 //!
 //! PredicatePushdown::default().transform(&mut expr, &mut transform_ctx);
 //!
@@ -117,12 +117,16 @@ impl CheckedRecursion for PredicatePushdown {
 }
 
 impl crate::Transform for PredicatePushdown {
+    fn name(&self) -> &'static str {
+        "PredicatePushdown"
+    }
+
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "predicate_pushdown")
     )]
-    fn transform(
+    fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
         _: &mut TransformCtx,
