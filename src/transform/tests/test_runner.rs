@@ -360,7 +360,7 @@ mod tests {
                 TransformCtx::local(&features, &typecheck_ctx, &mut df_meta, None);
 
             #[allow(deprecated)]
-            let mut optimizer = Optimizer::logical_optimizer(&mut transform_ctx);
+            let optimizer = Optimizer::logical_optimizer(&mut transform_ctx);
             dataflow = dataflow
                 .into_iter()
                 .map(|(id, rel)| {
@@ -394,8 +394,8 @@ mod tests {
             let mut transform_ctx =
                 TransformCtx::local(&features, &typecheck_ctx, &mut df_meta, None);
 
-            let mut log_optimizer = Optimizer::logical_cleanup_pass(&mut transform_ctx, true);
-            let mut phys_optimizer = Optimizer::physical_optimizer(&mut transform_ctx);
+            let log_optimizer = Optimizer::logical_cleanup_pass(&mut transform_ctx, true);
+            let phys_optimizer = Optimizer::physical_optimizer(&mut transform_ctx);
             dataflow = dataflow
                 .into_iter()
                 .map(|(id, rel)| {

@@ -885,7 +885,7 @@ impl Optimizer {
         fields(path.segment = self.name)
     )]
     pub fn optimize(
-        &mut self,
+        &self,
         mut relation: MirRelationExpr,
         ctx: &mut TransformCtx,
     ) -> Result<mz_expr::OptimizedMirRelationExpr, TransformError> {
