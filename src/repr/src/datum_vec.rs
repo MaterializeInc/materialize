@@ -46,6 +46,18 @@ impl DatumVec {
         borrow.extend(row.iter());
         borrow
     }
+
+    /// Borrow an instance with a specific lifetime, and pre-populate with a `Row` with up to
+    /// `limit` elements.
+    pub fn borrow_with_limit<'a>(
+        &'a mut self,
+        row: &'a RowRef,
+        limit: usize,
+    ) -> DatumVecBorrow<'a> {
+        let mut borrow = self.borrow();
+        borrow.extend(row.iter().take(limit));
+        borrow
+    }
 }
 
 /// A borrowed allocation of `Datum` with a specific lifetime.
