@@ -28,6 +28,12 @@ def get_ancestor_overrides_for_performance_regressions(
 
     min_ancestor_mz_version_per_commit = dict()
 
+    if scenario_class_name == "OptbenchTPCHQ01":
+        # PR#30806 ([optimizer] report per-transform metrics) increases wallclock
+        min_ancestor_mz_version_per_commit[
+            "a5355b2e89fedef9f7a04a96b737f7434a8e3f62"
+        ] = MzVersion.parse_mz("v0.128.0")
+
     if scenario_class_name in ("KafkaUpsert", "KafkaUpsertUnique", "ParallelIngestion"):
         # PR#30617 (storage/kafka: use separate consumer for metadata probing)
         # adds 1s of delay to Kafka source startup
