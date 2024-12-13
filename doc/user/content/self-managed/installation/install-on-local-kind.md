@@ -24,7 +24,7 @@ The tutorial uses a local `kind` cluster and deploys the following components:
 
 {{< important >}}
 
-For testing purposes only. For testing purposes only.  For testing purposes only. ....
+For testing purposes only.
 
 {{< /important >}}
 
@@ -207,8 +207,17 @@ Check out the {{% self-managed/latest_version %}} tag.
       your service name for `mzlvmx9h6dpx-console`):
 
       ```shell
-      kubectl port-forward svc/mzlvmx9h6dpx-console 8080:8080 -n materialize-environment
+      while true;
+      do kubectl port-forward svc/mzlvmx9h6dpx-console 8080:8080 -n materialize-environment 2>&1 |
+      grep -q "portforward.go" && echo "Restarting port forwarding due to an error." || break;
+      done;
       ```
+      {{< note >}}
+      Due to a [known Kubernetes issue](https://github.com/kubernetes/kubernetes/issues/78446),
+      interrupted long-running requests through a standard port-forward cause the port forward to hang. The command above
+      automatically restarts the port forwarding if an error occurs, ensuring a more stable
+      connection. It detects failures by monitoring for "portforward.go" error messages.
+      {{< /note >}}
 
    1. Open a browser and navigate to
       [http://localhost:8080](http://localhost:8080).
