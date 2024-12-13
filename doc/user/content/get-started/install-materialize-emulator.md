@@ -37,7 +37,7 @@ not suitable for production deployments</redb>.
 | **Use case isolation**               | ❌ | ✅ |
 | **Fault tolerance**                  | ❌ | ✅ |
 | **Horizontal scalability**           | ❌ | ✅ |
-| **GUI**      | ❌ | ✅ Materialize Console |
+| **GUI**      | ✅ Materialize Console  | ✅ Materialize Console |
 
 ### Prerequisites
 
@@ -73,8 +73,10 @@ not suitable for production deployments</redb>.
 
 1. <a name="materialize-emulator-connect-client"></a>
 
-   Connect to the Materialize Emulator using your preferred SQL client, using
-   the following connection field values:
+   Open the Materialize Console in your browser at `http://localhost:6874`.
+
+   Alternatively, you can connect to the Materialize Emulator using your
+   preferred SQL client, using the following connection field values:
 
    | Field    | Value         |
    |----------|---------------|
