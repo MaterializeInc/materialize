@@ -159,7 +159,8 @@ use crate::plan::{
 };
 use crate::session::vars::{
     self, ENABLE_CLUSTER_SCHEDULE_REFRESH, ENABLE_COLLECTION_PARTITION_BY,
-    ENABLE_KAFKA_SINK_HEADERS, ENABLE_KAFKA_SINK_PARTITION_BY, ENABLE_REFRESH_EVERY_MVS,
+    ENABLE_CREATE_TABLE_FROM_SOURCE, ENABLE_KAFKA_SINK_HEADERS, ENABLE_KAFKA_SINK_PARTITION_BY,
+    ENABLE_REFRESH_EVERY_MVS,
 };
 use crate::{names, parse};
 
@@ -491,6 +492,10 @@ pub fn plan_create_webhook_source(
     scx: &StatementContext,
     mut stmt: CreateWebhookSourceStatement<Aug>,
 ) -> Result<Plan, PlanError> {
+    if stmt.is_table {
+        scx.require_feature_flag(&ENABLE_CREATE_TABLE_FROM_SOURCE)?;
+    }
+
     // We will rewrite the cluster if one is not provided, so we must use the `in_cluster` value
     // we plan to normalize when we canonicalize the create statement.
     let in_cluster = source_sink_cluster_config(scx, "source", &mut stmt.in_cluster)?;
@@ -505,6 +510,8 @@ pub fn plan_create_webhook_source(
         validate_using,
         // We resolved `in_cluster` above, so we want to ignore it here.
         in_cluster: _,
+        // Whether or not we created a webhook as a source or table is irrelevant here.
+        is_table: _,
     } = stmt;
 
     let validate_using = validate_using

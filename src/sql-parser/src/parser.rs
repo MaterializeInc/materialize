@@ -1871,7 +1871,9 @@ impl<'a> Parser<'a> {
             || self.peek_keywords(&[TEMP, TABLE])
             || self.peek_keywords(&[TEMPORARY, TABLE])
         {
-            if self.peek_keywords_lookahead(&[FROM, SOURCE]) {
+            if self.peek_keywords_lookahead(&[FROM, SOURCE])
+                || self.peek_keywords_lookahead(&[FROM, WEBHOOK])
+            {
                 self.parse_create_table_from_source()
                     .map_parser_err(StatementKind::CreateTableFromSource)
             } else {
@@ -2811,8 +2813,8 @@ impl<'a> Parser<'a> {
         self.expect_keyword(FROM)?;
 
         // Webhook Source, which works differently than all other sources.
-        if self.peek_keyword(WEBHOOK) {
-            return self.parse_create_webhook_source(name, if_not_exists, in_cluster);
+        if self.parse_keyword(WEBHOOK) {
+            return self.parse_create_webhook_source(name, if_not_exists, in_cluster, false);
         }
 
         let connection = self.parse_create_source_connection()?;
@@ -2981,10 +2983,8 @@ impl<'a> Parser<'a> {
         name: UnresolvedItemName,
         if_not_exists: bool,
         in_cluster: Option<RawClusterName>,
+        is_table: bool,
     ) -> Result<Statement<Raw>, ParserError> {
-        // Consume this keyword because we only peeked it earlier.
-        self.expect_keyword(WEBHOOK)?;
-
         self.expect_keywords(&[BODY, FORMAT])?;
 
         // Note: we don't use `parse_format()` here because we support fewer formats than other
@@ -3055,6 +3055,7 @@ impl<'a> Parser<'a> {
         Ok(Statement::CreateWebhookSource(
             CreateWebhookSourceStatement {
                 name,
+                is_table,
                 if_not_exists,
                 body_format,
                 include_headers,
@@ -4767,6 +4768,12 @@ impl<'a> Parser<'a> {
         self.expect_keyword(TABLE)?;
         let if_not_exists = self.parse_if_not_exists()?;
         let table_name = self.parse_item_name()?;
+
+        if self.parse_keywords(&[FROM, WEBHOOK]) {
+            // Webhook Source, which works differently than all other sources.
+            return self.parse_create_webhook_source(table_name, if_not_exists, None, true);
+        }
+
         let (columns, constraints) = self.parse_table_from_source_columns()?;
 
         self.expect_keywords(&[FROM, SOURCE])?;
