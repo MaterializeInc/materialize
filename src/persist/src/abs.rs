@@ -19,7 +19,9 @@ use std::time::{Duration, Instant};
 use anyhow::anyhow;
 use async_trait::async_trait;
 use azure_core::StatusCode;
-use azure_identity::{create_default_credential, DefaultAzureCredential};
+use azure_identity::{
+    create_default_credential, DefaultAzureCredential, DefaultAzureCredentialBuilder,
+};
 use azure_storage::{prelude::*, EMULATOR_ACCOUNT};
 use azure_storage_blobs::prelude::*;
 use bytes::Bytes;
@@ -32,7 +34,8 @@ use mz_ore::lgbytes::{LgBytes, MetricsRegion};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::task::RuntimeExt;
 use tokio::runtime::Handle as AsyncHandle;
-use tracing::{debug, debug_span, info, trace, trace_span, Instrument};
+use tracing::{debug, debug_span, info, trace, trace_span, warn, Instrument};
+use url::Url;
 use uuid::Uuid;
 
 use crate::cfg::BlobKnobs;
@@ -62,6 +65,7 @@ impl ABSBlobConfig {
         container: String,
         prefix: String,
         metrics: S3BlobMetrics,
+        url: Url,
         cfg: Arc<ConfigSet>,
     ) -> Result<Self, Error> {
         // let is_cc_active = knobs.is_cc_active();
@@ -74,8 +78,29 @@ impl ABSBlobConfig {
                 .blob_service_client()
                 .container_client(container)
         } else {
-            let credentials =
-                create_default_credential().expect("default Azure credentials working");
+            // WIP: check query pairs if our query string is for a SAS token
+            let sas_credentials = match url.query() {
+                Some(query) => Some(StorageCredentials::sas_token(query)),
+                None => None,
+            };
+
+            let credentials = match sas_credentials {
+                Some(Ok(credentials)) => credentials,
+                Some(Err(err)) => {
+                    warn!("Failed to parse SAS token: {err}");
+                    // Fall back to default credentials
+                    StorageCredentials::token_credential(
+                        create_default_credential().expect("Azure default credentials"),
+                    )
+                }
+                None => {
+                    // Fall back to default credentials
+                    StorageCredentials::token_credential(
+                        create_default_credential().expect("Azure default credentials"),
+                    )
+                }
+            };
+
             let service_client = BlobServiceClient::new(account, credentials);
             service_client.container_client(container)
         };
@@ -106,9 +131,14 @@ impl ABSBlobConfig {
 
         let config = ABSBlobConfig::new(
             EMULATOR_ACCOUNT.to_string(),
-            container_name,
+            container_name.clone(),
             prefix,
             metrics,
+            Url::parse(&format!(
+                "http://devaccount1.blob.core.windows.net/{}",
+                container_name
+            ))
+            .expect("valid url"),
             Arc::new(ConfigSet::default()),
         )?;
 
@@ -118,7 +148,7 @@ impl ABSBlobConfig {
     /// Returns a clone of Self with a new v4 uuid prefix.
     pub fn clone_with_new_uuid_prefix(&self) -> Self {
         let mut ret = self.clone();
-        // ret.prefix = Uuid::new_v4().to_string();
+        ret.prefix = Uuid::new_v4().to_string();
         ret
     }
 }

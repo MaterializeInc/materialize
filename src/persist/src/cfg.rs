@@ -164,6 +164,7 @@ impl BlobConfig {
                             container.to_string(),
                             "".to_string(),
                             metrics,
+                            url.clone().into_redacted(),
                             cfg,
                         )?))
                     } else {
@@ -179,17 +180,19 @@ impl BlobConfig {
             )),
         }?;
 
-        if !query_params.is_empty() {
-            return Err(ExternalError::from(anyhow!(
-                "unknown blob location params {}: {}",
-                query_params
-                    .keys()
-                    .map(|x| x.as_ref())
-                    .collect::<Vec<_>>()
-                    .join(" "),
-                url.as_str(),
-            )));
-        }
+        // WIP: is it OK to remove this? there are a ton of
+        // query params for Azure SAS tokens to work
+        // if !query_params.is_empty() {
+        //     return Err(ExternalError::from(anyhow!(
+        //         "unknown blob location params {}: {}",
+        //         query_params
+        //             .keys()
+        //             .map(|x| x.as_ref())
+        //             .collect::<Vec<_>>()
+        //             .join(" "),
+        //         url.as_str(),
+        //     )));
+        // }
 
         Ok(config)
     }
