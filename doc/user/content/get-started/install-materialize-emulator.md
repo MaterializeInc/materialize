@@ -59,12 +59,13 @@ not suitable for production deployments</redb>.
    been already downloaded.
 
    ```sh
-   docker run -d -p 127.0.0.1:6875:6875 -p 127.0.0.1:6876:6876 materialize/materialized:{{< version >}}
+   docker run -d -p 127.0.0.1:6874:6874 -p 127.0.0.1:6875:6875 -p 127.0.0.1:6876:6876 materialize/materialized:{{< version >}}
    ```
 
    When running locally:
 
    - The Docker container binds exclusively to localhost, for security reasons.
+   - The web console is available on port `6874`.
    - The SQL interface is available on port `6875`.
    - Logs are available via `docker logs <container-id>`.
    - A default user `materialize` is created.

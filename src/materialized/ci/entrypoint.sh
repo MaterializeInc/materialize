@@ -39,6 +39,7 @@ hosted offering we run these services scaled across many machines.
 ********************************* WARNING ********************************
 EOF
 
+# Start PostgreSQL, unless suppressed.
 if [ -z "${MZ_NO_BUILTIN_POSTGRES:-}" ]; then
   pg_ctlcluster 16 main start
   psql -U root -c "CREATE SCHEMA IF NOT EXISTS consensus"
@@ -46,6 +47,9 @@ if [ -z "${MZ_NO_BUILTIN_POSTGRES:-}" ]; then
   psql -U root -c "CREATE SCHEMA IF NOT EXISTS adapter"
   psql -U root -c "CREATE SCHEMA IF NOT EXISTS tsoracle"
 fi
+
+# Start nginx to serve the console.
+nginx
 
 if [[ ! -f /mzdata/environment-id ]]; then
   echo "docker-container-$(cat /proc/sys/kernel/random/uuid)-0" > /mzdata/environment-id
