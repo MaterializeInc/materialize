@@ -6111,6 +6111,7 @@ dependencies = [
  "aws-credential-types",
  "aws-sdk-s3",
  "aws-types",
+ "azure_core",
  "azure_identity",
  "azure_storage",
  "azure_storage_blobs",

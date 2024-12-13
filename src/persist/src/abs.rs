@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
 use async_trait::async_trait;
+use azure_core::StatusCode;
 use azure_identity::{create_default_credential, DefaultAzureCredential};
 use azure_storage::{prelude::*, EMULATOR_ACCOUNT};
 use azure_storage_blobs::prelude::*;
@@ -44,6 +45,7 @@ use crate::metrics::{ABSBlobMetrics, S3BlobMetrics};
 pub struct ABSBlobConfig {
     metrics: S3BlobMetrics,
     client: ContainerClient,
+    prefix: String,
     cfg: Arc<ConfigSet>,
 }
 
@@ -67,13 +69,10 @@ impl ABSBlobConfig {
         // TODO: might need to pull out service client
         // to periodically refresh credentials
         let client = if account == EMULATOR_ACCOUNT {
-            let credentials = StorageCredentials::emulator();
-            info!(
-                "Account: {:?}, Container: {:?}, Credentials: {:?}",
-                account, container, credentials
-            );
-            let service_client = BlobServiceClient::new(account, credentials);
-            service_client.container_client(container)
+            info!("Connecting to Azure emulator");
+            ClientBuilder::emulator()
+                .blob_service_client()
+                .container_client(container)
         } else {
             let credentials =
                 create_default_credential().expect("default Azure credentials working");
@@ -85,11 +84,13 @@ impl ABSBlobConfig {
             metrics,
             client,
             cfg,
+            prefix,
         })
     }
 
     /// Returns a new [ABSBlobConfig] for use in unit tests.
     pub async fn new_for_test() -> Result<Option<Self>, Error> {
+        // WIP: do we need this container name to be passed in?
         let container_name = match std::env::var(Self::EXTERNAL_TESTS_ABS_CONTAINER) {
             Ok(container) => container,
             Err(_) => {
@@ -100,13 +101,13 @@ impl ABSBlobConfig {
             }
         };
 
-        // let prefix = Uuid::new_v4().to_string();
+        let prefix = Uuid::new_v4().to_string();
         let metrics = S3BlobMetrics::new(&MetricsRegistry::new());
 
         let config = ABSBlobConfig::new(
             EMULATOR_ACCOUNT.to_string(),
             container_name,
-            "".to_string(),
+            prefix,
             metrics,
             Arc::new(ConfigSet::default()),
         )?;
@@ -136,16 +137,25 @@ impl ABSBlob {
     /// Opens the given location for non-exclusive read-write access.
     pub async fn open(config: ABSBlobConfig) -> Result<Self, ExternalError> {
         let container_name = config.client.container_name().to_string();
+
+        if config.client.service_client().account() == EMULATOR_ACCOUNT {
+            // try to create the container if we're running in the emulator.
+            // it is surprisingly difficult to create the container out-of-band
+            // of an official client.
+            let _ = config.client.create().await;
+        }
+
         let ret = ABSBlob {
             metrics: config.metrics,
             client: config.client,
             container_name,
-            prefix: "".to_string(),
+            prefix: config.prefix,
             cfg: config.cfg,
         };
 
+        // WIP: do we have a healthcheck similar to S3?
         // Test connection before returning success
-        let _ = ret.get("HEALTH_CHECK").await?;
+        // let _ = ret.get("HEALTH_CHECK").await?;
         Ok(ret)
     }
 
@@ -165,8 +175,21 @@ impl Blob for ABSBlob {
 
         let mut stream = blob.get().into_stream();
         while let Some(value) = stream.next().await {
-            let response =
-                value.map_err(|e| ExternalError::from(anyhow!("Azure blob get error: {:?}", e)))?;
+            let response = match value {
+                Ok(v) => v,
+                Err(e) => {
+                    if let Some(e) = e.as_http_error() {
+                        if e.status() == StatusCode::NotFound {
+                            return Ok(None);
+                        }
+                    }
+
+                    return Err(ExternalError::from(anyhow!(
+                        "Azure blob get error: {:?}",
+                        e
+                    )));
+                }
+            };
 
             let content_length = response.blob.properties.content_length;
             let mut buffer = self
@@ -200,7 +223,7 @@ impl Blob for ABSBlob {
         let mut stream = self
             .client
             .list_blobs()
-            .prefix(blob_key_prefix)
+            .prefix(blob_key_prefix.clone())
             .into_stream();
 
         while let Some(response) = stream.next().await {
@@ -250,9 +273,15 @@ impl Blob for ABSBlob {
                     .map_err(|e| ExternalError::from(anyhow!("Azure blob delete error: {}", e)))?;
                 Ok(Some(size))
             }
-            // WIP: figure out what this is if empty
-            // Err(e) if e.status_code() == 404 => Ok(None),
-            Err(e) => Err(ExternalError::from(anyhow!("Azure blob error: {}", e))),
+            Err(e) => {
+                if let Some(e) = e.as_http_error() {
+                    if e.status() == StatusCode::NotFound {
+                        return Ok(None);
+                    }
+                }
+
+                Err(ExternalError::from(anyhow!("Azure blob error: {}", e)))
+            }
         }
     }
 
@@ -262,12 +291,18 @@ impl Blob for ABSBlob {
 
         match blob.get_properties().await {
             Ok(_) => Ok(()),
-            // WIP
-            // Err(e) if e.status_code() == 404 => Err(Determinate::new(anyhow!(
-            //     "unable to restore {key} in Azure Blob Storage: blob does not exist"
-            // ))
-            // .into()),
-            Err(e) => Err(ExternalError::from(anyhow!("Azure blob error: {}", e))),
+            Err(e) => {
+                if let Some(e) = e.as_http_error() {
+                    if e.status() == StatusCode::NotFound {
+                        return Err(Determinate::new(anyhow!(
+                            "unable to restore {key} in Azure Blob Storage: blob does not exist"
+                        ))
+                        .into());
+                    }
+                }
+
+                Err(ExternalError::from(anyhow!("Azure blob error: {}", e)))
+            }
         }
     }
 }
@@ -298,15 +333,8 @@ mod tests {
                 let config = ABSBlobConfig {
                     metrics: config.metrics.clone(),
                     client: config.client.clone(),
-                    container_name: config.container_name.clone(),
-                    prefix: format!("{}/abs_blob_impl_test/{}", config.prefix, path),
-                    cfg: Arc::new(
-                        ConfigSet::default()
-                            .add(&ENABLE_ABS_LGALLOC_CC_SIZES)
-                            .add(&ENABLE_ABS_LGALLOC_NONCC_SIZES)
-                            .add(&ENABLE_ONE_ALLOC_PER_REQUEST),
-                    ),
-                    is_cc_active: true,
+                    cfg: Arc::new(ConfigSet::default()),
+                    prefix: config.prefix.clone(),
                 };
                 ABSBlob::open(config).await
             }
