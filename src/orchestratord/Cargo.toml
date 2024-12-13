@@ -29,7 +29,6 @@ mz-ore = { path = "../ore" }
 mz-orchestrator-kubernetes = { path = "../orchestrator-kubernetes" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
 mz-prof-http = { path = "../prof-http" }
-mz-sql = { path = "../sql" }
 mz-tls-util = { path = "../tls-util" }
 prometheus = { version = "0.13.3", default-features = false }
 rand = "0.8.5"

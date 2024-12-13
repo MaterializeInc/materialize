@@ -42,7 +42,6 @@ use mz_cloud_resources::crd::gen::cert_manager::certificates::Certificate;
 use mz_cloud_resources::crd::materialize::v1alpha1::Materialize;
 use mz_orchestrator_tracing::TracingCliArgs;
 use mz_ore::instrument;
-use mz_sql::catalog::CloudProvider;
 
 /// Describes the status of a deployment.
 ///
@@ -503,7 +502,7 @@ fn create_environmentd_network_policies(
 }
 
 fn create_service_account_object(config: &super::Args, mz: &Materialize) -> ServiceAccount {
-    let annotations = if config.cloud_provider == CloudProvider::Aws {
+    let annotations = if config.cloud_provider == super::CloudProvider::Aws {
         let role_arn = mz
             .spec
             .environmentd_iam_role_arn
@@ -885,7 +884,7 @@ fn create_environmentd_statefulset_object(
     args.push("--persist-isolated-runtime-threads=-1".to_string());
 
     // Add AWS arguments.
-    if config.cloud_provider == CloudProvider::Aws {
+    if config.cloud_provider == super::CloudProvider::Aws {
         if let Some(azs) = config.aws_info.environmentd_availability_zones.as_ref() {
             for az in azs {
                 args.push(format!("--availability-zone={az}"));
