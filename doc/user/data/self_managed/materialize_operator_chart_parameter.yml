@@ -142,7 +142,7 @@ parameters:
   - parameter: operator.image.tag
     description: |
       The tag/version of the operator image to be used
-    default: v0.127.0-dev.0
+    default: v0.127.0
 
   - parameter: operator.nodeSelector
     description: ""

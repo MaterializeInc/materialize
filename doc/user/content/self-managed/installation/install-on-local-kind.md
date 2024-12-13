@@ -58,7 +58,7 @@ repo](https://github.com/MaterializeInc/materialize).
 
 {{< important >}}
 
-Check out the {{% self-managed/latest_version %}} branch.
+Check out the {{% self-managed/latest_version %}} tag.
 
 {{< /important >}}
 
@@ -203,14 +203,15 @@ Check out the {{% self-managed/latest_version %}} branch.
       service/mzlvmx9h6dpx-console   ClusterIP   None         <none>        8080 TCP   32s
       ```
 
-   1. Forward the Materialize console service to your local machine:
+   1. Forward the Materialize console service to your local machine (substitute
+      your service name for `mzlvmx9h6dpx-console`):
 
       ```shell
       kubectl port-forward svc/mzlvmx9h6dpx-console 8080:8080 -n materialize-environment
       ```
 
    1. Open a browser and navigate to
-      [https://localhost:8080](https://localhost:8080).
+      [http://localhost:8080](http://localhost:8080).
 
       ![Image of  self-managed Materialize console running on local kind](/images/self-managed/self-managed-console-kind.png)
 
