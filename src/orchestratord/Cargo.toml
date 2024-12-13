@@ -25,7 +25,6 @@ mz-alloc = { path = "../alloc" }
 mz-alloc-default = { path = "../alloc-default", optional = true }
 mz-build-info = { path = "../build-info" }
 mz-cloud-resources = { path = "../cloud-resources" }
-mz-environmentd = { path = "../environmentd" }
 mz-ore = { path = "../ore" }
 mz-orchestrator-kubernetes = { path = "../orchestrator-kubernetes" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
