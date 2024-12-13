@@ -44,10 +44,10 @@ tokio-postgres = "0.7.8"
 tower-http = "0.5.2"
 tracing = "0.1.37"
 urlencoding = "2.1.2"
-workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [features]
-default = ["mz-alloc-default"]
+default = ["mz-alloc-default", "workspace-hack"]
 jemalloc = ["mz-alloc/jemalloc"]
 
 [package.metadata.cargo-udeps.ignore]
