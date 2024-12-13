@@ -40,10 +40,26 @@ use crate::controller::materialize::tls::{create_certificate, issuer_ref_defined
 use crate::k8s::{apply_resource, delete_resource, get_resource};
 use mz_cloud_resources::crd::gen::cert_manager::certificates::Certificate;
 use mz_cloud_resources::crd::materialize::v1alpha1::Materialize;
-use mz_environmentd::DeploymentStatus;
 use mz_orchestrator_tracing::TracingCliArgs;
 use mz_ore::instrument;
 use mz_sql::catalog::CloudProvider;
+
+/// Describes the status of a deployment.
+///
+/// This is a simplified representation of `DeploymentState`, suitable for
+/// announcement to the external orchestrator.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum DeploymentStatus {
+    /// This deployment is not the leader. It is initializing and is not yet
+    /// ready to become the leader.
+    Initializing,
+    /// This deployment is not the leader, but it is ready to become the leader.
+    ReadyToPromote,
+    /// This deployment is in the process of becoming the leader.
+    Promoting,
+    /// This deployment is the leader.
+    IsLeader,
+}
 
 #[derive(Debug, Serialize)]
 pub struct Resources {
