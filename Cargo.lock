@@ -5652,7 +5652,6 @@ dependencies = [
  "mz-orchestrator-tracing",
  "mz-ore",
  "mz-prof-http",
- "mz-sql",
  "mz-tls-util",
  "prometheus",
  "rand",
