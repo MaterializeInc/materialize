@@ -225,10 +225,12 @@ Check out the {{< self-managed/latest_version >}} tag.
       done;
       ```
       {{< note >}}
-Due to a [known Kubernetes issue](https://github.com/kubernetes/kubernetes/issues/78446),
-interrupted long-running requests through a standard port-forward cause the port forward to hang. The command above
-automatically restarts the port forwarding if an error occurs, ensuring a more stable
-connection. It detects failures by monitoring for "portforward.go" error messages.
+      Due to a [known Kubernetes
+      issue](https://github.com/kubernetes/kubernetes/issues/78446), interrupted
+      long-running requests through a standard port-forward cause the port
+      forward to hang. The command above automatically restarts the port
+      forwarding if an error occurs, ensuring a more stable connection. It
+      detects failures by monitoring for `"portforward.go"` error messages.
       {{< /note >}}
 
    1. Open a browser and navigate to
