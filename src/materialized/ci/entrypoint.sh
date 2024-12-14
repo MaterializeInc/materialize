@@ -81,68 +81,101 @@ export MZ_BOOTSTRAP_ROLE=${MZ_BOOTSTRAP_ROLE:-materialize}
 export MZ_CLUSTER_REPLICA_SIZES=${MZ_CLUSTER_REPLICA_SIZES:-$(cat <<EOF
 {
   "25cc": {
+    "cpu_exclusive": false,
     "cpu_limit": 0.5,
     "credits_per_hour": "0.25",
+    "disk_limit": "7762MiB",
+    "memory_limit": "3881MiB",
     "scale": 1,
     "workers": 1
   },
   "50cc": {
+    "cpu_exclusive": true,
     "cpu_limit": 1,
     "credits_per_hour": "0.5",
+    "disk_limit": "15525MiB",
+    "memory_limit": "7762MiB",
     "scale": 1,
     "workers": 1
   },
   "100cc": {
+    "cpu_exclusive": true,
     "cpu_limit": 2,
     "credits_per_hour": "1",
+    "disk_limit": "31050MiB",
+    "memory_limit": "15525MiB",
     "scale": 1,
     "workers": 2
   },
   "200cc": {
+    "cpu_exclusive": true,
     "cpu_limit": 4,
     "credits_per_hour": "2",
+    "disk_limit": "62100MiB",
+    "memory_limit": "31050MiB",
     "scale": 1,
     "workers": 4
   },
   "300cc": {
+    "cpu_exclusive": true,
     "cpu_limit": 6,
     "credits_per_hour": "3",
+    "disk_limit": "93150MiB",
+    "memory_limit": "46575MiB",
     "scale": 1,
     "workers": 6
   },
   "400cc": {
+    "cpu_exclusive": true,
     "cpu_limit": 8,
     "credits_per_hour": "4",
+    "disk_limit": "124201MiB",
+    "memory_limit": "62100MiB",
     "scale": 1,
     "workers": 8
   },
   "600cc": {
+    "cpu_exclusive": true,
     "cpu_limit": 12,
     "credits_per_hour": "6",
+    "disk_limit": "186301MiB",
+    "memory_limit": "93150MiB",
     "scale": 1,
     "workers": 12
   },
   "800cc": {
+    "cpu_exclusive": true,
     "cpu_limit": 16,
     "credits_per_hour": "8",
+    "disk_limit": "248402MiB",
+    "memory_limit": "124201MiB",
     "scale": 1,
     "workers": 16
   },
   "1200cc": {
+    "cpu_exclusive": true,
     "cpu_limit": 24,
     "credits_per_hour": "12",
+    "disk_limit": "372603MiB",
+    "memory_limit": "186301MiB",
     "scale": 1,
     "workers": 24
   },
   "1600cc": {
+    "cpu_exclusive": true,
     "cpu_limit": 31,
     "credits_per_hour": "16",
+    "disk_limit": "481280MiB",
+    "memory_limit": "240640MiB",
     "scale": 1,
     "workers": 31
   },
   "3200cc": {
+    "cpu_exclusive": true,
     "cpu_limit": 62,
     "credits_per_hour": "32",
+    "disk_limit": "962560MiB",
+    "memory_limit": "481280MiB",
     "scale": 1,
     "workers": 62
   }
