@@ -1939,7 +1939,7 @@ impl Schema2<SourceData> for RelationDesc {
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::{build_compare, ArrayData};
+    use arrow::array::{make_comparator, ArrayData};
     use bytes::Bytes;
     use mz_expr::EvalError;
     use mz_ore::assert_err;
@@ -2092,7 +2092,8 @@ mod tests {
     }
 
     fn is_sorted(array: &dyn Array) -> bool {
-        let Ok(cmp) = build_compare(array, array) else {
+        let sort_options = arrow::compute::SortOptions::default();
+        let Ok(cmp) = make_comparator(array, array, sort_options) else {
             // TODO: arrow v51.0.0 doesn't support comparing structs. When
             // we migrate to v52+, the `build_compare` function is
             // deprecated and replaced by `make_comparator`, which does
