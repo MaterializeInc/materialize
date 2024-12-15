@@ -53,6 +53,7 @@ use std::iter::FromIterator;
 use mz_expr::visit::Visit;
 use mz_expr::{AggregateExpr, JoinInputMapper, MirRelationExpr, MirScalarExpr};
 
+use crate::analysis::DerivedView;
 use crate::TransformCtx;
 
 /// Pushes Reduce operators toward sources.
@@ -72,11 +73,12 @@ impl crate::Transform for ReductionPushdown {
     fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
-        _: &mut TransformCtx,
+        ctx: &mut TransformCtx,
     ) -> Result<(), crate::TransformError> {
         // `try_visit_mut_pre` is used here because after pushing down a reduction,
         // we want to see if we can push the same reduction further down.
         let result = relation.try_visit_mut_pre(&mut |e| self.action(e));
+        self.push_through_union(relation, ctx);
         mz_repr::explain::trace_plan(&*relation);
         result
     }
@@ -158,6 +160,149 @@ impl ReductionPushdown {
             }
         }
         Ok(())
+    }
+
+    /// Attempts to employ disjointness reasoning to push `Reduce` through `Union`.
+    ///
+    /// When a `Reduce` is atop a `Union`, if the union inputs can be partitioned
+    /// into classes where for each member of each class, the key expressions are
+    /// disjoint from the key expressions of all members of all other classes, we
+    /// can push the `Reduce` down to each component and union their results.
+    ///
+    /// We perform this disjointness analysis by extending each union input with
+    /// the key columns, then projecting onto them, and then pairwise merging the
+    /// equivalences and seeing if they are unsatisfiable.
+    pub fn push_through_union(&self, relation: &mut MirRelationExpr, ctx: &mut TransformCtx) {
+        use crate::analysis::equivalences::Equivalences;
+        use crate::analysis::{Arity, DerivedBuilder, RelationType};
+
+        let mut builder = DerivedBuilder::new(ctx.features);
+        builder.require(Arity);
+        builder.require(RelationType);
+        builder.require(Equivalences);
+        let derived = builder.visit(relation);
+        let derived = derived.as_view();
+
+        let mut todo = vec![(relation, derived)];
+        while let Some((expr, view)) = todo.pop() {
+            if let Some(replacement) = Self::assess_disjointness(expr, view) {
+                *expr = replacement;
+            } else {
+                todo.extend(expr.children_mut().rev().zip(view.children_rev()));
+            }
+        }
+    }
+
+    fn assess_disjointness(expr: &MirRelationExpr, view: DerivedView) -> Option<MirRelationExpr> {
+        use crate::analysis::equivalences::Equivalences;
+        use crate::analysis::{Arity, RelationType};
+
+        if let MirRelationExpr::Reduce {
+            input,
+            group_key,
+            aggregates,
+            expected_group_size,
+            ..
+        } = expr
+        {
+            if let MirRelationExpr::Union { .. } = &**input {
+                // Form the union input equivalences restricted to the `group_key` expressions.
+                let arity = *view.last_child().value::<Arity>().expect("Arity required");
+                let child_equivs = view
+                    .last_child()
+                    .children_rev()
+                    .map(|view| {
+                        let mut equivs = view
+                            .value::<Equivalences>()
+                            .expect("Equivalences required")
+                            .clone();
+                        if let Some(equivs) = &mut equivs {
+                            let types = view
+                                .value::<RelationType>()
+                                .expect("RelationType required")
+                                .as_ref()
+                                .unwrap()
+                                .clone();
+                            for (index, key_expr) in group_key.iter().enumerate() {
+                                equivs.classes.push(vec![
+                                    key_expr.clone(),
+                                    MirScalarExpr::column(arity + index),
+                                ]);
+                            }
+                            equivs.minimize(&Some(types.clone()));
+                            equivs.project(arity..arity + group_key.len());
+                            equivs.minimize(&Some(types.clone()));
+                        }
+                        equivs
+                    })
+                    .collect::<Vec<_>>();
+
+                // Assess the pairwise overlap of the equivalences.
+                let mut potential_overlap = Vec::new();
+                for i in 0..child_equivs.len() {
+                    if let Some(equiv_i) = &child_equivs[i] {
+                        for j in 0..i {
+                            if let Some(equiv_j) = &child_equivs[j] {
+                                let mut temp = equiv_i.clone();
+                                temp.classes.extend(equiv_j.classes.iter().cloned());
+                                temp.minimize(&None);
+                                if !temp.unsatisfiable() {
+                                    potential_overlap.push((i, j));
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Form connected components of potential overlap.
+                let mut root = (0..child_equivs.len()).collect::<Vec<_>>();
+                for (mut i, mut j) in potential_overlap {
+                    while i != root[i] {
+                        i = root[i];
+                    }
+                    while j != root[j] {
+                        j = root[j];
+                    }
+                    root[i] = std::cmp::min(root[i], root[j]);
+                    root[j] = std::cmp::min(root[i], root[j]);
+                }
+                let mut components: BTreeMap<_, Vec<_>> = BTreeMap::default();
+                for i in 0..root.len() {
+                    while root[i] != root[root[i]] {
+                        root[i] = root[root[i]];
+                    }
+                    components.entry(root[i]).or_default().push(i);
+                }
+
+                // This is interesting only with multiple components.
+                if components.len() > 1 {
+                    // Form new expression as a union of reduces of unions of components.
+                    let mut union_parts = Vec::with_capacity(components.len());
+                    for component in components.values() {
+                        let members = component
+                            .into_iter()
+                            .map(|i| input.children().nth(*i).unwrap().clone())
+                            .collect::<Vec<_>>();
+                        let union_expr =
+                            MirRelationExpr::union_many(members, mz_repr::RelationType::empty());
+                        let reduce_expr = MirRelationExpr::Reduce {
+                            input: Box::new(union_expr),
+                            group_key: group_key.clone(),
+                            aggregates: aggregates.clone(),
+                            monotonic: false,
+                            expected_group_size: expected_group_size.clone(),
+                        };
+                        union_parts.push(reduce_expr);
+                    }
+
+                    return Some(MirRelationExpr::union_many(
+                        union_parts,
+                        mz_repr::RelationType::empty(),
+                    ));
+                }
+            }
+        }
+        None
     }
 }
 
