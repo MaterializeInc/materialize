@@ -52,12 +52,13 @@ impl crate::Transform for Join {
     fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
-        _: &mut TransformCtx,
+        ctx: &mut TransformCtx,
     ) -> Result<(), TransformError> {
         // We need to stick with post-order here because `action` only fuses a
         // Join with its direct children. This means that we can only fuse a
         // tree of Join nodes in a single pass if we work bottom-up.
-        let mut transformed = false;
+        let mut transformed = Self::hoist_constants(relation, ctx)?;
+
         relation.try_visit_mut_post(&mut |relation| {
             transformed |= Self::action(relation)?;
             Ok::<_, TransformError>(())
@@ -246,6 +247,132 @@ impl Join {
         }
 
         Ok(false)
+    }
+
+    /// Hoist constant collections of a single row to be maps around the join.
+    pub fn hoist_constants(
+        relation: &mut MirRelationExpr,
+        ctx: &mut TransformCtx,
+    ) -> Result<bool, TransformError> {
+        use crate::analysis::Arity;
+        use crate::analysis::DerivedBuilder;
+
+        let mut builder = DerivedBuilder::new(ctx.features);
+        builder.require(Arity);
+        let derived = builder.visit(relation);
+        let derived = derived.as_view();
+
+        let mut updated = false;
+        let mut todo = vec![(&mut *relation, derived)];
+        while let Some((expr, view)) = todo.pop() {
+            if let MirRelationExpr::Join {
+                inputs,
+                equivalences,
+                ..
+            } = expr
+            {
+                // If any input is a constant collection of a single weight one row ...
+                let hoistable = inputs
+                    .iter()
+                    .map(|e| {
+                        if let MirRelationExpr::Constant { rows: Ok(data), .. } = e {
+                            data.len() == 1 && data[0].1 == 1
+                        } else {
+                            false
+                        }
+                    })
+                    .collect::<Vec<_>>();
+
+                if hoistable.iter().any(|x| *x) {
+                    let mut children: Vec<_> = view.children_rev().collect::<Vec<_>>();
+                    children.reverse();
+
+                    // The starting arity of non-hoisted columns.
+                    let mut base_arity = 0;
+                    // The starting arity of hoisted constant columns.
+                    let mut hoist_arity = 0;
+                    for (index, view) in children.iter().enumerate() {
+                        let child_arity = view.value::<Arity>().expect("Arity required");
+                        if !hoistable[index] {
+                            hoist_arity += child_arity;
+                        }
+                    }
+
+                    // Extract all constant collections into a list of literals we will map
+                    // on to the join result, then permute into position, and then apply the
+                    // equivalences to as a filter.
+                    let mut scalars = Vec::new();
+                    let mut columns = Vec::new();
+
+                    for (index, input) in inputs.iter().enumerate() {
+                        let child_arity =
+                            *children[index].value::<Arity>().expect("Arity required");
+
+                        if hoistable[index] {
+                            // These if statements should not be false; they are just to destructure.
+                            if let MirRelationExpr::Constant {
+                                rows: Ok(data),
+                                typ,
+                            } = input
+                            {
+                                if data.len() == 1 && data[0].1 == 1 {
+                                    // Inform the projection that its values can be found at the end.
+                                    for _ in 0..typ.column_types.len() {
+                                        columns.push(hoist_arity);
+                                        hoist_arity += 1;
+                                    }
+                                    // Assemble the scalar literals
+                                    use itertools::Itertools;
+                                    for (datum, col_typ) in
+                                        data[0].0.iter().zip_eq(typ.column_types.iter())
+                                    {
+                                        scalars.push(MirScalarExpr::literal_ok(
+                                            datum,
+                                            col_typ.scalar_type.clone(),
+                                        ));
+                                    }
+                                }
+                            }
+                        } else {
+                            for _ in 0..child_arity {
+                                columns.push(base_arity);
+                                base_arity += 1;
+                            }
+                        }
+                    }
+
+                    // The join should now be reformed by removing hoisted inputs, mapping literals,
+                    // projecting to re-order them, and imposing equivalences as a filter atop it.
+                    let mut mfp = MapFilterProject::new(base_arity);
+                    mfp = mfp
+                        .map(scalars)
+                        .project(columns)
+                        .filter(unpack_equivalences(equivalences));
+                    mfp.optimize();
+                    let (map, filter, project) = mfp.as_map_filter_project();
+
+                    for (index, hoist) in hoistable.iter().enumerate().rev() {
+                        if *hoist {
+                            inputs.remove(index);
+                        }
+                    }
+                    equivalences.clear();
+
+                    *expr = expr
+                        .take_dangerous()
+                        .map(map)
+                        .filter(filter)
+                        .project(project);
+                    updated = true;
+                } else {
+                    todo.extend(expr.children_mut().rev().zip(view.children_rev()));
+                }
+            } else {
+                todo.extend(expr.children_mut().rev().zip(view.children_rev()));
+            }
+        }
+
+        Ok(updated)
     }
 }
 

@@ -697,7 +697,7 @@ impl Optimizer {
                     // Converts `Cross Join {Constant(Literal) + Input}` to
                     // `Map {Cross Join (Input, Constant()), Literal}`.
                     // Join fusion will clean this up to `Map{Input, Literal}`
-                    Box::new(LiteralLifting::default()),
+                    // Box::new(LiteralLifting::default()),
                     // Identifies common relation subexpressions.
                     Box::new(cse::relation_cse::RelationCSE::new(false)),
                     Box::new(FuseAndCollapse::default()),
@@ -763,7 +763,7 @@ impl Optimizer {
                     Box::new(EquivalencePropagation::default()),
                     Box::new(fold_constants_fixpoint()),
                     Box::new(Demand::default()),
-                    Box::new(LiteralLifting::default()),
+                    // Box::new(LiteralLifting::default()),
                 ],
             }),
             Box::new(LiteralConstraints),
