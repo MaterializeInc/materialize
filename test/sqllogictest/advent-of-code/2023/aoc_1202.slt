@@ -279,7 +279,7 @@ Explained Query:
                           Join on=(#0 = #1 AND #2 = #4) type=delta
                             Get l2
                             ArrangeBy keys=[[#0], [#1]]
-                              Filter (#0) IS NOT NULL AND (#1) IS NOT NULL
+                              Filter (#0) IS NOT NULL AND (#1) IS NOT NULL AND (#2) IS NOT NULL
                                 Get l0
                             ArrangeBy keys=[[#0]]
                               Constant
