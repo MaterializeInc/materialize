@@ -26,7 +26,7 @@ quote = "1.0.23"
 syn = { version = "1.0.107", features = ["extra-traits", "full"] }
 serde = "1.0.152"
 serde_json = "1.0.125"
-tempfile = "3.8.1"
+tempfile = "3.14.0"
 tracing = "0.1.37"
 tracing-subscriber = { version = "0.3.16", features = ["env-filter", "std"] }
 workspace-hack = { version = "0.0.0", path = "../../../src/workspace-hack", optional = true }
