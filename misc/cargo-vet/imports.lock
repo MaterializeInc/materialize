@@ -447,6 +447,13 @@ user-id = 4747
 user-login = "jeromefroe"
 user-name = "Jerome Froelich"
 
+[[publisher.memchr]]
+version = "2.7.4"
+when = "2024-06-14"
+user-id = 189
+user-login = "BurntSushi"
+user-name = "Andrew Gallant"
+
 [[publisher.mime]]
 version = "0.3.17"
 when = "2023-03-20"
@@ -983,6 +990,11 @@ who = "Pat Hickey <phickey@fastly.com>"
 criteria = "safe-to-deploy"
 version = "0.3.27"
 notes = "Unsafe used to implement the unpark mutex, which is well commented and not obviously incorrect. Like with futures-channel I wouldn't be able to certify it as correct without formal methods."
+
+[[audits.bytecode-alliance.audits.hashbrown]]
+who = "Chris Fallin <chris@cfallin.org>"
+criteria = "safe-to-deploy"
+delta = "0.14.5 -> 0.15.2"
 
 [[audits.bytecode-alliance.audits.heck]]
 who = "Alex Crichton <alex@alexcrichton.com>"

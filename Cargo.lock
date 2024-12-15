@@ -7929,7 +7929,7 @@ dependencies = [
 [[package]]
 name = "postgres-protocol"
 version = "0.6.7"
-source = "git+https://github.com/MaterializeInc/rust-postgres#7d2f14e35e97973995c39662cde618036a0f9484"
+source = "git+https://github.com/MaterializeInc/rust-postgres#548f00c4cbcf7bd714c29cfd2fea7685040c9987"
 dependencies = [
  "base64 0.22.0",
  "byteorder",
@@ -7961,7 +7961,7 @@ dependencies = [
 [[package]]
 name = "postgres-types"
 version = "0.2.7"
-source = "git+https://github.com/MaterializeInc/rust-postgres#7d2f14e35e97973995c39662cde618036a0f9484"
+source = "git+https://github.com/MaterializeInc/rust-postgres#548f00c4cbcf7bd714c29cfd2fea7685040c9987"
 dependencies = [
  "bytes",
  "chrono",
@@ -10048,7 +10048,7 @@ dependencies = [
 [[package]]
 name = "tokio-postgres"
 version = "0.7.11"
-source = "git+https://github.com/MaterializeInc/rust-postgres#7d2f14e35e97973995c39662cde618036a0f9484"
+source = "git+https://github.com/MaterializeInc/rust-postgres#548f00c4cbcf7bd714c29cfd2fea7685040c9987"
 dependencies = [
  "async-trait",
  "byteorder",

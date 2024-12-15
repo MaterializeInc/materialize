@@ -41,60 +41,120 @@ who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "51.0.0"
 
+[[audits.arrow]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "53.3.0"
+
 [[audits.arrow-arith]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "51.0.0"
+
+[[audits.arrow-arith]]
+who = "Parker Timmerman"
+criteria = "safe-to-deploy"
+version = "53.3.0"
 
 [[audits.arrow-array]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "51.0.0"
 
+[[audits.arrow-array]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "53.3.0"
+
 [[audits.arrow-buffer]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "51.0.0"
+
+[[audits.arrow-buffer]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "53.3.0"
 
 [[audits.arrow-cast]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "51.0.0"
 
+[[audits.arrow-cast]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "53.3.0"
+
 [[audits.arrow-data]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "51.0.0"
+
+[[audits.arrow-data]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "53.3.0"
 
 [[audits.arrow-ipc]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "51.0.0"
 
+[[audits.arrow-ipc]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "53.3.0"
+
 [[audits.arrow-ord]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "51.0.0"
+
+[[audits.arrow-ord]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "53.3.0"
 
 [[audits.arrow-row]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "51.0.0"
 
+[[audits.arrow-row]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "53.3.0"
+
 [[audits.arrow-schema]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "51.0.0"
+
+[[audits.arrow-schema]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "53.3.0"
 
 [[audits.arrow-select]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "51.0.0"
 
+[[audits.arrow-select]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "53.3.0"
+
 [[audits.arrow-string]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "51.0.0"
+
+[[audits.arrow-string]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "53.3.0"
 
 [[audits.askama]]
 who = "Parker Timmerman <parker.timmerman@materialize.com>"
@@ -196,10 +256,20 @@ who = "Parker Timmerman <parker.timmerman@materialize.com>"
 criteria = "safe-to-deploy"
 version = "3.5.0"
 
+[[audits.brotli]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "7.0.0"
+
 [[audits.brotli-decompressor]]
 who = "Parker Timmerman <parker.timmerman@materialize.com>"
 criteria = "safe-to-deploy"
 version = "2.5.1"
+
+[[audits.brotli-decompressor]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "4.0.1"
 
 [[audits.bstr]]
 who = "Jan Teske <jteske@posteo.net>"
@@ -358,6 +428,11 @@ version = "0.4.2"
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "23.5.26"
+
+[[audits.flatbuffers]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "24.3.25"
 
 [[audits.flatcontainer]]
 who = "Moritz Hoffmann <mh@materialize.com>"
@@ -559,30 +634,60 @@ who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.8.5"
 
+[[audits.lexical-core]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "1.0.5"
+
 [[audits.lexical-parse-float]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.8.5"
+
+[[audits.lexical-parse-float]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "1.0.5"
 
 [[audits.lexical-parse-integer]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.8.6"
 
+[[audits.lexical-parse-integer]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "1.0.5"
+
 [[audits.lexical-util]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.8.5"
+
+[[audits.lexical-util]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "1.0.6"
 
 [[audits.lexical-write-float]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.8.5"
 
+[[audits.lexical-write-float]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "1.0.5"
+
 [[audits.lexical-write-integer]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.8.5"
+
+[[audits.lexical-write-integer]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "1.0.5"
 
 [[audits.libm]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
@@ -763,6 +868,11 @@ version = "2.2.0"
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "51.0.0"
+
+[[audits.parquet]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "53.3.0"
 
 [[audits.pest]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
