@@ -523,7 +523,7 @@ pub struct TlsCliArgs {
     /// rejected.
     #[clap(
         long, env = "TLS_MODE",
-        possible_values = &["disable", "require"],
+        value_parser = ["disable", "require"],
         default_value = "disable",
         default_value_ifs = &[
             ("frontegg-tenant", None, Some("require")),

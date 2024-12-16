@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::convert::Infallible;
 use std::error::Error;
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -50,7 +51,12 @@ struct Args {
     ///
     /// Passing `--var foo=bar` will create a variable named `arg.foo` with the
     /// value `bar`. Can be specified multiple times to set multiple variables.
-    #[clap(long, env = "VAR", use_delimiter = true, value_name = "NAME=VALUE")]
+    #[clap(
+        long,
+        env = "VAR",
+        use_value_delimiter = true,
+        value_name = "NAME=VALUE"
+    )]
     var: Vec<String>,
     /// A random number to distinguish each testdrive run.
     #[clap(long, value_name = "N")]
@@ -69,7 +75,7 @@ struct Args {
     #[clap(long, value_name = "SOURCE")]
     source: Option<String>,
     /// Default timeout for cancellable operations.
-    #[clap(long, parse(try_from_str = humantime::parse_duration), default_value = "30s", value_name = "DURATION")]
+    #[clap(long, value_parser = humantime::parse_duration, default_value = "30s", value_name = "DURATION")]
     default_timeout: Duration,
     /// The default number of times to retry a query expecting it to converge to the desired result.
     #[clap(long, default_value = "18446744073709551615", value_name = "N")]
@@ -77,7 +83,7 @@ struct Args {
     /// Initial backoff interval for retry operations.
     ///
     /// Set to 0 to retry immediately on failure.
-    #[clap(long, parse(try_from_str = humantime::parse_duration), default_value = "50ms", value_name = "DURATION")]
+    #[clap(long, value_parser = humantime::parse_duration, default_value = "50ms", value_name = "DURATION")]
     initial_backoff: Duration,
     /// Backoff factor when retrying.
     ///
@@ -155,7 +161,7 @@ struct Args {
     materialize_internal_http_port: u16,
     /// Arbitrary session parameters for testdrive to set after connecting to
     /// Materialize.
-    #[clap(long, value_name = "KEY=VAL", parse(from_str = parse_kafka_opt))]
+    #[clap(long, value_name = "KEY=VAL", value_parser = parse_kafka_opt)]
     materialize_param: Vec<(String, String)>,
     /// Validate the catalog state of the specified catalog kind.
     #[clap(long)]
@@ -190,7 +196,7 @@ struct Args {
     kafka_default_partitions: usize,
     /// Arbitrary rdkafka options for testdrive to use when connecting to the
     /// Kafka broker.
-    #[clap(long, env = "KAFKA_OPTION", use_delimiter=true, value_name = "KEY=VAL", parse(from_str = parse_kafka_opt))]
+    #[clap(long, env = "KAFKA_OPTION", use_value_delimiter=true, value_name = "KEY=VAL", value_parser = parse_kafka_opt)]
     kafka_option: Vec<(String, String)>,
     /// URL of the schema registry that testdrive will connect to.
     #[clap(long, value_name = "URL", default_value = "http://localhost:8081")]
@@ -555,9 +561,9 @@ async fn main() {
     }
 }
 
-fn parse_kafka_opt(opt: &str) -> (String, String) {
+fn parse_kafka_opt(opt: &str) -> Result<(String, String), Infallible> {
     let mut pieces = opt.splitn(2, '=');
     let key = pieces.next().unwrap_or("").to_owned();
     let val = pieces.next().unwrap_or("").to_owned();
-    (key, val)
+    Ok((key, val))
 }

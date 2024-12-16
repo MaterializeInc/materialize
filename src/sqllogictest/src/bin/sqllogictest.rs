@@ -17,6 +17,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use chrono::Utc;
+use clap::ArgAction;
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig, KeyValueArg};
 use mz_ore::metrics::MetricsRegistry;
@@ -37,7 +38,7 @@ struct Args {
     /// If specified once, print summary for each source file.
     /// If specified twice, also show descriptions of each error.
     /// If specified thrice, also print each query before it is executed.
-    #[clap(short = 'v', long = "verbose", parse(from_occurrences))]
+    #[clap(short = 'v', long = "verbose", action = ArgAction::Count)]
     verbosity: usize,
     /// Don't exit with a failing code if not all queries are successful.
     #[clap(long)]
@@ -91,7 +92,7 @@ struct Args {
     #[clap(
         long,
         env = "SYSTEM_PARAMETER_DEFAULT",
-        multiple = true,
+        action = ArgAction::Append,
         value_delimiter = ';'
     )]
     system_parameter_default: Vec<KeyValueArg<String, String>>,
