@@ -965,12 +965,18 @@ impl AggregatedStatistics {
     }
 
     /// Re-initialize a source. If it already exists, then its local epoch is advanced.
-    pub fn initialize_source<F: FnOnce() -> SourceStatistics>(&mut self, id: GlobalId, stats: F) {
+    pub fn initialize_source<F: FnOnce() -> SourceStatistics>(
+        &mut self,
+        id: GlobalId,
+        resume_upper: Antichain<Timestamp>,
+        stats: F,
+    ) {
         self.local_source_statistics
             .entry(id)
             .and_modify(|(ref mut epoch, ref mut stats)| {
                 *epoch += 1;
                 stats.reset_gauges();
+                stats.meta = SourceStatisticsMetadata::new(resume_upper);
             })
             .or_insert_with(|| (0, stats()));
 
