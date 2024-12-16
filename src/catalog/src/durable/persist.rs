@@ -47,7 +47,7 @@ use timely::Container;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
-use crate::durable::debug::{Collection, DebugCatalogState, Trace};
+use crate::durable::debug::{Collection, CollectionType, DebugCatalogState, Trace};
 use crate::durable::error::FenceError;
 use crate::durable::initialize::{
     ENABLE_0DT_DEPLOYMENT, ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT, SYSTEM_CONFIG_SYNCED_KEY,
@@ -1204,6 +1204,13 @@ impl UnopenedPersistCatalogState {
             .into_iter()
             .partition(|(update, _, _)| update.is_audit_log());
         self.snapshot = snapshot;
+        // Normally, `collection_entries` is updated in `apply_updates`. The audit log updates skip
+        // over that function so we manually update it here.
+        let audit_log_count = audit_logs.iter().map(|(_, _, diff)| diff).sum();
+        self.metrics
+            .collection_entries
+            .with_label_values(&[&CollectionType::AuditLog.to_string()])
+            .add(audit_log_count);
         let audit_log_handle = AuditLogIterator::new(audit_logs);
 
         // Perform data migrations.
