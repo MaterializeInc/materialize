@@ -37,7 +37,7 @@ not suitable for production deployments</redb>.
 | **Use case isolation**               | ❌ | ✅ |
 | **Fault tolerance**                  | ❌ | ✅ |
 | **Horizontal scalability**           | ❌ | ✅ |
-| **GUI**      | ✅ Materialize Console  | ✅ Materialize Console |
+| **GUI (Materialize Console)**      | ✅ | ✅ |
 
 ### Prerequisites
 
@@ -65,7 +65,7 @@ not suitable for production deployments</redb>.
    When running locally:
 
    - The Docker container binds exclusively to localhost, for security reasons.
-   - The web console is available on port `6874`.
+   - The [Materialize Console](/console/) is available on port `6874`.
    - The SQL interface is available on port `6875`.
    - Logs are available via `docker logs <container-id>`.
    - A default user `materialize` is created.
