@@ -5,16 +5,30 @@ robots: "noindex, nofollow"
 disable_list: true
 ---
 
+You can install self-managed Materialize on a Kubernetes cluster running locally
+or on a cloud provider.
+
 ## Install locally
 
-- [Install locally on kind](/self-managed/installation/install-on-local-kind/)
-
-- [Install locally on minikube](/self-managed/installation/install-on-local-minikube/)
+{{< multilinkbox >}}
+{{< linkbox title="Using Docker/kind" >}}
+[Install locally on kind](/self-managed/installation/install-on-local-kind/)
+{{</ linkbox >}}
+{{< linkbox  title="Using Docker/minikube" >}}
+[Install locally on minikube](/self-managed/installation/install-on-local-minikube/)
+{{</ linkbox >}}
+{{</ multilinkbox >}}
 
 ## Install on cloud provider
 
-- [Install on AWS](/self-managed/installation/install-on-aws/)
-- [Install on GCP](/self-managed/installation/install-on-gcp/)
+{{< multilinkbox >}}
+{{< linkbox title="AWS" >}}
+[Install on AWS](/self-managed/installation/install-on-aws/)
+{{</ linkbox >}}
+{{< linkbox title="GCP" >}}
+[Install on GCP](/self-managed/installation/install-on-gcp/)
+{{</ linkbox >}}
+{{</ multilinkbox >}}
 
 ## See also
 
