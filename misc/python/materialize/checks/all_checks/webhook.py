@@ -29,9 +29,9 @@ class Webhook(Check):
 
                 > CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON INCLUDE HEADERS;
 
-                >[version<12800] CREATE SOURCE webhook_bytes FROM WEBHOOK BODY FORMAT BYTES;
+                > CREATE SOURCE webhook_bytes IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT BYTES;
 
-                >[version>=12800] CREATE TABLE webhook_bytes FROM WEBHOOK BODY FORMAT BYTES;
+                >[version>=12800] CREATE TABLE webhook_table_text FROM WEBHOOK BODY FORMAT TEXT;
 
                 $ webhook-append database=materialize schema=public name=webhook_text
                 fooä
@@ -116,11 +116,11 @@ class Webhook(Check):
                 > SHOW CREATE SOURCE webhook_json
                 materialize.public.webhook_json "CREATE SOURCE \\"materialize\\".\\"public\\".\\"webhook_json\\" IN CLUSTER \\"webhook_cluster\\" FROM WEBHOOK BODY FORMAT JSON INCLUDE HEADERS"
 
-                >[version<12800] SHOW CREATE SOURCE webhook_bytes
+                > SHOW CREATE SOURCE webhook_bytes
                 materialize.public.webhook_bytes "CREATE SOURCE \\"materialize\\".\\"public\\".\\"webhook_bytes\\" IN CLUSTER \\"webhook_cluster\\" FROM WEBHOOK BODY FORMAT BYTES"
 
-                >[version>=12800] SHOW CREATE SOURCE webhook_bytes
-                materialize.public.webhook_bytes "CREATE TABLE \\"materialize\\".\\"public\\".\\"webhook_bytes\\" FROM WEBHOOK BODY FORMAT BYTES"
+                >[version>=12800] SHOW CREATE SOURCE webhook_table_text
+                materialize.public.webhook_table_text "CREATE TABLE \\"materialize\\".\\"public\\".\\"webhook_table_text\\" FROM WEBHOOK BODY FORMAT TEXT"
            """
             )
         )
