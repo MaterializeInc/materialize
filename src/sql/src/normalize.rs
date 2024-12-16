@@ -348,6 +348,7 @@ pub fn create_statement(
 
         Statement::CreateWebhookSource(CreateWebhookSourceStatement {
             name,
+            is_table: _,
             if_not_exists,
             include_headers: _,
             body_format: _,

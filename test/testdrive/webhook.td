@@ -540,3 +540,11 @@ SHOW cluster;
 
 > SELECT c.name = '${current-cluster}' FROM mz_clusters c JOIN mz_sources s ON c.id = s.cluster_id WHERE s.name = 'webhook_in_current';
 true
+
+> CREATE TABLE webhook_as_table FROM WEBHOOK BODY FORMAT TEXT;
+
+$ webhook-append name=webhook_as_table
+aaa_1
+
+> SELECT * FROM webhook_as_table;
+aaa_1

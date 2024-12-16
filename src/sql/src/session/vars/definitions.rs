@@ -1525,13 +1525,6 @@ pub static NETWORK_POLICY: VarDefinition = VarDefinition::new_lazy(
     true,
 );
 
-pub static ENABLE_CREATE_TABLE_FROM_SOURCE: VarDefinition = VarDefinition::new(
-    "enable_create_table_from_source",
-    value!(bool; false),
-    "Whether to allow CREATE TABLE .. FROM SOURCE syntax.",
-    true,
-);
-
 pub static FORCE_SOURCE_TABLE_SYNTAX: VarDefinition = VarDefinition::new(
     "force_source_table_syntax",
     value!(bool; false),
@@ -2200,6 +2193,12 @@ feature_flags!(
     {
         name: enable_network_policies,
         desc: "ENABLE NETWORK POLICIES",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_create_table_from_source,
+        desc: "Whether to allow CREATE TABLE .. FROM SOURCE syntax.",
         default: false,
         enable_for_item_parsing: true,
     },

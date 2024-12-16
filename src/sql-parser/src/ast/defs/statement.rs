@@ -733,10 +733,11 @@ impl<T: AstInfo> AstDisplay for ValidateConnectionStatement<T> {
 }
 impl_display_t!(ValidateConnectionStatement);
 
-/// `CREATE SOURCE <name> FROM WEBHOOK`
+/// `CREATE (SOURCE | TABLE) <name> FROM WEBHOOK`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateWebhookSourceStatement<T: AstInfo> {
     pub name: UnresolvedItemName,
+    pub is_table: bool,
     pub if_not_exists: bool,
     pub body_format: Format<T>,
     pub include_headers: CreateWebhookSourceIncludeHeaders,
@@ -746,15 +747,25 @@ pub struct CreateWebhookSourceStatement<T: AstInfo> {
 
 impl<T: AstInfo> AstDisplay for CreateWebhookSourceStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("CREATE SOURCE ");
+        f.write_str("CREATE ");
+
+        if self.is_table {
+            f.write_str("TABLE ");
+        } else {
+            f.write_str("SOURCE ");
+        }
+
         if self.if_not_exists {
             f.write_str("IF NOT EXISTS ");
         }
         f.write_node(&self.name);
 
-        if let Some(cluster_name) = &self.in_cluster {
-            f.write_str(" IN CLUSTER ");
-            f.write_node(cluster_name);
+        // CREATE TABLE ... FROM WEBHOOK does not support specifying a cluster.
+        if !self.is_table {
+            if let Some(cluster_name) = &self.in_cluster {
+                f.write_str(" IN CLUSTER ");
+                f.write_node(cluster_name);
+            }
         }
 
         f.write_str(" FROM WEBHOOK ");
