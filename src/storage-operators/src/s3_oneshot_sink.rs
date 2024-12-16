@@ -425,6 +425,23 @@ where
 
             // Map of an uploader per batch.
             let mut s3_uploaders: BTreeMap<u64, T> = BTreeMap::new();
+
+            // As a special case, the 0th worker always forces a file to be
+            // created for batch 0, even if it never sees any data for batch 0.
+            // This ensures that we always write at least one file to S3, even
+            // if the input is empty. See database-issue#8599.
+            if worker_id == 0 {
+                let mut uploader = T::new(
+                    sdk_config.clone(),
+                    connection_details.clone(),
+                    &sink_id,
+                    0,
+                    params.clone(),
+                )?;
+                uploader.force_new_file().await?;
+                s3_uploaders.insert(0, uploader);
+            }
+
             let mut row_count = 0;
             let mut last_row = None;
             while let Some(event) = input_handle.next().await {
@@ -580,6 +597,9 @@ trait CopyToS3Uploader: Sized {
         batch: u64,
         params: CopyToParameters,
     ) -> Result<Self, anyhow::Error>;
+    /// Force the start of a new file, even if no rows have yet been appended or
+    /// if the current file has not yet reached the configured `max_file_size`.
+    async fn force_new_file(&mut self) -> Result<(), anyhow::Error>;
     /// Append a row to the internal buffer, and optionally flush the buffer to S3.
     async fn append_row(&mut self, row: &Row) -> Result<(), anyhow::Error>;
     /// Flush the full remaining internal buffer to S3, and close all open resources.
