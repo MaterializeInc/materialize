@@ -170,7 +170,8 @@ steps:
         depends_on: []
         timeout_in_minutes: 20
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          # Use AWS machines so we have access to the Bazel remote cache.
+          queue: linux-aarch64-small
         coverage: skip
         sanitizer: skip
 
