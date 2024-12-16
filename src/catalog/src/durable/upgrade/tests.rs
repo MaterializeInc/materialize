@@ -20,9 +20,9 @@ use crate::durable::upgrade::AllVersionsStateUpdateKind;
 
 const PROTO_DIRECTORY: &str = {
     if mz_build_tools::is_bazel_build() {
-        "src/catalog/protos"
+        "src/catalog-protos/protos"
     } else {
-        "protos"
+        "../catalog-protos/protos"
     }
 };
 const PROTO_EXT: &str = "proto";

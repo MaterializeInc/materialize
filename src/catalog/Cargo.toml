@@ -26,6 +26,7 @@ itertools = "0.10.5"
 mz-adapter-types = { path = "../adapter-types" }
 mz-audit-log = { path = "../audit-log" }
 mz-build-info = { path = "../build-info" }
+mz-catalog-protos = { path = "../catalog-protos" }
 mz-cloud-resources = { path = "../cloud-resources" }
 mz-compute-client = { path = "../compute-client" }
 mz-compute-types = { path = "../compute-types" }
@@ -78,25 +79,14 @@ mz-postgres-util = { path = "../postgres-util" }
 similar-asserts = "1.4"
 tokio-postgres = { version = "0.7.8" }
 
-[build-dependencies]
-anyhow = "1.0.66"
-md-5 = "0.10.5"
-mz-build-tools = { path = "../build-tools", default-features = false }
-prost-build = "0.13.2"
-serde = "1.0.152"
-serde_json = "1.0.125"
-
 [features]
 default = ["mz-build-tools/default"]
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
 
-[package.metadata.cargo-gazelle.build]
-data = ["protos/**"]
-
 [package.metadata.cargo-gazelle.test.lib]
-data = ["protos/**", "src/durable/upgrade/snapshots/**"]
+data = ["//src/catalog-protos:all_protos", "src/durable/upgrade/snapshots/**"]
 
 [package.metadata.cargo-gazelle.test.debug]
 data = ["tests/snapshots/debug*.snap"]

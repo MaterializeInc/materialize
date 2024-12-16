@@ -16,21 +16,21 @@ breaking:
     - WIRE
   ignore:
     # reason: does currently not require backward-compatibility
-    - catalog/protos/objects.proto
+    - catalog-protos/protos/objects.proto
     # reason: does currently not require backward-compatibility
-    - catalog/protos/objects_v67.proto
+    - catalog-protos/protos/objects_v67.proto
     # reason: does currently not require backward-compatibility
-    - catalog/protos/objects_v68.proto
+    - catalog-protos/protos/objects_v68.proto
     # reason: does currently not require backward-compatibility
-    - catalog/protos/objects_v69.proto
+    - catalog-protos/protos/objects_v69.proto
     # reason: does currently not require backward-compatibility
-    - catalog/protos/objects_v70.proto
+    - catalog-protos/protos/objects_v70.proto
     # reason: does currently not require backward-compatibility
-    - catalog/protos/objects_v71.proto
+    - catalog-protos/protos/objects_v71.proto
     # reason: does currently not require backward-compatibility
-    - catalog/protos/objects_v72.proto
+    - catalog-protos/protos/objects_v72.proto
     # reason: does currently not require backward-compatibility
-    - catalog/protos/objects_v73.proto
+    - catalog-protos/protos/objects_v73.proto
     # reason: does currently not require backward-compatibility
     - cluster-client/src/client.proto
     # reason: does currently not require backward-compatibility

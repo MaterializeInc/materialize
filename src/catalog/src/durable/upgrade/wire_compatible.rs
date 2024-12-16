@@ -51,8 +51,8 @@ macro_rules! wire_compatible {
 
         // SAFETY: Below we assert that these types are wire compatible by generating arbitrary
         // structs, encoding in one, and then decoding in the other.
-        unsafe impl $crate::wire_compatible::WireCompatible< $b $(::$b_sub)* > for $a $(::$a_sub)* {}
-        unsafe impl $crate::wire_compatible::WireCompatible< $a $(::$a_sub)* > for $b $(::$b_sub)* {}
+        unsafe impl $crate::durable::upgrade::wire_compatible::WireCompatible< $b $(::$b_sub)* > for $a $(::$a_sub)* {}
+        unsafe impl $crate::durable::upgrade::wire_compatible::WireCompatible< $a $(::$a_sub)* > for $b $(::$b_sub)* {}
 
         ::paste::paste! {
             ::proptest::proptest! {
@@ -66,7 +66,7 @@ macro_rules! wire_compatible {
 
                     // Maybe superfluous, but this is a method called in production.
                     let b_decoded = b_decoded.expect("asserted Ok");
-                    let b_converted: $b $(::$b_sub)* = $crate::wire_compatible::WireCompatible::convert(&a);
+                    let b_converted: $b $(::$b_sub)* = $crate::durable::upgrade::wire_compatible::WireCompatible::convert(&a);
                     assert_eq!(b_decoded, b_converted);
 
                     let b_bytes = b_decoded.encode_to_vec();
@@ -83,7 +83,7 @@ macro_rules! wire_compatible {
 
                     // Maybe superfluous, but this is a method called in production.
                     let a_decoded = a_decoded.expect("asserted Ok");
-                    let a_converted: $a $(::$a_sub)* = $crate::wire_compatible::WireCompatible::convert(&b);
+                    let a_converted: $a $(::$a_sub)* = $crate::durable::upgrade::wire_compatible::WireCompatible::convert(&b);
                     assert_eq!(a_decoded, a_converted);
 
                     let a_bytes = a_decoded.encode_to_vec();

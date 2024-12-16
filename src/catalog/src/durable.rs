@@ -51,6 +51,7 @@ pub mod initialize;
 mod metrics;
 pub mod objects;
 mod persist;
+mod traits;
 mod transaction;
 mod upgrade;
 
