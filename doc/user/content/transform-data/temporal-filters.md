@@ -356,3 +356,13 @@ This change delays the insertion of `data` until at least `lower`, and schedules
 There are a variety of corner cases to double-check, mostly around what to do if a bound is absent, or if they cross (you can write it; we need to make sure it doesn't break). You'll want to double-check that the above makes sense when `diff` is negative (a deletion undoes the window its insertion would have introduced). We also need to update our query optimizer as filters can now do slightly weirder things than they could before, and it is less clear that you should use these filters ***e.g.*** to drive equi-join planning.
 
 But actually, the above is basically the implementation. The whole file comes in at around 300 lines, and that's with comments and a copyright header.
+
+## Appendix: Resource requirements
+
+Temporal filters can cause Materialize to maintain additional resources. A temporal filter evaluates a predicate on each record and can create up to two records based on the predicate, one insertion and one retraction. Many operators can process data independent of whether it's an insertion or retractions, some operators need to wait for data to be valid, i.e., their time to become current. This can lead to increased memory usage and CPU usage.
+
+This is true for arrangements, which maintain an index of data currently valid, and a stash of data that they've received but isn't valid yet. The stash is used to update the index when the data becomes valid. The size of the stash is proportional to the amount of future updates, and requires CPU time to maintain.
+
+Materialize includes optimizations to limit the amount of outstanding updates based on when they occur by dropping updates too far in the future. We still provide correctness for this optimization by ensuring we never commit any data for times that have been dropped. For wide temporal filters, this can lead to reduced CPU and memory usage.
+
+The current data timeout is set to several weeks, and relies on Materialize regularly restarting.
