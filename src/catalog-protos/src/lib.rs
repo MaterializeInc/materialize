@@ -54,9 +54,6 @@ mod tests {
     use std::fs;
     use std::io::{BufRead, BufReader};
 
-    use mz_proto::RustType;
-    use proptest::prelude::*;
-
     use crate::{CATALOG_VERSION, MIN_CATALOG_VERSION};
 
     // Note: Feel free to update this path if the protos move.
