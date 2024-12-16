@@ -134,7 +134,7 @@ pub struct TracingCliArgs {
         env = "OPENTELEMETRY_SCHED_DELAY",
         default_value = "5000ms",
         requires = "opentelemetry-endpoint",
-        parse(try_from_str = humantime::parse_duration)
+        value_parser = humantime::parse_duration,
     )]
     pub opentelemetry_sched_delay: Duration,
     /// The max time to attempt exporting a batch.
@@ -143,7 +143,7 @@ pub struct TracingCliArgs {
         env = "OPENTELEMETRY_MAX_EXPORT_TIMEOUT",
         default_value = "30s",
         requires = "opentelemetry-endpoint",
-        parse(try_from_str = humantime::parse_duration)
+        value_parser = humantime::parse_duration,
     )]
     pub opentelemetry_max_export_timeout: Duration,
     /// Export OpenTelemetry tracing events to the provided endpoint.
@@ -209,7 +209,7 @@ pub struct TracingCliArgs {
         long,
         env = "TOKIO_CONSOLE_PUBLISH_INTERVAL",
         requires = "tokio-console-listen-addr",
-        parse(try_from_str = humantime::parse_duration),
+        value_parser = humantime::parse_duration,
         default_value = "1s",
     )]
     pub tokio_console_publish_interval: Duration,
@@ -221,7 +221,7 @@ pub struct TracingCliArgs {
         long,
         env = "TOKIO_CONSOLE_RETENTION",
         requires = "tokio-console-listen-addr",
-        parse(try_from_str = humantime::parse_duration),
+        value_parser = humantime::parse_duration,
         default_value = "1h",
     )]
     pub tokio_console_retention: Duration,

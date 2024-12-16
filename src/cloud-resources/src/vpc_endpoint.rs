@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeMap;
+use std::convert::Infallible;
 use std::fmt::{self, Debug};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -48,8 +49,8 @@ impl AwsExternalIdPrefix {
     ///
     pub fn new_from_cli_argument_or_environment_variable(
         aws_external_id_prefix: &str,
-    ) -> AwsExternalIdPrefix {
-        AwsExternalIdPrefix(aws_external_id_prefix.into())
+    ) -> Result<AwsExternalIdPrefix, Infallible> {
+        Ok(AwsExternalIdPrefix(aws_external_id_prefix.into()))
     }
 }
 

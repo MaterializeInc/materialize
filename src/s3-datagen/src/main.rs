@@ -30,7 +30,7 @@ struct Args {
     #[clap(
         short = 's',
         long,
-        parse(try_from_str = parse_object_size)
+        value_parser = parse_object_size,
     )]
     object_size: usize,
 

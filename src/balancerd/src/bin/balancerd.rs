@@ -129,7 +129,7 @@ pub struct ServiceArgs {
     #[clap(
         long,
         env = "CONFIG_SYNC_TIMEOUT",
-        parse(try_from_str = humantime::parse_duration),
+        value_parser = humantime::parse_duration,
         default_value = "30s"
     )]
     config_sync_timeout: Duration,
@@ -140,7 +140,7 @@ pub struct ServiceArgs {
     #[clap(
         long,
         env = "CONFIG_SYNC_LOOP_INTERVAL",
-        parse(try_from_str = humantime::parse_duration),
+        value_parser = humantime::parse_duration,
     )]
     config_sync_loop_interval: Option<Duration>,
 

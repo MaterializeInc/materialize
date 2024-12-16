@@ -33,9 +33,9 @@ pub fn validate_profile_name(val: &str) -> Result<String, String> {
 #[derive(Debug, clap::Args)]
 pub struct EndpointArgs {
     /// Use the specified cloud endpoint.
-    #[clap(long, hidden = true, env = "CLOUD_ENDPOINT")]
+    #[clap(long, hide = true, env = "CLOUD_ENDPOINT")]
     pub cloud_endpoint: Option<Url>,
     /// Use the specified admin endpoint.
-    #[clap(long, hidden = true, env = "ADMIN_ENDPOINT")]
+    #[clap(long, hide = true, env = "ADMIN_ENDPOINT")]
     pub admin_endpoint: Option<Url>,
 }

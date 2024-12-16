@@ -178,7 +178,8 @@ impl ConnectionContext {
             aws_external_id_prefix: Some(
                 AwsExternalIdPrefix::new_from_cli_argument_or_environment_variable(
                     "test-aws-external-id-prefix",
-                ),
+                )
+                .expect("infallible"),
             ),
             aws_connection_role_arn: Some(
                 "arn:aws:iam::123456789000:role/MaterializeConnection".into(),

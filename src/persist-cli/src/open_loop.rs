@@ -70,7 +70,7 @@ pub struct Args {
     benchmark_type: BenchmarkType,
 
     /// Runtime in a whole number of seconds
-    #[clap(long, parse(try_from_str = humantime::parse_duration), value_name = "S", default_value = "60s")]
+    #[clap(long, value_parser = humantime::parse_duration, value_name = "S", default_value = "60s")]
     runtime: Duration,
 
     /// How many records writers should emit per second.
@@ -86,7 +86,7 @@ pub struct Args {
     batch_size: usize,
 
     /// Duration between subsequent informational log outputs.
-    #[clap(long, parse(try_from_str = humantime::parse_duration), value_name = "L", default_value = "1s")]
+    #[clap(long, value_parser = humantime::parse_duration, value_name = "L", default_value = "1s")]
     logging_granularity: Duration,
 
     /// Id of the persist shard (for use in multi-process runs).

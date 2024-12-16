@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 use std::{cmp, env, iter, thread};
 
 use anyhow::{bail, Context};
-use clap::{ArgEnum, Parser};
+use clap::{ArgAction, ArgEnum, Parser};
 use fail::FailScenario;
 use http::header::HeaderValue;
 use ipnet::IpNet;
@@ -177,8 +177,8 @@ pub struct Args {
     #[clap(
         long,
         env = "ANNOUNCE_EGRESS_ADDRESS",
-        multiple = true,
-        use_delimiter = true
+        action = ArgAction::Append,
+        use_value_delimiter = true
     )]
     announce_egress_address: Vec<IpNet>,
     /// The external host name to connect to the HTTP server of this
@@ -334,7 +334,7 @@ pub struct Args {
     #[clap(
         long,
         env = "AWS_SECRETS_CONTROLLER_TAGS",
-        multiple = true,
+        action = ArgAction::Append,
         value_delimiter = ';',
         required_if_eq("secrets-controller", "aws-secrets-manager")
     )]
@@ -398,14 +398,14 @@ pub struct Args {
     #[clap(
         long,
         env = "STORAGE_USAGE_COLLECTION_INTERVAL",
-        parse(try_from_str = humantime::parse_duration),
+        value_parser = humantime::parse_duration,
         default_value = "3600s"
     )]
     storage_usage_collection_interval_sec: Duration,
     /// The period for which to retain usage records. Note that the retention
     /// period is only evaluated at server start time, so rebooting the server
     /// is required to discard old records.
-    #[clap(long, env = "STORAGE_USAGE_RETENTION_PERIOD", parse(try_from_str = humantime::parse_duration))]
+    #[clap(long, env = "STORAGE_USAGE_RETENTION_PERIOD", value_parser = humantime::parse_duration)]
     storage_usage_retention_period: Option<Duration>,
 
     // === Adapter options. ===
@@ -449,7 +449,7 @@ pub struct Args {
     #[clap(
         long,
         env = "LAUNCHDARKLY_KEY_MAP",
-        multiple = true,
+        action = ArgAction::Append,
         value_delimiter = ';'
     )]
     launchdarkly_key_map: Vec<KeyValueArg<String, String>>,
@@ -457,7 +457,7 @@ pub struct Args {
     #[clap(
         long,
         env = "CONFIG_SYNC_TIMEOUT",
-        parse(try_from_str = humantime::parse_duration),
+        value_parser = humantime::parse_duration,
         default_value = "30s"
     )]
     config_sync_timeout: Duration,
@@ -469,7 +469,7 @@ pub struct Args {
     #[clap(
         long,
         env = "CONFIG_SYNC_LOOP_INTERVAL",
-        parse(try_from_str = humantime::parse_duration),
+        value_parser = humantime::parse_duration,
     )]
     config_sync_loop_interval: Option<Duration>,
     /// A scratch directory that can be used for ephemeral storage.
@@ -544,7 +544,7 @@ pub struct Args {
     #[clap(
         long,
         env = "SYSTEM_PARAMETER_DEFAULT",
-        multiple = true,
+        action = ArgAction::Append,
         value_delimiter = ';'
     )]
     system_parameter_default: Vec<KeyValueArg<String, String>>,
@@ -561,15 +561,15 @@ pub struct Args {
     /// Prefix for an external ID to be supplied to all AWS AssumeRole operations.
     ///
     /// Details: <https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-user_externalid.html>
-    #[clap(long, env = "AWS_EXTERNAL_ID_PREFIX", value_name = "ID", parse(from_str = AwsExternalIdPrefix::new_from_cli_argument_or_environment_variable))]
+    #[clap(long, env = "AWS_EXTERNAL_ID_PREFIX", value_name = "ID", value_parser = AwsExternalIdPrefix::new_from_cli_argument_or_environment_variable)]
     aws_external_id_prefix: Option<AwsExternalIdPrefix>,
     /// The list of supported AWS PrivateLink availability zone ids.
     /// Must be zone IDs, of format e.g. "use-az1".
     #[clap(
         long,
         env = "AWS_PRIVATELINK_AVAILABILITY_ZONES",
-        multiple = true,
-        use_delimiter = true
+        action = ArgAction::Append,
+        use_value_delimiter = true
     )]
     aws_privatelink_availability_zones: Option<Vec<String>>,
 
