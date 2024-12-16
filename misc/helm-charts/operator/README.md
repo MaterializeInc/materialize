@@ -1,6 +1,6 @@
 # Materialize Kubernetes Operator Helm Chart
 
-![Version: v25.1.0-beta.1](https://img.shields.io/badge/Version-v25.1.0--beta.1-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v0.127.0](https://img.shields.io/badge/AppVersion-v0.127.0-informational?style=flat-square)
+![Version: v25.1.0-beta.1](https://img.shields.io/badge/Version-v25.1.0--beta.1-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v0.127.1](https://img.shields.io/badge/AppVersion-v0.127.1-informational?style=flat-square)
 
 Materialize Kubernetes Operator Helm Chart
 
@@ -251,7 +251,7 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.features.createConsole` |  | ``true`` |
 | `operator.image.pullPolicy` |  | ``"IfNotPresent"`` |
 | `operator.image.repository` |  | ``"materialize/orchestratord"`` |
-| `operator.image.tag` |  | ``"v0.127.0"`` |
+| `operator.image.tag` |  | ``"v0.127.1"`` |
 | `operator.nodeSelector` |  | ``{}`` |
 | `operator.resources.limits.memory` |  | ``"512Mi"`` |
 | `operator.resources.requests.cpu` |  | ``"100m"`` |
@@ -277,7 +277,7 @@ Specify each parameter using the `--set key=value[,key=value]` argument to `helm
 
 ```shell
 helm install my-materialize-operator \
-  --set operator.image.tag=v0.127.0 \
+  --set operator.image.tag=v0.127.1 \
   materialize/materialize-operator
 ```
 
@@ -312,7 +312,7 @@ metadata:
   name: 12345678-1234-1234-1234-123456789012
   namespace: materialize-environment
 spec:
-  environmentdImageRef: materialize/environmentd:v0.127.0
+  environmentdImageRef: materialize/environmentd:v0.127.1
   backendSecretName: materialize-backend
   environmentdResourceRequirements:
     limits:
