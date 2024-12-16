@@ -341,7 +341,21 @@ mod tests {
             BlobKey::parse_ids(&format!("{}/{}/{}", shard_id, writer_id, part_id)),
             Ok((
                 shard_id,
-                PartialBlobKey::Batch(WriterKey::Id(writer_id), part_id)
+                PartialBlobKey::Batch(WriterKey::Id(writer_id), part_id.clone())
+            ))
+        );
+
+        let version = Version::new(1, 0, 0);
+        assert_eq!(
+            BlobKey::parse_ids(&format!(
+                "{}/{}/{}",
+                shard_id,
+                WriterKey::for_version(&version),
+                part_id
+            )),
+            Ok((
+                shard_id,
+                PartialBlobKey::Batch(WriterKey::for_version(&version), part_id)
             ))
         );
 

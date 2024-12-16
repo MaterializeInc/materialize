@@ -615,10 +615,7 @@ pub async fn unreferenced_blobs(args: &StateArgs) -> Result<impl serde::Serializ
     // versions are also considered live
     let minimum_version = WriterKey::for_version(&state_versions.cfg.build_version);
     for (part, writer) in all_parts {
-        let is_unreferenced = match writer {
-            WriterKey::Id(writer) => !known_writers.contains(&writer),
-            version @ WriterKey::Version(_) => version < minimum_version,
-        };
+        let is_unreferenced = writer < minimum_version;
         if is_unreferenced && !known_parts.contains(&part) {
             unreferenced_blobs.batch_parts.insert(part);
         }
