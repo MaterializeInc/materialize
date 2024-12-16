@@ -38,12 +38,6 @@ identifier = 'sql-server'
 weight = 15
 
 [[menu.main]]
-name = "Kafka"
-parent = 'ingest-data'
-identifier = 'kafka'
-weight = 20
-
-[[menu.main]]
 name = "Redpanda"
 parent = 'ingest-data'
 identifier = 'redpanda'
