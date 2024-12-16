@@ -131,14 +131,16 @@ Terraform/infrastructure practices.
 
    node_group_ami_type       = "AL2023_ARM_64_STANDARD"
    node_group_instance_types = ["r6g.medium"]
-   node_group_desired_size   = 3
-   node_group_min_size       = 2
-   node_group_max_size       = 5
+   node_group_desired_size   = 2
+   node_group_min_size       = 1
+   node_group_max_size       = 3
 
    db_instance_class    = "db.t3.large"
    db_allocated_storage = 20
    db_multi_az          = false
 
+   enable_monitoring = false
+   metrics_retention_days = 0
    enable_cluster_creator_admin_permissions = true
    ```
 
