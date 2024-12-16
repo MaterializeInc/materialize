@@ -1,21 +1,20 @@
 ---
-type: Post
-title: 'Temporal Filters: Enabling Windowed Queries in Materialize'
-date: '2021-02-16'
-category: Technical Article
-image: >-
-  https://res.cloudinary.com/mzimgcdn/image/upload/v1665546890/Temporal-Filters.webp
-people_refs:
-  - src/content/data/people/frank-mcsherry.json
+title: "Temporal Filters: Enabling Windowed Queries in Materialize"
 description: >-
   Temporal filters give you a powerful SQL primitive for defining time-windowed
   computations over temporal data.
+menu:
+  main:
+    name: "Temporal Filters"
+    identifier: transform-temporal-filters
+    parent: transform-data
+    weight: 90
 ---
 [Materialize](https://www.materialize.com) provides a SQL interface to work with continually changing data. You write SQL queries as if against static data, and then as your data change we keep the results of your queries automatically up to date, in milliseconds.
 
 Materialize leans hard into the ideal that SQL is what you know best, and what you want to use to look at streaming data. At the same time, there are several tantalizing concepts that native stream processors provide that aren't obviously possible with standard SQL.
 
-Today we'll look at how to perform time-windowed computation over temporal data.
+In this article, we'll look at how to perform time-windowed computation over temporal data.
 
 ## Temporal Data
 
@@ -44,30 +43,28 @@ In Materialize, you can ask questions that grab the "logical time" for your quer
 -- Reduce down to counts within a time interval.
 SELECT content, count(*)
 FROM events
-WHERE mz_logical_timestamp() >= insert_ts
-  AND mz_logical_timestamp() < delete_ts
+WHERE mz_now() >= insert_ts
+  AND mz_now() < delete_ts
 GROUP BY content;
 ```
 
-This query will change its results over time. Not just because you might add to and remove from `events`, but because `mz_logical_timestamp()` advances as you stare at your screen. Each time you issue the query you may get a different result.
+This query will change its results over time. Not just because you might add to and remove from `events`, but because `mz_now()` advances as you stare at your screen. Each time you issue the query you may get a different result.
 
 This looks like a great query! What's not to like?
 
-The main issue really is that it is ***just a query***. You can ask this question over and over, but you can also ask the same thing with an arbitrary timestamp in place of `mz_logical_timestamp()`. To support that, Materialize has to keep the entire collection of data around. Your `events` table will grow and grow and grow, and the time to answer the query will grow as well.
+The main issue really is that it is ***just a query***. You can ask this question over and over, but you can also ask the same thing with an arbitrary timestamp in place of `mz_now()`. To support that, Materialize has to keep the entire collection of data around. Your `events` table will grow and grow and grow, and the time to answer the query will grow as well.
 
 ## Time-Windowed Computation
 
-Materialize specializes at ***maintaining*** computations like the above, both because that can make it faster to get your answers out, but also because by specifying what you actually need Materialize can run much more lean. We'll see that now with the query above!
-
-Until recently, if you tried to create a materialized view of the query above, Materialize would tell you to take a hike. The subject of this post is that you can now do it. Moreover, comparing parts of your data to `mz_logical_timestamp()` in views (rather than just in queries) introduces powerful new idioms, ones that we'll explore in this post.
+Materialize specializes at ***maintaining*** computations like the above, both because that can make it faster to get your answers out, but also because by specifying what you actually need Materialize can run much more lean. We'll see that now with the query above! Moreover, comparing parts of your data to `mz_now()` in views (rather than just in queries) introduces powerful new idioms, ones that we'll explore in this article.
 
 ```sql
 -- Maintained collection of only valid results.
 CREATE MATERIALIZED VIEW valid_events
 AS SELECT content, count(*)
 FROM events
-WHERE mz_logical_timestamp() >= insert_ts
-  AND mz_logical_timestamp() < delete_ts
+WHERE mz_now() >= insert_ts
+  AND mz_now() < delete_ts
 GROUP BY content;
 ```
 
@@ -75,9 +72,9 @@ What's all this then?
 
 Presumably `valid_events` has the property that if you `SELECT` from it you should see the same results as for the time-windowed `SELECT` in the previous section. That is 100% true.
 
-What is also true is that `valid_events` has enough information from you, in the form of the query itself, to maintain only enough historical detail to answer these `SELECT` queries from now onward. Once Materialize's `mz_logical_timestamp()` passes a record's `delete_ts` it cannot be seen (at least not through this view), and Materialize can dispose of the event. The in-memory footprint of `valid_events` stays bounded by the number of records in the system that could still satisfy this constraint (those records that are currently valid, or who may yet become valid in the future).
+What is also true is that `valid_events` has enough information from you, in the form of the query itself, to maintain only enough historical detail to answer these `SELECT` queries from now onward. Once Materialize's `mz_now()` passes a record's `delete_ts` it cannot be seen (at least not through this view), and Materialize can dispose of the event. The in-memory footprint of `valid_events` stays bounded by the number of records in the system that could still satisfy this constraint (those records that are currently valid, or who may yet become valid in the future).
 
-While you add to `events`, Materialize collects up the events that are no longer visible, automatically. Of course, you can also ***change*** the records in `events`, in case you want to remove some events early, or draw out the `delete_ts` of any record, or replace one event with its next stage (and new `insert_ts` and `delete_ts`). If you happen to adjust any fields that interact with `mz_logical_timestamp()` Materialize will update the views appropriately.
+While you add to `events`, Materialize collects up the events that are no longer visible, automatically. Of course, you can also ***change*** the records in `events`, in case you want to remove some events early, or draw out the `delete_ts` of any record, or replace one event with its next stage (and new `insert_ts` and `delete_ts`). If you happen to adjust any fields that interact with `mz_now()` Materialize will update the views appropriately.
 
 ## A Brief Example
 
@@ -90,22 +87,22 @@ Let's start with something simple: we'll just look at the records currently pres
 CREATE MATERIALIZED VIEW valid AS
 SELECT content, insert_ts, delete_ts
 FROM events
-WHERE mz_logical_timestamp() >= insert_ts
-  AND mz_logical_timestamp() < delete_ts;
+WHERE mz_now() >= insert_ts
+  AND mz_now() < delete_ts;
 ```
 
 We'll print out the things in our view, along with the current logical timestamp. It is initially empty, because we haven't put any data in. But, these are the columns we'll be looking at.
 
 ```
-materialize=> SELECT *, mz_logical_timestamp() FROM valid;
+materialize=> SELECT *, mz_now() FROM valid;
 
-content | insert_ts | delete_ts | mz_logical_timestamp
+content | insert_ts | delete_ts | mz_now
 ---------+-----------+-----------+----------------------
 (0 rows)
 
 ```
 
-Now let's put some data in there. I'm going to just take advantage of the fact that `INSERT` statements can also use `mz_logical_timestamp()` to populate the data with some records that we will make last five seconds.
+Now let's put some data in there. I'm going to just take advantage of the fact that `INSERT` statements can also use `mz_now()` to populate the data with some records that we will make last five seconds.
 
 ```
 materialize=> INSERT INTO events VALUES (
@@ -130,9 +127,9 @@ Each of these were executed by me, a human, and so almost certainly got differen
 Next, I typed ***incredibly fast*** to see the output for the query; what was previously empty just up above:
 
 ```
-materialize=> SELECT *, mz_logical_timestamp() FROM valid;
+materialize=> SELECT *, mz_now() FROM valid;
 
-content | insert_ts | delete_ts | mz_logical_timestamp
+content | insert_ts | delete_ts | mz_now
 ---------+---------------+---------------+----------------------
 hello   | 1627380752528 | 1627380752528 | 1627380754223
 welcome | 1627380752530 | 1627380752530 | 1627380754223
@@ -140,11 +137,11 @@ goodbye | 1627380752533 | 1627380752533 | 1627380754223
 (3 rows)
 ```
 
-We can see that the `insert_ts` and `delete_ts` values are indeed `5000` apart, and for each of the outputs the `mz_logical_timestamp` lies between the two. What happens if we type the query again, very quickly?
+We can see that the `insert_ts` and `delete_ts` values are indeed `5000` apart, and for each of the outputs the `mz_now` lies between the two. What happens if we type the query again, very quickly?
 
 ```text
-materialize=> SELECT *, mz_logical_timestamp() FROM valid;
- content |   insert_ts   |   delete_ts   | mz_logical_timestamp
+materialize=> SELECT *, mz_now() FROM valid;
+ content |   insert_ts   |   delete_ts   | mz_now
 ---------+---------------+---------------+----------------------
  hello   | 1613084609890 | 1613084614890 |        1613084613168
  hello   | 1613084611459 | 1613084616459 |        1613084613168
@@ -152,12 +149,12 @@ materialize=> SELECT *, mz_logical_timestamp() FROM valid;
 (3 rows)
 ```
 
-The `mz_logical_timestamp` values have increased. We still see all of the record, as the timestamp hasn't increased enough to fall outside the five second bound yet. We type again ..
+The `mz_now` values have increased. We still see all of the record, as the timestamp hasn't increased enough to fall outside the five second bound yet. We type again ..
 
 ```
-materialize=> SELECT *, mz_logical_timestamp() FROM valid;
+materialize=> SELECT *, mz_now() FROM valid;
 
-content | insert_ts | delete_ts | mz_logical_timestamp
+content | insert_ts | delete_ts | mz_now
 ---------+---------------+---------------+----------------------
 hello   | 1627380752528 | 1627380752528 | 1627380755920
 welcome | 1627380752530 | 1627380752530 | 1627380755920
@@ -168,21 +165,21 @@ goodbye | 1627380752533 | 1627380752533 | 1627380755920
 .. and the timestamp increases again ..
 
 ```
-materialize=> SELECT *, mz_logical_timestamp() FROM valid;
+materialize=> SELECT *, mz_now() FROM valid;
 
-content | insert_ts | delete_ts | mz_logical_timestamp
+content | insert_ts | delete_ts | mz_now
 ---------+---------------+---------------+----------------------
 welcome | 1627380752530 | 1627380752530 | 1627380757989
 goodbye | 1627380752533 | 1627380752533 | 1627380757989
 (2 rows)
 ```
 
-.. and we lost one! Now that `mz_logical_timestamp()` has reached `1627380757528` that record no longer satisfies the predicate, and is no longer present in the view.
+.. and we lost one! Now that `mz_now()` has reached `1627380757528` that record no longer satisfies the predicate, and is no longer present in the view.
 
 ```
-materialize=> SELECT *, mz_logical_timestamp() FROM valid;
+materialize=> SELECT *, mz_now() FROM valid;
 
-content | insert_ts | delete_ts | mz_logical_timestamp
+content | insert_ts | delete_ts | mz_now
 ---------+---------------+---------------+----------------------
 goodbye | 1627380752533 | 1627380752533 | 1627380762667
 (1 row)
@@ -191,16 +188,16 @@ goodbye | 1627380752533 | 1627380752533 | 1627380762667
 One more has dropped out.
 
 ```
-materialize=> SELECT *, mz_logical_timestamp() FROM valid;
+materialize=> SELECT *, mz_now() FROM valid;
 
-content | insert_ts | delete_ts | mz_logical_timestamp
+content | insert_ts | delete_ts | mz_now
 ---------+-----------+-----------+----------------------
 (0 rows)
 ```
 
 Ah, they are all gone. My fingers can rest now.
 
-Although this looks rather similar to re-typing the `SELECT` query that explicitly filters against `mz_logical_timestamp()`, the difference here is that everything is dataflow with updates flowing through it. If we were to `TAIL` the view, we would see exactly the moments at which the collection changes, without polling the system repeatedly.
+Although this looks rather similar to re-typing the `SELECT` query that explicitly filters against `mz_now()`, the difference here is that everything is dataflow with updates flowing through it. If we were to `TAIL` the view, we would see exactly the moments at which the collection changes, without polling the system repeatedly.
 
 And of course, we can handle a substantially higher volume of updates than if we were continually re-scanning the entire collection.
 
@@ -219,8 +216,8 @@ The example we had above where all records were valid for five seconds was a sli
 CREATE MATERIALIZED VIEW valid_events AS
 SELECT content, count(*)
 FROM events
-WHERE mz_logical_timestamp() >= insert_ts
-  AND mz_logical_timestamp() < insert_ts + 5000
+WHERE mz_now() >= insert_ts
+  AND mz_now() < insert_ts + 5000
 GROUP BY content;
 ```
 
@@ -235,8 +232,8 @@ I mean, you could, if that is what you want; you just tweak the query:
 CREATE MATERIALIZED VIEW valid_events AS
 SELECT content, count(*)
 FROM events
-WHERE mz_logical_timestamp() >= 1000 * (insert_ts / 1000)
-  AND mz_logical_timestamp() < 1000 * (insert_ts / 1000) + 5000
+WHERE mz_now() >= 1000 * (insert_ts / 1000)
+  AND mz_now() < 1000 * (insert_ts / 1000) + 5000
 GROUP BY content;
 ```
 
@@ -247,8 +244,8 @@ The granularity and width of the window is up to you to control, with straight-f
 CREATE MATERIALIZED VIEW valid_events AS
 SELECT content, count(*)
 FROM events
-WHERE mz_logical_timestamp() >= 1000 * (insert_ts / 1000)
-  AND mz_logical_timestamp() < 1000 * (insert_ts / 1000) + 1000
+WHERE mz_now() >= 1000 * (insert_ts / 1000)
+  AND mz_now() < 1000 * (insert_ts / 1000) + 1000
 GROUP BY content;
 ```
 
@@ -296,8 +293,8 @@ All we need to do is change those two lines with the `'1995-03-15'` in them.
 
 ```sql
 ...
-    AND o_orderdate < mz_logical_timestamp()
-    AND l_shipdate > mz_logical_timestamp()
+    AND o_orderdate < mz_now()
+    AND l_shipdate > mz_now()
 ...
 ```
 
@@ -310,7 +307,7 @@ The second changed constraint restricts our attention to `lineitem` records that
 Expressed this way, with temporal filters, the memory footprint of the view will be proportional to the sizes of `orders` and `customer`, plus as much of `lineitem` is present but has not yet shipped. If we wanted to tighten our belt even more, we could add a further constraint that we aren't looking at orders that are too old
 
 ```sql
-    AND o_orderdate + '90 days' > mz_logical_timestamp()
+    AND o_orderdate + '90 days' > mz_now()
 ```
 
 This will collect up the `orders` relation in addition to `lineitem`, and also prevent us from always seeing that one order from two years back that never shipped.
@@ -321,15 +318,9 @@ Temporal filters are pretty neat stuff. I hope you are half as excited as I am.
 
 There are some limitations. I should have mentioned this earlier.
 
-You can only use `mz_logical_timestamp()` in `WHERE` clauses, where it must be directly compared to expressions not containing `mz_logical_timestamp()`, or in a conjunction (`AND`) with other clauses like that. You aren't allowed to use `!=` at the moment, but clever folks could figure out how to fake that out. For the reasoning on all this, check out the implementation discussion next!
+You can only use `mz_now()` in `WHERE` clauses, where it must be directly compared to expressions not containing `mz_now()`, or in a conjunction (`AND`) with other clauses like that. You aren't allowed to use `!=` at the moment, but clever folks could figure out how to fake that out. For the reasoning on all this, check out the implementation discussion next!
 
 Limitations notwithstanding, I'm personally very excited about these temporal filters. They open up the door to functionality and behaviors that streaming systems only provide through special language extensions. But, all you really need is SQL, and the ability to refer to time, to make your data run.
-
-***
-
-Get access to Materialize [here](https://materialize.com/docs/get-started/). Temporal filters aren't released yet, so to try it out you'll need to either build from source or pull down the right docker image, and use the `--experimental` flag. It should be available soon in an upcoming release. In the meantime, take a swing by [the Materialize blog](https://www.materialize.com/blog/) for more cutting-edge content, and join the community Slack through the bright banner at the top of the [Materialize homepage](https://www.materialize.com/).
-
-***
 
 ## Appendex: Implementation
 
@@ -339,19 +330,19 @@ The magic lives in `filter.rs`, which is the Rust source for our filter operator
 
 However, this all changed with temporal filters, which need to do something more clever than just drop or retain things. Let's talk through what they need to do first, before we see how they go about doing it.
 
-In [differential dataflow](https://github.com/TimelyDataflow/differential-dataflow), which lies in wait underneath Materialize, dataflow operators consume and produce ***updates***: triples of `(data, time, diff)`. The `data` is the data payload: the values in the columns of your individual records. The `time` is the logical timestamp at which the change should take effect. The `diff` is .. a signed integer let's say, that says how the occurence count of `data` should change: positive numbers indicate additions, negative numbers indicate deletions. Each stream of updates describes a continually changing collection, whose contents can be determined at any time by accumulating up the appropriate updates.
+In [differential dataflow](https://github.com/TimelyDataflow/differential-dataflow), which lies in wait underneath Materialize, dataflow operators consume and produce ***updates***: triples of `(data, time, diff)`. The `data` is the data payload: the values in the columns of your individual records. The `time` is the logical timestamp at which the change should take effect. The `diff` is .. a signed integer let's say, that says how the occurrence count of `data` should change: positive numbers indicate additions, negative numbers indicate deletions. Each stream of updates describes a continually changing collection, whose contents can be determined at any time by accumulating up the appropriate updates.
 
-The traditional (non-temporal) filter responds to `(data, time, diff)` triples by applying a predicate to `data`, and either dropping or retaining the triple based on what it sees. However, if we did that with a temporal predicate only at the moment we received the update, I guess using the current `mz_logical_timestamp()`, we wouldn't do the right thing at all. We might drop the record as being too early yet, oblivious to the fact that the record should re-appear in the future. Similarly, if the record should be removed in the future, evaluating the predicate ***now*** doesn't have the right effect.
+The traditional (non-temporal) filter responds to `(data, time, diff)` triples by applying a predicate to `data`, and either dropping or retaining the triple based on what it sees. However, if we did that with a temporal predicate only at the moment we received the update, I guess using the current `mz_now()`, we wouldn't do the right thing at all. We might drop the record as being too early yet, oblivious to the fact that the record should re-appear in the future. Similarly, if the record should be removed in the future, evaluating the predicate ***now*** doesn't have the right effect.
 
 The temporal filter is somewhat less traditional than its non-temporal counterpart. Rather than drop or retain records ***right now***, it will schedule the insertion and deletion of records in the future.
 
 The temporal filter operator looks for predicates of the form
 
 ```
-mz_logical_timestamp() CMP_OP EXPRESSION
+mz_now() CMP_OP EXPRESSION
 ```
 
-where `CMP_OP` is a comparison operation other than `!=` (*i.e.* the operators `=`, `<`, `<=`, `>`, `>=` and things like `BETWEEN` that reduce to them) and `EXPRESSION` is an expression that does not contain `mz_logical_timestamp()`. Roughly, the expression is a function of `data`, and once we evaluate it we get a bound on `mz_logical_timestamp()`. If we have several comparisons, we end up with bounds, maybe lower and maybe upper, which describe an interval of time.
+where `CMP_OP` is a comparison operation other than `!=` (*i.e.* the operators `=`, `<`, `<=`, `>`, `>=` and things like `BETWEEN` that reduce to them) and `EXPRESSION` is an expression that does not contain `mz_now()`. Roughly, the expression is a function of `data`, and once we evaluate it we get a bound on `mz_now()`. If we have several comparisons, we end up with bounds, maybe lower and maybe upper, which describe an interval of time.
 
 An update `(data, time, diff)` normally takes effect at `time` and is in then effect indefinitely. However, we can narrow its range of time to `[lower, upper)` by transforming the input update into two output updates:
 
@@ -362,8 +353,6 @@ An update `(data, time, diff)` normally takes effect at `time` and is in then ef
 
 This change delays the insertion of `data` until at least `lower`, and schedules its deletion at `upper`.
 
-There are a variety of corner cases to double check, mostly around what to do if a bound is absent, or if they cross (you can write it; we need to make sure it doesn't break). You'll want to double check that the above makes sense when `diff` is negative (a deletion undoes the window its insertion would have introduced). We also need to update our query optimizer as filters can now do slightly weirder things than they could before, and it is less clear that you should use these filters ***e.g.*** to drive equi-join planning.
+There are a variety of corner cases to double-check, mostly around what to do if a bound is absent, or if they cross (you can write it; we need to make sure it doesn't break). You'll want to double-check that the above makes sense when `diff` is negative (a deletion undoes the window its insertion would have introduced). We also need to update our query optimizer as filters can now do slightly weirder things than they could before, and it is less clear that you should use these filters ***e.g.*** to drive equi-join planning.
 
 But actually, the above is basically the implementation. The whole file comes in at around 300 lines, and that's with comments and a copyright header.
-
-There are surely a lot more lines of code to write in response to all the issues you are about to file, but I'm looking forward to that!
