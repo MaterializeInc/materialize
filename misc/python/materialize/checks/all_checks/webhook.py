@@ -116,8 +116,11 @@ class Webhook(Check):
                 > SHOW CREATE SOURCE webhook_json
                 materialize.public.webhook_json "CREATE SOURCE \\"materialize\\".\\"public\\".\\"webhook_json\\" IN CLUSTER \\"webhook_cluster\\" FROM WEBHOOK BODY FORMAT JSON INCLUDE HEADERS"
 
-                > SHOW CREATE SOURCE webhook_bytes
+                >[version<12800] SHOW CREATE SOURCE webhook_bytes
                 materialize.public.webhook_bytes "CREATE SOURCE \\"materialize\\".\\"public\\".\\"webhook_bytes\\" IN CLUSTER \\"webhook_cluster\\" FROM WEBHOOK BODY FORMAT BYTES"
+
+                >[version>=12800] SHOW CREATE SOURCE webhook_bytes
+                materialize.public.webhook_bytes "CREATE TABLE \\"materialize\\".\\"public\\".\\"webhook_bytes\\" FROM WEBHOOK BODY FORMAT BYTES"
            """
             )
         )
