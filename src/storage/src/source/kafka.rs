@@ -17,15 +17,15 @@ use std::time::Duration;
 
 use anyhow::bail;
 use chrono::{DateTime, NaiveDateTime};
-use differential_dataflow::AsCollection;
+use differential_dataflow::{AsCollection, Hashable};
 use futures::StreamExt;
 use maplit::btreemap;
 use mz_kafka_util::client::{get_partitions, MzClientContext, PartitionId, TunnelingClientContext};
 use mz_ore::assert_none;
+use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
 use mz_ore::iter::IteratorExt;
-use mz_ore::thread::{JoinHandleExt, UnparkOnDropHandle};
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{adt::jsonb::Jsonb, Datum, Diff, GlobalId, Row};
 use mz_ssh_util::tunnel::SshTunnelStatus;
@@ -39,7 +39,9 @@ use mz_storage_types::sources::{
     IndexedSourceExport, MzOffset, SourceExport, SourceExportDetails, SourceTimestamp,
 };
 use mz_timely_util::antichain::AntichainExt;
-use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
+use mz_timely_util::builder_async::{
+    Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
+};
 use mz_timely_util::containers::stack::AccountedStackBuilder;
 use mz_timely_util::order::Partitioned;
 use rdkafka::consumer::base_consumer::PartitionQueue;
@@ -49,13 +51,15 @@ use rdkafka::message::{BorrowedMessage, Headers};
 use rdkafka::statistics::Statistics;
 use rdkafka::topic_partition_list::Offset;
 use rdkafka::{ClientContext, Message, TopicPartitionList};
+use serde::{Deserialize, Serialize};
 use timely::container::CapacityContainerBuilder;
-use timely::dataflow::operators::Capability;
+use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::operators::{Broadcast, Capability};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use timely::progress::Timestamp;
 use timely::PartialOrder;
-use tokio::sync::Notify;
+use tokio::sync::{mpsc, Notify};
 use tracing::{error, info, trace};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
@@ -65,10 +69,26 @@ use crate::source::types::{
 };
 use crate::source::{RawSourceCreationConfig, SourceMessage};
 
-#[derive(Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 struct HealthStatus {
     kafka: Option<HealthStatusUpdate>,
     ssh: Option<HealthStatusUpdate>,
+}
+
+impl HealthStatus {
+    fn kafka(update: HealthStatusUpdate) -> Self {
+        Self {
+            kafka: Some(update),
+            ssh: None,
+        }
+    }
+
+    fn ssh(update: HealthStatusUpdate) -> Self {
+        Self {
+            kafka: None,
+            ssh: Some(update),
+        }
+    }
 }
 
 /// Contains all information necessary to ingest data from Kafka
@@ -98,16 +118,8 @@ pub struct KafkaSourceReader {
     /// Progress statistics as collected from the `resume_uppers` stream and the partition metadata
     /// thread.
     progress_statistics: Arc<Mutex<PartialProgressStatistics>>,
-    /// The last partition info we received. For each partition we also fetch the high watermark.
-    partition_info: Arc<Mutex<Option<(mz_repr::Timestamp, BTreeMap<PartitionId, HighWatermark>)>>>,
-    /// A handle to the spawned metadata thread
-    // Drop order is important here, we want the thread to be unparked after the `partition_info`
-    // Arc has been dropped, so that the unpacked thread notices it and exits immediately
-    _metadata_thread_handle: UnparkOnDropHandle<()>,
     /// A handle to the partition specific metrics
     partition_metrics: KafkaSourceMetrics,
-    /// The latest status detected by the metadata refresh thread.
-    health_status: Arc<Mutex<HealthStatus>>,
     /// Per partition capabilities used to produce messages
     partition_capabilities: BTreeMap<PartitionId, PartitionCapability>,
 }
@@ -116,7 +128,6 @@ pub struct KafkaSourceReader {
 /// only emit updates when `offset_known` is updated by the metadata thread.
 #[derive(Default)]
 struct PartialProgressStatistics {
-    probe: Option<Probe<KafkaTimestamp>>,
     offset_known: Option<u64>,
     offset_committed: Option<u64>,
 }
@@ -179,16 +190,18 @@ impl SourceRender for KafkaSourceConnection {
         Option<Stream<G, Probe<KafkaTimestamp>>>,
         Vec<PressOnDropButton>,
     ) {
-        let (data, progress, reader_health, stats, probes, reader_token) =
-            render_reader(scope, self, config, resume_uppers, start_signal);
+        let (metadata, probes, metadata_token) =
+            render_metadata_fetcher(scope, self.clone(), config.clone());
+        let (data, progress, health, stats, reader_token) =
+            render_reader(scope, self, config, resume_uppers, metadata, start_signal);
 
         (
             data,
             Some(progress),
-            reader_health,
+            health,
             stats,
             Some(probes),
-            vec![reader_token],
+            vec![metadata_token, reader_token],
         )
     }
 }
@@ -202,22 +215,24 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
     connection: KafkaSourceConnection,
     config: RawSourceCreationConfig,
     resume_uppers: impl futures::Stream<Item = Antichain<KafkaTimestamp>> + 'static,
+    metadata_stream: Stream<G, MetadataUpdate>,
     start_signal: impl std::future::Future<Output = ()> + 'static,
 ) -> (
     StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
     Stream<G, Infallible>,
     Stream<G, HealthStatusMessage>,
     Stream<G, ProgressStatisticsUpdate>,
-    Stream<G, Probe<KafkaTimestamp>>,
     PressOnDropButton,
 ) {
-    let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
+    let name = format!("KafkaReader({})", config.id);
+    let mut builder = AsyncOperatorBuilder::new(name, scope.clone());
 
     let (data_output, stream) = builder.new_output::<AccountedStackBuilder<_>>();
     let (_progress_output, progress_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
     let (health_output, health_stream) = builder.new_output();
     let (stats_output, stats_stream) = builder.new_output();
-    let (probe_output, probe_stream) = builder.new_output();
+
+    let mut metadata_input = builder.new_disconnected_input(&metadata_stream.broadcast(), Pipeline);
 
     let mut outputs = vec![];
     for (id, export) in &config.source_exports {
@@ -263,8 +278,7 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
     let busy_signal = Arc::clone(&config.busy_signal);
     let button = builder.build(move |caps| {
         SignaledFuture::new(busy_signal, async move {
-            let [mut data_cap, mut progress_cap, health_cap, stats_cap, probe_cap]: [_; 5] =
-                caps.try_into().unwrap();
+            let [mut data_cap, mut progress_cap, health_cap, stats_cap] = caps.try_into().unwrap();
 
             let client_id = connection.client_id(
                 config.config.config_set(),
@@ -345,10 +359,9 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
             );
 
             let (stats_tx, stats_rx) = crossbeam_channel::unbounded();
-            let health_status = Arc::new(Mutex::new(Default::default()));
             let notificator = Arc::new(Notify::new());
 
-            let reader_consumer: Result<BaseConsumer<_>, _> = connection
+            let consumer: Result<BaseConsumer<_>, _> = connection
                 .create_with_context(
                     &config.config,
                     GlueConsumerContext {
@@ -387,35 +400,12 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
                 )
                 .await;
 
-            // Consumers use a single connection to talk to the upstream, so if we'd use the
-            // same consumer in the reader and the metadata thread, metadata probes issued by
-            // the latter could be delayed by data fetches issued by the former. We avoid that
-            // by giving the metadata thread its own consumer.
-            let metadata_consumer: Result<BaseConsumer<_>, _> = connection
-                .create_with_context(
-                    &config.config,
-                    MzClientContext::default(),
-                    &btreemap! {
-                        // Use the user-configured topic metadata refresh
-                        // interval.
-                        "topic.metadata.refresh.interval.ms" =>
-                            topic_metadata_refresh_interval
-                            .as_millis()
-                            .to_string(),
-                        // Allow Kafka monitoring tools to identify this
-                        // consumer.
-                        "client.id" => format!("{client_id}-metadata"),
-                    },
-                    InTask::Yes,
-                )
-                .await;
-
-            let (reader_consumer, metadata_consumer) = match (reader_consumer, metadata_consumer) {
-                (Ok(r), Ok(m)) => (r, m),
-                (Err(e), _) | (_, Err(e)) => {
+            let consumer = match consumer {
+                Ok(consumer) => Arc::new(consumer),
+                Err(e) => {
                     let update = HealthStatusUpdate::halting(
                         format!(
-                            "failed creating kafka consumer: {}",
+                            "failed creating kafka reader consumer: {}",
                             e.display_with_causes()
                         ),
                         None,
@@ -442,8 +432,6 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
                 }
             };
 
-            let reader_consumer = Arc::new(reader_consumer);
-
             // Note that we wait for this AFTER we downgrade to the source `resume_upper`. This
             // allows downstream operators (namely, the `reclock_operator`) to downgrade to the
             // `resume_upper`, which is necessary for this basic form of backpressure to work.
@@ -455,108 +443,7 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
                 "kafka worker noticed rehydration is finished, starting partition queues..."
             );
 
-            let partition_info = Arc::new(Mutex::new(None));
-            let metadata_thread_handle = {
-                let partition_info = Arc::downgrade(&partition_info);
-                let topic = topic.clone();
-
-                // We want a fairly low ceiling on our polling frequency, since we rely
-                // on this heartbeat to determine the health of our Kafka connection.
-                let poll_interval = topic_metadata_refresh_interval.min(
-                    config
-                        .config
-                        .parameters
-                        .kafka_timeout_config
-                        .default_metadata_fetch_interval,
-                );
-
-                let status_report = Arc::clone(&health_status);
-
-                let now_fn = config.now_fn.clone();
-                thread::Builder::new()
-                    .name("kafka-metadata".to_string())
-                    .spawn(move || {
-                        trace!(
-                            source_id = config.id.to_string(),
-                            worker_id = config.worker_id,
-                            num_workers = config.worker_count,
-                            poll_interval =? poll_interval,
-                            "kafka metadata thread: starting..."
-                        );
-                        while let Some(partition_info) = partition_info.upgrade() {
-                            let probe_ts =
-                                mz_repr::Timestamp::try_from((now_fn)()).expect("must fit");
-                            let result = fetch_partition_info(
-                                &metadata_consumer,
-                                &topic,
-                                config
-                                    .config
-                                    .parameters
-                                    .kafka_timeout_config
-                                    .fetch_metadata_timeout,
-                            );
-                            trace!(
-                                source_id = config.id.to_string(),
-                                worker_id = config.worker_id,
-                                num_workers = config.worker_count,
-                                "kafka metadata thread: metadata fetch result: {:?}",
-                                result
-                            );
-                            match result {
-                                Ok(info) => {
-                                    *partition_info.lock().unwrap() = Some((probe_ts, info));
-                                    trace!(
-                                        source_id = config.id.to_string(),
-                                        worker_id = config.worker_id,
-                                        num_workers = config.worker_count,
-                                        "kafka metadata thread: updated partition metadata info",
-                                    );
-
-                                    // Clear all the health namespaces we know about.
-                                    // Note that many kafka sources's don't have an ssh tunnel, but
-                                    // the `health_operator` handles this fine.
-                                    *status_report.lock().unwrap() = HealthStatus {
-                                        kafka: Some(HealthStatusUpdate::running()),
-                                        ssh: Some(HealthStatusUpdate::running()),
-                                    };
-                                }
-                                Err(e) => {
-                                    let kafka_status = Some(HealthStatusUpdate::stalled(
-                                        format!("{}", e.display_with_causes()),
-                                        None,
-                                    ));
-
-                                    let ssh_status =
-                                        metadata_consumer.client().context().tunnel_status();
-                                    let ssh_status = match ssh_status {
-                                        SshTunnelStatus::Running => {
-                                            Some(HealthStatusUpdate::running())
-                                        }
-                                        SshTunnelStatus::Errored(e) => {
-                                            Some(HealthStatusUpdate::stalled(e, None))
-                                        }
-                                    };
-
-                                    *status_report.lock().unwrap() = HealthStatus {
-                                        kafka: kafka_status,
-                                        ssh: ssh_status,
-                                    }
-                                }
-                            }
-                            thread::park_timeout(poll_interval);
-                        }
-                        info!(
-                            source_id = config.id.to_string(),
-                            worker_id = config.worker_id,
-                            num_workers = config.worker_count,
-                            "kafka metadata thread: partition info has been dropped; shutting down."
-                        )
-                    })
-                    .unwrap()
-                    .unpark_on_drop()
-            };
             let partition_ids = start_offsets.keys().copied().collect();
-
             let offset_commit_metrics = config.metrics.get_offset_commit_metrics(config.id);
 
             let mut reader = KafkaSourceReader {
@@ -564,7 +451,7 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
                 source_name: config.name.clone(),
                 id: config.id,
                 partition_consumers: Vec::new(),
-                consumer: Arc::clone(&reader_consumer),
+                consumer: Arc::clone(&consumer),
                 worker_id: config.worker_id,
                 worker_count: config.worker_count,
                 last_offsets: outputs
@@ -574,21 +461,18 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
                 start_offsets,
                 stats_rx,
                 progress_statistics: Default::default(),
-                partition_info,
-                _metadata_thread_handle: metadata_thread_handle,
                 partition_metrics: config.metrics.get_kafka_source_metrics(
                     partition_ids,
                     topic.clone(),
                     config.id,
                 ),
-                health_status,
                 partition_capabilities,
             };
 
             let offset_committer = KafkaResumeUpperProcessor {
                 config: config.clone(),
                 topic_name: topic.clone(),
-                consumer: reader_consumer,
+                consumer,
                 progress_statistics: Arc::clone(&reader.progress_statistics),
             };
 
@@ -634,140 +518,205 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
             let mut prev_offset_known = None;
             let mut prev_offset_committed = None;
             let mut prev_pid_info: Option<BTreeMap<PartitionId, HighWatermark>> = None;
+            let mut metadata_update: Option<MetadataUpdate> = None;
             let mut snapshot_total = None;
 
             let max_wait_time =
                 mz_storage_types::dyncfgs::KAFKA_POLL_MAX_WAIT.get(config.config.config_set());
             loop {
-                let partition_info = reader.partition_info.lock().unwrap().take();
-                if let Some((probe_ts, partitions)) = partition_info {
-                    let max_pid = partitions.keys().last().cloned();
-                    let lower = max_pid
-                        .map(RangeBound::after)
-                        .unwrap_or(RangeBound::NegInfinity);
-                    let future_ts =
-                        Partitioned::new_range(lower, RangeBound::PosInfinity, MzOffset::from(0));
+                // Wait for data or metadata events while also making progress with offset
+                // committing.
+                tokio::select! {
+                    // TODO(petrosagg): remove the timeout and rely purely on librdkafka waking us
+                    // up
+                    _ = tokio::time::timeout(max_wait_time, notificator.notified()) => {},
 
-                    // Topics are identified by name but it's possible that a user recreates a
-                    // topic with the same name but different configuration. Ideally we'd want to
-                    // catch all of these cases and immediately error out the source, since the
-                    // data is effectively gone. Unfortunately this is not possible without
-                    // something like KIP-516 so we're left with heuristics.
-                    //
-                    // The first heuristic is whether the reported number of partitions went down
-                    if !PartialOrder::less_equal(data_cap.time(), &future_ts) {
-                        let prev_pid_count = prev_pid_info.map(|info| info.len()).unwrap_or(0);
-                        let pid_count = partitions.len();
-                        let err = DataflowError::SourceError(Box::new(SourceError {
-                            error: SourceErrorDetails::Other(
-                                format!(
-                                    "topic was recreated: partition \
-                                     count regressed from {prev_pid_count} to {pid_count}"
-                                )
-                                .into(),
-                            ),
-                        }));
-                        let time = data_cap.time().clone();
-                        let err = Err(err);
-                        for (output, err) in
-                            outputs.iter().map(|o| o.output_index).repeat_clone(err)
-                        {
-                            data_output
-                                .give_fueled(&data_cap, ((output, err), time, 1))
-                                .await;
+                    _ = metadata_input.ready() => {
+                        // Collect all pending updates, then only keep the most recent one.
+                        let mut updates = Vec::new();
+                        while let Some(event) = metadata_input.next_sync() {
+                            if let Event::Data(_, mut data) = event {
+                                updates.append(&mut data);
+                            }
                         }
-                        return;
+                        metadata_update = updates.into_iter().max_by_key(|u| u.timestamp);
                     }
 
-                    // The second heuristic is whether the high watermark regressed
-                    if let Some(prev_pid_info) = prev_pid_info {
-                        for (pid, prev_high_watermark) in prev_pid_info {
-                            let high_watermark = partitions[&pid];
-                            if !(prev_high_watermark <= high_watermark) {
-                                let err = DataflowError::SourceError(Box::new(SourceError {
-                                    error: SourceErrorDetails::Other(
-                                        format!(
-                                            "topic was recreated: high watermark of \
-                                             partition {pid} regressed from {} to {}",
-                                            prev_high_watermark, high_watermark
-                                        )
-                                        .into(),
-                                    ),
-                                }));
-                                let time = data_cap.time().clone();
-                                let err = Err(err);
-                                for (output, err) in
-                                    outputs.iter().map(|o| o.output_index).repeat_clone(err)
-                                {
-                                    data_output
-                                        .give_fueled(&data_cap, ((output, err), time, 1))
-                                        .await;
+                    // This future is not cancel safe but we are only passing a reference to it in
+                    // the select! loop so the future stays on the stack and never gets cancelled
+                    // until the end of the function.
+                    _ = resume_uppers_process_loop.as_mut() => {},
+                }
+
+                match metadata_update.take().map(|m| m.info) {
+                    Some(Ok(partitions)) => {
+                        let max_pid = partitions.keys().last().cloned();
+                        let lower = max_pid
+                            .map(RangeBound::after)
+                            .unwrap_or(RangeBound::NegInfinity);
+                        let future_ts = Partitioned::new_range(
+                            lower,
+                            RangeBound::PosInfinity,
+                            MzOffset::from(0),
+                        );
+
+                        // Topics are identified by name but it's possible that a user recreates a
+                        // topic with the same name but different configuration. Ideally we'd want to
+                        // catch all of these cases and immediately error out the source, since the
+                        // data is effectively gone. Unfortunately this is not possible without
+                        // something like KIP-516 so we're left with heuristics.
+                        //
+                        // The first heuristic is whether the reported number of partitions went down
+                        if !PartialOrder::less_equal(data_cap.time(), &future_ts) {
+                            let prev_pid_count = prev_pid_info.map(|info| info.len()).unwrap_or(0);
+                            let pid_count = partitions.len();
+                            let err = DataflowError::SourceError(Box::new(SourceError {
+                                error: SourceErrorDetails::Other(
+                                    format!(
+                                        "topic was recreated: partition count regressed from \
+                                         {prev_pid_count} to {pid_count}"
+                                    )
+                                    .into(),
+                                ),
+                            }));
+                            let time = data_cap.time().clone();
+                            let err = Err(err);
+                            for (output, err) in
+                                outputs.iter().map(|o| o.output_index).repeat_clone(err)
+                            {
+                                data_output
+                                    .give_fueled(&data_cap, ((output, err), time, 1))
+                                    .await;
+                            }
+                            return;
+                        }
+
+                        // The second heuristic is whether the high watermark regressed
+                        if let Some(prev_pid_info) = prev_pid_info {
+                            for (pid, prev_high_watermark) in prev_pid_info {
+                                let high_watermark = partitions[&pid];
+                                if !(prev_high_watermark <= high_watermark) {
+                                    let err = DataflowError::SourceError(Box::new(SourceError {
+                                        error: SourceErrorDetails::Other(
+                                            format!(
+                                                "topic was recreated: high watermark of \
+                                                 partition {pid} regressed from {} to {}",
+                                                prev_high_watermark, high_watermark
+                                            )
+                                            .into(),
+                                        ),
+                                    }));
+                                    let time = data_cap.time().clone();
+                                    let err = Err(err);
+                                    for (output, err) in
+                                        outputs.iter().map(|o| o.output_index).repeat_clone(err)
+                                    {
+                                        data_output
+                                            .give_fueled(&data_cap, ((output, err), time, 1))
+                                            .await;
+                                    }
+                                    return;
                                 }
-                                return;
+                            }
+                        }
+
+                        let mut upstream_stat = 0;
+                        for (&pid, &high_watermark) in &partitions {
+                            if responsible_for_pid(&config, pid) {
+                                upstream_stat += high_watermark;
+                                reader.ensure_partition(pid);
+                                if let Entry::Vacant(entry) =
+                                    reader.partition_capabilities.entry(pid)
+                                {
+                                    let start_offset = match reader.start_offsets.get(&pid) {
+                                        Some(&offset) => offset.try_into().unwrap(),
+                                        None => 0u64,
+                                    };
+                                    let part_since_ts = Partitioned::new_singleton(
+                                        RangeBound::exact(pid),
+                                        MzOffset::from(start_offset),
+                                    );
+                                    let part_upper_ts = Partitioned::new_singleton(
+                                        RangeBound::exact(pid),
+                                        MzOffset::from(high_watermark),
+                                    );
+
+                                    // This is the moment at which we have discovered a new partition
+                                    // and we need to make sure we produce its initial snapshot at a,
+                                    // single timestamp so that the source transitions from no data
+                                    // from this partition to all the data of this partition. We do
+                                    // this by initializing the data capability to the starting offset
+                                    // and, importantly, the progress capability directly to the high
+                                    // watermark. This jump of the progress capability ensures that
+                                    // everything until the high watermark will be reclocked to a
+                                    // single point.
+                                    entry.insert(PartitionCapability {
+                                        data: data_cap.delayed(&part_since_ts),
+                                        progress: progress_cap.delayed(&part_upper_ts),
+                                    });
+                                }
+                            }
+                        }
+
+                        // If we are snapshotting, record our first set of partitions as the snapshot
+                        // size.
+                        if is_snapshotting && snapshot_total.is_none() {
+                            // Note that we want to represent the _number of offsets_, which
+                            // means the watermark's frontier semantics is correct, without
+                            // subtracting (Kafka offsets start at 0).
+                            snapshot_total = Some(upstream_stat);
+                        }
+
+                        // Clear all the health namespaces we know about.
+                        // Note that many kafka sources's don't have an ssh tunnel, but the
+                        // `health_operator` handles this fine.
+                        for output in &outputs {
+                            for namespace in [StatusNamespace::Kafka, StatusNamespace::Ssh] {
+                                health_output.give(
+                                    &health_cap,
+                                    HealthStatusMessage {
+                                        index: output.output_index,
+                                        namespace,
+                                        update: HealthStatusUpdate::running(),
+                                    },
+                                );
+                            }
+                        }
+
+                        let mut progress_statistics =
+                            reader.progress_statistics.lock().expect("poisoned");
+                        progress_statistics.offset_known = Some(upstream_stat);
+                        data_cap.downgrade(&future_ts);
+                        progress_cap.downgrade(&future_ts);
+                        prev_pid_info = Some(partitions);
+                    }
+                    Some(Err(status)) => {
+                        if let Some(update) = status.kafka {
+                            for (output, update) in outputs.iter().repeat_clone(update) {
+                                health_output.give(
+                                    &health_cap,
+                                    HealthStatusMessage {
+                                        index: output.output_index,
+                                        namespace: StatusNamespace::Kafka,
+                                        update,
+                                    },
+                                );
+                            }
+                        }
+                        if let Some(update) = status.ssh {
+                            for (output, update) in outputs.iter().repeat_clone(update) {
+                                health_output.give(
+                                    &health_cap,
+                                    HealthStatusMessage {
+                                        index: output.output_index,
+                                        namespace: StatusNamespace::Ssh,
+                                        update,
+                                    },
+                                );
                             }
                         }
                     }
-
-                    let mut upstream_stat = 0;
-                    let mut probe = Probe {
-                        probe_ts,
-                        upstream_frontier: Antichain::from_elem(future_ts),
-                    };
-                    for (&pid, &high_watermark) in &partitions {
-                        probe.upstream_frontier.insert(Partitioned::new_singleton(
-                            RangeBound::exact(pid),
-                            MzOffset::from(high_watermark),
-                        ));
-                        if responsible_for_pid(&config, pid) {
-                            upstream_stat += high_watermark;
-                            reader.ensure_partition(pid);
-                            if let Entry::Vacant(entry) = reader.partition_capabilities.entry(pid) {
-                                let start_offset = match reader.start_offsets.get(&pid) {
-                                    Some(&offset) => offset.try_into().unwrap(),
-                                    None => 0u64,
-                                };
-                                let part_since_ts = Partitioned::new_singleton(
-                                    RangeBound::exact(pid),
-                                    MzOffset::from(start_offset),
-                                );
-                                let part_upper_ts = Partitioned::new_singleton(
-                                    RangeBound::exact(pid),
-                                    MzOffset::from(high_watermark),
-                                );
-
-                                // This is the moment at which we have discovered a new partition
-                                // and we need to make sure we produce its initial snapshot at a,
-                                // single timestamp so that the source transitions from no data
-                                // from this partition to all the data of this partition. We do
-                                // this by initializing the data capability to the starting offset
-                                // and, importantly, the progress capability directly to the high
-                                // watermark. This jump of the progress capability ensures that
-                                // everything until the high watermark will be reclocked to a
-                                // single point.
-                                entry.insert(PartitionCapability {
-                                    data: data_cap.delayed(&part_since_ts),
-                                    progress: progress_cap.delayed(&part_upper_ts),
-                                });
-                            }
-                        }
-                    }
-
-                    // If we are snapshotting, record our first set of partitions as the snapshot
-                    // size.
-                    if is_snapshotting && snapshot_total.is_none() {
-                        // Note that we want to represent the _number of offsets_, which
-                        // means the watermark's frontier semantics is correct, without
-                        // subtracting (Kafka offsets start at 0).
-                        snapshot_total = Some(upstream_stat);
-                    }
-
-                    let mut progress_statistics =
-                        reader.progress_statistics.lock().expect("poisoned");
-                    progress_statistics.offset_known = Some(upstream_stat);
-                    progress_statistics.probe = Some(probe);
-                    data_cap.downgrade(&future_ts);
-                    progress_cap.downgrade(&future_ts);
-                    prev_pid_info = Some(partitions);
+                    None => {}
                 }
 
                 // Poll the consumer once. We split the consumer's partitions out into separate
@@ -964,35 +913,6 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
                     }
                 }
 
-                let (kafka_status, ssh_status) = {
-                    let mut health_status = reader.health_status.lock().unwrap();
-                    (health_status.kafka.take(), health_status.ssh.take())
-                };
-                if let Some(status) = kafka_status {
-                    for (output, status) in outputs.iter().repeat_clone(status) {
-                        health_output.give(
-                            &health_cap,
-                            HealthStatusMessage {
-                                index: output.output_index,
-                                namespace: StatusNamespace::Kafka,
-                                update: status,
-                            },
-                        );
-                    }
-                }
-                if let Some(status) = ssh_status {
-                    for (output, status) in outputs.iter().repeat_clone(status) {
-                        health_output.give(
-                            &health_cap,
-                            HealthStatusMessage {
-                                index: output.output_index,
-                                namespace: StatusNamespace::Ssh,
-                                update: status,
-                            },
-                        );
-                    }
-                }
-
                 // If we have a new `offset_known` from the partition metadata thread, and
                 // `committed` from reading the `resume_uppers` stream, we can emit a
                 // progress stats update.
@@ -1013,10 +933,6 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
                 prev_offset_committed = offset_committed;
                 prev_offset_known = offset_known;
 
-                if let Some(probe) = stats.probe {
-                    probe_output.give(&probe_cap, probe);
-                }
-
                 if let (Some(snapshot_total), true) = (snapshot_total, is_snapshotting) {
                     stats_output.give(
                         &stats_cap,
@@ -1030,17 +946,6 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
                         is_snapshotting = false;
                     }
                 }
-
-                // Wait to be notified while also making progress with offset committing
-                tokio::select! {
-                    // TODO(petrosagg): remove the timeout and rely purely on librdkafka waking us
-                    // up
-                    _  = tokio::time::timeout(max_wait_time, notificator.notified()) => {},
-                    // This future is not cancel safe but we are only passing a reference to it in
-                    // the select! loop so the future stays on the stack and never gets cancelled
-                    // until the end of the function.
-                    _ = resume_uppers_process_loop.as_mut() => {},
-                }
             }
         })
     });
@@ -1050,7 +955,6 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
         progress_stream,
         health_stream,
         stats_stream,
-        probe_stream,
         button.press_on_drop(),
     )
 }
@@ -1581,10 +1485,243 @@ fn fetch_partition_info<C: ConsumerContext>(
     Ok(result)
 }
 
+/// An update produced by the metadata fetcher.
+///
+/// Either the IDs and high watermarks of the topic partitions as of `timestamp`, or a health
+/// status describing a fetch error.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+struct MetadataUpdate {
+    timestamp: mz_repr::Timestamp,
+    info: Result<BTreeMap<PartitionId, HighWatermark>, HealthStatus>,
+}
+
+impl MetadataUpdate {
+    fn to_probe(&self) -> Option<Probe<KafkaTimestamp>> {
+        let Ok(partitions) = &self.info else {
+            return None;
+        };
+
+        let max_pid = partitions.keys().last().copied();
+        let lower = max_pid
+            .map(RangeBound::after)
+            .unwrap_or(RangeBound::NegInfinity);
+        let future_ts = Partitioned::new_range(lower, RangeBound::PosInfinity, MzOffset::from(0));
+
+        let mut upstream_frontier = Antichain::from_elem(future_ts);
+        for (pid, high_watermark) in partitions {
+            upstream_frontier.insert(Partitioned::new_singleton(
+                RangeBound::exact(*pid),
+                MzOffset::from(*high_watermark),
+            ));
+        }
+
+        Some(Probe {
+            probe_ts: self.timestamp,
+            upstream_frontier,
+        })
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum KafkaHeaderParseError {
     #[error("A header with key '{key}' was not found in the message headers")]
     KeyNotFound { key: String },
     #[error("Found ill-formed byte sequence in header '{key}' that cannot be decoded as valid utf-8 (original bytes: {raw:x?})")]
     Utf8Error { key: String, raw: Vec<u8> },
+}
+
+/// Render the metadata fetcher of a Kafka source.
+///
+/// The metadata fetcher is a single-worker operator that is responsible for periodically fetching
+/// the Kafka topic metadata (partition IDs and high watermarks) and making it available as a
+/// Timely stream.
+fn render_metadata_fetcher<G: Scope<Timestamp = KafkaTimestamp>>(
+    scope: &G,
+    connection: KafkaSourceConnection,
+    config: RawSourceCreationConfig,
+) -> (
+    Stream<G, MetadataUpdate>,
+    Stream<G, Probe<KafkaTimestamp>>,
+    PressOnDropButton,
+) {
+    let active_worker_id = usize::cast_from(config.id.hashed());
+    let is_active_worker = active_worker_id % scope.peers() == scope.index();
+
+    let name = format!("KafkaMetadataFetcher({})", config.id);
+    let mut builder = AsyncOperatorBuilder::new(name, scope.clone());
+
+    let (metadata_output, metadata_stream) = builder.new_output();
+    let (probe_output, probe_stream) = builder.new_output();
+
+    let button = builder.build(move |caps| async move {
+        if !is_active_worker {
+            return;
+        }
+
+        let [metadata_cap, probe_cap] = caps.try_into().unwrap();
+
+        let client_id = connection.client_id(
+            config.config.config_set(),
+            &config.config.connection_context,
+            config.id,
+        );
+        let KafkaSourceConnection {
+            connection,
+            topic,
+            topic_metadata_refresh_interval,
+            ..
+        } = connection;
+
+        let consumer: Result<BaseConsumer<_>, _> = connection
+            .create_with_context(
+                &config.config,
+                MzClientContext::default(),
+                &btreemap! {
+                    // Use the user-configured topic metadata refresh
+                    // interval.
+                    "topic.metadata.refresh.interval.ms" =>
+                        topic_metadata_refresh_interval
+                        .as_millis()
+                        .to_string(),
+                    // Allow Kafka monitoring tools to identify this
+                    // consumer.
+                    "client.id" => format!("{client_id}-metadata"),
+                },
+                InTask::Yes,
+            )
+            .await;
+
+        let consumer = match consumer {
+            Ok(consumer) => consumer,
+            Err(e) => {
+                let msg = format!(
+                    "failed creating kafka metadata consumer: {}",
+                    e.display_with_causes()
+                );
+                let status_update = HealthStatusUpdate::halting(msg, None);
+                let status = match e {
+                    ContextCreationError::Ssh(_) => HealthStatus::ssh(status_update),
+                    _ => HealthStatus::kafka(status_update),
+                };
+                let update = MetadataUpdate {
+                    timestamp: 0.into(),
+                    info: Err(status),
+                };
+                metadata_output.give(&metadata_cap, update);
+                return;
+            }
+        };
+
+        // We want a fairly low ceiling on our polling frequency, since we rely
+        // on this heartbeat to determine the health of our Kafka connection.
+        let poll_interval = topic_metadata_refresh_interval.min(
+            config
+                .config
+                .parameters
+                .kafka_timeout_config
+                .default_metadata_fetch_interval,
+        );
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        spawn_metadata_thread(config, consumer, topic, poll_interval, tx);
+
+        while let Some(update) = rx.recv().await {
+            if let Some(probe) = update.to_probe() {
+                probe_output.give(&probe_cap, probe);
+            }
+            metadata_output.give(&metadata_cap, update);
+        }
+    });
+
+    (metadata_stream, probe_stream, button.press_on_drop())
+}
+
+fn spawn_metadata_thread<C: ConsumerContext>(
+    config: RawSourceCreationConfig,
+    consumer: BaseConsumer<TunnelingClientContext<C>>,
+    topic: String,
+    poll_interval: Duration,
+    tx: mpsc::UnboundedSender<MetadataUpdate>,
+) {
+    thread::Builder::new()
+        .name(format!("kafka-metadata-{}", config.id))
+        .spawn(move || {
+            trace!(
+                source_id = config.id.to_string(),
+                worker_id = config.worker_id,
+                num_workers = config.worker_count,
+                poll_interval =? poll_interval,
+                "kafka metadata thread: starting..."
+            );
+            loop {
+                let probe_ts = (config.now_fn)().into();
+                let result = fetch_partition_info(
+                    &consumer,
+                    &topic,
+                    config
+                        .config
+                        .parameters
+                        .kafka_timeout_config
+                        .fetch_metadata_timeout,
+                );
+                trace!(
+                    source_id = config.id.to_string(),
+                    worker_id = config.worker_id,
+                    num_workers = config.worker_count,
+                    "kafka metadata thread: metadata fetch result: {:?}",
+                    result
+                );
+                let update = match result {
+                    Ok(partitions) => {
+                        trace!(
+                            source_id = config.id.to_string(),
+                            worker_id = config.worker_id,
+                            num_workers = config.worker_count,
+                            "kafka metadata thread: fetched partition metadata info",
+                        );
+
+                        MetadataUpdate {
+                            timestamp: probe_ts,
+                            info: Ok(partitions),
+                        }
+                    }
+                    Err(e) => {
+                        let kafka_status = Some(HealthStatusUpdate::stalled(
+                            format!("{}", e.display_with_causes()),
+                            None,
+                        ));
+
+                        let ssh_status = consumer.client().context().tunnel_status();
+                        let ssh_status = match ssh_status {
+                            SshTunnelStatus::Running => Some(HealthStatusUpdate::running()),
+                            SshTunnelStatus::Errored(e) => {
+                                Some(HealthStatusUpdate::stalled(e, None))
+                            }
+                        };
+
+                        MetadataUpdate {
+                            timestamp: probe_ts,
+                            info: Err(HealthStatus {
+                                kafka: kafka_status,
+                                ssh: ssh_status,
+                            }),
+                        }
+                    }
+                };
+
+                if tx.send(update).is_err() {
+                    break;
+                }
+
+                thread::park_timeout(poll_interval);
+            }
+
+            info!(
+                source_id = config.id.to_string(),
+                worker_id = config.worker_id,
+                num_workers = config.worker_count,
+                "kafka metadata thread: receiver has gone away; shutting down."
+            )
+        })
+        .unwrap();
 }
