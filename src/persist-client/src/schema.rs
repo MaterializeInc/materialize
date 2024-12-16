@@ -435,7 +435,12 @@ pub(crate) fn is_atleast_as_nullable(old: &DataType, new: &DataType) -> Result<(
             Ok(())
         }
         (DataType::List(old_field), DataType::List(new_field))
-        | (DataType::Map(old_field, _), DataType::Map(new_field, _)) => {
+        | (DataType::Map(old_field, _), DataType::Map(new_field, _))
+        // Note: We previously represented Maps as arrow::DataType::Map, but have since switched to
+        // using List-of-Structs since it's the same thing but better supported.
+        //
+        // See: <https://github.com/MaterializeInc/materialize/pull/28912>
+        | (DataType::Map(old_field, _), DataType::List(new_field)) => {
             if !check(old_field, new_field) {
                 anyhow::bail!("'{}' is now less nullable", old_field.name());
             }
@@ -973,5 +978,62 @@ mod tests {
             result.unwrap_err().to_string_with_causes(),
             "'k': 'details': 'plan' is now less nullable"
         );
+    }
+
+    #[mz_ore::test]
+    fn test_map_to_list_backwards_compatible() {
+        let map_type = DataType::Map(
+            Arc::new(Field::new(
+                "map_entries",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("key", DataType::Utf8, false),
+                    Field::new("val", DataType::Utf8, true),
+                ])),
+                false,
+            )),
+            true,
+        );
+        let list_type = DataType::List(Arc::new(Field::new(
+            "map_entries",
+            DataType::Struct(Fields::from(vec![
+                Field::new("key", DataType::Utf8, false),
+                Field::new("val", DataType::Utf8, true),
+            ])),
+            false,
+        )));
+        assert_ok!(is_atleast_as_nullable(&map_type, &list_type));
+
+        let map_type_less_nullable = DataType::Map(
+            Arc::new(Field::new(
+                "map_entries",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("key", DataType::Utf8, false),
+                    Field::new("val", DataType::Utf8, false),
+                ])),
+                false,
+            )),
+            true,
+        );
+        assert_ok!(is_atleast_as_nullable(&map_type_less_nullable, &list_type));
+
+        let list_type_less_nullable = DataType::List(Arc::new(Field::new(
+            "map_entries",
+            DataType::Struct(Fields::from(vec![
+                Field::new("key", DataType::Utf8, false),
+                Field::new("val", DataType::Utf8, false),
+            ])),
+            false,
+        )));
+        let result = is_atleast_as_nullable(&map_type, &list_type_less_nullable);
+        assert_err!(result);
+        assert_contains!(
+            result.unwrap_err().to_string_with_causes(),
+            "'map_entries': 'val' is now less nullable"
+        );
+
+        assert_ok!(is_atleast_as_nullable(
+            &map_type_less_nullable,
+            &list_type_less_nullable
+        ));
     }
 }
