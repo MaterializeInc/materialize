@@ -9,10 +9,6 @@ aliases:
   - /sql/recursive-ctes/
 ---
 
-{{< public-preview >}}
-Recursive CTEs using the `WITH MUTUALLY RECURSIVE` syntax
-{{</ public-preview >}}
-
 Recursive CTEs operate on the recursively-defined structures like trees or graphs implied from queries over your data.
 
 ## Syntax
