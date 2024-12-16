@@ -266,9 +266,9 @@ Terraform/infrastructure practices.
           cidrs: ["0.0.0.0/0"]
         ingress:
           enabled: true
-            cidrs: ["0.0.0.0/0"]
-          internal:
-            enabled: true
+          cidrs: ["0.0.0.0/0"]
+        internal:
+          enabled: true
 
       ```
 
