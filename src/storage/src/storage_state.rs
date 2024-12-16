@@ -633,9 +633,11 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 );
 
                 for (export_id, export) in ingestion_description.source_exports.iter() {
-                    self.storage_state
-                        .aggregated_statistics
-                        .initialize_source(*export_id, || {
+                    let resume_upper = resume_uppers[export_id].clone();
+                    self.storage_state.aggregated_statistics.initialize_source(
+                        *export_id,
+                        resume_upper.clone(),
+                        || {
                             SourceStatistics::new(
                                 *export_id,
                                 self.storage_state.timely_worker_index,
@@ -643,9 +645,10 @@ impl<'w, A: Allocate> Worker<'w, A> {
                                 ingestion_id,
                                 &export.storage_metadata.data_shard,
                                 export.data_config.envelope.clone(),
-                                resume_uppers[export_id].clone(),
+                                resume_upper,
                             )
-                        });
+                        },
+                    );
                 }
 
                 for id in ingestion_description.collection_ids() {
