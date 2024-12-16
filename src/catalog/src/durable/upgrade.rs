@@ -10,10 +10,16 @@
 //! This module contains all the helpers and code paths for upgrading/migrating the `Catalog`.
 //!
 //! We facilitate migrations by keeping snapshots of the objects we previously stored, and relying
-//! entirely on these snapshots. These exist in the form of `catalog/protos/objects_vXX.proto`. By
-//! maintaining and relying on snapshots we don't have to worry about changes elsewhere in the
-//! codebase effecting our migrations because our application and serialization logic is decoupled,
-//! and the objects of the Catalog for a given version are "frozen in time".
+//! entirely on these snapshots. These snapshots exist in the [`mz_catalog_protos`] crate in the
+//! form of `catalog-protos/protos/objects_vXX.proto`. By maintaining and relying on snapshots we
+//! don't have to worry about changes elsewhere in the codebase effecting our migrations because
+//! our application and serialization logic is decoupled, and the objects of the Catalog for a
+//! given version are "frozen in time".
+//!
+//! > **Note**: The protobuf snapshot files themselves live in a separate crate because it takes a
+//!             relatively significant amount of time to codegen and build them. By placing them in
+//!             a separate crate we don't have to pay this compile time cost when building the
+//!             catalog, allowing for faster iteration.
 //!
 //! You cannot make any changes to the following message or anything that they depend on:
 //!
@@ -34,10 +40,11 @@
 //! 5. We should now have a copy of the protobuf objects as they currently exist, and a copy of
 //!    how we want them to exist. For example, if the version of the Catalog before we made our
 //!    changes was 15, we should now have `objects_v15.proto` and `objects_v16.proto`.
-//! 6. Rebuild Materialize which will error because the hashes stored in `src/catalog/protos/hashes.json`
-//!    have now changed. Update these to match the new hashes for objects.proto and
-//!    objects_v<CATALOG_VERSION>.proto
-//! 7. Add `v<CATALOG_VERSION>` to the call to the `objects!` macro in this file.
+//! 6. Rebuild Materialize which will error because the hashes stored in
+//!    `src/catalog-protos/protos/hashes.json` have now changed. Update these to match the new
+//!    hashes for objects.proto and `objects_v<CATALOG_VERSION>.proto`.
+//! 7. Add `v<CATALOG_VERSION>` to the call to the `objects!` macro in this file, and to the
+//!    `proto_objects!` macro in the [`mz_catalog_protos`] crate.
 //! 8. Add a new file to `catalog/src/durable/upgrade` which is where we'll put the new migration
 //!    path.
 //! 9. Write upgrade functions using the two versions of the protos we now have, e.g.

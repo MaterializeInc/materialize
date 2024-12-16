@@ -28,7 +28,7 @@ rust_library(
     proc_macro_deps = [] + all_crate_deps(proc_macro = True),
     rustc_env = {},
     rustc_flags = [],
-    version = "0.1.0",
+    version = "0.0.0",
     deps = [
         ":mz_catalog_protos_build_script",
         "//src/audit-log:mz_audit_log",
@@ -66,7 +66,7 @@ rust_test(
     ),
     rustc_env = {},
     rustc_flags = [],
-    version = "0.1.0",
+    version = "0.0.0",
     deps = [
         "//src/audit-log:mz_audit_log",
         "//src/build-tools:mz_build_tools",
@@ -118,4 +118,9 @@ cargo_build_script(
         build = True,
         normal = True,
     ),
+)
+
+filegroup(
+    name = "all_protos",
+    srcs = glob(["protos/**"]),
 )

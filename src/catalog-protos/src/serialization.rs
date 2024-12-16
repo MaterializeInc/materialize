@@ -9,7 +9,7 @@
 
 //! This module is responsible for serializing objects from crates other than
 //! `mz_catalog` into protobuf.
-//! 
+//!
 //! The reason this module doesn't exist in the `mz_catalog` crate itself is
 //! because of Rust's orphan rules.
 

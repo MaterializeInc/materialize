@@ -86,7 +86,7 @@ default = ["mz-build-tools/default"]
 normal = ["workspace-hack"]
 
 [package.metadata.cargo-gazelle.test.lib]
-data = ["protos/**", "src/durable/upgrade/snapshots/**"]
+data = ["//src/catalog-protos:all_protos", "src/durable/upgrade/snapshots/**"]
 
 [package.metadata.cargo-gazelle.test.debug]
 data = ["tests/snapshots/debug*.snap"]

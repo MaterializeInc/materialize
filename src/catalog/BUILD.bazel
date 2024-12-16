@@ -76,10 +76,7 @@ rust_test(
     compile_data = [],
     crate = ":mz_catalog",
     crate_features = ["default"],
-    data = [] + glob([
-        "protos/**",
-        "src/durable/upgrade/snapshots/**",
-    ]),
+    data = ["//src/catalog-protos:all_protos"] + glob(["src/durable/upgrade/snapshots/**"]),
     env = {},
     proc_macro_deps = [] + all_crate_deps(
         proc_macro = True,

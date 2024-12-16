@@ -4578,7 +4578,7 @@ dependencies = [
 
 [[package]]
 name = "mz-catalog-protos"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "md-5",
@@ -4599,6 +4599,7 @@ dependencies = [
  "serde",
  "serde_json",
  "similar-asserts",
+ "workspace-hack",
 ]
 
 [[package]]

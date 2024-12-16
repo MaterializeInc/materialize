@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-
 /// A copy of [`std::convert::From`] so we can work around Rust's orphan rules.
 ///
 /// The protobuf objects we durably persist for the catalog live in the
