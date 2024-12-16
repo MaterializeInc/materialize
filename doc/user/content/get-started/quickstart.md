@@ -58,8 +58,8 @@ Materialize.
   Console](https://console.materialize.com/) and sign in. By default, you should
   be in the SQL Shell. If you're already signed in, you can access the SQL Shell in the left-hand menu.
 
-- If you are using the Materialize Emulator, open the Materialize Console at
-  `http://localhost:6874`.
+- If you are using the Materialize Emulator, open the Materialize Console in
+  your browser at [http://localhost:6874](http://localhost:6874).
 
 ## Step 1. Create a schema
 
