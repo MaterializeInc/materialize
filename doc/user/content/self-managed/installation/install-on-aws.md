@@ -367,7 +367,7 @@ To deploy Materialize:
      name: "${var.service_account_name}"
      namespace: materialize-environment
    spec:
-     environmentdImageRef: materialize/environmentd:latest
+     environmentdImageRef: materialize/environmentd:v0.127.0
      environmentdResourceRequirements:
        limits:
          memory: 16Gi
