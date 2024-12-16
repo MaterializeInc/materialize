@@ -58,6 +58,7 @@ skip = [
     { name = "indexmap", version = "1.9.1" },
     # Required by indexmap 1.9.1, which is depended on by many things
     { name = "hashbrown", version = "0.12.3" },
+    { name = "hashbrown", version = "0.14.5" },
 
     # Had to update `tower-http` to `0.4.3` to fix the `base64` duplicate version
     # but this introduced a new dependency on `bitflags 2.3.3` but all the rest of

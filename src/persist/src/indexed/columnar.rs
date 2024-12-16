@@ -457,7 +457,7 @@ impl ColumnarRecords {
     ) -> Result<(Self, Option<ColumnarRecordsStructuredExt>), TryFromProtoError> {
         let binary_array = |data: Bytes, offsets: Vec<i32>| match BinaryArray::try_new(
             OffsetBuffer::new(offsets.into()),
-            data.into(),
+            ::arrow::buffer::Buffer::from_bytes(data.into()),
             None,
         ) {
             Ok(data) => Ok(realloc_array(&data, lgbytes)),
