@@ -38,11 +38,11 @@ use tracing::trace;
 use super::matching_image_from_environmentd_image_ref;
 use crate::controller::materialize::tls::{create_certificate, issuer_ref_defined};
 use crate::k8s::{apply_resource, delete_resource, get_resource};
+use mz_cloud_provider::CloudProvider;
 use mz_cloud_resources::crd::gen::cert_manager::certificates::Certificate;
 use mz_cloud_resources::crd::materialize::v1alpha1::Materialize;
 use mz_orchestrator_tracing::TracingCliArgs;
 use mz_ore::instrument;
-use mz_sql::catalog::CloudProvider;
 
 /// Describes the status of a deployment.
 ///

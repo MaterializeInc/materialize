@@ -4211,6 +4211,7 @@ dependencies = [
  "mz-build-info",
  "mz-catalog",
  "mz-ccsr",
+ "mz-cloud-provider",
  "mz-cloud-resources",
  "mz-cluster-client",
  "mz-compute-client",
@@ -4639,6 +4640,13 @@ dependencies = [
  "thiserror",
  "tokio",
  "url",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-cloud-provider"
+version = "0.1.0"
+dependencies = [
  "workspace-hack",
 ]
 
@@ -5677,6 +5685,7 @@ dependencies = [
  "mz-alloc",
  "mz-alloc-default",
  "mz-build-info",
+ "mz-cloud-provider",
  "mz-cloud-resources",
  "mz-orchestrator-kubernetes",
  "mz-orchestrator-tracing",
@@ -6430,6 +6439,7 @@ dependencies = [
  "mz-audit-log",
  "mz-build-info",
  "mz-ccsr",
+ "mz-cloud-provider",
  "mz-cloud-resources",
  "mz-controller-types",
  "mz-dyncfg",

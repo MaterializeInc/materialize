@@ -21,16 +21,16 @@ k8s-controller = "0.3.3"
 k8s-openapi = { version = "0.22.0", features = ["v1_29"] }
 kube = { version = "0.92.1", default-features = false, features = ["client", "runtime", "ws"] }
 maplit = "1.0.2"
-mz-alloc = { path = "../alloc" }
-mz-alloc-default = { path = "../alloc-default", optional = true }
-mz-build-info = { path = "../build-info" }
-mz-cloud-resources = { path = "../cloud-resources" }
-mz-ore = { path = "../ore" }
-mz-orchestrator-kubernetes = { path = "../orchestrator-kubernetes" }
-mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
-mz-prof-http = { path = "../prof-http" }
-mz-sql = { path = "../sql" }
-mz-tls-util = { path = "../tls-util" }
+mz-alloc = { path = "../alloc", default-features = false }
+mz-alloc-default = { path = "../alloc-default", optional = true, default-features = false }
+mz-build-info = { path = "../build-info", default-features = false }
+mz-cloud-provider = { path = "../cloud-provider", default-features = false }
+mz-cloud-resources = { path = "../cloud-resources", default-features = false }
+mz-ore = { path = "../ore", default-features = false }
+mz-orchestrator-kubernetes = { path = "../orchestrator-kubernetes", default-features = false }
+mz-orchestrator-tracing = { path = "../orchestrator-tracing", default-features = false }
+mz-prof-http = { path = "../prof-http", default-features = false }
+mz-tls-util = { path = "../tls-util", default-features = false }
 prometheus = { version = "0.13.3", default-features = false }
 rand = "0.8.5"
 reqwest = { version = "0.11.13", features = ["json"] }
