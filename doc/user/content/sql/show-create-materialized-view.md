@@ -10,11 +10,11 @@ menu:
 
 ## Syntax
 
-{{< diagram "show-create-materialized-view.svg" >}}
+```sql
+SHOW CREATE MATERIALIZED VIEW <view_name>
+```
 
-Field | Use
-------|-----
-_view&lowbar;name_ | The materialized view you want to use. You can find available materialized view names through [`SHOW MATERIALIZED VIEWS`](../show-materialized-views).
+For available materialized view names, see [`SHOW MATERIALIZED VIEWS`](/sql/show-materialized-views).
 
 ## Examples
 
