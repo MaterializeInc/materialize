@@ -16,8 +16,8 @@ mz-lowertest = { path = "../lowertest" }
 mz-ore = { path = "../ore", features = ["test"], default-features = false }
 mz-proto = { path = "../proto", features = ["chrono"], default-features = false }
 phf = { version = "0.11.1", default-features = false }
-proptest = { version = "1.0.0", default-features = false, features = ["std"] }
-proptest-derive = { version = "0.3.0", features = ["boxed_union"] }
+proptest = { version = "1.6.0", default-features = false, features = ["std"] }
+proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
 prost = { version = "0.13.2", features = ["no-recursion-limit"] }
 serde = { version = "1.0.152", features = ["derive"] }
 uncased = "0.9.7"

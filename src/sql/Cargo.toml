@@ -66,8 +66,8 @@ mz-txn-wal = { path = "../txn-wal" }
 paste = "1.0"
 prometheus = { version = "0.13.3", default-features = false }
 protobuf-native = "0.3.2"
-proptest = { version = "1.0.0", default-features = false, features = ["std"] }
-proptest-derive = { version = "0.3.0", features = ["boxed_union"] }
+proptest = { version = "1.6.0", default-features = false, features = ["std"] }
+proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
 prost = { version = "0.13.2", features = ["no-recursion-limit"] }
 rdkafka = { version = "0.29.0", features = [
     "cmake-build",
