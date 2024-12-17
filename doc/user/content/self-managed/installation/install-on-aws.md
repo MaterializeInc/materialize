@@ -130,7 +130,7 @@ Terraform/infrastructure practices.
    }
 
    node_group_ami_type       = "AL2023_ARM_64_STANDARD"
-   node_group_instance_types = ["r6g.medium"]
+   node_group_instance_types = ["r6g.2xlarge"]
    node_group_desired_size   = 2
    node_group_min_size       = 1
    node_group_max_size       = 3
@@ -237,8 +237,8 @@ Terraform/infrastructure practices.
 
 1. Check out the {{% self-managed/latest_version %}} tag.
 
-1. Create a `my-materialize-values.yaml` configuration file for the Materialize
-   operator. Update with:
+1. Create a `my-materialize-operator-values.yaml` configuration file for the
+   Materialize operator. Update with:
 
    - your region,
 
@@ -248,7 +248,7 @@ Terraform/infrastructure practices.
      output](#terraform-output) for the `materialize_s3_role_arn`.)
 
       ```yaml
-      # my-materialize-values.yaml
+      # my-materialize-operator-values.yaml
 
       operator:
         cloudProvider:
@@ -281,11 +281,11 @@ Terraform/infrastructure practices.
    for details.
 
 1. Install the Materialize operator `materialize-operator`, specifying the path
-   to your `my-materialize-values.yaml` file:
+   to your `my-materialize-operator-values.yaml` file:
 
    ```shell
    helm install materialize-operator misc/helm-charts/operator \
-      -f my-materialize-values.yaml  \
+      -f my-materialize-operator-values.yaml  \
       --namespace materialize --create-namespace
    ```
 
