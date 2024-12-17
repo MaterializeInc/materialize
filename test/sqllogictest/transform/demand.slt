@@ -26,6 +26,93 @@ select x from (select x, 1/a from (select 2 as x), t);
 2
 2
 
+# A `dummy` used to occur in the following plan before putting an extra call to `ProjectionPushdown` after the `Demand`
+# call in the physical optimizer, because at the time of the first `Demand` call, the column that is later dummied in
+# the second call is still being used in a join constraint, but this join is then eliminated by `RedundantJoin`.
+query T multiline
+explain with(arity, join implementations)
+select
+  case when (((false)
+          and (true))
+        and ((numrange(0,0)) -|- (case when (cast(null as mz_aclitem)) = (cast(null as mz_aclitem)) then numrange(0,0) else numrange(0,0) end
+            )))
+      and (((10::uint8) & (case when (TIMESTAMPTZ '2023-01-01 01:23:45+06') >= ((TIMESTAMPTZ '95143-12-31 23:59:59+06' + INTERVAL '167 MILLENNIUM')) then 2::uint8 else 2::uint8 end
+            )) < (pg_catalog.mod(
+          CAST(null::uint8 as uint8),
+          CAST(null::uint8 as uint8)))) then mz_catalog.kafka_murmur2(
+      CAST(cast('\xDEADBEEF' as bytea) as bytea)) else mz_catalog.kafka_murmur2(
+      CAST(cast('\xDEADBEEF' as bytea) as bytea)) end
+     as c0,
+  (mz_unsafe.mz_avg_promotion(
+      CAST(0::uint4 as uint4))) / (null::numeric) as c1,
+  mz_catalog.try_parse_monotonic_iso8601_timestamp(
+    CAST(pg_catalog.obj_description(
+      CAST(mz_internal.aclitem_grantee(
+        CAST(cast(null as aclitem) as aclitem)) as oid),
+      CAST((('[]'::jsonb) -> (pg_catalog.session_user())) ->> (pg_catalog.pg_get_viewdef(
+          CAST(case when ('{}'::map[text=>text]) ?| (array['a', 'b', null, '']::text[]) then null::oid else null::oid end
+             as oid),
+          CAST(true as bool))) as text)) as text)) as c2,
+  '2024-12-18 12:54:29.994+00'::timestamptz as c3
+from
+  (select distinct
+        mz_catalog.map_agg(
+          CAST(cast(coalesce(null::text,
+            null::text) as text) as text),
+          null) as c0,
+        mz_catalog.mz_environment_id() as c1,
+        (mz_catalog.mz_environment_id()) || ((null::uint4) + (4294967295::uint4)) as c2,
+        pg_catalog.tstzrange(
+          CAST((INTERVAL '2147483647 MONTHS') + (TIMESTAMPTZ '2023-01-01 01:23:45+06') as timestamptz),
+          CAST(TIMESTAMPTZ '2023-01-01 01:23:45+06' as timestamptz)) as c3,
+        pg_catalog.version() as c4
+      from
+        (select
+              36 as c0,
+              33 as c1
+            from
+              (select
+                    4 as c0
+                  from
+                    "mz_catalog"."mz_columns" as ref_2
+                  where (false) <> (true)
+                  limit coalesce(13, 72)) as subq_0
+            where (true) = (true)
+            limit coalesce(82, 50)) as subq_1
+      where (pg_catalog.mod(
+          CAST(case when ((TIMESTAMPTZ '0001-01-01 00:00:00+06' - INTERVAL '4713 YEARS')) >= ((TIMESTAMPTZ '95143-12-31 23:59:59+06' + INTERVAL '167 MILLENNIUM')) then null::int2 else null::int2 end
+             as int2),
+          CAST(10::int2 as int2))) > (null::int2)
+      limit coalesce(90, 42)) as subq_2
+where true
+limit coalesce(43, 120);
+----
+Explained Query:
+  Finish limit=43 output=[#0..=#3]
+    Return // { arity: 4 }
+      Map (833564499, null, null, 2024-12-18 12:54:29.994 UTC) // { arity: 4 }
+        TopK limit=90 // { arity: 0 }
+          Union // { arity: 0 }
+            Get l0 // { arity: 0 }
+            Negate // { arity: 0 }
+              Get l0 // { arity: 0 }
+            Constant // { arity: 0 }
+              - ()
+    With
+      cte l0 =
+        Distinct project=[] // { arity: 0 }
+          TopK limit=13 // { arity: 0 }
+            Filter error("timestamp out of range") // { arity: 0 }
+              Project () // { arity: 0 }
+                ReadIndex on=mz_columns mz_columns_ind=[*** full scan ***] // { arity: 8 }
+
+Used Indexes:
+  - mz_catalog.mz_columns_ind (*** full scan ***)
+
+Target cluster: mz_catalog_server
+
+EOF
+
 ## -------------------- Tests for WITH MUTUALLY RECURSIVE --------------------
 
 # Demand creates the `#0 + #0` from `#0 + #2`.

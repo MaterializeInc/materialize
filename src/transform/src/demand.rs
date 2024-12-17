@@ -37,19 +37,22 @@ use crate::TransformCtx;
 ///
 /// Nowadays, this transform is mostly obsoleted by `ProjectionPushdown`.
 /// However, I know of one thing that it still does that `ProjectionPushdown`
-/// doesn't do (might possibly be more such things):
+/// doesn't do (there might be more such things):
 /// if you have something like
-// ```
-//     Project (#0, #1)
-//       Join on=(#0 = #1)
-// ```
-// then this is turned into
-// ```
-//     Project (#0, #0)
-//       Join on=(#0 = #1)
-// ```
-// This can be beneficial for projecting out some columns earlier inside a complex join (by the LIR
-// planning), and then recovering them after the join (if needed) by duplicating existing columns.
+/// ```code
+///     Project (#0, #1)
+///       Join on=(#0 = #1)
+/// ```
+/// then this is turned into
+/// ```code
+///     Project (#0, #0)
+///       Join on=(#0 = #1)
+/// ```
+/// This can be beneficial for projecting out some columns earlier inside a complex join (by the LIR
+/// planning), and then recovering them after the join (if needed) by duplicating existing columns.
+///
+/// After the last run of `Demand`, there should always be a `ProjectionPushdown`, so that dummies
+/// are eliminated from plans.
 #[derive(Debug)]
 pub struct Demand {
     recursion_guard: RecursionGuard,
