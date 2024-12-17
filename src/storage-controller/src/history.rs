@@ -203,7 +203,6 @@ impl<T: std::fmt::Debug> CommandHistory<T> {
 mod tests {
     use std::str::FromStr;
 
-    use mz_cluster_client::metrics::ControllerMetrics;
     use mz_ore::metrics::MetricsRegistry;
     use mz_ore::url::SensitiveUrl;
     use mz_persist_types::PersistLocation;
@@ -232,8 +231,7 @@ mod tests {
 
     fn history() -> CommandHistory<u64> {
         let registry = MetricsRegistry::new();
-        let controller_metrics = ControllerMetrics::new(&registry);
-        let metrics = StorageControllerMetrics::new(&registry, controller_metrics)
+        let metrics = StorageControllerMetrics::new(registry)
             .for_instance(StorageInstanceId::system(0).expect("0 is a valid ID"))
             .for_history();
 
