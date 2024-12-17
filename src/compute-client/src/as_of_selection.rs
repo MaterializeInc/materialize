@@ -921,7 +921,6 @@ mod tests {
             _new_collection: GlobalId,
             _new_desc: RelationDesc,
             _expected_version: RelationVersion,
-            _new_version: RelationVersion,
         ) -> Result<(), StorageError<Self::Timestamp>> {
             unimplemented!()
         }

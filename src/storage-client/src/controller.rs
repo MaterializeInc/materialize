@@ -118,7 +118,12 @@ pub enum DataSource {
     /// Data comes from external HTTP requests pushed to Materialize.
     Webhook,
     /// The adapter layer appends timestamped data, i.e. it is a `TABLE`.
-    Table { version: RelationVersion },
+    Table {
+        /// This table has had columns added or dropped to it, so we're now a
+        /// "view" over the "primary" Table/collection. Within the
+        /// `storage-controller` we the primary as a dependency.
+        primary: Option<GlobalId>,
+    },
     /// This source's data is does not need to be managed by the storage
     /// controller, e.g. it's a materialized view or the catalog collection.
     Other,
@@ -141,27 +146,13 @@ pub struct CollectionDescription<T> {
 }
 
 impl<T> CollectionDescription<T> {
-    pub fn for_table(desc: RelationDesc, version: RelationVersion) -> Self {
+    pub fn for_table(desc: RelationDesc, primary: Option<GlobalId>) -> Self {
         Self {
             desc,
-            data_source: DataSource::Table { version },
+            data_source: DataSource::Table { primary },
             since: None,
             status_collection_id: None,
             timeline: Some(Timeline::EpochMilliseconds),
-        }
-    }
-
-    /// Returns the [`RelationVersion`] associated with this [`CollectionDescription`], if this
-    /// collection can be versioned.
-    pub fn relation_version(&self) -> Option<RelationVersion> {
-        match self.data_source {
-            DataSource::Table { version } => Some(version),
-            DataSource::Ingestion(_)
-            | DataSource::IngestionExport { .. }
-            | DataSource::Introspection(_)
-            | DataSource::Webhook
-            | DataSource::Progress
-            | DataSource::Other => None,
         }
     }
 }
@@ -500,7 +491,6 @@ pub trait StorageController: Debug {
         new_collection: GlobalId,
         new_desc: RelationDesc,
         expected_version: RelationVersion,
-        new_version: RelationVersion,
         forget_ts: Self::Timestamp,
         register_ts: Self::Timestamp,
     ) -> Result<(), StorageError<Self::Timestamp>>;
