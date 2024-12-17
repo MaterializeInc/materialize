@@ -6,10 +6,8 @@ await-holding-invalid-types = [
 disallowed-methods = [
     { path = "std::panic::catch_unwind", reason = "use `mz_ore::panic::catch_unwind` instead" },
     { path = "futures::FutureExt::catch_unwind", reason = "use `mz_ore::future::FutureExt::catch_unwind` instead" },
-
     { path = "futures_executor::block_on", reason = "use `tokio::runtime::Handle::block_on` instead" },
     { path = "futures::executor::block_on", reason = "use `tokio::runtime::Handle::block_on` instead" },
-
     { path = "tokio::spawn", reason = "use the spawn wrappers in `mz_ore::task` instead" },
     { path = "tokio::task::spawn", reason = "use the spawn wrappers in `mz_ore::task` instead" },
     { path = "tokio::task::spawn_blocking", reason = "use the spawn wrappers in `mz_ore::task` instead" },
@@ -17,11 +15,9 @@ disallowed-methods = [
     { path = "tokio::runtime::Handle::spawn_blocking", reason = "use the spawn wrappers in `mz_ore::task` instead" },
     { path = "tokio::runtime::Runtime::spawn", reason = "use the spawn wrappers in `mz_ore::task` instead" },
     { path = "tokio::runtime::Runtime::spawn_blocking", reason = "use the spawn wrappers in `mz_ore::task` instead" },
-
     # Note these wrappers aren't implemented yet, as we haven't needed them.
     { path = "tokio::task::spawn_local", reason = "use the spawn wrappers in `mz_ore::task` instead" },
     { path = "tokio::task::LocalSet::spawn_local", reason = "use the spawn wrappers in `mz_ore::task` instead" },
-
     # Note that `spawn_blocking` and the local varieties are not yet implemented, as they haven't been needed yet.
     { path = "tokio::task::JoinSet::spawn", reason = "use the spawn wrappers in `mz_ore::task` instead" },
     { path = "tokio::task::JoinSet::spawn_on", reason = "use the spawn wrappers in `mz_ore::task` instead" },
@@ -29,7 +25,6 @@ disallowed-methods = [
     { path = "tokio::task::JoinSet::spawn_blocking_on", reason = "use the spawn wrappers in `mz_ore::task` instead" },
     { path = "tokio::task::JoinSet::spawn_local", reason = "use the spawn wrappers in `mz_ore::task` instead" },
     { path = "tokio::task::JoinSet::spawn_local", reason = "use the spawn wrappers in `mz_ore::task` instead" },
-
     # These are banned because we want to ensure people don't forget to use .name(...), so we require the use of `mz_ore`
     { path = "tokio::task::Builder::spawn", reason = "use the spawn wrappers in `mz_ore::task` instead" },
     { path = "tokio::task::Builder::spawn_on", reason = "use the spawn wrappers in `mz_ore::task` instead" },
@@ -41,15 +36,12 @@ disallowed-methods = [
     { path = "tokio::task::join_set::Builder::spawn_on", reason = "use the spawn wrappers in `mz_ore::task` instead" },
     { path = "tokio::task::join_set::Builder::spawn_local", reason = "use the spawn wrappers in `mz_ore::task` instead" },
     { path = "tokio::task::join_set::Builder::spawn_local", reason = "use the spawn wrappers in `mz_ore::task` instead" },
-
     { path = "rdkafka::config::ClientConfig::new", reason = "use the `client::create_new_client_config` wrapper in `kafka_util` instead" },
-
     { path = "aws_config::defaults", reason = "use the `mz_aws_config::defaults` function instead" },
     { path = "aws_config::load_defaults", reason = "use the `mz_aws_config::defaults` function instead" },
     { path = "aws_config::from_env", reason = "use the `mz_aws_config::defaults` function instead" },
     { path = "aws_config::load_from_env", reason = "use the `mz_aws_config::defaults` function instead" },
     { path = "aws_sdk_s3::Client::new", reason = "use the `mz_aws_util::s3::new_client` function instead" },
-
     # Prevent access to Differential APIs that want to use the default trace or use a default name, or where we offer
     # our own wrapper
     { path = "differential_dataflow::Collection::consolidate", reason = "use the `mz_timely_util::operator::CollectionExt::consolidate_named` function instead" },
@@ -77,7 +69,6 @@ disallowed-methods = [
     { path = "differential_dataflow::operators::reduce::join::Join::antijoin", reason = "use the `differential_dataflow::operators::join::Join::join_core` function instead" },
     { path = "differential_dataflow::operators::reduce::join::Join::join_map", reason = "use the `differential_dataflow::operators::join::Join::join_core` function instead" },
     { path = "differential_dataflow::operators::reduce::join::Join::semijoin", reason = "use the `differential_dataflow::operators::join::Join::join_core` function instead" },
-
     # Prevent access to Timely APIs with untested semantics.
     { path = "timely::worker::Worker::drop_dataflow", reason = "Might break logging dataflows, check with #team-compute." },
 ]
