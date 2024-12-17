@@ -142,7 +142,6 @@ impl Metrics {
             move || start.elapsed().as_secs_f64(),
         );
         let s3_blob = S3BlobMetrics::new(registry);
-        // let azure_blob = ABSBlobMetrics::new(registry);
         let columnar = ColumnarMetrics::new(
             registry,
             &s3_blob.lgbytes,

@@ -9,39 +9,32 @@
 
 //! An Azure Blob Storage implementation of [Blob] storage.
 
-use std::cmp;
-use std::fmt::{Debug, Formatter};
-use std::ops::Range;
-use std::sync::atomic::AtomicU64;
+use std::fmt::Debug;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
 use async_trait::async_trait;
 use azure_core::StatusCode;
-use azure_identity::{
-    create_default_credential, DefaultAzureCredential, DefaultAzureCredentialBuilder,
-};
+use azure_identity::create_default_credential;
 use azure_storage::{prelude::*, EMULATOR_ACCOUNT};
 use azure_storage_blobs::prelude::*;
 use bytes::Bytes;
-use futures_util::stream::FuturesOrdered;
-use futures_util::{FutureExt, StreamExt};
-use mz_dyncfg::{Config, ConfigSet};
-use mz_ore::bytes::{MaybeLgBytes, SegmentedBytes};
-use mz_ore::cast::CastFrom;
-use mz_ore::lgbytes::{LgBytes, MetricsRegion};
-use mz_ore::metrics::MetricsRegistry;
-use mz_ore::task::RuntimeExt;
+use futures_util::StreamExt;
 use tokio::runtime::Handle as AsyncHandle;
-use tracing::{debug, debug_span, info, trace, trace_span, warn, Instrument};
+use tracing::{info, warn};
 use url::Url;
 use uuid::Uuid;
+
+use mz_dyncfg::ConfigSet;
+use mz_ore::bytes::{MaybeLgBytes, SegmentedBytes};
+use mz_ore::cast::CastFrom;
+use mz_ore::lgbytes::LgBytes;
+use mz_ore::metrics::MetricsRegistry;
 
 use crate::cfg::BlobKnobs;
 use crate::error::Error;
 use crate::location::{Blob, BlobMetadata, Determinate, ExternalError};
-use crate::metrics::{ABSBlobMetrics, S3BlobMetrics};
+use crate::metrics::S3BlobMetrics;
 
 /// Configuration for opening an [ABSBlob].
 #[derive(Clone, Debug)]
@@ -68,17 +61,12 @@ impl ABSBlobConfig {
         url: Url,
         cfg: Arc<ConfigSet>,
     ) -> Result<Self, Error> {
-        // let is_cc_active = knobs.is_cc_active();
-
-        // TODO: might need to pull out service client
-        // to periodically refresh credentials
         let client = if account == EMULATOR_ACCOUNT {
             info!("Connecting to Azure emulator");
             ClientBuilder::emulator()
                 .blob_service_client()
                 .container_client(container)
         } else {
-            // WIP: check query pairs if our query string is for a SAS token
             let sas_credentials = match url.query() {
                 Some(query) => Some(StorageCredentials::sas_token(query)),
                 None => None,
@@ -88,13 +76,15 @@ impl ABSBlobConfig {
                 Some(Ok(credentials)) => credentials,
                 Some(Err(err)) => {
                     warn!("Failed to parse SAS token: {err}");
-                    // Fall back to default credentials
+                    // TODO: should we fallback here? Or can we fully rely on query params
+                    // to determine whether a SAS token was provided?
                     StorageCredentials::token_credential(
                         create_default_credential().expect("Azure default credentials"),
                     )
                 }
                 None => {
-                    // Fall back to default credentials
+                    // Fall back to default credential stack to support auth modes like
+                    // workload identity that are injected into the environment
                     StorageCredentials::token_credential(
                         create_default_credential().expect("Azure default credentials"),
                     )
@@ -104,6 +94,10 @@ impl ABSBlobConfig {
             let service_client = BlobServiceClient::new(account, credentials);
             service_client.container_client(container)
         };
+
+        // TODO: some auth modes like user-delegated SAS tokens are time-limited
+        // and need to be refreshed. This can be done through `service_client.update_credentials`
+        // but there'll be a fair bit of plumbing needed to make each mode work
 
         Ok(ABSBlobConfig {
             metrics,
@@ -119,7 +113,7 @@ impl ABSBlobConfig {
         let container_name = match std::env::var(Self::EXTERNAL_TESTS_ABS_CONTAINER) {
             Ok(container) => container,
             Err(_) => {
-                // WIP: figure out CI situation
+                // WIP: figure out CI
                 // if mz_ore::env::is_var_truthy("CI") {
                 //     panic!("CI is supposed to run this test but something has gone wrong!");
                 // }
@@ -170,9 +164,9 @@ impl ABSBlob {
         let container_name = config.client.container_name().to_string();
 
         if config.client.service_client().account() == EMULATOR_ACCOUNT {
-            // try to create the container if we're running in the emulator.
-            // it is surprisingly difficult to create the container out-of-band
-            // of an official client.
+            // TODO: we could move this logic into the test harness.
+            // it's currently here because it's surprisingly annoying to
+            // create the container out-of-band
             let _ = config.client.create().await;
         }
 
@@ -184,9 +178,10 @@ impl ABSBlob {
             cfg: config.cfg,
         };
 
-        // WIP: do we have a healthcheck similar to S3?
         // Test connection before returning success
-        // let _ = ret.get("HEALTH_CHECK").await?;
+        // let x = ret.client.blob_client("HEALTH_CHECK").get_properties().await;
+        // x.err
+
         Ok(ret)
     }
 
@@ -199,9 +194,7 @@ impl ABSBlob {
 impl Blob for ABSBlob {
     async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError> {
         let path = self.get_path(key);
-
         let blob = self.client.blob_client(path);
-
         let mut segments: Vec<MaybeLgBytes> = vec![];
 
         let mut stream = blob.get().into_stream();
@@ -340,9 +333,11 @@ impl Blob for ABSBlob {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::location::tests::blob_impl_test;
     use tracing::info;
+
+    use crate::location::tests::blob_impl_test;
+
+    use super::*;
 
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
     async fn abs_blob() -> Result<(), ExternalError> {
@@ -358,7 +353,6 @@ mod tests {
         };
 
         blob_impl_test(move |path| {
-            let path = path.to_owned();
             let config = config.clone();
             async move {
                 let config = ABSBlobConfig {
