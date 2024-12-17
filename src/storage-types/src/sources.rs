@@ -26,6 +26,7 @@ use itertools::Itertools;
 use kafka::KafkaSourceExportDetails;
 use load_generator::{LoadGeneratorOutput, LoadGeneratorSourceExportDetails};
 use mz_ore::assert_none;
+use mz_persist_types::arrow::ArrayOrd;
 use mz_persist_types::columnar::{ColumnDecoder, ColumnEncoder, Schema2};
 use mz_persist_types::stats::{
     ColumnNullStats, ColumnStatKinds, ColumnarStats, PrimitiveStats, StructStats,
@@ -1665,10 +1666,10 @@ impl SourceDataRowColumnarDecoder {
         }
     }
 
-    pub fn byte_size(&self) -> usize {
+    pub fn goodbytes(&self) -> usize {
         let self_size = std::mem::size_of::<SourceDataRowColumnarDecoder>();
         match self {
-            SourceDataRowColumnarDecoder::Row(decoder) => self_size + decoder.byte_size(),
+            SourceDataRowColumnarDecoder::Row(decoder) => self_size + decoder.goodbytes(),
             SourceDataRowColumnarDecoder::EmptyRow => self_size,
         }
     }
@@ -1762,10 +1763,8 @@ impl ColumnDecoder<SourceData> for SourceDataColumnarDecoder {
         false
     }
 
-    fn byte_size(&self) -> usize {
-        self.row_decoder.byte_size()
-            + self.err_decoder.get_array_memory_size()
-            + std::mem::size_of::<SourceDataColumnarDecoder>()
+    fn goodbytes(&self) -> usize {
+        self.row_decoder.goodbytes() + ArrayOrd::Binary(self.err_decoder.clone()).goodbytes()
     }
 
     fn stats(&self) -> StructStats {
@@ -2225,8 +2224,20 @@ mod tests {
     }
 
     #[mz_ore::test]
+    fn backward_compatible_project_away_all() {
+        let old = RelationDesc::from_names_and_types([("a", ScalarType::Bool.nullable(true))]);
+        let new = RelationDesc::empty();
+
+        let old_data_type = get_data_type(&old);
+        let new_data_type = get_data_type(&new);
+
+        let migration = backward_compatible(&old_data_type, &new_data_type);
+        assert!(migration.is_some());
+    }
+
+    #[mz_ore::test]
     #[cfg_attr(miri, ignore)]
-    fn backward_compatible_migrate1() {
+    fn backward_compatible_migrate() {
         let strat = (any::<RelationDesc>(), any::<RelationDesc>()).prop_flat_map(|(old, new)| {
             proptest::collection::vec(arb_source_data_for_relation_desc(&old), 2)
                 .prop_map(move |datas| (old.clone(), new.clone(), datas))
@@ -2254,8 +2265,7 @@ mod tests {
                     typ: ColumnType { nullable, .. },
                     ..
                 } => *nullable,
-                // TODO(parkmycar): Re-enable DropColumn.
-                // PropRelationDescDiff::DropColumn { .. } => true,
+                PropRelationDescDiff::DropColumn { .. } => true,
                 _ => false,
             });
 

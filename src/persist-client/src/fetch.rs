@@ -29,6 +29,7 @@ use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsStructuredEx
 use mz_persist::indexed::encoding::{BlobTraceBatchPart, BlobTraceUpdates};
 use mz_persist::location::{Blob, SeqNo};
 use mz_persist::metrics::ColumnarMetrics;
+use mz_persist_types::arrow::ArrayOrd;
 use mz_persist_types::columnar::{ColumnDecoder, Schema2};
 use mz_persist_types::stats::PartStats;
 use mz_persist_types::{Codec, Codec64};
@@ -839,13 +840,13 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
                 }
                 match &migration {
                     PartMigration::SameSchema { both } => {
-                        let key_size_before = structured.key.get_array_memory_size();
+                        let key_size_before = ArrayOrd::new(&structured.key).goodbytes();
 
                         let key = decode::<K>("key", &*both.key, &structured.key);
                         let val = decode::<V>("val", &*both.val, &structured.val);
 
                         if let Some(key_decoder) = key.as_ref() {
-                            let key_size_after = key_decoder.byte_size();
+                            let key_size_after = key_decoder.goodbytes();
                             let key_diff = key_size_before.saturating_sub(key_size_after);
                             metrics
                                 .pushdown
@@ -870,8 +871,8 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
                             .migration_migrate_seconds
                             .inc_by(start.elapsed().as_secs_f64());
 
-                        let key_before_size = structured.key.get_array_memory_size();
-                        let key_after_size = key.get_array_memory_size();
+                        let key_before_size = ArrayOrd::new(&structured.key).goodbytes();
+                        let key_after_size = ArrayOrd::new(&key).goodbytes();
                         let key_diff = key_before_size.saturating_sub(key_after_size);
                         metrics
                             .pushdown

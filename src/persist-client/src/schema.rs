@@ -501,6 +501,7 @@ mod tests {
     use mz_dyncfg::ConfigUpdates;
     use mz_ore::error::ErrorExt;
     use mz_ore::{assert_contains, assert_err, assert_ok};
+    use mz_persist_types::arrow::ArrayOrd;
     use mz_persist_types::codec_impls::UnitSchema;
     use mz_persist_types::columnar::{ColumnDecoder, ColumnEncoder, Schema2};
     use mz_persist_types::stats::{NoneStats, StructStats};
@@ -614,13 +615,11 @@ mod tests {
         fn is_null(&self, _: usize) -> bool {
             false
         }
-        fn byte_size(&self) -> usize {
-            let size_of_values = self
-                .0
+        fn goodbytes(&self) -> usize {
+            self.0
                 .iter()
-                .map(|val| val.get_array_memory_size())
-                .sum::<usize>();
-            size_of_values + std::mem::size_of::<Vec<StringArray>>()
+                .map(|val| ArrayOrd::String(val.clone()).goodbytes())
+                .sum()
         }
         fn stats(&self) -> StructStats {
             StructStats {

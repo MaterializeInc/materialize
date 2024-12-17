@@ -32,6 +32,7 @@ use dec::{Context, Decimal, OrderedDecimal};
 use itertools::{EitherOrBoth, Itertools};
 use mz_ore::assert_none;
 use mz_ore::cast::CastFrom;
+use mz_persist_types::arrow::ArrayOrd;
 use mz_persist_types::columnar::{ColumnDecoder, ColumnEncoder, FixedSizeCodec, Schema2};
 use mz_persist_types::stats::{
     ColumnNullStats, ColumnStatKinds, ColumnarStats, FixedSizeBytesStatsKind, OptionStats,
@@ -1216,32 +1217,32 @@ impl DatumColumnDecoder {
         }
     }
 
-    fn byte_size(&self) -> usize {
+    fn goodbytes(&self) -> usize {
         match self {
-            DatumColumnDecoder::Bool(a) => a.get_array_memory_size(),
-            DatumColumnDecoder::U8(a) => a.get_array_memory_size(),
-            DatumColumnDecoder::U16(a) => a.get_array_memory_size(),
-            DatumColumnDecoder::U32(a) => a.get_array_memory_size(),
-            DatumColumnDecoder::U64(a) => a.get_array_memory_size(),
-            DatumColumnDecoder::I16(a) => a.get_array_memory_size(),
-            DatumColumnDecoder::I32(a) => a.get_array_memory_size(),
-            DatumColumnDecoder::I64(a) => a.get_array_memory_size(),
-            DatumColumnDecoder::F32(a) => a.get_array_memory_size(),
-            DatumColumnDecoder::F64(a) => a.get_array_memory_size(),
-            DatumColumnDecoder::Numeric(a) => a.get_array_memory_size(),
-            DatumColumnDecoder::String(a) => a.get_array_memory_size(),
-            DatumColumnDecoder::Bytes(a) => a.get_array_memory_size(),
-            DatumColumnDecoder::Date(a) => a.get_array_memory_size(),
-            DatumColumnDecoder::Time(a) => a.get_array_memory_size(),
-            DatumColumnDecoder::Timestamp(a) => a.get_array_memory_size(),
-            DatumColumnDecoder::TimestampTz(a) => a.get_array_memory_size(),
-            DatumColumnDecoder::MzTimestamp(a) => a.get_array_memory_size(),
-            DatumColumnDecoder::Interval(a) => a.get_array_memory_size(),
-            DatumColumnDecoder::Uuid(a) => a.get_array_memory_size(),
-            DatumColumnDecoder::AclItem(a) => a.get_array_memory_size(),
-            DatumColumnDecoder::MzAclItem(a) => a.get_array_memory_size(),
-            DatumColumnDecoder::Range(a) => a.get_array_memory_size(),
-            DatumColumnDecoder::Json(a) => a.get_array_memory_size(),
+            DatumColumnDecoder::Bool(a) => ArrayOrd::Bool(a.clone()).goodbytes(),
+            DatumColumnDecoder::U8(a) => ArrayOrd::UInt8(a.clone()).goodbytes(),
+            DatumColumnDecoder::U16(a) => ArrayOrd::UInt16(a.clone()).goodbytes(),
+            DatumColumnDecoder::U32(a) => ArrayOrd::UInt32(a.clone()).goodbytes(),
+            DatumColumnDecoder::U64(a) => ArrayOrd::UInt64(a.clone()).goodbytes(),
+            DatumColumnDecoder::I16(a) => ArrayOrd::Int16(a.clone()).goodbytes(),
+            DatumColumnDecoder::I32(a) => ArrayOrd::Int32(a.clone()).goodbytes(),
+            DatumColumnDecoder::I64(a) => ArrayOrd::Int64(a.clone()).goodbytes(),
+            DatumColumnDecoder::F32(a) => ArrayOrd::Float32(a.clone()).goodbytes(),
+            DatumColumnDecoder::F64(a) => ArrayOrd::Float64(a.clone()).goodbytes(),
+            DatumColumnDecoder::Numeric(a) => ArrayOrd::Binary(a.clone()).goodbytes(),
+            DatumColumnDecoder::String(a) => ArrayOrd::String(a.clone()).goodbytes(),
+            DatumColumnDecoder::Bytes(a) => ArrayOrd::Binary(a.clone()).goodbytes(),
+            DatumColumnDecoder::Date(a) => ArrayOrd::Int32(a.clone()).goodbytes(),
+            DatumColumnDecoder::Time(a) => ArrayOrd::FixedSizeBinary(a.clone()).goodbytes(),
+            DatumColumnDecoder::Timestamp(a) => ArrayOrd::FixedSizeBinary(a.clone()).goodbytes(),
+            DatumColumnDecoder::TimestampTz(a) => ArrayOrd::FixedSizeBinary(a.clone()).goodbytes(),
+            DatumColumnDecoder::MzTimestamp(a) => ArrayOrd::UInt64(a.clone()).goodbytes(),
+            DatumColumnDecoder::Interval(a) => ArrayOrd::FixedSizeBinary(a.clone()).goodbytes(),
+            DatumColumnDecoder::Uuid(a) => ArrayOrd::FixedSizeBinary(a.clone()).goodbytes(),
+            DatumColumnDecoder::AclItem(a) => ArrayOrd::FixedSizeBinary(a.clone()).goodbytes(),
+            DatumColumnDecoder::MzAclItem(a) => ArrayOrd::Binary(a.clone()).goodbytes(),
+            DatumColumnDecoder::Range(a) => ArrayOrd::Binary(a.clone()).goodbytes(),
+            DatumColumnDecoder::Json(a) => ArrayOrd::String(a.clone()).goodbytes(),
             DatumColumnDecoder::Array {
                 dim_offsets,
                 dims,
@@ -1250,9 +1251,9 @@ impl DatumColumnDecoder {
                 nulls,
             } => {
                 dim_offsets.inner().inner().len()
-                    + dims.get_array_memory_size()
+                    + ArrayOrd::FixedSizeBinary(dims.clone()).goodbytes()
                     + val_offsets.inner().inner().len()
-                    + vals.byte_size()
+                    + vals.goodbytes()
                     + nulls.as_ref().map(|b| b.len()).unwrap_or(0)
             }
             DatumColumnDecoder::List {
@@ -1261,7 +1262,7 @@ impl DatumColumnDecoder {
                 nulls,
             } => {
                 offsets.inner().inner().len()
-                    + values.byte_size()
+                    + values.goodbytes()
                     + nulls.as_ref().map(|b| b.len()).unwrap_or(0)
             }
             DatumColumnDecoder::Map {
@@ -1271,15 +1272,15 @@ impl DatumColumnDecoder {
                 nulls,
             } => {
                 offsets.inner().inner().len()
-                    + keys.get_array_memory_size()
-                    + vals.byte_size()
+                    + ArrayOrd::String(keys.clone()).goodbytes()
+                    + vals.goodbytes()
                     + nulls.as_ref().map(|b| b.len()).unwrap_or(0)
             }
             DatumColumnDecoder::Record { fields, nulls } => {
-                fields.iter().map(|f| f.byte_size()).sum::<usize>()
+                fields.iter().map(|f| f.goodbytes()).sum::<usize>()
                     + nulls.as_ref().map(|b| b.len()).unwrap_or(0)
             }
-            DatumColumnDecoder::RecordEmpty(a) => a.get_array_memory_size(),
+            DatumColumnDecoder::RecordEmpty(a) => ArrayOrd::Bool(a.clone()).goodbytes(),
         }
     }
 }
@@ -1399,21 +1400,14 @@ impl ColumnDecoder<Row> for RowColumnarDecoder {
         nullability.is_null(idx)
     }
 
-    fn byte_size(&self) -> usize {
+    fn goodbytes(&self) -> usize {
         let decoders_size: usize = self
             .decoders
             .iter()
-            .map(|(name, null_count, decoder)| {
-                name.len()
-                    + std::mem::size_of::<Arc<str>>()
-                    + std::mem::size_of_val(null_count)
-                    + decoder.byte_size()
-            })
+            .map(|(_name, _null_count, decoder)| decoder.goodbytes())
             .sum();
 
-        std::mem::size_of_val(&self.len)
-            + decoders_size
-            + std::mem::size_of_val(&self.nullability)
+        decoders_size
             + self
                 .nullability
                 .as_ref()
