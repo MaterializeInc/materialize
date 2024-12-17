@@ -29,7 +29,7 @@ use mz_ore::task::AbortOnDropHandle;
 use mz_ore::{assert_none, instrument, soft_assert_or_log};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
-use mz_persist_client::critical::{CriticalReaderId, SinceHandle};
+use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::read::ReadHandle;
 use mz_persist_client::schema::CaESchema;
 use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
@@ -267,7 +267,6 @@ pub trait StorageCollections: Debug {
         new_collection: GlobalId,
         new_desc: RelationDesc,
         expected_version: RelationVersion,
-        new_version: RelationVersion,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
     /// Drops the read capability for the sources and allows their resources to
@@ -558,7 +557,6 @@ where
         shard: ShardId,
         since: Option<&Antichain<T>>,
         relation_desc: RelationDesc,
-        relation_version: Option<RelationVersion>,
         persist_client: &PersistClient,
     ) -> (WriteHandle<SourceData, (), T, Diff>, SinceHandleWrapper<T>) {
         let since_handle = if self.read_only {
@@ -568,7 +566,7 @@ where
             SinceHandleWrapper::Leased(read_handle)
         } else {
             let since_handle = self
-                .open_critical_handle(id, shard, since, relation_version, persist_client)
+                .open_critical_handle(id, shard, since, persist_client)
                 .await;
 
             SinceHandleWrapper::Critical(since_handle)
@@ -631,7 +629,6 @@ where
         id: &GlobalId,
         shard: ShardId,
         since: Option<&Antichain<T>>,
-        version: Option<RelationVersion>,
         persist_client: &PersistClient,
     ) -> SinceHandle<SourceData, (), T, Diff, PersistEpoch> {
         tracing::debug!(%id, ?since, "opening critical handle");
@@ -649,16 +646,14 @@ where
         // Construct the handle in a separate block to ensure all error paths
         // are diverging
         let since_handle = {
-            // If the collection we're openning is versioned, be sure to use a
-            // different CriticalId so the SinceHandles don't conflict.
-            let reader_id = match version {
-                Some(version) => CriticalReaderId::new_controller(version.into_raw()),
-                None => PersistClient::CONTROLLER_CRITICAL_SINCE,
-            };
             // This block's aim is to ensure the handle is in terms of our epoch
             // by the time we return it.
             let mut handle: SinceHandle<_, _, _, _, PersistEpoch> = persist_client
-                .open_critical_since(shard, reader_id, diagnostics.clone())
+                .open_critical_since(
+                    shard,
+                    PersistClient::CONTROLLER_CRITICAL_SINCE,
+                    diagnostics.clone(),
+                )
                 .await
                 .expect("invalid persist usage");
 
@@ -834,9 +829,12 @@ where
         let dependencies = match &data_source {
             DataSource::Introspection(_)
             | DataSource::Webhook
-            | DataSource::Table { .. }
+            | DataSource::Table { primary: None }
             | DataSource::Progress
             | DataSource::Other => Vec::new(),
+            DataSource::Table {
+                primary: Some(primary),
+            } => vec![*primary],
             DataSource::IngestionExport {
                 ingestion_id,
                 data_config,
@@ -1481,7 +1479,6 @@ where
                             metadata.data_shard,
                             description.since.as_ref(),
                             metadata.relation_desc.clone(),
-                            description.relation_version(),
                             persist_client,
                         )
                         .await;
@@ -1843,9 +1840,8 @@ where
         new_collection: GlobalId,
         new_desc: RelationDesc,
         expected_version: RelationVersion,
-        new_version: RelationVersion,
     ) -> Result<(), StorageError<Self::Timestamp>> {
-        let data_shard = {
+        let (data_shard, existing_since) = {
             let self_collections = self.collections.lock().expect("lock poisoned");
             let existing = self_collections
                 .get(&existing_collection)
@@ -1856,7 +1852,10 @@ where
                 return Err(StorageError::IdentifierInvalid(existing_collection));
             }
 
-            existing.collection_metadata.data_shard
+            (
+                existing.collection_metadata.data_shard,
+                existing.description.since.clone(),
+            )
         };
 
         let persist_client = self
@@ -1909,9 +1908,8 @@ where
             .open_data_handles(
                 &new_collection,
                 data_shard,
-                None,
+                existing_since.as_ref(),
                 new_desc.clone(),
-                Some(new_version),
                 &persist_client,
             )
             .await;
@@ -1919,7 +1917,8 @@ where
         // TODO(alter_table): Do we need to advance the since of the table to match the time this
         // new version was registered with txn-wal?
 
-        let collection_desc = CollectionDescription::<T>::for_table(new_desc.clone(), new_version);
+        // Note: The new collection is now the "primary collection" so we specify `None` here.
+        let collection_desc = CollectionDescription::<T>::for_table(new_desc.clone(), None);
         let collection_meta = CollectionMetadata {
             persist_location: self.persist_location.clone(),
             relation_desc: collection_desc.desc.clone(),
@@ -1936,10 +1935,35 @@ where
             collection_meta,
         );
 
+        // Great! Our new schema is registered with Persist, now we need to update our internal
+        // data structures.
         {
             let mut self_collections = self.collections.lock().expect("lock poisoned");
+
+            // Add a record of the new collection.
             self_collections.insert(new_collection, collection_state);
+            // Update the existing collection so we know it's a "projection" of this new one.
+            let existing = self_collections
+                .get_mut(&existing_collection)
+                .expect("existing collection missing");
+
+            // A higher level should already be asserting this, but let's make sure.
+            assert!(matches!(
+                existing.description.data_source,
+                DataSource::Table { primary: None }
+            ));
+
+            // The existing version of the table will depend on the new version.
+            existing.description.data_source = DataSource::Table {
+                primary: Some(new_collection),
+            };
+            existing.storage_dependencies.push(new_collection);
+            self.install_collection_dependency_read_holds_inner(
+                &mut *self_collections,
+                existing_collection,
+            )?;
         };
+
         // TODO(alter_table): Support changes to sources.
         self.register_handles(new_collection, true, since_handle, write_handle);
 

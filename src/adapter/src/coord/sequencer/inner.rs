@@ -1098,9 +1098,9 @@ impl Coordinator {
                         let relation_desc = table
                             .desc
                             .at_version(RelationVersionSelector::Specific(relation_version));
+                        // We assert above we have a single version, and thus we are the primary.
+                        let collection_desc = CollectionDescription::for_table(relation_desc, None);
 
-                        let collection_desc =
-                            CollectionDescription::for_table(relation_desc, relation_version);
                         let storage_metadata = coord.catalog.state().storage_metadata();
                         coord
                             .controller
@@ -4817,7 +4817,6 @@ impl Coordinator {
                     new_global_id,
                     new_desc,
                     expected_version,
-                    new_version,
                     forget_ts,
                     register_ts,
                 )

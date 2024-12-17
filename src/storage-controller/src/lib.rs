@@ -1178,7 +1178,6 @@ where
         new_collection: GlobalId,
         new_desc: RelationDesc,
         expected_version: RelationVersion,
-        new_version: RelationVersion,
         forget_ts: Self::Timestamp,
         register_ts: Self::Timestamp,
     ) -> Result<(), StorageError<Self::Timestamp>> {
@@ -1203,7 +1202,6 @@ where
                     new_collection,
                     new_desc.clone(),
                     expected_version,
-                    new_version,
                 )
                 .await?;
 
@@ -1224,7 +1222,8 @@ where
             )
             .await;
 
-        let collection_desc = CollectionDescription::<T>::for_table(new_desc.clone(), new_version);
+        // Note: The new collection is now the "primary collection" so we specify `None` here.
+        let collection_desc = CollectionDescription::<T>::for_table(new_desc.clone(), None);
         let collection_meta = CollectionMetadata {
             persist_location: self.persist_location.clone(),
             data_shard,
@@ -1243,7 +1242,21 @@ where
             wallclock_lag_metrics,
         };
 
+        // Great! We have successfully evolved the schema of our Table, now we need to update our
+        // in-memory data structures.
         self.collections.insert(new_collection, collection_state);
+        let existing = self
+            .collections
+            .get_mut(&existing_collection)
+            .expect("missing existing collection");
+        assert!(matches!(
+            existing.data_source,
+            DataSource::Table { primary: None }
+        ));
+        existing.data_source = DataSource::Table {
+            primary: Some(new_collection),
+        };
+
         self.persist_table_worker.update(
             existing_collection,
             new_collection,
@@ -1617,7 +1630,7 @@ where
                     //
                     // We can immediately compact them, because they don't
                     // interact with clusterd.
-                    DataSource::Webhook | DataSource::Table { .. } => {
+                    DataSource::Webhook | DataSource::Table { primary: None } => {
                         let pending_compaction_command = PendingCompactionCommand {
                             id: *id,
                             read_frontier: Antichain::new(),
@@ -1629,6 +1642,8 @@ where
                         self.pending_compaction_commands
                             .push(pending_compaction_command);
                     }
+                    // Tables that are not the primary collection do not need Persist compaction applied.
+                    DataSource::Table { primary: Some(_) } => (),
                     DataSource::Ingestion(_) => {
                         ingestions_to_drop.insert(id);
                     }

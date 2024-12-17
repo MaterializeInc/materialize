@@ -77,15 +77,6 @@ impl CriticalReaderId {
     pub fn new() -> Self {
         CriticalReaderId(*Uuid::new_v4().as_bytes())
     }
-
-    /// Returns a new [`CriticalReaderId`] using the [`CONTROLLER_CRITICAL_SINCE`] as a base.
-    ///
-    /// [`CONTROLLER_CRITICAL_SINCE`]: crate::PersistClient::CONTROLLER_CRITICAL_SINCE
-    pub fn new_controller(seed: u64) -> Self {
-        let mut base: [u8; 16] = crate::PersistClient::CONTROLLER_CRITICAL_SINCE.0;
-        base[..8].copy_from_slice(&seed.to_le_bytes()[..]);
-        CriticalReaderId(base)
-    }
 }
 
 /// A "capability" granting the ability to hold back the `since` frontier of a
