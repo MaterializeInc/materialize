@@ -65,7 +65,7 @@ for details.
 Materialize provides a [sample Terraform
 module](https://github.com/MaterializeInc/terraform-aws-materialize/blob/main/README.md)
 for evaluation purposes only. The module deploys a sample infrastructure on AWS
-with the following components:
+(region `us-east-1`) with the following components:
 
 - EKS component
 - Networking component
@@ -111,17 +111,17 @@ Terraform/infrastructure practices.
    - set your `node_group_ami_type` to a `"AL2023_ARM_64_STANDARD"`.
    - set your `node_group_instance_types` to a supported instance type for
      ARM64.
-
+   - set your `service_account_name` to a name for your Materialize.
 
 
    ```bash
    cluster_name      = "my-test-eks"
    environment       = "my-test"
    vpc_name          = "my-test-vpc"
-
    bucket_name       = "my-test-bucket"
+   service_account_name = "my-test-materialize-svc"
    db_identifier     = "my-test-db"
-   database_password = "enter-your-secure-password"
+   database_password = "enter-your-secure-password" # Enter a secure password
 
    tags = {
      Environment = "my-test"
@@ -166,9 +166,7 @@ Terraform/infrastructure practices.
    Upon successful completion, various fields and their values are output:
 
    ```bash
-   ...
-
-   Apply complete! Resources: 71 added, 0 changed, 0 destroyed.
+   Apply complete! Resources: 82 added, 0 changed, 0 destroyed.
 
    Outputs:
    database_endpoint = "my-test-db.abcdefg8dsto.us-east-1.rds.amazonaws.com:5432"
@@ -176,7 +174,7 @@ Terraform/infrastructure practices.
    materialize_s3_role_arn = "arn:aws:iam::000111222333:role/my-test-materialize-s3-role"
    metadata_backend_url = <sensitive>
    oidc_provider_arn = "arn:aws:iam::000111222333:oidc-provider/oidc.eks. us-east-1.amazonaws.com/id/0123456789A00BCD000E11BE12345A01"
-   persist_backend_url = "s3://my-test-bucket/ my-test:serviceaccount:materialize-environment:12345678-1234-1234-1234-1234 56789012"
+   persist_backend_url = "s3://my-test-bucket/my-test:serviceaccount:materialize-environment:my-test-materialize-svc"
    s3_bucket_name = "my-test-bucket"
    vpc_id = "vpc-0abc000bed1d111bd"
    ```
@@ -203,7 +201,8 @@ Terraform/infrastructure practices.
       - `<your-cluster-name>` with the name of your EKS cluster (specified in
         `terraform.tfvars`)
 
-      - `<your-region>` with the region of your EKS cluster
+      - `<your-region>` with the region of your EKS cluster. By default, the
+        sample Terraform module uses `us-east-1`.
 
       ```bash
       aws eks update-kubeconfig --name <your-cluster-name> --region <your-region>
@@ -240,7 +239,7 @@ Terraform/infrastructure practices.
 1. Create a `my-materialize-operator-values.yaml` configuration file for the
    Materialize operator. Update with:
 
-   - your region,
+   - your AWS region (the sample Terraform module uses `us-east-1`).
 
    - your AWS Account ID, and
 
@@ -253,14 +252,14 @@ Terraform/infrastructure practices.
       operator:
         cloudProvider:
           type: "aws"
-          region: "<your-aws-region>" # e.g. us-west-2
+          region: "your-aws-region" # e.g. us-east-1
           providers:
             aws:
               enabled: true
-              accountID: "<your-aws-account-id>" # e.g. 123456789012
+              accountID: "your-aws-account-id" # e.g. 123456789012
               iam:
                 roles:
-                  environment: "<your-materialize-s3-role-arn>" # e.g. arn:aws:iam::123456789012:role/materialize-s3-role
+                  environment: "your-materialize-s3-role-arn" # e.g. arn:aws:iam::123456789012:role/materialize-s3-role
       networkPolicies:
         enabled: true
         egress:
@@ -336,9 +335,12 @@ To deploy Materialize:
       name: materialize-backend
       namespace: materialize-environment
     stringData:
-      metadata_backend_url: "postgres://db_user:db_password@database_endpoint/db_name?sslmode=require"
       persist_backend_url: "your-persist-backend-url"
+      metadata_backend_url: "postgres://db_user:db_password@database_endpoint/db_name?sslmode=require"
     ```
+
+    - For `your-persist-backend-url`, set to the value from the [Terraform
+      output](#terraform-output).
 
     - For `your-metadata-backend-url`, update with your values:
 
@@ -348,25 +350,21 @@ To deploy Materialize:
         output](#terraform-output).
       - Default `db_name` is `materialize`.
 
-      {{< tip >}}
-      URL encode your database password.
-      {{< /tip >}}
-
-
-    - For `your-persist-backend-url`, set to the value from the [Terraform
-      output](#terraform-output).
+        {{< tip >}}
+        URL encode your database password.
+        {{< /tip >}}
 
 1. Create a YAML file `my-materialize.yaml` for your Materialize
    configuration.
 
-   Replace `${var.service_account_name}` with the the desired name for your
-   Materialize.
+   Replace `<your_service_account_name>` with the name you specified in the
+   `terraform.tfvars` file.
 
    ```yaml
    apiVersion: materialize.cloud/v1alpha1
    kind: Materialize
    metadata:
-     name: "${var.service_account_name}"
+     name: "<your_service_account_name>"      # e.g. my-test-materialize-svc
      namespace: materialize-environment
    spec:
      environmentdImageRef: materialize/environmentd:v0.127.0
@@ -385,11 +383,15 @@ To deploy Materialize:
      backendSecretName: materialize-backend
    ```
 
-1. Create the `materialize-environment` namespace and apply the files to install
-   Materialize:
+1. Create the your namespace.
 
    ```shell
    kubectl create namespace materialize-environment
+   ```
+
+1. Apply the files to install Materialize:
+
+   ```shell
    kubectl apply -f materialize-backend-secret.yaml
    kubectl apply -f my-materialize.yaml
    ```
@@ -516,6 +518,8 @@ In your Terraform directory, run:
 ```bash
 terraform destroy
 ```
+
+When prompted, type `yes` to confirm the deletion.
 
 ## See also
 
