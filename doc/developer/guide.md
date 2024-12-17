@@ -68,7 +68,7 @@ sudo apt install docker docker-compose-plugin
 
 Materialize can also optionally be built with [Bazel](https://bazel.build/). To
 learn more about Bazel and how it's setup at Materialize, checkout our
-[Bazel documentation](../../misc/bazel/README.md).
+[Bazel documentation](/doc/developer/bazel.md).
 
 ### CockroachDB
 
