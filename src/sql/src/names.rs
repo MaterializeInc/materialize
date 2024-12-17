@@ -490,10 +490,12 @@ impl AstDisplay for ResolvedItemName {
                 f.write_str(".");
                 f.write_node(&Ident::new_unchecked(&full_name.item));
 
-                if let RelationVersionSelector::Specific(version) = version {
-                    let version: Version = (*version).into();
-                    f.write_str(" VERSION ");
-                    f.write_node(&version);
+                if *print_id {
+                    if let RelationVersionSelector::Specific(version) = version {
+                        let version: Version = (*version).into();
+                        f.write_str(" VERSION ");
+                        f.write_node(&version);
+                    }
                 }
 
                 if *print_id {

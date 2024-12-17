@@ -16,7 +16,7 @@ from materialize.mz_version import MzVersion
 
 class AlterTableAddColumn(Check):
     def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion.parse_mz("v0.127.0-dev")
+        return self.base_version >= MzVersion.parse_mz("v0.128.0-dev")
 
     def initialize(self) -> Testdrive:
         return Testdrive(
@@ -24,9 +24,6 @@ class AlterTableAddColumn(Check):
                 """
                 $postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
                 ALTER SYSTEM SET enable_alter_table_add_column = true;
-
-                $postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-                ALTER SYSTEM SET persist_dangerous_enable_schema_evolution = true;
 
                 > CREATE TABLE alter_table1 (f1 INTEGER, f2 INTEGER NOT NULL DEFAULT 1234);
                 > INSERT INTO alter_table1 VALUES (100, 100);
@@ -43,12 +40,18 @@ class AlterTableAddColumn(Check):
             Testdrive(dedent(s))
             for s in [
                 """
+                $postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+                ALTER SYSTEM SET enable_alter_table_add_column = true;
+
                 > ALTER TABLE alter_table1 ADD COLUMN f3 text;
                 > INSERT INTO alter_table1 VALUES (200, 200, 'hello'), (NULL, 300, 'world'), (400, 400, NULL), (NULL, 500, NULL);
                 > CREATE MATERIALIZED VIEW alter_table_mv1 AS SELECT alter_table2.f1 as f1_2, alter_table1.f1 as f1_1 FROM alter_table1, alter_table2;
                 > CREATE INDEX alter_table1_idx ON alter_table1 (f1);
                 """,
                 """
+                $postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+                ALTER SYSTEM SET enable_alter_table_add_column = true;
+
                 > ALTER TABLE alter_table2 ADD COLUMN f2 INTEGER;
                 > INSERT INTO alter_table2 VALUES ('foo', 900), ('bar', 800);
                 > CREATE VIEW alter_table_view_2 AS SELECT * FROM alter_table2;
