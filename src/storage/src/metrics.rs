@@ -119,7 +119,6 @@ impl StorageMetrics {
         primary_source_id: GlobalId,
         worker_id: usize,
         data_shard: &mz_persist_client::ShardId,
-        output_index: usize,
     ) -> source::SourcePersistSinkMetrics {
         source::SourcePersistSinkMetrics::new(
             &self.source_defs.source_defs,
@@ -127,18 +126,16 @@ impl StorageMetrics {
             primary_source_id,
             worker_id,
             data_shard,
-            output_index,
         )
     }
 
     /// Get a `SourceMetrics` for the given id and worker id.
     pub(crate) fn get_source_metrics(
         &self,
-        name: &str,
         id: GlobalId,
         worker_id: usize,
     ) -> source::SourceMetrics {
-        source::SourceMetrics::new(&self.source_defs.source_defs, name, id, worker_id)
+        source::SourceMetrics::new(&self.source_defs.source_defs, id, worker_id)
     }
 
     /// Get a `PgMetrics` for the given id.

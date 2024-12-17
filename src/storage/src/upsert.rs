@@ -21,7 +21,7 @@ use futures::StreamExt;
 use indexmap::map::Entry;
 use itertools::Itertools;
 use mz_ore::error::ErrorExt;
-use mz_repr::{Datum, DatumVec, Diff, Row};
+use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row};
 use mz_rocksdb::ValueIterator;
 use mz_storage_operators::metrics::BackpressureMetrics;
 use mz_storage_types::configuration::StorageConfiguration;
@@ -43,7 +43,6 @@ use timely::progress::{Antichain, Timestamp};
 
 use crate::healthcheck::HealthStatusUpdate;
 use crate::metrics::upsert::UpsertMetrics;
-use crate::render::sources::OutputIndex;
 use crate::storage_state::StorageInstanceContext;
 use crate::upsert_continual_feedback;
 use autospill::AutoSpillBackend;
@@ -215,7 +214,7 @@ pub(crate) fn upsert<G: Scope, FromTime>(
     backpressure_metrics: Option<BackpressureMetrics>,
 ) -> (
     Collection<G, Result<Row, DataflowError>, Diff>,
-    Stream<G, (OutputIndex, HealthStatusUpdate)>,
+    Stream<G, (Option<GlobalId>, HealthStatusUpdate)>,
     Stream<G, Infallible>,
     PressOnDropButton,
 )
@@ -401,7 +400,7 @@ fn upsert_operator<G: Scope, FromTime, F, Fut, US>(
     snapshot_buffering_max: Option<usize>,
 ) -> (
     Collection<G, Result<Row, DataflowError>, Diff>,
-    Stream<G, (OutputIndex, HealthStatusUpdate)>,
+    Stream<G, (Option<GlobalId>, HealthStatusUpdate)>,
     Stream<G, Infallible>,
     PressOnDropButton,
 )
@@ -716,7 +715,7 @@ fn upsert_classic<G: Scope, FromTime, F, Fut, US>(
     snapshot_buffering_max: Option<usize>,
 ) -> (
     Collection<G, Result<Row, DataflowError>, Diff>,
-    Stream<G, (OutputIndex, HealthStatusUpdate)>,
+    Stream<G, (Option<GlobalId>, HealthStatusUpdate)>,
     Stream<G, Infallible>,
     PressOnDropButton,
 )
@@ -993,8 +992,8 @@ impl<G: Scope> UpsertErrorEmitter<G>
     for (
         &mut AsyncOutputHandle<
             <G as ScopeParent>::Timestamp,
-            CapacityContainerBuilder<Vec<(OutputIndex, HealthStatusUpdate)>>,
-            Tee<<G as ScopeParent>::Timestamp, Vec<(OutputIndex, HealthStatusUpdate)>>,
+            CapacityContainerBuilder<Vec<(Option<GlobalId>, HealthStatusUpdate)>>,
+            Tee<<G as ScopeParent>::Timestamp, Vec<(Option<GlobalId>, HealthStatusUpdate)>>,
         >,
         &Capability<<G as ScopeParent>::Timestamp>,
     )
@@ -1010,13 +1009,13 @@ async fn process_upsert_state_error<G: Scope>(
     e: anyhow::Error,
     health_output: &AsyncOutputHandle<
         <G as ScopeParent>::Timestamp,
-        CapacityContainerBuilder<Vec<(OutputIndex, HealthStatusUpdate)>>,
-        Tee<<G as ScopeParent>::Timestamp, Vec<(OutputIndex, HealthStatusUpdate)>>,
+        CapacityContainerBuilder<Vec<(Option<GlobalId>, HealthStatusUpdate)>>,
+        Tee<<G as ScopeParent>::Timestamp, Vec<(Option<GlobalId>, HealthStatusUpdate)>>,
     >,
     health_cap: &Capability<<G as ScopeParent>::Timestamp>,
 ) {
     let update = HealthStatusUpdate::halting(e.context(context).to_string_with_causes(), None);
-    health_output.give(health_cap, (0, update));
+    health_output.give(health_cap, (None, update));
     std::future::pending::<()>().await;
     unreachable!("pending future never returns");
 }

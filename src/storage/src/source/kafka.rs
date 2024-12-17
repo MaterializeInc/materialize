@@ -19,6 +19,7 @@ use anyhow::bail;
 use chrono::{DateTime, NaiveDateTime};
 use differential_dataflow::{AsCollection, Hashable};
 use futures::StreamExt;
+use itertools::Itertools;
 use maplit::btreemap;
 use mz_kafka_util::client::{get_partitions, MzClientContext, PartitionId, TunnelingClientContext};
 use mz_ore::assert_none;
@@ -35,9 +36,7 @@ use mz_storage_types::errors::{
 use mz_storage_types::sources::kafka::{
     KafkaMetadataKind, KafkaSourceConnection, KafkaTimestamp, RangeBound,
 };
-use mz_storage_types::sources::{
-    IndexedSourceExport, MzOffset, SourceExport, SourceExportDetails, SourceTimestamp,
-};
+use mz_storage_types::sources::{MzOffset, SourceExport, SourceExportDetails, SourceTimestamp};
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{
     Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
@@ -54,6 +53,7 @@ use rdkafka::{ClientContext, Message, TopicPartitionList};
 use serde::{Deserialize, Serialize};
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::operators::core::Partition;
 use timely::dataflow::operators::{Broadcast, Capability};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
@@ -162,6 +162,7 @@ fn responsible_for_pid(config: &RawSourceCreationConfig, pid: i32) -> bool {
 }
 
 struct SourceOutputInfo {
+    id: GlobalId,
     output_index: usize,
     resume_upper: Antichain<KafkaTimestamp>,
     metadata_columns: Vec<KafkaMetadataKind>,
@@ -183,7 +184,7 @@ impl SourceRender for KafkaSourceConnection {
         resume_uppers: impl futures::Stream<Item = Antichain<KafkaTimestamp>> + 'static,
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
-        StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
+        BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
         Option<Stream<G, Infallible>>,
         Stream<G, HealthStatusMessage>,
         Stream<G, ProgressStatisticsUpdate>,
@@ -192,11 +193,34 @@ impl SourceRender for KafkaSourceConnection {
     ) {
         let (metadata, probes, metadata_token) =
             render_metadata_fetcher(scope, self.clone(), config.clone());
-        let (data, progress, health, stats, reader_token) =
-            render_reader(scope, self, config, resume_uppers, metadata, start_signal);
+        let (data, progress, health, stats, reader_token) = render_reader(
+            scope,
+            self,
+            config.clone(),
+            resume_uppers,
+            metadata,
+            start_signal,
+        );
+
+        let partition_count = u64::cast_from(config.source_exports.len());
+        let data_streams: Vec<_> = data.inner.partition::<CapacityContainerBuilder<_>, _, _>(
+            partition_count,
+            |((output, data), time, diff): &(
+                (usize, Result<SourceMessage, DataflowError>),
+                _,
+                Diff,
+            )| {
+                let output = u64::cast_from(*output);
+                (output, (data.clone(), time.clone(), diff.clone()))
+            },
+        );
+        let mut data_collections = BTreeMap::new();
+        for (id, data_stream) in config.source_exports.keys().zip_eq(data_streams) {
+            data_collections.insert(*id, data_stream.as_collection());
+        }
 
         (
-            data,
+            data_collections,
             Some(progress),
             health,
             stats,
@@ -235,15 +259,11 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
     let mut metadata_input = builder.new_disconnected_input(&metadata_stream.broadcast(), Pipeline);
 
     let mut outputs = vec![];
-    for (id, export) in &config.source_exports {
-        let IndexedSourceExport {
-            ingestion_output,
-            export:
-                SourceExport {
-                    details,
-                    storage_metadata: _,
-                    data_config: _,
-                },
+    for (idx, (id, export)) in config.source_exports.iter().enumerate() {
+        let SourceExport {
+            details,
+            storage_metadata: _,
+            data_config: _,
         } = export;
         let resume_upper = Antichain::from_iter(
             config
@@ -268,8 +288,9 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
         };
 
         let output = SourceOutputInfo {
+            id: *id,
             resume_upper,
-            output_index: *ingestion_output,
+            output_index: idx,
             metadata_columns,
         };
         outputs.push(output);
@@ -414,7 +435,7 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
                         health_output.give(
                             &health_cap,
                             HealthStatusMessage {
-                                index: output.output_index,
+                                id: Some(output.id),
                                 namespace: if matches!(e, ContextCreationError::Ssh(_)) {
                                     StatusNamespace::Ssh
                                 } else {
@@ -675,7 +696,7 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
                                 health_output.give(
                                     &health_cap,
                                     HealthStatusMessage {
-                                        index: output.output_index,
+                                        id: Some(output.id),
                                         namespace,
                                         update: HealthStatusUpdate::running(),
                                     },
@@ -696,7 +717,7 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
                                 health_output.give(
                                     &health_cap,
                                     HealthStatusMessage {
-                                        index: output.output_index,
+                                        id: Some(output.id),
                                         namespace: StatusNamespace::Kafka,
                                         update,
                                     },
@@ -708,7 +729,7 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
                                 health_output.give(
                                     &health_cap,
                                     HealthStatusMessage {
-                                        index: output.output_index,
+                                        id: Some(output.id),
                                         namespace: StatusNamespace::Ssh,
                                         update,
                                     },
@@ -738,7 +759,7 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
                                 health_output.give(
                                     &health_cap,
                                     HealthStatusMessage {
-                                        index: output.output_index,
+                                        id: Some(output.id),
                                         namespace: StatusNamespace::Kafka,
                                         update: status,
                                     },
@@ -845,7 +866,7 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
                                     health_output.give(
                                         &health_cap,
                                         HealthStatusMessage {
-                                            index: output.output_index,
+                                            id: Some(output.id),
                                             namespace: StatusNamespace::Kafka,
                                             update: status,
                                         },

@@ -159,22 +159,6 @@ impl AddAssign<&BatchMetrics> for BatchMetrics {
     }
 }
 
-impl BatchMetrics {
-    fn is_empty(&self) -> bool {
-        let BatchMetrics {
-            inserts: self_inserts,
-            retractions: self_retractions,
-            error_inserts: self_error_inserts,
-            error_retractions: self_error_retractions,
-        } = self;
-
-        *self_inserts == 0
-            && *self_retractions == 0
-            && *self_error_inserts == 0
-            && *self_error_retractions == 0
-    }
-}
-
 /// Manages batches and metrics.
 struct BatchBuilderAndMetadata<K, V, T, D>
 where
@@ -297,7 +281,6 @@ pub(crate) fn render<G>(
     desired_collection: Collection<G, Result<Row, DataflowError>, Diff>,
     storage_state: &StorageState,
     metrics: SourcePersistSinkMetrics,
-    output_index: usize,
     busy_signal: Arc<Semaphore>,
 ) -> (
     Stream<G, ()>,
@@ -341,7 +324,6 @@ where
         &written_batches,
         persist_clients,
         storage_state,
-        output_index,
         metrics,
         Arc::clone(&busy_signal),
     );
@@ -898,7 +880,6 @@ fn append_batches<G>(
     batches: &Stream<G, HollowBatchAndMetadata<mz_repr::Timestamp>>,
     persist_clients: Arc<PersistClientCache>,
     storage_state: &StorageState,
-    output_index: usize,
     metrics: SourcePersistSinkMetrics,
     busy_signal: Arc<Semaphore>,
 ) -> (
@@ -1033,11 +1014,8 @@ where
         // if the failpoint is configured
         let mut pg_snapshot_pause = false;
         (|| {
-            fail::fail_point!("pg_snapshot_pause", |val| {
-                pg_snapshot_pause = val.map_or(false, |index| {
-                    let index: usize = index.parse().unwrap();
-                    index == output_index
-                });
+            fail::fail_point!("pg_snapshot_pause", |_| {
+                pg_snapshot_pause = true;
             });
         })();
 

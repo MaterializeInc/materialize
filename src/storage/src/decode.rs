@@ -571,7 +571,7 @@ pub fn render_decode_delimited<G: Scope, FromTime: Timestamp>(
     let health = transient_errors.map(|err: Rc<CsrConnectError>| {
         let halt_status = HealthStatusUpdate::halting(err.display_with_causes().to_string(), None);
         HealthStatusMessage {
-            index: 0,
+            id: None,
             namespace: if matches!(&*err, CsrConnectError::Ssh(_)) {
                 StatusNamespace::Ssh
             } else {

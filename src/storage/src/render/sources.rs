@@ -11,6 +11,7 @@
 //!
 //! See [`render_source`] for more details.
 
+use std::collections::BTreeMap;
 use std::iter;
 use std::sync::Arc;
 
@@ -32,6 +33,7 @@ use mz_timely_util::builder_async::PressOnDropButton;
 use mz_timely_util::operator::CollectionExt;
 use mz_timely_util::order::refine_antichain;
 use serde::{Deserialize, Serialize};
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::operators::generic::operator::empty;
 use timely::dataflow::operators::{Concat, ConnectLoop, Feedback, Leave, Map, OkErr};
 use timely::dataflow::scopes::{Child, Scope};
@@ -43,9 +45,6 @@ use crate::healthcheck::{HealthStatusMessage, StatusNamespace};
 use crate::source::types::{DecodeResult, SourceOutput, SourceRender};
 use crate::source::{self, RawSourceCreationConfig, SourceExportCreationConfig};
 use crate::upsert::UpsertKey;
-
-/// The output index for health streams, used to handle multiplexed streams
-pub(crate) type OutputIndex = usize;
 
 /// _Renders_ complete _differential_ [`Collection`]s
 /// that represent the final source and its errors
@@ -67,10 +66,13 @@ pub fn render_source<'g, G, C>(
     storage_state: &crate::storage_state::StorageState,
     base_source_config: RawSourceCreationConfig,
 ) -> (
-    Vec<(
-        Collection<Child<'g, G, mz_repr::Timestamp>, Row, Diff>,
-        Collection<Child<'g, G, mz_repr::Timestamp>, DataflowError, Diff>,
-    )>,
+    BTreeMap<
+        GlobalId,
+        (
+            Collection<Child<'g, G, mz_repr::Timestamp>, Row, Diff>,
+            Collection<Child<'g, G, mz_repr::Timestamp>, DataflowError, Diff>,
+        ),
+    >,
     Stream<G, HealthStatusMessage>,
     Vec<PressOnDropButton>,
 )
@@ -100,7 +102,7 @@ where
 
     // Build the _raw_ ok and error sources using `create_raw_source` and the
     // correct `SourceReader` implementations
-    let (streams, mut health, source_tokens) = source::create_raw_source(
+    let (exports, mut health, source_tokens) = source::create_raw_source(
         scope,
         storage_state,
         resume_stream,
@@ -111,18 +113,25 @@ where
 
     needed_tokens.extend(source_tokens);
 
-    let mut outputs = vec![];
-    for (export_id, ok_source, err_source, data_config) in streams {
+    let mut outputs = BTreeMap::new();
+    for (export_id, export) in exports {
+        type CB<C> = CapacityContainerBuilder<C>;
+        let (ok_stream, err_stream) =
+            export.map_fallible::<CB<_>, CB<_>, _, _, _>("export-demux-ok-err", |r| r);
+
         // All sources should push their various error streams into this vector,
         // whose contents will be concatenated and inserted along the collection.
         // All subsources include the non-definite errors of the ingestion
-        let error_collections = vec![err_source.map(DataflowError::from)];
+        let error_collections = vec![err_stream.map(DataflowError::from)];
 
+        let data_config = base_source_config.source_exports[&export_id]
+            .data_config
+            .clone();
         let (ok, err, extra_tokens, health_stream) = render_source_stream(
             scope,
             dataflow_debug_name,
             export_id,
-            ok_source,
+            ok_stream,
             data_config,
             description.clone(),
             error_collections,
@@ -131,7 +140,7 @@ where
             starter.clone(),
         );
         needed_tokens.extend(extra_tokens);
-        outputs.push((ok, err));
+        outputs.insert(export_id, (ok, err));
 
         health = health.concat(&health_stream.leave());
     }
@@ -364,8 +373,8 @@ where
                     (
                         upsert.leave(),
                         health_update
-                            .map(|(index, update)| HealthStatusMessage {
-                                index,
+                            .map(|(id, update)| HealthStatusMessage {
+                                id,
                                 namespace: StatusNamespace::Upsert,
                                 update,
                             })
