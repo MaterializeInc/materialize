@@ -426,7 +426,7 @@ pub struct RunnerInner<'a> {
     auto_index_selects: bool,
     auto_transactions: bool,
     enable_table_keys: bool,
-    verbosity: usize,
+    verbosity: u8,
     stdout: &'a dyn WriteFmt,
     _shutdown_trigger: trigger::Trigger,
     _server_thread: JoinOnDropHandle<()>,
@@ -1797,7 +1797,7 @@ pub trait WriteFmt {
 pub struct RunConfig<'a> {
     pub stdout: &'a dyn WriteFmt,
     pub stderr: &'a dyn WriteFmt,
-    pub verbosity: usize,
+    pub verbosity: u8,
     pub postgres_url: String,
     pub no_fail: bool,
     pub fail_fast: bool,
