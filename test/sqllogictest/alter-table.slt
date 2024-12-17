@@ -28,7 +28,7 @@ CREATE VIEW v2 AS SELECT * FROM t2;
 query TT
 SHOW CREATE VIEW v1
 ----
-materialize.public.v1  CREATE␠VIEW␠"materialize"."public"."v1"␠AS␠SELECT␠*␠FROM␠"materialize"."public"."t2"␠VERSION␠0
+materialize.public.v1  CREATE␠VIEW␠"materialize"."public"."v1"␠AS␠SELECT␠*␠FROM␠"materialize"."public"."t2"
 
 # Note: When the feature is off we should not record versions.
 query TT
@@ -87,7 +87,7 @@ materialize.public.t1  CREATE␠TABLE␠"materialize"."public"."t1"␠("a"␠"pg
 query TT
 SHOW CREATE VIEW v1;
 ----
-materialize.public.v1  CREATE␠VIEW␠"materialize"."public"."v1"␠AS␠SELECT␠*␠FROM␠"materialize"."public"."t1"␠VERSION␠0
+materialize.public.v1  CREATE␠VIEW␠"materialize"."public"."v1"␠AS␠SELECT␠*␠FROM␠"materialize"."public"."t1"
 
 statement ok
 CREATE VIEW v2 AS SELECT * FROM t1;
