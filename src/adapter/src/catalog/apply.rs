@@ -33,7 +33,7 @@ use mz_catalog::memory::objects::{
     TableDataSource, TemporaryItem, Type, UpdateFrom,
 };
 use mz_catalog::SYSTEM_CONN_ID;
-use mz_compute_client::controller::ComputeReplicaConfig;
+use mz_compute_types::config::ComputeReplicaConfig;
 use mz_controller::clusters::{ReplicaConfig, ReplicaLogging};
 use mz_controller_types::ClusterId;
 use mz_expr::MirScalarExpr;

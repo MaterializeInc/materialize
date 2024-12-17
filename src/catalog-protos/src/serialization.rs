@@ -15,7 +15,7 @@
 
 use std::time::Duration;
 
-use mz_compute_client::controller::ComputeReplicaLogging;
+use mz_compute_types::config::ComputeReplicaLogging;
 use mz_controller_types::ReplicaId;
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
