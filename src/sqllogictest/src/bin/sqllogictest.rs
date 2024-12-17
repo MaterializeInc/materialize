@@ -39,7 +39,7 @@ struct Args {
     /// If specified twice, also show descriptions of each error.
     /// If specified thrice, also print each query before it is executed.
     #[clap(short = 'v', long = "verbose", action = ArgAction::Count)]
-    verbosity: usize,
+    verbosity: u8,
     /// Don't exit with a failing code if not all queries are successful.
     #[clap(long)]
     no_fail: bool,
