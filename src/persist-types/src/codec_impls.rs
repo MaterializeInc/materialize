@@ -20,6 +20,7 @@ use arrow::array::{
 use bytes::{BufMut, Bytes};
 use timely::order::Product;
 
+use crate::arrow::ArrayOrd;
 use crate::columnar::{ColumnDecoder, ColumnEncoder, Schema2};
 use crate::stats::{ColumnStatKinds, ColumnarStats, NoneStats, StructStats};
 use crate::{Codec, Codec64, Opaque, ShardId};
@@ -94,7 +95,7 @@ impl ColumnDecoder<()> for UnitColumnar {
         }
     }
 
-    fn byte_size(&self) -> usize {
+    fn goodbytes(&self) -> usize {
         std::mem::size_of::<UnitColumnar>()
     }
 
@@ -286,8 +287,8 @@ impl<T: SimpleColumnarData> ColumnDecoder<T> for SimpleColumnarDecoder<T> {
     fn is_null(&self, idx: usize) -> bool {
         self.0.is_null(idx)
     }
-    fn byte_size(&self) -> usize {
-        self.0.get_array_memory_size()
+    fn goodbytes(&self) -> usize {
+        ArrayOrd::new(&self.0).goodbytes()
     }
 
     fn stats(&self) -> StructStats {
@@ -609,7 +610,7 @@ impl<T> ColumnDecoder<T> for TodoColumnarDecoder<T> {
         panic!("TODO")
     }
 
-    fn byte_size(&self) -> usize {
+    fn goodbytes(&self) -> usize {
         panic!("TODO")
     }
 

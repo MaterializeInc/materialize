@@ -71,7 +71,7 @@ pub trait ColumnDecoder<T> {
     fn is_null(&self, idx: usize) -> bool;
 
     /// Returns the number of bytes used by this decoder.
-    fn byte_size(&self) -> usize;
+    fn goodbytes(&self) -> usize;
 
     /// Returns statistics for the column. This structure is defined by Persist,
     /// but the contents are determined by the client; Persist will preserve
