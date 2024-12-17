@@ -8,7 +8,7 @@ This Helm chart deploys the Materialize operator on a Kubernetes cluster. The op
 
 ## Prerequisites
 
-- Kubernetes 1.19+
+- Kubernetes 1.29+
 - Helm 3.2.0+
 
 ### Kubernetes Storage Configuration
@@ -111,9 +111,9 @@ The following table lists the configurable parameters of the Materialize operato
 | `environmentd.nodeSelector` | Node selector to use for environmentd pods spawned by the operator | ``{}`` |
 | `networkPolicies.egress` | egress from Materialize pods to sources and sinks | ``{"cidrs":["0.0.0.0/0"],"enabled":false}`` |
 | `networkPolicies.enabled` | Whether to enable network policies for securing communication between pods | ``false`` |
-| `networkPolicies.ingress` | ingress to the SQL and HTTP interfaces on environmentd or balancerd | ``{"cidrs":["0.0.0.0/0"],"enabled":false}`` |
-| `networkPolicies.internal` | internal communication between Materialize pods | ``{"enabled":false}`` |
-| `observability.enabled` |  | ``true`` |
+| `networkPolicies.ingress` | Whether to enable ingress to the SQL and HTTP interfaces on environmentd or balancerd | ``{"cidrs":["0.0.0.0/0"],"enabled":false}`` |
+| `networkPolicies.internal` | Whether to enable internal communication between Materialize pods | ``{"enabled":false}`` |
+| `observability.enabled` | Whether to enable observability features | ``true`` |
 | `observability.podMetrics.enabled` | Whether to enable the pod metrics scraper which populates the Environment Overview Monitoring tab in the web console (requires metrics-server to be installed) | ``false`` |
 | `observability.prometheus.scrapeAnnotations.enabled` | Whether to annotate pods with common keys used for prometheus scraping. | ``true`` |
 | `operator.args.enableInternalStatementLogging` |  | ``true`` |
@@ -124,7 +124,7 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.cloudProvider.providers.aws.iam.roles.environment` | ARN of the IAM role for environmentd | ``""`` |
 | `operator.cloudProvider.providers.gcp` | GCP Configuration (placeholder for future use) | ``{"enabled":false}`` |
 | `operator.cloudProvider.region` | Common cloud provider settings | ``"kind"`` |
-| `operator.cloudProvider.type` |  | ``"local"`` |
+| `operator.cloudProvider.type` | Specifies cloud provider. Valid values are 'aws', 'gcp', 'azure' , 'generic', or 'local' | ``"local"`` |
 | `operator.clusters.defaultSizes.analytics` |  | ``"25cc"`` |
 | `operator.clusters.defaultSizes.catalogServer` |  | ``"50cc"`` |
 | `operator.clusters.defaultSizes.default` |  | ``"25cc"`` |
@@ -145,7 +145,7 @@ The following table lists the configurable parameters of the Materialize operato
 | `serviceAccount.create` | Whether to create a new service account for the operator | ``true`` |
 | `serviceAccount.name` | The name of the service account to be created | ``"orchestratord"`` |
 | `storage.storageClass.allowVolumeExpansion` |  | ``false`` |
-| `storage.storageClass.create` | Set to false to use an existing StorageClass instead | ``false`` |
+| `storage.storageClass.create` | Set to false to use an existing StorageClass instead. Refer to the [Kubernetes StorageClass documentation](https://kubernetes.io/docs/concepts/storage/storage-classes/) | ``false`` |
 | `storage.storageClass.name` | Name of the StorageClass to create/use: eg "openebs-lvm-instance-store-ext4" | ``""`` |
 | `storage.storageClass.parameters` | Parameters for the CSI driver | ``{"fsType":"ext4","storage":"lvm","volgroup":"instance-store-vg"}`` |
 | `storage.storageClass.provisioner` | CSI driver to use, eg "local.csi.openebs.io" | ``""`` |

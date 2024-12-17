@@ -36,6 +36,7 @@ operator:
 
   # Cloud provider configuration
   cloudProvider:
+    # -- Specifies cloud provider. Valid values are 'aws', 'gcp', 'azure' , 'generic', or 'local'
     type: "local"
 
     # -- Common cloud provider settings
@@ -232,6 +233,7 @@ serviceAccount:
 
 # Observability settings (disabled in this case)
 observability:
+  # -- Whether to enable observability features
   enabled: true
   podMetrics:
     # -- Whether to enable the pod metrics scraper which populates the
@@ -252,10 +254,10 @@ telemetry:
 networkPolicies:
   # -- Whether to enable network policies for securing communication between pods
   enabled: false
-  # -- internal communication between Materialize pods
+  # -- Whether to enable internal communication between Materialize pods
   internal:
     enabled: false
-  # -- ingress to the SQL and HTTP interfaces
+  # -- Whether to enable ingress to the SQL and HTTP interfaces
   # on environmentd or balancerd
   ingress:
     enabled: false
@@ -289,7 +291,8 @@ tls:
 # Storage configuration
 storage:
   storageClass:
-    # -- Set to false to use an existing StorageClass instead
+    # -- Set to false to use an existing StorageClass instead.
+    # Refer to the [Kubernetes StorageClass documentation](https://kubernetes.io/docs/concepts/storage/storage-classes/)
     create: false
 
     # -- Name of the StorageClass to create/use: eg "openebs-lvm-instance-store-ext4"
