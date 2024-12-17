@@ -515,11 +515,18 @@ kubectl delete namespace materialize-environment
 
 In your Terraform directory, run:
 
+
 ```bash
 terraform destroy
 ```
 
 When prompted, type `yes` to confirm the deletion.
+
+{{< tip>}}
+To delete your S3 bucket, you may need to empty the S3 bucket first.  If the
+`terraform destroy` command fails because the S3 bucket is not empty, empty the
+S3 bucket first and rerun the `terraform destroy` command.
+{{</ tip >}}
 
 ## See also
 
