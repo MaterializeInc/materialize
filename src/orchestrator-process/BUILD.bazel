@@ -22,7 +22,7 @@ rust_library(
         proc_macro = True,
     ),
     compile_data = [],
-    crate_features = [],
+    crate_features = ["default"],
     data = [],
     proc_macro_deps = [] + all_crate_deps(proc_macro = True),
     rustc_env = {},
@@ -52,7 +52,7 @@ rust_test(
     ),
     compile_data = [],
     crate = ":mz_orchestrator_process",
-    crate_features = [],
+    crate_features = ["default"],
     data = [],
     env = {},
     proc_macro_deps = [] + all_crate_deps(

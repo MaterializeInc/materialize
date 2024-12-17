@@ -566,6 +566,7 @@ crates_repository(
         "//:src/catalog/Cargo.toml",
         "//:src/ccsr/Cargo.toml",
         "//:src/cloud-api/Cargo.toml",
+        "//:src/cloud-provider/Cargo.toml",
         "//:src/cloud-resources/Cargo.toml",
         "//:src/cluster-client/Cargo.toml",
         "//:src/cluster/Cargo.toml",

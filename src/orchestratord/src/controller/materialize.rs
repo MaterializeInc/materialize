@@ -21,18 +21,18 @@ use serde::Deserialize;
 use tracing::{debug, trace};
 
 use crate::metrics::Metrics;
+use mz_cloud_provider::CloudProvider;
 use mz_cloud_resources::crd::materialize::v1alpha1::{
     Materialize, MaterializeCertSpec, MaterializeStatus,
 };
 use mz_orchestrator_kubernetes::KubernetesImagePullPolicy;
 use mz_orchestrator_tracing::TracingCliArgs;
 use mz_ore::{cast::CastFrom, cli::KeyValueArg, instrument};
-use mz_sql::catalog::CloudProvider;
 
-mod balancer;
-mod console;
-mod environmentd;
-mod tls;
+pub mod balancer;
+pub mod console;
+pub mod environmentd;
+pub mod tls;
 
 #[derive(clap::Parser)]
 pub struct Args {

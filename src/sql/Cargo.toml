@@ -37,6 +37,7 @@ mz-adapter-types = { path = "../adapter-types" }
 mz-audit-log = { path = "../audit-log" }
 mz-build-info = { path = "../build-info" }
 mz-ccsr = { path = "../ccsr" }
+mz-cloud-provider = { path = "../cloud-provider", default-features = false }
 mz-cloud-resources = { path = "../cloud-resources" }
 mz-controller-types = { path = "../controller-types" }
 mz-dyncfg = { path = "../dyncfg" }

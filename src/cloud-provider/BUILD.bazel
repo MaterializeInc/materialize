@@ -15,7 +15,7 @@ load("@rules_rust//rust:defs.bzl", "rust_doc_test", "rust_library", "rust_test")
 package(default_visibility = ["//visibility:public"])
 
 rust_library(
-    name = "mz_secrets",
+    name = "mz_cloud_provider",
     srcs = glob(["src/**/*.rs"]),
     aliases = aliases(
         normal = True,
@@ -27,17 +27,17 @@ rust_library(
     proc_macro_deps = [] + all_crate_deps(proc_macro = True),
     rustc_env = {},
     rustc_flags = [],
-    version = "0.0.0",
-    deps = ["//src/repr:mz_repr"] + all_crate_deps(normal = True),
+    version = "0.1.0",
+    deps = [] + all_crate_deps(normal = True),
 )
 
 alias(
-    name = "secrets",
-    actual = "mz_secrets",
+    name = "cloud-provider",
+    actual = "mz_cloud_provider",
 )
 
 rust_test(
-    name = "mz_secrets_lib_tests",
+    name = "mz_cloud_provider_lib_tests",
     size = "medium",
     aliases = aliases(
         normal = True,
@@ -46,7 +46,7 @@ rust_test(
         proc_macro_dev = True,
     ),
     compile_data = [],
-    crate = ":mz_secrets",
+    crate = ":mz_cloud_provider",
     crate_features = ["default"],
     data = [],
     env = {},
@@ -56,23 +56,17 @@ rust_test(
     ),
     rustc_env = {},
     rustc_flags = [],
-    version = "0.0.0",
-    deps = [
-        "//src/ore:mz_ore",
-        "//src/repr:mz_repr",
-    ] + all_crate_deps(
+    version = "0.1.0",
+    deps = [] + all_crate_deps(
         normal = True,
         normal_dev = True,
     ),
 )
 
 rust_doc_test(
-    name = "mz_secrets_doc_test",
-    crate = ":mz_secrets",
-    deps = [
-        "//src/ore:mz_ore",
-        "//src/repr:mz_repr",
-    ] + all_crate_deps(
+    name = "mz_cloud_provider_doc_test",
+    crate = ":mz_cloud_provider",
+    deps = [] + all_crate_deps(
         normal = True,
         normal_dev = True,
     ),

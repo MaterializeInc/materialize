@@ -4211,6 +4211,7 @@ dependencies = [
  "mz-build-info",
  "mz-catalog",
  "mz-ccsr",
+ "mz-cloud-provider",
  "mz-cloud-resources",
  "mz-cluster-client",
  "mz-compute-client",
@@ -4643,6 +4644,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-cloud-provider"
+version = "0.1.0"
+dependencies = [
+ "workspace-hack",
+]
+
+[[package]]
 name = "mz-cloud-resources"
 version = "0.0.0"
 dependencies = [
@@ -5067,6 +5075,7 @@ dependencies = [
  "mz-orchestrator-kubernetes",
  "mz-orchestrator-process",
  "mz-orchestrator-tracing",
+ "mz-orchestratord",
  "mz-ore",
  "mz-persist-client",
  "mz-pgrepr",
@@ -5676,13 +5685,12 @@ dependencies = [
  "mz-alloc",
  "mz-alloc-default",
  "mz-build-info",
+ "mz-cloud-provider",
  "mz-cloud-resources",
- "mz-environmentd",
  "mz-orchestrator-kubernetes",
  "mz-orchestrator-tracing",
  "mz-ore",
  "mz-prof-http",
- "mz-sql",
  "mz-tls-util",
  "prometheus",
  "rand",
@@ -6431,6 +6439,7 @@ dependencies = [
  "mz-audit-log",
  "mz-build-info",
  "mz-ccsr",
+ "mz-cloud-provider",
  "mz-cloud-resources",
  "mz-controller-types",
  "mz-dyncfg",
