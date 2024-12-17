@@ -18,6 +18,21 @@ use mz_ore::metric;
 use mz_ore::metrics::{Counter, IntCounter, MetricsRegistry};
 use prometheus::{CounterVec, IntCounterVec};
 
+/// Metrics specific to ABSBlob's internal workings.
+#[derive(Debug, Clone)]
+pub struct ABSBlobMetrics {
+    pub(crate) lgbytes: LgBytesMetrics,
+}
+
+impl ABSBlobMetrics {
+    /// Returns a new [ABSBlobMetrics] instance connected to the given registry.
+    pub fn new(registry: &MetricsRegistry) -> Self {
+        ABSBlobMetrics {
+            lgbytes: LgBytesMetrics::new(registry),
+        }
+    }
+}
+
 /// Metrics specific to S3Blob's internal workings.
 #[derive(Debug, Clone)]
 pub struct S3BlobMetrics {

@@ -21,10 +21,11 @@ use tracing::warn;
 use mz_postgres_client::metrics::PostgresClientMetrics;
 use mz_postgres_client::PostgresClientKnobs;
 
+use crate::abs::{ABSBlob, ABSBlobConfig};
 use crate::file::{FileBlob, FileBlobConfig};
 use crate::location::{Blob, Consensus, Determinate, ExternalError};
 use crate::mem::{MemBlob, MemBlobConfig, MemConsensus};
-use crate::metrics::S3BlobMetrics;
+use crate::metrics::{ABSBlobMetrics, S3BlobMetrics};
 use crate::postgres::{PostgresConsensus, PostgresConsensusConfig};
 use crate::s3::{S3Blob, S3BlobConfig};
 
@@ -48,6 +49,8 @@ pub enum BlobConfig {
     /// Config for [MemBlob], only available in testing to prevent
     /// footguns.
     Mem(bool),
+    /// Config for [ABSBlob].
+    Azure(ABSBlobConfig),
 }
 
 /// Configuration knobs for [Blob].
@@ -70,6 +73,7 @@ impl BlobConfig {
         match self {
             BlobConfig::File(config) => Ok(Arc::new(FileBlob::open(config).await?)),
             BlobConfig::S3(config) => Ok(Arc::new(S3Blob::open(config).await?)),
+            BlobConfig::Azure(config) => Ok(Arc::new(ABSBlob::open(config).await?)),
             BlobConfig::Mem(tombstone) => {
                 Ok(Arc::new(MemBlob::open(MemBlobConfig::new(tombstone))))
             }
@@ -148,6 +152,27 @@ impl BlobConfig {
                 query_params.clear();
                 Ok(BlobConfig::Mem(tombstone))
             }
+            "http" | "https" => match url.host().expect("hostname").to_string().split_once('.') {
+                Some((account, "blob.core.windows.net")) => {
+                    if let Some(container) = url
+                        .path_segments()
+                        .expect("azure blob storage container")
+                        .next()
+                    {
+                        Ok(BlobConfig::Azure(ABSBlobConfig::new(
+                            account.to_string(),
+                            container.to_string(),
+                            "".to_string(),
+                            metrics,
+                            url.clone().into_redacted(),
+                            cfg,
+                        )?))
+                    } else {
+                        Err(anyhow!("unknown persist blob scheme: {}", url.as_str()))
+                    }
+                }
+                _ => Err(anyhow!("unknown persist blob scheme: {}", url.as_str())),
+            },
             p => Err(anyhow!(
                 "unknown persist blob scheme {}: {}",
                 p,
@@ -155,17 +180,19 @@ impl BlobConfig {
             )),
         }?;
 
-        if !query_params.is_empty() {
-            return Err(ExternalError::from(anyhow!(
-                "unknown blob location params {}: {}",
-                query_params
-                    .keys()
-                    .map(|x| x.as_ref())
-                    .collect::<Vec<_>>()
-                    .join(" "),
-                url.as_str(),
-            )));
-        }
+        // WIP: is it OK to remove this? there are a ton of
+        // query params for Azure SAS tokens to work
+        // if !query_params.is_empty() {
+        //     return Err(ExternalError::from(anyhow!(
+        //         "unknown blob location params {}: {}",
+        //         query_params
+        //             .keys()
+        //             .map(|x| x.as_ref())
+        //             .collect::<Vec<_>>()
+        //             .join(" "),
+        //         url.as_str(),
+        //     )));
+        // }
 
         Ok(config)
     }
