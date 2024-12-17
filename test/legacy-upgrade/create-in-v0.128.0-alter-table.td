@@ -12,9 +12,6 @@ $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdri
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET enable_alter_table_add_column = true;
 
-$ postgres-execute connection=mz_system
-ALTER SYSTEM SET persist_dangerous_enable_schema_evolution = true;
-
 > CREATE TABLE alter_table_t1 (a int);
 
 > INSERT INTO alter_table_t1 VALUES (100), (NULL);

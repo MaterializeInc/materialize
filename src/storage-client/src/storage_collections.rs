@@ -1547,11 +1547,46 @@ where
         // Reorder in dependency order.
         to_register.sort_by_key(|(id, ..)| *id);
 
+        // Register tables first, but register them in reverse order since earlier tables
+        // can depend on later tables.
+        //
+        // Note: We could do more complex sorting to avoid the allocations, but IMO it's
+        // easier to reason about it this way.
+        let (tables_to_register, collections_to_register): (Vec<_>, Vec<_>) = to_register
+            .into_iter()
+            .partition(|(_id, desc, ..)| matches!(desc.data_source, DataSource::Table { .. }));
+        let to_register = tables_to_register
+            .into_iter()
+            .rev()
+            .chain(collections_to_register.into_iter());
+
+        // to_register.sort_unstable_by(|(a_id, a_desc, ..), (b_id, b_desc, ..)| {
+        //     match (&a_desc.data_source, &b_desc.data_source) {
+        //         // Earlier versions of a table depend on later versions.
+        //         (DataSource::Table { primary: a_col }, DataSource::Table { primary: b_col }) => {
+        //             match (a_col, b_col) {
+        //                 // Primary collections depend on nothing, so just sort by GlobalId.
+        //                 (None, None) => a_id.cmp(b_id),
+        //                 // Sort collections with no dependencies before those with dependencies.
+        //                 (None, Some(_)) => std::cmp::Ordering::Less,
+        //                 (Some(_), None) => std::cmp::Ordering::Greater,
+        //                 // Sort collections with greater GlobalIds before those with lower GlobalIds.
+        //                 (Some(a_col_id), Some(b_col_id)) => b_col_id.cmp(a_col_id),
+        //             }
+        //         }
+        //         // Tables should sort before everything.
+        //         (DataSource::Table { .. }, _other) => std::cmp::Ordering::Less,
+        //         (_a, _b) => a_id.cmp(b_id),
+        //     }
+        // });
+
         // We hold this lock for a very short amount of time, just doing some
         // hashmap inserts and unbounded channel sends.
         let mut self_collections = self.collections.lock().expect("lock poisoned");
 
         for (id, mut description, write_handle, since_handle, metadata) in to_register {
+            tracing::info!(%id, desc = ?description.data_source, "REGISTERING");
+
             // Ensure that the ingestion has an export for its primary source if applicable.
             // This is done in an awkward spot to appease the borrow checker.
             // TODO(database-issues#8620): This will be removed once sources no longer export
