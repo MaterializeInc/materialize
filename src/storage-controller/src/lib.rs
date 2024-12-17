@@ -27,7 +27,6 @@ use futures::StreamExt;
 use itertools::Itertools;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterReplicaLocation;
-use mz_cluster_client::metrics::{ControllerMetrics, WallclockLagMetrics};
 use mz_cluster_client::{ReplicaId, WallclockLagFn};
 use mz_controller_types::dyncfgs::{ENABLE_0DT_DEPLOYMENT_SOURCES, WALLCLOCK_LAG_REFRESH_INTERVAL};
 use mz_ore::collections::CollectionExt;
@@ -723,9 +722,7 @@ where
         let mut new_source_statistic_entries = BTreeSet::new();
         let mut new_webhook_statistic_entries = BTreeSet::new();
 
-        for (id, description, write, metadata) in to_register {
-            let mut data_source = description.data_source;
-
+        for (id, mut description, write, metadata) in to_register {
             to_execute.insert(id);
             new_collections.insert(id);
 
@@ -733,7 +730,7 @@ where
             // This is done in an awkward spot to appease the borrow checker.
             // TODO(database-issues#8620): This will be removed once sources no longer export
             // to primary collections and only export to explicit SourceExports (tables).
-            if let DataSource::Ingestion(ingestion) = &mut data_source {
+            if let DataSource::Ingestion(ingestion) = &mut description.data_source {
                 if let Some(export) = ingestion.desc.primary_source_export() {
                     ingestion.source_exports.insert(id, export);
                 }
@@ -742,7 +739,8 @@ where
             let write_frontier = write.upper();
 
             // Determine if this collection has another dependency.
-            let storage_dependencies = self.determine_collection_dependencies(id, &data_source)?;
+            let storage_dependencies =
+                self.determine_collection_dependencies(id, &description.data_source)?;
 
             let dependency_read_holds = self
                 .storage_collections
@@ -787,15 +785,17 @@ where
                 );
             }
 
-            // Perform data source-specific setup.
-            let mut extra_state = CollectionStateExtra::None;
-            let mut maybe_instance_id = None;
-            match &data_source {
+            let mut collection_state = CollectionState {
+                data_source: description.data_source.clone(),
+                collection_metadata: metadata.clone(),
+                extra_state: CollectionStateExtra::None,
+                wallclock_lag_max: Default::default(),
+            };
+
+            // Install the collection state in the appropriate spot.
+            match &collection_state.data_source {
                 DataSource::Introspection(typ) => {
-                    debug!(
-                        ?data_source, meta = ?metadata,
-                        "registering {id} with persist monotonic worker",
-                    );
+                    debug!(data_source = ?collection_state.data_source, meta = ?metadata, "registering {} with persist monotonic worker", id);
                     // We always register the collection with the collection manager,
                     // regardless of read-only mode. The CollectionManager itself is
                     // aware of read-only mode and will not attempt to write before told
@@ -807,12 +807,11 @@ where
                         write,
                         persist_client.clone(),
                     )?;
+                    self.collections.insert(id, collection_state);
                 }
                 DataSource::Webhook => {
-                    debug!(
-                        ?data_source, meta = ?metadata,
-                        "registering {id} with persist monotonic worker",
-                    );
+                    debug!(data_source = ?collection_state.data_source, meta = ?metadata, "registering {} with persist monotonic worker", id);
+                    self.collections.insert(id, collection_state);
                     new_source_statistic_entries.insert(id);
                     // This collection of statistics is periodically aggregated into
                     // `source_statistics`.
@@ -830,10 +829,7 @@ where
                     details,
                     data_config,
                 } => {
-                    debug!(
-                        ?data_source, meta = ?metadata,
-                        "not registering {id} with a controller persist worker",
-                    );
+                    debug!(data_source = ?collection_state.data_source, meta = ?metadata, "not registering {} with a controller persist worker", id);
                     // Adjust the source to contain this export.
                     let ingestion_state = self
                         .collections
@@ -876,29 +872,22 @@ where
                         hydrated: false,
                     };
 
-                    extra_state = CollectionStateExtra::Ingestion(ingestion_state);
-                    maybe_instance_id = Some(instance_id);
+                    collection_state.extra_state = CollectionStateExtra::Ingestion(ingestion_state);
 
+                    self.collections.insert(id, collection_state);
                     new_source_statistic_entries.insert(id);
                 }
                 DataSource::Table => {
-                    debug!(
-                        ?data_source, meta = ?metadata,
-                        "registering {id} with persist table worker",
-                    );
+                    debug!(data_source = ?collection_state.data_source, meta = ?metadata, "registering {} with persist table worker", id);
+                    self.collections.insert(id, collection_state);
                     table_registers.push((id, write));
                 }
                 DataSource::Progress | DataSource::Other => {
-                    debug!(
-                        ?data_source, meta = ?metadata,
-                        "not registering {id} with a controller persist worker",
-                    );
+                    debug!(data_source = ?collection_state.data_source, meta = ?metadata, "not registering {} with a controller persist worker", id);
+                    self.collections.insert(id, collection_state);
                 }
                 DataSource::Ingestion(ingestion_desc) => {
-                    debug!(
-                        ?data_source, meta = ?metadata,
-                        "not registering {id} with a controller persist worker",
-                    );
+                    debug!(?ingestion_desc, meta = ?metadata, "not registering {} with a controller persist worker", id);
 
                     let mut dependency_since = Antichain::from_elem(T::minimum());
                     for read_hold in dependency_read_holds.iter() {
@@ -915,23 +904,12 @@ where
                         hydrated: false,
                     };
 
-                    extra_state = CollectionStateExtra::Ingestion(ingestion_state);
-                    maybe_instance_id = Some(ingestion_desc.instance_id);
+                    collection_state.extra_state = CollectionStateExtra::Ingestion(ingestion_state);
 
+                    self.collections.insert(id, collection_state);
                     new_source_statistic_entries.insert(id);
                 }
             }
-
-            let wallclock_lag_metrics = self.metrics.wallclock_lag_metrics(id, maybe_instance_id);
-            let collection_state = CollectionState {
-                data_source,
-                collection_metadata: metadata,
-                extra_state,
-                wallclock_lag_max: Default::default(),
-                wallclock_lag_metrics,
-            };
-
-            self.collections.insert(id, collection_state);
         }
 
         {
@@ -1327,17 +1305,10 @@ where
                 "create_exports: creating sink"
             );
 
-            let wallclock_lag_metrics = self
-                .metrics
-                .wallclock_lag_metrics(id, Some(description.instance_id));
-
-            let export_state = ExportState::new(
-                description.clone(),
-                read_hold,
-                read_policy,
-                wallclock_lag_metrics,
+            self.exports.insert(
+                id,
+                ExportState::new(description.clone(), read_hold, read_policy),
             );
-            self.exports.insert(id, export_state);
 
             // Just like with `new_source_statistic_entries`, we can probably
             // `insert` here, but in the interest of safety, never override
@@ -1385,17 +1356,12 @@ where
             return Err(StorageError::ReadBeforeSince(from_id));
         }
 
-        let wallclock_lag_metrics = self
-            .metrics
-            .wallclock_lag_metrics(id, Some(new_description.instance_id));
-
         let new_export = ExportState {
             description: new_description.clone(),
             read_hold,
             read_policy: cur_export.read_policy.clone(),
             write_frontier: cur_export.write_frontier.clone(),
             wallclock_lag_max: Default::default(),
-            wallclock_lag_metrics,
         };
         *cur_export = new_export;
 
@@ -2472,8 +2438,7 @@ where
         txns_metrics: Arc<TxnMetrics>,
         envd_epoch: NonZeroI64,
         read_only: bool,
-        metrics_registry: &MetricsRegistry,
-        controller_metrics: ControllerMetrics,
+        metrics_registry: MetricsRegistry,
         connection_context: ConnectionContext,
         txn: &dyn StorageTxn<T>,
         storage_collections: Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
@@ -2541,8 +2506,6 @@ where
 
         let (instance_response_tx, instance_response_rx) = mpsc::unbounded_channel();
 
-        let metrics = StorageControllerMetrics::new(metrics_registry, controller_metrics);
-
         Self {
             build_info,
             collections: BTreeMap::default(),
@@ -2573,7 +2536,7 @@ where
             internal_response_queue: rx,
             persist_location,
             persist: persist_clients,
-            metrics,
+            metrics: StorageControllerMetrics::new(metrics_registry),
             recorded_frontiers: BTreeMap::new(),
             recorded_replica_frontiers: BTreeMap::new(),
             wallclock_lag,
@@ -3502,8 +3465,7 @@ where
             .differential_append(id, replica_updates);
     }
 
-    /// Refresh the `WallclockLagHistory` introspection and the `wallclock_lag_*_seconds` metrics
-    /// with the current lag values.
+    /// Update introspection with the current wallclock lag values.
     ///
     /// We measure the lag of write frontiers behind the wallclock time every second and track the
     /// maximum over 60 measurements (i.e., one minute). Every minute, we emit a new lag event to
@@ -3511,7 +3473,7 @@ where
     ///
     /// This method is invoked by `ComputeController::maintain`, which we expect to be called once
     /// per second during normal operation.
-    fn refresh_wallclock_lag(&mut self) {
+    fn update_wallclock_lag_introspection(&mut self) {
         let refresh_introspection = !self.read_only
             && self.wallclock_lag_last_refresh.elapsed()
                 >= WALLCLOCK_LAG_REFRESH_INTERVAL.get(self.config.config_set());
@@ -3547,8 +3509,6 @@ where
                 let row = pack_row(id, lag);
                 updates.push((row, 1));
             }
-
-            collection.wallclock_lag_metrics.observe(lag);
         }
 
         let active_exports = self.exports.iter_mut().filter(|(_id, e)| !e.is_dropped());
@@ -3561,8 +3521,6 @@ where
                 let row = pack_row(*id, lag);
                 updates.push((row, 1));
             }
-
-            export.wallclock_lag_metrics.observe(lag);
         }
 
         if let Some(updates) = introspection_updates {
@@ -3577,7 +3535,7 @@ where
     /// for tasks that need to run periodically, such as state cleanup or updating of metrics.
     fn maintain(&mut self) {
         self.update_frontier_introspection();
-        self.refresh_wallclock_lag();
+        self.update_wallclock_lag_introspection();
     }
 }
 
@@ -3762,8 +3720,6 @@ struct CollectionState<T: TimelyTimestamp> {
 
     /// Maximum frontier wallclock lag since the last introspection update.
     wallclock_lag_max: Duration,
-    /// Frontier wallclock lag metrics tracked for this collection.
-    wallclock_lag_metrics: WallclockLagMetrics,
 }
 
 /// Additional state that the controller maintains for select collection types.
