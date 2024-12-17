@@ -50,7 +50,7 @@ tower = "0.4.13"
 tracing = "0.1.37"
 tracing-subscriber = "0.3.16"
 uuid = "1.2.2"
-workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
 mz-environmentd = { path = "../environmentd", default-features = false, features = ["test"] }
@@ -60,7 +60,7 @@ reqwest = "0.11.24"
 tempfile = "3.8.1"
 
 [features]
-default = ["mz-alloc-default"]
+default = ["mz-alloc-default", "workspace-hack"]
 jemalloc = ["mz-alloc/jemalloc"]
 
 [package.metadata.cargo-udeps.ignore]

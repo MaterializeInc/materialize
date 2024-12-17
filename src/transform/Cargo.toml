@@ -25,7 +25,7 @@ proptest = { version = "1.6.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.5.1" }
 serde = "1.0.152"
 tracing = "0.1.37"
-workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
 anyhow = "1.0.66"
@@ -39,3 +39,6 @@ serde_json = "1.0.125"
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
+
+[features]
+default = ["workspace-hack"]

@@ -58,7 +58,10 @@ tokio-stream = { version = "0.1.11", features = ["net"] }
 tower-http = { version = "0.5.2", features = ["cors"] }
 uuid = "1.2.2"
 walkdir = "2.3.2"
-workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
+
+[features]
+default = ["workspace-hack"]

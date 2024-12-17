@@ -21,7 +21,7 @@ proptest = { version = "1.6.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
 prost = "0.13.2"
 serde = { version = "1.0.152", features = ["derive"] }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false }
@@ -57,3 +57,6 @@ data = ["protos/**"]
 
 [package.metadata.cargo-gazelle.test.lib]
 data = ["protos/**"]
+
+[features]
+default = ["workspace-hack"]

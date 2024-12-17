@@ -12,10 +12,10 @@ workspace = true
 [dependencies]
 mz-clusterd = { path = "../clusterd", default-features = false }
 mz-environmentd = { path = "../environmentd", default-features = false }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [features]
-default = ["mz-clusterd/default", "mz-environmentd/default"]
+default = ["mz-clusterd/default", "mz-environmentd/default", "workspace-hack"]
 jemalloc = ["mz-clusterd/jemalloc", "mz-environmentd/jemalloc"]
 tokio-console = ["mz-clusterd/tokio-console", "mz-environmentd/tokio-console"]
 

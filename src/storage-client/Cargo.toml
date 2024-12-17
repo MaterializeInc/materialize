@@ -56,7 +56,7 @@ tokio = { version = "1.38.0", features = [
 tokio-stream = "0.1.11"
 tonic = "0.12.1"
 tracing = "0.1.37"
-workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false }
@@ -69,7 +69,7 @@ mz-secrets = { path = "../secrets" }
 mz-dyncfg = { path = "../dyncfg" }
 
 [features]
-default = ["mz-build-tools/default"]
+default = ["mz-build-tools/default", "workspace-hack"]
 
 [package.metadata.cargo-udeps.ignore]
 # only used on linux
