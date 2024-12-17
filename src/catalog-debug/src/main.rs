@@ -636,10 +636,10 @@ async fn upgrade_check(
         .get_entries()
         .filter_map(|(_item_id, entry)| match entry.item() {
             // TODO(alter_table): Handle multiple versions of tables.
-            CatalogItem::Table(table) => Some((table.global_id_writes(), &table.desc)),
-            CatalogItem::Source(source) => Some((source.global_id(), &source.desc)),
-            CatalogItem::ContinualTask(ct) => Some((ct.global_id(), &ct.desc)),
-            CatalogItem::MaterializedView(mv) => Some((mv.global_id(), &mv.desc)),
+            CatalogItem::Table(table) => Some((table.global_id_writes(), table.desc.latest())),
+            CatalogItem::Source(source) => Some((source.global_id(), source.desc.clone())),
+            CatalogItem::ContinualTask(ct) => Some((ct.global_id(), ct.desc.clone())),
+            CatalogItem::MaterializedView(mv) => Some((mv.global_id(), mv.desc.clone())),
             CatalogItem::Log(_)
             | CatalogItem::View(_)
             | CatalogItem::Sink(_)
@@ -670,7 +670,7 @@ async fn upgrade_check(
 
         let persisted_data_type =
             mz_persist_types::columnar::data_type::<SourceData>(&persisted_relation_desc)?;
-        let new_data_type = mz_persist_types::columnar::data_type::<SourceData>(item_desc)?;
+        let new_data_type = mz_persist_types::columnar::data_type::<SourceData>(&item_desc)?;
 
         let migration =
             mz_persist_types::schema::backward_compatible(&persisted_data_type, &new_data_type);
