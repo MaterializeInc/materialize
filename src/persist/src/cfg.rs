@@ -159,9 +159,11 @@ impl BlobConfig {
                         .expect("azure blob storage container")
                         .next()
                     {
+                        query_params.clear();
                         Ok(BlobConfig::Azure(ABSBlobConfig::new(
                             account.to_string(),
                             container.to_string(),
+                            // WIP: how do we handle the prefix here
                             "".to_string(),
                             metrics,
                             url.clone().into_redacted(),
@@ -180,19 +182,17 @@ impl BlobConfig {
             )),
         }?;
 
-        // WIP: is it OK to remove this? there are a ton of
-        // query params for Azure SAS tokens to work
-        // if !query_params.is_empty() {
-        //     return Err(ExternalError::from(anyhow!(
-        //         "unknown blob location params {}: {}",
-        //         query_params
-        //             .keys()
-        //             .map(|x| x.as_ref())
-        //             .collect::<Vec<_>>()
-        //             .join(" "),
-        //         url.as_str(),
-        //     )));
-        // }
+        if !query_params.is_empty() {
+            return Err(ExternalError::from(anyhow!(
+                "unknown blob location params {}: {}",
+                query_params
+                    .keys()
+                    .map(|x| x.as_ref())
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                url.as_str(),
+            )));
+        }
 
         Ok(config)
     }
