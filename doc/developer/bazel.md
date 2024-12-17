@@ -1,4 +1,4 @@
-# Bazel
+# Bazel <img width=24px alt="bazel logo" src="https://blog.bazel.build/images/bazel-icon.svg"/>
 
 [Official Site](https://bazel.build/)
 
