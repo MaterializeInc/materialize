@@ -5,6 +5,17 @@
 An open source distributed build system maintained by Google, a fork of their internal build system
 known as Blaze.
 
+> **tl;dr**: These tips should get you started with Bazel:
+> 1. To generate a `BUILD.bazel` file, run `bin/bazel gen`.
+> 2. When running Bazel, a target is defined like `//src/catalog:mz_catalog`
+     where `//` signifies the root of our repository, `src/catalog` is the path
+     to a directory containing a `BUILD.bazel` file, and `:mz_catalog` is a
+     named target within that `BUILD.bazel` file.
+> 3. To see what targets are available you can use the `query` subcommand, e.g.
+     `bin/bazel query //src/catalog/...`.
+
+#### About Bazel
+
 Bazel's main component for building code are "rules", which are provided by open source rule sets, e.g.
 [`rules_rust`](https://github.com/bazelbuild/rules_rust). When using a rule, e.g.
 [`rust_library`](https://bazelbuild.github.io/rules_rust/defs.html#rust_library), you define all of
@@ -21,12 +32,13 @@ allows Bazel to aggressively cache artifacts, which reduces build times.
 
   * [Getting Started](#getting-started)
     * [Installing `bazelisk`](#installing-bazelisk)
-    * [Using Bazel](#using-bazel)
-      * [Defining your own `.bazelrc` file](#defining-your-own-bazelrc-file)
-      * [Remote caching](#remote-caching)
-      * [Building a crate](#building-a-crate)
-      * [Running a test](#running-a-test)
-        * [Filtering tests](#filtering-tests)
+    * [Defining your own `.bazelrc` file](#defining-your-own-bazelrc-file)
+    * [Remote caching](#remote-caching)
+  * [Using Bazel](#using-bazel)
+    * [Building a crate](#building-a-crate)
+    * [Adding a new crate](#adding-a-new-crate)
+    * [Running a test](#running-a-test)
+      * [Filtering tests](#filtering-tests)
   * [How Bazel Works](#how-bazel-works)
     * [`WORKSPACE`, `BUILD.bazel`, `*.bzl` files](#workspace-buildbazel-bzl-files)
     * [Generating `BUILD.bazel` files](#generating-buildbazel-files)
@@ -58,18 +70,7 @@ chmod +x bazelisk-linux-amd64
 sudo mv bazelisk-linux-amd64 /usr/local/bin/bazel
 ```
 
-## Using Bazel
-
-Bazel has been integrated into [`mzbuild`](../../doc/developer/mzbuild.md), which means you can use
-it for other tools as well like `mzimage` and `mzcompose`! To enable Bazel specify the `--bazel`
-flag like you would specify the `--dev` flag, e.g. `bin/mzcompose --bazel ...`.
-
-Otherwise Bazel can be used just like `cargo`, to build individual targets and run tests. We
-provide a thin wrapper around the `bazel` command in the form of `bin/bazel`. This sets up remote
-caching, and provides the `fmt` and `gen` subcommands. Otherwise it forwards all commands onto
-`bazel` itself.
-
-### Defining your own `.bazelrc` file
+## Defining your own `.bazelrc` file
 
 Bazel has numerous [command line options](https://bazel.build/reference/command-line-reference),
 which can be defined in a `.bazelrc` file to create different configurations that you run Bazel
@@ -92,7 +93,7 @@ common --experimental_disk_cache_gc_max_size=40G
 common --experimental_disk_cache_gc_max_age=7d
 ```
 
-### Remote caching
+## Remote caching
 
 Bazel supports reading and writing artifacts to a [remote cache](https://bazel.build/remote/caching).
 We currently have two setup that are backed by S3 and running [`bazel-remote`](https://github.com/buchgr/bazel-remote).
@@ -112,7 +113,7 @@ remote_cache = "teleport:bazel-remote-cache"
 When running Bazel via `bin/bazel` we will read the build config and spawn a Teleport proxy via
 `tsh` if one isn't already running, then specify `--remote_cache` to `bazel` with the correct URL.
 
-#### Teleport proxy fails to start
+### Teleport proxy fails to start
 
 In some cases you might see a warning printed when calling `bin/bazel` indicating the Teleport
 proxy failed to start, e.g.
@@ -127,7 +128,18 @@ Generally this means there is a Teleport proxy already running that we've lost t
 fix this issue by terminating the existing `tsh` process with the PID specified in the warning
 message.
 
-### Building a crate
+# Using Bazel
+
+Bazel has been integrated into [`mzbuild`](../../doc/developer/mzbuild.md), which means you can use
+it for other tools as well like `mzimage` and `mzcompose`! To enable Bazel specify the `--bazel`
+flag like you would specify the `--dev` flag, e.g. `bin/mzcompose --bazel ...`.
+
+Otherwise Bazel can be used just like `cargo`, to build individual targets and run tests. We
+provide a thin wrapper around the `bazel` command in the form of `bin/bazel`. This sets up remote
+caching, and provides the `fmt` and `gen` subcommands. Otherwise it forwards all commands onto
+`bazel` itself.
+
+## Building a crate
 
 All Rust crates have a `BUILD.bazel` file that define different build targets for the crate. You
 don't have to write these files, they are automatically generated from the crate's `Cargo.toml`.
@@ -166,7 +178,35 @@ crate:
 $ bin/bazel build //src/adapter
 ```
 
-### Running a test
+## Adding a new crate
+
+When adding a new crate to our workspace follow the normal flow that you would
+with Cargo, e.g. run `cargo new --lib my_crate`. Once it's created you'll need
+to add an entry to the Bazel [`WORKSPACE`](/WORKSPACE) in the root of our
+repository. In that file search for "crates_repository" and then find the
+manifests section, it should look something like this:
+
+```
+crates_repository(
+  name = "crates_io",
+
+  //...
+
+  manifests = [
+    "//:Cargo.toml",
+    "//:src/adapter-types/Cargo.toml",
+    <add your new crate to this list>
+  ],
+)
+```
+
+> The `crates_repository` Bazel rule aggregates all of the third-party crates
+that we use and automatically generates `BUILD.bazel` files for them.
+
+Once your new crate is added to `crates_repository` run `bin/bazel gen` to
+generate a new `BUILD.bazel` file, and you should be all set!
+
+## Running a test
 
 > Note: Support for running Rust tests with Bazel is still experimental. We're waiting on
   [#29266](https://github.com/MaterializeInc/materialize/pull/29266).
@@ -194,7 +234,7 @@ You can run the tests in `future.rs` by running the following command:
 bin/bazel test //src/ore:mz_ore_future_tests
 ```
 
-#### Filtering Tests
+### Filtering Tests
 
 You can provide arguments to the underlying test binary with the [`--test_arg`](https://bazel.build/reference/command-line-reference#flag--test_arg)
 command line option. This allows you to provide a filter to Rust's test framework, e.g.
