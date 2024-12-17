@@ -32,7 +32,7 @@ rust_library(
     deps = [
         ":mz_catalog_protos_build_script",
         "//src/audit-log:mz_audit_log",
-        "//src/compute-client:mz_compute_client",
+        "//src/compute-types:mz_compute_types",
         "//src/controller-types:mz_controller_types",
         "//src/proto:mz_proto",
         "//src/repr:mz_repr",
@@ -70,7 +70,7 @@ rust_test(
     deps = [
         "//src/audit-log:mz_audit_log",
         "//src/build-tools:mz_build_tools",
-        "//src/compute-client:mz_compute_client",
+        "//src/compute-types:mz_compute_types",
         "//src/controller-types:mz_controller_types",
         "//src/ore:mz_ore",
         "//src/proto:mz_proto",
@@ -89,7 +89,7 @@ rust_doc_test(
     deps = [
         "//src/audit-log:mz_audit_log",
         "//src/build-tools:mz_build_tools",
-        "//src/compute-client:mz_compute_client",
+        "//src/compute-types:mz_compute_types",
         "//src/controller-types:mz_controller_types",
         "//src/ore:mz_ore",
         "//src/proto:mz_proto",

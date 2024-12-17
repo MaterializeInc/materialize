@@ -4585,7 +4585,7 @@ dependencies = [
  "md-5",
  "mz-audit-log",
  "mz-build-tools",
- "mz-compute-client",
+ "mz-compute-types",
  "mz-controller-types",
  "mz-ore",
  "mz-proto",

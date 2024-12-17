@@ -40,6 +40,7 @@ use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_cluster_client::metrics::ControllerMetrics;
 use mz_cluster_client::{ReplicaId, WallclockLagFn};
+use mz_compute_types::config::ComputeReplicaConfig;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::dyncfgs::COMPUTE_REPLICA_EXPIRATION_OFFSET;
 use mz_compute_types::ComputeInstanceId;
@@ -152,31 +153,6 @@ impl PeekNotification {
             PeekResponse::Error(err) => Self::Error(err.clone()),
             PeekResponse::Canceled => Self::Canceled,
         }
-    }
-}
-
-/// Replica configuration
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ComputeReplicaConfig {
-    /// TODO(database-issues#7533): Add documentation.
-    pub logging: ComputeReplicaLogging,
-}
-
-/// Logging configuration of a replica.
-#[derive(Clone, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
-pub struct ComputeReplicaLogging {
-    /// Whether to enable logging for the logging dataflows.
-    pub log_logging: bool,
-    /// The interval at which to log.
-    ///
-    /// A `None` value indicates that logging is disabled.
-    pub interval: Option<Duration>,
-}
-
-impl ComputeReplicaLogging {
-    /// Return whether logging is enabled.
-    pub fn enabled(&self) -> bool {
-        self.interval.is_some()
     }
 }
 
