@@ -810,22 +810,19 @@ impl<T: AstInfo> AstDisplay for Values<T> {
         f.write_str("VALUES ");
         let mut delim = "";
 
-        let (rows, remaining): (Box<dyn Iterator<Item = _>>, usize) = if f.redacted() {
-            (Box::new(self.0.iter().take(20)), self.0.len() - 20)
-        } else {
-            (Box::new(self.0.iter()), 0)
-        };
-        for row in rows {
+        for (i, row) in self.0.iter().enumerate() {
+            if f.redacted() && i == 20 {
+                f.write_str("/* ");
+                f.write_str(&(self.0.len().saturating_sub(20)).to_string());
+                f.write_str(" more rows */");
+                break;
+            }
+
             f.write_str(delim);
             delim = ", ";
             f.write_str("(");
             f.write_node(&display::comma_separated(row));
             f.write_str(")");
-        }
-        if remaining > 0 {
-            f.write_str("/* ");
-            f.write_str(&remaining.to_string());
-            f.write_str(" more rows */");
         }
     }
 }
