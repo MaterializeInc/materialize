@@ -466,7 +466,8 @@ struct ColumnMetadata {
 
 /// A description of the shape of a relation.
 ///
-/// It bundles a [`RelationType`] with the name of each column in the relation.
+/// It bundles a [`RelationType`] with `ColumnMetadata` for each column in
+/// the relation.
 ///
 /// # Examples
 ///
@@ -497,6 +498,39 @@ struct ColumnMetadata {
 /// });
 /// let desc = RelationDesc::new(relation_type, names);
 /// ```
+///
+/// Next to the [`RelationType`] we maintain a map of `ColumnIndex` to
+/// `ColumnMetadata`, where [`ColumnIndex`] is a stable identifier for a
+/// column throughout the lifetime of the relation. This allows a
+/// [`RelationDesc`] to represent a projection over a version of itself.
+///
+/// ```
+/// use std::collections::BTreeSet;
+/// use mz_repr::{ColumnIndex, RelationDesc, ScalarType};
+///
+/// let desc = RelationDesc::builder()
+///     .with_column("name", ScalarType::String.nullable(false))
+///     .with_column("email", ScalarType::String.nullable(false))
+///     .finish();
+///
+/// // Project away the second column.
+/// let demands = BTreeSet::from([1]);
+/// let proj = desc.apply_demand(&demands);
+///
+/// // We projected away the first column.
+/// assert!(!proj.contains_index(&ColumnIndex::from_raw(0)));
+/// // But retained the second.
+/// assert!(proj.contains_index(&ColumnIndex::from_raw(1)));
+///
+/// // The underlying `RelationType` also contains a single column.
+/// assert_eq!(proj.typ().arity(), 1);
+/// ```
+///
+/// To maintain this stable mapping and track the lifetime of a column (e.g.
+/// when adding or dropping a column) we use `ColumnMetadata`. It maintains
+/// the index in [`RelationType`] that corresponds to a given column, and the
+/// version at which this column was added or dropped.
+///
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct RelationDesc {
     typ: RelationType,
@@ -729,7 +763,10 @@ impl RelationDesc {
 
     /// Returns an iterator over the columns in this relation.
     pub fn iter(&self) -> impl Iterator<Item = (&ColumnName, &ColumnType)> {
-        self.iter_names().zip(self.iter_types())
+        self.metadata.values().map(|meta| {
+            let typ = &self.typ.columns()[meta.typ_idx];
+            (&meta.name, typ)
+        })
     }
 
     /// Returns an iterator over the types of the columns in this relation.
