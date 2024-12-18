@@ -6,11 +6,7 @@ robots: "noindex, nofollow"
 
 Self-managed Materialize requires:
 
-- A Kubernetes (v1.19+) environment.
-
-- PostgreSQL or CockroachDB as a metadata database.
-
-- Blob storage.
+{{% self-managed/requirements-list %}}
 
 The tutorial deploys Materialize to AWS Elastic Kubernetes Service (EKS) with a
 PostgreSQL RDS database as the metadata database and AWS S3 for blob storage.
@@ -23,10 +19,10 @@ For testing purposes only. For testing purposes only. For testing purposes only.
 
 ## Prerequisites
 
-### Helm 3.2.0+
+### Terraform
 
-If you don't have Helm version 3.2.0+ installed, refer to the [Helm
-documentation](https://helm.sh/docs/intro/install/).
+If you don't have Terraform installed, [install
+Terraform](https://developer.hashicorp.com/terraform/install?product_intent=terraform).
 
 ### AWS CLI
 
@@ -38,13 +34,20 @@ If you do not have the AWS CLI installed,
 - Configure with your AWS credentials. For details, see the [AWS
   documentation](https://docs.aws.amazon.com/cli/latest/userguide/cli-chap-configure.html).
 
+### kubectl
+
+If you do not have `kubectl`, install. See the [Amazon EKS: install `kubectl`
+documentation](https://docs.aws.amazon.com/eks/latest/userguide/install-kubectl.html)
+for details.
+
+### Helm 3.2.0+
+
+If you do not have Helm 3.2.0+, install. See the [Helm
+documentation](https://helm.sh/docs/intro/install/).
+
 ### AWS Kubernetes environment
 
-- A Kubernetes (v1.19+) environment.
-
-- PostgreSQL or CockroachDB as a metadata database.
-
-- Blob storage.
+{{% self-managed/requirements-list %}}
 
 When operating in AWS, we recommend:
 
@@ -54,7 +57,7 @@ When operating in AWS, we recommend:
   when running with local disk (Recommended for production.  See [Operational guidelines](/self-managed/operational-guidelines/#locally-attached-nvme-storage-openebs) for more information.)
 
 See [A. Set up AWS Kubernetes environment](#a-set-up-aws-kubernetes-environment)
-for details.
+for a sample setup.
 
 ## A. Set up AWS Kubernetes environment
 
@@ -80,14 +83,11 @@ evaluation purposes only. Materialize does not support nor recommends this
 module for production use. Materialize does not guarantee tests for changes to
 the module.
 
-For simplicity, this tutorial stores your RDS Postgres secret in a file. In
+For simplicity, this tutorial stores your RDS PostgreSQL secret in a file. In
 practice, refer to your organization's official security and
 Terraform/infrastructure practices.
 
 {{< /important >}}
-
-1. If you do not have Terraform installed, [install
-   Terraform](https://developer.hashicorp.com/terraform/install?product_intent=terraform).
 
 1. Clone or download the [Materialize's sample Terraform
    repo](https://github.com/MaterializeInc/terraform-aws-materialize).
@@ -191,32 +191,26 @@ Terraform/infrastructure practices.
      Materialize](#c-install-materialize))
 
 
-1. If you do not have `kubectl` installed,
+1. Configure `kubectl` to connect to your EKS cluster, replacing:
 
-   - Install `kubectl`. See the [Amazon EKS: install `kubectl`
-     documentation](https://docs.aws.amazon.com/eks/latest/userguide/install-kubectl.html).
+   - `<your-cluster-name>` with the name of your EKS cluster (specified in
+     `terraform.tfvars`)
 
-   - Configure `kubectl` to  connect to your EKS cluster, replacing:
+   - `<your-region>` with the region of your EKS cluster. By default, the
+     sample Terraform module uses `us-east-1`.
 
-      - `<your-cluster-name>` with the name of your EKS cluster (specified in
-        `terraform.tfvars`)
+   ```bash
+   aws eks update-kubeconfig --name <your-cluster-name> --region <your-region>
+   ```
 
-      - `<your-region>` with the region of your EKS cluster. By default, the
-        sample Terraform module uses `us-east-1`.
+   To verify that you have configured correctly, run the following command:
 
-      ```bash
-      aws eks update-kubeconfig --name <your-cluster-name> --region <your-region>
-      ```
-
-      To verify that you have configured correctly, run the following command:
-
-      ```bash
-      kubectl get nodes
-      ```
+   ```bash
+   kubectl get nodes
+   ```
 
    For help with `kubectl` commands, see [kubectl Quick
    reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
-
 
 {{< /tab >}}
 
@@ -514,7 +508,6 @@ kubectl delete namespace materialize-environment
 ```
 
 In your Terraform directory, run:
-
 
 ```bash
 terraform destroy
