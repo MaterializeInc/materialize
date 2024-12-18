@@ -20,17 +20,15 @@ For testing purposes only. For testing purposes only. For testing purposes only.
 
 ## Prerequisites
 
+### Google cloud project
+
+If you do not have a GCP project, create one.
+
 ### gcloud CLI
 
-If you do not have the gcloud CLI installed,
-
-- Install the gcloud CLI. For details, see the [Install the gcloud CLI
-  documentation](https://cloud.google.com/sdk/docs/install).
-
-- Initialize the gcloud CLI and select a project to use. For details, see the
-  [Initializing the gcloud CLI
-  documentation](https://cloud.google.com/sdk/docs/initializing).
-
+If you do not have the gcloud CLI installed, install the gcloud CLI. For
+details, see the [Install the gcloud CLI
+documentation](https://cloud.google.com/sdk/docs/install).
 
 ### Terraform
 
@@ -39,21 +37,21 @@ Terraform](https://developer.hashicorp.com/terraform/install?product_intent=terr
 
 ### kubectl
 
-If you do not have `kubectl`,
+If you do not have `kubectl`, install `kubectl`. See [Install kubectl and
+configure cluster access](https://cloud.google.com/kubernetes-engine/docs/how-to/cluster-access-for-kubectl)
+for details.
 
-- Install `kubectl`. See [Install kubectl and configure cluster
-  access](https://cloud.google.com/kubernetes-engine/docs/how-to/cluster-access-for-kubectl)
-  for details.
+{{< tip >}}
 
-- Install the `gke-gcloud-auth-plugin` plugin for `kubectl`. For details, see
-  [Install the
-  gke-gcloud-auth-plugin](https://cloud.google.com/kubernetes-engine/docs/how-to/cluster-access-for-kubectl#install_plugin).
+Using `gcloud` to install `kubectl` will also install the needed plugins.
+Otherwise, install the `gke-gcloud-auth-plugin` for `kubectl`. For
+details, see [Install the
+gke-gcloud-auth-plugin](https://cloud.google.com/kubernetes-engine/docs/how-to/cluster-access-for-kubectl#install_plugin).
 
-  During the Kubernetes environment setup, you will configure `kubectl` to
-  interact with your GKE cluster.
+{{< /tip >}}
 
-For help with `kubectl` commands, see [kubectl Quick
-reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
+During the [Kubernetes environment setup](#a-set-up-gcp-kubernetes-environment),
+you will configure `kubectl` to interact with your GKE cluster.
 
 ### Helm 3.2.0+
 
@@ -119,26 +117,25 @@ Terraform/infrastructure practices.
 
 1. Grant the service account the neccessary IAM roles.
 
-
-   b. Enter your GCP project ID.
+   1. Enter your GCP project ID.
 
       ```bash
       read -s PROJECT_ID
       ```
 
-   a. Find your service account email for your GCP project
+   1. Find your service account email for your GCP project
 
       ```bash
       gcloud iam service-accounts list --project $PROJECT_ID
       ```
 
-   c. Enter your service account email.
+   1. Enter your service account email.
 
       ```bash
       read -s SERVICE_ACCOUNT
       ```
 
-   d. Grant the service account the neccessary IAM roles.
+   1. Grant the service account the neccessary IAM roles.
 
       ```bash
       gcloud projects add-iam-policy-binding $PROJECT_ID \
@@ -154,6 +151,16 @@ Terraform/infrastructure practices.
       --role="roles/servicenetworking.networksAdmin"
       ```
 
+1. Authenticate to allow Terraform to interact with your GCP project. For
+   details, see [Terraform: Google Cloud Provider Configuration
+   reference](https://registry.terraform.io/providers/hashicorp/google/latest/docs/guides/provider_reference#authentication).
+
+   For example, to use User Application Default Credentials, you can run the
+   following command:
+
+   ```bash
+   gcloud auth application-default login
+   ```
 
 1. Clone or download the [Materialize's sample Terraform
    repo](https://github.com/MaterializeInc/terraform-google-materialize).
@@ -165,17 +172,35 @@ Terraform/infrastructure practices.
    cd terraform-google-materialize/examples/simple
    ```
 
-1. Initialize the terraform directory.
+1. Copy the `terraform.tfvars.example` file to `terraform.tfvars`.
+
+   ```bash
+   cp terraform.tfvars.example terraform.tfvars
+   ```
+
+1. Edit the `terraform.tfvars` file to set the values for your AWS environment.
+   In particular,
+   - set `project_id` to your GCP project ID.
+   - set `database_password` to a secure password.
+
+   ```bash
+    # GCP Project Configuration
+    project_id = "your-gcp-project-id" # Enter your GCP project ID
+    region     = "us-central1"
+    prefix     = "mz-simple"
+
+    # Database Configuration
+    database_config = {
+      tier     = "db-custom-2-4096" # 2 vCPUs, 4GB RAM
+      version  = "POSTGRES_15"
+      password = "enter-secure-passowrd" # At least 12 characters
+    }
+   ```
+
+1. Create a terraform plan and review the changes.
 
     ```bash
     terraform init
-    ```
-
-1. Create a terraform plan and review the changes, replacing `your-password`
-   with a securepassword for your Cloud SQL database.
-
-    ```bash
-    terraform plan -var project_id=$PROJECT_ID -var database_password="your-password" -out my-plan.tfplan
     ```
 
 1. If you are satisfied with the changes, apply the terraform plan.
@@ -191,12 +216,18 @@ Terraform/infrastructure practices.
    Apply complete! Resources: 16 added, 0 changed, 0 destroyed.
 
    Outputs:
-
+   
    connection_strings = <sensitive>
+   database = <sensitive>
    gke_cluster = <sensitive>
    service_accounts = {
      "gke_sa" = "mz-simple-gke-sa@your-project-id.iam.gserviceaccount.com"
      "materialize_sa" = "mz-simple-materialize-sa@your-project-id.iam.gserviceaccount.com"
+   }
+   storage = {
+     "name" = "mz-simple-storage-your-project-id"
+     "self_link" = "https://www.googleapis.com/storage/v1/b/mz-simple-storage-your-project-id"
+     "url" = "gs://mz-simple-storage-your-project-id"
    }
    ```
 
@@ -417,9 +448,6 @@ In your Terraform directory, run:
 ```bash
 terraform destroy
 ```
-
-When prompted for your GCP Project ID, enter the value for your GCP Project ID.
-Specify the actual value and not the environment variable.
 
 When prompted to proceed, type `yes` to confirm the deletion.
 
