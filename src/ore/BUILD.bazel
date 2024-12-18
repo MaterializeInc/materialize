@@ -24,6 +24,7 @@ rust_library(
     compile_data = [],
     crate_features = [
         "anyhow",
+        "assert",
         "async",
         "async-trait",
         "bytes",
@@ -104,6 +105,7 @@ rust_test(
     crate = ":mz_ore",
     crate_features = [
         "anyhow",
+        "assert",
         "async",
         "async-trait",
         "bytes",
