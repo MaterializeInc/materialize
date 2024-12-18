@@ -49,6 +49,9 @@ If you do not have `kubectl`,
   [Install the
   gke-gcloud-auth-plugin](https://cloud.google.com/kubernetes-engine/docs/how-to/cluster-access-for-kubectl#install_plugin).
 
+  During the Kubernetes environment setup, you will configure `kubectl` to
+  interact with your GKE cluster.
+
 For help with `kubectl` commands, see [kubectl Quick
 reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 
