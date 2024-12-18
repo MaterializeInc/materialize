@@ -549,18 +549,21 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
                     Some(ts) => (self.wallclock_lag)(ts),
                     None => Duration::ZERO,
                 };
-                collection.wallclock_lag_max = std::cmp::max(collection.wallclock_lag_max, lag);
 
-                if let Some(updates) = &mut introspection_updates {
-                    let max_lag = std::mem::take(&mut collection.wallclock_lag_max);
-                    let max_lag_us = i64::try_from(max_lag.as_micros()).expect("must fit");
-                    let row = Row::pack_slice(&[
-                        Datum::String(&collection_id.to_string()),
-                        Datum::String(&replica_id.to_string()),
-                        Datum::Interval(Interval::new(0, 0, max_lag_us)),
-                        Datum::TimestampTz(now_tz),
-                    ]);
-                    updates.push((row, 1));
+                if let Some(wallclock_lag_max) = &mut collection.wallclock_lag_max {
+                    *wallclock_lag_max = std::cmp::max(*wallclock_lag_max, lag);
+
+                    if let Some(updates) = &mut introspection_updates {
+                        let max_lag = std::mem::take(wallclock_lag_max);
+                        let max_lag_us = i64::try_from(max_lag.as_micros()).expect("must fit");
+                        let row = Row::pack_slice(&[
+                            Datum::String(&collection_id.to_string()),
+                            Datum::String(&replica_id.to_string()),
+                            Datum::Interval(Interval::new(0, 0, max_lag_us)),
+                            Datum::TimestampTz(now_tz),
+                        ]);
+                        updates.push((row, 1));
+                    }
                 }
 
                 if let Some(metrics) = &mut collection.metrics {
@@ -2708,6 +2711,13 @@ impl<T: ComputeControllerTimestamp> ReplicaState<T> {
             state.set_hydrated();
         }
 
+        // In an effort to keep the produced wallclock lag introspection data small and
+        // predictable, we disable wallclock lag tracking for transient collections, i.e. slow-path
+        // select indexes and subscribes.
+        if id.is_transient() {
+            state.wallclock_lag_max = None;
+        }
+
         if let Some(previous) = self.collections.insert(id, state) {
             panic!("attempt to add a collection with existing ID {id} (previous={previous:?}");
         }
@@ -2805,7 +2815,9 @@ struct ReplicaCollectionState<T: ComputeControllerTimestamp> {
     input_read_holds: Vec<ReadHold<T>>,
 
     /// Maximum frontier wallclock lag since the last introspection update.
-    wallclock_lag_max: Duration,
+    ///
+    /// If this is `None`, wallclock lag is not tracked for this collection.
+    wallclock_lag_max: Option<Duration>,
 }
 
 impl<T: ComputeControllerTimestamp> ReplicaCollectionState<T> {
@@ -2825,7 +2837,7 @@ impl<T: ComputeControllerTimestamp> ReplicaCollectionState<T> {
             hydrated: false,
             introspection,
             input_read_holds,
-            wallclock_lag_max: Default::default(),
+            wallclock_lag_max: Some(Duration::ZERO),
         }
     }
 
