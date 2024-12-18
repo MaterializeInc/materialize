@@ -160,10 +160,6 @@ impl Client {
     /// NOTE that this operation is only available to Materialize employees
     /// This operation has a long duration, it can take
     /// several minutes to complete.
-    /// The first few requests will return a 504,
-    /// indicating that the API is working on the deletion.
-    /// A request returning a 202 indicates that
-    /// no region is available to delete (the delete request is complete.)
     pub async fn delete_region(
         &self,
         cloud_provider: CloudProvider,
@@ -189,47 +185,45 @@ impl Client {
             None
         };
 
-        // We need to continuously try to delete the environment
-        // until it succeeds (Status code: 202) or an unexpected error occurs.
-        let mut loops = 0;
-        loop {
-            loops += 1;
+        let req = self
+            .build_region_request(
+                Method::DELETE,
+                ["api", "region"],
+                query,
+                &cloud_provider,
+                Some(1),
+            )
+            .await?;
+        self.send_request::<Empty>(req).await?;
 
+        // Wait for the environment to be fully deleted
+        for _ in 0..600 {
             let req = self
                 .build_region_request(
-                    Method::DELETE,
+                    Method::GET,
                     ["api", "region"],
-                    query,
+                    None,
                     &cloud_provider,
                     Some(1),
                 )
                 .await?;
-
-            // This timeout corresponds to the same in our cloud services tests.
-            let req = req.timeout(Duration::from_secs(305));
-
-            match self.send_request::<Empty>(req).await {
-                Ok(_) => break Ok(()), // The request was successful, no environment is available to delete anymore.
-                Err(Error::Api(err)) => {
-                    if err.status_code != 504 {
-                        // The error was not a timeout (status code 504), so it's unexpected and we should return it
-                        return Err(Error::Api(err));
-                    }
-                    // If the error was a timeout, it means the API is still working on deleting the environment.
+            let res = self.send_request::<Region>(req).await;
+            if hard {
+                if let Err(Error::SuccesfullButNoContent) = res {
+                    return Ok(());
                 }
-                Err(Error::Transport(e)) => {
-                    if !e.is_timeout() {
-                        return Err(Error::Transport(e));
-                    }
+            } else {
+                if let Ok(Region {
+                    region_state: RegionState::SoftDeleted,
+                    ..
+                }) = res
+                {
+                    return Ok(());
                 }
-                // The request failed with a non-API error, so we should return it
-                Err(e) => return Err(e),
             }
 
-            // Too many requests/timeouts were reached.
-            if loops == 10 {
-                return Err(Error::TimeoutError);
-            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
         }
+        Err(Error::TimeoutError)
     }
 }
