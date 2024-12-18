@@ -235,12 +235,12 @@ pub fn build_compute_dataflow<A: Allocate>(
                             let new_desc =
                                 source.storage_metadata.relation_desc.apply_demand(&demands);
                             let new_arity = demands.len();
-                            let remap = demands
+                            let remap: BTreeMap<_, _> = demands
                                 .into_iter()
                                 .enumerate()
                                 .map(|(new, old)| (old, new))
                                 .collect();
-                            ops.permute(remap, new_arity);
+                            ops.permute_fn(|old_idx| remap[&old_idx], new_arity);
                             read_schema = Some(new_desc);
                         }
 
