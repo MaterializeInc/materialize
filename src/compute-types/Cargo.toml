@@ -19,8 +19,8 @@ mz-ore = { path = "../ore", features = ["tracing_", "metrics"] }
 mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr", features = ["tracing_"] }
 mz-storage-types = { path = "../storage-types" }
-proptest = { version = "1.0.0", default-features = false, features = ["std"] }
-proptest-derive = { version = "0.3.0", features = ["boxed_union"] }
+proptest = { version = "1.6.0", default-features = false, features = ["std"] }
+proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
 prost = { version = "0.13.2", features = ["no-recursion-limit"] }
 serde = { version = "1.0.152", features = ["derive"] }
 timely = "0.14.1"

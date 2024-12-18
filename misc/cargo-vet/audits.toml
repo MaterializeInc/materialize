@@ -988,6 +988,16 @@ who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "maintained-and-necessary"
 version = "1.0.82"
 
+[[audits.proptest]]
+who = "Alex Hunt <alex.hunt@materialize.com>"
+criteria = "maintained-and-necessary"
+version = "1.6.0"
+
+[[audits.proptest-derive]]
+who = "Alex Hunt <alex.hunt@materialize.com>"
+criteria = "maintained-and-necessary"
+version = "0.5.1"
+
 [[audits.prost]]
 who = "Jan Teske <jteske@posteo.net>"
 criteria = "maintained-and-necessary"
@@ -1455,6 +1465,16 @@ version = "0.23.0"
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "safe-to-deploy"
 version = "0.1.6"
+
+[[audits.unarray]]
+who = "Alex Hunt <alex.hunt@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.1.4"
+notes = """
+My knowledge of unsafe is limited, but the code is very small and seems to do what it says it does.
+Safety seems to have been a consideration, and explanatory comments make up 80% of the tiny codebase.
+It also has over 20 million downloads on crates.io, not that that is a guarantee of anything.
+"""
 
 [[audits.unicode-joining-type]]
 who = "Alex Hunt <alex.hunt@materialize.com>"

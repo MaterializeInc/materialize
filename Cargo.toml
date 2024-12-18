@@ -310,10 +310,6 @@ tracing-opentelemetry = { git = "https://github.com/MaterializeInc/tracing-opent
 # Needs a more complex update to 2.0.0, with a custom TLS connector.
 launchdarkly-server-sdk = { git = "https://github.com/MaterializeInc/rust-server-sdk", rev = "87c0f67aa51fa936d3a6a49605e8e3f565d15281" }
 
-# Waiting on https://github.com/AltSysrq/proptest/pull/264.
-proptest = { git = "https://github.com/MaterializeInc/proptest.git" }
-proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git" }
-
 # Waiting on https://github.com/edenhill/librdkafka/pull/4051.
 rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git" }
 rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git" }
