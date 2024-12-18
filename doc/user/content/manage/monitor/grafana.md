@@ -19,6 +19,11 @@ the following additional services:
 
 ## Step 1. Set up a Prometheus SQL Exporter
 
+{{< note >}}
+As a best practice, we strongly recommend using [service accounts](/manage/access-control/service-accounts)
+to connect external applications, like Grafana, to Materialize.
+{{</ note >}}
+
 To export metrics from Materialize and expose them in a format that Grafana can
 consume, you need to configure and run a Prometheus SQL Exporter. This service
 will run SQL queries against Materialize at specified intervals, and export the

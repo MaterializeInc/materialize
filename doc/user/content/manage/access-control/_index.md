@@ -57,8 +57,7 @@ identity provider. This ensures that all users can securely log in to the
 Materialize console using the same authentication scheme and credentials across
 all systems in your organization.
 
-To configure SSO for your Materialize organization, follow [this step-by-step
-guide](/manage/access-control/sso).
+To configure SSO for your Materialize organization, follow [this step-by-step guide](/manage/access-control/sso).
 
 ### Configuring network policies
 
@@ -71,6 +70,17 @@ Materialize region using IP-based rules.
 
 To configure network policies in your Materialize organization, follow
 [this step-by-step guide](/manage/access-control/manage-network-policies).
+
+### Creating service accounts
+
+It's a best practice to use service accounts (i.e., non-human users) to connect
+external applications and services to Materialize. As an **administrator** of a
+Materialize organization, you can create service accounts manually via the
+[Materialize Console](https://console.materialize.com/), or programatically
+via [Terraform](/manage/terraform/).
+
+To create a service account in your Materialize organization, follow
+[this step-by-step guide](/manage/access-control/create-service-account).
 
 ### Using an external secret store
 

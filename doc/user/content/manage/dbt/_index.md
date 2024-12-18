@@ -74,6 +74,11 @@ create a `profiles.yml` file, if it doesn't exist. To help you get started, the
 
 ### Connect to Materialize
 
+{{< note >}}
+As a best practice, we strongly recommend using [service accounts](/manage/access-control/service-accounts)
+to connect external applications, like dbt, to Materialize.
+{{</ note >}}
+
 dbt manages all your connection configurations (or, profiles) in a file called
 [`profiles.yml`](https://docs.getdbt.com/dbt-cli/configure-your-profile). By
 default, this file is located under `~/.dbt/`.
@@ -104,6 +109,8 @@ default, this file is located under `~/.dbt/`.
           threads: 1
           host: <host>
           port: 6875
+          # Materialize user or service account (recommended)
+          # to connect as
           user: <user@domain.com>
           pass: <password>
           database: materialize
