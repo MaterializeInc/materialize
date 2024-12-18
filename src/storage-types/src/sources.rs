@@ -2000,6 +2000,9 @@ mod tests {
         }
         let col = encoder.finish();
 
+        // The top-level StructArray for SourceData should always be non-nullable.
+        assert!(!col.is_nullable());
+
         // Reallocate our arrays with lgalloc.
         let col = realloc_array(&col, &metrics);
 
