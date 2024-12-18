@@ -414,12 +414,7 @@ pub struct SourceStatisticsRecord {
 }
 
 impl SourceStatisticsRecord {
-    fn clear(&mut self) {
-        self.messages_received = 0;
-        self.bytes_received = 0;
-        self.updates_staged = 0;
-        self.updates_committed = 0;
-
+    fn reset_gauges(&mut self) {
         // These gauges MUST be initialized across all workers before we aggregate and
         // report statistics.
         self.rehydration_latency_ms = None;
@@ -498,12 +493,7 @@ pub struct SinkStatisticsRecord {
 }
 
 impl SinkStatisticsRecord {
-    fn clear(&mut self) {
-        self.messages_staged = 0;
-        self.messages_committed = 0;
-        self.bytes_staged = 0;
-        self.bytes_committed = 0;
-    }
+    fn reset_gauges(&self) {}
 
     /// Reset counters so that we continue to ship diffs to the controller.
     fn reset_counters(&mut self) {
@@ -584,11 +574,11 @@ impl SourceStatistics {
         }
     }
 
-    /// Clear the data, resetting gauges to uninitialized.
+    /// Reset gauges to uninitialized state.
     /// This does not reset prometheus gauges, which will be overwritten with new values.
-    pub fn clear(&self) {
+    pub fn reset_gauges(&self) {
         let mut cur = self.stats.borrow_mut();
-        cur.stats.clear();
+        cur.stats.reset_gauges();
     }
 
     /// Get a snapshot of the data, returning `None` if all gauges are not initialized.
@@ -834,11 +824,11 @@ impl SinkStatistics {
         }
     }
 
-    /// Clear the data, resetting gauges to uninitialized.
+    /// Reset gauges to uninitialized state.
     /// This does not reset prometheus gauges, which will be overwritten with new values.
-    pub fn clear(&self) {
-        let mut cur = self.stats.borrow_mut();
-        cur.stats.clear()
+    pub fn reset_gauges(&self) {
+        let cur = self.stats.borrow_mut();
+        cur.stats.reset_gauges();
     }
 
     /// Get a snapshot of the data, returning `None` if all gauges are not initialized.
@@ -951,22 +941,26 @@ impl AggregatedStatistics {
         self.global_sink_statistics.remove(&id);
     }
 
-    /// Advance the _global epoch_ for statistics. Local statistics before this epoch will be
-    /// ignored.
+    /// Advance the _global epoch_ for statistics.
+    ///
+    /// Gauge values from previous epochs will be ignored. Counter values from previous epochs will
+    /// still be applied as usual.
     pub fn advance_global_epoch(&mut self, id: GlobalId) {
-        if self.worker_id == 0 {
-            self.global_source_statistics
-                .entry(id)
-                .and_modify(|(ref mut epoch, ref mut stats)| {
-                    *epoch += 1;
-                    *stats = vec![None; self.worker_count];
-                });
-            self.global_sink_statistics
-                .entry(id)
-                .and_modify(|(ref mut epoch, ref mut stats)| {
-                    *epoch += 1;
-                    *stats = vec![None; self.worker_count];
-                });
+        if let Some((epoch, stats)) = self.global_source_statistics.get_mut(&id) {
+            *epoch += 1;
+            for worker_stats in stats {
+                if let Some(update) = worker_stats {
+                    update.reset_gauges();
+                }
+            }
+        }
+        if let Some((epoch, stats)) = self.global_sink_statistics.get_mut(&id) {
+            *epoch += 1;
+            for worker_stats in stats {
+                if let Some(update) = worker_stats {
+                    update.reset_gauges();
+                }
+            }
         }
     }
 
@@ -976,7 +970,7 @@ impl AggregatedStatistics {
             .entry(id)
             .and_modify(|(ref mut epoch, ref mut stats)| {
                 *epoch += 1;
-                stats.clear()
+                stats.reset_gauges();
             })
             .or_insert_with(|| (0, stats()));
 
@@ -993,7 +987,7 @@ impl AggregatedStatistics {
             .entry(id)
             .and_modify(|(ref mut epoch, ref mut stats)| {
                 *epoch += 1;
-                stats.clear()
+                stats.reset_gauges();
             })
             .or_insert_with(|| (0, stats()));
         if self.worker_id == 0 {
@@ -1010,35 +1004,43 @@ impl AggregatedStatistics {
         sink_statistics: Vec<(usize, SinkStatisticsRecord)>,
     ) {
         // Currently, only worker 0 ingest data from other workers.
-        if self.worker_id == 0 {
-            for (epoch, stat) in source_statistics {
-                self.global_source_statistics.entry(stat.id).and_modify(
-                    |(global_epoch, ref mut stats)| {
-                        if epoch >= *global_epoch {
-                            match &mut stats[stat.worker_id] {
-                                None => {
-                                    stats[stat.worker_id] = Some(stat.as_update());
-                                }
-                                Some(occupied) => occupied.incorporate(stat.as_update()),
-                            }
-                        }
-                    },
-                );
-            }
+        if self.worker_id != 0 {
+            return;
+        }
 
-            for (epoch, stat) in sink_statistics {
-                self.global_sink_statistics.entry(stat.id).and_modify(
-                    |(global_epoch, ref mut stats)| {
-                        if epoch >= *global_epoch {
-                            match &mut stats[stat.worker_id] {
-                                None => {
-                                    stats[stat.worker_id] = Some(stat.as_update());
-                                }
-                                Some(occupied) => occupied.incorporate(stat.as_update()),
-                            }
-                        }
-                    },
-                );
+        for (epoch, stat) in source_statistics {
+            if let Some((global_epoch, stats)) = self.global_source_statistics.get_mut(&stat.id) {
+                // The record might be from a previous incarnation of the source. If that's the
+                // case, we only incorporate its counter values and ignore its gauge values.
+                let epoch_match = epoch >= *global_epoch;
+                let mut update = stat.as_update();
+                match (&mut stats[stat.worker_id], epoch_match) {
+                    (None, true) => stats[stat.worker_id] = Some(update),
+                    (None, false) => {
+                        update.reset_gauges();
+                        stats[stat.worker_id] = Some(update);
+                    }
+                    (Some(occupied), true) => occupied.incorporate(update),
+                    (Some(occupied), false) => occupied.incorporate_counters(update),
+                }
+            }
+        }
+
+        for (epoch, stat) in sink_statistics {
+            if let Some((global_epoch, stats)) = self.global_sink_statistics.get_mut(&stat.id) {
+                // The record might be from a previous incarnation of the sink. If that's the
+                // case, we only incorporate its counter values and ignore its gauge values.
+                let epoch_match = epoch >= *global_epoch;
+                let update = stat.as_update();
+                match (&mut stats[stat.worker_id], epoch_match) {
+                    (None, true) => stats[stat.worker_id] = Some(update),
+                    (None, false) => {
+                        update.reset_gauges();
+                        stats[stat.worker_id] = Some(update);
+                    }
+                    (Some(occupied), true) => occupied.incorporate(update),
+                    (Some(occupied), false) => occupied.incorporate_counters(update),
+                }
             }
         }
     }
