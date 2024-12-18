@@ -398,22 +398,22 @@ Explained Query:
     With
       cte l19 =
         Reduce aggregates=[count(*)]
-          Project ()
-            Union
-              Negate
-                Project (#0, #1)
-                  Join on=(#0 = #2 AND #1 = #3) type=differential
-                    ArrangeBy keys=[[#0, #1]]
+          Union
+            Negate
+              Project ()
+                Join on=(#0 = #2 AND #1 = #3) type=differential
+                  ArrangeBy keys=[[#0, #1]]
+                    Project (#0, #1)
                       Get l18
-                    ArrangeBy keys=[[#0, #1]]
-                      Distinct project=[#0, #1]
-                        Project (#0, #1)
-                          Get l8
+                  ArrangeBy keys=[[#0, #1]]
+                    Distinct project=[#0, #1]
+                      Project (#0, #1)
+                        Get l8
+            Project ()
               Get l18
       cte l18 =
-        Project (#0, #1)
-          Filter (#2 = true)
-            Get l17
+        Filter (#2 = true)
+          Get l17
   With Mutually Recursive
     cte l17 =
       Distinct project=[#0..=#2]

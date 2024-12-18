@@ -44,6 +44,7 @@ use crate::fold_constants::FoldConstants;
 use crate::join_implementation::JoinImplementation;
 use crate::literal_constraints::LiteralConstraints;
 use crate::literal_lifting::LiteralLifting;
+use crate::movement::ProjectionPushdown;
 use crate::non_null_requirements::NonNullRequirements;
 use crate::normalize_lets::NormalizeLets;
 use crate::normalize_ops::NormalizeOps;
@@ -57,6 +58,8 @@ use crate::threshold_elision::ThresholdElision;
 use crate::typecheck::{SharedContext, Typecheck};
 use crate::union_cancel::UnionBranchCancellation;
 use crate::will_distinct::WillDistinct;
+
+pub use dataflow::optimize_dataflow;
 
 pub mod analysis;
 pub mod canonicalization;
@@ -89,8 +92,6 @@ pub mod threshold_elision;
 pub mod typecheck;
 pub mod union_cancel;
 pub mod will_distinct;
-
-pub use dataflow::optimize_dataflow;
 
 /// Compute the conjunction of a variadic number of expressions.
 #[macro_export]
@@ -763,6 +764,8 @@ impl Optimizer {
                     Box::new(EquivalencePropagation::default()),
                     Box::new(fold_constants_fixpoint()),
                     Box::new(Demand::default()),
+                    // Demand might have introduced dummies, so let's also do a ProjectionPushdown.
+                    Box::new(ProjectionPushdown::default()),
                     Box::new(LiteralLifting::default()),
                 ],
             }),
