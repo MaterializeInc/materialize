@@ -868,6 +868,18 @@ fn create_environmentd_statefulset_object(
         config.secrets_controller
     ));
 
+    if let Some(cluster_replica_sizes) = &config.environmentd_cluster_replica_sizes {
+        if let Ok(cluster_replica_sizes) =
+            serde_json::from_str::<BTreeMap<String, serde_json::Value>>(cluster_replica_sizes)
+        {
+            let cluster_replica_sizes: Vec<_> =
+                cluster_replica_sizes.keys().map(|s| s.as_str()).collect();
+            args.push(format!(
+                "--system-parameter-default=allowed_cluster_replica_sizes='{}'",
+                cluster_replica_sizes.join("', '")
+            ));
+        }
+    }
     if !config.cloud_provider.is_cloud() {
         args.push("--system-parameter-default=cluster_enable_topology_spread=false".into());
     }
