@@ -529,7 +529,7 @@ fn ast_rewrite_sources_to_tables(
                 let tables_for_source =
                     items_with_statements_copied
                         .iter()
-                        .any(|(item, statement)| match statement {
+                        .any(|(_, statement)| match statement {
                             Statement::CreateTableFromSource(stmt) => {
                                 let source: GlobalId = match &stmt.source {
                                     RawItemName::Name(_) => {
