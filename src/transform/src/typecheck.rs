@@ -151,8 +151,6 @@ pub enum TypeError<'a> {
     DisallowedDummy {
         /// The expression with the dummy value
         source: &'a MirRelationExpr,
-        /// The dummy value
-        got: Row,
     },
 }
 
@@ -530,7 +528,6 @@ impl Typecheck {
                         if self.disallow_dummy && datums.iter().any(|d| d == &mz_repr::Datum::Dummy) {
                             return Err(TypeError::DisallowedDummy {
                                 source: expr,
-                                got: row.clone(),
                             });
                         }
                     }
@@ -587,6 +584,12 @@ impl Typecheck {
 
                 for scalar_expr in scalars.iter() {
                     t_in.push(tc.typecheck_scalar(scalar_expr, expr, &t_in)?);
+
+                    if self.disallow_dummy && scalar_expr.contains_dummy() {
+                        return Err(TypeError::DisallowedDummy {
+                            source: expr,
+                        });
+                    }
                 }
 
                 Ok(t_in)
@@ -597,6 +600,12 @@ impl Typecheck {
                 let mut t_exprs = Vec::with_capacity(exprs.len());
                 for scalar_expr in exprs {
                     t_exprs.push(tc.typecheck_scalar(scalar_expr, expr, &t_in)?);
+
+                    if self.disallow_dummy && scalar_expr.contains_dummy() {
+                        return Err(TypeError::DisallowedDummy {
+                            source: expr,
+                        });
+                    }
                 }
                 // TODO(mgree) check t_exprs agrees with `func`'s input type
 
@@ -633,6 +642,12 @@ impl Typecheck {
                             },
                             diffs: vec![ColumnTypeDifference::NotSubtype { sub, sup: ScalarType::Bool }],
                             message: "expected boolean condition".into(),
+                        });
+                    }
+
+                    if self.disallow_dummy && scalar_expr.contains_dummy() {
+                        return Err(TypeError::DisallowedDummy {
+                            source: expr,
                         });
                     }
                 }
@@ -698,6 +713,12 @@ impl Typecheck {
                                     ::tracing::debug!("{err}");
                                 }
                             }
+                        }
+
+                        if self.disallow_dummy && scalar_expr.contains_dummy() {
+                            return Err(TypeError::DisallowedDummy {
+                                source: expr,
+                            });
                         }
 
                         t_exprs.push(t_expr);
@@ -789,6 +810,12 @@ impl Typecheck {
                     .iter()
                     .map(|scalar_expr| tc.typecheck_scalar(scalar_expr, expr, &t_in))
                     .collect::<Result<Vec<_>, _>>()?;
+
+                    if self.disallow_dummy && group_key.iter().any(|scalar_expr| scalar_expr.contains_dummy()) {
+                        return Err(TypeError::DisallowedDummy {
+                            source: expr,
+                        });
+                    }
 
                 for agg in aggregates {
                     t_out.push(tc.typecheck_aggregate(agg, expr, &t_in)?);
@@ -1552,7 +1579,7 @@ impl<'a> TypeError<'a> {
                 writeln!(f, "LetRec ids and definitions don't line up")?
             }
             Shadowing { source: _, id } => writeln!(f, "id {id} is shadowed")?,
-            DisallowedDummy { source: _, got } => writeln!(f, "row {got} contains a dummy value")?,
+            DisallowedDummy { source: _ } => writeln!(f, "contains a dummy value")?,
             Recursion { error } => writeln!(f, "{error}")?,
         }
 
