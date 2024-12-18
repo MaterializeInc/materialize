@@ -147,6 +147,13 @@ pub enum TypeError<'a> {
         /// The error that aborted recursion
         error: RecursionLimitError,
     },
+    /// A dummy value was found
+    DisallowedDummy {
+        /// The expression with the dummy value
+        source: &'a MirRelationExpr,
+        /// The dummy value
+        got: Row,
+    },
 }
 
 impl<'a> From<RecursionLimitError> for TypeError<'a> {
@@ -428,6 +435,8 @@ pub struct Typecheck {
     disallow_new_globals: bool,
     /// Whether or not to be strict about join equivalences having the same nullability
     strict_join_equivalences: bool,
+    /// Whether or not to disallow dummy values
+    disallow_dummy: bool,
     /// Recursion guard for checked recursion
     recursion_guard: RecursionGuard,
 }
@@ -445,6 +454,7 @@ impl Typecheck {
             ctx,
             disallow_new_globals: false,
             strict_join_equivalences: false,
+            disallow_dummy: false,
             recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
         }
     }
@@ -463,6 +473,12 @@ impl Typecheck {
     pub fn strict_join_equivalences(mut self) -> Self {
         self.strict_join_equivalences = true;
 
+        self
+    }
+
+    /// Disallow dummy values
+    pub fn disallow_dummy(mut self) -> Self {
+        self.disallow_dummy = true;
         self
     }
 
@@ -508,6 +524,13 @@ impl Typecheck {
                                 source: expr,
                                 got: row.clone(),
                                 expected: typ.column_types.clone(),
+                            });
+                        }
+
+                        if self.disallow_dummy && datums.iter().any(|d| d == &mz_repr::Datum::Dummy) {
+                            return Err(TypeError::DisallowedDummy {
+                                source: expr,
+                                got: row.clone(),
                             });
                         }
                     }
@@ -1399,7 +1422,8 @@ impl<'a> TypeError<'a> {
             | BadTopKGroupKey { source, .. }
             | BadTopKOrdering { source, .. }
             | BadLetRecBindings { source }
-            | Shadowing { source, .. } => Some(source),
+            | Shadowing { source, .. }
+            | DisallowedDummy { source, .. } => Some(source),
             Recursion { .. } => None,
         }
     }
@@ -1528,6 +1552,7 @@ impl<'a> TypeError<'a> {
                 writeln!(f, "LetRec ids and definitions don't line up")?
             }
             Shadowing { source: _, id } => writeln!(f, "id {id} is shadowed")?,
+            DisallowedDummy { source: _, got } => writeln!(f, "row {got} contains a dummy value")?,
             Recursion { error } => writeln!(f, "{error}")?,
         }
 

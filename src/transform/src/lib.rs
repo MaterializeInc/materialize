@@ -784,7 +784,11 @@ impl Optimizer {
             // - `CollectIndexRequests` needs a normalized plan.
             //   https://github.com/MaterializeInc/database-issues/issues/6371
             Box::new(fold_constants_fixpoint()),
-            Box::new(Typecheck::new(ctx.typecheck()).disallow_new_globals()),
+            Box::new(
+                Typecheck::new(ctx.typecheck())
+                    .disallow_new_globals()
+                    .disallow_dummy(),
+            ),
         ];
         Self {
             name: "physical",
