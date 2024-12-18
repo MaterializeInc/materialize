@@ -76,7 +76,6 @@ base64 = "0.13.1"
 insta = "1.32"
 mz-build-tools = { path = "../build-tools", default-features = false }
 mz-postgres-util = { path = "../postgres-util" }
-similar-asserts = "1.4"
 tokio-postgres = { version = "0.7.8" }
 
 [features]

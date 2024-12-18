@@ -41,7 +41,6 @@ rust_library(
         "//src/orchestrator-tracing:mz_orchestrator_tracing",
         "//src/ore:mz_ore",
         "//src/prof-http:mz_prof_http",
-        "//src/tls-util:mz_tls_util",
     ] + all_crate_deps(normal = True),
 )
 
@@ -79,7 +78,6 @@ rust_test(
         "//src/orchestrator-tracing:mz_orchestrator_tracing",
         "//src/ore:mz_ore",
         "//src/prof-http:mz_prof_http",
-        "//src/tls-util:mz_tls_util",
     ] + all_crate_deps(
         normal = True,
         normal_dev = True,
@@ -99,7 +97,6 @@ rust_doc_test(
         "//src/orchestrator-tracing:mz_orchestrator_tracing",
         "//src/ore:mz_ore",
         "//src/prof-http:mz_prof_http",
-        "//src/tls-util:mz_tls_util",
     ] + all_crate_deps(
         normal = True,
         normal_dev = True,
@@ -133,6 +130,5 @@ rust_binary(
         "//src/orchestrator-tracing:mz_orchestrator_tracing",
         "//src/ore:mz_ore",
         "//src/prof-http:mz_prof_http",
-        "//src/tls-util:mz_tls_util",
     ] + all_crate_deps(normal = True),
 )
