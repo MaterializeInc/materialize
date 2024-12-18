@@ -25,7 +25,6 @@ rust_library(
     crate_features = [
         "capture",
         "default",
-        "humantime",
         "mz-repr",
         "tokio-console",
         "tracing-capture",
@@ -64,7 +63,6 @@ rust_test(
     crate_features = [
         "capture",
         "default",
-        "humantime",
         "mz-repr",
         "tokio-console",
         "tracing-capture",
