@@ -30,7 +30,6 @@ mz-ore = { path = "../ore", default-features = false }
 mz-orchestrator-kubernetes = { path = "../orchestrator-kubernetes", default-features = false }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing", default-features = false }
 mz-prof-http = { path = "../prof-http", default-features = false }
-mz-tls-util = { path = "../tls-util", default-features = false }
 prometheus = { version = "0.13.3", default-features = false }
 rand = "0.8.5"
 reqwest = { version = "0.11.13", features = ["json"] }

@@ -14,5 +14,8 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = tru
 [features]
 default = ["workspace-hack"]
 
+[package.metadata.cargo-udeps.ignore]
+normal = ["workspace-hack"]
+
 [lints]
 workspace = true
