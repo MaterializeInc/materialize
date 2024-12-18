@@ -20,7 +20,7 @@ itertools = "0.10.5"
 libc = "0.2.138"
 maplit = "1.0.2"
 mz-orchestrator = { path = "../orchestrator" }
-mz-ore = { path = "../ore", features = ["async"] }
+mz-ore = { path = "../ore", default-features = false, features = ["async", "network"] }
 mz-repr = { path = "../repr" }
 mz-secrets = { path = "../secrets" }
 nix = "0.26.1"
