@@ -809,7 +809,15 @@ impl<T: AstInfo> AstDisplay for Values<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("VALUES ");
         let mut delim = "";
-        for row in &self.0 {
+
+        for (i, row) in self.0.iter().enumerate() {
+            if f.redacted() && i == 20 {
+                f.write_str("/* ");
+                f.write_str(&(self.0.len().saturating_sub(20)).to_string());
+                f.write_str(" more rows */");
+                break;
+            }
+
             f.write_str(delim);
             delim = ", ";
             f.write_str("(");
