@@ -22,8 +22,8 @@
 #![warn(missing_docs, missing_debug_implementations)]
 #![cfg_attr(nightly_doc_features, feature(doc_cfg))]
 
-#[cfg_attr(nightly_doc_features, doc(cfg(feature = "test")))]
-#[cfg(feature = "test")]
+#[cfg_attr(nightly_doc_features, doc(cfg(feature = "assert")))]
+#[cfg(feature = "assert")]
 pub mod assert;
 pub mod bits;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "bytes_")))]

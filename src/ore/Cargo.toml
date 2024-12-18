@@ -143,10 +143,11 @@ tracing_ = [
 tokio-console = ["console-subscriber", "tokio", "tokio/tracing", "network"]
 cli = ["clap"]
 stack = ["stacker"]
-test = ["anyhow", "ctor", "tracing-subscriber", "derivative"]
-metrics = ["prometheus"]
+test = ["anyhow", "ctor", "tracing-subscriber", "derivative", "assert"]
+metrics = ["prometheus", "derivative", "assert"]
 id_gen = ["hibitset", "rand", "uuid"]
 capture = ["tracing-capture"]
+assert = ["derivative", "ctor"]
 
 [[test]]
 name = "future"

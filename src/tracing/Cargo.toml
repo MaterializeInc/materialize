@@ -11,7 +11,7 @@ workspace = true
 
 [dependencies]
 anyhow = "1.0.66"
-mz-ore = { path = "../ore", features = ["test"] }
+mz-ore = { path = "../ore", default-features = false, features = ["test", "tracing_"] }
 mz-proto = { path = "../proto" }
 prost = { version = "0.13.2", features = ["no-recursion-limit"] }
 proptest = { version = "1.6.0", default-features = false, features = ["std"] }
