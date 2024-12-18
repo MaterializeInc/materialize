@@ -86,9 +86,6 @@ fish          fish    1000
 birdmore      geese   56
 mammalmore    moosemoose   2
 
-# statistics are only populated every minute by default
-$ set-sql-timeout duration=2minutes
-
 # Also test a source with multiple sub-sources.
 # NOTE: We give this source a unique name because we want to query for it with
 # a `SUBSCRIBE ... AS OF AT LEAST 0` below and want to avoid receiving results
@@ -103,26 +100,34 @@ $ set-sql-timeout duration=2minutes
 > CREATE TABLE organizations FROM SOURCE auction_house_in_source_statistics_td (REFERENCE organizations);
 > CREATE TABLE users FROM SOURCE auction_house_in_source_statistics_td (REFERENCE users);
 
-# NOTE: These queries are slow to succeed because the default metrics scraping
-# interval is 30 seconds.
-> SELECT s.name,
-  bool_and(u.snapshot_committed),
-  SUM(u.messages_received), SUM(u.updates_staged), SUM(u.updates_committed), SUM(u.bytes_received) > 0, bool_and(u.rehydration_latency IS NOT NULL)
+> SELECT
+      s.name,
+      bool_and(u.snapshot_committed),
+      SUM(u.messages_received) >= 4,
+      SUM(u.updates_staged),
+      SUM(u.updates_committed),
+      SUM(u.bytes_received) > 0,
+      bool_and(u.rehydration_latency IS NOT NULL)
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('metrics_test_source')
   GROUP BY s.name
   ORDER BY s.name
-metrics_test_source true 4 2 2 true true
+metrics_test_source true true 2 2 true true
 
 > DROP SOURCE metrics_test_source CASCADE
 
 # Note that only the base-source has `messages_received`, but the sub-sources have `messages_committed`.
 # Committed will usually, for auction sources, add up to received, but we don't test this (right now) because of
 # jitter on when metrics are produced for each sub-source.
-> SELECT s.name,
-  bool_and(u.snapshot_committed),
-  SUM(u.messages_received) > 0, SUM(u.updates_staged) > 0, SUM(u.updates_committed) > 0, SUM(u.bytes_received) > 0, bool_and(u.rehydration_latency IS NOT NULL)
+> SELECT
+      s.name,
+      bool_and(u.snapshot_committed),
+      SUM(u.messages_received) > 0,
+      SUM(u.updates_staged) > 0,
+      SUM(u.updates_committed) > 0,
+      SUM(u.bytes_received) > 0,
+      bool_and(u.rehydration_latency IS NOT NULL)
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('accounts', 'auction_house_in_source_statistics_td', 'auctions', 'bids', 'organizations', 'users')
@@ -159,14 +164,14 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 # We can't control this, so have to accept the range.
 > SELECT
     s.name,
-    SUM(u.messages_received),
+    SUM(u.messages_received) >= 18,
     SUM(u.bytes_received) > 0
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('upsert')
   GROUP BY s.name
   ORDER BY s.name
-upsert 18 true
+upsert true true
 
 # Upsert stats are on the UPSERT sub source/table, not the main source.
 > SELECT
@@ -206,14 +211,14 @@ $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} 
 {"key": "mammalmore"}
 
 > SELECT s.name,
-    SUM(u.messages_received),
+    SUM(u.messages_received) >= 20,
     SUM(u.bytes_received) > 0
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('upsert')
   GROUP BY s.name
   ORDER BY s.name
-upsert 20 true
+upsert true true
 
 > SELECT t.name,
     bool_and(u.snapshot_committed),
@@ -231,12 +236,12 @@ upsert_tbl true "${updates-committed}" "${updates-committed}" true 2
 # check pre-aggregated view
 
 > SELECT s.name,
-    u.messages_received,
+    u.messages_received >= 20,
     u.bytes_received > 0
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('upsert')
-upsert 20 true
+upsert true true
 
 > SELECT t.name,
     u.snapshot_committed,

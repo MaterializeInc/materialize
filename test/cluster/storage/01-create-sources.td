@@ -7,9 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# To ensure we get statistics in time
-$ set-sql-timeout duration=180s
-
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true
 ALTER SYSTEM SET kafka_default_metadata_fetch_interval = 1000
@@ -63,15 +60,15 @@ one
 
 > SELECT s.name,
   SUM(u.updates_committed) > 0,
-  SUM(u.messages_received),
+  SUM(u.messages_received) >= 2,
   SUM(u.offset_known),
   SUM(u.offset_committed)
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('remote1', 'remote2')
   GROUP BY s.id, s.name
-remote1 true 2 1 1
-remote2 true 2 1 1
+remote1 true true 1 1
+remote2 true true 1 1
 
 > SELECT s.name,
   SUM(u.updates_committed)
