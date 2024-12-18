@@ -8,7 +8,7 @@ This Helm chart deploys the Materialize operator on a Kubernetes cluster. The op
 
 ## Prerequisites
 
-- Kubernetes 1.19+
+- Kubernetes 1.29+
 - Helm 3.2.0+
 
 ### Kubernetes Storage Configuration
@@ -107,165 +107,48 @@ The following table lists the configurable parameters of the Materialize operato
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `clusterd.nodeSelector` |  | ``{}`` |
-| `environmentd.nodeSelector` |  | ``{}`` |
-| `networkPolicies.egress.cidrs[0]` |  | ``"0.0.0.0/0"`` |
-| `networkPolicies.egress.enabled` |  | ``false`` |
-| `networkPolicies.enabled` |  | ``false`` |
-| `networkPolicies.ingress.cidrs[0]` |  | ``"0.0.0.0/0"`` |
-| `networkPolicies.ingress.enabled` |  | ``false`` |
-| `networkPolicies.internal.enabled` |  | ``false`` |
-| `observability.enabled` |  | ``true`` |
-| `observability.podMetrics.enabled` |  | ``false`` |
-| `observability.prometheus.scrapeAnnotations.enabled` |  | ``true`` |
+| `clusterd.nodeSelector` | Node selector to use for clusterd pods spawned by the operator | ``{}`` |
+| `environmentd.nodeSelector` | Node selector to use for environmentd pods spawned by the operator | ``{}`` |
+| `networkPolicies.egress` | egress from Materialize pods to sources and sinks | ``{"cidrs":["0.0.0.0/0"],"enabled":false}`` |
+| `networkPolicies.enabled` | Whether to enable network policies for securing communication between pods | ``false`` |
+| `networkPolicies.ingress` | Whether to enable ingress to the SQL and HTTP interfaces on environmentd or balancerd | ``{"cidrs":["0.0.0.0/0"],"enabled":false}`` |
+| `networkPolicies.internal` | Whether to enable internal communication between Materialize pods | ``{"enabled":false}`` |
+| `observability.enabled` | Whether to enable observability features | ``true`` |
+| `observability.podMetrics.enabled` | Whether to enable the pod metrics scraper which populates the Environment Overview Monitoring tab in the web console (requires metrics-server to be installed) | ``false`` |
+| `observability.prometheus.scrapeAnnotations.enabled` | Whether to annotate pods with common keys used for prometheus scraping. | ``true`` |
 | `operator.args.enableInternalStatementLogging` |  | ``true`` |
-| `operator.args.startupLogFilter` |  | ``"INFO,mz_orchestratord=TRACE"`` |
-| `operator.cloudProvider.providers.aws.accountID` |  | ``""`` |
+| `operator.args.startupLogFilter` | Log filtering settings for startup logs | ``"INFO,mz_orchestratord=TRACE"`` |
+| `operator.cloudProvider.providers.aws.accountID` | When using AWS, accountID is required | ``""`` |
 | `operator.cloudProvider.providers.aws.enabled` |  | ``false`` |
-| `operator.cloudProvider.providers.aws.iam.roles.connection` |  | ``""`` |
-| `operator.cloudProvider.providers.aws.iam.roles.environment` |  | ``""`` |
-| `operator.cloudProvider.providers.gcp.enabled` |  | ``false`` |
-| `operator.cloudProvider.region` |  | ``"kind"`` |
-| `operator.cloudProvider.type` |  | ``"local"`` |
+| `operator.cloudProvider.providers.aws.iam.roles.connection` | ARN for CREATE CONNECTION feature | ``""`` |
+| `operator.cloudProvider.providers.aws.iam.roles.environment` | ARN of the IAM role for environmentd | ``""`` |
+| `operator.cloudProvider.providers.gcp` | GCP Configuration (placeholder for future use) | ``{"enabled":false}`` |
+| `operator.cloudProvider.region` | Common cloud provider settings | ``"kind"`` |
+| `operator.cloudProvider.type` | Specifies cloud provider. Valid values are 'aws', 'gcp', 'azure' , 'generic', or 'local' | ``"local"`` |
 | `operator.clusters.defaultSizes.analytics` |  | ``"25cc"`` |
 | `operator.clusters.defaultSizes.catalogServer` |  | ``"50cc"`` |
 | `operator.clusters.defaultSizes.default` |  | ``"25cc"`` |
 | `operator.clusters.defaultSizes.probe` |  | ``"mz_probe"`` |
 | `operator.clusters.defaultSizes.support` |  | ``"25cc"`` |
 | `operator.clusters.defaultSizes.system` |  | ``"25cc"`` |
-| `operator.clusters.sizes.100cc.cpu_exclusive` |  | ``true`` |
-| `operator.clusters.sizes.100cc.cpu_limit` |  | ``2`` |
-| `operator.clusters.sizes.100cc.credits_per_hour` |  | ``"1"`` |
-| `operator.clusters.sizes.100cc.disk_limit` |  | ``"31050MiB"`` |
-| `operator.clusters.sizes.100cc.memory_limit` |  | ``"15525MiB"`` |
-| `operator.clusters.sizes.100cc.scale` |  | ``1`` |
-| `operator.clusters.sizes.100cc.workers` |  | ``2`` |
-| `operator.clusters.sizes.1200cc.cpu_exclusive` |  | ``true`` |
-| `operator.clusters.sizes.1200cc.cpu_limit` |  | ``24`` |
-| `operator.clusters.sizes.1200cc.credits_per_hour` |  | ``"12"`` |
-| `operator.clusters.sizes.1200cc.disk_limit` |  | ``"372603MiB"`` |
-| `operator.clusters.sizes.1200cc.memory_limit` |  | ``"186301MiB"`` |
-| `operator.clusters.sizes.1200cc.scale` |  | ``1`` |
-| `operator.clusters.sizes.1200cc.workers` |  | ``24`` |
-| `operator.clusters.sizes.128C.cpu_exclusive` |  | ``true`` |
-| `operator.clusters.sizes.128C.cpu_limit` |  | ``62`` |
-| `operator.clusters.sizes.128C.credits_per_hour` |  | ``"128"`` |
-| `operator.clusters.sizes.128C.disk_limit` |  | ``"962560MiB"`` |
-| `operator.clusters.sizes.128C.memory_limit` |  | ``"481280MiB"`` |
-| `operator.clusters.sizes.128C.scale` |  | ``4`` |
-| `operator.clusters.sizes.128C.workers` |  | ``62`` |
-| `operator.clusters.sizes.1600cc.cpu_exclusive` |  | ``true`` |
-| `operator.clusters.sizes.1600cc.cpu_limit` |  | ``31`` |
-| `operator.clusters.sizes.1600cc.credits_per_hour` |  | ``"16"`` |
-| `operator.clusters.sizes.1600cc.disk_limit` |  | ``"481280MiB"`` |
-| `operator.clusters.sizes.1600cc.memory_limit` |  | ``"240640MiB"`` |
-| `operator.clusters.sizes.1600cc.scale` |  | ``1`` |
-| `operator.clusters.sizes.1600cc.workers` |  | ``31`` |
-| `operator.clusters.sizes.200cc.cpu_exclusive` |  | ``true`` |
-| `operator.clusters.sizes.200cc.cpu_limit` |  | ``4`` |
-| `operator.clusters.sizes.200cc.credits_per_hour` |  | ``"2"`` |
-| `operator.clusters.sizes.200cc.disk_limit` |  | ``"62100MiB"`` |
-| `operator.clusters.sizes.200cc.memory_limit` |  | ``"31050MiB"`` |
-| `operator.clusters.sizes.200cc.scale` |  | ``1`` |
-| `operator.clusters.sizes.200cc.workers` |  | ``4`` |
-| `operator.clusters.sizes.256C.cpu_exclusive` |  | ``true`` |
-| `operator.clusters.sizes.256C.cpu_limit` |  | ``62`` |
-| `operator.clusters.sizes.256C.credits_per_hour` |  | ``"256"`` |
-| `operator.clusters.sizes.256C.disk_limit` |  | ``"962560MiB"`` |
-| `operator.clusters.sizes.256C.memory_limit` |  | ``"481280MiB"`` |
-| `operator.clusters.sizes.256C.scale` |  | ``8`` |
-| `operator.clusters.sizes.256C.workers` |  | ``62`` |
-| `operator.clusters.sizes.25cc.cpu_exclusive` |  | ``false`` |
-| `operator.clusters.sizes.25cc.cpu_limit` |  | ``0.5`` |
-| `operator.clusters.sizes.25cc.credits_per_hour` |  | ``"0.25"`` |
-| `operator.clusters.sizes.25cc.disk_limit` |  | ``"7762MiB"`` |
-| `operator.clusters.sizes.25cc.memory_limit` |  | ``"3881MiB"`` |
-| `operator.clusters.sizes.25cc.scale` |  | ``1`` |
-| `operator.clusters.sizes.25cc.workers` |  | ``1`` |
-| `operator.clusters.sizes.300cc.cpu_exclusive` |  | ``true`` |
-| `operator.clusters.sizes.300cc.cpu_limit` |  | ``6`` |
-| `operator.clusters.sizes.300cc.credits_per_hour` |  | ``"3"`` |
-| `operator.clusters.sizes.300cc.disk_limit` |  | ``"93150MiB"`` |
-| `operator.clusters.sizes.300cc.memory_limit` |  | ``"46575MiB"`` |
-| `operator.clusters.sizes.300cc.scale` |  | ``1`` |
-| `operator.clusters.sizes.300cc.workers` |  | ``6`` |
-| `operator.clusters.sizes.3200cc.cpu_exclusive` |  | ``true`` |
-| `operator.clusters.sizes.3200cc.cpu_limit` |  | ``62`` |
-| `operator.clusters.sizes.3200cc.credits_per_hour` |  | ``"32"`` |
-| `operator.clusters.sizes.3200cc.disk_limit` |  | ``"962560MiB"`` |
-| `operator.clusters.sizes.3200cc.memory_limit` |  | ``"481280MiB"`` |
-| `operator.clusters.sizes.3200cc.scale` |  | ``1`` |
-| `operator.clusters.sizes.3200cc.workers` |  | ``62`` |
-| `operator.clusters.sizes.400cc.cpu_exclusive` |  | ``true`` |
-| `operator.clusters.sizes.400cc.cpu_limit` |  | ``8`` |
-| `operator.clusters.sizes.400cc.credits_per_hour` |  | ``"4"`` |
-| `operator.clusters.sizes.400cc.disk_limit` |  | ``"124201MiB"`` |
-| `operator.clusters.sizes.400cc.memory_limit` |  | ``"62100MiB"`` |
-| `operator.clusters.sizes.400cc.scale` |  | ``1`` |
-| `operator.clusters.sizes.400cc.workers` |  | ``8`` |
-| `operator.clusters.sizes.50cc.cpu_exclusive` |  | ``true`` |
-| `operator.clusters.sizes.50cc.cpu_limit` |  | ``1`` |
-| `operator.clusters.sizes.50cc.credits_per_hour` |  | ``"0.5"`` |
-| `operator.clusters.sizes.50cc.disk_limit` |  | ``"15525MiB"`` |
-| `operator.clusters.sizes.50cc.memory_limit` |  | ``"7762MiB"`` |
-| `operator.clusters.sizes.50cc.scale` |  | ``1`` |
-| `operator.clusters.sizes.50cc.workers` |  | ``1`` |
-| `operator.clusters.sizes.512C.cpu_exclusive` |  | ``true`` |
-| `operator.clusters.sizes.512C.cpu_limit` |  | ``62`` |
-| `operator.clusters.sizes.512C.credits_per_hour` |  | ``"512"`` |
-| `operator.clusters.sizes.512C.disk_limit` |  | ``"962560MiB"`` |
-| `operator.clusters.sizes.512C.memory_limit` |  | ``"481280MiB"`` |
-| `operator.clusters.sizes.512C.scale` |  | ``16`` |
-| `operator.clusters.sizes.512C.workers` |  | ``62`` |
-| `operator.clusters.sizes.600cc.cpu_exclusive` |  | ``true`` |
-| `operator.clusters.sizes.600cc.cpu_limit` |  | ``12`` |
-| `operator.clusters.sizes.600cc.credits_per_hour` |  | ``"6"`` |
-| `operator.clusters.sizes.600cc.disk_limit` |  | ``"186301MiB"`` |
-| `operator.clusters.sizes.600cc.memory_limit` |  | ``"93150MiB"`` |
-| `operator.clusters.sizes.600cc.scale` |  | ``1`` |
-| `operator.clusters.sizes.600cc.workers` |  | ``12`` |
-| `operator.clusters.sizes.6400cc.cpu_exclusive` |  | ``true`` |
-| `operator.clusters.sizes.6400cc.cpu_limit` |  | ``62`` |
-| `operator.clusters.sizes.6400cc.credits_per_hour` |  | ``"64"`` |
-| `operator.clusters.sizes.6400cc.disk_limit` |  | ``"962560MiB"`` |
-| `operator.clusters.sizes.6400cc.memory_limit` |  | ``"481280MiB"`` |
-| `operator.clusters.sizes.6400cc.scale` |  | ``2`` |
-| `operator.clusters.sizes.6400cc.workers` |  | ``62`` |
-| `operator.clusters.sizes.800cc.cpu_exclusive` |  | ``true`` |
-| `operator.clusters.sizes.800cc.cpu_limit` |  | ``16`` |
-| `operator.clusters.sizes.800cc.credits_per_hour` |  | ``"8"`` |
-| `operator.clusters.sizes.800cc.disk_limit` |  | ``"248402MiB"`` |
-| `operator.clusters.sizes.800cc.memory_limit` |  | ``"124201MiB"`` |
-| `operator.clusters.sizes.800cc.scale` |  | ``1`` |
-| `operator.clusters.sizes.800cc.workers` |  | ``16`` |
-| `operator.clusters.sizes.mz_probe.cpu_exclusive` |  | ``false`` |
-| `operator.clusters.sizes.mz_probe.cpu_limit` |  | ``0.1`` |
-| `operator.clusters.sizes.mz_probe.credits_per_hour` |  | ``"0.00"`` |
-| `operator.clusters.sizes.mz_probe.disk_limit` |  | ``"1552MiB"`` |
-| `operator.clusters.sizes.mz_probe.memory_limit` |  | ``"776MiB"`` |
-| `operator.clusters.sizes.mz_probe.scale` |  | ``1`` |
-| `operator.clusters.sizes.mz_probe.workers` |  | ``1`` |
-| `operator.features.authentication` |  | ``false`` |
-| `operator.features.consoleImageTagMapOverride` |  | ``{}`` |
-| `operator.features.createBalancers` |  | ``true`` |
-| `operator.features.createConsole` |  | ``true`` |
-| `operator.image.pullPolicy` |  | ``"IfNotPresent"`` |
-| `operator.image.repository` |  | ``"materialize/orchestratord"`` |
-| `operator.image.tag` |  | ``"v0.128.0-dev.0"`` |
+| `operator.features.authentication` | Whether to enable environmentd rbac checks TODO: this is not yet supported in the helm chart | ``false`` |
+| `operator.features.consoleImageTagMapOverride` | Override the mapping of environmentd versions to console versions | ``{}`` |
+| `operator.features.createBalancers` | Flag to indicate whether to create balancerd pods for the environments | ``true`` |
+| `operator.features.createConsole` | Flag to indicate whether to create console pods for the environments | ``true`` |
+| `operator.image.pullPolicy` | Policy for pulling the image: "IfNotPresent" avoids unnecessary re-pulling of images | ``"IfNotPresent"`` |
+| `operator.image.repository` | The Docker repository for the operator image | ``"materialize/orchestratord"`` |
+| `operator.image.tag` | The tag/version of the operator image to be used | ``"v0.128.0-dev.0"`` |
 | `operator.nodeSelector` |  | ``{}`` |
-| `operator.resources.limits.memory` |  | ``"512Mi"`` |
-| `operator.resources.requests.cpu` |  | ``"100m"`` |
-| `operator.resources.requests.memory` |  | ``"512Mi"`` |
-| `rbac.create` |  | ``true`` |
-| `serviceAccount.create` |  | ``true`` |
-| `serviceAccount.name` |  | ``"orchestratord"`` |
+| `operator.resources.limits` | Resource limits for the operator's CPU and memory | ``{"memory":"512Mi"}`` |
+| `operator.resources.requests` | Resources requested by the operator for CPU and memory | ``{"cpu":"100m","memory":"512Mi"}`` |
+| `rbac.create` | Whether to create necessary RBAC roles and bindings | ``true`` |
+| `serviceAccount.create` | Whether to create a new service account for the operator | ``true`` |
+| `serviceAccount.name` | The name of the service account to be created | ``"orchestratord"`` |
 | `storage.storageClass.allowVolumeExpansion` |  | ``false`` |
-| `storage.storageClass.create` |  | ``false`` |
-| `storage.storageClass.name` |  | ``""`` |
-| `storage.storageClass.parameters.fsType` |  | ``"ext4"`` |
-| `storage.storageClass.parameters.storage` |  | ``"lvm"`` |
-| `storage.storageClass.parameters.volgroup` |  | ``"instance-store-vg"`` |
-| `storage.storageClass.provisioner` |  | ``""`` |
+| `storage.storageClass.create` | Set to false to use an existing StorageClass instead. Refer to the [Kubernetes StorageClass documentation](https://kubernetes.io/docs/concepts/storage/storage-classes/) | ``false`` |
+| `storage.storageClass.name` | Name of the StorageClass to create/use: eg "openebs-lvm-instance-store-ext4" | ``""`` |
+| `storage.storageClass.parameters` | Parameters for the CSI driver | ``{"fsType":"ext4","storage":"lvm","volgroup":"instance-store-vg"}`` |
+| `storage.storageClass.provisioner` | CSI driver to use, eg "local.csi.openebs.io" | ``""`` |
 | `storage.storageClass.reclaimPolicy` |  | ``"Delete"`` |
 | `storage.storageClass.volumeBindingMode` |  | ``"WaitForFirstConsumer"`` |
 | `telemetry.enabled` |  | ``true`` |
