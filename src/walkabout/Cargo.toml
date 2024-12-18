@@ -11,7 +11,7 @@ workspace = true
 
 [dependencies]
 anyhow = "1.0.66"
-itertools = "0.10.5"
+itertools = "0.12.1"
 mz-ore = { path = "../ore", default-features = false, features = ["test"] }
 quote = "1.0.23"
 syn = { version = "1.0.107", features = ["extra-traits", "full", "parsing"] }
