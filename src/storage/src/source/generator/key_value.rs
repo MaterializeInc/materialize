@@ -13,9 +13,10 @@ use std::sync::Arc;
 
 use differential_dataflow::AsCollection;
 use futures::stream::StreamExt;
+use itertools::Itertools;
 use mz_ore::cast::CastFrom;
 use mz_ore::iter::IteratorExt;
-use mz_repr::{Datum, Diff, Row};
+use mz_repr::{Datum, Diff, GlobalId, Row};
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::load_generator::{KeyValueLoadGenerator, LoadGeneratorOutput};
 use mz_storage_types::sources::{MzOffset, SourceTimestamp};
@@ -31,7 +32,7 @@ use tracing::info;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::source::types::{ProgressStatisticsUpdate, SignaledFuture, StackedCollection};
-use crate::source::{RawSourceCreationConfig, SourceMessage};
+use crate::source::{PartitionCore, RawSourceCreationConfig, SourceMessage};
 
 pub fn render<G: Scope<Timestamp = MzOffset>>(
     key_value: KeyValueLoadGenerator,
@@ -41,7 +42,7 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
     start_signal: impl std::future::Future<Output = ()> + 'static,
     output_map: BTreeMap<LoadGeneratorOutput, Vec<usize>>,
 ) -> (
-    StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
+    BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
     Option<Stream<G, Infallible>>,
     Stream<G, HealthStatusMessage>,
     Stream<G, ProgressStatisticsUpdate>,
@@ -53,6 +54,20 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
     let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
 
     let (data_output, stream) = builder.new_output::<AccountedStackBuilder<_>>();
+    let partition_count = u64::cast_from(config.source_exports.len());
+    let data_streams: Vec<_> = stream.partition_core(
+        partition_count,
+        |((output, data), time, diff): &(
+            (usize, Result<SourceMessage, DataflowError>),
+            MzOffset,
+            Diff,
+        )| { (*output, (data.clone(), time.clone(), diff.clone())) },
+    );
+    let mut data_collections = BTreeMap::new();
+    for (id, data_stream) in config.source_exports.keys().zip_eq(data_streams) {
+        data_collections.insert(*id, data_stream.as_collection());
+    }
+
     let (_progress_output, progress_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
     let (stats_output, stats_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
 
@@ -207,7 +222,7 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
     });
 
     let status = [HealthStatusMessage {
-        index: 0,
+        id: None,
         namespace: StatusNamespace::Generator,
         update: HealthStatusUpdate::running(),
     }]
@@ -215,7 +230,7 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
     let stats_stream = stats_stream.concat(&steady_state_stats_stream);
 
     (
-        stream.as_collection(),
+        data_collections,
         Some(progress_stream),
         status,
         stats_stream,

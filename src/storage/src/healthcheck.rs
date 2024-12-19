@@ -212,16 +212,14 @@ impl<'a> From<&'a OverallStatus> for Status {
 
 #[derive(Debug)]
 struct HealthState {
-    id: GlobalId,
     healths: PerWorkerHealthStatus,
     last_reported_status: Option<OverallStatus>,
     halt_with: Option<(StatusNamespace, HealthStatusUpdate)>,
 }
 
 impl HealthState {
-    fn new(id: GlobalId, worker_count: usize) -> HealthState {
+    fn new(worker_count: usize) -> HealthState {
         HealthState {
-            id,
             healths: PerWorkerHealthStatus {
                 errors_by_worker: vec![Default::default(); worker_count],
             },
@@ -310,10 +308,9 @@ impl HealthOperator for DefaultWriter {
 /// A health message consumed by the `health_operator`.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct HealthStatusMessage {
-    /// The index of the object this message describes.
-    ///
-    /// Useful for sub-objects like sub-sources.
-    pub index: usize,
+    /// The object that this status message is about. When None, it refers to the entire ingestion
+    /// as a whole. When Some, it refers to a specific subsource.
+    pub id: Option<GlobalId>,
     /// The namespace of the health update.
     pub namespace: StatusNamespace,
     /// The update itself.
@@ -339,8 +336,6 @@ pub(crate) fn health_operator<'g, G, P>(
     object_type: &'static str,
     // An indexed stream of health updates. Indexes are configured in `configs`.
     health_stream: &Stream<G, HealthStatusMessage>,
-    // A map of index to collection id that we intend to report on.
-    configs: BTreeMap<usize, GlobalId>,
     // An impl of `HealthOperator` that configures the output behavior of this operator.
     health_operator_impl: P,
     // Whether or not we should actually write namespaced errors in the `details` column.
@@ -365,7 +360,7 @@ where
     } else {
         // We'll route all the work to a single arbitrary worker;
         // there's not much to do, and we need a global view.
-        usize::cast_from(configs.keys().next().hashed()) % worker_count
+        usize::cast_from(mark_starting.iter().next().hashed()) % worker_count
     };
 
     let is_active_worker = chosen_worker_id == healthcheck_worker_id;
@@ -381,20 +376,22 @@ where
     );
 
     let button = health_op.build(move |mut _capabilities| async move {
-        let mut health_states: BTreeMap<_, _> = configs
-            .into_iter()
-            .map(|(output_idx, id)| (output_idx, HealthState::new(id, worker_count)))
+        let mut health_states: BTreeMap<_, _> = mark_starting
+            .iter()
+            .copied()
+            .chain([halting_id])
+            .map(|id| (id, HealthState::new(worker_count)))
             .collect();
 
         // Write the initial starting state to the status shard for all managed objects
         if is_active_worker {
-            for state in health_states.values_mut() {
-                if mark_starting.contains(&state.id) {
+            for (id, state) in health_states.iter_mut() {
+                if mark_starting.contains(id) {
                     let status = OverallStatus::Starting;
                     let timestamp = mz_ore::now::to_datetime(now());
                     health_operator_impl
                         .record_new_status(
-                            state.id,
+                            *id,
                             timestamp,
                             (&status).into(),
                             status.error(),
@@ -409,21 +406,19 @@ where
             }
         }
 
-        let mut outputs_seen = BTreeMap::<usize, BTreeSet<_>>::new();
+        let mut outputs_seen = BTreeMap::<GlobalId, BTreeSet<_>>::new();
         while let Some(event) = input.next().await {
             if let AsyncEvent::Data(_cap, rows) = event {
                 for (worker_id, message) in rows {
                     let HealthStatusMessage {
-                        index: output_index,
+                        id,
                         namespace: ns,
                         update: health_event,
                     } = message;
+                    let id = id.unwrap_or(halting_id);
                     let HealthState {
-                        id,
-                        healths,
-                        halt_with,
-                        ..
-                    } = match health_states.get_mut(&output_index) {
+                        healths, halt_with, ..
+                    } = match health_states.get_mut(&id) {
                         Some(health) => health,
                         // This is a health status update for a sub-object_type that we did not request to
                         // be generated, which means it doesn't have a GlobalId and should not be
@@ -434,7 +429,7 @@ where
                     // Its important to track `new_round` per-namespace, so namespaces are reasoned
                     // about in `merge_update` independently.
                     let new_round = outputs_seen
-                        .entry(output_index)
+                        .entry(id)
                         .or_insert_with(BTreeSet::new)
                         .insert(ns.clone());
 
@@ -454,15 +449,12 @@ where
 
                 let mut halt_with_outer = None;
 
-                while let Some((output_index, _)) = outputs_seen.pop_first() {
+                while let Some((id, _)) = outputs_seen.pop_first() {
                     let HealthState {
-                        id,
                         healths,
                         last_reported_status,
                         halt_with,
-                    } = health_states
-                        .get_mut(&output_index)
-                        .expect("known to exist");
+                    } = health_states.get_mut(&id).expect("known to exist");
 
                     let new_status = healths.decide_status();
 
@@ -476,7 +468,7 @@ where
                         let timestamp = mz_ore::now::to_datetime(now());
                         health_operator_impl
                             .record_new_status(
-                                *id,
+                                id,
                                 timestamp,
                                 (&new_status).into(),
                                 new_status.error(),
@@ -491,7 +483,7 @@ where
 
                     // Set halt with if None.
                     if halt_with_outer.is_none() && halt_with.is_some() {
-                        halt_with_outer = Some((*id, halt_with.clone()));
+                        halt_with_outer = Some((id, halt_with.clone()));
                     }
                 }
 
@@ -621,7 +613,7 @@ mod tests {
                 Update(TestUpdate {
                     worker_id: 1,
                     namespace: StatusNamespace::Generator,
-                    input_index: 0,
+                    id: None,
                     update: HealthStatusUpdate::running(),
                 }),
                 AssertStatus(vec![StatusToAssert {
@@ -638,7 +630,7 @@ mod tests {
                 Update(TestUpdate {
                     worker_id: 1,
                     namespace: StatusNamespace::Generator,
-                    input_index: 1,
+                    id: Some(GlobalId::User(1)),
                     update: HealthStatusUpdate::running(),
                 }),
                 AssertStatus(vec![StatusToAssert {
@@ -649,7 +641,7 @@ mod tests {
                 Update(TestUpdate {
                     worker_id: 0,
                     namespace: StatusNamespace::Generator,
-                    input_index: 1,
+                    id: Some(GlobalId::User(1)),
                     update: HealthStatusUpdate::stalled("uhoh".to_string(), None),
                 }),
                 AssertStatus(vec![StatusToAssert {
@@ -663,7 +655,7 @@ mod tests {
                 Update(TestUpdate {
                     worker_id: 0,
                     namespace: StatusNamespace::Generator,
-                    input_index: 1,
+                    id: Some(GlobalId::User(1)),
                     update: HealthStatusUpdate::running(),
                 }),
                 AssertStatus(vec![StatusToAssert {
@@ -703,7 +695,7 @@ mod tests {
                 Update(TestUpdate {
                     worker_id: 0,
                     namespace: StatusNamespace::Generator,
-                    input_index: 1,
+                    id: Some(GlobalId::User(1)),
                     update: HealthStatusUpdate::stalled("uhoh".to_string(), None),
                 }),
                 AssertStatus(vec![StatusToAssert {
@@ -742,7 +734,7 @@ mod tests {
                 Update(TestUpdate {
                     worker_id: 0,
                     namespace: StatusNamespace::Generator,
-                    input_index: 0,
+                    id: None,
                     update: HealthStatusUpdate::stalled("uhoh".to_string(), None),
                 }),
                 AssertStatus(vec![StatusToAssert {
@@ -755,7 +747,7 @@ mod tests {
                 Update(TestUpdate {
                     worker_id: 0,
                     namespace: StatusNamespace::Kafka,
-                    input_index: 0,
+                    id: None,
                     update: HealthStatusUpdate::stalled("uhoh".to_string(), None),
                 }),
                 AssertStatus(vec![StatusToAssert {
@@ -769,7 +761,7 @@ mod tests {
                 Update(TestUpdate {
                     worker_id: 0,
                     namespace: StatusNamespace::Kafka,
-                    input_index: 0,
+                    id: None,
                     update: HealthStatusUpdate::running(),
                 }),
                 AssertStatus(vec![StatusToAssert {
@@ -782,7 +774,7 @@ mod tests {
                 Update(TestUpdate {
                     worker_id: 0,
                     namespace: StatusNamespace::Generator,
-                    input_index: 0,
+                    id: None,
                     update: HealthStatusUpdate::running(),
                 }),
                 AssertStatus(vec![StatusToAssert {
@@ -818,7 +810,7 @@ mod tests {
                 Update(TestUpdate {
                     worker_id: 0,
                     namespace: StatusNamespace::Ssh,
-                    input_index: 0,
+                    id: None,
                     update: HealthStatusUpdate::stalled("uhoh".to_string(), None),
                 }),
                 AssertStatus(vec![StatusToAssert {
@@ -831,7 +823,7 @@ mod tests {
                 Update(TestUpdate {
                     worker_id: 0,
                     namespace: StatusNamespace::Ssh,
-                    input_index: 0,
+                    id: None,
                     update: HealthStatusUpdate::stalled("uhoh2".to_string(), None),
                 }),
                 AssertStatus(vec![StatusToAssert {
@@ -844,7 +836,7 @@ mod tests {
                 Update(TestUpdate {
                     worker_id: 0,
                     namespace: StatusNamespace::Ssh,
-                    input_index: 0,
+                    id: None,
                     update: HealthStatusUpdate::running(),
                 }),
                 // We haven't starting running yet, as a `Default` namespace hasn't told us.
@@ -856,7 +848,7 @@ mod tests {
                 Update(TestUpdate {
                     worker_id: 0,
                     namespace: StatusNamespace::Generator,
-                    input_index: 0,
+                    id: None,
                     update: HealthStatusUpdate::running(),
                 }),
                 AssertStatus(vec![StatusToAssert {
@@ -890,7 +882,7 @@ mod tests {
                 Update(TestUpdate {
                     worker_id: 0,
                     namespace: StatusNamespace::Generator,
-                    input_index: 0,
+                    id: None,
                     update: HealthStatusUpdate::stalled(
                         "uhoh".to_string(),
                         Some("hint1".to_string()),
@@ -906,7 +898,7 @@ mod tests {
                 Update(TestUpdate {
                     worker_id: 1,
                     namespace: StatusNamespace::Generator,
-                    input_index: 0,
+                    id: None,
                     update: HealthStatusUpdate::stalled(
                         "uhoh2".to_string(),
                         Some("hint2".to_string()),
@@ -924,7 +916,7 @@ mod tests {
                 Update(TestUpdate {
                     worker_id: 1,
                     namespace: StatusNamespace::Generator,
-                    input_index: 0,
+                    id: None,
                     update: HealthStatusUpdate::stalled(
                         "uhoh2".to_string(),
                         Some("hint3".to_string()),
@@ -942,7 +934,7 @@ mod tests {
                 Update(TestUpdate {
                     worker_id: 0,
                     namespace: StatusNamespace::Generator,
-                    input_index: 0,
+                    id: None,
                     update: HealthStatusUpdate::running(),
                 }),
                 AssertStatus(vec![StatusToAssert {
@@ -956,7 +948,7 @@ mod tests {
                 Update(TestUpdate {
                     worker_id: 1,
                     namespace: StatusNamespace::Generator,
-                    input_index: 0,
+                    id: None,
                     update: HealthStatusUpdate::running(),
                 }),
                 AssertStatus(vec![StatusToAssert {
@@ -1004,7 +996,7 @@ mod tests {
     struct TestUpdate {
         worker_id: u64,
         namespace: StatusNamespace,
-        input_index: usize,
+        id: Option<GlobalId>,
         update: HealthStatusUpdate,
     }
 
@@ -1111,7 +1103,6 @@ mod tests {
                                 *inputs.first_key_value().unwrap().0,
                                 "source_test",
                                 &input,
-                                inputs.iter().map(|(id, index)| (*index, *id)).collect(),
                                 TestWriter {
                                     sender: out_tx,
                                     input_mapping: inputs,
@@ -1191,7 +1182,7 @@ mod tests {
                     capability.as_ref().unwrap(),
                     (
                         element.worker_id,
-                        element.input_index,
+                        element.id,
                         element.namespace,
                         element.update,
                     ),
@@ -1202,7 +1193,7 @@ mod tests {
         });
 
         let output = output.exchange(|d| d.0).map(|d| HealthStatusMessage {
-            index: d.1,
+            id: d.1,
             namespace: d.2,
             update: d.3,
         });

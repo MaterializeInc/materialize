@@ -15,8 +15,10 @@ use std::time::Duration;
 
 use differential_dataflow::AsCollection;
 use futures::StreamExt;
+use itertools::Itertools;
+use mz_ore::cast::CastFrom;
 use mz_ore::iter::IteratorExt;
-use mz_repr::Row;
+use mz_repr::{Diff, GlobalId, Row};
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::load_generator::{
     Event, Generator, KeyValueLoadGenerator, LoadGenerator, LoadGeneratorOutput,
@@ -33,7 +35,7 @@ use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespac
 use crate::source::types::{
     Probe, ProgressStatisticsUpdate, SignaledFuture, SourceRender, StackedCollection,
 };
-use crate::source::{RawSourceCreationConfig, SourceMessage};
+use crate::source::{PartitionCore, RawSourceCreationConfig, SourceMessage};
 
 mod auction;
 mod clock;
@@ -136,7 +138,7 @@ impl GeneratorKind {
         committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
-        StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
+        BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
         Option<Stream<G, Infallible>>,
         Stream<G, HealthStatusMessage>,
         Stream<G, ProgressStatisticsUpdate>,
@@ -144,20 +146,17 @@ impl GeneratorKind {
     ) {
         // figure out which output types from the generator belong to which output indexes
         let mut output_map = BTreeMap::new();
-        for (_, export) in config.source_exports.iter() {
-            let output_type = match &export.export.details {
+        for (idx, (_, export)) in config.source_exports.iter().enumerate() {
+            let output_type = match &export.details {
                 SourceExportDetails::LoadGenerator(details) => details.output,
                 // This is an export that doesn't need any data output to it.
                 SourceExportDetails::None => continue,
-                _ => panic!(
-                    "unexpected source export details: {:?}",
-                    export.export.details
-                ),
+                _ => panic!("unexpected source export details: {:?}", export.details),
             };
             output_map
                 .entry(output_type)
                 .or_insert_with(Vec::new)
-                .push(export.ingestion_output);
+                .push(idx);
         }
 
         match self {
@@ -200,7 +199,7 @@ impl SourceRender for LoadGeneratorSourceConnection {
         committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
-        StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
+        BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
         Option<Stream<G, Infallible>>,
         Stream<G, HealthStatusMessage>,
         Stream<G, ProgressStatisticsUpdate>,
@@ -230,7 +229,7 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
     committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
     output_map: BTreeMap<LoadGeneratorOutput, Vec<usize>>,
 ) -> (
-    StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
+    BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
     Option<Stream<G, Infallible>>,
     Stream<G, HealthStatusMessage>,
     Stream<G, ProgressStatisticsUpdate>,
@@ -239,6 +238,20 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
     let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
 
     let (data_output, stream) = builder.new_output::<AccountedStackBuilder<_>>();
+    let partition_count = u64::cast_from(config.source_exports.len());
+    let data_streams: Vec<_> = stream.partition_core(
+        partition_count,
+        |((output, data), time, diff): &(
+            (usize, Result<SourceMessage, DataflowError>),
+            MzOffset,
+            Diff,
+        )| { (*output, (data.clone(), time.clone(), diff.clone())) },
+    );
+    let mut data_collections = BTreeMap::new();
+    for (id, data_stream) in config.source_exports.keys().zip_eq(data_streams) {
+        data_collections.insert(*id, data_stream.as_collection());
+    }
+
     let (health_output, health_stream) = builder.new_output();
     let (stats_output, stats_stream) = builder.new_output();
 
@@ -328,7 +341,7 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
                             None => continue,
                         };
 
-                        let message = Ok(SourceMessage {
+                        let message: Result<SourceMessage, DataflowError> = Ok(SourceMessage {
                             key: Row::default(),
                             value,
                             metadata: Row::default(),
@@ -351,7 +364,7 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
                             health_output.give(
                                 &health_cap,
                                 HealthStatusMessage {
-                                    index: 0,
+                                    id: None,
                                     namespace: StatusNamespace::Generator,
                                     update: HealthStatusUpdate::running(),
                                 },
@@ -417,7 +430,7 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
     });
 
     (
-        stream.as_collection(),
+        data_collections,
         None,
         health_stream,
         stats_stream,

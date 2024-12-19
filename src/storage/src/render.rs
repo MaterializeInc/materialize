@@ -272,7 +272,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
             let base_source_config = RawSourceCreationConfig {
                 name: format!("{}-{}", connection.name(), primary_source_id),
                 id: primary_source_id,
-                source_exports: description.indexed_source_exports(&primary_source_id),
+                source_exports: description.source_exports.clone(),
                 timestamp_interval: description.desc.timestamp_interval,
                 worker_id: mz_scope.index(),
                 worker_count: mz_scope.peers(),
@@ -297,7 +297,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                 busy_signal: Arc::clone(&busy_signal),
             };
 
-            let (mut outputs, source_health, source_tokens) = match connection {
+            let (outputs, source_health, source_tokens) = match connection {
                 GenericSourceConnection::Kafka(c) => crate::render::sources::render_source(
                     mz_scope,
                     &debug_name,
@@ -337,56 +337,47 @@ pub fn build_ingestion_dataflow<A: Allocate>(
             };
             tokens.extend(source_tokens);
 
-            let mut health_configs = BTreeMap::new();
-
             let mut upper_streams = vec![];
             let mut health_streams = vec![source_health];
-            let source_exports = description.indexed_source_exports(&primary_source_id);
-            for (export_id, export) in source_exports {
-                let (ok, err) = outputs
-                    .get_mut(export.ingestion_output)
-                    .expect("known to exist");
+            for (export_id, (ok, err)) in outputs {
+                let export = &description.source_exports[&export_id];
                 let source_data = ok.map(Ok).concat(&err.map(Err));
 
                 let metrics = storage_state.metrics.get_source_persist_sink_metrics(
                     export_id,
                     primary_source_id,
                     worker_id,
-                    &export.export.storage_metadata.data_shard,
-                    export.ingestion_output,
+                    &export.storage_metadata.data_shard,
                 );
 
                 tracing::info!(
                     id = %primary_source_id,
-                    "timely-{worker_id}: persisting export #{} of {} into {}",
-                    export.ingestion_output,
-                    primary_source_id,
-                    export_id
+                    "timely-{worker_id}: persisting export {} of {}",
+                    export_id,
+                    primary_source_id
                 );
                 let (upper_stream, errors, sink_tokens) = crate::render::persist_sink::render(
                     mz_scope,
                     export_id,
-                    export.export.storage_metadata.clone(),
+                    export.storage_metadata.clone(),
                     source_data,
                     storage_state,
                     metrics,
-                    export.ingestion_output,
                     Arc::clone(&busy_signal),
                 );
                 upper_streams.push(upper_stream);
                 tokens.extend(sink_tokens);
 
-                let sink_health = errors.map(|err: Rc<anyhow::Error>| {
+                let sink_health = errors.map(move |err: Rc<anyhow::Error>| {
                     let halt_status =
                         HealthStatusUpdate::halting(err.display_with_causes().to_string(), None);
                     HealthStatusMessage {
-                        index: 0,
+                        id: Some(export_id),
                         namespace: StatusNamespace::Internal,
                         update: halt_status,
                     }
                 });
                 health_streams.push(sink_health.leave());
-                health_configs.insert(export.ingestion_output, export_id);
             }
 
             mz_scope
@@ -408,7 +399,6 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                 primary_source_id,
                 "source",
                 &health_stream,
-                health_configs,
                 crate::healthcheck::DefaultWriter {
                     command_tx: Rc::clone(&storage_state.internal_cmd_tx),
                     updates: Rc::clone(&storage_state.object_status_updates),
@@ -455,13 +445,6 @@ pub fn build_export_dataflow<A: Allocate>(
                 crate::render::sinks::render_sink(scope, storage_state, id, &description);
             tokens.extend(sink_tokens);
 
-            let mut health_configs = BTreeMap::new();
-            health_configs.insert(
-                // There is only 1 sink (as opposed to many sub-sources), so we just use a single
-                // index.
-                0, id,
-            );
-
             // Note that sinks also have only 1 active worker, which simplifies the work that
             // `health_operator` has to do internally.
             let health_token = crate::healthcheck::health_operator(
@@ -471,7 +454,6 @@ pub fn build_export_dataflow<A: Allocate>(
                 id,
                 "sink",
                 &health_stream,
-                health_configs,
                 crate::healthcheck::DefaultWriter {
                     command_tx: Rc::clone(&storage_state.internal_cmd_tx),
                     updates: Rc::clone(&storage_state.object_status_updates),

@@ -1716,39 +1716,6 @@ def workflow_test_replica_targeted_select_abort(c: Composition) -> None:
     killer.join()
 
 
-def workflow_pg_snapshot_partial_failure(c: Composition) -> None:
-    """Test PostgreSQL snapshot partial failure"""
-
-    c.down(destroy_volumes=True)
-
-    with c.override(
-        # Start postgres for the pg source
-        Testdrive(no_reset=True),
-        Clusterd(
-            name="clusterd1",
-            environment_extra=["FAILPOINTS=pg_snapshot_pause=return(2)"],
-        ),
-    ):
-        c.up("materialized", "postgres", "clusterd1")
-
-        c.run_testdrive_files("pg-snapshot-partial-failure/01-configure-postgres.td")
-        c.run_testdrive_files("pg-snapshot-partial-failure/02-create-sources.td")
-
-        c.run_testdrive_files(
-            "pg-snapshot-partial-failure/03-verify-good-sub-source.td"
-        )
-
-        c.kill("clusterd1")
-        # Restart the storage instance with the failpoint off...
-        with c.override(
-            # turn off the failpoint
-            Clusterd(name="clusterd1")
-        ):
-            c.run_testdrive_files("pg-snapshot-partial-failure/04-add-more-data.td")
-            c.up("clusterd1")
-            c.run_testdrive_files("pg-snapshot-partial-failure/05-verify-data.td")
-
-
 def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
     """
     Test that compute reconciliation reuses existing dataflows.

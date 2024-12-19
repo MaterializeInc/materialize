@@ -34,7 +34,6 @@ use std::time::Duration;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use futures::stream::StreamExt;
-use itertools::Itertools;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::error::ErrorExt;
@@ -45,23 +44,20 @@ use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::dyncfgs;
 use mz_storage_types::errors::DataflowError;
-use mz_storage_types::sources::{
-    IndexedSourceExport, SourceConnection, SourceExportDataConfig, SourceTimestamp,
-};
+use mz_storage_types::sources::{SourceConnection, SourceExport, SourceTimestamp};
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
 use mz_timely_util::capture::PusherCapture;
-use mz_timely_util::operator::StreamExt as _;
 use mz_timely_util::reclock::reclock;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::capture::capture::Capture;
 use timely::dataflow::operators::capture::{Event, EventPusher};
 use timely::dataflow::operators::core::Map as _;
-use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::operators::{Broadcast, CapabilitySet, Concat, Inspect, Leave, Partition};
+use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
+use timely::dataflow::operators::{Broadcast, CapabilitySet, Concat, Inspect, Leave};
 use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, Stream};
 use timely::order::TotalOrder;
@@ -88,7 +84,7 @@ pub struct RawSourceCreationConfig {
     /// The ID of this instantiation of this source.
     pub id: GlobalId,
     /// The details of the outputs from this ingestion.
-    pub source_exports: BTreeMap<GlobalId, IndexedSourceExport<CollectionMetadata>>,
+    pub source_exports: BTreeMap<GlobalId, SourceExport<CollectionMetadata>>,
     /// The ID of the worker on which this operator is executing
     pub worker_id: usize,
     /// The total count of workers
@@ -178,12 +174,14 @@ pub fn create_raw_source<'g, G: Scope<Timestamp = ()>, C>(
     source_connection: C,
     start_signal: impl std::future::Future<Output = ()> + 'static,
 ) -> (
-    Vec<(
+    BTreeMap<
         GlobalId,
-        Collection<Child<'g, G, mz_repr::Timestamp>, SourceOutput<C::Time>, Diff>,
-        Collection<Child<'g, G, mz_repr::Timestamp>, DataflowError, Diff>,
-        SourceExportDataConfig,
-    )>,
+        Collection<
+            Child<'g, G, mz_repr::Timestamp>,
+            Result<SourceOutput<C::Time>, DataflowError>,
+            Diff,
+        >,
+    >,
     Stream<G, HealthStatusMessage>,
     Vec<PressOnDropButton>,
 )
@@ -199,11 +197,7 @@ where
         watch::channel(MutableAntichain::new_bottom(C::Time::minimum()));
     let (probed_upper_tx, probed_upper_rx) = watch::channel(None);
 
-    let source_metrics = Arc::new(
-        config
-            .metrics
-            .get_source_metrics(&config.name, id, worker_id),
-    );
+    let source_metrics = Arc::new(config.metrics.get_source_metrics(id, worker_id));
 
     let timestamp_desc = source_connection.timestamp_desc();
 
@@ -227,13 +221,12 @@ where
         Arc::clone(&source_metrics),
     );
 
-    let (reclock_pusher, reclocked) = reclock(&remap_collection, config.as_of.clone());
-
-    let streams = demux_source_exports(config.clone(), reclocked);
+    let mut reclocked_exports = BTreeMap::new();
 
     let config = config.clone();
-    let (streams, health, source_tokens) = scope.parent.scoped("SourceTimeDomain", move |scope| {
-        let (source, source_upper, health_stream, source_tokens) = source_render_operator(
+    let reclocked_exports2 = &mut reclocked_exports;
+    let (health, source_tokens) = scope.parent.scoped("SourceTimeDomain", move |scope| {
+        let (exports, source_upper, health_stream, source_tokens) = source_render_operator(
             scope,
             config.clone(),
             source_connection,
@@ -242,30 +235,34 @@ where
             start_signal,
         );
 
-        source
-            .inner
-            .map(move |((output, result), from_time, diff)| {
-                let result = match result {
-                    Ok(msg) => Ok(SourceOutput {
-                        key: msg.key.clone(),
-                        value: msg.value.clone(),
-                        metadata: msg.metadata.clone(),
-                        from_time: from_time.clone(),
-                    }),
-                    Err(err) => Err(err.clone()),
-                };
-                ((*output, result), from_time.clone(), *diff)
-            })
-            .capture_into(PusherCapture(reclock_pusher));
+        for (id, export) in exports {
+            let (reclock_pusher, reclocked) = reclock(&remap_collection, config.as_of.clone());
+            export
+                .inner
+                .map(move |(result, from_time, diff)| {
+                    let result = match result {
+                        Ok(msg) => Ok(SourceOutput {
+                            key: msg.key.clone(),
+                            value: msg.value.clone(),
+                            metadata: msg.metadata.clone(),
+                            from_time: from_time.clone(),
+                        }),
+                        Err(err) => Err(err.clone()),
+                    };
+                    (result, from_time.clone(), *diff)
+                })
+                .capture_into(PusherCapture(reclock_pusher));
+            reclocked_exports2.insert(id, reclocked);
+        }
 
         source_upper.capture_into(FrontierCapture(ingested_upper_tx));
 
-        (streams, health_stream.leave(), source_tokens)
+        (health_stream.leave(), source_tokens)
     });
 
     tokens.extend(source_tokens);
 
-    (streams, health, tokens)
+    (reclocked_exports, health, tokens)
 }
 
 pub struct FrontierCapture<T>(watch::Sender<MutableAntichain<T>>);
@@ -294,7 +291,7 @@ fn source_render_operator<G, C>(
     resume_uppers: impl futures::Stream<Item = Antichain<C::Time>> + 'static,
     start_signal: impl std::future::Future<Output = ()> + 'static,
 ) -> (
-    StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
+    BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
     Stream<G, Infallible>,
     Stream<G, HealthStatusMessage>,
     Vec<PressOnDropButton>,
@@ -314,8 +311,8 @@ where
         trace!(%upper, "timely-{worker_id} source({source_id}) received resume upper");
     });
 
-    let (input_data, progress, health, stats, probes, tokens) =
-        source_connection.render(scope, config, resume_uppers, start_signal);
+    let (exports, progress, health, stats, probes, tokens) =
+        source_connection.render(scope, config.clone(), resume_uppers, start_signal);
 
     crate::source::statistics::process_statistics(
         scope.clone(),
@@ -326,69 +323,100 @@ where
     );
 
     let name = format!("SourceGenericStats({})", source_id);
-    let mut builder = AsyncOperatorBuilder::new(name, scope.clone());
+    let mut builder = OperatorBuilderRc::new(name, scope.clone());
 
-    let (data_output, data) = builder.new_output::<CapacityContainerBuilder<_>>();
-    let (progress_output, derived_progress) = builder.new_output::<CapacityContainerBuilder<_>>();
-    let mut data_input = builder.new_input_for_many(
-        &input_data.inner,
-        Pipeline,
-        [&data_output, &progress_output],
+    let (_, derived_progress) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (mut health_output, derived_health) = builder.new_output::<CapacityContainerBuilder<_>>();
+
+    let mut export_collections = BTreeMap::new();
+    let mut export_handles = vec![];
+    for (id, export) in exports {
+        let (export_output, new_export) = builder.new_output::<CapacityContainerBuilder<_>>();
+        // This input's frontier flow into the progress collection and the corresponding output
+        let mut connection = vec![Antichain::from_elem(Default::default()), Antichain::new()];
+        // No frontier implications for other outputs
+        for _ in 0..export_handles.len() {
+            connection.push(Antichain::new());
+        }
+        // Standard frontier implication for the corresponding output of this input
+        connection.push(Antichain::from_elem(Default::default()));
+        let export_input = builder.new_input_connection(&export.inner, Pipeline, connection);
+        export_handles.push((id, export_input, export_output));
+        let new_export: StackedCollection<G, Result<SourceMessage, DataflowError>> =
+            new_export.as_collection();
+        export_collections.insert(id, new_export);
+    }
+
+    let bytes_read_counter = config.metrics.source_defs.bytes_read.clone();
+    let source_metrics = config.metrics.get_source_metrics(config.id, worker_id);
+
+    // Compute the overall resume upper to report for the ingestion
+    let resume_upper = Antichain::from_iter(
+        config
+            .resume_uppers
+            .values()
+            .flat_map(|f| f.iter().cloned()),
     );
-    let (health_output, derived_health) = builder.new_output::<CapacityContainerBuilder<_>>();
+    source_metrics
+        .resume_upper
+        .set(mz_persist_client::metrics::encode_ts_metric(&resume_upper));
 
-    builder.build(move |mut caps| async move {
-        let health_cap = caps.pop().unwrap();
-        drop(caps);
+    builder.build(move |mut caps| {
+        let health_cap = caps.remove(1);
+        move |_frontiers| {
+            let mut statuses_by_idx = BTreeMap::new();
+            let mut health_output = health_output.activate();
 
-        let mut statuses_by_idx = BTreeMap::new();
+            for (id, input, output) in export_handles.iter_mut() {
+                while let Some((cap, data)) = input.next() {
+                    for (message, _, _) in data.iter() {
+                        let status = match message {
+                            Ok(_) => HealthStatusUpdate::running(),
+                            // All errors coming into the data stream are definite.
+                            // Downstream consumers of this data will preserve this
+                            // status.
+                            Err(ref error) => HealthStatusUpdate::stalled(
+                                error.to_string(),
+                                Some(
+                                    "retracting the errored value may resume the source"
+                                        .to_string(),
+                                ),
+                            ),
+                        };
 
-        while let Some(event) = data_input.next().await {
-            let AsyncEvent::Data([cap_data, _cap_progress], mut data) = event else {
-                continue;
-            };
-            for ((output_index, message), _, _) in data.iter() {
-                let status = match message {
-                    Ok(_) => HealthStatusUpdate::running(),
-                    // All errors coming into the data stream are definite.
-                    // Downstream consumers of this data will preserve this
-                    // status.
-                    Err(ref error) => HealthStatusUpdate::stalled(
-                        error.to_string(),
-                        Some("retracting the errored value may resume the source".to_string()),
-                    ),
-                };
+                        let statuses: &mut Vec<_> = statuses_by_idx.entry(*id).or_default();
 
-                let statuses: &mut Vec<_> = statuses_by_idx.entry(*output_index).or_default();
+                        let status = HealthStatusMessage {
+                            id: Some(*id),
+                            namespace: C::STATUS_NAMESPACE.clone(),
+                            update: status,
+                        };
+                        if statuses.last() != Some(&status) {
+                            statuses.push(status);
+                        }
 
-                let status = HealthStatusMessage {
-                    index: *output_index,
-                    namespace: C::STATUS_NAMESPACE.clone(),
-                    update: status,
-                };
-                if statuses.last() != Some(&status) {
-                    statuses.push(status);
-                }
-
-                match message {
-                    Ok(message) => {
-                        source_statistics.inc_messages_received_by(1);
-                        let key_len = u64::cast_from(message.key.byte_len());
-                        let value_len = u64::cast_from(message.value.byte_len());
-                        source_statistics.inc_bytes_received_by(key_len + value_len);
+                        match message {
+                            Ok(message) => {
+                                source_statistics.inc_messages_received_by(1);
+                                let key_len = u64::cast_from(message.key.byte_len());
+                                let value_len = u64::cast_from(message.value.byte_len());
+                                bytes_read_counter.inc_by(key_len + value_len);
+                                source_statistics.inc_bytes_received_by(key_len + value_len);
+                            }
+                            Err(_) => {}
+                        }
                     }
-                    Err(_) => {}
-                }
-            }
-            data_output.give_container(&cap_data, &mut data);
+                    let mut output = output.activate();
+                    output.session(&cap).give_container(data);
 
-            for statuses in statuses_by_idx.values_mut() {
-                if statuses.is_empty() {
-                    continue;
+                    for statuses in statuses_by_idx.values_mut() {
+                        if statuses.is_empty() {
+                            continue;
+                        }
+                        health_output.session(&health_cap).give_container(statuses);
+                        statuses.clear()
+                    }
                 }
-
-                health_output.give_container(&health_cap, statuses);
-                statuses.clear()
             }
         }
     });
@@ -409,7 +437,7 @@ where
     });
 
     (
-        data.as_collection(),
+        export_collections,
         progress,
         health.concat(&derived_health),
         tokens,
@@ -599,128 +627,6 @@ where
     (remap_stream.as_collection(), button.press_on_drop())
 }
 
-/// Demultiplexes a combined stream of all source exports into individual collections per source export
-fn demux_source_exports<G, FromTime>(
-    config: RawSourceCreationConfig,
-    input: Collection<G, (usize, Result<SourceOutput<FromTime>, DataflowError>), Diff>,
-) -> Vec<(
-    GlobalId,
-    Collection<G, SourceOutput<FromTime>, Diff>,
-    Collection<G, DataflowError, Diff>,
-    SourceExportDataConfig,
-)>
-where
-    G: Scope<Timestamp = mz_repr::Timestamp>,
-    FromTime: SourceTimestamp,
-{
-    let RawSourceCreationConfig {
-        name,
-        id,
-        source_exports,
-        worker_id,
-        worker_count: _,
-        timestamp_interval: _,
-        storage_metadata: _,
-        as_of: _,
-        resume_uppers,
-        source_resume_uppers: _,
-        metrics,
-        now_fn: _,
-        persist_clients: _,
-        source_statistics: _,
-        shared_remap_upper: _,
-        config: _,
-        remap_collection_id: _,
-        busy_signal: _,
-    } = config;
-
-    // TODO(guswynn): expose function
-    let bytes_read_counter = metrics.source_defs.bytes_read.clone();
-    let source_metrics = metrics.get_source_metrics(&name, id, worker_id);
-
-    // Compute the overall resume upper to report for the ingestion
-    let resume_upper = Antichain::from_iter(resume_uppers.values().flat_map(|f| f.iter().cloned()));
-    source_metrics
-        .resume_upper
-        .set(mz_persist_client::metrics::encode_ts_metric(&resume_upper));
-
-    let input = input.inner.inspect_core(move |event| match event {
-        Ok((_, data)) => {
-            for ((_idx, result), _time, _diff) in data.iter() {
-                if let Ok(msg) = result {
-                    bytes_read_counter.inc_by(u64::cast_from(msg.key.byte_len()));
-                    bytes_read_counter.inc_by(u64::cast_from(msg.value.byte_len()));
-                }
-            }
-        }
-        Err([time]) => source_metrics.capability.set(time.into()),
-        Err([]) => source_metrics
-            .capability
-            .set(mz_repr::Timestamp::MAX.into()),
-        // `mz_repr::Timestamp` is totally ordered and so there can be at most one element in the
-        // frontier. If this ever changes we need to rethink how we surface this in metrics. We
-        // will notice when that happens because the `expect()` will fail.
-        Err(_) => unreachable!("there can be at most one element for totally ordered times"),
-    });
-
-    // TODO(petrosagg): output the two streams directly
-    type CB<C> = CapacityContainerBuilder<C>;
-    let (ok_muxed_stream, err_muxed_stream) = input.map_fallible::<CB<_>, CB<_>, _, _, _>(
-        "reclock-demux-ok-err",
-        |((output, r), ts, diff)| match r {
-            Ok(ok) => Ok(((output, ok), ts, diff)),
-            Err(err) => Err(((output, err), ts, diff)),
-        },
-    );
-
-    let exports_by_index = source_exports
-        .iter()
-        .map(|(id, export)| (export.ingestion_output, (*id, &export.export.data_config)))
-        .collect::<BTreeMap<_, _>>();
-
-    // We use the output index from the source export to route values to its ok
-    // and err streams. There is one partition per source export; however,
-    // source export indices can be non-contiguous, so we need to ensure we have
-    // at least as many partitions as we reference.
-    let partition_count = u64::cast_from(
-        exports_by_index
-            .keys()
-            .max()
-            .expect("source exports must have elements")
-            + 1,
-    );
-
-    let ok_streams: Vec<_> = ok_muxed_stream
-        .partition(partition_count, |((output, data), time, diff)| {
-            (u64::cast_from(output), (data, time, diff))
-        })
-        .into_iter()
-        .map(|stream| stream.as_collection())
-        .collect();
-
-    let err_streams: Vec<_> = err_muxed_stream
-        .partition(partition_count, |((output, err), time, diff)| {
-            (u64::cast_from(output), (err, time, diff))
-        })
-        .into_iter()
-        .map(|stream| stream.as_collection())
-        .collect();
-
-    ok_streams
-        .into_iter()
-        .zip_eq(err_streams)
-        .enumerate()
-        .filter_map(|(idx, (ok_stream, err_stream))| {
-            // We only want to return streams for partitions with a data config, which
-            // indicates that they actually have data. The filtered streams were just
-            // empty partitions for any non-continuous values in the output indexes.
-            exports_by_index
-                .get(&idx)
-                .map(|export| (export.0, ok_stream, err_stream, (*export.1).clone()))
-        })
-        .collect()
-}
-
 /// Reclocks an `IntoTime` frontier stream into a `FromTime` frontier stream. This is used for the
 /// virtual (through persist) feedback edge so that we convert the `IntoTime` resumption frontier
 /// into the `FromTime` frontier that is used with the source's `OffsetCommiter`.
@@ -740,7 +646,7 @@ where
     let scope = bindings.scope().clone();
 
     let name = format!("ReclockCommitUpper({id})");
-    let mut builder = OperatorBuilder::new(name, scope);
+    let mut builder = OperatorBuilderRc::new(name, scope);
 
     let mut bindings = builder.new_input(&bindings.inner, Pipeline);
     let _ = builder.new_input(committed_upper, Pipeline);

@@ -19,9 +19,11 @@ use anyhow::bail;
 use chrono::{DateTime, NaiveDateTime};
 use differential_dataflow::AsCollection;
 use futures::StreamExt;
+use itertools::Itertools;
 use maplit::btreemap;
 use mz_kafka_util::client::{get_partitions, MzClientContext, PartitionId, TunnelingClientContext};
 use mz_ore::assert_none;
+use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
 use mz_ore::iter::IteratorExt;
@@ -35,9 +37,7 @@ use mz_storage_types::errors::{
 use mz_storage_types::sources::kafka::{
     KafkaMetadataKind, KafkaSourceConnection, KafkaTimestamp, RangeBound,
 };
-use mz_storage_types::sources::{
-    IndexedSourceExport, MzOffset, SourceExport, SourceExportDetails, SourceTimestamp,
-};
+use mz_storage_types::sources::{MzOffset, SourceExport, SourceExportDetails, SourceTimestamp};
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
 use mz_timely_util::containers::stack::AccountedStackBuilder;
@@ -63,7 +63,7 @@ use crate::metrics::source::kafka::KafkaSourceMetrics;
 use crate::source::types::{
     Probe, ProgressStatisticsUpdate, SignaledFuture, SourceRender, StackedCollection,
 };
-use crate::source::{RawSourceCreationConfig, SourceMessage};
+use crate::source::{PartitionCore, RawSourceCreationConfig, SourceMessage};
 
 #[derive(Default)]
 struct HealthStatus {
@@ -151,6 +151,7 @@ fn responsible_for_pid(config: &RawSourceCreationConfig, pid: i32) -> bool {
 }
 
 struct SourceOutputInfo {
+    id: GlobalId,
     output_index: usize,
     resume_upper: Antichain<KafkaTimestamp>,
     metadata_columns: Vec<KafkaMetadataKind>,
@@ -172,7 +173,7 @@ impl SourceRender for KafkaSourceConnection {
         resume_uppers: impl futures::Stream<Item = Antichain<KafkaTimestamp>> + 'static,
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
-        StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
+        BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
         Option<Stream<G, Infallible>>,
         Stream<G, HealthStatusMessage>,
         Stream<G, ProgressStatisticsUpdate>,
@@ -189,15 +190,11 @@ impl SourceRender for KafkaSourceConnection {
         let (probe_output, probe_stream) = builder.new_output();
 
         let mut outputs = vec![];
-        for (id, export) in &config.source_exports {
-            let IndexedSourceExport {
-                ingestion_output,
-                export:
-                    SourceExport {
-                        details,
-                        storage_metadata: _,
-                        data_config: _,
-                    },
+        for (idx, (id, export)) in config.source_exports.iter().enumerate() {
+            let SourceExport {
+                details,
+                storage_metadata: _,
+                data_config: _,
             } = export;
             let resume_upper = Antichain::from_iter(
                 config
@@ -222,11 +219,26 @@ impl SourceRender for KafkaSourceConnection {
             };
 
             let output = SourceOutputInfo {
+                id: *id,
+                output_index: idx,
                 resume_upper,
-                output_index: *ingestion_output,
                 metadata_columns,
             };
             outputs.push(output);
+        }
+
+        let partition_count = u64::cast_from(config.source_exports.len());
+        let data_streams: Vec<_> = stream.partition_core(
+            partition_count,
+            |((output, data), time, diff): &(
+                (usize, Result<SourceMessage, DataflowError>),
+                KafkaTimestamp,
+                Diff,
+            )| { (*output, (data.clone(), time.clone(), diff.clone())) },
+        );
+        let mut data_collections = BTreeMap::new();
+        for (id, data_stream) in config.source_exports.keys().zip_eq(data_streams) {
+            data_collections.insert(*id, data_stream.as_collection());
         }
 
         let busy_signal = Arc::clone(&config.busy_signal);
@@ -394,7 +406,7 @@ impl SourceRender for KafkaSourceConnection {
                                 health_output.give(
                                     &health_cap,
                                     HealthStatusMessage {
-                                        index: output.output_index,
+                                        id: Some(output.id),
                                         namespace: if matches!(e, ContextCreationError::Ssh(_)) {
                                             StatusNamespace::Ssh
                                         } else {
@@ -764,7 +776,7 @@ impl SourceRender for KafkaSourceConnection {
                                     health_output.give(
                                         &health_cap,
                                         HealthStatusMessage {
-                                            index: output.output_index,
+                                            id: Some(output.id),
                                             namespace: Self::STATUS_NAMESPACE.clone(),
                                             update: status,
                                         },
@@ -880,7 +892,7 @@ impl SourceRender for KafkaSourceConnection {
                                         health_output.give(
                                             &health_cap,
                                             HealthStatusMessage {
-                                                index: output.output_index,
+                                                id: Some(output.id),
                                                 namespace: Self::STATUS_NAMESPACE.clone(),
                                                 update: status,
                                             },
@@ -957,7 +969,7 @@ impl SourceRender for KafkaSourceConnection {
                             health_output.give(
                                 &health_cap,
                                 HealthStatusMessage {
-                                    index: output.output_index,
+                                    id: Some(output.id),
                                     namespace: Self::STATUS_NAMESPACE.clone(),
                                     update: status,
                                 },
@@ -969,7 +981,7 @@ impl SourceRender for KafkaSourceConnection {
                             health_output.give(
                                 &health_cap,
                                 HealthStatusMessage {
-                                    index: output.output_index,
+                                    id: Some(output.id),
                                     namespace: StatusNamespace::Ssh,
                                     update: status,
                                 },
@@ -1033,7 +1045,7 @@ impl SourceRender for KafkaSourceConnection {
         });
 
         (
-            stream.as_collection(),
+            data_collections,
             Some(progress_stream),
             health_stream,
             stats_stream,

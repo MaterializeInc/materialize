@@ -84,19 +84,20 @@ use std::convert::Infallible;
 use std::rc::Rc;
 use std::time::Duration;
 
+use differential_dataflow::AsCollection;
 use itertools::Itertools as _;
 use mz_expr::{EvalError, MirScalarExpr};
+use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_postgres_util::{simple_query_opt, Client, PostgresError};
-use mz_repr::{Datum, Row};
+use mz_repr::{Datum, Diff, GlobalId, Row};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::Ident;
 use mz_storage_types::errors::{DataflowError, SourceError, SourceErrorDetails};
 use mz_storage_types::sources::postgres::CastType;
 use mz_storage_types::sources::{
-    IndexedSourceExport, MzOffset, PostgresSourceConnection, SourceExport, SourceExportDetails,
-    SourceTimestamp,
+    MzOffset, PostgresSourceConnection, SourceExport, SourceExportDetails, SourceTimestamp,
 };
 use mz_timely_util::builder_async::PressOnDropButton;
 use serde::{Deserialize, Serialize};
@@ -108,7 +109,7 @@ use tokio_postgres::types::PgLsn;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::source::types::{Probe, ProgressStatisticsUpdate, SourceRender, StackedCollection};
-use crate::source::{RawSourceCreationConfig, SourceMessage};
+use crate::source::{PartitionCore, RawSourceCreationConfig, SourceMessage};
 
 mod replication;
 mod snapshot;
@@ -127,7 +128,7 @@ impl SourceRender for PostgresSourceConnection {
         resume_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
         _start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
-        StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
+        BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
         Option<Stream<G, Infallible>>,
         Stream<G, HealthStatusMessage>,
         Stream<G, ProgressStatisticsUpdate>,
@@ -136,19 +137,12 @@ impl SourceRender for PostgresSourceConnection {
     ) {
         // Collect the source outputs that we will be exporting into a per-table map.
         let mut table_info = BTreeMap::new();
-        for (
-            id,
-            IndexedSourceExport {
-                ingestion_output,
-                export:
-                    SourceExport {
-                        details,
-                        storage_metadata: _,
-                        data_config: _,
-                    },
-            },
-        ) in &config.source_exports
-        {
+        for (idx, (id, export)) in config.source_exports.iter().enumerate() {
+            let SourceExport {
+                details,
+                storage_metadata: _,
+                data_config: _,
+            } = export;
             let details = match details {
                 SourceExportDetails::Postgres(details) => details,
                 // This is an export that doesn't need any data output to it.
@@ -173,7 +167,7 @@ impl SourceRender for PostgresSourceConnection {
             table_info
                 .entry(output.desc.oid)
                 .or_insert_with(BTreeMap::new)
-                .insert(*ingestion_output, output);
+                .insert(idx, output);
         }
 
         let metrics = config.metrics.get_postgres_source_metrics(config.id);
@@ -190,7 +184,7 @@ impl SourceRender for PostgresSourceConnection {
         let (repl_updates, uppers, stats_stream, probe_stream, repl_err, repl_token) =
             replication::render(
                 scope.clone(),
-                config,
+                config.clone(),
                 self,
                 table_info,
                 &rewinds,
@@ -202,9 +196,22 @@ impl SourceRender for PostgresSourceConnection {
         let stats_stream = stats_stream.concat(&snapshot_stats);
 
         let updates = snapshot_updates.concat(&repl_updates);
+        let partition_count = u64::cast_from(config.source_exports.len());
+        let data_streams: Vec<_> = updates.inner.partition_core(
+            partition_count,
+            |((output, data), time, diff): &(
+                (usize, Result<SourceMessage, DataflowError>),
+                MzOffset,
+                Diff,
+            )| { (*output, (data.clone(), time.clone(), diff.clone())) },
+        );
+        let mut data_collections = BTreeMap::new();
+        for (id, data_stream) in config.source_exports.keys().zip_eq(data_streams) {
+            data_collections.insert(*id, data_stream.as_collection());
+        }
 
         let init = std::iter::once(HealthStatusMessage {
-            index: 0,
+            id: None,
             namespace: Self::STATUS_NAMESPACE,
             update: HealthStatusUpdate::Running,
         })
@@ -232,7 +239,7 @@ impl SourceRender for PostgresSourceConnection {
             };
 
             HealthStatusMessage {
-                index: 0,
+                id: None,
                 namespace: namespace.clone(),
                 update,
             }
@@ -241,7 +248,7 @@ impl SourceRender for PostgresSourceConnection {
         let health = init.concat(&errs);
 
         (
-            updates,
+            data_collections,
             Some(uppers),
             health,
             stats_stream,
