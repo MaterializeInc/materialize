@@ -20,6 +20,7 @@ use differential_dataflow::trace::implementations::BatchContainer;
 use either::Either;
 use timely::container::columnation::{Columnation, Region, TimelyStack};
 use timely::container::{Container, ContainerBuilder, PushInto, SizableContainer};
+use timely::dataflow::channels::ContainerBytes;
 
 use crate::containers::array::Array;
 
@@ -168,22 +169,49 @@ impl<T: Clone + Columnation + 'static> Container for StackWrapper<T> {
     }
 }
 
+impl<T: Columnation + Serialize + for<'a> Deserialize<'a>> ContainerBytes for StackWrapper<T> {
+    fn from_bytes(bytes: timely::bytes::arc::Bytes) -> Self {
+        bincode::deserialize(&bytes[..]).expect("bincode::deserialize() failed")
+    }
+
+    fn length_in_bytes(&self) -> usize {
+        bincode::serialized_size(&self)
+            .expect("bincode::serialized_size() failed")
+            .try_into()
+            .expect("must fit")
+    }
+
+    fn into_bytes<W: ::std::io::Write>(&self, writer: &mut W) {
+        bincode::serialize_into(writer, &self).expect("bincode::serialize_into() failed");
+    }
+}
+
 impl<T: Clone + Columnation + 'static> SizableContainer for StackWrapper<T> {
-    fn capacity(&self) -> usize {
+    fn at_capacity(&self) -> bool {
         match self {
-            StackWrapper::Legacy(l) => l.capacity(),
-            StackWrapper::Chunked(c) => c.capacity(),
+            StackWrapper::Legacy(ts) => ts.at_capacity(),
+            StackWrapper::Chunked(chunked) => chunked.len() == chunked.capacity(),
         }
     }
 
-    fn preferred_capacity() -> usize {
-        timely::container::buffer::default_capacity::<T>()
-    }
-
-    fn reserve(&mut self, additional: usize) {
+    fn ensure_capacity(&mut self, stash: &mut Option<Self>) {
+        let (mut stash_ts, mut stash_chunked) = match stash.take() {
+            Some(StackWrapper::Legacy(ts)) => (Some(ts), None),
+            Some(StackWrapper::Chunked(chunked)) => (None, Some(chunked)),
+            None => (None, None),
+        };
         match self {
-            StackWrapper::Legacy(l) => l.reserve(additional),
-            StackWrapper::Chunked(c) => c.reserve(additional),
+            StackWrapper::Legacy(ts) => ts.ensure_capacity(&mut stash_ts),
+            StackWrapper::Chunked(chunked) => {
+                if chunked.capacity() == 0 {
+                    *chunked = stash_chunked.take().unwrap_or_default();
+                    chunked.clear();
+                }
+                let preferred = timely::container::buffer::default_capacity::<T>();
+                if chunked.capacity() < preferred {
+                    chunked.reserve(preferred - chunked.capacity());
+                }
+            }
         }
     }
 }
@@ -391,6 +419,12 @@ impl<T: Columnation> ChunkedStack<T> {
         self.local.is_empty()
     }
 
+    /// Reserve space for `additional` elements.
+    pub fn reserve(&mut self, additional: usize) {
+        let additional_chunks = (additional + Self::CHUNK - 1) / Self::CHUNK;
+        self.local.reserve(additional_chunks);
+    }
+
     /// Empties the collection.
     pub fn clear(&mut self) {
         for array in &mut self.local {
@@ -467,21 +501,6 @@ impl<T: Columnation + 'static> Container for ChunkedStack<T> {
 
     fn drain(&mut self) -> Self::DrainIter<'_> {
         self.range(..)
-    }
-}
-
-impl<T: Columnation + 'static> SizableContainer for ChunkedStack<T> {
-    fn capacity(&self) -> usize {
-        self.capacity()
-    }
-
-    fn preferred_capacity() -> usize {
-        timely::container::buffer::default_capacity::<T>()
-    }
-
-    fn reserve(&mut self, additional: usize) {
-        let additional_chunks = (additional + Self::CHUNK - 1) / Self::CHUNK;
-        self.local.reserve(additional_chunks);
     }
 }
 

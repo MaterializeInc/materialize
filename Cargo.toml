@@ -282,15 +282,19 @@ incremental = true
 # tend to get rewritten or disappear (e.g., because a PR is force pushed or gets
 # merged), after which point it becomes impossible to build that historical
 # version of Materialize.
+[patch."https://github.com/MaterializeInc/rust-postgres-array"]
+postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "548f00c4cbcf7bd714c29cfd2fea7685040c9987" }
+postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "548f00c4cbcf7bd714c29cfd2fea7685040c9987" }
+
 [patch.crates-io]
 # Waiting on https://github.com/sfackler/rust-postgres/pull/752.
-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
-tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
-postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
-postgres-replication = { git = "https://github.com/MaterializeInc/rust-postgres" }
-postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres" }
-postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres" }
-postgres_array = { git = "https://github.com/MaterializeInc/rust-postgres-array" }
+postgres = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "548f00c4cbcf7bd714c29cfd2fea7685040c9987" }
+tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "548f00c4cbcf7bd714c29cfd2fea7685040c9987" }
+postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "548f00c4cbcf7bd714c29cfd2fea7685040c9987" }
+postgres-replication = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "548f00c4cbcf7bd714c29cfd2fea7685040c9987" }
+postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "548f00c4cbcf7bd714c29cfd2fea7685040c9987" }
+postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "548f00c4cbcf7bd714c29cfd2fea7685040c9987" }
+postgres_array = { git = "https://github.com/MaterializeInc/rust-postgres-array", rev = "f58d0101e5198e04e8692629018d9b58f8543534" }
 
 # Waiting on a release that includes:
 # * https://github.com/blackbeam/mysql_async/pull/300

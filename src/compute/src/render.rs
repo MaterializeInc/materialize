@@ -154,7 +154,8 @@ use crate::render::context::{
     ArrangementFlavor, Context, MzArrangement, MzArrangementImport, ShutdownToken,
 };
 use crate::render::continual_task::ContinualTaskCtx;
-use crate::typedefs::{ErrSpine, KeyBatcher};
+use crate::row_spine::{RowRowBatcher, RowRowBuilder};
+use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, KeyBatcher};
 
 pub mod context;
 pub(crate) mod continual_task;
@@ -654,7 +655,9 @@ where
                 let mut errs = errs
                     .as_collection(|k, v| (k.clone(), v.clone()))
                     .leave()
-                    .mz_arrange("Arrange export iterative err");
+                    .mz_arrange::<ErrBatcher<_, _>, ErrBuilder<_, _>, _>(
+                        "Arrange export iterative err",
+                    );
 
                 // Ensure that the frontier does not advance past the expiration time, if set.
                 // Otherwise, we might write down incorrect data.
@@ -719,7 +722,7 @@ where
                 let oks = inner
                     .as_collection(|k, v| (k.into_owned(), v.into_owned()))
                     .leave()
-                    .mz_arrange(name);
+                    .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, _>(name);
                 MzArrangement::RowRow(oks)
             }
         }
@@ -829,8 +832,10 @@ where
                 // multiplicities of errors, but .. this seems to be the better call.
                 let err: KeyCollection<_, _, _> = err.into();
                 let mut errs = err
-                    .mz_arrange::<ErrSpine<_, _>>("Arrange recursive err")
-                    .mz_reduce_abelian::<_, _, _, ErrSpine<_, _>>(
+                    .mz_arrange::<ErrBatcher<_, _>, ErrBuilder<_, _>, ErrSpine<_, _>>(
+                        "Arrange recursive err",
+                    )
+                    .mz_reduce_abelian::<_, _, _, ErrBuilder<_, _>, ErrSpine<_, _>>(
                         "Distinct recursive err",
                         move |_k, _s, t| t.push(((), 1)),
                     )

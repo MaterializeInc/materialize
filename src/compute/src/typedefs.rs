@@ -16,7 +16,9 @@ use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::trace::implementations::chunker::ColumnationChunker;
 use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
 use differential_dataflow::trace::implementations::merge_batcher_col::ColumnationMerger;
-use differential_dataflow::trace::implementations::ord_neu::{FlatValSpine, OrdValBatch};
+use differential_dataflow::trace::implementations::ord_neu::{
+    FlatValBatcher, FlatValBuilder, FlatValSpine, OrdValBatch,
+};
 use differential_dataflow::trace::wrappers::enter::TraceEnter;
 use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
 use mz_ore::flatcontainer::MzRegionPreference;
@@ -25,8 +27,12 @@ use mz_storage_types::errors::DataflowError;
 use timely::container::flatcontainer::impls::tuple::{TupleABCRegion, TupleABRegion};
 use timely::dataflow::ScopeParent;
 
-pub use crate::row_spine::{RowRowSpine, RowSpine, RowValSpine};
-use crate::typedefs::spines::MzFlatLayout;
+use crate::row_spine::RowValBuilder;
+use crate::typedefs::spines::{
+    ColKeyBatcher, ColKeyBuilder, ColValBatcher, ColValBuilder, MzFlatLayout,
+};
+
+pub use crate::row_spine::{RowRowSpine, RowSpine, RowValBatcher, RowValSpine};
 pub use crate::typedefs::spines::{ColKeySpine, ColValSpine};
 
 pub(crate) mod spines {
@@ -49,18 +55,16 @@ pub(crate) mod spines {
     use crate::typedefs::{KeyBatcher, KeyValBatcher};
 
     /// A spine for generic keys and values.
-    pub type ColValSpine<K, V, T, R> = Spine<
-        Rc<OrdValBatch<MzStack<((K, V), T, R)>>>,
-        KeyValBatcher<K, V, T, R>,
-        RcBuilder<OrdValBuilder<MzStack<((K, V), T, R)>, TimelyStack<((K, V), T, R)>>>,
-    >;
+    pub type ColValSpine<K, V, T, R> = Spine<Rc<OrdValBatch<MzStack<((K, V), T, R)>>>>;
+    pub type ColValBatcher<K, V, T, R> = KeyValBatcher<K, V, T, R>;
+    pub type ColValBuilder<K, V, T, R> =
+        RcBuilder<OrdValBuilder<MzStack<((K, V), T, R)>, TimelyStack<((K, V), T, R)>>>;
 
     /// A spine for generic keys
-    pub type ColKeySpine<K, T, R> = Spine<
-        Rc<OrdKeyBatch<MzStack<((K, ()), T, R)>>>,
-        KeyBatcher<K, T, R>,
-        RcBuilder<OrdKeyBuilder<MzStack<((K, ()), T, R)>, TimelyStack<((K, ()), T, R)>>>,
-    >;
+    pub type ColKeySpine<K, T, R> = Spine<Rc<OrdKeyBatch<MzStack<((K, ()), T, R)>>>>;
+    pub type ColKeyBatcher<K, T, R> = KeyBatcher<K, T, R>;
+    pub type ColKeyBuilder<K, T, R> =
+        RcBuilder<OrdKeyBuilder<MzStack<((K, ()), T, R)>, TimelyStack<((K, ()), T, R)>>>;
 
     /// A layout based on chunked timely stacks
     pub struct MzStack<U: Update> {
@@ -173,10 +177,19 @@ pub type RowEnter<T, R, TEnter> = TraceEnter<TraceFrontier<RowAgent<T, R>>, TEnt
 
 // Error specialized spines and agents.
 pub type ErrSpine<T, R> = ColKeySpine<DataflowError, T, R>;
+pub type ErrBatcher<T, R> = ColKeyBatcher<DataflowError, T, R>;
+pub type ErrBuilder<T, R> = ColKeyBuilder<DataflowError, T, R>;
+
 pub type ErrAgent<T, R> = TraceAgent<ErrSpine<T, R>>;
 pub type ErrEnter<T, TEnter> = TraceEnter<TraceFrontier<ErrAgent<T, Diff>>, TEnter>;
+
 pub type KeyErrSpine<K, T, R> = ColValSpine<K, DataflowError, T, R>;
+pub type KeyErrBatcher<K, T, R> = ColValBatcher<K, DataflowError, T, R>;
+pub type KeyErrBuilder<K, T, R> = ColValBuilder<K, DataflowError, T, R>;
+
 pub type RowErrSpine<T, R> = RowValSpine<DataflowError, T, R>;
+pub type RowErrBatcher<T, R> = RowValBatcher<DataflowError, T, R>;
+pub type RowErrBuilder<T, R> = RowValBuilder<DataflowError, T, R>;
 
 // Batchers for consolidation
 pub type KeyBatcher<K, T, D> = KeyValBatcher<K, (), T, D>;
@@ -184,19 +197,34 @@ pub type KeyValBatcher<K, V, T, D> = MergeBatcher<
     Vec<((K, V), T, D)>,
     ColumnationChunker<((K, V), T, D)>,
     ColumnationMerger<((K, V), T, D)>,
-    T,
 >;
 
 pub type FlatKeyValBatch<K, V, T, R> = OrdValBatch<MzFlatLayout<K, V, T, R>>;
-pub type FlatKeyValSpine<K, V, T, R, C> =
-    FlatValSpine<MzFlatLayout<K, V, T, R>, TupleABCRegion<TupleABRegion<K, V>, T, R>, C>;
-pub type FlatKeyValSpineDefault<K, V, T, R, C> = FlatKeyValSpine<
+pub type FlatKeyValSpine<K, V, T, R> = FlatValSpine<MzFlatLayout<K, V, T, R>>;
+pub type FlatKeyValSpineDefault<K, V, T, R> = FlatKeyValSpine<
+    <K as MzRegionPreference>::Region,
+    <V as MzRegionPreference>::Region,
+    <T as MzRegionPreference>::Region,
+    <R as MzRegionPreference>::Region,
+>;
+pub type FlatKeyValBatcher<K, V, T, R, C> =
+    FlatValBatcher<TupleABCRegion<TupleABRegion<K, V>, T, R>, C>;
+pub type FlatKeyValBatcherDefault<K, V, T, R, C> = FlatKeyValBatcher<
     <K as MzRegionPreference>::Region,
     <V as MzRegionPreference>::Region,
     <T as MzRegionPreference>::Region,
     <R as MzRegionPreference>::Region,
     C,
 >;
-pub type FlatKeyValAgent<K, V, T, R, C> = TraceAgent<FlatKeyValSpine<K, V, T, R, C>>;
-pub type FlatKeyValEnter<K, V, T, R, C, TEnter> =
-    TraceEnter<TraceFrontier<FlatKeyValAgent<K, V, T, R, C>>, TEnter>;
+pub type FlatKeyValBuilder<K, V, T, R> =
+    FlatValBuilder<MzFlatLayout<K, V, T, R>, TupleABCRegion<TupleABRegion<K, V>, T, R>>;
+pub type FlatKeyValBuilderDefault<K, V, T, R> = FlatKeyValBuilder<
+    <K as MzRegionPreference>::Region,
+    <V as MzRegionPreference>::Region,
+    <T as MzRegionPreference>::Region,
+    <R as MzRegionPreference>::Region,
+>;
+
+pub type FlatKeyValAgent<K, V, T, R> = TraceAgent<FlatKeyValSpine<K, V, T, R>>;
+pub type FlatKeyValEnter<K, V, T, R, TEnter> =
+    TraceEnter<TraceFrontier<FlatKeyValAgent<K, V, T, R>>, TEnter>;
