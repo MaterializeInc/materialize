@@ -204,7 +204,10 @@ pub trait Transform: fmt::Debug {
         relation: &mut MirRelationExpr,
         args: &mut TransformCtx,
     ) -> Result<(), TransformError> {
-        let hash_before = args.global_id.and_then(|id| args.last_hash.get(&id).copied()).unwrap_or_else(|| relation.hash_to_u64());
+        let hash_before = args
+            .global_id
+            .and_then(|id| args.last_hash.get(&id).copied())
+            .unwrap_or_else(|| relation.hash_to_u64());
 
         mz_ore::soft_assert_eq_no_log!(hash_before, relation.hash_to_u64(), "cached hash clash");
         // actually run the transform, recording the time taken
