@@ -367,6 +367,21 @@ pub struct ColumnIndex(usize);
 
 static_assertions::assert_not_impl_all!(ColumnIndex: Arbitrary);
 
+impl ColumnIndex {
+    /// Returns a stable identifier for this [`ColumnIndex`].
+    pub fn to_stable_name(&self) -> String {
+        self.0.to_string()
+    }
+
+    pub fn to_raw(&self) -> usize {
+        self.0
+    }
+
+    pub fn from_raw(val: usize) -> Self {
+        ColumnIndex(val)
+    }
+}
+
 /// The version a given column was added at.
 #[derive(
     Clone,
@@ -451,7 +466,8 @@ struct ColumnMetadata {
 
 /// A description of the shape of a relation.
 ///
-/// It bundles a [`RelationType`] with the name of each column in the relation.
+/// It bundles a [`RelationType`] with `ColumnMetadata` for each column in
+/// the relation.
 ///
 /// # Examples
 ///
@@ -482,6 +498,39 @@ struct ColumnMetadata {
 /// });
 /// let desc = RelationDesc::new(relation_type, names);
 /// ```
+///
+/// Next to the [`RelationType`] we maintain a map of `ColumnIndex` to
+/// `ColumnMetadata`, where [`ColumnIndex`] is a stable identifier for a
+/// column throughout the lifetime of the relation. This allows a
+/// [`RelationDesc`] to represent a projection over a version of itself.
+///
+/// ```
+/// use std::collections::BTreeSet;
+/// use mz_repr::{ColumnIndex, RelationDesc, ScalarType};
+///
+/// let desc = RelationDesc::builder()
+///     .with_column("name", ScalarType::String.nullable(false))
+///     .with_column("email", ScalarType::String.nullable(false))
+///     .finish();
+///
+/// // Project away the second column.
+/// let demands = BTreeSet::from([1]);
+/// let proj = desc.apply_demand(&demands);
+///
+/// // We projected away the first column.
+/// assert!(!proj.contains_index(&ColumnIndex::from_raw(0)));
+/// // But retained the second.
+/// assert!(proj.contains_index(&ColumnIndex::from_raw(1)));
+///
+/// // The underlying `RelationType` also contains a single column.
+/// assert_eq!(proj.typ().arity(), 1);
+/// ```
+///
+/// To maintain this stable mapping and track the lifetime of a column (e.g.
+/// when adding or dropping a column) we use `ColumnMetadata`. It maintains
+/// the index in [`RelationType`] that corresponds to a given column, and the
+/// version at which this column was added or dropped.
+///
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct RelationDesc {
     typ: RelationType,
@@ -580,6 +629,11 @@ impl RelationDesc {
     /// Check if the `RelationDesc` is empty.
     pub fn is_empty(&self) -> bool {
         self == &Self::empty()
+    }
+
+    /// Returns the number of columns in this [`RelationDesc`].
+    pub fn len(&self) -> usize {
+        self.typ().column_types.len()
     }
 
     /// Constructs a new `RelationDesc` from a `RelationType` and an iterator
@@ -709,7 +763,10 @@ impl RelationDesc {
 
     /// Returns an iterator over the columns in this relation.
     pub fn iter(&self) -> impl Iterator<Item = (&ColumnName, &ColumnType)> {
-        self.iter_names().zip(self.iter_types())
+        self.metadata.values().map(|meta| {
+            let typ = &self.typ.columns()[meta.typ_idx];
+            (&meta.name, typ)
+        })
     }
 
     /// Returns an iterator over the types of the columns in this relation.
@@ -722,6 +779,14 @@ impl RelationDesc {
         self.metadata.values().map(|meta| &meta.name)
     }
 
+    /// Returns an iterator over the columns in this relation, with all their metadata.
+    pub fn iter_all(&self) -> impl Iterator<Item = (&ColumnIndex, &ColumnName, &ColumnType)> {
+        self.metadata.iter().map(|(col_idx, metadata)| {
+            let col_typ = &self.typ.columns()[metadata.typ_idx];
+            (col_idx, &metadata.name, col_typ)
+        })
+    }
+
     /// Returns an iterator over the names of the columns in this relation that are "similar" to
     /// the provided `name`.
     pub fn iter_similar_names<'a>(
@@ -729,6 +794,11 @@ impl RelationDesc {
         name: &'a ColumnName,
     ) -> impl Iterator<Item = &'a ColumnName> {
         self.iter_names().filter(|n| n.is_similar(name))
+    }
+
+    /// Returns whether this [`RelationDesc`] contains a column at the specified index.
+    pub fn contains_index(&self, idx: &ColumnIndex) -> bool {
+        self.metadata.contains_key(idx)
     }
 
     /// Finds a column by name.
@@ -747,13 +817,20 @@ impl RelationDesc {
     /// # Panics
     ///
     /// Panics if `i` is not a valid column index.
+    ///
+    /// TODO(parkmycar): Migrate all uses of this to [`RelationDesc::get_name_idx`].
     pub fn get_name(&self, i: usize) -> &ColumnName {
         // TODO(parkmycar): Refactor this to use `ColumnIndex`.
-        &self
-            .metadata
-            .get(&ColumnIndex(i))
-            .expect("should exist")
-            .name
+        self.get_name_idx(&ColumnIndex(i))
+    }
+
+    /// Gets the name of the column at `idx`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no column exists at `idx`.
+    pub fn get_name_idx(&self, idx: &ColumnIndex) -> &ColumnName {
+        &self.metadata.get(idx).expect("should exist").name
     }
 
     /// Mutably gets the name of the `i`th column.
@@ -768,6 +845,16 @@ impl RelationDesc {
             .get_mut(&ColumnIndex(i))
             .expect("should exist")
             .name
+    }
+
+    /// Gets the [`ColumnType`] of the column at `idx`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no column exists at `idx`.
+    pub fn get_type(&self, idx: &ColumnIndex) -> &ColumnType {
+        let typ_idx = self.metadata.get(idx).expect("should exist").typ_idx;
+        &self.typ.column_types[typ_idx]
     }
 
     /// Gets the name of the `i`th column if that column name is unambiguous.
@@ -800,6 +887,33 @@ impl RelationDesc {
             Ok(())
         }
     }
+
+    /// Creates a new [`RelationDesc`] retaining only the columns specified in `demands`.
+    pub fn apply_demand(&self, demands: &BTreeSet<usize>) -> RelationDesc {
+        let mut new_desc = self.clone();
+
+        // Update ColumnMetadata.
+        let mut removed = 0;
+        new_desc.metadata.retain(|idx, metadata| {
+            let retain = demands.contains(&idx.0);
+            if !retain {
+                removed += 1;
+            } else {
+                metadata.typ_idx -= removed;
+            }
+            retain
+        });
+
+        // Update ColumnType.
+        let mut idx = 0;
+        new_desc.typ.column_types.retain(|_| {
+            let keep = demands.contains(&idx);
+            idx += 1;
+            keep
+        });
+
+        new_desc
+    }
 }
 
 impl Arbitrary for RelationDesc {
@@ -827,6 +941,19 @@ impl Arbitrary for RelationDesc {
 pub fn arb_relation_desc(num_cols: std::ops::Range<usize>) -> impl Strategy<Value = RelationDesc> {
     proptest::collection::btree_map(any::<ColumnName>(), any::<ColumnType>(), num_cols)
         .prop_map(RelationDesc::from_names_and_types)
+}
+
+/// Returns a [`Strategy`] that generates a projection of the provided [`RelationDesc`].
+pub fn arb_relation_desc_projection(desc: RelationDesc) -> impl Strategy<Value = RelationDesc> {
+    let mask: Vec<_> = (0..desc.len()).map(|_| any::<bool>()).collect();
+    mask.prop_map(move |mask| {
+        let demands: BTreeSet<_> = mask
+            .into_iter()
+            .enumerate()
+            .filter_map(|(idx, keep)| keep.then_some(idx))
+            .collect();
+        desc.apply_demand(&demands)
+    })
 }
 
 impl IntoIterator for RelationDesc {
@@ -1654,6 +1781,28 @@ mod tests {
           }
         }
         "###);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn apply_demand() {
+        let desc = RelationDesc::builder()
+            .with_column("a", ScalarType::String.nullable(true))
+            .with_column("b", ScalarType::Int64.nullable(false))
+            .with_column("c", ScalarType::Time.nullable(false))
+            .finish();
+        let desc = desc.apply_demand(&BTreeSet::from([0, 2]));
+        assert_eq!(desc.arity(), 2);
+        // TODO(parkmycar): Move validate onto RelationDesc.
+        VersionedRelationDesc::new(desc).validate();
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn smoketest_column_index_stable_ident() {
+        let idx_a = ColumnIndex(42);
+        // Note(parkmycar): This should never change.
+        assert_eq!(idx_a.to_stable_name(), "42");
     }
 
     #[mz_ore::test]
