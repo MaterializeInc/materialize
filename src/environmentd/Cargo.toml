@@ -34,7 +34,7 @@ hyper-tls = "0.6.0"
 hyper-util = "0.1.6"
 include_dir = "0.7.3"
 ipnet = "2.5.0"
-itertools = "0.10.5"
+itertools = "0.12.1"
 jsonwebtoken = "9.2.0"
 libc = "0.2.138"
 mime = "0.3.16"
@@ -128,7 +128,7 @@ datadriven = "0.8.0"
 fallible-iterator = "0.2.0"
 http-body-util = "0.1.2"
 insta = { version = "1.32", features = ["json"] }
-itertools = "0.10.5"
+itertools = "0.12.1"
 jsonwebtoken = "9.2.0"
 mz-environmentd = { path = "../environmentd", features = ["test"] }
 mz-pgrepr = { path = "../pgrepr" }
