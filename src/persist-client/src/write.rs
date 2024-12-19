@@ -620,7 +620,6 @@ where
                 Arc::clone(&self.metrics),
                 Arc::clone(&self.machine.applier.shard_metrics),
                 self.shard_id(),
-                lower.clone(),
                 Arc::clone(&self.blob),
                 Arc::clone(&self.isolated_runtime),
                 &self.metrics.user,
@@ -633,7 +632,6 @@ where
                 Arc::clone(&self.metrics),
                 Arc::clone(&self.machine.applier.shard_metrics),
                 self.shard_id(),
-                lower.clone(),
                 Arc::clone(&self.blob),
                 Arc::clone(&self.isolated_runtime),
                 &self.metrics.user,
@@ -644,19 +642,15 @@ where
             parts,
             Arc::clone(&self.metrics),
             self.write_schemas.clone(),
-            lower,
             Arc::clone(&self.blob),
             self.machine.shard_id().clone(),
             self.cfg.build_version.clone(),
-            Antichain::from_elem(T::minimum()),
-            None,
         );
-        BatchBuilder {
+        BatchBuilder::new(
             builder,
-            metrics: Arc::clone(&self.metrics),
-            key_buf: vec![],
-            val_buf: vec![],
-        }
+            Description::new(lower, Antichain::new(), Antichain::from_elem(T::minimum())),
+            Arc::clone(&self.metrics),
+        )
     }
 
     /// Uploads the given `updates` as one `Batch` to the blob store and returns
