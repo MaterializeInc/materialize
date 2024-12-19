@@ -368,7 +368,7 @@ pub struct RenderingContext<'a> {
 }
 
 impl<'a> RenderingContext<'a> {
-    pub fn new(indent: Indent, humanizer: &'a dyn ExprHumanizer) -> RenderingContext {
+    pub fn new(indent: Indent, humanizer: &'a dyn ExprHumanizer) -> RenderingContext<'a> {
         RenderingContext { indent, humanizer }
     }
 }

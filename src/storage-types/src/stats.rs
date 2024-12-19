@@ -185,7 +185,7 @@ impl RelationPartStats<'_> {
         num_oks.map(|num_oks| num_results - num_oks)
     }
 
-    fn col_values<'a>(&'a self, idx: usize, arena: &'a RowArena) -> Option<ResultSpec> {
+    fn col_values<'a>(&'a self, idx: usize, arena: &'a RowArena) -> Option<ResultSpec<'a>> {
         let name = self.desc.get_name(idx);
         let typ = &self.desc.typ().column_types[idx];
 

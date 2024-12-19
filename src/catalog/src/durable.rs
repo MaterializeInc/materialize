@@ -276,6 +276,7 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send {
 
 /// A read-write API for the durable catalog state.
 #[async_trait]
+#[allow(elided_named_lifetimes)]
 pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     /// Returns true if the catalog is opened in read only mode, false otherwise.
     fn is_read_only(&self) -> bool;
