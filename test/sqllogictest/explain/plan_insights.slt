@@ -1248,9 +1248,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT 'abc'
                         "nullable": false
                       }
                     ],
-                    "keys": [
-                      []
-                    ]
+                    "keys": []
                   }
                 ]
               }
