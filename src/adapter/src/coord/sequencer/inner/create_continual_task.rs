@@ -10,7 +10,7 @@
 use std::sync::Arc;
 
 use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, ContinualTask, Table, TableDataSource,
+    CatalogCollectionEntry, CatalogEntry, CatalogItem, ContinualTask, Table, TableDataSource,
 };
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::Plan;
@@ -22,7 +22,9 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::instrument;
 use mz_repr::adt::mz_acl_item::PrivilegeMap;
 use mz_repr::optimize::OverrideFrom;
-use mz_repr::{GlobalId, RelationVersion, Timestamp};
+use mz_repr::{
+    GlobalId, RelationVersion, RelationVersionSelector, Timestamp, VersionedRelationDesc,
+};
 use mz_sql::ast::visit_mut::{VisitMut, VisitMutNode};
 use mz_sql::ast::{Raw, RawItemName};
 use mz_sql::names::{FullItemName, PartialItemName, ResolvedIds};
@@ -62,29 +64,33 @@ impl Coordinator {
         let (item_id, global_id) = self.catalog_mut().allocate_user_id(id_ts).await?;
         let collections = [(RelationVersion::root(), global_id)].into_iter().collect();
 
+        let entry = CatalogEntry {
+            item: CatalogItem::Table(Table {
+                create_sql: None,
+                desc: VersionedRelationDesc::new(desc.clone()),
+                collections,
+                conn_id: None,
+                resolved_ids: resolved_ids.clone(),
+                custom_logical_compaction_window: None,
+                is_retained_metrics_object: false,
+                data_source: TableDataSource::TableWrites {
+                    defaults: Vec::new(),
+                },
+            }),
+            referenced_by: Vec::new(),
+            used_by: Vec::new(),
+            id: item_id,
+            oid: 0,
+            name: name.clone(),
+            owner_id: *session.current_role_id(),
+            privileges: PrivilegeMap::new(),
+        };
         let bootstrap_catalog = ContinualTaskCatalogBootstrap {
             delegate: self.owned_catalog().as_optimizer_catalog(),
             sink_id: global_id,
-            entry: CatalogEntry {
-                item: CatalogItem::Table(Table {
-                    create_sql: None,
-                    desc: desc.clone(),
-                    collections,
-                    conn_id: None,
-                    resolved_ids: resolved_ids.clone(),
-                    custom_logical_compaction_window: None,
-                    is_retained_metrics_object: false,
-                    data_source: TableDataSource::TableWrites {
-                        defaults: Vec::new(),
-                    },
-                }),
-                referenced_by: Vec::new(),
-                used_by: Vec::new(),
-                id: item_id,
-                oid: 0,
-                name: name.clone(),
-                owner_id: *session.current_role_id(),
-                privileges: PrivilegeMap::new(),
+            entry: CatalogCollectionEntry {
+                entry,
+                version: RelationVersionSelector::Latest,
             },
         };
 
@@ -252,13 +258,13 @@ impl Coordinator {
 struct ContinualTaskCatalogBootstrap {
     delegate: Arc<dyn OptimizerCatalog>,
     sink_id: GlobalId,
-    entry: CatalogEntry,
+    entry: CatalogCollectionEntry,
 }
 
 impl OptimizerCatalog for ContinualTaskCatalogBootstrap {
-    fn get_entry(&self, id: &GlobalId) -> &CatalogEntry {
+    fn get_entry(&self, id: &GlobalId) -> CatalogCollectionEntry {
         if self.sink_id == *id {
-            return &self.entry;
+            return self.entry.clone();
         }
         self.delegate.get_entry(id)
     }
@@ -333,7 +339,7 @@ struct NoIndexCatalog {
 }
 
 impl OptimizerCatalog for NoIndexCatalog {
-    fn get_entry(&self, id: &GlobalId) -> &CatalogEntry {
+    fn get_entry(&self, id: &GlobalId) -> CatalogCollectionEntry {
         self.delegate.get_entry(id)
     }
 
