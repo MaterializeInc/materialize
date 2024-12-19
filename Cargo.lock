@@ -1996,7 +1996,7 @@ dependencies = [
  "deadpool",
  "log",
  "tokio",
- "tokio-postgres 0.7.11 (git+https://github.com/MaterializeInc/rust-postgres?rev=548f00c4cbcf7bd714c29cfd2fea7685040c9987)",
+ "tokio-postgres",
 ]
 
 [[package]]
@@ -4299,7 +4299,7 @@ dependencies = [
  "thiserror",
  "timely",
  "tokio",
- "tokio-postgres 0.7.11 (git+https://github.com/MaterializeInc/rust-postgres?rev=548f00c4cbcf7bd714c29cfd2fea7685040c9987)",
+ "tokio-postgres",
  "tokio-stream",
  "tracing",
  "tracing-core",
@@ -4470,7 +4470,7 @@ dependencies = [
  "mz-tracing",
  "num_cpus",
  "openssl",
- "postgres 0.19.8 (git+https://github.com/MaterializeInc/rust-postgres?rev=548f00c4cbcf7bd714c29cfd2fea7685040c9987)",
+ "postgres",
  "prometheus",
  "proxy-header",
  "reqwest",
@@ -4478,7 +4478,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-openssl",
- "tokio-postgres 0.7.11 (git+https://github.com/MaterializeInc/rust-postgres?rev=548f00c4cbcf7bd714c29cfd2fea7685040c9987)",
+ "tokio-postgres",
  "tokio-util",
  "tower",
  "tracing",
@@ -4571,7 +4571,7 @@ dependencies = [
  "thiserror",
  "timely",
  "tokio",
- "tokio-postgres 0.7.11 (git+https://github.com/MaterializeInc/rust-postgres?rev=548f00c4cbcf7bd714c29cfd2fea7685040c9987)",
+ "tokio-postgres",
  "tracing",
  "uuid",
  "workspace-hack",
@@ -4601,7 +4601,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
- "tokio-postgres 0.7.11 (git+https://github.com/MaterializeInc/rust-postgres?rev=548f00c4cbcf7bd714c29cfd2fea7685040c9987)",
+ "tokio-postgres",
  "tracing",
  "url",
  "uuid",
@@ -5131,7 +5131,7 @@ dependencies = [
  "opentelemetry",
  "opentelemetry_sdk",
  "pin-project",
- "postgres 0.19.8 (git+https://github.com/MaterializeInc/rust-postgres?rev=548f00c4cbcf7bd714c29cfd2fea7685040c9987)",
+ "postgres",
  "postgres-openssl",
  "postgres-protocol 0.6.7 (git+https://github.com/MaterializeInc/rust-postgres?rev=548f00c4cbcf7bd714c29cfd2fea7685040c9987)",
  "postgres_array",
@@ -5159,7 +5159,7 @@ dependencies = [
  "timely",
  "tokio",
  "tokio-openssl",
- "tokio-postgres 0.7.11 (git+https://github.com/MaterializeInc/rust-postgres?rev=548f00c4cbcf7bd714c29cfd2fea7685040c9987)",
+ "tokio-postgres",
  "tokio-stream",
  "tower",
  "tower-http",
@@ -5292,7 +5292,7 @@ dependencies = [
  "socket2 0.5.7",
  "thiserror",
  "tokio",
- "tokio-postgres 0.7.11 (git+https://github.com/MaterializeInc/rust-postgres?rev=548f00c4cbcf7bd714c29cfd2fea7685040c9987)",
+ "tokio-postgres",
  "tokio-stream",
  "tokio-util",
  "tonic",
@@ -5532,7 +5532,7 @@ dependencies = [
  "mz-metabase",
  "mz-ore",
  "tokio",
- "tokio-postgres 0.7.11 (git+https://github.com/MaterializeInc/rust-postgres?rev=548f00c4cbcf7bd714c29cfd2fea7685040c9987)",
+ "tokio-postgres",
  "tracing",
  "workspace-hack",
 ]
@@ -5729,7 +5729,7 @@ dependencies = [
  "sha2",
  "thiserror",
  "tokio",
- "tokio-postgres 0.7.11 (git+https://github.com/MaterializeInc/rust-postgres?rev=548f00c4cbcf7bd714c29cfd2fea7685040c9987)",
+ "tokio-postgres",
  "tower-http",
  "tracing",
  "urlencoding",
@@ -5851,7 +5851,7 @@ dependencies = [
  "tempfile",
  "timely",
  "tokio",
- "tokio-postgres 0.7.11 (git+https://github.com/MaterializeInc/rust-postgres?rev=548f00c4cbcf7bd714c29cfd2fea7685040c9987)",
+ "tokio-postgres",
  "tracing",
  "url",
  "urlencoding",
@@ -6053,7 +6053,7 @@ dependencies = [
  "mz-server-core",
  "mz-sql",
  "openssl",
- "postgres 0.19.8 (git+https://github.com/MaterializeInc/rust-postgres?rev=548f00c4cbcf7bd714c29cfd2fea7685040c9987)",
+ "postgres",
  "tokio",
  "tokio-openssl",
  "tokio-stream",
@@ -6076,7 +6076,7 @@ dependencies = [
  "mz-server-core",
  "tokio",
  "tokio-openssl",
- "tokio-postgres 0.7.11 (git+https://github.com/MaterializeInc/rust-postgres?rev=548f00c4cbcf7bd714c29cfd2fea7685040c9987)",
+ "tokio-postgres",
  "tracing",
  "workspace-hack",
 ]
@@ -6118,7 +6118,7 @@ dependencies = [
  "serde",
  "thiserror",
  "tokio",
- "tokio-postgres 0.7.11 (git+https://github.com/MaterializeInc/rust-postgres?rev=548f00c4cbcf7bd714c29cfd2fea7685040c9987)",
+ "tokio-postgres",
  "tonic-build",
  "tracing",
  "workspace-hack",
@@ -6194,7 +6194,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
- "tokio-postgres 0.7.11 (git+https://github.com/MaterializeInc/rust-postgres?rev=548f00c4cbcf7bd714c29cfd2fea7685040c9987)",
+ "tokio-postgres",
  "url",
  "uuid",
  "workspace-hack",
@@ -6207,7 +6207,7 @@ dependencies = [
  "anyhow",
  "mz-ore",
  "mz-repr",
- "postgres 0.19.8 (git+https://github.com/MaterializeInc/rust-postgres?rev=548f00c4cbcf7bd714c29cfd2fea7685040c9987)",
+ "postgres",
  "regex",
  "workspace-hack",
 ]
@@ -6259,7 +6259,7 @@ dependencies = [
  "strsim",
  "thiserror",
  "timely",
- "tokio-postgres 0.7.11 (git+https://github.com/MaterializeInc/rust-postgres?rev=548f00c4cbcf7bd714c29cfd2fea7685040c9987)",
+ "tokio-postgres",
  "tracing",
  "tracing-core",
  "tracing-subscriber",
@@ -6509,7 +6509,7 @@ dependencies = [
  "static_assertions",
  "thiserror",
  "tokio",
- "tokio-postgres 0.7.11 (git+https://github.com/MaterializeInc/rust-postgres?rev=548f00c4cbcf7bd714c29cfd2fea7685040c9987)",
+ "tokio-postgres",
  "tracing",
  "tracing-subscriber",
  "uncased",
@@ -6608,7 +6608,7 @@ dependencies = [
  "tempfile",
  "time",
  "tokio",
- "tokio-postgres 0.7.11 (git+https://github.com/MaterializeInc/rust-postgres?rev=548f00c4cbcf7bd714c29cfd2fea7685040c9987)",
+ "tokio-postgres",
  "tokio-stream",
  "tower-http",
  "tracing",
@@ -6723,7 +6723,7 @@ dependencies = [
  "thiserror",
  "timely",
  "tokio",
- "tokio-postgres 0.7.11 (git+https://github.com/MaterializeInc/rust-postgres?rev=548f00c4cbcf7bd714c29cfd2fea7685040c9987)",
+ "tokio-postgres",
  "tokio-stream",
  "tokio-util",
  "tonic-build",
@@ -6816,7 +6816,7 @@ dependencies = [
  "serde_json",
  "timely",
  "tokio",
- "tokio-postgres 0.7.11 (git+https://github.com/MaterializeInc/rust-postgres?rev=548f00c4cbcf7bd714c29cfd2fea7685040c9987)",
+ "tokio-postgres",
  "tokio-stream",
  "tracing",
  "workspace-hack",
@@ -6921,7 +6921,7 @@ dependencies = [
  "thiserror",
  "timely",
  "tokio",
- "tokio-postgres 0.7.11 (git+https://github.com/MaterializeInc/rust-postgres?rev=548f00c4cbcf7bd714c29cfd2fea7685040c9987)",
+ "tokio-postgres",
  "tonic-build",
  "tracing",
  "url",
@@ -6940,7 +6940,7 @@ dependencies = [
  "rand",
  "rdkafka",
  "tokio",
- "tokio-postgres 0.7.11 (git+https://github.com/MaterializeInc/rust-postgres?rev=548f00c4cbcf7bd714c29cfd2fea7685040c9987)",
+ "tokio-postgres",
  "tracing",
  "workspace-hack",
 ]
@@ -7011,7 +7011,7 @@ dependencies = [
  "tiberius",
  "time",
  "tokio",
- "tokio-postgres 0.7.11 (git+https://github.com/MaterializeInc/rust-postgres?rev=548f00c4cbcf7bd714c29cfd2fea7685040c9987)",
+ "tokio-postgres",
  "tokio-stream",
  "tokio-util",
  "tonic",
@@ -7079,7 +7079,7 @@ dependencies = [
  "postgres-openssl",
  "thiserror",
  "tokio",
- "tokio-postgres 0.7.11 (git+https://github.com/MaterializeInc/rust-postgres?rev=548f00c4cbcf7bd714c29cfd2fea7685040c9987)",
+ "tokio-postgres",
  "tracing",
  "workspace-hack",
 ]
@@ -7976,20 +7976,7 @@ dependencies = [
  "futures-util",
  "log",
  "tokio",
- "tokio-postgres 0.7.11 (git+https://github.com/MaterializeInc/rust-postgres?rev=548f00c4cbcf7bd714c29cfd2fea7685040c9987)",
-]
-
-[[package]]
-name = "postgres"
-version = "0.19.8"
-source = "git+https://github.com/MaterializeInc/rust-postgres#548f00c4cbcf7bd714c29cfd2fea7685040c9987"
-dependencies = [
- "bytes",
- "fallible-iterator",
- "futures-util",
- "log",
- "tokio",
- "tokio-postgres 0.7.11 (git+https://github.com/MaterializeInc/rust-postgres)",
+ "tokio-postgres",
 ]
 
 [[package]]
@@ -8000,7 +7987,7 @@ dependencies = [
  "openssl",
  "tokio",
  "tokio-openssl",
- "tokio-postgres 0.7.11 (git+https://github.com/MaterializeInc/rust-postgres?rev=548f00c4cbcf7bd714c29cfd2fea7685040c9987)",
+ "tokio-postgres",
 ]
 
 [[package]]
@@ -8049,7 +8036,7 @@ dependencies = [
  "pin-project-lite",
  "postgres-protocol 0.6.7 (git+https://github.com/MaterializeInc/rust-postgres?rev=548f00c4cbcf7bd714c29cfd2fea7685040c9987)",
  "postgres-types 0.2.7 (git+https://github.com/MaterializeInc/rust-postgres?rev=548f00c4cbcf7bd714c29cfd2fea7685040c9987)",
- "tokio-postgres 0.7.11 (git+https://github.com/MaterializeInc/rust-postgres?rev=548f00c4cbcf7bd714c29cfd2fea7685040c9987)",
+ "tokio-postgres",
 ]
 
 [[package]]
@@ -8072,12 +8059,8 @@ version = "0.2.7"
 source = "git+https://github.com/MaterializeInc/rust-postgres#7d2f14e35e97973995c39662cde618036a0f9484"
 dependencies = [
  "bytes",
- "chrono",
  "fallible-iterator",
  "postgres-protocol 0.6.7 (git+https://github.com/MaterializeInc/rust-postgres)",
- "serde",
- "serde_json",
- "uuid",
 ]
 
 [[package]]
@@ -10200,32 +10183,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tokio-postgres"
-version = "0.7.11"
-source = "git+https://github.com/MaterializeInc/rust-postgres#7d2f14e35e97973995c39662cde618036a0f9484"
-dependencies = [
- "async-trait",
- "byteorder",
- "bytes",
- "fallible-iterator",
- "futures-channel",
- "futures-util",
- "log",
- "parking_lot",
- "percent-encoding",
- "phf",
- "pin-project-lite",
- "postgres-protocol 0.6.7 (git+https://github.com/MaterializeInc/rust-postgres)",
- "postgres-types 0.2.7 (git+https://github.com/MaterializeInc/rust-postgres)",
- "rand",
- "serde",
- "socket2 0.5.7",
- "tokio",
- "tokio-util",
- "whoami",
-]
-
-[[package]]
 name = "tokio-stream"
 version = "0.1.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11365,8 +11322,8 @@ dependencies = [
  "percent-encoding",
  "phf",
  "phf_shared",
- "postgres 0.19.8 (git+https://github.com/MaterializeInc/rust-postgres)",
- "postgres-types 0.2.7 (git+https://github.com/MaterializeInc/rust-postgres)",
+ "postgres",
+ "postgres-types 0.2.7 (git+https://github.com/MaterializeInc/rust-postgres?rev=548f00c4cbcf7bd714c29cfd2fea7685040c9987)",
  "predicates",
  "proc-macro2",
  "proptest-derive",
@@ -11399,7 +11356,7 @@ dependencies = [
  "time",
  "time-macros",
  "tokio",
- "tokio-postgres 0.7.11 (git+https://github.com/MaterializeInc/rust-postgres)",
+ "tokio-postgres",
  "tokio-stream",
  "tokio-util",
  "toml_datetime",

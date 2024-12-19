@@ -282,6 +282,10 @@ incremental = true
 # tend to get rewritten or disappear (e.g., because a PR is force pushed or gets
 # merged), after which point it becomes impossible to build that historical
 # version of Materialize.
+[patch."https://github.com/MaterializeInc/rust-postgres-array"]
+postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "548f00c4cbcf7bd714c29cfd2fea7685040c9987" }
+postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "548f00c4cbcf7bd714c29cfd2fea7685040c9987" }
+
 [patch.crates-io]
 # Waiting on https://github.com/sfackler/rust-postgres/pull/752.
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres", rev = "548f00c4cbcf7bd714c29cfd2fea7685040c9987" }
