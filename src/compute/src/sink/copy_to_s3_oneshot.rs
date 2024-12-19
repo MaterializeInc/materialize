@@ -12,7 +12,7 @@ use std::cell::RefCell;
 use std::ops::DerefMut;
 use std::rc::Rc;
 
-use differential_dataflow::{Collection, Hashable};
+use differential_dataflow::{AsCollection, Collection, Hashable};
 use mz_compute_client::protocol::response::CopyToResponse;
 use mz_compute_types::dyncfgs::{
     COPY_TO_S3_ARROW_BUILDER_BUFFER_RATIO, COPY_TO_S3_MULTIPART_PART_SIZE_BYTES,
@@ -73,43 +73,47 @@ where
         // is necessary to ensure the files written from each compute replica are identical.
         // While this is not technically guaranteed, the current implementation uses a FIFO channel.
         // In the storage copy_to operator we assert the ordering of rows to detect any regressions.
-        let input = consolidate_pact::<KeyBatcher<_, _, _>, _, _, _, _, _>(
-            &sinked_collection.map(move |row| {
-                let batch = row.hashed() % batch_count;
-                ((row, batch), ())
-            }),
+        let input = consolidate_pact::<KeyBatcher<_, _, _>, _, _, _, _>(
+            &sinked_collection
+                .map(move |row| {
+                    let batch = row.hashed() % batch_count;
+                    ((row, batch), ())
+                })
+                .inner,
             Exchange::new(move |(((_, batch), _), _, _)| *batch),
             "Consolidated COPY TO S3 input",
-        );
+        )
+        .as_collection();
 
         // We need to consolidate the error collection to ensure we don't act on retracted errors.
-        let error = consolidate_pact::<KeyBatcher<_, _, _>, _, _, _, _, _>(
-            &err_collection.map(move |row| {
-                let batch = row.hashed() % batch_count;
-                ((row, batch), ())
-            }),
+        let error = consolidate_pact::<KeyBatcher<_, _, _>, _, _, _, _>(
+            &err_collection
+                .map(move |row| {
+                    let batch = row.hashed() % batch_count;
+                    ((row, batch), ())
+                })
+                .inner,
             Exchange::new(move |(((_, batch), _), _, _)| *batch),
             "Consolidated COPY TO S3 errors",
-        );
+        )
+        .container::<Vec<_>>();
         // We can only propagate the one error back to the client, so filter the error
         // collection to the first error that is before the sink 'up_to' to avoid
         // sending the full error collection to the next operator. We ensure we find the
         // first error before the 'up_to' to avoid accidentally sending an irrelevant error.
         let error_stream =
-            error
-                .inner
-                .unary_frontier(Pipeline, "COPY TO S3 error filtering", |_cap, _info| {
-                    let up_to = sink.up_to.clone();
-                    let mut received_one = false;
-                    move |input, output| {
-                        while let Some((time, data)) = input.next() {
-                            if !up_to.less_equal(time.time()) && !received_one {
-                                received_one = true;
-                                output.session(&time).give_iterator(data.drain(..1));
-                            }
+            error.unary_frontier(Pipeline, "COPY TO S3 error filtering", |_cap, _info| {
+                let up_to = sink.up_to.clone();
+                let mut received_one = false;
+                move |input, output| {
+                    while let Some((time, data)) = input.next() {
+                        if !up_to.less_equal(time.time()) && !received_one {
+                            received_one = true;
+                            output.session(&time).give_iterator(data.drain(..1));
                         }
                     }
-                });
+                }
+            });
 
         let params = mz_storage_operators::s3_oneshot_sink::CopyToParameters {
             parquet_row_group_ratio: COPY_TO_S3_PARQUET_ROW_GROUP_FILE_RATIO

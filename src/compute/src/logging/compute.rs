@@ -30,7 +30,6 @@ use timely::dataflow::channels::pushers::{Counter, Tee};
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::{Filter, Operator};
 use timely::dataflow::{Scope, Stream};
-use timely::logging::WorkerIdentifier;
 use timely::scheduling::Scheduler;
 use timely::worker::Worker;
 use timely::{Container, Data};
@@ -41,10 +40,11 @@ use crate::extensions::arrange::MzArrange;
 use crate::logging::{
     ComputeLog, EventQueue, LogCollection, LogVariant, PermutedRowPacker, SharedLoggingState,
 };
+use crate::row_spine::{RowRowBatcher, RowRowBuilder};
 use crate::typedefs::RowRowSpine;
 
 /// Type alias for a logger of compute events.
-pub type Logger = timely::logging_core::Logger<ComputeEvent, WorkerIdentifier>;
+pub type Logger = timely::logging_core::Logger<ComputeEvent>;
 
 /// A logged compute event.
 #[derive(Debug, Clone, PartialOrd, PartialEq)]
@@ -228,7 +228,7 @@ impl LirMetadata {
 pub(super) fn construct<A: Allocate + 'static>(
     worker: &mut timely::worker::Worker<A>,
     config: &mz_compute_client::logging::LoggingConfig,
-    event_queue: EventQueue<Vec<(Duration, WorkerIdentifier, ComputeEvent)>>,
+    event_queue: EventQueue<Vec<(Duration, ComputeEvent)>>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
 ) -> BTreeMap<LogVariant, LogCollection> {
     let logging_interval_ms = std::cmp::max(1, config.interval.as_millis());
@@ -305,12 +305,7 @@ pub(super) fn construct<A: Allocate + 'static>(
                         dataflow_global_ids: dataflow_global_ids.session(&cap),
                     };
 
-                    for (time, logger_id, event) in data.drain(..) {
-                        // We expect the logging infrastructure to not shuffle events between
-                        // workers and this code relies on the assumption that each worker handles
-                        // its own events.
-                        assert_eq!(logger_id, worker_id);
-
+                    for (time, event) in data.drain(..) {
                         DemuxHandler {
                             state: &mut demux_state,
                             shared_state: &mut shared_state.borrow_mut(),
@@ -495,7 +490,9 @@ pub(super) fn construct<A: Allocate + 'static>(
             let variant = LogVariant::Compute(variant);
             if config.index_logs.contains_key(&variant) {
                 let trace = collection
-                    .mz_arrange::<RowRowSpine<_, _>>(&format!("Arrange {variant:?}"))
+                    .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+                        &format!("Arrange {variant:?}"),
+                    )
                     .trace;
                 let collection = LogCollection {
                     trace,

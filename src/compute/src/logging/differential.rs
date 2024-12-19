@@ -18,8 +18,10 @@ use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::logging::{
     BatchEvent, BatcherEvent, DifferentialEvent, DropEvent, MergeEvent, TraceShare,
 };
+use differential_dataflow::AsCollection;
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, Timestamp};
+use mz_timely_util::operator::consolidate_pact;
 use mz_timely_util::replay::MzReplay;
 use timely::communication::Allocate;
 use timely::container::CapacityContainerBuilder;
@@ -29,14 +31,14 @@ use timely::dataflow::channels::pushers::{Counter, Tee};
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::Filter;
 use timely::dataflow::Stream;
-use timely::logging::WorkerIdentifier;
 
-use crate::extensions::arrange::{MzArrange, MzArrangeCore};
+use crate::extensions::arrange::MzArrange;
 use crate::logging::compute::ComputeEvent;
 use crate::logging::{
     DifferentialLog, EventQueue, LogCollection, LogVariant, PermutedRowPacker, SharedLoggingState,
 };
-use crate::typedefs::{KeyValSpine, RowRowSpine};
+use crate::row_spine::{RowRowBatcher, RowRowBuilder};
+use crate::typedefs::{KeyBatcher, RowRowSpine};
 
 /// Constructs the logging dataflow for differential logs.
 ///
@@ -47,7 +49,7 @@ use crate::typedefs::{KeyValSpine, RowRowSpine};
 pub(super) fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
     config: &mz_compute_client::logging::LoggingConfig,
-    event_queue: EventQueue<Vec<(Duration, WorkerIdentifier, DifferentialEvent)>>,
+    event_queue: EventQueue<Vec<(Duration, DifferentialEvent)>>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
 ) -> BTreeMap<LogVariant, LogCollection> {
     let logging_interval_ms = std::cmp::max(1, config.interval.as_millis());
@@ -105,12 +107,7 @@ pub(super) fn construct<A: Allocate>(
                         batcher_allocations: batcher_allocations.session_with_builder(&cap),
                     };
 
-                    for (time, logger_id, event) in data.drain(..) {
-                        // We expect the logging infrastructure to not shuffle events between
-                        // workers and this code relies on the assumption that each worker handles
-                        // its own events.
-                        assert_eq!(logger_id, worker_id);
-
+                    for (time, event) in data.drain(..) {
                         DemuxHandler {
                             state: &mut demux_state,
                             output: &mut output_buffers,
@@ -126,17 +123,18 @@ pub(super) fn construct<A: Allocate>(
 
         let stream_to_collection = |input: Stream<_, ((usize, ()), Timestamp, Diff)>, log, name| {
             let packer = PermutedRowPacker::new(log);
-            input
-                .mz_arrange_core::<_, KeyValSpine<_, _, _, _>>(
-                    Pipeline,
-                    &format!("PreArrange Differential {name}"),
-                )
-                .as_collection(move |op, ()| {
-                    packer.pack_slice(&[
-                        Datum::UInt64(u64::cast_from(*op)),
-                        Datum::UInt64(u64::cast_from(worker_id)),
-                    ])
-                })
+            consolidate_pact::<KeyBatcher<_, _, _>, _, _, _, _>(
+                &input,
+                Pipeline,
+                &format!("Consolidate Differential {name}"),
+            )
+            .as_collection()
+            .map(move |(op, ())| {
+                packer.pack_slice(&[
+                    Datum::UInt64(u64::cast_from(op)),
+                    Datum::UInt64(u64::cast_from(worker_id)),
+                ])
+            })
         };
 
         // Encode the contents of each logging stream into its expected `Row` format.
@@ -171,7 +169,9 @@ pub(super) fn construct<A: Allocate>(
             let variant = LogVariant::Differential(variant);
             if config.index_logs.contains_key(&variant) {
                 let trace = collection
-                    .mz_arrange::<RowRowSpine<_, _>>(&format!("Arrange {variant:?}"))
+                    .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+                        &format!("Arrange {variant:?}"),
+                    )
                     .trace;
                 let collection = LogCollection {
                     trace,

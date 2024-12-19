@@ -31,7 +31,11 @@ where
     G::Timestamp: Lattice + Ord,
 {
     /// Applies `reduce` to arranged data, and returns an arrangement of output data.
-    fn mz_reduce_abelian<L, K, V, T2>(&self, name: &str, logic: L) -> Arranged<G, TraceAgent<T2>>
+    fn mz_reduce_abelian<L, K, V, Bu, T2>(
+        &self,
+        name: &str,
+        logic: L,
+    ) -> Arranged<G, TraceAgent<T2>>
     where
         T2: for<'a> Trace<Key<'a> = T1::Key<'a>, Time = G::Timestamp> + 'static,
         K: Data,
@@ -40,8 +44,8 @@ where
         for<'a> T2::Val<'a>: IntoOwned<'a, Owned = V>,
         T2::Diff: Abelian,
         T2::Batch: Batch,
-        T2::Builder: Builder,
-        <T2::Builder as Builder>::Input: Container + PushInto<((K, V), T2::Time, T2::Diff)>,
+        Bu: Builder<Time = G::Timestamp, Output = T2::Batch>,
+        Bu::Input: Container + PushInto<((K, V), T2::Time, T2::Diff)>,
         L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(V, T2::Diff)>) + 'static,
         Arranged<G, TraceAgent<T2>>: ArrangementSize;
 }
@@ -54,7 +58,11 @@ where
     T1::Diff: Semigroup,
 {
     /// Applies `reduce` to arranged data, and returns an arrangement of output data.
-    fn mz_reduce_abelian<L, K, V, T2>(&self, name: &str, logic: L) -> Arranged<G, TraceAgent<T2>>
+    fn mz_reduce_abelian<L, K, V, Bu, T2>(
+        &self,
+        name: &str,
+        logic: L,
+    ) -> Arranged<G, TraceAgent<T2>>
     where
         T2: for<'a> Trace<Key<'a> = T1::Key<'a>, Time = G::Timestamp> + 'static,
         K: Data,
@@ -63,14 +71,15 @@ where
         for<'a> T2::Val<'a>: IntoOwned<'a, Owned = V>,
         T2::Diff: Abelian,
         T2::Batch: Batch,
-        T2::Builder: Builder,
-        <T2::Builder as Builder>::Input: Container + PushInto<((K, V), T2::Time, T2::Diff)>,
+        Bu: Builder<Time = G::Timestamp, Output = T2::Batch>,
+        Bu::Input: Container + PushInto<((K, V), T2::Time, T2::Diff)>,
         L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(V, T2::Diff)>) + 'static,
         Arranged<G, TraceAgent<T2>>: ArrangementSize,
     {
         // Allow access to `reduce_abelian` since we're within Mz's wrapper and force arrangement size logging.
         #[allow(clippy::disallowed_methods)]
-        Arranged::<_, _>::reduce_abelian::<_, _, _, T2>(self, name, logic).log_arrangement_size()
+        Arranged::<_, _>::reduce_abelian::<_, _, _, Bu, T2>(self, name, logic)
+            .log_arrangement_size()
     }
 }
 
@@ -85,7 +94,7 @@ where
     /// are produced as a result. The method is useful for reductions that need to present different
     /// output views on the same input data. An example is producing an error-free reduction output
     /// along with a separate error output indicating when the error-free output is valid.
-    fn reduce_pair<L1, K, V1, T1, L2, V2, T2>(
+    fn reduce_pair<L1, K, V1, Bu1, T1, L2, V2, Bu2, T2>(
         &self,
         name1: &str,
         name2: &str,
@@ -99,8 +108,8 @@ where
         for<'a> T1::Val<'a>: IntoOwned<'a, Owned = V1>,
         T1::Diff: Abelian,
         T1::Batch: Batch,
-        T1::Builder: Builder,
-        <T1::Builder as Builder>::Input: Container + PushInto<((K, V1), T1::Time, T1::Diff)>,
+        Bu1: Builder<Time = G::Timestamp, Output = T1::Batch>,
+        Bu1::Input: Container + PushInto<((K, V1), T1::Time, T1::Diff)>,
         L1: FnMut(Tr::Key<'_>, &[(Tr::Val<'_>, Tr::Diff)], &mut Vec<(V1, T1::Diff)>) + 'static,
         V1: Data,
         T2: Trace + for<'a> TraceReader<Key<'a> = Tr::Key<'a>, Time = G::Timestamp> + 'static,
@@ -108,8 +117,8 @@ where
         for<'a> T2::Val<'a>: IntoOwned<'a, Owned = V2>,
         T2::Diff: Abelian,
         T2::Batch: Batch,
-        T2::Builder: Builder,
-        <T2::Builder as Builder>::Input: Container + PushInto<((K, V2), T2::Time, T2::Diff)>,
+        Bu2: Builder<Time = G::Timestamp, Output = T2::Batch>,
+        Bu2::Input: Container + PushInto<((K, V2), T2::Time, T2::Diff)>,
         L2: FnMut(Tr::Key<'_>, &[(Tr::Val<'_>, Tr::Diff)], &mut Vec<(V2, T2::Diff)>) + 'static,
         V2: Data,
         Arranged<G, TraceAgent<T1>>: ArrangementSize,
@@ -122,7 +131,7 @@ where
     Tr: TraceReader<Time = G::Timestamp> + Clone + 'static,
     Tr::Diff: Semigroup,
 {
-    fn reduce_pair<L1, K, V1, T1, L2, V2, T2>(
+    fn reduce_pair<L1, K, V1, Bu1, T1, L2, V2, Bu2, T2>(
         &self,
         name1: &str,
         name2: &str,
@@ -136,7 +145,8 @@ where
         for<'a> T1::Val<'a>: IntoOwned<'a, Owned = V1>,
         T1::Diff: Abelian,
         T1::Batch: Batch,
-        <T1::Builder as Builder>::Input: Container + PushInto<((K, V1), T1::Time, T1::Diff)>,
+        Bu1: Builder<Time = G::Timestamp, Output = T1::Batch>,
+        Bu1::Input: Container + PushInto<((K, V1), T1::Time, T1::Diff)>,
         L1: FnMut(Tr::Key<'_>, &[(Tr::Val<'_>, Tr::Diff)], &mut Vec<(V1, T1::Diff)>) + 'static,
         V1: Data,
         T2: Trace + for<'a> TraceReader<Key<'a> = Tr::Key<'a>, Time = G::Timestamp> + 'static,
@@ -144,15 +154,15 @@ where
         for<'a> T2::Val<'a>: IntoOwned<'a, Owned = V2>,
         T2::Diff: Abelian,
         T2::Batch: Batch,
-        T2::Builder: Builder,
-        <T2::Builder as Builder>::Input: Container + PushInto<((K, V2), T2::Time, T2::Diff)>,
+        Bu2: Builder<Time = G::Timestamp, Output = T2::Batch>,
+        Bu2::Input: Container + PushInto<((K, V2), T2::Time, T2::Diff)>,
         L2: FnMut(Tr::Key<'_>, &[(Tr::Val<'_>, Tr::Diff)], &mut Vec<(V2, T2::Diff)>) + 'static,
         V2: Data,
         Arranged<G, TraceAgent<T1>>: ArrangementSize,
         Arranged<G, TraceAgent<T2>>: ArrangementSize,
     {
-        let arranged1 = self.mz_reduce_abelian::<L1, _, _, T1>(name1, logic1);
-        let arranged2 = self.mz_reduce_abelian::<L2, _, _, T2>(name2, logic2);
+        let arranged1 = self.mz_reduce_abelian::<L1, _, _, Bu1, T1>(name1, logic1);
+        let arranged2 = self.mz_reduce_abelian::<L2, _, _, Bu2, T2>(name2, logic2);
         (arranged1, arranged2)
     }
 }

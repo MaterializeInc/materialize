@@ -17,19 +17,20 @@ use std::rc::Weak;
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::difference::{Multiply, Semigroup};
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::trace::{Batcher, Builder};
+use differential_dataflow::trace::{Batcher, Builder, Description};
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use timely::container::columnation::{Columnation, TimelyStack};
-use timely::container::{ContainerBuilder, PushInto};
+use timely::container::{ContainerBuilder, PushInto, SizableContainer};
 use timely::dataflow::channels::pact::{Exchange, ParallelizationContract, Pipeline};
 use timely::dataflow::channels::pushers::Tee;
+use timely::dataflow::channels::ContainerBytes;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
 use timely::dataflow::operators::generic::operator::{self, Operator};
 use timely::dataflow::operators::generic::{InputHandleCore, OperatorInfo, OutputHandleCore};
 use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, StreamCore};
 use timely::progress::{Antichain, Timestamp};
-use timely::{Container, Data, ExchangeData, PartialOrder};
+use timely::{Container, Data, PartialOrder};
 
 use crate::builder_async::{
     AsyncInputHandle, AsyncOutputHandle, ConnectedToOne, Disconnected,
@@ -105,7 +106,7 @@ where
         constructor: B,
     ) -> StreamCore<G, CB::Container>
     where
-        C2: Container,
+        C2: Container + 'static,
         CB: ContainerBuilder,
         B: FnOnce(
             Capability<G::Timestamp>,
@@ -182,7 +183,7 @@ where
     /// Distributes the data of the stream to all workers in a round-robin fashion.
     fn distribute(&self) -> StreamCore<G, C1>
     where
-        C1: ExchangeData;
+        C1: ContainerBytes + Send;
 }
 
 /// Extension methods for differential [`Collection`]s.
@@ -301,7 +302,7 @@ where
 
 impl<G, C1> StreamExt<G, C1> for StreamCore<G, C1>
 where
-    C1: Container,
+    C1: Container + Data,
     G: Scope,
 {
     fn unary_fallible<DCB, ECB, B, P>(
@@ -389,7 +390,7 @@ where
         constructor: B,
     ) -> StreamCore<G, CB::Container>
     where
-        C2: Container,
+        C2: Container + 'static,
         CB: ContainerBuilder,
         B: FnOnce(
             Capability<G::Timestamp>,
@@ -544,7 +545,7 @@ where
 
     fn distribute(&self) -> StreamCore<G, C1>
     where
-        C1: ExchangeData,
+        C1: ContainerBytes + Send,
     {
         self.unary(crate::pact::Distribute, "Distribute", move |_, _| {
             move |input, output| {
@@ -705,7 +706,8 @@ where
                 h.finish()
             });
             // Access to `arrange_core` is OK because we specify the trace and don't hold on to it.
-            consolidate_pact::<Ba, _, _, _, _, _>(&self.map(|k| (k, ())), exchange, name)
+            consolidate_pact::<Ba, _, _, _, _>(&self.map(|k| (k, ())).inner, exchange, name)
+                .as_collection()
                 .map(|(k, ())| k)
         } else {
             self
@@ -726,7 +728,8 @@ where
         let exchange =
             Exchange::new(move |update: &((D1, ()), G::Timestamp, R)| (update.0).0.hashed());
 
-        consolidate_pact::<Ba, _, _, _, _, _>(&self.map(|k| (k, ())), exchange, name)
+        consolidate_pact::<Ba, _, _, _, _>(&self.map(|k| (k, ())).inner, exchange, name)
+            .as_collection()
             .map(|(k, ())| k)
     }
 }
@@ -769,125 +772,117 @@ where
 /// The data are accumulated in place, each held back until their timestamp has completed.
 ///
 /// This serves as a low-level building-block for more user-friendly functions.
-pub fn consolidate_pact<B, P, G, K, V, R>(
-    collection: &Collection<G, (K, V), R>,
+pub fn consolidate_pact<B, P, G, CI, CO>(
+    stream: &StreamCore<G, CI>,
     pact: P,
     name: &str,
-) -> Collection<G, (K, V), R>
+) -> StreamCore<G, CO>
 where
     G: Scope,
-    K: Data,
-    V: Data,
-    R: Data + Semigroup,
-    B: Batcher<Input = Vec<((K, V), G::Timestamp, R)>, Time = G::Timestamp> + 'static,
+    B: Batcher<Input = CI, Time = G::Timestamp> + 'static,
     B::Output: Container,
-    for<'a> Vec<((K, V), G::Timestamp, R)>: PushInto<<B::Output as Container>::Item<'a>>,
-    P: ParallelizationContract<G::Timestamp, Vec<((K, V), G::Timestamp, R)>>,
+    for<'a> CO: PushInto<<B::Output as Container>::Item<'a>>,
+    P: ParallelizationContract<G::Timestamp, CI>,
+    CI: Container + Data,
+    CO: SizableContainer + Data,
 {
-    collection
-        .inner
-        .unary_frontier(pact, name, |_cap, info| {
-            // Acquire a logger for arrange events.
-            let logger = {
-                let scope = collection.scope();
-                let register = scope.log_register();
-                register.get::<differential_dataflow::logging::DifferentialEvent>(
-                    "differential/arrange",
-                )
-            };
+    stream.unary_frontier(pact, name, |_cap, info| {
+        // Acquire a logger for arrange events.
+        let logger = {
+            let scope = stream.scope();
+            let register = scope.log_register();
+            register
+                .get::<differential_dataflow::logging::DifferentialEvent>("differential/arrange")
+        };
 
-            let mut batcher = B::new(logger, info.global_id);
-            // Capabilities for the lower envelope of updates in `batcher`.
-            let mut capabilities = Antichain::<Capability<G::Timestamp>>::new();
-            let mut prev_frontier = Antichain::from_elem(G::Timestamp::minimum());
+        let mut batcher = B::new(logger, info.global_id);
+        // Capabilities for the lower envelope of updates in `batcher`.
+        let mut capabilities = Antichain::<Capability<G::Timestamp>>::new();
+        let mut prev_frontier = Antichain::from_elem(G::Timestamp::minimum());
 
-            move |input, output| {
-                input.for_each(|cap, data| {
-                    capabilities.insert(cap.retain());
-                    batcher.push_container(data);
-                });
+        move |input, output| {
+            input.for_each(|cap, data| {
+                capabilities.insert(cap.retain());
+                batcher.push_container(data);
+            });
 
-                if prev_frontier.borrow() != input.frontier().frontier() {
-                    if capabilities
-                        .elements()
-                        .iter()
-                        .any(|c| !input.frontier().less_equal(c.time()))
-                    {
-                        let mut upper = Antichain::new(); // re-used allocation for sealing batches.
+            if prev_frontier.borrow() != input.frontier().frontier() {
+                if capabilities
+                    .elements()
+                    .iter()
+                    .any(|c| !input.frontier().less_equal(c.time()))
+                {
+                    let mut upper = Antichain::new(); // re-used allocation for sealing batches.
 
-                        // For each capability not in advance of the input frontier ...
-                        for (index, capability) in capabilities.elements().iter().enumerate() {
-                            if !input.frontier().less_equal(capability.time()) {
-                                // Assemble the upper bound on times we can commit with this capabilities.
-                                // We must respect the input frontier, and *subsequent* capabilities, as
-                                // we are pretending to retire the capability changes one by one.
-                                upper.clear();
-                                for time in input.frontier().frontier().iter() {
-                                    upper.insert(time.clone());
-                                }
-                                for other_capability in &capabilities.elements()[(index + 1)..] {
-                                    upper.insert(other_capability.time().clone());
-                                }
+                    // For each capability not in advance of the input frontier ...
+                    for (index, capability) in capabilities.elements().iter().enumerate() {
+                        if !input.frontier().less_equal(capability.time()) {
+                            // Assemble the upper bound on times we can commit with this capabilities.
+                            // We must respect the input frontier, and *subsequent* capabilities, as
+                            // we are pretending to retire the capability changes one by one.
+                            upper.clear();
+                            for time in input.frontier().frontier().iter() {
+                                upper.insert(time.clone());
+                            }
+                            for other_capability in &capabilities.elements()[(index + 1)..] {
+                                upper.insert(other_capability.time().clone());
+                            }
 
-                                // send the batch to downstream consumers, empty or not.
-                                let mut session = output.session(&capabilities.elements()[index]);
-                                // Extract updates not in advance of `upper`.
-                                let output = batcher
-                                    .seal::<ConsolidateBuilder<_, _, _, _, _>>(upper.clone());
-                                for mut batch in output {
-                                    session.give_container(&mut batch);
-                                }
+                            // send the batch to downstream consumers, empty or not.
+                            let mut session = output.session(&capabilities.elements()[index]);
+                            // Extract updates not in advance of `upper`.
+                            let output =
+                                batcher.seal::<ConsolidateBuilder<_, B::Output, CO>>(upper.clone());
+                            for mut batch in output {
+                                session.give_container(&mut batch);
                             }
                         }
-
-                        // Having extracted and sent batches between each capability and the input frontier,
-                        // we should downgrade all capabilities to match the batcher's lower update frontier.
-                        // This may involve discarding capabilities, which is fine as any new updates arrive
-                        // in messages with new capabilities.
-
-                        let mut new_capabilities = Antichain::new();
-                        for time in batcher.frontier().iter() {
-                            if let Some(capability) = capabilities
-                                .elements()
-                                .iter()
-                                .find(|c| c.time().less_equal(time))
-                            {
-                                new_capabilities.insert(capability.delayed(time));
-                            } else {
-                                panic!("failed to find capability");
-                            }
-                        }
-
-                        capabilities = new_capabilities;
                     }
 
-                    prev_frontier.clear();
-                    prev_frontier.extend(input.frontier().frontier().iter().cloned());
+                    // Having extracted and sent batches between each capability and the input frontier,
+                    // we should downgrade all capabilities to match the batcher's lower update frontier.
+                    // This may involve discarding capabilities, which is fine as any new updates arrive
+                    // in messages with new capabilities.
+
+                    let mut new_capabilities = Antichain::new();
+                    for time in batcher.frontier().iter() {
+                        if let Some(capability) = capabilities
+                            .elements()
+                            .iter()
+                            .find(|c| c.time().less_equal(time))
+                        {
+                            new_capabilities.insert(capability.delayed(time));
+                        } else {
+                            panic!("failed to find capability");
+                        }
+                    }
+
+                    capabilities = new_capabilities;
                 }
+
+                prev_frontier.clear();
+                prev_frontier.extend(input.frontier().frontier().iter().cloned());
             }
-        })
-        .as_collection()
+        }
+    })
 }
 
 /// A builder that wraps a session for direct output to a stream.
-struct ConsolidateBuilder<K: Data, V: Data, T: Timestamp, R: Data, O> {
-    // Session<'a, T, Vec<((K, V), T, R)>, Counter<T, ((K, V), T, R), Tee<T, ((K, V), T, R)>>>,
-    buffer: Vec<Vec<((K, V), T, R)>>,
-    _marker: PhantomData<O>,
+struct ConsolidateBuilder<T, I, O> {
+    buffer: Vec<O>,
+    _marker: PhantomData<(T, I)>,
 }
 
-impl<K, V, T, R, O> Builder for ConsolidateBuilder<K, V, T, R, O>
+impl<T, I, O> Builder for ConsolidateBuilder<T, I, O>
 where
-    K: Data,
-    V: Data,
     T: Timestamp,
-    R: Data,
-    O: Container,
-    for<'a> Vec<((K, V), T, R)>: PushInto<O::Item<'a>>,
+    I: Container,
+    O: SizableContainer,
+    for<'a> O: PushInto<I::Item<'a>>,
 {
-    type Input = O;
+    type Input = I;
     type Time = T;
-    type Output = Vec<Vec<((K, V), T, R)>>;
+    type Output = Vec<O>;
 
     fn new() -> Self {
         Self {
@@ -908,24 +903,27 @@ where
         // contents at all.
         'element: for element in chunk.drain() {
             if let Some(last) = self.buffer.last_mut() {
-                if last.len() < last.capacity() {
+                if !last.at_capacity() {
                     last.push_into(element);
                     continue 'element;
                 }
             }
-            let mut new =
-                Vec::with_capacity(timely::container::buffer::default_capacity::<Self::Input>());
+            let mut new = O::default();
+            new.ensure_capacity(&mut None);
             new.push_into(element);
             self.buffer.push(new);
         }
     }
 
-    fn done(
-        self,
-        _lower: Antichain<Self::Time>,
-        _upper: Antichain<Self::Time>,
-        _since: Antichain<Self::Time>,
-    ) -> Self::Output {
+    fn done(self, _: Description<Self::Time>) -> Self::Output {
         self.buffer
+    }
+
+    fn seal(chain: &mut Vec<Self::Input>, description: Description<Self::Time>) -> Self::Output {
+        let mut builder = Self::new();
+        for mut input in chain.drain(..) {
+            builder.push(&mut input);
+        }
+        builder.done(description)
     }
 }

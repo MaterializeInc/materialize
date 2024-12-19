@@ -44,7 +44,10 @@ use crate::compute_state::{ComputeState, HydrationEvent};
 use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::render::errors::ErrorLogger;
 use crate::render::{LinearJoinSpec, RenderTimestamp};
-use crate::typedefs::{ErrAgent, ErrEnter, ErrSpine, RowRowAgent, RowRowEnter, RowRowSpine};
+use crate::row_spine::{RowRowBatcher, RowRowBuilder};
+use crate::typedefs::{
+    ErrAgent, ErrBatcher, ErrBuilder, ErrEnter, ErrSpine, RowRowAgent, RowRowEnter, RowRowSpine,
+};
 
 /// Dataflow-local collections and arrangements.
 ///
@@ -1045,7 +1048,9 @@ where
                     .expect("Collection constructed above");
                 let (oks, errs_keyed) = Self::specialized_arrange(&name, oks, &key, &thinning);
                 let errs: KeyCollection<_, _, _> = errs.concat(&errs_keyed).into();
-                let errs = errs.mz_arrange::<ErrSpine<_, _>>(&format!("{}-errors", name));
+                let errs = errs.mz_arrange::<ErrBatcher<_, _>, ErrBuilder<_, _>, ErrSpine<_, _>>(
+                    &format!("{}-errors", name),
+                );
                 self.arranged
                     .insert(key, ArrangementFlavor::Local(oks, errs));
             }
@@ -1068,7 +1073,8 @@ where
                 "FormArrangementKey",
                 specialized_arrangement_key(key.clone(), thinning.clone()),
             );
-        let oks = oks.mz_arrange::<RowRowSpine<_, _>>(name);
+        let oks =
+            oks.mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(name);
         (MzArrangement::RowRow(oks), errs)
     }
 }
