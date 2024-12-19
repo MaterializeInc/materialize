@@ -717,8 +717,16 @@ async fn http_auth(
         (TlsMode::Require, ConnProtocol::Https { .. }) => {}
     }
     let creds = match frontegg {
-        // If no Frontegg authentication, use the default HTTP user.
-        None => Credentials::DefaultUser,
+        None => {
+            // If no Frontegg authentication, use whatever is in the HTTP auth
+            // header (without checking the password), or fall back to the
+            // default user.
+            if let Some(basic) = req.headers().typed_get::<Authorization<Basic>>() {
+                Credentials::User(basic.username().to_string())
+            } else {
+                Credentials::DefaultUser
+            }
+        }
         Some(_) => {
             if let Some(basic) = req.headers().typed_get::<Authorization<Basic>>() {
                 Credentials::Password {

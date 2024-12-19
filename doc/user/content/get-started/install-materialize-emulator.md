@@ -37,7 +37,7 @@ not suitable for production deployments</redb>.
 | **Use case isolation**               | ❌ | ✅ |
 | **Fault tolerance**                  | ❌ | ✅ |
 | **Horizontal scalability**           | ❌ | ✅ |
-| **GUI**      | ❌ | ✅ Materialize Console |
+| **GUI (Materialize Console)**      | ✅ | ✅ |
 
 ### Prerequisites
 
@@ -59,12 +59,13 @@ not suitable for production deployments</redb>.
    been already downloaded.
 
    ```sh
-   docker run -d -p 127.0.0.1:6875:6875 -p 127.0.0.1:6876:6876 materialize/materialized:{{< version >}}
+   docker run -d -p 127.0.0.1:6874:6874 -p 127.0.0.1:6875:6875 -p 127.0.0.1:6876:6876 materialize/materialized:{{< version >}}
    ```
 
    When running locally:
 
-   - The Docker container binds exclusively to localhost, for security reasons.
+   - The Docker container binds exclusively to localhost for security reasons.
+   - The [Materialize Console](/console/) is available on port `6874`.
    - The SQL interface is available on port `6875`.
    - Logs are available via `docker logs <container-id>`.
    - A default user `materialize` is created.
@@ -72,8 +73,10 @@ not suitable for production deployments</redb>.
 
 1. <a name="materialize-emulator-connect-client"></a>
 
-   Connect to the Materialize Emulator using your preferred SQL client, using
-   the following connection field values:
+   Open the Materialize Console in your browser at [http://localhost:6874](http://localhost:6874).
+
+   Alternatively, you can connect to the Materialize Emulator using your
+   preferred SQL client, using the following connection field values:
 
    | Field    | Value         |
    |----------|---------------|

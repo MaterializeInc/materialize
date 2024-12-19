@@ -1372,13 +1372,21 @@ async fn test_auth_base_require_tls() {
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
-            // Test that specifying an mzcloud header does nothing and uses the default
-            // user.
+            // Test that specifies a username/password in the mzcloud header should use the username
+            TestCase::Http {
+                user_to_auth_as: frontegg_user,
+                user_reported_by_system: frontegg_user,
+                scheme: Scheme::HTTPS,
+                headers: &frontegg_header_basic,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
+            // Test that has no headers should use the default user
             TestCase::Http {
                 user_to_auth_as: &*HTTP_DEFAULT_USER.name,
                 user_reported_by_system: &*HTTP_DEFAULT_USER.name,
                 scheme: Scheme::HTTPS,
-                headers: &frontegg_header_basic,
+                headers: &no_headers,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
