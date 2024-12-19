@@ -11,6 +11,9 @@
 # Test ALTER TABLE -- source will error out for tables which existed when the source was created
 #
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET pg_schema_validation_interval = '2s';
+
 > CREATE SECRET pgpass AS 'postgres'
 > CREATE CONNECTION pg TO POSTGRES (
     HOST postgres,
@@ -132,7 +135,6 @@ INSERT INTO add_columns VALUES (2, 'ab');
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE remove_column DROP COLUMN f2;
-INSERT INTO remove_column VALUES (3);
 
 ! SELECT * from remove_column;
 contains:altered
@@ -146,7 +148,6 @@ contains:altered
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_column ALTER COLUMN f2 TYPE CHAR(2);
-INSERT INTO alter_column VALUES (3, 'bc');
 
 ! SELECT * from alter_column;
 contains:altered
@@ -160,7 +161,6 @@ contains:altered
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_drop_nullability ALTER COLUMN f1 DROP NOT NULL;
-INSERT INTO alter_drop_nullability VALUES (NULL);
 
 ! SELECT * FROM alter_drop_nullability WHERE f1 IS NOT NULL;
 contains:altered
@@ -193,7 +193,6 @@ INSERT INTO alter_add_nullability VALUES (1);
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_drop_pk DROP CONSTRAINT alter_drop_pk_pkey;
-INSERT INTO alter_drop_pk VALUES (1);
 
 ! SELECT f1 FROM alter_drop_pk;
 contains:altered
@@ -223,7 +222,6 @@ INSERT INTO alter_add_pk VALUES (2);
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_cycle_pk DROP CONSTRAINT alter_cycle_pk_pkey;
 ALTER TABLE alter_cycle_pk ADD PRIMARY KEY(f1);
-INSERT INTO alter_cycle_pk VALUES (2);
 
 ! SELECT * FROM alter_cycle_pk;
 contains:altered
@@ -254,7 +252,6 @@ INSERT INTO alter_cycle_pk_off VALUES (1);
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_drop_unique DROP CONSTRAINT alter_drop_unique_f1_key;
-INSERT INTO alter_drop_unique VALUES (1);
 
 ! SELECT f1 FROM alter_drop_unique;
 contains:altered
@@ -283,7 +280,6 @@ ab
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_extend_column ALTER COLUMN f1 TYPE VARCHAR(20);
-INSERT INTO alter_extend_column VALUES ('abcd');
 
 ! SELECT * FROM alter_extend_column;
 contains:altered
@@ -296,7 +292,6 @@ contains:altered
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_decimal ALTER COLUMN f1 TYPE DECIMAL(6,1);
-INSERT INTO alter_decimal VALUES (12345.6);
 
 ! SELECT * FROM alter_decimal;
 contains:altered
@@ -310,20 +305,12 @@ contains:altered
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_table_rename RENAME TO alter_table_renamed;
-INSERT INTO alter_table_renamed VALUES (2);
 
 ! SELECT * FROM alter_table_rename;
 contains:altered
 
-$ postgres-execute connection=postgres://postgres:postgres@postgres
-INSERT INTO alter_table_renamed VALUES (3);
-
-! SELECT * FROM alter_table_renamed;
-contains:unknown
-
-
 #
-# Alter table rename colum
+# Alter table rename column
 
 > SELECT * FROM alter_table_rename_column;
 f1_orig f2_orig
@@ -332,7 +319,6 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_table_rename_column RENAME COLUMN f1 TO f3;
 ALTER TABLE alter_table_rename_column RENAME COLUMN f2 TO f1;
 ALTER TABLE alter_table_rename_column RENAME COLUMN f3 TO f2;
-INSERT INTO alter_table_rename_column (f1, f2) VALUES ('f1_renamed', 'f2_renamed');
 
 ! SELECT * FROM alter_table_rename_column;
 contains:altered
@@ -348,7 +334,6 @@ f1_orig f2_orig
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_table_change_attnum DROP COLUMN f2;
 ALTER TABLE alter_table_change_attnum ADD COLUMN f2 VARCHAR(10);
-INSERT INTO alter_table_change_attnum (f1, f2) VALUES ('f1_changed', 'f2_changed');
 
 ! SELECT * FROM alter_table_change_attnum;
 contains:altered
@@ -375,7 +360,6 @@ INSERT INTO alter_table_supported (f1, f2) VALUES (3, 3);
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_table_supported DROP COLUMN f2;
-INSERT INTO alter_table_supported (f1) VALUES (1);
 
 ! SELECT * from alter_table_supported;
 contains:altered
@@ -389,7 +373,6 @@ contains:altered
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 TRUNCATE truncate_table;
-INSERT INTO truncate_table VALUES (1, 1);
 
 ! SELECT * FROM truncate_table;
 contains:table was truncated
@@ -400,17 +383,8 @@ contains:table was truncated
 > SELECT * from drop_table;
 1 1
 
-# Drop a table and then trigger a `Relation` message
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 DROP TABLE drop_table;
-ALTER TABLE add_columns ADD COLUMN f3 int;
-INSERT INTO add_columns VALUES (3, 'cd', 1);
-
-# Ensure we've seen the relation message.
-> SELECT * from add_columns;
-1
-2
-3
 
 # Table is dropped
 ! SELECT * FROM drop_table;
