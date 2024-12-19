@@ -9,10 +9,11 @@
 
 import hashlib
 import pathlib
-import requests
 import subprocess
 
-from materialize import MZ_ROOT, ui, spawn
+import requests
+
+from materialize import MZ_ROOT, ui
 
 """Utilities for interacting with Bazel from python scripts"""
 

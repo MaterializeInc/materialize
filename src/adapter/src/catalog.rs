@@ -1121,14 +1121,14 @@ impl Catalog {
     }
 
     pub fn get_role_allowed_cluster_sizes(&self, role_id: &Option<RoleId>) -> Vec<String> {
-        return if role_id == &Some(MZ_SYSTEM_ROLE_ID) {
+        if role_id == &Some(MZ_SYSTEM_ROLE_ID) {
             self.cluster_replica_sizes()
                 .enabled_allocations()
                 .map(|a| a.0.to_owned())
                 .collect::<Vec<_>>()
         } else {
             self.system_config().allowed_cluster_replica_sizes()
-        };
+        }
     }
 
     pub fn concretize_replica_location(
