@@ -79,8 +79,20 @@ Data accuracy and completeness is fully controlled by platform users.
 Materialize customers have full responsibility for responding to customer data
 privacy and governance requests. For details, see our [Privacy Policy](https://materialize.com/privacy-policy/).
 
+## Responsibility Matrix
+
+| Area | Materialize Responsibilities | Customer Responsibilities |
+|------|----------------------------|-------------------------|
+| Infrastructure | - Platform maintenance and updates<br>- System availability<br>- Core service reliability | - Client-side infrastructure<br>- Network connectivity<br>- Load balancing configuration |
+| Backups | - Core system state<br>- Ingested data | - Source data backups<br>- Integrity and security of source data backups |
+| Connection Recovery |  | - Re-establish dropped connections<br>- Data resynchronization<br>- Monitoring and alerting on connection failure<br>- Client-side disaster recovery |
+| Availability | - Core service availability<br>- Core platform disaster recovery | - Redundant connectivity<br>- Load balancing configuration<br>- Disaster recovery of customer-owned infrastructure |
+| Account Management and Authorization | - Tenant account creation | - Create and manage users within your organization's account<br>- Configure and maintain SSO integration<br>- Enable and configure MFA<br>- Configure role based access control (RBAC)<br>- Audit and monitor user activity |
+| Data | - Data processing integrity and correctness | - Data accuracy and quality<br>- Data privacy compliance<br>- Data governance<br>- Data retention policies |
+| Security | - Platform security<br>- Enforce customer configured authorization controls<br>- Security patches & vulnerability management | - Account security<br>- Access management<br>- Authentication configuration |
+| Monitoring | - Platform health monitoring<br>- System performance metrics | - Connection monitoring<br> |
 ## Conclusion
 
 Adhering to these responsibilities ensures that your data is protected, and
-Naterialize is utilized effectively. If you have any questions or need further
+Materialize is utilized effectively. If you have any questions or need further
 clarification on your responsibilities, please [contact support](/support).
