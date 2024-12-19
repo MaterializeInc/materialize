@@ -103,6 +103,16 @@ database as a source requires enabling [**GTID-based binlog replication**](/sql/
 | MySQL _(direct)_       | {{< supportLevel alpha >}} | See the [source documentation](/sql/create-source/mysql/) for more details, and the relevant integration guide for step-by-step instructions:<p></p><ul><li>[Amazon RDS for MySQL](/ingest-data/mysql/amazon-rds)</li><li>[Amazon Aurora for MySQL](/ingest-data/mysql/amazon-aurora)</li><li>[Azure DB for MySQL](/ingest-data/mysql/azure-db)</li><li>[Google Cloud SQL for MySQL](/ingest-data/mysql/google-cloud-sql)</li><li>[Self-hosted MySQL](/ingest-data/mysql/self-hosted)</li></ul> |
 | MySQL _(via Debezium)_ | {{< supportLevel production >}}  | See the [MySQL CDC guide](/integrations/cdc-mysql/) for a step-by-step breakdown of the integration. |             |
 
+### CockroachDB
+
+CockroachDB is supported as a [**source**](/concepts/sources)
+both through
+[Changefeeds](/ingest-data/cockroachdb/) (via Kafka or Redpanda).
+
+| Service                | Support level                    | Notes                                                                                                |             |
+| ---------------------- | -------------------------------- | ---------------------------------------------------------------------------------------------------- | ----------- |
+| CockroachDB _(via Changefeeds)_ | {{< supportLevel production >}}  | See the [CockroachDB Changefeed Guide](/integrations/cockroachdb/) for a step-by-step breakdown of the integration. |             |
+
 ### Other databases
 
 {{< note >}}

@@ -8,7 +8,7 @@ disableKinds = ['taxonomy']
 [params]
 repo = "//github.com/MaterializeInc/materialize"
 bannerMessage = "Need to run Materialize in your own private or public cloud? Get early access to **self-managed Materialize**!"
-bannerLink="https://materialize.com/blog/self-managed/?utm_medium=docs-banner&utm_source=documentation&utm_campaign=FY25_Blogs&sf_campaign=701TR00000NoNFXYA3&utm_term=&utm_content="
+bannerLink = "https://materialize.com/blog/self-managed/?utm_medium=docs-banner&utm_source=documentation&utm_campaign=FY25_Blogs&sf_campaign=701TR00000NoNFXYA3&utm_term=&utm_content="
 
 [frontmatter]
 publishDate = ["publishDate"]
@@ -20,7 +20,7 @@ publishDate = ["publishDate"]
 [[menu.main]]
 identifier = "get-started"
 name = "Get started"
-weight= 5
+weight = 5
 
 #
 # Connect sources
@@ -29,13 +29,19 @@ weight= 5
 [[menu.main]]
 identifier = "ingest-data"
 name = "Ingest data"
-weight= 11
+weight = 11
 
 [[menu.main]]
 name = "SQL Server"
 parent = 'ingest-data'
 identifier = 'sql-server'
 weight = 15
+
+[[menu.main]]
+name = "CockroachDB"
+parent = 'ingest-data'
+identifier = 'crdb'
+weight = 16
 
 [[menu.main]]
 name = "Redpanda"
@@ -53,7 +59,7 @@ weight = 30
 identifier = "network-security"
 name = "Network security"
 parent = 'ingest-data'
-weight= 35
+weight = 35
 
 #
 # Transform data
@@ -62,7 +68,7 @@ weight= 35
 [[menu.main]]
 identifier = "transform-data"
 name = "Transform data"
-weight= 12
+weight = 12
 
 #
 # Serve results
@@ -71,43 +77,43 @@ weight= 12
 [[menu.main]]
 identifier = "serve"
 name = "Serve results"
-weight= 13
+weight = 13
 
 [[menu.main]]
 name = "Query using `SELECT`"
 parent = "serve"
 url = "/sql/select/"
-weight= 5
+weight = 5
 
 [[menu.main]]
 name = "Query using external tools"
 identifier = "bi-tools"
 parent = "serve"
-weight= 10
+weight = 10
 
 [[menu.main]]
 name = "Subscribe to results (`SUBSCRIBE`)"
 parent = "serve"
 url = "/sql/subscribe/"
-weight= 15
+weight = 15
 
 [[menu.main]]
 name = "Sink results to external tools"
 identifier = "sink"
 parent = "serve"
-weight= 20
+weight = 20
 
 [[menu.main]]
 name = "Kafka"
 parent = "sink"
 url = "/sql/create-sink"
-weight= 20
+weight = 20
 
 [[menu.main]]
 name = "Redpanda"
 parent = "sink"
 url = "/sql/create-sink"
-weight= 30
+weight = 30
 #
 # Manage Materialize
 #
@@ -115,12 +121,12 @@ weight= 30
 [[menu.main]]
 identifier = "manage"
 name = "Manage Materialize"
-weight= 14
+weight = 14
 
 [[menu.main]]
 name = "Monitoring"
 identifier = "monitor"
-weight= 5
+weight = 5
 parent = "manage"
 
 #
@@ -130,7 +136,7 @@ parent = "manage"
 [[menu.main]]
 identifier = "reference"
 name = "Reference"
-weight= 15
+weight = 15
 
 
 [[menu.main]]
@@ -138,7 +144,7 @@ identifier = "cs_redpanda"
 name = "Redpanda"
 parent = "create-source"
 url = "/sql/create-source/kafka"
-weight= 10
+weight = 10
 
 [[menu.main]]
 identifier = "csink_redpanda"
@@ -169,7 +175,7 @@ url = '/sql/create-sink'
 [[menu.main]]
 identifier = "integrations"
 name = "Tools and integrations"
-weight= 25
+weight = 25
 
 [[menu.main]]
 identifier = "cli-reference"
@@ -204,13 +210,13 @@ weight = 70
 name = "Security overview"
 parent = "about"
 url = "https://materialize.com/security-overview"
-weight= 25
+weight = 25
 
 [[menu.main]]
 name = "Responsible disclosure policy"
 parent = "about"
 url = "https://materialize.com/securitydisclosure"
-weight= 30
+weight = 30
 
 [markup.goldmark.renderer]
 # allow <a name="link-target">, the old syntax no longer works
