@@ -122,8 +122,14 @@ impl<T: Ord + Columnation + Clone + 'static> BatchContainer for StackWrapper<T> 
 }
 
 impl<T: Clone + Columnation + 'static> Container for StackWrapper<T> {
-    type ItemRef<'a> = &'a T where Self: 'a;
-    type Item<'a> = &'a T where Self: 'a;
+    type ItemRef<'a>
+        = &'a T
+    where
+        Self: 'a;
+    type Item<'a>
+        = &'a T
+    where
+        Self: 'a;
 
     fn len(&self) -> usize {
         match self {
@@ -476,8 +482,14 @@ impl<T: Ord + Columnation + ToOwned<Owned = T> + 'static> BatchContainer for Chu
 }
 
 impl<T: Columnation + 'static> Container for ChunkedStack<T> {
-    type ItemRef<'a> = &'a T where Self: 'a;
-    type Item<'a> = &'a T where Self: 'a;
+    type ItemRef<'a>
+        = &'a T
+    where
+        Self: 'a;
+    type Item<'a>
+        = &'a T
+    where
+        Self: 'a;
 
     fn len(&self) -> usize {
         self.len()

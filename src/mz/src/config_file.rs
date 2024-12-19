@@ -115,7 +115,7 @@ impl ConfigFile {
 
     /// Loads a profile from the configuration file.
     /// Panics if the profile is not found.
-    pub fn load_profile<'a>(&'a self, name: &'a str) -> Result<Profile, Error> {
+    pub fn load_profile<'a>(&'a self, name: &'a str) -> Result<Profile<'a>, Error> {
         match &self.parsed.profiles {
             Some(profiles) => match profiles.get(name) {
                 None => Err(Error::ProfileMissing(name.to_string())),
@@ -257,7 +257,7 @@ impl ConfigFile {
         &'a self,
         name: &str,
         profile: &'a str,
-    ) -> Result<Option<&str>, Error> {
+    ) -> Result<Option<&'a str>, Error> {
         let profile = self.load_profile(profile)?;
         let value = (PROFILE_PARAMS[name].get)(profile.parsed);
 
