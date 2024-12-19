@@ -686,8 +686,10 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
             // directly to make sure this doesn't compile if someone attempts to make this operator
             // generic over partial orders in the future.
             let Some(mut upper) = resume_upper.clone().into_option() else {
+                write_frontier.borrow_mut().clear();
                 return Ok(());
             };
+
             let mut deferred_updates = vec![];
             let mut extra_updates = vec![];
             // We must wait until we have data to commit before starting a transaction because

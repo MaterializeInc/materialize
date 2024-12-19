@@ -5113,3 +5113,72 @@ def workflow_replica_expiration_creates_retraction_diffs_after_panic(
             """
             )
         )
+
+
+def workflow_test_constant_sink(c: Composition) -> None:
+    """
+    Test how we handle constant sinks.
+
+    This test reflects the current behavior, though not the desired behavior,
+    as described in database-issues#8842. Once we fix that issue, this can
+    become a regression test.
+    """
+
+    c.down(destroy_volumes=True)
+
+    with c.override(Testdrive(no_reset=True)):
+        c.up("testdrive", persistent=True)
+        c.up("materialized", "zookeeper", "kafka", "schema-registry")
+
+        c.testdrive(
+            dedent(
+                """
+                > CREATE CLUSTER test SIZE '1';
+
+                > CREATE MATERIALIZED VIEW const IN CLUSTER test AS SELECT 1
+
+                > CREATE CONNECTION kafka_conn
+                  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
+
+                > CREATE CONNECTION csr_conn TO CONFLUENT SCHEMA REGISTRY (
+                    URL '${testdrive.schema-registry-url}'
+                  )
+
+                > CREATE SINK snk
+                  IN CLUSTER test
+                  FROM const
+                  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk-${testdrive.seed}')
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE DEBEZIUM
+
+                > SELECT write_frontier
+                  FROM mz_internal.mz_frontiers
+                  JOIN mz_sinks ON id = object_id
+                  WHERE name = 'snk'
+
+                > SELECT status
+                  FROM mz_internal.mz_sink_statuses
+                  WHERE name = 'snk'
+                dropped
+                """
+            )
+        )
+
+        c.kill("materialized")
+        c.up("materialized")
+
+        c.testdrive(
+            dedent(
+                """
+                > SELECT write_frontier
+                  FROM mz_internal.mz_frontiers
+                  JOIN mz_sinks ON id = object_id
+                  WHERE name = 'snk'
+
+                > SELECT status
+                  FROM mz_internal.mz_sink_statuses
+                  WHERE name = 'snk'
+                dropped
+                """
+            )
+        )
