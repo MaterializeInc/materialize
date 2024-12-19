@@ -8,14 +8,15 @@ menu:
     parent: 'commands'
 ---
 
-`CREATE INDEX` creates an in-memory [index](/concepts/indexes/) on a source, view, or materialized
-view.
+`CREATE INDEX` creates an in-memory [index](/concepts/indexes/) on a source,
+table,view, or materialized view.
 
-In Materialize, indexes store query results in memory within a [cluster](https://materialize.com/docs/concepts/clusters/),
-and keep these results incrementally updated as new data arrives. By making
-up-to-date results available in memory, indexes can help [optimize query
-performance](https://materialize.com/docs/transform-data/optimization/),
-both when serving results and maintaining resource-heavy operations like joins.
+In Materialize, indexes store  **both** the key and the query results in memory
+within a [cluster](https://materialize.com/docs/concepts/clusters/), and keep
+these results incrementally updated as new data arrives. By making up-to-date
+results available in memory, indexes can help [optimize query
+performance](https://materialize.com/docs/transform-data/optimization/), both
+when serving results and maintaining resource-heavy operations like joins.
 
 ### Usage patterns
 
@@ -99,15 +100,7 @@ When creating your own indexes, you can choose the indexed expressions.
 
 ### Memory footprint
 
-The in-memory sizes of indexes are proportional to the current size of the source
-or view they represent. The actual amount of memory required depends on several
-details related to the rate of compaction and the representation of the types of
-data in the source or view.
-
-Creating an index may also force the first materialization of a view, which may
-cause Materialize to install a dataflow to determine and maintain the results of
-the view. This dataflow may have a memory footprint itself, in addition to that
-of the index.
+{{% views-indexes/indexes-memory-footprint %}}
 
 ## Examples
 
