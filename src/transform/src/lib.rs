@@ -125,6 +125,8 @@ pub struct TransformCtx<'a> {
     pub df_meta: &'a mut DataflowMetainfo,
     /// Metrics for the optimizer.
     pub metrics: Option<&'a OptimizerMetrics>,
+    /// The last hash of the query, if known.
+    pub last_hash: BTreeMap<GlobalId, u64>,
 }
 
 const FOLD_CONSTANTS_LIMIT: usize = 10000;
@@ -150,6 +152,7 @@ impl<'a> TransformCtx<'a> {
             typecheck_ctx,
             df_meta,
             metrics,
+            last_hash: Default::default(),
         }
     }
 
@@ -173,6 +176,7 @@ impl<'a> TransformCtx<'a> {
             df_meta,
             typecheck_ctx,
             metrics,
+            last_hash: Default::default(),
         }
     }
 
@@ -200,16 +204,25 @@ pub trait Transform: fmt::Debug {
         relation: &mut MirRelationExpr,
         args: &mut TransformCtx,
     ) -> Result<(), TransformError> {
-        let before = relation.hash_to_u64();
+        let hash_before = args
+            .global_id
+            .and_then(|id| args.last_hash.get(&id).copied())
+            .unwrap_or_else(|| relation.hash_to_u64());
+
+        mz_ore::soft_assert_eq_no_log!(hash_before, relation.hash_to_u64(), "cached hash clash");
+        // actually run the transform, recording the time taken
         let start = std::time::Instant::now();
         let res = self.actually_perform_transform(relation, args);
         let duration = start.elapsed();
-        let after = relation.hash_to_u64();
 
+        let hash_after = relation.hash_to_u64();
+        if let Some(id) = args.global_id {
+            args.last_hash.insert(id, hash_after);
+        }
         if let Some(metrics) = args.metrics {
             let transform_name = self.name();
             metrics.observe_transform_time(transform_name, duration);
-            metrics.inc_transform(before != after, transform_name);
+            metrics.inc_transform(hash_before != hash_after, transform_name);
         }
 
         res
@@ -932,6 +945,10 @@ impl Optimizer {
         relation: &mut MirRelationExpr,
         args: &mut TransformCtx,
     ) -> Result<(), TransformError> {
+        if let Some(id) = args.global_id {
+            args.last_hash.insert(id, relation.hash_to_u64());
+        }
+
         for transform in self.transforms.iter() {
             transform.transform(relation, args)?;
         }
