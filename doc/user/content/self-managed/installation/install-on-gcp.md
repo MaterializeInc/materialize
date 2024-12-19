@@ -25,7 +25,7 @@ examples/simple Terraform module.
 
 ### Google cloud project
 
-If you do not have a GCP project for your Materialize environment, create one.
+If you do not have a GCP project to use for this tutorial, create one.
 
 ### gcloud CLI
 
