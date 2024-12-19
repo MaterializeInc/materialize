@@ -220,6 +220,7 @@ async fn check_catalog_state(state: &State) -> Result<(), anyhow::Error> {
         // first lines that differs and show context around it.
         let diff = similar::TextDiff::from_lines(&memory_catalog, &disk_catalog)
             .unified_diff()
+            .header("memory", "disk")
             .context_radius(50)
             .to_string()
             .lines()
