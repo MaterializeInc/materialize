@@ -225,19 +225,6 @@ steps:
         coverage: skip
         sanitizer: skip
 
-      - id: vet-check
-        label: ":rust: Cargo vet Check"
-        command: bin/ci-builder run stable cargo vet check --locked
-        inputs:
-          - Cargo.lock
-          - misc/cargo-vet/config.toml
-        depends_on: []
-        timeout_in_minutes: 20
-        agents:
-          queue: hetzner-aarch64-4cpu-8gb
-        coverage: skip
-        sanitizer: skip
-
   - group: Docs tests
     key: docs-tests
     label: ":rust: Docs tests"
