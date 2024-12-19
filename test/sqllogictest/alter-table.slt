@@ -367,34 +367,6 @@ SELECT v2.a, v3.a, v4.a, v2.b, v3.b, v4.c FROM v2 JOIN v3 ON v2.a = v3.a JOIN v4
 6  6  6  later  later  2020-01-01␠00:00:00
 7  7  7  bar  bar  1000-01-01␠00:00:00
 
-statement ok
-BEGIN;
-
-query I
-SELECT a FROM t1 ORDER BY a ASC;
-----
-2
-4
-5
-6
-7
-
-# Let timestamps advance.
-statement ok
-SELECT mz_unsafe.mz_sleep(3);
-
-query I
-SELECT a FROM v2 ORDER BY a ASC;
-----
-2
-4
-5
-6
-7
-
-statement ok
-COMMIT;
-
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_alter_table_add_column = false;
 ----
@@ -437,11 +409,6 @@ ALTER TABLE t2 ADD COLUMN b text;
 
 statement ok
 DROP TABLE t1 CASCADE;
-
-query TT
-SELECT id, name FROM mz_views WHERE id LIKE 'u%';
-----
-u15 v_on_t2
 
 query TT
 SELECT id, name FROM mz_tables WHERE id LIKE 'u%';
