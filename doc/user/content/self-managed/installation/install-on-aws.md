@@ -77,17 +77,9 @@ for evaluation purposes only. The module deploys a sample infrastructure on AWS
 
 {{< warning >}}
 
-The sample Terraform module is for **evaluation purposes only** and not intended
-for production use. It is provided to help you get started with Materialize for
-evaluation purposes only. Materialize does not support nor recommends this
-module for production use. Materialize does not guarantee tests for changes to
-the module.
+{{< self-managed/terraform-disclaimer >}}
 
-For simplicity, this tutorial stores your RDS PostgreSQL secret in a file. In
-practice, refer to your organization's official security and
-Terraform/infrastructure practices.
-
-{{< /important >}}
+{{< /warning >}}
 
 1. Clone or download the [Materialize's sample Terraform
    repo](https://github.com/MaterializeInc/terraform-aws-materialize).
@@ -184,12 +176,16 @@ Terraform/infrastructure practices.
    - `materialize_s3_role_arn` (Used during [B. Install the Materialize
      Operator](#b-install-the-materialize-operator))
 
-   - `database_endpoint` (Used during [C. Install
-     Materialize](#c-install-materialize))
-
    - `persist_backend_url` (Used during [C. Install
      Materialize](#c-install-materialize))
 
+   - `metadata_backend_url` (Used during [C. Install
+     Materialize](#c-install-materialize)). You can get the connection strings by running the
+     following command:
+
+     ```bash
+     terraform output -json metadata_backend_url | jq
+     ```
 
 1. Configure `kubectl` to connect to your EKS cluster, replacing:
 
@@ -312,9 +308,7 @@ To deploy Materialize:
 
 1. {{< warning>}}
 
-   For simplicity, this tutorial stores your RDS Postgres secret in a file. In
-   practice, refer to your organization's official security and Terraform/infrastructure
-   practices.
+   {{< self-managed/terraform-disclaimer >}}
 
    {{< /warning >}}
 
@@ -330,23 +324,18 @@ To deploy Materialize:
       namespace: materialize-environment
     stringData:
       persist_backend_url: "your-persist-backend-url"
-      metadata_backend_url: "postgres://db_user:db_password@database_endpoint/db_name?sslmode=require"
+      metadata_backend_url: "your-metadata-backend-url"
     ```
 
     - For `your-persist-backend-url`, set to the value from the [Terraform
       output](#terraform-output).
 
-    - For `your-metadata-backend-url`, update with your values:
+    - For `your-metadata-backend-url`, set to the value from the [Terraform
+      output](#terraform-output).
 
-      - Default `db_user` is `materialize`,
-      - `db_password` is the value you specified in the `terraform.tfvars` file.
-      - `database_endpoint` is the value from the [Terraform
-        output](#terraform-output).
-      - Default `db_name` is `materialize`.
-
-        {{< tip >}}
-        URL encode your database password.
-        {{< /tip >}}
+      {{< tip >}}
+      You may need to URL encode your database password.
+      {{< /tip >}}
 
 1. Create a YAML file `my-materialize.yaml` for your Materialize
    configuration.

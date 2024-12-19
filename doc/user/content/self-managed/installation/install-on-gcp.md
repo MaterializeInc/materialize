@@ -16,17 +16,20 @@ bucket for blob storage.
 
 For testing purposes only. For testing purposes only. For testing purposes only. ....
 
+Assumes the `gke_config.machine_type = "e2-standard-4"` in the sample
+examples/simple Terraform module.
+
 {{< /important >}}
 
 ## Prerequisites
 
 ### Google cloud project
 
-If you do not have a GCP project, create one.
+If you do not have a GCP project for your Materialize environment, create one.
 
 ### gcloud CLI
 
-If you do not have the gcloud CLI installed, 
+If you do not have the gcloud CLI installed,
 
 - Install the gcloud CLI. For details, see the [Install the gcloud CLI
   documentation](https://cloud.google.com/sdk/docs/install).
@@ -78,7 +81,7 @@ for a sample setup.
 Materialize provides a [sample Terraform
 module](https://github.com/MaterializeInc/terraform-google-materialize) for
 evaluation purposes only. The module deploys a sample infrastructure on GCP
-(region `us-east-1`) with the following components:
+(region `us-central1`) with the following components:
 
 - Google Kubernetes Engine (GKE) cluster
 - Database component for metadata storage (Cloud SQL PostgreSQL database)
@@ -88,17 +91,9 @@ evaluation purposes only. The module deploys a sample infrastructure on GCP
 
 {{< warning >}}
 
-The sample Terraform module is for **evaluation purposes only** and not intended
-for production use. It is provided to help you get started with Materialize for
-evaluation purposes only. Materialize does not support nor recommends this
-module for production use. Materialize does not guarantee tests for changes to
-the module.
+{{< self-managed/terraform-disclaimer >}}
 
-For simplicity, this tutorial stores your Cloud SQL PostgreSQL secret in a file.
-In practice, refer to your organization's official security and
-Terraform/infrastructure practices.
-
-{{< /important >}}
+{{< /warning >}}
 
 1. Enable the following services for your GCP project:
 
@@ -169,44 +164,22 @@ Terraform/infrastructure practices.
 1. Clone or download the [Materialize's sample Terraform
    repo](https://github.com/MaterializeInc/terraform-google-materialize).
 
-1. Go to the Materialize Terraform repo directory.
+1. Go to the `examples/simple` folder in the Materialize Terraform repo
+   directory.
 
    ```bash
-   cd terraform-google-materialize
+   cd terraform-google-materialize/examples/simple
    ```
 
-1. Copy the `terraform.tfvars.example` file to `terraform.tfvars`.
+1. Create a `terraform.tfvars` file and and specify:
+
+   -  Your GCP project ID and
+
+   -  A secure password for the Cloud SQL PostgreSQL database (to be created).
 
    ```bash
-   cp terraform.tfvars.example terraform.tfvars
-   ```
-
-1. Edit the `terraform.tfvars` file to set the values for your AWS environment.
-   In particular,
-   - set `project_id` to your GCP project ID.
-   - set `database_password` to a secure password.
-
-   ```bash
-    # GCP Project Configuration
-    project_id = "enter-your-gcp-project-id" # Enter your GCP project ID
-    region     = "us-central1"
-    prefix     = "mz-simple"
-
-    # Database Configuration
-    database_config = {
-      tier     = "db-custom-2-4096" # 2 vCPUs, 4GB RAM
-      version  = "POSTGRES_15"
-      password = "enter-secure-passowrd" # At least 12 characters
-    }
-
-    gke_config = {
-      node_count     = 1
-      machine_type   = "e2-standard-4"
-      disk_size_gb   = 50
-      min_nodes      = 1
-      max_nodes      = 2
-      node_locations = []
-   }
+   project_id = "enter-your-gcp-project-id"
+   database_password  = "enter-secure-password"
    ```
 
 1. Initialize the terraform directory.
@@ -218,7 +191,7 @@ Terraform/infrastructure practices.
 1. Create a terraform plan and review the changes.
 
     ```bash
-    terraform plan -out my-plan.tfplan  
+    terraform plan -out my-plan.tfplan
     ```
 
 1. If you are satisfied with the changes, apply the terraform plan.
@@ -234,20 +207,29 @@ Terraform/infrastructure practices.
    Apply complete! Resources: 16 added, 0 changed, 0 destroyed.
 
    Outputs:
-   
+
    connection_strings = <sensitive>
-   database = <sensitive>
    gke_cluster = <sensitive>
    service_accounts = {
-     "gke_sa" = "mz-simple-gke-sa@your-project-id.iam.gserviceaccount.com"
-     "materialize_sa" = "mz-simple-materialize-sa@your-project-id.iam.gserviceaccount.com"
-   }
-   storage = {
-     "name" = "mz-simple-storage-your-project-id"
-     "self_link" = "https://www.googleapis.com/storage/v1/b/mz-simple-storage-your-project-id"
-     "url" = "gs://mz-simple-storage-your-project-id"
+      "gke_sa" = "mz-simple-gke-sa@your-project-id.iam.gserviceaccount.com"
+      "materialize_sa" = "mz-simple-materialize-sa@your-project-id.iam.gserviceaccount.com"
    }
    ```
+
+1. Note the following output values to be used during [C. Install
+     Materialize](#c-install-materialize)
+
+   <a name="terraform-output"></a>
+
+   - `service_accounts.materialize_sa` value before the `@` (e.g.,
+     `my-simple-materialize-sa`)
+
+   - `connection_strings`. You can get the connection strings by running the
+     following command:
+
+     ```bash
+     terraform output -json connection_strings | jq
+     ```
 
 1. Configure `kubectl` to connect to your EKS cluster:
 
@@ -347,7 +329,13 @@ Terraform/infrastructure practices.
 
 To deploy Materialize:
 
-1. For your backend configuration, create a file
+1. {{< warning>}}
+
+   {{< self-managed/terraform-disclaimer >}}
+
+   {{< /warning >}}
+
+   For your backend configuration, create a file
    `materialize-backend-secret.yaml` for your [Kubernetes
    Secret](https://kubernetes.io/docs/concepts/configuration/secret/).
 
@@ -359,28 +347,25 @@ To deploy Materialize:
       namespace: materialize-environment
     stringData:
       persist_backend_url: "your-persist-backend-url"
-      metadata_backend_url: "postgres://db_user:db_password@database_endpoint/db_name?sslmode=require"
+      metadata_backend_url: "your-metadata-backend-url"
     ```
 
-    - For `your-persist-backend-url`, set to the your google storate uri (e.g., `gs://some-example-bucket`).
+    - For `your-persist-backend-url`, set to the `persist_backend_url` value
+      from the [Terraform output](#terraform-output).
 
-    - For `your-metadata-backend-url`, update with your values:
+    - For `your-metadata-backend-url`, set to the `metadata_backend_url` value
+      from the [Terraform output](#terraform-output).
 
-      - Default `db_user` is `materialize`,
-      - `db_password` is the value you specified during Terraform plan.
-      - `database_endpoint` is the Google Cloud SQL database connection name
-        (e.g., `some-name:us-central1:mz-simple-pg`).
-      - Default `db_name` is `materialize`.
-
-        {{< tip >}}
-        URL encode your database password.
-        {{< /tip >}}
+      {{< tip >}}
+      You may need to URL encode your database password in the
+      `metadata_backend_url`.
+      {{< /tip >}}
 
 1. Create a YAML file (e.g., `my-materialize.yaml`) for your Materialize
    configuration.
 
    Replace `your-service-account-name` with the service account name as
-   specified in the Terraform output.
+   specified in the [Terraform output](#terraform-output).
 
    ```yaml
    apiVersion: materialize.cloud/v1alpha1
@@ -414,12 +399,80 @@ To deploy Materialize:
    kubectl apply -f my-materialize.yaml
    ```
 
-1. Verify the installation:
+1. Verify the installation and check the status:
 
    ```bash
-   kubectl get materializes -n materialize-environment
-   kubectl get pods -n materialize-environment
+   kubectl get all -n materialize-environment
    ```
+
+   Wait for the components to be in the `Running` state.
+
+   ```none
+   NAME                                             READY   STATUS    RESTARTS   AGE
+   pod/mzqqi9d9n2rw-balancerd-5b56d9b5d-q767h       1/1     Running   0          13m
+   pod/mzqqi9d9n2rw-cluster-s1-replica-s1-gen-1-0   1/1     Running   0          13m
+   pod/mzqqi9d9n2rw-cluster-s2-replica-s2-gen-1-0   1/1     Running   0          13m
+   pod/mzqqi9d9n2rw-cluster-s3-replica-s3-gen-1-0   1/1     Running   0          13m
+   pod/mzqqi9d9n2rw-cluster-u1-replica-u1-gen-1-0   1/1     Running   0          13m
+   pod/mzqqi9d9n2rw-console-585b4cbc87-7cqfr        1/1     Running   0          13m
+   pod/mzqqi9d9n2rw-console-585b4cbc87-b482w        1/1     Running   0          13m
+   pod/mzqqi9d9n2rw-environmentd-1-0                1/1     Running   0          14m
+
+   NAME                                               TYPE        CLUSTER-IP   EXTERNAL-IP   PORT(S)                                        AGE
+   service/mzqqi9d9n2rw-balancerd                     ClusterIP   None         <none>        6876/TCP,6875/TCP                              13m
+   service/mzqqi9d9n2rw-cluster-s1-replica-s1-gen-1   ClusterIP   None         <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   13m
+   service/mzqqi9d9n2rw-cluster-s2-replica-s2-gen-1   ClusterIP   None         <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   13m
+   service/mzqqi9d9n2rw-cluster-s3-replica-s3-gen-1   ClusterIP   None         <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   13m
+   service/mzqqi9d9n2rw-cluster-u1-replica-u1-gen-1   ClusterIP   None         <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   13m
+   service/mzqqi9d9n2rw-console                       ClusterIP   None         <none>        8080/TCP                                       13m
+   service/mzqqi9d9n2rw-environmentd                  ClusterIP   None         <none>        6875/TCP,6876/TCP,6877/TCP,6878/TCP            13m
+   service/mzqqi9d9n2rw-environmentd-1                ClusterIP   None         <none>        6875/TCP,6876/TCP,6877/TCP,6878/TCP            14m
+   service/mzqqi9d9n2rw-persist-pubsub-1              ClusterIP   None         <none>        6879/TCP                                       14m
+
+   NAME                                     READY   UP-TO-DATE   AVAILABLE   AGE
+   deployment.apps/mzqqi9d9n2rw-balancerd   1/1     1            1           13m
+   deployment.apps/mzqqi9d9n2rw-console     2/2     2            2           13m
+
+   NAME                                               DESIRED   CURRENT   READY   AGE
+   replicaset.apps/mzqqi9d9n2rw-balancerd-5b56d9b5d   1         1         1       13m
+   replicaset.apps/mzqqi9d9n2rw-console-585b4cbc87    2         2         2       13m
+
+   NAME                                                        READY   AGE
+   statefulset.apps/mzqqi9d9n2rw-cluster-s1-replica-s1-gen-1   1/1     13m
+   statefulset.apps/mzqqi9d9n2rw-cluster-s2-replica-s2-gen-1   1/1     13m
+   statefulset.apps/mzqqi9d9n2rw-cluster-s3-replica-s3-gen-1   1/1     13m
+   statefulset.apps/mzqqi9d9n2rw-cluster-u1-replica-u1-gen-1   1/1     13m
+   statefulset.apps/mzqqi9d9n2rw-environmentd-1                1/1     14m
+   ```
+
+1. Open the Materialize console in your browser:
+
+   1. From the previous `kubectl` output, find the Materialize console service.
+
+      ```none
+      NAME                           TYPE        CLUSTER-IP   EXTERNAL-IP   PORT(S)    AGE
+      service/mzqqi9d9n2rw-console   ClusterIP   None         <none>        8080/TCP   13m
+      ```
+
+   1. Forward the Materialize console service to your local machine (substitute
+      your service name for `mzqqi9d9n2rw-console`):
+
+      ```shell
+      while true;
+      do kubectl port-forward svc/mzqqi9d9n2rw-console 8080:8080 -n materialize-environment 2>&1 |
+      grep -q "portforward.go" && echo "Restarting port forwarding due to an error." || break;
+      done;
+      ```
+      {{< note >}}
+      Due to a [known Kubernetes issue](https://github.com/kubernetes/kubernetes/issues/78446),
+      interrupted long-running requests through a standard port-forward cause the port forward to hang. The command above
+      automatically restarts the port forwarding if an error occurs, ensuring a more stable
+      connection. It detects failures by monitoring for "portforward.go" error messages.
+      {{< /note >}}
+
+   1. Open a browser and navigate to
+      [http://localhost:8080](http://localhost:8080).
+
 
 ## Troubleshooting
 
