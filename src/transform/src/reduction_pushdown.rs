@@ -49,6 +49,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::iter::FromIterator;
+use std::num::NonZeroU64;
 
 use mz_expr::visit::Visit;
 use mz_expr::{AggregateExpr, JoinInputMapper, MirRelationExpr, MirScalarExpr};
@@ -167,7 +168,7 @@ fn try_push_reduce_through_join(
     group_key: &Vec<MirScalarExpr>,
     aggregates: &Vec<AggregateExpr>,
     monotonic: bool,
-    expected_group_size: Option<u64>,
+    expected_group_size: Option<NonZeroU64>,
 ) -> Option<MirRelationExpr> {
     // Variable name details:
     // The goal is to turn `old` (`Reduce { Join { <inputs> }}`) into
@@ -404,7 +405,7 @@ struct ReduceBuilder {
 impl ReduceBuilder {
     fn new(
         mut component: Component,
-        inputs: &Vec<MirRelationExpr>,
+        inputs: &[MirRelationExpr],
         old_join_mapper: &JoinInputMapper,
     ) -> Self {
         let localize_map = component
@@ -471,7 +472,7 @@ impl ReduceBuilder {
     fn construct_reduce(
         self,
         monotonic: bool,
-        expected_group_size: Option<u64>,
+        expected_group_size: Option<NonZeroU64>,
     ) -> MirRelationExpr {
         MirRelationExpr::Reduce {
             input: Box::new(self.input),
