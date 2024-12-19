@@ -26,9 +26,13 @@ If you do not have a GCP project, create one.
 
 ### gcloud CLI
 
-If you do not have the gcloud CLI installed, install the gcloud CLI. For
-details, see the [Install the gcloud CLI
-documentation](https://cloud.google.com/sdk/docs/install).
+If you do not have the gcloud CLI installed, 
+
+- Install the gcloud CLI. For details, see the [Install the gcloud CLI
+  documentation](https://cloud.google.com/sdk/docs/install).
+
+- Initialize the gcloud CLI to specify the GCP project you want to use. For
+  details, see the [Install the gcloud CLI documentation](https://cloud.google.com/sdk/docs/install).
 
 ### Terraform
 
@@ -165,11 +169,10 @@ Terraform/infrastructure practices.
 1. Clone or download the [Materialize's sample Terraform
    repo](https://github.com/MaterializeInc/terraform-google-materialize).
 
-1. Go to the `examples/simple` folder in the Materialize Terraform repo
-   directory.
+1. Go to the Materialize Terraform repo directory.
 
    ```bash
-   cd terraform-google-materialize/examples/simple
+   cd terraform-google-materialize
    ```
 
 1. Copy the `terraform.tfvars.example` file to `terraform.tfvars`.
@@ -185,7 +188,7 @@ Terraform/infrastructure practices.
 
    ```bash
     # GCP Project Configuration
-    project_id = "your-gcp-project-id" # Enter your GCP project ID
+    project_id = "enter-your-gcp-project-id" # Enter your GCP project ID
     region     = "us-central1"
     prefix     = "mz-simple"
 
@@ -195,12 +198,27 @@ Terraform/infrastructure practices.
       version  = "POSTGRES_15"
       password = "enter-secure-passowrd" # At least 12 characters
     }
+
+    gke_config = {
+      node_count     = 1
+      machine_type   = "e2-standard-4"
+      disk_size_gb   = 50
+      min_nodes      = 1
+      max_nodes      = 2
+      node_locations = []
+   }
    ```
+
+1. Initialize the terraform directory.
+
+    ```bash
+    terraform init
+    ```
 
 1. Create a terraform plan and review the changes.
 
     ```bash
-    terraform init
+    terraform plan -out my-plan.tfplan  
     ```
 
 1. If you are satisfied with the changes, apply the terraform plan.
@@ -267,7 +285,8 @@ Terraform/infrastructure practices.
 1. Create a `my-materialize-operator-values.yaml` configuration file for
    the Materialize operator.  Update with:
 
-   - your GCP region (the sample Terraform module uses `us-east-1`).
+   - your GCP region (the sample Terraform module uses a default region of
+     `us-central1`).
 
 
       ```yaml
