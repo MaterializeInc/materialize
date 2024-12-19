@@ -1745,6 +1745,7 @@ pub mod datadriven {
         let output = args.expect_str("output");
         let lower = args.expect_antichain("lower");
         let upper = args.expect_antichain("upper");
+        assert!(PartialOrder::less_than(&lower, &upper));
         let since = args
             .optional_antichain("since")
             .unwrap_or_else(|| Antichain::from_elem(0));
@@ -1780,7 +1781,6 @@ pub mod datadriven {
             Arc::clone(&datadriven.client.metrics),
             Arc::clone(&datadriven.machine.applier.shard_metrics),
             datadriven.shard_id,
-            lower.clone(),
             Arc::clone(&datadriven.client.blob),
             Arc::clone(&datadriven.client.isolated_runtime),
             &datadriven.client.metrics.user,
@@ -1790,19 +1790,15 @@ pub mod datadriven {
             parts,
             Arc::clone(&datadriven.client.metrics),
             schemas.clone(),
-            lower,
             Arc::clone(&datadriven.client.blob),
             datadriven.shard_id.clone(),
             datadriven.client.cfg.build_version.clone(),
-            since,
-            Some(upper.clone()),
         );
-        let mut builder = BatchBuilder {
+        let mut builder = BatchBuilder::new(
             builder,
-            metrics: Arc::clone(&datadriven.client.metrics),
-            key_buf: vec![],
-            val_buf: vec![],
-        };
+            Description::new(lower, upper.clone(), since),
+            Arc::clone(&datadriven.client.metrics),
+        );
         for ((k, ()), t, d) in updates {
             builder.add(&k, &(), &t, &d).await.expect("invalid batch");
         }
