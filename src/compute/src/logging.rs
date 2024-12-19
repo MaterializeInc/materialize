@@ -111,7 +111,7 @@ where
 
 impl<C, P> BatchLogger<CapacityContainerBuilder<C>, P>
 where
-    C: SizableContainer,
+    C: SizableContainer + Clone + 'static,
     P: EventPusher<Timestamp, C>,
 {
     /// Publishes a batch of logged events and advances the capability.

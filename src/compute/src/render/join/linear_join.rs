@@ -38,7 +38,7 @@ use crate::render::context::{
     ArrangementFlavor, CollectionBundle, Context, MzArrangement, MzArrangementImport, ShutdownToken,
 };
 use crate::render::join::mz_join_core::mz_join_core;
-use crate::row_spine::RowRowSpine;
+use crate::row_spine::{RowRowBatcher, RowRowBuilder, RowRowSpine};
 use crate::typedefs::{RowRowAgent, RowRowEnter};
 
 /// Available linear join implementations.
@@ -384,7 +384,10 @@ where
             // TODO(vmarcos): We should implement further arrangement specialization here (database-issues#6659).
             // By knowing how types propagate through joins we could specialize intermediate
             // arrangements as well, either in values or eventually in keys.
-            let arranged = keyed.mz_arrange::<RowRowSpine<_, _>>("JoinStage");
+            let arranged = keyed
+                .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+                    "JoinStage",
+                );
             joined = JoinedFlavor::Local(MzArrangement::RowRow(arranged));
         }
 

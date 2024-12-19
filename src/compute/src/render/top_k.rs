@@ -31,18 +31,21 @@ use mz_ore::soft_assert_or_log;
 use mz_repr::{Datum, DatumVec, Diff, Row, ScalarType, SharedRow};
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
-use timely::container::columnation::{Columnation, TimelyStack};
-use timely::container::CapacityContainerBuilder;
+use timely::container::columnation::Columnation;
+use timely::container::{CapacityContainerBuilder, PushInto};
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::Scope;
+use timely::Container;
 
 use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
 use crate::render::context::{CollectionBundle, Context};
 use crate::render::errors::MaybeValidatingRow;
 use crate::render::Pairer;
-use crate::row_spine::{DatumSeq, RowValSpine};
+use crate::row_spine::{
+    DatumSeq, RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowValBuilder, RowValSpine,
+};
 use crate::typedefs::{KeyBatcher, RowRowSpine, RowSpine};
 
 // The implementation requires integer timestamps to be able to delay feedback for monotonic inputs.
@@ -400,10 +403,12 @@ where
         // If validating: demux errors, otherwise we cannot produce errors.
         let (input, oks, errs) = if validating {
             // Build topk stage, produce errors for invalid multiplicities.
-            let (input, stage) =
-                build_topk_negated_stage::<S, _, RowValSpine<Result<Row, Row>, _, _>>(
-                    &input, order_key, offset, limit, arity,
-                );
+            let (input, stage) = build_topk_negated_stage::<
+                S,
+                _,
+                RowValBuilder<_, _, _>,
+                RowValSpine<Result<Row, Row>, _, _>,
+            >(&input, order_key, offset, limit, arity);
             let stage = stage.as_collection(|k, v| (k.into_owned(), v.clone()));
 
             // Demux oks and errors.
@@ -426,9 +431,10 @@ where
             (input, oks, Some(errs))
         } else {
             // Build non-validating topk stage.
-            let (input, stage) = build_topk_negated_stage::<S, _, RowRowSpine<_, _>>(
-                &input, order_key, offset, limit, arity,
-            );
+            let (input, stage) =
+                build_topk_negated_stage::<S, _, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+                    &input, order_key, offset, limit, arity,
+                );
             // Turn arrangement into collection.
             let stage = stage.as_collection(|k, v| (k.into_owned(), v.into_owned()));
 
@@ -491,8 +497,10 @@ where
             })
             .into();
         let result = partial
-            .mz_arrange::<RowSpine<_, _>>("Arranged MonotonicTop1 partial [val: empty]")
-            .mz_reduce_abelian::<_, _, _, RowRowSpine<_, _>>(
+            .mz_arrange::<RowBatcher<_, _>, RowBuilder<_, _>, RowSpine<_, _>>(
+                "Arranged MonotonicTop1 partial [val: empty]",
+            )
+            .mz_reduce_abelian::<_, _, _, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
                 "MonotonicTop1",
                 move |_key, input, output| {
                     let accum: &monoids::Top1Monoid = &input[0].1;
@@ -511,7 +519,7 @@ where
 /// Returns two arrangements:
 /// * The arranged input data without modifications, and
 /// * the maintained negated output data.
-fn build_topk_negated_stage<G, V, Tr>(
+fn build_topk_negated_stage<G, V, Bu, Tr>(
     input: &Collection<G, (Row, Row), Diff>,
     order_key: Vec<mz_expr::ColumnOrder>,
     offset: usize,
@@ -525,12 +533,13 @@ where
     G: Scope,
     G::Timestamp: Lattice + Columnation,
     V: MaybeValidatingRow<Row, Row>,
+    Bu: Builder<Time = G::Timestamp, Output = Tr::Batch>,
+    Bu::Input: Container + PushInto<((Row, V), G::Timestamp, Diff)>,
     Tr: Trace
         + for<'a> TraceReader<Key<'a> = DatumSeq<'a>, Time = G::Timestamp, Diff = Diff>
         + 'static,
     for<'a> Tr::Val<'a>: IntoOwned<'a, Owned = V>,
     Tr::Batch: Batch,
-    Tr::Builder: Builder<Input = TimelyStack<((Row, V), G::Timestamp, Diff)>>,
     Arranged<G, TraceAgent<Tr>>: ArrangementSize,
 {
     let mut datum_vec = mz_repr::DatumVec::new();
@@ -539,9 +548,11 @@ where
     // such that `input.concat(&negated_output)` yields the correct TopK
     // NOTE(vmarcos): The arranged input operator name below is used in the tuning advice
     // built-in view mz_introspection.mz_expected_group_size_advice.
-    let arranged = input.mz_arrange::<RowRowSpine<_, _>>("Arranged TopK input");
+    let arranged = input.mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+        "Arranged TopK input",
+    );
 
-    let reduced = arranged.mz_reduce_abelian::<_, _, _, Tr>("Reduced TopK input", {
+    let reduced = arranged.mz_reduce_abelian::<_, _, _, Bu, Tr>("Reduced TopK input", {
         move |mut hash_key, source, target: &mut Vec<(V, Diff)>| {
             // Unpack the limit, either into an integer literal or an expression to evaluate.
             let limit: Option<i64> = limit.as_ref().map(|l| {

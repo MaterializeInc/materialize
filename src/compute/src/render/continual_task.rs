@@ -857,7 +857,7 @@ where
         let name = format!("ct_times_reduce({})", name);
         self.inner
             .unary_frontier(Pipeline, &name, |_caps, _info| {
-                let mut notificator = FrontierNotificator::new();
+                let mut notificator = FrontierNotificator::default();
                 let mut stash = HashMap::<_, R>::new();
                 move |input, output| {
                     while let Some((cap, data)) = input.next() {

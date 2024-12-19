@@ -39,7 +39,7 @@ console = { version = "0.15.5", default-features = false, features = ["ansi-pars
 criterion = { version = "0.4.0", features = ["async_tokio", "html_reports"] }
 crossbeam-deque = { version = "0.8.3" }
 crossbeam-epoch = { version = "0.9.13" }
-crossbeam-utils = { version = "0.8.20" }
+crossbeam-utils = { version = "0.8.21" }
 crypto-common = { version = "0.1.3", default-features = false, features = ["std"] }
 debugid = { version = "0.8.0", default-features = false, features = ["serde"] }
 dec = { version = "0.4.8", default-features = false, features = ["serde"] }
@@ -55,7 +55,7 @@ futures-io = { version = "0.3.30" }
 futures-sink = { version = "0.3.30" }
 futures-task = { version = "0.3.30" }
 futures-util = { version = "0.3.30", features = ["channel", "io", "sink"] }
-getrandom = { version = "0.2.10", default-features = false, features = ["std"] }
+getrandom = { version = "0.2.15", default-features = false, features = ["std"] }
 globset = { version = "0.4.14", features = ["serde1"] }
 hashbrown = { version = "0.14.5", features = ["raw"] }
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", features = ["client", "http1", "http2", "stream", "tcp"] }
@@ -67,7 +67,7 @@ k8s-openapi = { version = "0.22.0", default-features = false, features = ["schem
 kube = { version = "0.92.1", default-features = false, features = ["client", "derive", "openssl-tls", "runtime", "ws"] }
 kube-client = { version = "0.92.1", default-features = false, features = ["jsonpatch", "openssl-tls", "ws"] }
 kube-core = { version = "0.92.1", default-features = false, features = ["jsonpatch", "schema", "ws"] }
-libc = { version = "0.2.153", features = ["extra_traits", "use_std"] }
+libc = { version = "0.2.169", features = ["extra_traits", "use_std"] }
 libz-sys = { version = "1.1.8", features = ["static"] }
 log = { version = "0.4.22", default-features = false, features = ["std"] }
 lru = { version = "0.12.3" }
@@ -83,7 +83,7 @@ nom = { version = "7.1.2" }
 num = { version = "0.4.1" }
 num-bigint = { version = "0.4.3" }
 num-integer = { version = "0.1.46", features = ["i128"] }
-num-traits = { version = "0.2.15", features = ["i128", "libm"] }
+num-traits = { version = "0.2.19", features = ["i128", "libm"] }
 openssl = { version = "0.10.66", features = ["vendored"] }
 openssl-sys = { version = "0.9.103", default-features = false, features = ["vendored"] }
 ordered-float = { version = "4.2.0", features = ["serde"] }
@@ -95,11 +95,11 @@ phf_shared = { version = "0.11.1", features = ["uncased"] }
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4"] }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 predicates = { version = "2.1.4" }
-proc-macro2 = { version = "1.0.82", features = ["span-locations"] }
+proc-macro2 = { version = "1.0.92", features = ["span-locations"] }
 prost = { version = "0.13.2", features = ["no-recursion-limit", "prost-derive"] }
 prost-reflect = { version = "0.14.3", default-features = false, features = ["serde"] }
 prost-types = { version = "0.13.2" }
-quote = { version = "1.0.36" }
+quote = { version = "1.0.37" }
 rand = { version = "0.8.5", features = ["small_rng"] }
 rand_chacha = { version = "0.3.0" }
 rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake-build", "libz-static", "ssl-vendored", "zstd"] }
@@ -110,15 +110,15 @@ reqwest = { version = "0.11.24", features = ["blocking", "json", "multipart", "n
 schemars = { version = "0.8.11", features = ["uuid1"] }
 scopeguard = { version = "1.1.0" }
 semver = { version = "1.0.23", features = ["serde"] }
-serde = { version = "1.0.203", features = ["alloc", "derive", "rc"] }
-serde_json = { version = "1.0.127", features = ["alloc", "arbitrary_precision", "float_roundtrip", "preserve_order", "raw_value", "unbounded_depth"] }
+serde = { version = "1.0.216", features = ["alloc", "derive", "rc"] }
+serde_json = { version = "1.0.133", features = ["alloc", "arbitrary_precision", "float_roundtrip", "preserve_order", "raw_value", "unbounded_depth"] }
 sha2 = { version = "0.10.6", features = ["asm"] }
 similar = { version = "2.2.1", features = ["inline", "unicode"] }
 smallvec = { version = "1.13.2", default-features = false, features = ["const_new", "serde", "union", "write"] }
 socket2 = { version = "0.5.7", default-features = false, features = ["all"] }
 subtle = { version = "2.4.1" }
 syn-dff4ba8e3ae991db = { package = "syn", version = "1.0.107", features = ["extra-traits", "full", "visit", "visit-mut"] }
-syn-f595c2ba2a3f28df = { package = "syn", version = "2.0.63", features = ["extra-traits", "full", "visit", "visit-mut"] }
+syn-f595c2ba2a3f28df = { package = "syn", version = "2.0.90", features = ["extra-traits", "full", "visit", "visit-mut"] }
 textwrap = { version = "0.16.1", default-features = false, features = ["terminal_size"] }
 time = { version = "0.3.17", features = ["macros", "quickcheck", "serde-well-known"] }
 tokio = { version = "1.38.0", features = ["full", "test-util", "tracing"] }
@@ -171,7 +171,7 @@ console = { version = "0.15.5", default-features = false, features = ["ansi-pars
 criterion = { version = "0.4.0", features = ["async_tokio", "html_reports"] }
 crossbeam-deque = { version = "0.8.3" }
 crossbeam-epoch = { version = "0.9.13" }
-crossbeam-utils = { version = "0.8.20" }
+crossbeam-utils = { version = "0.8.21" }
 crypto-common = { version = "0.1.3", default-features = false, features = ["std"] }
 debugid = { version = "0.8.0", default-features = false, features = ["serde"] }
 dec = { version = "0.4.8", default-features = false, features = ["serde"] }
@@ -187,7 +187,7 @@ futures-io = { version = "0.3.30" }
 futures-sink = { version = "0.3.30" }
 futures-task = { version = "0.3.30" }
 futures-util = { version = "0.3.30", features = ["channel", "io", "sink"] }
-getrandom = { version = "0.2.10", default-features = false, features = ["std"] }
+getrandom = { version = "0.2.15", default-features = false, features = ["std"] }
 globset = { version = "0.4.14", features = ["serde1"] }
 hashbrown = { version = "0.14.5", features = ["raw"] }
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", features = ["client", "http1", "http2", "stream", "tcp"] }
@@ -199,7 +199,7 @@ k8s-openapi = { version = "0.22.0", default-features = false, features = ["schem
 kube = { version = "0.92.1", default-features = false, features = ["client", "derive", "openssl-tls", "runtime", "ws"] }
 kube-client = { version = "0.92.1", default-features = false, features = ["jsonpatch", "openssl-tls", "ws"] }
 kube-core = { version = "0.92.1", default-features = false, features = ["jsonpatch", "schema", "ws"] }
-libc = { version = "0.2.153", features = ["extra_traits", "use_std"] }
+libc = { version = "0.2.169", features = ["extra_traits", "use_std"] }
 libz-sys = { version = "1.1.8", features = ["static"] }
 log = { version = "0.4.22", default-features = false, features = ["std"] }
 lru = { version = "0.12.3" }
@@ -215,7 +215,7 @@ nom = { version = "7.1.2" }
 num = { version = "0.4.1" }
 num-bigint = { version = "0.4.3" }
 num-integer = { version = "0.1.46", features = ["i128"] }
-num-traits = { version = "0.2.15", features = ["i128", "libm"] }
+num-traits = { version = "0.2.19", features = ["i128", "libm"] }
 openssl = { version = "0.10.66", features = ["vendored"] }
 openssl-sys = { version = "0.9.103", default-features = false, features = ["vendored"] }
 ordered-float = { version = "4.2.0", features = ["serde"] }
@@ -227,12 +227,12 @@ phf_shared = { version = "0.11.1", features = ["uncased"] }
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4"] }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 predicates = { version = "2.1.4" }
-proc-macro2 = { version = "1.0.82", features = ["span-locations"] }
+proc-macro2 = { version = "1.0.92", features = ["span-locations"] }
 proptest-derive = { version = "0.5.1", default-features = false, features = ["boxed_union"] }
 prost = { version = "0.13.2", features = ["no-recursion-limit", "prost-derive"] }
 prost-reflect = { version = "0.14.3", default-features = false, features = ["serde"] }
 prost-types = { version = "0.13.2" }
-quote = { version = "1.0.36" }
+quote = { version = "1.0.37" }
 rand = { version = "0.8.5", features = ["small_rng"] }
 rand_chacha = { version = "0.3.0" }
 rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake-build", "libz-static", "ssl-vendored", "zstd"] }
@@ -243,15 +243,15 @@ reqwest = { version = "0.11.24", features = ["blocking", "json", "multipart", "n
 schemars = { version = "0.8.11", features = ["uuid1"] }
 scopeguard = { version = "1.1.0" }
 semver = { version = "1.0.23", features = ["serde"] }
-serde = { version = "1.0.203", features = ["alloc", "derive", "rc"] }
-serde_json = { version = "1.0.127", features = ["alloc", "arbitrary_precision", "float_roundtrip", "preserve_order", "raw_value", "unbounded_depth"] }
+serde = { version = "1.0.216", features = ["alloc", "derive", "rc"] }
+serde_json = { version = "1.0.133", features = ["alloc", "arbitrary_precision", "float_roundtrip", "preserve_order", "raw_value", "unbounded_depth"] }
 sha2 = { version = "0.10.6", features = ["asm"] }
 similar = { version = "2.2.1", features = ["inline", "unicode"] }
 smallvec = { version = "1.13.2", default-features = false, features = ["const_new", "serde", "union", "write"] }
 socket2 = { version = "0.5.7", default-features = false, features = ["all"] }
 subtle = { version = "2.4.1" }
 syn-dff4ba8e3ae991db = { package = "syn", version = "1.0.107", features = ["extra-traits", "full", "visit", "visit-mut"] }
-syn-f595c2ba2a3f28df = { package = "syn", version = "2.0.63", features = ["extra-traits", "full", "visit", "visit-mut"] }
+syn-f595c2ba2a3f28df = { package = "syn", version = "2.0.90", features = ["extra-traits", "full", "visit", "visit-mut"] }
 textwrap = { version = "0.16.1", default-features = false, features = ["terminal_size"] }
 time = { version = "0.3.17", features = ["macros", "quickcheck", "serde-well-known"] }
 time-macros = { version = "0.2.6", default-features = false, features = ["formatting", "parsing", "serde"] }

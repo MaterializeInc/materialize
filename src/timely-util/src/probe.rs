@@ -22,7 +22,7 @@ use timely::dataflow::operators::{CapabilitySet, InspectCore};
 use timely::dataflow::{Scope, Stream, StreamCore};
 use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
 use timely::progress::Timestamp;
-use timely::{Container, PartialOrder};
+use timely::{Container, Data, PartialOrder};
 use tokio::sync::Notify;
 
 use crate::builder_async::OperatorBuilder as AsyncOperatorBuilder;
@@ -33,7 +33,11 @@ pub trait ProbeNotify<G: Scope> {
     fn probe_notify_with(&self, handles: Vec<Handle<G::Timestamp>>) -> Self;
 }
 
-impl<G: Scope, C: Container> ProbeNotify<G> for StreamCore<G, C> {
+impl<G, C> ProbeNotify<G> for StreamCore<G, C>
+where
+    G: Scope,
+    C: Container + Data,
+{
     fn probe_notify_with(&self, mut handles: Vec<Handle<G::Timestamp>>) -> Self {
         if handles.is_empty() {
             return self.clone();

@@ -25,7 +25,7 @@ use timely::container::columnation::Columnation;
 use timely::container::{CapacityContainerBuilder, ContainerBuilder, PushInto};
 use timely::dataflow::channels::pact::ParallelizationContract;
 use timely::dataflow::channels::pushers::Tee;
-use timely::dataflow::channels::Bundle;
+use timely::dataflow::channels::Message;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
 use timely::dataflow::operators::generic::{
     InputHandleCore, OperatorInfo, OutputHandleCore, OutputWrapper,
@@ -34,8 +34,7 @@ use timely::dataflow::operators::{Capability, CapabilitySet, InputCapability};
 use timely::dataflow::{Scope, StreamCore};
 use timely::progress::{Antichain, Timestamp};
 use timely::scheduling::{Activator, SyncActivator};
-use timely::Message;
-use timely::{Container, PartialOrder};
+use timely::{Bincode, Container, PartialOrder};
 
 use crate::containers::stack::{AccountedStackBuilder, StackWrapper};
 
@@ -77,7 +76,7 @@ where
     T: Timestamp,
     D: Container,
     C: InputConnection<T> + 'static,
-    P: Pull<Bundle<T, D>> + 'static,
+    P: Pull<Message<T, D>> + 'static,
 {
     fn accept_input(&mut self) {
         let mut queue = self.queue.borrow_mut();
@@ -118,7 +117,7 @@ struct InputHandleQueue<
     T: Timestamp,
     D: Container,
     C: InputConnection<T>,
-    P: Pull<Bundle<T, D>> + 'static,
+    P: Pull<Message<T, D>> + 'static,
 > {
     queue: Rc<RefCell<VecDeque<Event<T, C::Capability, D>>>>,
     waker: Rc<Cell<Option<Waker>>>,
@@ -211,7 +210,7 @@ pub enum Event<T: Timestamp, C, D> {
 pub struct AsyncOutputHandle<
     T: Timestamp,
     CB: ContainerBuilder,
-    P: Push<Bundle<T, CB::Container>> + 'static,
+    P: Push<Message<T, CB::Container>> + 'static,
 > {
     // The field order is important here as the handle is borrowing from the wrapper. See also the
     // safety argument in the constructor
@@ -223,8 +222,8 @@ pub struct AsyncOutputHandle<
 impl<T, C, P> AsyncOutputHandle<T, CapacityContainerBuilder<C>, P>
 where
     T: Timestamp,
-    C: Container,
-    P: Push<Bundle<T, C>> + 'static,
+    C: Container + Clone + 'static,
+    P: Push<Message<T, C>> + 'static,
 {
     #[inline]
     pub fn give_container(&self, cap: &Capability<T>, container: &mut C) {
@@ -237,7 +236,7 @@ impl<T, CB, P> AsyncOutputHandle<T, CB, P>
 where
     T: Timestamp,
     CB: ContainerBuilder,
-    P: Push<Bundle<T, CB::Container>> + 'static,
+    P: Push<Message<T, CB::Container>> + 'static,
 {
     fn new(wrapper: OutputWrapper<T, CB, P>, index: usize) -> Self {
         let mut wrapper = Rc::new(Box::pin(wrapper));
@@ -273,8 +272,8 @@ where
 impl<T, C, P> AsyncOutputHandle<T, CapacityContainerBuilder<C>, P>
 where
     T: Timestamp,
-    C: Container,
-    P: Push<Bundle<T, C>> + 'static,
+    C: Container + Clone + 'static,
+    P: Push<Message<T, C>> + 'static,
 {
     pub fn give<D>(&self, cap: &Capability<T>, data: D)
     where
@@ -290,7 +289,7 @@ impl<T, D, P>
 where
     D: timely::Data + Columnation,
     T: Timestamp,
-    P: Push<Bundle<T, StackWrapper<D>>>,
+    P: Push<Message<T, StackWrapper<D>>>,
 {
     pub const MAX_OUTSTANDING_BYTES: usize = 128 * 1024 * 1024;
 
@@ -316,7 +315,7 @@ where
     }
 }
 
-impl<T: Timestamp, CB: ContainerBuilder, P: Push<Bundle<T, CB::Container>> + 'static> Clone
+impl<T: Timestamp, CB: ContainerBuilder, P: Push<Message<T, CB::Container>> + 'static> Clone
     for AsyncOutputHandle<T, CB, P>
 {
     fn clone(&self) -> Self {
@@ -436,13 +435,14 @@ impl<G: Scope> OperatorBuilder<G> {
     }
 
     /// Adds a new input that is connected to the specified output, returning the async input handle to use.
-    pub fn new_input_for<D: Container, P>(
+    pub fn new_input_for<D, P>(
         &mut self,
         stream: &StreamCore<G, D>,
         pact: P,
         output: &dyn OutputIndex,
     ) -> AsyncInputHandle<G::Timestamp, D, ConnectedToOne>
     where
+        D: Container + 'static,
         P: ParallelizationContract<G::Timestamp, D>,
     {
         let index = output.index();
@@ -451,13 +451,14 @@ impl<G: Scope> OperatorBuilder<G> {
     }
 
     /// Adds a new input that is connected to the specified outputs, returning the async input handle to use.
-    pub fn new_input_for_many<const N: usize, D: Container, P>(
+    pub fn new_input_for_many<const N: usize, D, P>(
         &mut self,
         stream: &StreamCore<G, D>,
         pact: P,
         outputs: [&dyn OutputIndex; N],
     ) -> AsyncInputHandle<G::Timestamp, D, ConnectedToMany<N>>
     where
+        D: Container + 'static,
         P: ParallelizationContract<G::Timestamp, D>,
     {
         let indices = outputs.map(|output| output.index());
@@ -468,25 +469,27 @@ impl<G: Scope> OperatorBuilder<G> {
     }
 
     /// Adds a new input that is not connected to any output, returning the async input handle to use.
-    pub fn new_disconnected_input<D: Container, P>(
+    pub fn new_disconnected_input<D, P>(
         &mut self,
         stream: &StreamCore<G, D>,
         pact: P,
     ) -> AsyncInputHandle<G::Timestamp, D, Disconnected>
     where
+        D: Container + 'static,
         P: ParallelizationContract<G::Timestamp, D>,
     {
         self.new_input_connection(stream, pact, Disconnected)
     }
 
     /// Adds a new input with connection information, returning the async input handle to use.
-    pub fn new_input_connection<D: Container, P, C>(
+    pub fn new_input_connection<D, P, C>(
         &mut self,
         stream: &StreamCore<G, D>,
         pact: P,
         connection: C,
     ) -> AsyncInputHandle<G::Timestamp, D, C>
     where
+        D: Container + 'static,
         P: ParallelizationContract<G::Timestamp, D>,
         C: InputConnection<G::Timestamp> + 'static,
     {
@@ -721,7 +724,7 @@ pub struct ButtonHandle {
     buttons_remaining: usize,
     /// A flag indicating whether this worker has pressed its button.
     local_pressed: Rc<Cell<bool>>,
-    puller: Box<dyn Pull<Message<bool>>>,
+    puller: Box<dyn Pull<Bincode<bool>>>,
 }
 
 impl ButtonHandle {
@@ -740,7 +743,7 @@ impl ButtonHandle {
 }
 
 pub struct Button {
-    pushers: Vec<Box<dyn Push<Message<bool>>>>,
+    pushers: Vec<Box<dyn Push<Bincode<bool>>>>,
     local_pressed: Rc<Cell<bool>>,
 }
 
@@ -748,7 +751,7 @@ impl Button {
     /// Presses the button. It is safe to call this function multiple times.
     pub fn press(&mut self) {
         for mut pusher in self.pushers.drain(..) {
-            pusher.send(Message::from_typed(true));
+            pusher.send(Bincode::from(true));
             pusher.done();
         }
         self.local_pressed.set(true);
