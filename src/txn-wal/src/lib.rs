@@ -551,7 +551,7 @@ pub(crate) async fn cads<T, O, C>(
 }
 
 #[cfg(test)]
-pub mod tests {
+mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::sync::Arc;
     use std::sync::Mutex;

@@ -326,7 +326,10 @@ mod container {
 
     use mz_repr::fixed_length::ToDatumIter;
     impl<'long> ToDatumIter for DatumSeq<'long> {
-        type DatumIter<'short> = DatumSeq<'short> where Self: 'short;
+        type DatumIter<'short>
+            = DatumSeq<'short>
+        where
+            Self: 'short;
         fn to_datum_iter<'short>(&'short self) -> Self::DatumIter<'short> {
             *self
         }

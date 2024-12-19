@@ -29,7 +29,11 @@ pub trait ToDatumIter: Sized {
 }
 
 impl<'b, T: ToDatumIter> ToDatumIter for &'b T {
-    type DatumIter<'a> = T::DatumIter<'a> where T: 'a, Self: 'a;
+    type DatumIter<'a>
+        = T::DatumIter<'a>
+    where
+        T: 'a,
+        Self: 'a;
     fn to_datum_iter<'a>(&'a self) -> Self::DatumIter<'a> {
         (**self).to_datum_iter()
     }

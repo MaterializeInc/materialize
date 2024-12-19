@@ -1695,6 +1695,7 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
 }
 
 #[async_trait]
+#[allow(elided_named_lifetimes)]
 impl DurableCatalogState for PersistCatalogState {
     fn is_read_only(&self) -> bool {
         matches!(self.mode, Mode::Readonly)

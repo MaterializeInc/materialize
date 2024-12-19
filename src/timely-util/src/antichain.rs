@@ -42,7 +42,10 @@ impl<T: Display + 'static> AntichainExt for MutableAntichain<T> {
 }
 
 impl<'a, T: Display> AntichainExt for AntichainRef<'a, T> {
-    type Pretty<'b> = FrontierPrinter<Self> where Self: 'b;
+    type Pretty<'b>
+        = FrontierPrinter<Self>
+    where
+        Self: 'b;
 
     fn pretty(&self) -> Self::Pretty<'a> {
         FrontierPrinter(*self)

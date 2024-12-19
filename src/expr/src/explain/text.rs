@@ -877,7 +877,7 @@ impl MirRelationExpr {
     fn column_names<'a>(
         &'a self,
         ctx: &'a PlanRenderingContext<'_, MirRelationExpr>,
-    ) -> Option<&Vec<String>> {
+    ) -> Option<&'a Vec<String>> {
         if !ctx.config.humanized_exprs {
             None
         } else if let Some(analyses) = ctx.annotations.get(self) {

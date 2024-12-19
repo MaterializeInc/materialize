@@ -242,7 +242,7 @@ pub struct Cursor<'a> {
 impl<'a> Cursor<'a> {
     /// Constructs a new `Cursor` from a byte slice. The cursor will begin
     /// decoding from the beginning of the slice.
-    pub fn new(buf: &'a [u8]) -> Cursor {
+    pub fn new(buf: &'a [u8]) -> Cursor<'a> {
         Cursor { buf }
     }
 
