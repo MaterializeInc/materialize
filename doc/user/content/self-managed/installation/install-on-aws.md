@@ -312,7 +312,7 @@ To deploy Materialize:
 
    {{< /warning >}}
 
-1. For your backend configuration, create a file
+   For your backend configuration, create a file
    `materialize-backend-secret.yaml` for your [Kubernetes
    Secret](https://kubernetes.io/docs/concepts/configuration/secret/).
 
