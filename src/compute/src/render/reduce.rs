@@ -87,27 +87,26 @@ where
             } = key_val_plan;
             let key_arity = key_plan.projection.len();
             let mut datums = DatumVec::new();
-            let (key_val_input, err_input): (
-                timely::dataflow::Stream<_, (Result<(Row, Row), DataflowError>, _, _)>,
-                _,
-            ) = input
-                .enter_region(inner)
-                .flat_map(input_key.map(|k| (k, None)), || {
-                    // Determine the columns we'll need from the row.
-                    let mut demand = Vec::new();
-                    demand.extend(key_plan.demand());
-                    demand.extend(val_plan.demand());
-                    demand.sort();
-                    demand.dedup();
-                    // remap column references to the subset we use.
-                    let mut demand_map = BTreeMap::new();
-                    for column in demand.iter() {
-                        demand_map.insert(*column, demand_map.len());
-                    }
-                    let demand_map_len = demand_map.len();
-                    key_plan.permute_fn(|c| demand_map[&c], demand_map_len);
-                    val_plan.permute_fn(|c| demand_map[&c], demand_map_len);
-                    let skips = mz_compute_types::plan::reduce::convert_indexes_to_skips(demand);
+            // Determine the columns we'll need from the row.
+            let mut demand = Vec::new();
+            demand.extend(key_plan.demand());
+            demand.extend(val_plan.demand());
+            demand.sort();
+            demand.dedup();
+            // remap column references to the subset we use.
+            let mut demand_map = BTreeMap::new();
+            for column in demand.iter() {
+                demand_map.insert(*column, demand_map.len());
+            }
+            let demand_map_len = demand_map.len();
+            key_plan.permute_fn(|c| demand_map[&c], demand_map_len);
+            val_plan.permute_fn(|c| demand_map[&c], demand_map_len);
+            let max_demand = demand.iter().max().map(|x| *x + 1).unwrap_or(0);
+            let skips = mz_compute_types::plan::reduce::convert_indexes_to_skips(demand);
+            let (key_val_input, err_input) = input.enter_region(inner).flat_map(
+                input_key.map(|k| (k, None)),
+                max_demand,
+                || {
                     move |row_datums, time, diff| {
                         let binding = SharedRow::get();
                         let mut row_builder = binding.borrow_mut();
@@ -152,12 +151,14 @@ where
                         let row = row_builder.clone();
                         Some((Ok((key, row)), time.clone(), diff.clone()))
                     }
-                });
+                },
+            );
 
             // Demux out the potential errors from key and value selector evaluation.
+            type CB<T> = ConsolidatingContainerBuilder<T>;
             let (ok, mut err) = key_val_input
                 .as_collection()
-                .flat_map_fallible::<ConsolidatingContainerBuilder<_>, ConsolidatingContainerBuilder<_>, _, _, _, _>("OkErrDemux", Some);
+                .flat_map_fallible::<CB<_>, CB<_>, _, _, _, _>("OkErrDemux", Some);
 
             err = err.concat(&err_input);
 
