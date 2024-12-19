@@ -1953,6 +1953,19 @@ impl MirScalarExpr {
         contains
     }
 
+    /// True iff the expression contains a `Dummy`.
+    pub fn contains_dummy(&self) -> bool {
+        let mut contains = false;
+        self.visit_pre(|e| {
+            if let MirScalarExpr::Literal(row, _) = e {
+                if let Ok(row) = row {
+                    contains |= row.iter().any(|d| d == Datum::Dummy);
+                }
+            }
+        });
+        contains
+    }
+
     /// The size of the expression as a tree.
     pub fn size(&self) -> usize {
         let mut size = 0;
