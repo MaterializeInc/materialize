@@ -10,6 +10,13 @@
 # This is a separate mzimage so that we don't have to re-install the apt things
 # every time we get a CI builder with a cold cache.
 
+# Package a pinned version of the console into the image, for ease of getting
+# started with Materialize. It's okay if this console lags a bit behind what's
+# deployed to production, but the version needs to be bumped whenever features
+# that the console depends upon are removed (to a version of the console that
+# doesn't depend on those features).
+FROM materialize/console:25.1.0-beta.2 AS console
+
 MZFROM ubuntu-base
 
 RUN groupadd --system --gid=999 materialize \
@@ -21,6 +28,8 @@ RUN apt-get update \
     && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get -qy install --no-install-recommends \
         ca-certificates \
         curl \
+        gettext-base \
+        nginx \
         postgresql \
         postgresql-contrib \
         tini \
@@ -30,10 +39,22 @@ RUN apt-get update \
        fi \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean \
-    && mkdir -p /mzdata /scratch /var/lib/postgresql/data /var/run/postgresql \
-    && chown -R materialize /mzdata /scratch /var/lib/postgresql/data /var/run/postgresql /var/log/postgresql /var/lib/postgresql/16/main
+    && mkdir -p /mzdata /scratch /var/lib/postgresql/data /var/run/postgresql /var/lib/nginx /var/log/nginx \
+    && touch /run/nginx.pid \
+    && chown -R materialize /mzdata /scratch /var/lib/postgresql/data /var/run/postgresql /var/log/postgresql /var/lib/postgresql/16/main /var/lib/nginx /var/log/nginx /run/nginx.pid
 
 COPY postgresql.conf pg_hba.conf /etc/postgresql/16/main/
+
+COPY --from=console /usr/share/nginx/html /usr/share/nginx/html
+COPY --from=console /etc/nginx/templates/default.conf.template /etc/nginx/templates/default.conf.template
+
+# Configure the console to listen on port 6874 and proxy API requests through to
+# the Materialize instance that will be started and listening for requests on
+# port 6876.
+RUN MZ_ENDPOINT=http://localhost:6876 \
+    MZ_NGINX_LISTENER_CONFIG="listen 6874;" \
+    envsubst '${MZ_ENDPOINT} ${MZ_NGINX_LISTENER_CONFIG}' < /etc/nginx/templates/default.conf.template > /etc/nginx/sites-enabled/default \
+    && rm /etc/nginx/templates/default.conf.template
 
 USER materialize
 
