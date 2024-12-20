@@ -78,7 +78,7 @@ Field | Meaning | Example
 ## Examples
 
 ```mzsql
-EXPLAIN TIMESTAMP FOR MATERIALIZED VIEW users;
+EXPLAIN TIMESTAMP FOR SELECT * FROM users;
 ```
 ```
                                  Timestamp
