@@ -13,22 +13,26 @@ use std::collections::BTreeMap;
 use std::convert::TryInto;
 use std::rc::Rc;
 
+use differential_dataflow::AsCollection;
 use mz_compute_client::logging::LoggingConfig;
 use mz_expr::{permutation_for_arrangement, MirScalarExpr};
 use mz_ore::cast::CastFrom;
 use mz_ore::flatcontainer::{MzRegionPreference, OwnedRegionOpinion};
 use mz_ore::iter::IteratorExt;
 use mz_repr::{Datum, Diff, RowArena, SharedRow, Timestamp};
+use mz_timely_util::operator::consolidate_pact;
 use mz_timely_util::replay::MzReplay;
 use timely::communication::Allocate;
 use timely::container::flatcontainer::FlatStack;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::operators::core::Map;
 
-use crate::extensions::arrange::{MzArrange, MzArrangeCore};
+use crate::extensions::arrange::MzArrange;
 use crate::logging::initialize::ReachabilityEventRegion;
 use crate::logging::{EventQueue, LogCollection, LogVariant, TimelyLog};
-use crate::typedefs::{FlatKeyValSpineDefault, RowRowSpine};
+use crate::row_spine::{RowRowBatcher, RowRowBuilder};
+use crate::typedefs::{FlatKeyValBatcherDefault, RowRowSpine};
 
 /// Constructs the logging dataflow for reachability logs.
 ///
@@ -69,7 +73,7 @@ pub(super) fn construct<A: Allocate>(
                 if !enable_logging {
                     return;
                 }
-                for (time, _worker, (addr, massaged)) in data.iter() {
+                for (time, (addr, massaged)) in data.iter() {
                     let time_ms = ((time.as_millis() / interval_ms) + 1) * interval_ms;
                     let time_ms: Timestamp = time_ms.try_into().expect("must fit");
                     for (source, port, update_type, ts, diff) in massaged {
@@ -83,11 +87,14 @@ pub(super) fn construct<A: Allocate>(
         // Restrict results by those logs that are meant to be active.
         let logs_active = vec![LogVariant::Timely(TimelyLog::Reachability)];
 
-        let updates = updates
-            .mz_arrange_core::<_, FlatKeyValSpineDefault<UpdatesKey, (), Timestamp, Diff, _>>(
-                Pipeline,
-                "PreArrange Timely reachability",
-            );
+        let updates = consolidate_pact::<
+            FlatKeyValBatcherDefault<UpdatesKey, (), Timestamp, Diff, _>,
+            _,
+            _,
+            _,
+            _,
+        >(&updates, Pipeline, "Consolidate Timely reachability")
+        .container::<FlatStack<UpdatesRegion>>();
 
         let mut result = BTreeMap::new();
         for variant in logs_active {
@@ -101,36 +108,41 @@ pub(super) fn construct<A: Allocate>(
                     variant.desc().arity(),
                 );
 
-                let updates =
-                    updates.as_collection(move |(update_type, addr, source, port, ts), _| {
-                        let row_arena = RowArena::default();
-                        let update_type = if update_type { "source" } else { "target" };
-                        let binding = SharedRow::get();
-                        let mut row_builder = binding.borrow_mut();
-                        row_builder.packer().push_list(
-                            addr.iter()
-                                .copied()
-                                .chain_one(source)
-                                .map(|id| Datum::UInt64(u64::cast_from(id))),
-                        );
-                        let datums = &[
-                            row_arena.push_unary_row(row_builder.clone()),
-                            Datum::UInt64(u64::cast_from(port)),
-                            Datum::UInt64(u64::cast_from(worker_index)),
-                            Datum::String(update_type),
-                            Datum::from(ts.clone()),
-                        ];
-                        row_builder.packer().extend(key.iter().map(|k| datums[*k]));
-                        let key_row = row_builder.clone();
-                        row_builder
-                            .packer()
-                            .extend(value.iter().map(|k| datums[*k]));
-                        let value_row = row_builder.clone();
-                        (key_row, value_row)
-                    });
+                let updates = updates
+                    .map(
+                        move |(((update_type, addr, source, port, ts), _), time, diff)| {
+                            let row_arena = RowArena::default();
+                            let update_type = if update_type { "source" } else { "target" };
+                            let binding = SharedRow::get();
+                            let mut row_builder = binding.borrow_mut();
+                            row_builder.packer().push_list(
+                                addr.iter()
+                                    .copied()
+                                    .chain_one(source)
+                                    .map(|id| Datum::UInt64(u64::cast_from(id))),
+                            );
+                            let datums = &[
+                                row_arena.push_unary_row(row_builder.clone()),
+                                Datum::UInt64(u64::cast_from(port)),
+                                Datum::UInt64(u64::cast_from(worker_index)),
+                                Datum::String(update_type),
+                                Datum::from(ts.clone()),
+                            ];
+                            row_builder.packer().extend(key.iter().map(|k| datums[*k]));
+                            let key_row = row_builder.clone();
+                            row_builder
+                                .packer()
+                                .extend(value.iter().map(|k| datums[*k]));
+                            let value_row = row_builder.clone();
+                            ((key_row, value_row), time, diff)
+                        },
+                    )
+                    .as_collection();
 
                 let trace = updates
-                    .mz_arrange::<RowRowSpine<_, _>>(&format!("Arrange {variant:?}"))
+                    .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+                        &format!("Arrange {variant:?}"),
+                    )
                     .trace;
                 let collection = LogCollection {
                     trace,

@@ -37,7 +37,7 @@ use mz_repr::{Datum, DatumList, DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
 use serde::{Deserialize, Serialize};
-use timely::container::columnation::{Columnation, CopyRegion, TimelyStack};
+use timely::container::columnation::{Columnation, CopyRegion};
 use timely::container::{CapacityContainerBuilder, PushInto};
 use timely::dataflow::Scope;
 use timely::progress::timestamp::Refines;
@@ -51,9 +51,12 @@ use crate::render::context::{CollectionBundle, Context, MzArrangement};
 use crate::render::errors::MaybeValidatingRow;
 use crate::render::reduce::monoids::{get_monoid, ReductionMonoid};
 use crate::render::{ArrangementFlavor, Pairer};
-use crate::row_spine::DatumSeq;
+use crate::row_spine::{
+    DatumSeq, RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowValBatcher, RowValBuilder,
+};
 use crate::typedefs::{
-    KeyBatcher, RowErrSpine, RowRowArrangement, RowRowSpine, RowSpine, RowValSpine,
+    ErrBatcher, ErrBuilder, KeyBatcher, RowErrBuilder, RowErrSpine, RowRowArrangement, RowRowSpine,
+    RowSpine, RowValSpine,
 };
 
 impl<G, T> Context<G, T>
@@ -189,7 +192,10 @@ where
         let errs: KeyCollection<_, _, _> = err_input.concatenate(errors).into();
         CollectionBundle::from_columns(
             0..key_arity,
-            ArrangementFlavor::Local(arrangement, errs.mz_arrange("Arrange bundle err")),
+            ArrangementFlavor::Local(
+                arrangement,
+                errs.mz_arrange::<ErrBatcher<_, _>, ErrBuilder<_, _>, _>("Arrange bundle err"),
+            ),
         )
     }
 
@@ -355,8 +361,8 @@ where
 
         let aggregate_types_err = aggregate_types.clone();
         let (oks, errs) = differential_dataflow::collection::concatenate(scope, to_concat)
-            .mz_arrange::<RowValSpine<_, _, _>>("Arrange ReduceCollation")
-            .reduce_pair::<_, _, _, RowRowSpine<_, _>, _, _, RowErrSpine<_, _>>(
+            .mz_arrange::<RowValBatcher<_, _, _>, RowValBuilder<_,_,_>, RowValSpine<_, _, _>>("Arrange ReduceCollation")
+            .reduce_pair::<_, _, _, RowRowBuilder<_,_>, RowRowSpine<_, _>, _, _, RowErrBuilder<_,_>, RowErrSpine<_, _>>(
                 "ReduceCollation",
                 "ReduceCollation Errors",
                 {
@@ -511,12 +517,12 @@ where
         S: Scope<Timestamp = G::Timestamp>,
     {
         let (arrangement, errs) = self
-            .build_distinct::<RowRowSpine<_, _>, RowErrSpine<_, _>, _>(collection, "", mfp_after);
+            .build_distinct::<RowRowBatcher<_, _>, RowRowBuilder<_, _,>, RowRowSpine<_, _>, RowErrBuilder<_,_>, RowErrSpine<_, _>, _>(collection, "", mfp_after);
         (MzArrangement::RowRow(arrangement), errs)
     }
 
     /// Build the dataflow to compute the set of distinct keys.
-    fn build_distinct<T1, T2, S>(
+    fn build_distinct<Ba1, Bu1, T1, Bu2, T2, S>(
         &self,
         collection: Collection<S, (Row, Row), Diff>,
         tag: &str,
@@ -530,9 +536,9 @@ where
         for<'a> T1: Trace<Val<'a> = DatumSeq<'a>, Time = G::Timestamp, Diff = Diff> + 'static,
         for<'a> T1::Key<'a>: IntoOwned<'a, Owned = Row>,
         T1::Batch: Batch,
-        T1::Batcher: Batcher<Input = Vec<((Row, Row), G::Timestamp, Diff)>>,
-        <T1::Batcher as Batcher>::Output: Container + PushInto<((Row, Row), T1::Time, T1::Diff)>,
-        T1::Builder: Builder,
+        Ba1: Batcher<Input = Vec<((Row, Row), G::Timestamp, Diff)>, Time = G::Timestamp> + 'static,
+        Ba1::Output: Container + PushInto<((Row, Row), T1::Time, T1::Diff)>,
+        Bu1: Builder<Time = G::Timestamp, Input = Ba1::Output, Output = T1::Batch>,
         for<'a> T1::Key<'a>: std::fmt::Debug + ToDatumIter,
         Arranged<S, TraceAgent<T1>>: ArrangementSize,
         T2: for<'a> Trace<
@@ -542,9 +548,8 @@ where
                 Diff = Diff,
             > + 'static,
         T2::Batch: Batch,
-        T2::Batcher: Batcher<Input = Vec<((Row, DataflowError), G::Timestamp, Diff)>>,
-        <T2::Batcher as Batcher>::Output:
-            Container + PushInto<((Row, DataflowError), T2::Time, T2::Diff)>,
+        Bu2: Builder<Time = G::Timestamp, Output = T2::Batch>,
+        Bu2::Input: Container + PushInto<((Row, DataflowError), T2::Time, T2::Diff)>,
         Arranged<S, TraceAgent<T2>>: ArrangementSize,
     {
         let error_logger = self.error_logger();
@@ -561,8 +566,8 @@ where
         let mfp_after2 = mfp_after.filter(|mfp| mfp.could_error());
 
         let (output, errors) = collection
-            .mz_arrange::<T1>(&input_name)
-            .reduce_pair::<_, Row, Row, T1, _, _, T2>(
+            .mz_arrange::<Ba1, Bu1, T1>(&input_name)
+            .reduce_pair::<_, Row, Row, Bu1, T1, _, _, Bu2, T2>(
                 &output_name,
                 "DistinctByErrorCheck",
                 move |key, _input, output| {
@@ -663,27 +668,32 @@ where
 
         let arranged =
             differential_dataflow::collection::concatenate(&mut input.scope(), to_collect)
-                .mz_arrange::<RowValSpine<_, _, _>>("Arranged ReduceFuseBasic input");
+                .mz_arrange::<RowValBatcher<_, _, _>, RowValBuilder<_, _, _>, RowValSpine<_, _, _>>(
+                "Arranged ReduceFuseBasic input",
+            );
 
-        let output = arranged.mz_reduce_abelian::<_, _, _, RowRowSpine<_, _>>("ReduceFuseBasic", {
-            move |key, input, output| {
-                let temp_storage = RowArena::new();
-                let datum_iter = key.to_datum_iter();
-                let mut datums_local = datums1.borrow();
-                datums_local.extend(datum_iter);
-                let key_len = datums_local.len();
+        let output = arranged.mz_reduce_abelian::<_, _, _, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+            "ReduceFuseBasic",
+            {
+                move |key, input, output| {
+                    let temp_storage = RowArena::new();
+                    let datum_iter = key.to_datum_iter();
+                    let mut datums_local = datums1.borrow();
+                    datums_local.extend(datum_iter);
+                    let key_len = datums_local.len();
 
-                for ((_, row), _) in input.iter() {
-                    datums_local.push(row.unpack_first());
+                    for ((_, row), _) in input.iter() {
+                        datums_local.push(row.unpack_first());
+                    }
+
+                    if let Some(row) =
+                        evaluate_mfp_after(&mfp_after1, &mut datums_local, &temp_storage, key_len)
+                    {
+                        output.push((row, 1));
+                    }
                 }
-
-                if let Some(row) =
-                    evaluate_mfp_after(&mfp_after1, &mut datums_local, &temp_storage, key_len)
-                {
-                    output.push((row, 1));
-                }
-            }
-        });
+            },
+        );
         // If `mfp_after` can error, then we need to render a paired reduction
         // to scan for these potential errors. Note that we cannot directly use
         // `mz_timely_util::reduce::ReduceExt::reduce_pair` here because we only
@@ -691,7 +701,7 @@ where
         let validation_errs = err_output.expect("expected to validate in at least one aggregate");
         if let Some(mfp) = mfp_after2 {
             let mfp_errs = arranged
-                .mz_reduce_abelian::<_, _, _, RowErrSpine<_, _>>(
+                .mz_reduce_abelian::<_, _, _, RowErrBuilder<_, _>, RowErrSpine<_, _>>(
                     "ReduceFuseBasic Error Check",
                     move |key, input, output| {
                         // Since negative accumulations are checked in at least one component
@@ -761,7 +771,7 @@ where
             let keyed = partial.map(move |(key, val)| pairer.merge(&key, &val));
             if validating {
                 let (oks, errs) = self
-                    .build_reduce_inaccumulable_distinct::<_, _, RowValSpine<Result<(), String>, _, _>>(keyed, None)
+                    .build_reduce_inaccumulable_distinct::<_, _, RowValBuilder<Result<(), String>, _,_>, RowValSpine<Result<(), String>, _, _>>(keyed, None)
                     .as_collection(|k, v| (k.into_owned(), v.as_ref().map(|&()| ()).map_err(|m| m.as_str().into())))
                     .map_fallible::<CapacityContainerBuilder<_>, CapacityContainerBuilder<_>, _, _, _>("Demux Errors", move |(key_val, result)| match result {
                         Ok(()) => Ok(pairer.split(&key_val)),
@@ -771,7 +781,7 @@ where
                 partial = oks;
             } else {
                 partial = self
-                    .build_reduce_inaccumulable_distinct::<_, _, RowSpine<_, _>>(
+                    .build_reduce_inaccumulable_distinct::<_, _, RowBuilder<_, _>, RowSpine<_, _>>(
                         keyed,
                         Some(" [val: empty]"),
                     )
@@ -792,9 +802,12 @@ where
         } else {
             "FusedReduceUnnestList"
         };
-        let arranged = partial.mz_arrange::<RowRowSpine<_, _>>(&format!("Arranged {name}"));
+        let arranged = partial
+            .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(&format!(
+                "Arranged {name}"
+            ));
         let oks = if !fused_unnest_list {
-            arranged.mz_reduce_abelian::<_, _, _, RowRowSpine<_, _>>(name, {
+            arranged.mz_reduce_abelian::<_, _, _, RowRowBuilder<_, _>, RowRowSpine<_, _>>(name, {
                 move |key, source, target| {
                     // We respect the multiplicity here (unlike in hierarchical aggregation)
                     // because we don't know that the aggregation method is not sensitive
@@ -828,7 +841,7 @@ where
                 }
             })
         } else {
-            arranged.mz_reduce_abelian::<_, _, _, RowRowSpine<_, _>>(name, {
+            arranged.mz_reduce_abelian::<_, _, _, RowRowBuilder<_, _>, RowRowSpine<_, _>>(name, {
                 move |key, source, target| {
                     // This part is the same as in the `!fused_unnest_list` if branch above.
                     let iter = source.iter().flat_map(|(v, w)| {
@@ -872,7 +885,7 @@ where
 
             let errs = if !fused_unnest_list {
                 arranged
-                    .mz_reduce_abelian::<_, _, _, RowErrSpine<_, _>>(
+                    .mz_reduce_abelian::<_, _, _, RowErrBuilder<_,_>, RowErrSpine<_, _>>(
                         &format!("{name} Error Check"),
                         move |key, source, target| {
                             // Negative counts would be surprising, but until we are 100% certain we won't
@@ -927,7 +940,7 @@ where
                     unreachable!()
                 };
                 arranged
-                    .mz_reduce_abelian::<_, _, _, RowErrSpine<_, _>>(
+                    .mz_reduce_abelian::<_, _, _, RowErrBuilder<_, _>, RowErrSpine<_, _>>(
                         &format!("{name} Error Check"),
                         move |key, source, target| {
                             let iter = source.iter().flat_map(|(mut v, w)| {
@@ -970,7 +983,7 @@ where
         (oks, err_output)
     }
 
-    fn build_reduce_inaccumulable_distinct<S, V, Tr>(
+    fn build_reduce_inaccumulable_distinct<S, V, Bu, Tr>(
         &self,
         input: Collection<S, Row, Diff>,
         name_tag: Option<&str>,
@@ -982,7 +995,8 @@ where
             + for<'a> TraceReader<Key<'a> = DatumSeq<'a>, Time = G::Timestamp, Diff = Diff>
             + 'static,
         Tr::Batch: Batch,
-        Tr::Builder: Builder<Input = TimelyStack<((Row, V), G::Timestamp, Diff)>>,
+        Bu: Builder<Time = G::Timestamp, Output = Tr::Batch>,
+        Bu::Input: Container + PushInto<((Row, V), Tr::Time, Tr::Diff)>,
         for<'a> Tr::Key<'a>: IntoOwned<'a, Owned = Row>,
         for<'a> Tr::Val<'a>: IntoOwned<'a, Owned = V>,
         Arranged<S, TraceAgent<Tr>>: ArrangementSize,
@@ -996,8 +1010,10 @@ where
 
         let input: KeyCollection<_, _, _> = input.into();
         input
-            .mz_arrange::<RowSpine<_, _>>("Arranged ReduceInaccumulable Distinct [val: empty]")
-            .mz_reduce_abelian::<_, _, _, Tr>(&output_name, move |_, source, t| {
+            .mz_arrange::<RowBatcher<_, _>, RowBuilder<_, _>, RowSpine<_, _>>(
+                "Arranged ReduceInaccumulable Distinct [val: empty]",
+            )
+            .mz_reduce_abelian::<_, _, _, Bu, Tr>(&output_name, move |_, source, t| {
                 if let Some(err) = V::into_error() {
                     for (value, count) in source.iter() {
                         if count.is_positive() {
@@ -1118,14 +1134,17 @@ where
             let error_logger = self.error_logger();
             // NOTE(vmarcos): The input operator name below is used in the tuning advice built-in
             // view mz_introspection.mz_expected_group_size_advice.
-            let arranged = partial.mz_arrange::<RowRowSpine<_, _>>("Arrange ReduceMinsMaxes");
+            let arranged = partial
+                .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+                    "Arrange ReduceMinsMaxes",
+                );
             // Note that we would prefer to use `mz_timely_util::reduce::ReduceExt::reduce_pair` here,
             // but we then wouldn't be able to do this error check conditionally.  See its documentation
             // for the rationale around using a second reduction here.
             let must_validate = err_output.is_none();
             if must_validate || mfp_after2.is_some() {
                 let errs = arranged
-                    .mz_reduce_abelian::<_, _, _, RowErrSpine<_, _>>(
+                    .mz_reduce_abelian::<_, _, _, RowErrBuilder<_, _>, RowErrSpine<_, _>>(
                         "ReduceMinsMaxes Error Check",
                         move |key, source, target| {
                             // Negative counts would be surprising, but until we are 100% certain we wont
@@ -1177,7 +1196,7 @@ where
                 }
             }
             arranged
-                .mz_reduce_abelian::<_, _, _, RowRowSpine<_, _>>(
+                .mz_reduce_abelian::<_, _, _, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
                     "ReduceMinsMaxes",
                     move |key, source, target| {
                         let temp_storage = RowArena::new();
@@ -1234,7 +1253,7 @@ where
     {
         let (input, negated_output, errs) = if validating {
             let (input, reduced) = self
-                .build_bucketed_negated_output::<_, _, RowValSpine<Result<Row, Row>, _, _>>(
+                .build_bucketed_negated_output::<_, _, RowValBuilder<_,_,_>, RowValSpine<Result<Row, Row>, _, _>>(
                     input,
                     aggr_funcs.clone(),
                 );
@@ -1258,10 +1277,11 @@ where
             );
             (input, oks, Some(errs))
         } else {
-            let (input, reduced) = self.build_bucketed_negated_output::<_, _, RowRowSpine<_, _>>(
-                input,
-                aggr_funcs.clone(),
-            );
+            let (input, reduced) = self
+                .build_bucketed_negated_output::<_, _, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+                    input,
+                    aggr_funcs.clone(),
+                );
             // TODO: Here is a good moment where we could apply the next `mod` calculation. Note
             // that we need to apply the mod on both input and oks.
             let oks = reduced.as_collection(|k, v| (k.into_owned(), v.into_owned()));
@@ -1276,7 +1296,7 @@ where
     /// Build a dataflow fragment for one stage of a reduction tree for multiple hierarchical
     /// aggregates to arrange and reduce the inputs. Returns the arranged input and the reduction,
     /// with all diffs in the reduction's output negated.
-    fn build_bucketed_negated_output<S, V, Tr>(
+    fn build_bucketed_negated_output<S, V, Bu, Tr>(
         &self,
         input: &Collection<S, (Row, Row), Diff>,
         aggrs: Vec<AggregateFunc>,
@@ -1291,17 +1311,20 @@ where
             + for<'a> TraceReader<Key<'a> = DatumSeq<'a>, Time = G::Timestamp, Diff = Diff>
             + 'static,
         Tr::Batch: Batch,
-        Tr::Builder: Builder<Input = TimelyStack<((Row, V), G::Timestamp, Diff)>>,
+        Bu: Builder<Time = G::Timestamp, Output = Tr::Batch>,
+        Bu::Input: Container + PushInto<((Row, V), Tr::Time, Tr::Diff)>,
         for<'a> Tr::Val<'a>: IntoOwned<'a, Owned = V>,
         Arranged<S, TraceAgent<Tr>>: ArrangementSize,
     {
         let error_logger = self.error_logger();
         // NOTE(vmarcos): The input operator name below is used in the tuning advice built-in
         // view mz_introspection.mz_expected_group_size_advice.
-        let arranged_input =
-            input.mz_arrange::<RowRowSpine<_, _>>("Arranged MinsMaxesHierarchical input");
+        let arranged_input = input
+            .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+                "Arranged MinsMaxesHierarchical input",
+            );
 
-        let reduced = arranged_input.mz_reduce_abelian::<_, _, _, Tr>(
+        let reduced = arranged_input.mz_reduce_abelian::<_, _, _, Bu, Tr>(
             "Reduced Fallibly MinsMaxesHierarchical",
             move |key, source, target| {
                 if let Some(err) = V::into_error() {
@@ -1417,26 +1440,31 @@ where
 
         let partial: KeyCollection<_, _, _> = partial.into();
         let arranged = partial
-            .mz_arrange::<RowSpine<_, Vec<ReductionMonoid>>>("ArrangeMonotonic [val: empty]");
-        let output = arranged.mz_reduce_abelian::<_, _, _, RowRowSpine<_, _>>("ReduceMonotonic", {
-            move |key, input, output| {
-                let temp_storage = RowArena::new();
-                let datum_iter = key.to_datum_iter();
-                let mut datums_local = datums1.borrow();
-                datums_local.extend(datum_iter);
-                let key_len = datums_local.len();
-                let accum = &input[0].1;
-                for monoid in accum.iter() {
-                    datums_local.extend(monoid.finalize().iter());
-                }
+            .mz_arrange::<RowBatcher<_, _>, RowBuilder<_, _>, RowSpine<_, Vec<ReductionMonoid>>>(
+                "ArrangeMonotonic [val: empty]",
+            );
+        let output = arranged.mz_reduce_abelian::<_, _, _, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+            "ReduceMonotonic",
+            {
+                move |key, input, output| {
+                    let temp_storage = RowArena::new();
+                    let datum_iter = key.to_datum_iter();
+                    let mut datums_local = datums1.borrow();
+                    datums_local.extend(datum_iter);
+                    let key_len = datums_local.len();
+                    let accum = &input[0].1;
+                    for monoid in accum.iter() {
+                        datums_local.extend(monoid.finalize().iter());
+                    }
 
-                if let Some(row) =
-                    evaluate_mfp_after(&mfp_after1, &mut datums_local, &temp_storage, key_len)
-                {
-                    output.push((row, 1));
+                    if let Some(row) =
+                        evaluate_mfp_after(&mfp_after1, &mut datums_local, &temp_storage, key_len)
+                    {
+                        output.push((row, 1));
+                    }
                 }
-            }
-        });
+            },
+        );
 
         // If `mfp_after` can error, then we need to render a paired reduction
         // to scan for these potential errors. Note that we cannot directly use
@@ -1444,7 +1472,7 @@ where
         // conditionally render the second component of the reduction pair.
         if let Some(mfp) = mfp_after2 {
             let mfp_errs = arranged
-                .mz_reduce_abelian::<_, _, _, RowErrSpine<_, _>>(
+                .mz_reduce_abelian::<_, _, _, RowErrBuilder<_, _>, RowErrSpine<_, _>>(
                     "ReduceMonotonic Error Check",
                     move |key, input, output| {
                         let temp_storage = RowArena::new();
@@ -1556,8 +1584,10 @@ where
                     let value = row.iter().nth(datum_index).unwrap();
                     (pairer.merge(&key, std::iter::once(value)), ())
                 })
-                .mz_arrange::<RowSpine<_, _>>("Arranged Accumulable Distinct [val: empty]")
-                .mz_reduce_abelian::<_, _, _, RowSpine<_, _>>(
+                .mz_arrange::<RowBatcher<_, _>, RowBuilder<_, _>, RowSpine<_, _>>(
+                    "Arranged Accumulable Distinct [val: empty]",
+                )
+                .mz_reduce_abelian::<_, _, _, RowBuilder<_, _>, RowSpine<_, _>>(
                     "Reduced Accumulable Distinct [val: empty]",
                     move |_k, _s, t| t.push(((), 1)),
                 )
@@ -1592,8 +1622,8 @@ where
         let error_logger = self.error_logger();
         let err_full_aggrs = full_aggrs.clone();
         let (arranged_output, arranged_errs) = collection
-            .mz_arrange::<RowSpine<_, (Vec<Accum>, Diff)>>("ArrangeAccumulable [val: empty]")
-            .reduce_pair::<_, _, _, RowRowSpine<_, _>, _, _, RowErrSpine<_, _>>(
+            .mz_arrange::<RowBatcher<_,_>, RowBuilder<_,_>, RowSpine<_, (Vec<Accum>, Diff)>>("ArrangeAccumulable [val: empty]")
+            .reduce_pair::<_, _, _, RowRowBuilder<_,_>, RowRowSpine<_, _>, _, _, RowErrBuilder<_,_>, RowErrSpine<_, _>>(
                 "ReduceAccumulable",
                 "AccumulableErrorCheck",
                 {

@@ -46,7 +46,7 @@ use mz_txn_wal::operator::{txns_progress, TxnsContext};
 use serde::{Deserialize, Serialize};
 use timely::communication::Push;
 use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::channels::Bundle;
+use timely::dataflow::channels::Message;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::OutputHandleCore;
 use timely::dataflow::operators::{Capability, Leave, OkErr};
@@ -557,7 +557,7 @@ impl PendingWork {
     ) -> bool
     where
         P: Push<
-            Bundle<
+            Message<
                 (mz_repr::Timestamp, Subtime),
                 Vec<(
                     Result<Row, DataflowError>,

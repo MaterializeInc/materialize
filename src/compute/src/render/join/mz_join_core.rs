@@ -84,7 +84,7 @@ where
     I: IntoIterator,
     I::Item: Data,
     YFn: Fn(Instant, usize) -> bool + 'static,
-    C: SizableContainer + PushInto<(I::Item, G::Timestamp, Diff)>,
+    C: SizableContainer + PushInto<(I::Item, G::Timestamp, Diff)> + Data,
 {
     let mut trace1 = arranged1.trace.clone();
     let mut trace2 = arranged2.trace.clone();
@@ -578,7 +578,7 @@ where
         I: IntoIterator<Item = D>,
         L: FnMut(C1::Key<'_>, C1::Val<'_>, C2::Val<'_>) -> I,
         YFn: Fn(usize) -> bool,
-        C: SizableContainer + PushInto<(D, T, Diff)>,
+        C: SizableContainer + PushInto<(D, T, Diff)> + Data,
     {
         let meet = self.capability.time();
 

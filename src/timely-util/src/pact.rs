@@ -12,7 +12,7 @@
 use std::rc::Rc;
 use timely::communication::{Pull, Push};
 use timely::dataflow::channels::pact::{LogPuller, LogPusher, ParallelizationContract};
-use timely::dataflow::channels::Bundle;
+use timely::dataflow::channels::{ContainerBytes, Message};
 use timely::logging::TimelyLogger;
 use timely::progress::Timestamp;
 use timely::worker::AsWorker;
@@ -22,9 +22,13 @@ use timely::{Container, ExchangeData};
 #[derive(Debug)]
 pub struct Distribute;
 
-impl<T: Timestamp, C: Container + ExchangeData> ParallelizationContract<T, C> for Distribute {
-    type Pusher = DistributePusher<LogPusher<T, C, Box<dyn Push<Bundle<T, C>>>>>;
-    type Puller = LogPuller<T, C, Box<dyn Pull<Bundle<T, C>>>>;
+impl<T, C> ParallelizationContract<T, C> for Distribute
+where
+    T: Timestamp,
+    C: Container + ContainerBytes + Send + 'static,
+{
+    type Pusher = DistributePusher<LogPusher<T, C, Box<dyn Push<Message<T, C>>>>>;
+    type Puller = LogPuller<T, C, Box<dyn Pull<Message<T, C>>>>;
 
     fn connect<A: AsWorker>(
         self,
@@ -33,7 +37,7 @@ impl<T: Timestamp, C: Container + ExchangeData> ParallelizationContract<T, C> fo
         address: Rc<[usize]>,
         logging: Option<TimelyLogger>,
     ) -> (Self::Pusher, Self::Puller) {
-        let (senders, receiver) = allocator.allocate::<Bundle<T, C>>(identifier, address);
+        let (senders, receiver) = allocator.allocate::<Message<T, C>>(identifier, address);
         let senders = senders
             .into_iter()
             .enumerate()
@@ -61,13 +65,13 @@ impl<P> DistributePusher<P> {
     }
 }
 
-impl<T, C, P> Push<Bundle<T, C>> for DistributePusher<P>
+impl<T, C, P> Push<Message<T, C>> for DistributePusher<P>
 where
     T: Eq + ExchangeData,
     C: Container,
-    P: Push<Bundle<T, C>>,
+    P: Push<Message<T, C>>,
 {
-    fn push(&mut self, message: &mut Option<Bundle<T, C>>) {
+    fn push(&mut self, message: &mut Option<Message<T, C>>) {
         let worker_idx = self.next;
         self.next = (self.next + 1) % self.pushers.len();
         self.pushers[worker_idx].push(message);

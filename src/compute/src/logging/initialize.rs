@@ -22,7 +22,7 @@ use mz_timely_util::operator::CollectionExt;
 use timely::communication::Allocate;
 use timely::container::flatcontainer::FlatStack;
 use timely::container::{CapacityContainerBuilder, PushInto};
-use timely::logging::{Logger, ProgressEventTimestamp, TimelyEvent, WorkerIdentifier};
+use timely::logging::{Logger, ProgressEventTimestamp, TimelyEvent};
 use timely::order::Product;
 use timely::progress::reachability::logging::TrackerEvent;
 
@@ -30,6 +30,7 @@ use crate::arrangement::manager::TraceBundle;
 use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::logging::compute::ComputeEvent;
 use crate::logging::{BatchLogger, EventQueue, SharedLoggingState};
+use crate::typedefs::{ErrBatcher, ErrBuilder};
 
 /// Initialize logging dataflows.
 ///
@@ -86,11 +87,8 @@ type ReachabilityEventRegionPreference = (
     OwnedRegionOpinion<Vec<usize>>,
     OwnedRegionOpinion<Vec<(usize, usize, bool, Option<Timestamp>, Diff)>>,
 );
-pub(super) type ReachabilityEventRegion = <(
-    Duration,
-    WorkerIdentifier,
-    ReachabilityEventRegionPreference,
-) as MzRegionPreference>::Region;
+pub(super) type ReachabilityEventRegion =
+    <(Duration, ReachabilityEventRegionPreference) as MzRegionPreference>::Region;
 
 struct LoggingContext<'a, A: Allocate> {
     worker: &'a mut timely::worker::Worker<A>,
@@ -98,10 +96,10 @@ struct LoggingContext<'a, A: Allocate> {
     interval_ms: u128,
     now: Instant,
     start_offset: Duration,
-    t_event_queue: EventQueue<Vec<(Duration, WorkerIdentifier, TimelyEvent)>>,
+    t_event_queue: EventQueue<Vec<(Duration, TimelyEvent)>>,
     r_event_queue: EventQueue<FlatStack<ReachabilityEventRegion>>,
-    d_event_queue: EventQueue<Vec<(Duration, WorkerIdentifier, DifferentialEvent)>>,
-    c_event_queue: EventQueue<Vec<(Duration, WorkerIdentifier, ComputeEvent)>>,
+    d_event_queue: EventQueue<Vec<(Duration, DifferentialEvent)>>,
+    c_event_queue: EventQueue<Vec<(Duration, ComputeEvent)>>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
 }
 
@@ -137,7 +135,9 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
             .dataflow_named("Dataflow: logging errors", |scope| {
                 let collection: KeyCollection<_, DataflowError, Diff> =
                     Collection::empty(scope).into();
-                collection.mz_arrange("Arrange logging err").trace
+                collection
+                    .mz_arrange::<ErrBatcher<_, _>, ErrBuilder<_, _>, _>("Arrange logging err")
+                    .trace
             });
 
         // TODO(vmarcos): If we introduce introspection sources that would match
@@ -170,19 +170,14 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
 
     fn simple_logger<E: Clone + 'static>(
         &self,
-        event_queue: EventQueue<Vec<(Duration, WorkerIdentifier, E)>>,
+        event_queue: EventQueue<Vec<(Duration, E)>>,
     ) -> Logger<E> {
         let mut logger =
             BatchLogger::<CapacityContainerBuilder<_>, _>::new(event_queue.link, self.interval_ms);
-        Logger::new(
-            self.now,
-            self.start_offset,
-            self.worker.index(),
-            move |time, data| {
-                logger.publish_batch(time, data);
-                event_queue.activator.activate();
-            },
-        )
+        Logger::new(self.now, self.start_offset, move |time, data| {
+            logger.publish_batch(time, data);
+            event_queue.activator.activate();
+        })
     }
 
     fn reachability_logger(&self) -> Logger<TrackerEvent> {
@@ -191,46 +186,37 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
             CapacityContainerBuilder<FlatStack<ReachabilityEventRegion>>,
             _,
         >::new(event_queue.link, self.interval_ms);
-        Logger::new(
-            self.now,
-            self.start_offset,
-            self.worker.index(),
-            move |time, data| {
-                let mut massaged = Vec::new();
-                for (time, worker, event) in data.drain(..) {
-                    match event {
-                        TrackerEvent::SourceUpdate(update) => {
-                            massaged.extend(update.updates.iter().map(
-                                |(node, port, time, diff)| {
-                                    let ts = try_downcast_timestamp(time);
-                                    let is_source = true;
-                                    (*node, *port, is_source, ts, *diff)
-                                },
-                            ));
+        Logger::new(self.now, self.start_offset, move |time, data| {
+            let mut massaged = Vec::new();
+            for (time, event) in data.drain(..) {
+                match event {
+                    TrackerEvent::SourceUpdate(update) => {
+                        massaged.extend(update.updates.iter().map(|(node, port, time, diff)| {
+                            let ts = try_downcast_timestamp(time);
+                            let is_source = true;
+                            (*node, *port, is_source, ts, *diff)
+                        }));
 
-                            logger.push_into((time, worker, (update.tracker_id, &massaged)));
-                            logger.extract_and_send();
-                            massaged.clear();
-                        }
-                        TrackerEvent::TargetUpdate(update) => {
-                            massaged.extend(update.updates.iter().map(
-                                |(node, port, time, diff)| {
-                                    let ts = try_downcast_timestamp(time);
-                                    let is_source = false;
-                                    (*node, *port, is_source, ts, *diff)
-                                },
-                            ));
+                        logger.push_into((time, (update.tracker_id, &massaged)));
+                        logger.extract_and_send();
+                        massaged.clear();
+                    }
+                    TrackerEvent::TargetUpdate(update) => {
+                        massaged.extend(update.updates.iter().map(|(node, port, time, diff)| {
+                            let ts = try_downcast_timestamp(time);
+                            let is_source = false;
+                            (*node, *port, is_source, ts, *diff)
+                        }));
 
-                            logger.push_into((time, worker, (update.tracker_id, &massaged)));
-                            logger.extract_and_send();
-                            massaged.clear();
-                        }
+                        logger.push_into((time, (update.tracker_id, &massaged)));
+                        logger.extract_and_send();
+                        massaged.clear();
                     }
                 }
-                logger.flush_through(time);
-                event_queue.activator.activate();
-            },
-        )
+            }
+            logger.flush_through(time);
+            event_queue.activator.activate();
+        })
     }
 }
 

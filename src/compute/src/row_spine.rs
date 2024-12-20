@@ -10,7 +10,10 @@
 pub use self::container::DatumContainer;
 pub use self::container::DatumSeq;
 pub use self::offset_opt::OffsetOptimized;
-pub use self::spines::{RowRowSpine, RowSpine, RowValSpine};
+pub use self::spines::{
+    RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowRowSpine, RowSpine, RowValBatcher,
+    RowValBuilder, RowValSpine,
+};
 use differential_dataflow::trace::implementations::OffsetList;
 
 /// Spines specialized to contain `Row` types in keys and values.
@@ -30,21 +33,20 @@ mod spines {
     use crate::row_spine::{DatumContainer, OffsetOptimized};
     use crate::typedefs::{KeyBatcher, KeyValBatcher};
 
-    pub type RowRowSpine<T, R> = Spine<
-        Rc<OrdValBatch<RowRowLayout<((Row, Row), T, R)>>>,
-        KeyValBatcher<Row, Row, T, R>,
-        RcBuilder<OrdValBuilder<RowRowLayout<((Row, Row), T, R)>, TimelyStack<((Row, Row), T, R)>>>,
-    >;
-    pub type RowValSpine<V, T, R> = Spine<
-        Rc<OrdValBatch<RowValLayout<((Row, V), T, R)>>>,
-        KeyValBatcher<Row, V, T, R>,
-        RcBuilder<OrdValBuilder<RowValLayout<((Row, V), T, R)>, TimelyStack<((Row, V), T, R)>>>,
-    >;
-    pub type RowSpine<T, R> = Spine<
-        Rc<OrdKeyBatch<RowLayout<((Row, ()), T, R)>>>,
-        KeyBatcher<Row, T, R>,
-        RcBuilder<OrdKeyBuilder<RowLayout<((Row, ()), T, R)>, TimelyStack<((Row, ()), T, R)>>>,
-    >;
+    pub type RowRowSpine<T, R> = Spine<Rc<OrdValBatch<RowRowLayout<((Row, Row), T, R)>>>>;
+    pub type RowRowBatcher<T, R> = KeyValBatcher<Row, Row, T, R>;
+    pub type RowRowBuilder<T, R> =
+        RcBuilder<OrdValBuilder<RowRowLayout<((Row, Row), T, R)>, TimelyStack<((Row, Row), T, R)>>>;
+
+    pub type RowValSpine<V, T, R> = Spine<Rc<OrdValBatch<RowValLayout<((Row, V), T, R)>>>>;
+    pub type RowValBatcher<V, T, R> = KeyValBatcher<Row, V, T, R>;
+    pub type RowValBuilder<V, T, R> =
+        RcBuilder<OrdValBuilder<RowValLayout<((Row, V), T, R)>, TimelyStack<((Row, V), T, R)>>>;
+
+    pub type RowSpine<T, R> = Spine<Rc<OrdKeyBatch<RowLayout<((Row, ()), T, R)>>>>;
+    pub type RowBatcher<T, R> = KeyBatcher<Row, T, R>;
+    pub type RowBuilder<T, R> =
+        RcBuilder<OrdKeyBuilder<RowLayout<((Row, ()), T, R)>, TimelyStack<((Row, ()), T, R)>>>;
 
     /// A layout based on timely stacks
     pub struct RowRowLayout<U: Update<Key = Row, Val = Row>> {

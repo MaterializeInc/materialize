@@ -14,7 +14,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use differential_dataflow::operators::arrange::Arrange;
-use differential_dataflow::trace::implementations::ord_neu::ColValSpine;
+use differential_dataflow::trace::implementations::ord_neu::{
+    ColValBatcher, ColValBuilder, ColValSpine,
+};
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use mz_interchange::avro::DiffPair;
 use mz_interchange::envelopes::combine_at_timestamp;
@@ -146,7 +148,7 @@ where
     // from here. TODO(database-issues#5046): Revisit with cluster unification.
     #[allow(clippy::disallowed_methods)]
     let mut collection =
-        combine_at_timestamp(collection.arrange_named::<ColValSpine<_, _, _, _>>("Arrange Sink"));
+        combine_at_timestamp(collection.arrange_named::<ColValBatcher<_,_,_,_>, ColValBuilder<_,_,_,_>, ColValSpine<_, _, _, _>>("Arrange Sink"));
 
     // If there is no user-specified key, remove the synthetic key.
     //

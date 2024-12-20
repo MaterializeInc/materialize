@@ -36,7 +36,7 @@ chrono = { version = "0.4.35", default-features = false, features = ["serde", "s
 chrono-tz = { version = "0.8.1", features = ["serde", "case-insensitive"] }
 compact_bytes = "0.1.2"
 dec = "0.4.8"
-differential-dataflow = "0.13.1"
+differential-dataflow = "0.13.2"
 enum-kinds = "0.5.1"
 flatcontainer = "0.5.0"
 hex = "0.4.3"
@@ -68,7 +68,7 @@ serde_json = { version = "1.0.125", features = ["arbitrary_precision", "preserve
 smallvec = { version = "1.10.0", features = ["serde", "union"] }
 static_assertions = "1.1"
 strsim = "0.10"
-timely = "0.14.1"
+timely = "0.15.1"
 tokio-postgres = { version = "0.7.8" }
 tracing-core = "0.1.30"
 url = { version = "2.3.1", features = ["serde"] }
