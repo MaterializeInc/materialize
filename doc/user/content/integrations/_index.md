@@ -106,12 +106,12 @@ database as a source requires enabling [**GTID-based binlog replication**](/sql/
 ### CockroachDB
 
 CockroachDB is supported as a [**source**](/concepts/sources)
-both through
+through
 [Changefeeds](/ingest-data/cockroachdb/) (via Kafka or Redpanda).
 
 | Service                | Support level                    | Notes                                                                                                |             |
 | ---------------------- | -------------------------------- | ---------------------------------------------------------------------------------------------------- | ----------- |
-| CockroachDB _(via Changefeeds)_ | {{< supportLevel production >}}  | See the [CockroachDB Changefeed Guide](/integrations/cockroachdb/) for a step-by-step breakdown of the integration. |             |
+| CockroachDB _(via Changefeeds)_ | {{< supportLevel production >}}  | See the [CockroachDB Changefeed Guide](/ingest-data/cockroachdb/) for a step-by-step breakdown of the integration. |             |
 
 ### Other databases
 

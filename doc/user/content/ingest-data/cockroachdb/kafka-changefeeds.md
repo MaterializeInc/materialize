@@ -5,12 +5,12 @@ menu:
   main:
     parent: "crdb"
     name: "Using Kafka and Changefeeds"
-    identifier: "crdb-changefeeds"
-    weight: 16
+    identifier: "crdb-kafka-changefeeds"
+    weight: 5
 ---
 
 Change Data Capture (CDC) allows you to track and propagate changes in a CockroachDB database to downstream consumers.
-In this guide, we will cover how to use Materialize to create and efficiently maintain real-time materialized views on top of CDC data using Kafka and CockroachDB changefeeds.
+In this guide, we will cover how to use Materialize to create and efficiently maintain real-time views on top of CDC data using Kafka and CockroachDB changefeeds.
 
 {{< tip >}}
 {{< guided-tour-blurb-for-ingest-data >}}
