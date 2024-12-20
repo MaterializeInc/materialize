@@ -9,6 +9,8 @@
 
 # Regression test for https://github.com/MaterializeInc/database-issues/issues/8810.
 
+$ set-arg-default single-replica-cluster=quickstart
+
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET storage_statistics_interval = '1s';
 ALTER SYSTEM SET storage_statistics_collection_interval = '1s';
@@ -19,6 +21,7 @@ $ kafka-create-topic topic=data
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE src
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
 
 > SELECT rehydration_latency < '5' FROM mz_internal.mz_source_statistics
