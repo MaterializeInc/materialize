@@ -58,9 +58,8 @@ use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::time_dependence::{TimeDependence, TimeDependenceError};
 use prometheus::proto::LabelPair;
 use serde::{Deserialize, Serialize};
-use timely::progress::{Antichain, ChangeBatch, Timestamp};
+use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
-use tokio::sync::mpsc::error::SendError;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{self, MissedTickBehavior};
 use tracing::debug_span;
@@ -1115,7 +1114,7 @@ impl<T: ComputeControllerTimestamp> InstanceState<T> {
         self.collections.get(&id).ok_or(CollectionMissing(id))
     }
 
-    pub fn call<F>(&self, f: F)
+    fn call<F>(&self, f: F)
     where
         F: FnOnce(&mut Instance<T>) + Send + 'static,
     {
@@ -1130,7 +1129,7 @@ impl<T: ComputeControllerTimestamp> InstanceState<T> {
             .expect("instance not dropped");
     }
 
-    pub async fn call_sync<F, R>(&self, f: F) -> R
+    async fn call_sync<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut Instance<T>) -> R + Send + 'static,
         R: Send + 'static,
@@ -1168,16 +1167,7 @@ impl<T: ComputeControllerTimestamp> InstanceState<T> {
             since
         });
 
-        let client = self.client.clone();
-        let tx = Arc::new(move |id, change: ChangeBatch<_>| {
-            let cmd: instance::Command<_> = {
-                let change = change.clone();
-                Box::new(move |i| i.report_read_hold_change(id, change))
-            };
-            client.send(cmd).map_err(|_| SendError((id, change)))
-        });
-
-        let hold = ReadHold::new(id, since, tx);
+        let hold = ReadHold::new(id, since, self.client.read_hold_tx());
         Ok(hold)
     }
 
