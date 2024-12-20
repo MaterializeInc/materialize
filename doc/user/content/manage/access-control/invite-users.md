@@ -1,6 +1,6 @@
 ---
 title: "Invite users"
-description: "Invite new users to a Materialize organization."
+description: "How to invite new users to a Materialize organization."
 aliases:
   - /invite-users/
 disable_toc: true
@@ -11,7 +11,7 @@ menu:
 ---
 
 As an **administrator** of a Materialize organization, you can invite new users
-via the Materialize console. Depending on the level of access each user should
+via the Materialize Console. Depending on the level of access each user should
 have, you can assign them `Organization Admin` or `Organization Member`
 privileges.
 
@@ -23,14 +23,14 @@ granular permissions within the database must be handled separately using
 
 ## How to invite a new user
 
-1. [Log in to the Materialize console](https://console.materialize.com/).
+1. [Log in to the Materialize Console](https://console.materialize.com/).
 
 1. Navigate to **Account** > **Account Settings** > **Users**.
 
 1. Click **Invite User** and fill in the user information.
 
 1. In the **Select Role**, select *Organization Admin* or *Organization Member*
-   depending on what level of console access the user needs:
+   depending on the level of console access the user needs:
 
     - `Organization Admin`: can perform adminstration tasks in the console, like
       inviting new users, editing account and security information, or managing

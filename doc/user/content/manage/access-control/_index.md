@@ -16,7 +16,7 @@ requires **administrator** privileges.
 {{</ note >}}
 
 Access control in Materialize is configured at two levels: access to the
-[Materialize console](https://console.materialize.com/) and access within the
+[Materialize Console](https://console.materialize.com/) and access within the
 database. The privileges assigned on user invitation have implications at both
 levels, so we recommend carefully evaluating your access control needs ahead of
 expanding the number of users in your Materialize organization.
@@ -25,7 +25,7 @@ expanding the number of users in your Materialize organization.
 
 ### Inviting users
 
-As an **administrator**, you can invite new users via the Materialize console.
+As an **administrator**, you can invite new users via the Materialize Console.
 Depending on the level of access each user should have, you can assign them
 `Organization Admin` or `Organization Member` privileges.
 
@@ -54,7 +54,7 @@ sign-on (SSO) as an additional layer of account security using your existing
 [SAML](https://auth0.com/blog/how-saml-authentication-works/)- or
 [OpenID Connect](https://auth0.com/intro-to-iam/what-is-openid-connect-oidc)-based
 identity provider. This ensures that all users can securely log in to the
-Materialize console using the same authentication scheme and credentials across
+Materialize Console using the same authentication scheme and credentials across
 all systems in your organization.
 
 To configure SSO for your Materialize organization, follow [this step-by-step guide](/manage/access-control/sso).
@@ -80,7 +80,7 @@ Materialize organization, you can create service accounts manually via the
 via [Terraform](/manage/terraform/).
 
 To create a service account in your Materialize organization, follow
-[this step-by-step guide](/manage/access-control/create-service-account).
+[this step-by-step guide](/manage/access-control/create-service-accounts).
 
 ### Using an external secret store
 
