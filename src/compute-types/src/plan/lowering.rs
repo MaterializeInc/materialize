@@ -769,8 +769,12 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 )
             }
             MirRelationExpr::Threshold { input } => {
-                let arity = input.arity();
                 let (plan, keys) = self.lower_mir_expr(input)?;
+                let arity = keys
+                    .types
+                    .as_ref()
+                    .map(|types| types.len())
+                    .unwrap_or_else(|| input.arity());
                 let (threshold_plan, required_arrangement) = ThresholdPlan::create_from(arity);
                 let mut types = keys.types.clone();
                 let plan = if !keys
@@ -778,7 +782,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     .iter()
                     .any(|(key, _, _)| key == &required_arrangement.0)
                 {
-                    types = Some(input.typ().column_types);
+                    types = Some(types.unwrap_or_else(|| input.typ().column_types));
                     self.arrange_by(
                         plan,
                         AvailableCollections::new_arranged(
@@ -837,10 +841,13 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 )
             }
             MirRelationExpr::ArrangeBy { input, keys } => {
-                let arity = input.arity();
-                let types = Some(input.typ().column_types);
+                let input_mir = input;
                 let (input, mut input_keys) = self.lower_mir_expr(input)?;
-                input_keys.types = types;
+                // Fill the `types` in `input_keys` if not already present.
+                let input_types = input_keys
+                    .types
+                    .get_or_insert_with(|| input_mir.typ().column_types);
+                let arity = input_types.len();
 
                 // Determine keys that are not present in `input_keys`.
                 let new_keys = keys
