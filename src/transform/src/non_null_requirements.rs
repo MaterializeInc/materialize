@@ -170,7 +170,7 @@ impl NonNullRequirements {
                     {
                         // A null value was introduced in a marked column;
                         // the entire expression can be zeroed out.
-                        relation.take_safely();
+                        relation.take_safely(None);
                         Ok(())
                     } else {
                         // For each column, if it must be non-null, extract the expression's

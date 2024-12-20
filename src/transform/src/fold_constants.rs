@@ -250,7 +250,7 @@ impl FoldConstants {
                     .iter()
                     .any(|p| p.is_literal_false() || p.is_literal_null())
                 {
-                    relation.take_safely();
+                    relation.take_safely(Some(relation_type.clone()));
                 } else if let Some((rows, ..)) = (**input).as_const() {
                     // Evaluate errors last, to reduce risk of spurious errors.
                     predicates.sort_by_key(|p| p.is_literal_err());
@@ -291,7 +291,7 @@ impl FoldConstants {
                 ..
             } => {
                 if inputs.iter().any(|e| e.is_empty()) {
-                    relation.take_safely();
+                    relation.take_safely(Some(relation_type.clone()));
                 } else if let Some(e) = inputs.iter().find_map(|i| i.as_const_err()) {
                     *relation = MirRelationExpr::Constant {
                         rows: Err(e.clone()),

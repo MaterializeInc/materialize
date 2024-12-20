@@ -25,6 +25,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::IdGen;
 use mz_ore::metrics::Histogram;
 use mz_ore::num::NonNeg;
+use mz_ore::soft_assert_no_log;
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::Indent;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
@@ -1687,9 +1688,27 @@ impl MirRelationExpr {
         })
     }
 
-    /// Take ownership of `self`, leaving an empty `MirRelationExpr::Constant` with the correct type.
-    pub fn take_safely(&mut self) -> MirRelationExpr {
-        let typ = self.typ();
+    /// Take ownership of `self`, leaving an empty `MirRelationExpr::Constant` with the optionally
+    /// given scalar types. The given scalar types should be `base_eq` with the types that `typ()`
+    /// would find. Keys and nullability are ignored in the given `RelationType`, and instead we set
+    /// the best possible key and nullability, since we are making an empty collection.
+    ///
+    /// If `typ` is not given, then this calls `.typ()` (which is possibly expensive) to determine
+    /// the correct type.
+    pub fn take_safely(&mut self, typ: Option<RelationType>) -> MirRelationExpr {
+        if let Some(typ) = &typ {
+            soft_assert_no_log!(self
+                .typ()
+                .column_types
+                .iter()
+                .zip_eq(typ.column_types.iter())
+                .all(|(t1, t2)| t1.scalar_type.base_eq(&t2.scalar_type)));
+        }
+        let mut typ = typ.unwrap_or_else(|| self.typ());
+        typ.keys = vec![vec![]];
+        for ct in typ.column_types.iter_mut() {
+            ct.nullable = false;
+        }
         std::mem::replace(
             self,
             MirRelationExpr::Constant {
@@ -1698,6 +1717,14 @@ impl MirRelationExpr {
             },
         )
     }
+
+    /// Take ownership of `self`, leaving an empty `MirRelationExpr::Constant` with the given scalar
+    /// types. Nullability is ignored in the given `ColumnType`s, and instead we set the best
+    /// possible nullability, since we are making an empty collection.
+    pub fn take_safely_with_col_types(&mut self, typ: Vec<ColumnType>) -> MirRelationExpr {
+        self.take_safely(Some(RelationType::new(typ)))
+    }
+
     /// Take ownership of `self`, leaving an empty `MirRelationExpr::Constant` with an **incorrect** type.
     ///
     /// This should only be used if `self` is about to be dropped or otherwise overwritten.
@@ -2233,11 +2260,13 @@ impl MirRelationExpr {
                     value.visit_pre_mut(|e| {
                         if let MirRelationExpr::Get {
                             id: crate::Id::Local(id),
+                            typ,
                             ..
                         } = e
                         {
+                            let typ = typ.clone();
                             if deadlist.contains(id) {
-                                e.take_safely();
+                                e.take_safely(Some(typ));
                             }
                         }
                     });

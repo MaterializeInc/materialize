@@ -56,7 +56,7 @@ impl TopKElision {
             if limit.as_ref().map_or(true, |l| l.is_literal_null()) && *offset == 0 {
                 *relation = input.take_dangerous();
             } else if limit.as_ref().and_then(|l| l.as_literal_int64()) == Some(0) {
-                relation.take_safely();
+                relation.take_safely(None);
             }
         }
     }
