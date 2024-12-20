@@ -694,9 +694,6 @@ where
             .try_collect()
             .await?;
 
-        // Reorder in dependency order.
-        to_register.sort_by_key(|(id, ..)| *id);
-
         // The set of collections that we should render at the end of this
         // function.
         let mut to_execute = BTreeSet::new();
@@ -706,6 +703,22 @@ where
         // not executed directly.
         let mut new_collections = BTreeSet::new();
         let mut table_registers = Vec::with_capacity(to_register.len());
+
+        // Reorder in dependency order.
+        to_register.sort_by_key(|(id, ..)| *id);
+
+        // Register tables first, but register them in reverse order since earlier tables
+        // can depend on later tables.
+        //
+        // Note: We could do more complex sorting to avoid the allocations, but IMO it's
+        // easier to reason about it this way.
+        let (tables_to_register, collections_to_register): (Vec<_>, Vec<_>) = to_register
+            .into_iter()
+            .partition(|(_id, desc, ..)| matches!(desc.data_source, DataSource::Table { .. }));
+        let to_register = tables_to_register
+            .into_iter()
+            .rev()
+            .chain(collections_to_register.into_iter());
 
         // Statistics need a level of indirection so we can mutably borrow
         // `self` when registering collections and when we are inserting
