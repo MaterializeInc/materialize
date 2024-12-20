@@ -124,6 +124,7 @@ impl EquivalencePropagation {
         let expr_type = derived
             .value::<RelationType>()
             .expect("RelationType required");
+        assert!(expr_type.is_some());
         let expr_equivalences = derived
             .value::<Equivalences>()
             .expect("Equivalences required");
@@ -132,7 +133,7 @@ impl EquivalencePropagation {
         let expr_equivalences = if let Some(e) = expr_equivalences {
             e
         } else {
-            expr.take_safely();
+            expr.take_safely_with_col_types(expr_type.clone().unwrap());
             return;
         };
 
@@ -147,7 +148,7 @@ impl EquivalencePropagation {
 
         outer_equivalences.minimize(expr_type.as_ref().map(|x| &x[..]));
         if outer_equivalences.unsatisfiable() {
-            expr.take_safely();
+            expr.take_safely_with_col_types(expr_type.clone().unwrap());
             return;
         }
 
