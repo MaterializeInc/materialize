@@ -1399,7 +1399,8 @@ impl HirScalarExpr {
 
                 // Record input arity here so that any group_keys that need to mutate get_inner
                 // don't add those columns to the aggregate input.
-                let input_arity = get_inner.typ().arity();
+                let input_type = get_inner.typ();
+                let input_arity = input_type.arity();
                 // The reduction that computes the window function must be keyed on the columns
                 // from the outer context, plus the expressions in the partition key. The current
                 // subquery will be 'executed' for every distinct row from the outer context so
@@ -1428,8 +1429,6 @@ impl HirScalarExpr {
                 }
 
                 get_inner.let_in(id_gen, |id_gen, mut get_inner| {
-                    let input_type = get_inner.typ();
-
                     // Original columns of the relation
                     let fields: Box<_> = input_type
                         .column_types
