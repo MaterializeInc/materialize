@@ -1574,12 +1574,14 @@ impl HirScalarExpr {
                 let inner_arity = get_inner.arity();
                 let mut total_arity = inner_arity;
                 let mut join_inputs = vec![get_inner];
+                let mut join_input_arities = vec![inner_arity];
                 for (expr, subquery) in subqueries.into_iter() {
                     // Avoid lowering duplicated subqueries
                     if !subquery_map.contains_key(&expr) {
                         let subquery_arity = subquery.arity();
                         assert_eq!(subquery_arity, inner_arity + 1);
                         join_inputs.push(subquery);
+                        join_input_arities.push(subquery_arity);
                         total_arity += subquery_arity;
 
                         // Column with the value of the subquery
@@ -1589,7 +1591,8 @@ impl HirScalarExpr {
                 // Each subquery projects all the columns of the outer context (distinct_inner)
                 // plus 1 column, containing the result of the subquery. Those columns must be
                 // joined with the outer/main relation (get_inner).
-                let input_mapper = mz_expr::JoinInputMapper::new(&join_inputs);
+                let input_mapper =
+                    mz_expr::JoinInputMapper::new_from_input_arities(join_input_arities);
                 let equivalences = (0..inner_arity)
                     .map(|col| {
                         join_inputs
