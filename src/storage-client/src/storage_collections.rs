@@ -1932,6 +1932,18 @@ where
         // TODO(alter_table): Do we need to advance the since of the table to match the time this
         // new version was registered with txn-wal?
 
+        // See comment on self.initial_txn_upper on why we're doing this.
+        let write_frontier =
+            if PartialOrder::less_than(write_handle.upper(), &self.initial_txn_upper) {
+                self.initial_txn_upper.clone()
+            } else {
+                write_handle.upper().clone()
+            };
+        let since = existing_since
+            .as_ref()
+            .unwrap_or_else(|| since_handle.since())
+            .clone();
+
         // Note: The new collection is now the "primary collection" so we specify `None` here.
         let collection_desc = CollectionDescription::<T>::for_table(new_desc.clone(), None);
         let collection_meta = CollectionMetadata {
@@ -1944,8 +1956,8 @@ where
         };
         let collection_state = CollectionState::new(
             collection_desc,
-            since_handle.since().clone(),
-            write_handle.upper().clone(),
+            since,
+            write_frontier,
             Vec::new(),
             collection_meta,
         );

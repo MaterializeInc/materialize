@@ -185,7 +185,7 @@ build:optimized --cxxopt=-D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_FAST
 build:optimized --copt=-O2
 build:optimized --copt=-DNDEBUG
 
-build:optimized --config=debuginfo-none
+build:optimized --config=debuginfo-limited
 
 build:optimized --copt=-fno-lto
 build:optimized --linkopt=-fno-lto
