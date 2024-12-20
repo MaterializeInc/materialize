@@ -20,7 +20,7 @@ the following additional services:
 ## Step 1. Set up a Prometheus SQL Exporter
 
 {{< note >}}
-As a best practice, we strongly recommend using [service accounts](/manage/access-control/service-accounts)
+As a best practice, we strongly recommend using [service accounts](/manage/access-control/create-service-accounts)
 to connect external applications, like Grafana, to Materialize.
 {{</ note >}}
 

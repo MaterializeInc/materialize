@@ -68,7 +68,7 @@ provider "materialize" {
 
 **Minimum requirements:** `terraform-provider-materialize` v0.8.1+
 
-As a best practice, we strongly recommend using [service accounts](/manage/access-control/service-accounts)
+As a best practice, we strongly recommend using [service accounts](/manage/access-control/create-service-accounts)
 to connect external applications to Materialize. To create a
 service account, create a new [`materialize_role`](https://registry.terraform.io/providers/MaterializeInc/materialize/latest/docs/resources/role)
 and associate it with a new [`materialize_app_password`](https://registry.terraform.io/providers/MaterializeInc/materialize/latest/docs/resources/app_password)

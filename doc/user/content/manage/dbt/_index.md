@@ -75,7 +75,7 @@ create a `profiles.yml` file, if it doesn't exist. To help you get started, the
 ### Connect to Materialize
 
 {{< note >}}
-As a best practice, we strongly recommend using [service accounts](/manage/access-control/service-accounts)
+As a best practice, we strongly recommend using [service accounts](/manage/access-control/create-service-accounts)
 to connect external applications, like dbt, to Materialize.
 {{</ note >}}
 
