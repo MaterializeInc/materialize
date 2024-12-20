@@ -1996,7 +1996,7 @@ where
 
         let acquired_holds = advanced_holds
             .into_iter()
-            .map(|(id, since)| ReadHold::new(id, since, self.holds_tx.clone()))
+            .map(|(id, since)| ReadHold::with_channel(id, since, self.holds_tx.clone()))
             .collect_vec();
 
         trace!(?desired_holds, ?acquired_holds, "acquire_read_holds");
