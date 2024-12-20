@@ -2631,9 +2631,9 @@ fn test_internal_ws_auth() {
     }
 }
 
-#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
-async fn test_leader_promotion_always_using_deploy_generation() {
+fn test_leader_promotion_always_using_deploy_generation() {
     let tmpdir = TempDir::new().unwrap();
     let harness = test_util::TestHarness::default()
         .unsafe_mode()
@@ -2641,37 +2641,37 @@ async fn test_leader_promotion_always_using_deploy_generation() {
         .with_deploy_generation(2);
     {
         // propose a deploy generation for the first time
-        let server = harness.clone().start().await;
-        let client = server.connect().await.unwrap();
-        client.simple_query("SELECT 1").await.unwrap();
+        let server = harness.clone().start_blocking();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        client.simple_query("SELECT 1").unwrap();
     }
     {
         // keep it the same, no need to promote the leader
-        let server = harness.start().await;
-        let client = server.connect().await.unwrap();
-        client.simple_query("SELECT 1").await.unwrap();
+        let server = harness.start_blocking();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        client.simple_query("SELECT 1").unwrap();
 
-        let http_client = reqwest::Client::new();
+        let http_client = reqwest::blocking::Client::new();
 
         // check that we're the leader and promotion doesn't do anything
         let status_http_url = Url::parse(&format!(
             "http://{}/api/leader/status",
-            server.inner.internal_http_local_addr()
+            server.inner().internal_http_local_addr()
         ))
         .unwrap();
-        let res = http_client.get(status_http_url).send().await.unwrap();
+        let res = http_client.get(status_http_url).send().unwrap();
         assert_eq!(res.status(), StatusCode::OK);
-        let response = res.text().await.unwrap();
+        let response = res.text().unwrap();
         assert_eq!(response, r#"{"status":"IsLeader"}"#);
 
         let promote_http_url = Url::parse(&format!(
             "http://{}/api/leader/promote",
-            server.inner.internal_http_local_addr()
+            server.inner().internal_http_local_addr()
         ))
         .unwrap();
-        let res = http_client.post(promote_http_url).send().await.unwrap();
+        let res = http_client.post(promote_http_url).send().unwrap();
         assert_eq!(res.status(), StatusCode::OK);
-        let response = res.text().await.unwrap();
+        let response = res.text().unwrap();
         assert_eq!(response, r#"{"result":"Success"}"#);
     }
 }
@@ -4222,44 +4222,39 @@ async fn test_startup_cluster_notice() {
     "###);
 }
 
-#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
-async fn test_durable_oids() {
+fn test_durable_oids() {
     let data_dir = tempfile::tempdir().unwrap();
     let harness = test_util::TestHarness::default().data_directory(data_dir.path());
 
     let table_oid: u32 = {
-        let server = harness.clone().start().await;
-        let client = server.connect().await.unwrap();
+        let server = harness.clone().start_blocking();
+        let mut client = server.connect(postgres::NoTls).unwrap();
         client
             .execute("CREATE TABLE t (a INT);", &[])
-            .await
             .expect("failed to create table");
         client
             .query_one("SELECT oid FROM mz_tables WHERE name = 't'", &[])
-            .await
             .expect("failed to select")
             .get(0)
     };
 
     {
-        let server = harness.clone().start().await;
-        let client = server.connect().await.unwrap();
+        let server = harness.clone().start_blocking();
+        let mut client = server.connect(postgres::NoTls).unwrap();
 
         let restarted_table_oid: u32 = client
             .query_one("SELECT oid FROM mz_tables WHERE name = 't'", &[])
-            .await
             .expect("failed to select")
             .get(0);
         assert_eq!(table_oid, restarted_table_oid);
 
         client
             .execute("CREATE VIEW v AS SELECT 1;", &[])
-            .await
             .expect("failed to create table");
         let view_oid: u32 = client
             .query_one("SELECT oid FROM mz_views WHERE name = 'v'", &[])
-            .await
             .expect("failed to select")
             .get(0);
         assert_ne!(table_oid, view_oid);
