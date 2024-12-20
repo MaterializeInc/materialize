@@ -12,9 +12,8 @@ workspace = true
 [dependencies]
 anyhow = "1.0.66"
 async-stream = "0.3.3"
-async-trait = "0.1.68"
 bytesize = "1.1.0"
-clap = { version = "3.2.24", features = ["derive", "env"] }
+columnar = "0.2.0"
 crossbeam-channel = "0.5.8"
 dec = { version = "0.4.8", features = ["serde"] }
 differential-dataflow = "0.13.1"
@@ -22,9 +21,7 @@ differential-dogs3 = "0.1.1"
 futures = "0.3.25"
 itertools = "0.10.5"
 lgalloc = "0.4"
-mz-build-info = { path = "../build-info" }
 mz-cluster = { path = "../cluster" }
-mz-cluster-client = { path = "../cluster-client" }
 mz-compute-client = { path = "../compute-client" }
 mz-compute-types = { path = "../compute-types" }
 mz-dyncfg = { path = "../dyncfg" }
@@ -34,7 +31,6 @@ mz-ore = { path = "../ore", features = ["async", "flatcontainer", "process", "tr
 mz-persist-client = { path = "../persist-client" }
 mz-persist-types = { path = "../persist-types" }
 mz-repr = { path = "../repr" }
-mz-service = { path = "../service" }
 mz-storage-operators = { path = "../storage-operators" }
 mz-storage-types = { path = "../storage-types" }
 mz-timely-util = { path = "../timely-util" }

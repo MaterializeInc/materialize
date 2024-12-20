@@ -14,12 +14,12 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::Duration;
 
+use columnar::Columnar;
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use mz_compute_client::logging::LoggingConfig;
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, Timestamp};
 use mz_timely_util::replay::MzReplay;
-use serde::{Deserialize, Serialize};
 use timely::communication::Allocate;
 use timely::container::columnation::{Columnation, CopyRegion};
 use timely::container::CapacityContainerBuilder;
@@ -325,6 +325,7 @@ struct DemuxState {
     schedules_data: BTreeMap<usize, Vec<(isize, i64)>>,
 }
 
+#[derive(Columnar)]
 struct Park {
     /// Time when the park occurred.
     time: Duration,
@@ -333,7 +334,7 @@ struct Park {
 }
 
 /// Organize message counts into number of batches and records.
-#[derive(Default, Copy, Clone, Debug)]
+#[derive(Default, Copy, Clone, Debug, Columnar)]
 struct MessageCount {
     /// The number of batches sent across a channel.
     batches: i64,
@@ -364,7 +365,7 @@ struct DemuxOutput<'a> {
     schedules_histogram: OutputSession<'a, (ScheduleHistogramDatum, ())>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Columnar)]
 struct ChannelDatum {
     id: usize,
     source: (usize, usize),
@@ -375,7 +376,7 @@ impl Columnation for ChannelDatum {
     type InnerRegion = CopyRegion<Self>;
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Columnar)]
 struct ParkDatum {
     duration_pow: u128,
     requested_pow: Option<u128>,
@@ -385,7 +386,7 @@ impl Columnation for ParkDatum {
     type InnerRegion = CopyRegion<Self>;
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Columnar)]
 struct MessageDatum {
     channel: usize,
     worker: usize,
@@ -395,7 +396,7 @@ impl Columnation for MessageDatum {
     type InnerRegion = CopyRegion<Self>;
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Columnar)]
 struct ScheduleHistogramDatum {
     operator: usize,
     duration_pow: u128,
