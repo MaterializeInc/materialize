@@ -548,8 +548,6 @@ impl Context {
                 equivalences,
                 implementation,
             } => {
-                let input_mapper = JoinInputMapper::new(inputs);
-
                 // Plan each of the join inputs independently.
                 // The `plans` get surfaced upwards, and the `input_keys` should
                 // be used as part of join planning / to validate the existing
@@ -563,6 +561,9 @@ impl Context {
                     plans.push(plan);
                     input_keys.push(keys);
                 }
+
+                let input_mapper =
+                    JoinInputMapper::new_from_input_arities(input_arities.iter().copied());
 
                 // Extract temporal predicates as joins cannot currently absorb them.
                 let (plan, missing) = match implementation {
