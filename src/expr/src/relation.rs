@@ -593,7 +593,7 @@ impl MirRelationExpr {
     /// Reports the column types of the relation given the column types of the
     /// input relations.
     ///
-    /// This method delegates to `try_col_with_input_cols`, panicing if an `Err`
+    /// This method delegates to `try_col_with_input_cols`, panicking if an `Err`
     /// variant is returned.
     pub fn col_with_input_cols<'a, I>(&self, input_types: I) -> Vec<ColumnType>
     where
