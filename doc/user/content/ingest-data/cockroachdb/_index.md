@@ -15,7 +15,7 @@ menu:
 Materialize supports CockroachDB as a real-time data source. Using Kafka with
 CockroachDB
 [Changefeeds](https://www.cockroachlabs.com/docs/stable/change-data-capture-overview),
-Materialize can consume changefeedsto create and efficiently maintain real-time
+Materialize can consume changefeeds to create and efficiently maintain real-time
 views on top of CDC data.
 
 {{< tip >}}
