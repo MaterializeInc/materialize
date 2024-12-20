@@ -24,6 +24,11 @@ continually reports metrics via the Datadog API.
 
 ## Step 1. Set up a Prometheus SQL Exporter
 
+{{< note >}}
+As a best practice, we strongly recommend using [service accounts](/manage/access-control/create-service-accounts)
+to connect external applications, like Datadog, to Materialize.
+{{</ note >}}
+
 To export metrics from Materialize and expose them in a format that Datadog can
 consume, you need to configure and run a Prometheus SQL Exporter. This service
 will run SQL queries against Materialize at specified intervals, and export the
@@ -44,7 +49,7 @@ which has been tried and tested in production environments.
 
 
 1. In the configuration file, define the connection to your Materialize region
-   under `connections` using the credentials provided in the [Materialize console](https://console.materialize.com/).
+   under `connections` using the credentials provided in the [Materialize Console](https://console.materialize.com/).
 
    {{< note >}}
    You must escape the special `@` character in `USER` for a successful

@@ -8,10 +8,11 @@ menu:
     name: "Use Terraform to manage Materialize"
 ---
 
-[Terraform](https://www.terraform.io/) is an infrastructure-as-code tool that allows you to manage your
-resources in a declarative configuration language. Materialize maintains a
-[Terraform provider](https://registry.terraform.io/providers/MaterializeInc/materialize/latest/docs) to help you safely and predictably provision and manage
-connections, sources, and other database objects.
+[Terraform](https://www.terraform.io/) is an infrastructure-as-code tool that
+allows you to manage your resources in a declarative configuration language.
+Materialize maintains a[Terraform provider](https://registry.terraform.io/providers/MaterializeInc/materialize/latest/docs)
+to help you safely and predictably provision and manage connections, sources,
+and other database objects.
 
 Materialize also maintains several modules that make it easier to manage
 other cloud resources that Materialize depends on. Modules allow you to bypass
@@ -41,12 +42,10 @@ To configure the provider to communicate with your Materialize region, you
 need to authenticate with a Materialize username, app password, and other
 specifics from your account.
 
-{{< note >}}
-Materialize recommends creating a new app password for each application you use. To create a new app password, navigate to [https://console.materialize.com/access](https://console.materialize.com/access).
-{{</ note >}}
-
-Materialize recommends saving sensitive input variables as environment variables
-to avoid checking secrets into source control. In Terraform, you can export your Materialize app password as a [Terraform environment variable](https://developer.hashicorp.com/terraform/cli/config/environment-variables#tf_var_name) with the `TF_VAR_<name>` format.
+We recommend saving sensitive input variables as environment variables to avoid
+checking secrets into source control. In Terraform, you can export Materialize
+app passwords as a [Terraform environment variable](https://developer.hashicorp.com/terraform/cli/config/environment-variables#tf_var_name)
+with the `TF_VAR_<name>` format.
 
 ```shell
 export TF_VAR_MZ_PASSWORD=<app_password>
@@ -62,6 +61,49 @@ provider "materialize" {
   password       = var.MZ_PASSWORD
   default_region = <region>
   database       = <database>
+}
+```
+
+#### Creating service accounts
+
+**Minimum requirements:** `terraform-provider-materialize` v0.8.1+
+
+As a best practice, we strongly recommend using [service accounts](/manage/access-control/create-service-accounts)
+to connect external applications to Materialize. To create a
+service account, create a new [`materialize_role`](https://registry.terraform.io/providers/MaterializeInc/materialize/latest/docs/resources/role)
+and associate it with a new [`materialize_app_password`](https://registry.terraform.io/providers/MaterializeInc/materialize/latest/docs/resources/app_password)
+of type `service`. More granular permissions for the service account can then
+be configured using [role-based access control (RBAC)](/manage/access-control/#role-based-access-control-rbac).
+
+```hcl
+# Create a service user in the aws/us-east-1 region.
+resource "materialize_role" "production_dashboard" {
+  name   = "svc_production_dashboard"
+  region = "aws/us-east-1"
+}
+
+# Create an app password for the service user.
+resource "materialize_app_password" "production_dashboard" {
+  name = "production_dashboard_app_password"
+  type = "service"
+  user = materialize_role.production_dashboard.name
+  roles = ["Member"]
+}
+
+# Allow the service user to use the "production_analytics" database.
+resource "materialize_database_grant" "database_usage" {
+  role_name     = materialize_role.production_dashboard.name
+  privilege     = "USAGE"
+  database_name = "production_analytics"
+  region        = "aws/us-east-1"
+}
+
+# Export the user and password for use in the external tool.
+output "production_dashboard_user" {
+  value = materialize_role.production_dashboard.name
+}
+output "production_dashboard_password" {
+  value = materialize_app_password.production_dashboard.password
 }
 ```
 
