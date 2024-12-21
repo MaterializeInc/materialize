@@ -212,6 +212,11 @@ impl CopyToS3Uploader for ParquetUploader {
         }
         Ok(())
     }
+
+    async fn force_new_file(&mut self) -> Result<(), anyhow::Error> {
+        self.start_new_file().await?;
+        Ok(())
+    }
 }
 
 impl ParquetUploader {
