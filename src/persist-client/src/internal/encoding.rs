@@ -1417,7 +1417,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for HollowRunRef<T> 
             ts_rewrite: None,
             format: None,
             schema_id: None,
-            structured_key_lower: None,
+            structured_key_lower: self.structured_key_lower.into_proto(),
             deprecated_schema_id: None,
         };
         part
@@ -1435,7 +1435,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for HollowRunRef<T> 
             hollow_bytes: proto.encoded_size_bytes.into_rust()?,
             max_part_bytes: run_proto.max_part_bytes.into_rust()?,
             key_lower: proto.key_lower.to_vec(),
-            structured_key_lower: None,
+            structured_key_lower: proto.structured_key_lower.into_rust()?,
             _phantom_data: Default::default(),
         })
     }
