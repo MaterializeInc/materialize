@@ -42,6 +42,8 @@ def main() -> int:
         output_path_cmd(config, sub_args)
     elif args.action == "check":
         check_cmd(config, sub_args)
+    elif args.action == "integrity":
+        integrity_cmd(config, sub_args)
     else:
         bazel_cmd(config, [args.action] + sub_args)
 
@@ -96,6 +98,20 @@ def output_path_cmd(config: BuildConfig, args: list[str]):
     paths = bazel.output_paths(target)
     for path in paths:
         print(path)
+
+
+def integrity_cmd(config: BuildConfig, args: list[str]):
+    """Calculate the integrity value for a file."""
+    if args[0] == "toolchains":
+        assert len(args) == 3, "expected <stable version> <nightly version>"
+        stable = args[1]
+        nightly = args[2]
+        hashes = bazel.toolchain_hashes(stable, nightly)
+        print(hashes)
+    else:
+        for path in args:
+            integrity = bazel.calc_ingerity(path)
+            print(integrity)
 
 
 def bazel_cmd(config: BuildConfig, args: list[str]):

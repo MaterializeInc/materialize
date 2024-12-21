@@ -990,7 +990,7 @@ impl ParsedDateTime {
     }
 
     fn seconds_has_fraction(&self) -> bool {
-        return self.second.is_some() && self.second.as_ref().unwrap().fraction != 0;
+        self.second.is_some() && self.second.as_ref().unwrap().fraction != 0
     }
 
     pub fn check_datelike_bounds(&mut self) -> Result<(), String> {

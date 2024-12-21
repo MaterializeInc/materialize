@@ -197,7 +197,7 @@ impl Coordinator {
     pub(crate) async fn ensure_timeline_state<'a>(
         &'a mut self,
         timeline: &'a Timeline,
-    ) -> &mut TimelineState<Timestamp> {
+    ) -> &'a mut TimelineState<Timestamp> {
         Self::ensure_timeline_state_with_initial_time(
             timeline,
             Timestamp::minimum(),
