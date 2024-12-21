@@ -13,52 +13,113 @@ aliases:
 
 ## Indexes
 
-Like in any standard relational database, you can use [indexes](/concepts/indexes/) to optimize query performance in Materialize. Improvements can be significant, reducing some query times down to single-digit milliseconds.
+Indexes in Materialize maintain the complete up-to-date query results in memory
+(and not just the index keys and the pointers to data rows). Unlike some other
+databases, Materialize can use an index to serve query results even if the query
+does not specify a `WHERE` condition on the index key(s). Serving queries from
+an index is fast since the results are already up-to-date and in memory.
 
-Building an efficient index depends on the clauses used in your queries, as well as your expected access patterns. Use the following as a guide:
+Materialize can use [indexes](/concepts/indexes/) to further optimize query
+performance in Materialize. Improvements can be significant, reducing some query
+times down to single-digit milliseconds.
 
-* [WHERE](#where-point-lookups)
+Building an efficient index depends on the clauses used in your queries as well
+as your expected access patterns. Use the following as a guide:
+
+* [WHERE point lookups](#where-point-lookups)
 * [JOIN](#join)
 * [DEFAULT](#default-index)
 
-`GROUP BY`, `ORDER BY` and `LIMIT` clauses currently do not benefit from an index.
-
-
 ### `WHERE` point lookups
-Speed up a query involving a `WHERE` clause with equality comparisons to literals (e.g., `42`, or `'foo'`):
 
-| Clause                                            | Index                                    |
+Unlike some other databases, Materialize can use an index to serve query results
+even if the query does not specify a `WHERE` condition on the index key(s). For
+some queries, Materialize can perform [**point
+lookups**](/concepts/indexes/#point-lookups) on the index (as opposed to an
+index scan) if the query's `WHERE` clause:
+
+- Specifies equality (`=` or `IN`) condition on **all** the indexed fields. The
+  equality conditions must specify the **exact** index key expression (including
+  type).
+
+- Only uses `AND` (conjunction) to combine conditions for **different** fields.
+
+Depending on your query pattern, you may want to build indexes to support point
+lookups.
+
+#### Create an index to support point lookups
+
+To [create an index](/sql/create-index/) to support [**point
+lookups**](/concepts/indexes/#point-lookups):
+
+```mzsql
+CREATE INDEX ON obj_name (<keys>);
+```
+
+- Specify **only** the keys that are constrained in the query's `WHERE` clause.
+  If your index contains keys not specified in the query's `WHERE` clause, then
+  Materialize performs a full index scan.
+
+- Specify all (or subset of) keys that are constrained in the query pattern's
+  `WHERE` clause. If the index specifies all the keys, Materialize performs a
+  point lookup only. If the index specifies a subset of keys, then Materialize
+  performs a point lookup on the index keys and then filters these results using
+  the conditions on the non-indexed fields.
+
+- Specify index keys that **exactly match** the column expressions in the
+  `WHERE` clause. For example, if the query specifies `WHERE quantity * price =
+  100`, the index key should be `quantity * price` and not `price * quantity`.
+
+- If the `WHERE` uses `OR` clauses and:
+
+  - The `OR` arguments constrain all the same fields (e.g., `WHERE (quantity = 5
+    AND price = 1.25) OR (quantity = 10 AND price = 1.25)`), create an index for
+    the constrained fields (e.g., `quantity` and `price`).
+
+  - The `OR` arguments constrain some of the same fields (e.g., `WHERE (quantity
+    = 5 AND price = 1.25) OR (quantity = 10 AND item = 'brownie)`), create an
+    index for the intersection of the constrained fields (e.g., `quantity`).
+    Materialize performs a point lookup on the indexed key and then filters the
+    results using the conditions on the non-indexed fields.
+
+  - The `OR` arguments constrain completely disjoint sets of fields (e.g.,
+    `WHERE quantity = 5 OR item = 'brownie'`), try to rewrite your query using a
+    `UNION` (or `UNION ALL`), where each argument of the `UNION` has one of the
+    original `OR` arguments.
+
+#### Examples
+
+| WHERE clause of your query patterns    | Index for point lookups                                 |
 |---------------------------------------------------|------------------------------------------|
 | `WHERE x = 42`                                    | `CREATE INDEX ON obj_name (x);`        |
 | `WHERE x IN (1, 2, 3)`                            | `CREATE INDEX ON obj_name (x);`        |
-| `WHERE (x, y) IN ((1, 'a'), (7, 'b'), (8, 'c'))`  | `CREATE INDEX ON obj_name (x, y);`     |
-| `WHERE x = 1 AND y = 'abc'`                       | `CREATE INDEX ON obj_name (x, y);`     |
-| `WHERE (x = 5 AND y = 'a') OR (x = 7 AND y = ''`) | `CREATE INDEX ON obj_name (x, y);`     |
-| `WHERE 2 * x = 64`                                | `CREATE INDEX ON obj_name (2 * x);`    |
+| `WHERE x = 1 OR x = 2`                            | `CREATE INDEX ON obj_name (x);`        |
+| `WHERE (x, y) IN ((1, 'a'), (7, 'b'), (8, 'c'))`  | `CREATE INDEX ON obj_name (x, y);` or <br/> `CREATE INDEX ON obj_name (y, x);`  |
+| `WHERE x = 1 AND y = 'abc'`                       | `CREATE INDEX ON obj_name (x, y);` or <br/> `CREATE INDEX ON obj_name (y, x);` |
+| `WHERE (x = 5 AND y = 'a') OR (x = 7 AND y = ''`) | `CREATE INDEX ON obj_name (x, y);` or <br/> `CREATE INDEX ON obj_name (y, x);`     |
+| `WHERE y * x = 64`                                | `CREATE INDEX ON obj_name (y * x);`    |
 | `WHERE upper(y) = 'HELLO'`                        | `CREATE INDEX ON obj_name (upper(y));` |
 
-You can verify that Materialize is accessing the input by an index lookup using `EXPLAIN`. Check for `lookup_value` after the index name to confirm that an index lookup is happening, i.e., that Materialize is only reading the matching records from the index instead of scanning the entire index:
+You can verify that Materialize is accessing the input by an index lookup using [`EXPLAIN`](/sql/explain-plan/).
+
 ```mzsql
-EXPLAIN SELECT * FROM foo WHERE x = 42 AND y = 'hello';
-```
-```
-                               Optimized Plan
------------------------------------------------------------------------------
- Explained Query (fast path):                                               +
-   Project (#0, #1)                                                         +
-     ReadExistingIndex materialize.public.foo_x_y lookup_value=(42, "hello")+
-                                                                            +
- Used Indexes:                                                              +
-   - materialize.public.foo_x_y (lookup)                                    +
+CREATE INDEX ON foo (x, y);
+EXPLAIN SELECT * FROM foo WHERE x = 42 AND y = 50;
 ```
 
-#### Matching multi-column indexes to multi-column `WHERE` clauses
+In the [`EXPLAIN`](/sql/explain-plan/) output, check for `lookup_value` after
+the index name to confirm that Materialize will use a point lookup; i.e., that
+Materialize will only read the matching records from the index instead of
+scanning the entire index:
 
-In general, your index key should exactly match the columns that are constrained in the `WHERE` clause. In more detail:
-{{< warning >}} If the `WHERE` clause constrains fewer fields than your index key includes, then the index will not be used for a lookup, but will be fully scanned. For example, an index on `(x, y)` cannot be used to execute `WHERE x = 7` as a point lookup. {{< /warning >}}
-- If the `WHERE` clause constrains more fields than your index key includes, then the index might still provide some speedup, but it won't necessarily be optimal: In this case, the index lookup is performed using only those constraints that are included in the index key, and the rest of the constraints will be used to subsequently filter the result of the index lookup.
-- If `OR` is used and not all arguments constrain the same fields, create an index for the intersection of the constrained fields. For example, if you have `WHERE (x = 51 AND y = 'bbb') OR (x = 76 AND z = 9)`, create an index just on `x`.
-- If `OR` is used and its arguments constrain completely disjoint sets of fields (e.g. `WHERE x = 5 OR y = 'aaa'`), try to rewrite your query using a `UNION` (or `UNION ALL`), where each argument of the `UNION` has one of the original `OR` arguments.
+```
+ Explained Query (fast path):
+   Project (#0{x}, #1{y})
+     ReadIndex on=materialize.public.foo foo_x_y_idx=[lookup value=(42, 50)]
+
+ Used Indexes:
+   - materialize.public.foo_x_y_idx (lookup)
+```
 
 ### `JOIN`
 
@@ -292,6 +353,10 @@ The following are the possible index usage types:
 - `delta join 1st input (full scan)`: Materialize will use the index for the first input of a [delta join](#optimize-multi-way-joins-with-delta-joins). Note that the first input of a delta join is always fully scanned. However, executing the join won't require additional memory if the input is indexed.
 - `delta join lookup`: Materialize will use the index for a non-first input of a [delta join](#optimize-multi-way-joins-with-delta-joins). This means that, in an ad hoc query, the join will perform only lookups into the index.
 - `fast path limit`: When a [fast path](/sql/explain-plan/#fast-path-queries) query has a `LIMIT` clause but no `ORDER BY` clause, then Materialize will read from the index only as many records as required to satisfy the `LIMIT` (plus `OFFSET`) clause.
+
+### Limitations
+
+{{% index_usage/index-ordering %}}
 
 ## Query hints
 

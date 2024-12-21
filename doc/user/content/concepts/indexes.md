@@ -105,6 +105,100 @@ CREATE INDEX idx_on_my_view IN CLUSTER active_cluster ON my_view (...);
 
 ## Usage patterns
 
+### Index usage
+
+{{% important %}}
+Indexes are local to a cluster. Queries in a different cluster cannot use the indexes in another cluster.
+{{% /important %}}
+
+Unlike some other databases, Materialize can use an index to serve query
+results even if the query does not specify a `WHERE` condition on the index
+key.
+
+For example, consider the following index:
+
+```mzsql
+CREATE INDEX idx_orders_view_qty ON orders_view (quantity);
+```
+
+Materialize can use the index for the following queries (issued from the same
+cluster as the index) on `orders_view`:
+
+```mzsql
+SELECT * FROM orders_view;  -- scans the index
+SELECT * FROM orders_view WHERE status = 'shipped';  -- scans the index
+SELECT * FROM orders_view WHERE quantity = 10;  -- point lookup on the index
+```
+
+For the queries that do not specify a condition on the indexed field,
+Materialize scans the index. For the query that specifies an equality condition
+on the indexed field, Materialize performs a **point lookup** on the index
+(i.e., reads just the matching records from the index).
+
+#### Point lookups
+
+Materialize performs **point lookup** on the index if the query's `WHERE`
+clause:
+
+- Specifies equality (`=` or `IN`) condition and **only** equality conditions on
+  **all** the indexed fields. The equality conditions must specify the **exact**
+  index key expression (including type) for point lookups. For example:
+
+  - If the index is on `round(quantity)`, the query must specify equality
+    condition on `round(quantity)` (and not just `quanity`) for Materialize to
+    perform a point lookup.
+
+  - If the index is on `quantity * price`, the query must specify equality
+    condition on `quantity * price` (and not `price * quantity`) for Materialize
+    to perform a point lookup.
+
+  - If the index is on the `quantity` field which is an integer, the query must
+    specify equality condition on `quantity` with a value that is an integer.
+
+- Only uses `AND` (conjunction) to combine conditions for **different** fields.
+
+For queries whose `WHERE` clause meets the point lookup criteria and includes
+conditions on additional fields (also using `AND` conjunction), Materialize
+performs a point lookup on the index keys and then filters the results using the
+additional conditions on the non-indexed fields.
+
+For queries that do not meet the point lookup criteria, Materialize performs a
+full index scan (including for range queries). That is, Materialize performs a
+full index scan if the `WHERE` clause:
+
+- Does not specify **all** the indexed fields.
+- Does not specify only equality conditions on the index fields or specifies an
+  equality condition that specifies a different value type than the index key
+  type.
+- Uses OR (disjunction) to combine conditions for **different** fields.
+
+#### Examples
+
+Consider the following index on a view:
+
+```mzsql
+CREATE INDEX idx_orders_view_qty on orders_view (quantity);
+```
+
+The following table shows various queries and whether Materialize performs a
+point lookup or an index scan.
+
+{{< index_usage/index-usage-table data="index_usage_key_quantity" >}}
+
+Consider that the view has an index on the `quantity` and `price` fields
+instead of an index on the `quantity` field:
+
+```mzsql
+DROP INDEX idx_orders_view_qty;
+CREATE INDEX idx_orders_view_qty_price on orders_view (quantity, price);
+```
+
+{{< index_usage/index-usage-table data="index_usage_key_quantity_price" >}}
+
+#### Limitations
+
+{{% index_usage/index-ordering %}}
+
 ### Indexes on views vs. materialized views
 
 {{% views-indexes/table-usage-pattern-intro %}}

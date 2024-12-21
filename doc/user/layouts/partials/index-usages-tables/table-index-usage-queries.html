@@ -1,0 +1,19 @@
+<table>
+<thead>
+<tr>
+<th>Query</th>
+<th>Index usage</th>
+
+</tr>
+</thead>
+<tbody>
+{{ range .queries }}
+<tr>
+<td>{{ .query | markdownify }}</td>
+<td>
+{{ .index_usage | markdownify }}
+</td>
+</tr>
+{{ end }}
+</tbody>
+</table>
