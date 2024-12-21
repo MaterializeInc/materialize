@@ -1136,6 +1136,7 @@ steps:
         - ./ci/plugins/scratch-aws-access: ~
         - ./ci/plugins/mzcompose:
             composition: terraform
+            run: aws-temporary
       branches: "main v*.*"
 
   - group: "Output consistency"
