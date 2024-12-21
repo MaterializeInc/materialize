@@ -1091,11 +1091,21 @@ where
         let mut persist_compaction_commands = Vec::with_capacity(collections_net.len());
         for (key, (mut changes, frontier)) in collections_net {
             if !changes.is_empty() {
+                // If the table has a "primary" collection, let that collection drive compaction.
+                let collection = collections.get(&key).expect("must still exist");
+                let should_emit_persist_compaction = !matches!(
+                    collection.description.data_source,
+                    DataSource::Table { primary: Some(_) }
+                );
+
                 if frontier.is_empty() {
                     info!(id = %key, "removing collection state because the since advanced to []!");
                     collections.remove(&key).expect("must still exist");
                 }
-                persist_compaction_commands.push((key, frontier));
+
+                if should_emit_persist_compaction {
+                    persist_compaction_commands.push((key, frontier));
+                }
             }
         }
 
@@ -1856,7 +1866,12 @@ where
         new_desc: RelationDesc,
         expected_version: RelationVersion,
     ) -> Result<(), StorageError<Self::Timestamp>> {
-        let (data_shard, existing_since) = {
+        let (
+            data_shard,
+            existing_write_frontier,
+            existing_read_policy,
+            mut existing_read_capabilities,
+        ) = {
             let self_collections = self.collections.lock().expect("lock poisoned");
             let existing = self_collections
                 .get(&existing_collection)
@@ -1869,7 +1884,9 @@ where
 
             (
                 existing.collection_metadata.data_shard,
-                existing.description.since.clone(),
+                existing.write_frontier.clone(),
+                existing.read_policy.clone(),
+                existing.read_capabilities.clone(),
             )
         };
 
@@ -1923,7 +1940,7 @@ where
             .open_data_handles(
                 &new_collection,
                 data_shard,
-                existing_since.as_ref(),
+                None,
                 new_desc.clone(),
                 &persist_client,
             )
@@ -1931,6 +1948,16 @@ where
 
         // TODO(alter_table): Do we need to advance the since of the table to match the time this
         // new version was registered with txn-wal?
+
+        // Because this is a Table, we know it's managed by txn_wal, and thus it's logical write
+        // frontier is possibly in advance of the write_handle's upper. So we fast forward the
+        // write frontier to match that of the existing collection.
+        let write_frontier =
+            if PartialOrder::less_than(write_handle.upper(), &existing_write_frontier) {
+                existing_write_frontier
+            } else {
+                write_handle.upper().clone()
+            };
 
         // Note: The new collection is now the "primary collection" so we specify `None` here.
         let collection_desc = CollectionDescription::<T>::for_table(new_desc.clone(), None);
@@ -1945,7 +1972,7 @@ where
         let collection_state = CollectionState::new(
             collection_desc,
             since_handle.since().clone(),
-            write_handle.upper().clone(),
+            write_frontier,
             Vec::new(),
             collection_meta,
         );
@@ -1973,10 +2000,33 @@ where
                 primary: Some(new_collection),
             };
             existing.storage_dependencies.push(new_collection);
-            self.install_collection_dependency_read_holds_inner(
+
+            // Install the relevant read capabilities on the new collection.
+            //
+            // Note(parkmycar): Originally we used `install_collection_dependency_read_holds_inner`
+            // here, but that only installed a ReadHold on the new collection for the implied
+            // capability of the existing collection. This would cause runtime panics because it
+            // would eventually result in negative read capabilities.
+            let mut changes = ChangeBatch::new();
+            for (time, diff) in existing_read_capabilities.updates() {
+                changes.update(time.clone(), *diff);
+            }
+            let mut updates = BTreeMap::from([(new_collection, changes)]);
+            StorageCollectionsImpl::update_read_capabilities_inner(
+                &self.cmd_tx,
                 &mut *self_collections,
-                existing_collection,
-            )?;
+                &mut updates,
+            );
+
+            // Note: The Coordinator will also set the ReadPolicy, but start by
+            // initializing it to the same policy as the existing collection to
+            // prevent some other action, e.g. the write frontier of the
+            // txn_wal shard advancing, from getting interleaved between this
+            // call and the Coordinator's call to set the ReadPolicy.
+            self.set_read_policies_inner(
+                &mut *self_collections,
+                vec![(new_collection, existing_read_policy)],
+            );
         };
 
         // TODO(alter_table): Support changes to sources.
