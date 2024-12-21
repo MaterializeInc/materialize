@@ -76,6 +76,7 @@ use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::LazyLock;
+use std::time::Instant;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use bytes::Bytes;
@@ -86,10 +87,10 @@ use mz_ore::collections::HashSet;
 use mz_ore::future::InTask;
 use mz_ore::iter::IteratorExt;
 use mz_postgres_util::tunnel::PostgresFlavor;
+use mz_postgres_util::PostgresError;
 use mz_postgres_util::{simple_query_opt, Client};
 use mz_repr::{Datum, DatumVec, Diff, Row};
 use mz_sql_parser::ast::{display::AstDisplay, Ident};
-use mz_ssh_util::tunnel_manager::SshTunnelManager;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceTimestamp;
 use mz_storage_types::sources::{MzOffset, PostgresSourceConnection};
@@ -234,6 +235,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                     &config.config.connection_context.ssh_tunnel_manager,
                 )
                 .await?;
+            let metadata_client = Arc::new(metadata_client);
 
             while let Some(_) = slot_ready_input.next().await {
                 // Wait for the slot to be created
@@ -241,7 +243,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             tracing::info!(%id, "ensuring replication slot {slot} exists");
             super::ensure_replication_slot(&replication_client, slot).await?;
             let slot_metadata = super::fetch_slot_metadata(
-                &metadata_client,
+                &*metadata_client,
                 slot,
                 mz_storage_types::dyncfgs::PG_FETCH_SLOT_RESUME_LSN_INTERVAL
                     .get(config.config.config_set()),
@@ -366,7 +368,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             let stream_result = raw_stream(
                 &config,
                 replication_client,
-                metadata_client,
+                Arc::clone(&metadata_client),
                 &connection.publication_details.slot,
                 &connection.publication_details.timeline_id,
                 &connection.publication,
@@ -417,6 +419,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             // compatible with `columnation`, to Vec<u8> data that is.
             let mut col_temp: Vec<Vec<u8>> = vec![];
             let mut row_temp = vec![];
+            let mut last_schema_validation = Instant::now();
             while let Some(event) = stream.as_mut().next().await {
                 use LogicalReplicationMessage::*;
                 use ReplicationMessage::*;
@@ -427,10 +430,9 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 
                             let mut tx = pin!(extract_transaction(
                                 stream.by_ref(),
+                                &*metadata_client,
                                 commit_lsn,
                                 &table_info,
-                                &connection_config,
-                                &config.config.connection_context.ssh_tunnel_manager,
                                 &metrics,
                                 &connection.publication,
                                 &mut errored
@@ -492,12 +494,75 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                         _ => return Err(TransientError::BareTransactionEvent),
                     },
                     Ok(PrimaryKeepAlive(keepalive)) => {
-                        trace!(
-                            %id,
-                            "timely-{worker_id} received \
-                               keepalive lsn={}",
+                        trace!( %id,
+                            "timely-{worker_id} received keepalive lsn={}",
                             keepalive.wal_end()
                         );
+                        let validation_interval = mz_storage_types::dyncfgs::PG_SCHEMA_VALIDATION_INTERVAL.get(config.config.config_set());
+                        if last_schema_validation.elapsed() > validation_interval {
+                            trace!(%id, "timely-{worker_id} validating schemas");
+                            let upstream_info = {
+                                match mz_postgres_util::publication_info(&*metadata_client, &connection.publication)
+                                    .await
+                                {
+                                    Ok(info) => info.into_iter().map(|t| (t.oid, t)).collect(),
+                                    // If the replication stream cannot be obtained in a definite way there is
+                                    // nothing else to do. These errors are not retractable.
+                                    Err(PostgresError::PublicationMissing(publication)) => {
+                                        let err = DefiniteError::PublicationDropped(publication);
+                                        // If the publication is missing there is nothing else to
+                                        // do. These errors are not retractable.
+                                        for (oid, outputs) in table_info.iter() {
+                                            for output_index in outputs.keys() {
+                                                let update = (
+                                                    (
+                                                        *oid,
+                                                        *output_index,
+                                                        Err(DataflowError::from(err.clone())),
+                                                    ),
+                                                    data_cap_set[0].time().clone(),
+                                                    1,
+                                                );
+                                                data_output.give_fueled(&data_cap_set[0], update).await;
+                                            }
+                                        }
+                                        definite_error_handle.give(
+                                            &definite_error_cap_set[0],
+                                            ReplicationError::Definite(Rc::new(err)),
+                                        );
+                                        return Ok(());
+                                    }
+                                    Err(e) => Err(TransientError::from(e))?,
+                                }
+                            };
+                            for (&oid, outputs) in table_info.iter() {
+                                for (output_index, info) in outputs {
+                                    if errored.contains(output_index) {
+                                        trace!(%id, "timely-{worker_id} output index {output_index} \
+                                            for oid {oid} skipped");
+                                        continue;
+                                    }
+                                    match verify_schema(oid, &info.desc, &upstream_info, &*info.casts) {
+                                        Ok(()) => {
+                                            trace!(%id, "timely-{worker_id} schema of output \
+                                                index {output_index} for oid {oid} valid");
+                                        }
+                                        Err(err) => {
+                                            trace!(%id, "timely-{worker_id} schema of output \
+                                                index {output_index} for oid {oid} invalid");
+                                            let update = (
+                                                (oid, *output_index, Err(err.into())),
+                                                data_cap_set[0].time().clone(),
+                                                1,
+                                            );
+                                            data_output.give_fueled(&data_cap_set[0], update).await;
+                                            errored.insert(*output_index);
+                                        }
+                                    }
+                                }
+                            }
+                            last_schema_validation = Instant::now();
+                        }
                         data_upper = std::cmp::max(data_upper, keepalive.wal_end().into());
                     }
                     Ok(_) => return Err(TransientError::UnknownReplicationMessage),
@@ -570,7 +635,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 async fn raw_stream<'a>(
     config: &'a RawSourceCreationConfig,
     replication_client: Client,
-    metadata_client: Client,
+    metadata_client: Arc<Client>,
     slot: &'a str,
     timeline_id: &'a Option<u64>,
     publication: &'a str,
@@ -597,7 +662,7 @@ async fn raw_stream<'a>(
     >,
     TransientError,
 > {
-    if let Err(err) = ensure_publication_exists(&metadata_client, publication).await? {
+    if let Err(err) = ensure_publication_exists(&*metadata_client, publication).await? {
         // If the publication gets deleted there is nothing else to do. These errors
         // are not retractable.
         return Ok(Err(err));
@@ -628,7 +693,7 @@ async fn raw_stream<'a>(
     // Note: We must use the metadata client here which is NOT in replication mode. Some Aurora
     // Postgres versions disallow SHOW commands from within replication connection.
     // See: https://github.com/readysettech/readyset/discussions/28#discussioncomment-4405671
-    let row = simple_query_opt(&metadata_client, "SHOW wal_sender_timeout;")
+    let row = simple_query_opt(&*metadata_client, "SHOW wal_sender_timeout;")
         .await?
         .unwrap();
     let wal_sender_timeout = match row.get("wal_sender_timeout") {
@@ -680,7 +745,7 @@ async fn raw_stream<'a>(
     // cannot use the replication client to do that because it's already in CopyBoth mode.
     // [1] https://www.postgresql.org/docs/15/protocol-replication.html#PROTOCOL-REPLICATION-START-REPLICATION-SLOT-LOGICAL
     let slot_metadata = super::fetch_slot_metadata(
-        &metadata_client,
+        &*metadata_client,
         slot,
         mz_storage_types::dyncfgs::PG_FETCH_SLOT_RESUME_LSN_INTERVAL
             .get(config.config.config_set()),
@@ -704,7 +769,7 @@ async fn raw_stream<'a>(
             while !probe_tx.is_closed() {
                 interval.tick().await;
                 let probe_ts = mz_repr::Timestamp::try_from((now_fn)()).expect("must fit");
-                let probe_or_err = super::fetch_max_lsn(&metadata_client)
+                let probe_or_err = super::fetch_max_lsn(&*metadata_client)
                     .await
                     .map(|lsn| Probe {
                         probe_ts,
@@ -800,10 +865,9 @@ async fn raw_stream<'a>(
 fn extract_transaction<'a>(
     stream: impl AsyncStream<Item = Result<ReplicationMessage<LogicalReplicationMessage>, TransientError>>
         + 'a,
+    metadata_client: &'a Client,
     commit_lsn: MzOffset,
     table_info: &'a BTreeMap<u32, BTreeMap<usize, SourceOutputInfo>>,
-    connection_config: &'a mz_postgres_util::Config,
-    ssh_tunnel_manager: &'a SshTunnelManager,
     metrics: &'a PgSourceMetrics,
     publication: &'a str,
     errored_outputs: &'a mut HashSet<usize>,
@@ -919,11 +983,9 @@ fn extract_transaction<'a>(
                         // to check the current local schema against the current remote schema to
                         // ensure e.g. we haven't received a schema update with the same terminal
                         // column name which is actually a different column.
-                        let client = connection_config
-                            .connect("replication schema verification", ssh_tunnel_manager)
-                            .await?;
                         let upstream_info =
-                            mz_postgres_util::publication_info(&client, publication).await?;
+                            mz_postgres_util::publication_info(metadata_client, publication)
+                                .await?;
                         let upstream_info = upstream_info.into_iter().map(|t| (t.oid, t)).collect();
 
                         for (output_index, output) in valid_outputs {
