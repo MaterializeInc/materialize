@@ -33,7 +33,7 @@ use mz_persist_client::fetch::{SerdeLeasedBatchPart, ShardSourcePart};
 use mz_persist_client::operators::shard_source::{shard_source, SnapshotMode};
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::{Codec, Codec64};
-use mz_repr::{Datum, DatumVec, Diff, GlobalId, RelationType, Row, RowArena, Timestamp};
+use mz_repr::{Datum, DatumVec, Diff, GlobalId, RelationDesc, Row, RowArena, Timestamp};
 use mz_storage_types::controller::{CollectionMetadata, TxnsCodecRow};
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceData;
@@ -141,6 +141,7 @@ pub fn persist_source<G>(
     // dataflow.
     worker_dyncfgs: &ConfigSet,
     metadata: CollectionMetadata,
+    read_schema: Option<RelationDesc>,
     as_of: Option<Antichain<Timestamp>>,
     snapshot_mode: SnapshotMode,
     until: Antichain<Timestamp>,
@@ -204,6 +205,7 @@ where
             source_id,
             Arc::clone(&persist_clients),
             metadata.clone(),
+            read_schema,
             as_of.clone(),
             snapshot_mode,
             until.clone(),
@@ -274,6 +276,7 @@ pub fn persist_source_core<'g, G>(
     source_id: GlobalId,
     persist_clients: Arc<PersistClientCache>,
     metadata: CollectionMetadata,
+    read_schema: Option<RelationDesc>,
     as_of: Option<Antichain<Timestamp>>,
     snapshot_mode: SnapshotMode,
     until: Antichain<Timestamp>,
@@ -299,7 +302,6 @@ where
 {
     let cfg = persist_clients.cfg().clone();
     let name = source_id.to_string();
-    let desc = metadata.relation_desc.clone();
     let ignores_data = map_filter_project
         .as_ref()
         .map_or(false, |x| x.ignores_input());
@@ -313,6 +315,12 @@ where
         ProjectionPushdown::FetchAll
     };
     let filter_plan = map_filter_project.as_ref().map(|p| (*p).clone());
+
+    // N.B. `read_schema` may be a subset of the total columns for this shard.
+    let read_desc = match read_schema {
+        Some(desc) => desc,
+        None => metadata.relation_desc,
+    };
 
     let desc_transformer = match flow_control {
         Some(flow_control) => Some(move |mut scope: _, descs: &Stream<_, _>, chosen_worker| {
@@ -350,7 +358,7 @@ where
         snapshot_mode,
         until.clone(),
         desc_transformer,
-        Arc::new(metadata.relation_desc),
+        Arc::new(read_desc.clone()),
         Arc::new(UnitSchema),
         move |stats, frontier| {
             let Some(lower) = frontier.as_option().copied() else {
@@ -369,8 +377,8 @@ where
                 ResultSpec::value_between(Datum::MzTimestamp(lower), Datum::MzTimestamp(upper));
             if let Some(plan) = &filter_plan {
                 let metrics = &metrics.pushdown.part_stats;
-                let stats = RelationPartStats::new(&filter_name, metrics, &desc, stats);
-                filter_may_match(desc.typ(), time_range, stats, plan)
+                let stats = RelationPartStats::new(&filter_name, metrics, &read_desc, stats);
+                filter_may_match(&read_desc, time_range, stats, plan)
             } else {
                 true
             }
@@ -385,13 +393,13 @@ where
 }
 
 fn filter_may_match(
-    relation_type: &RelationType,
+    relation_desc: &RelationDesc,
     time_range: ResultSpec,
     stats: RelationPartStats,
     plan: &MfpPlan,
 ) -> bool {
     let arena = RowArena::new();
-    let mut ranges = ColumnSpecs::new(relation_type, &arena);
+    let mut ranges = ColumnSpecs::new(relation_desc.typ(), &arena);
     ranges.push_unmaterializable(UnmaterializableFunc::MzNow, time_range);
 
     if stats.err_count().into_iter().any(|count| count > 0) {
@@ -399,9 +407,11 @@ fn filter_may_match(
         return true;
     }
 
-    for (id, _) in relation_type.column_types.iter().enumerate() {
-        let result_spec = stats.col_stats(id, &arena);
-        ranges.push_column(id, result_spec);
+    // N.B. We may have pushed down column "demands" into Persist, so this
+    // relation desc may have a different set of columns than the stats.
+    for (pos, (idx, _, _)) in relation_desc.iter_all().enumerate() {
+        let result_spec = stats.col_stats(idx, &arena);
+        ranges.push_column(pos, result_spec);
     }
     let result = ranges.mfp_plan_filter(plan).range;
     result.may_contain(Datum::True) || result.may_fail()
@@ -603,6 +613,9 @@ impl PendingWork {
                             |time| !until.less_equal(time),
                             row_builder,
                         ) {
+                            // Earlier we decided this Part doesn't need to be fetched, but to
+                            // audit our logic we fetched it any way. If the MFP returned data it
+                            // means our earlier decision to not fetch this part was incorrect.
                             if let Some(_stats) = &is_filter_pushdown_audit {
                                 // NB: The tag added by this scope is used for alerting. The panic
                                 // message may be changed arbitrarily, but the tag key and val must

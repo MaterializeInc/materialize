@@ -133,6 +133,7 @@ where
         &compute_state.txns_ctx,
         &compute_state.worker_config,
         target.clone(),
+        None,
         source_as_of,
         SnapshotMode::Include,
         Antichain::new(), // we want all updates
