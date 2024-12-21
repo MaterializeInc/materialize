@@ -4799,16 +4799,15 @@ impl Coordinator {
             let CatalogItem::Table(table) = &entry.item else {
                 panic!("programming error, expected table found {:?}", entry.item);
             };
+            let table = table.clone();
 
             let new_version = table.desc.latest_version();
             let new_desc = table
                 .desc
                 .at_version(RelationVersionSelector::Specific(new_version));
-            let forget_ts = coord.get_local_write_ts().await.timestamp;
             let register_ts = coord.get_local_write_ts().await.timestamp;
 
-            assert!(forget_ts <= register_ts);
-
+            // Alter the table description, creating a "new" collection.
             coord
                 .controller
                 .storage
@@ -4817,13 +4816,25 @@ impl Coordinator {
                     new_global_id,
                     new_desc,
                     expected_version,
-                    forget_ts,
                     register_ts,
                 )
                 .await
                 .expect("failed to alter desc of table");
-
             coord.apply_local_write(register_ts).await;
+
+            // Initialize the ReadPolicy which ensures we have the correct read holds.
+            let compaction_window = table
+                .custom_logical_compaction_window
+                .unwrap_or(CompactionWindow::Default);
+            coord
+                .initialize_read_policies(
+                    &crate::CollectionIdBundle {
+                        storage_ids: btreeset![new_global_id],
+                        compute_ids: BTreeMap::new(),
+                    },
+                    compaction_window,
+                )
+                .await;
         })
         .await?;
 

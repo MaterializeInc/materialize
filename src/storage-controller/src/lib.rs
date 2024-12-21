@@ -727,6 +727,11 @@ where
         let mut new_webhook_statistic_entries = BTreeSet::new();
 
         for (id, description, write, metadata) in to_register {
+            let is_in_txns = |id, metadata: &CollectionMetadata| {
+                metadata.txns_shard.is_some()
+                    && !(self.read_only && migrated_storage_collections.contains(&id))
+            };
+
             let mut data_source = description.data_source;
 
             to_execute.insert(id);
@@ -758,7 +763,9 @@ where
             }
 
             // Assert some invariants.
-            if !dependency_read_holds.is_empty() {
+            //
+            // TODO(parkmycar): Include Tables (is_in_txns) in this check.
+            if !dependency_read_holds.is_empty() && !is_in_txns(id, &metadata) {
                 // The dependency since cannot be beyond the dependent (our)
                 // upper unless the collection is new. In practice, the
                 // depdenency is the remap shard of a source (export), and if
@@ -1192,7 +1199,6 @@ where
         new_collection: GlobalId,
         new_desc: RelationDesc,
         expected_version: RelationVersion,
-        forget_ts: Self::Timestamp,
         register_ts: Self::Timestamp,
     ) -> Result<(), StorageError<Self::Timestamp>> {
         let data_shard = {
@@ -1271,13 +1277,10 @@ where
             primary: Some(new_collection),
         };
 
-        self.persist_table_worker.update(
-            existing_collection,
-            new_collection,
-            forget_ts,
-            register_ts,
-            write_handle,
-        );
+        self.persist_table_worker
+            .register(register_ts, vec![(new_collection, write_handle)])
+            .await
+            .expect("table worker unexpectedly shut down");
 
         Ok(())
     }
@@ -3136,9 +3139,12 @@ where
         let dependency = match &data_source {
             DataSource::Introspection(_)
             | DataSource::Webhook
-            | DataSource::Table { .. }
+            | DataSource::Table { primary: None }
             | DataSource::Progress
             | DataSource::Other => vec![],
+            DataSource::Table {
+                primary: Some(primary),
+            } => vec![*primary],
             DataSource::IngestionExport { ingestion_id, .. } => {
                 // Ingestion exports depend on their primary source's remap
                 // collection.

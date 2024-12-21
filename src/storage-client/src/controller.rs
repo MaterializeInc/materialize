@@ -491,7 +491,6 @@ pub trait StorageController: Debug {
         new_collection: GlobalId,
         new_desc: RelationDesc,
         expected_version: RelationVersion,
-        forget_ts: Self::Timestamp,
         register_ts: Self::Timestamp,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
