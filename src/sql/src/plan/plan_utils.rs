@@ -10,6 +10,7 @@
 //! Helper code used throughout the planner.
 
 use std::fmt;
+use std::num::NonZeroU64;
 
 use mz_repr::RelationDesc;
 
@@ -77,9 +78,9 @@ impl fmt::Display for JoinSide {
 /// hint configuration.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct GroupSizeHints {
-    pub aggregate_input_group_size: Option<u64>,
-    pub distinct_on_input_group_size: Option<u64>,
-    pub limit_input_group_size: Option<u64>,
+    pub aggregate_input_group_size: Option<NonZeroU64>,
+    pub distinct_on_input_group_size: Option<NonZeroU64>,
+    pub limit_input_group_size: Option<NonZeroU64>,
 }
 
 impl TryFrom<SelectOptionExtracted> for GroupSizeHints {
@@ -106,9 +107,15 @@ impl TryFrom<SelectOptionExtracted> for GroupSizeHints {
         {
             Err(PlanError::InvalidGroupSizeHints)
         } else {
-            let aggregate_input_group_size = aggregate_input_group_size.or(expected_group_size);
-            let distinct_on_input_group_size = distinct_on_input_group_size.or(expected_group_size);
-            let limit_input_group_size = limit_input_group_size.or(expected_group_size);
+            let aggregate_input_group_size = aggregate_input_group_size
+                .or(expected_group_size)
+                .and_then(NonZeroU64::new);
+            let distinct_on_input_group_size = distinct_on_input_group_size
+                .or(expected_group_size)
+                .and_then(NonZeroU64::new);
+            let limit_input_group_size = limit_input_group_size
+                .or(expected_group_size)
+                .and_then(NonZeroU64::new);
             Ok(GroupSizeHints {
                 aggregate_input_group_size,
                 distinct_on_input_group_size,
