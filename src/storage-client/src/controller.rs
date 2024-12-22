@@ -29,7 +29,6 @@ use std::time::Duration;
 use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
 use mz_cluster_client::client::ClusterReplicaLocation;
-use mz_cluster_client::metrics::WallclockLagMetrics;
 use mz_cluster_client::ReplicaId;
 use mz_ore::collections::CollectionExt;
 use mz_persist_client::read::{Cursor, ReadHandle};
@@ -827,8 +826,6 @@ pub struct ExportState<T: TimelyTimestamp> {
 
     /// Maximum frontier wallclock lag since the last introspection update.
     pub wallclock_lag_max: Duration,
-    /// Frontier wallclock lag metrics tracked for this collection.
-    pub wallclock_lag_metrics: WallclockLagMetrics,
 }
 
 impl<T: Timestamp> ExportState<T> {
@@ -836,7 +833,6 @@ impl<T: Timestamp> ExportState<T> {
         description: ExportDescription<T>,
         read_hold: ReadHold<T>,
         read_policy: ReadPolicy<T>,
-        wallclock_lag_metrics: WallclockLagMetrics,
     ) -> Self {
         Self {
             description,
@@ -844,7 +840,6 @@ impl<T: Timestamp> ExportState<T> {
             read_policy,
             write_frontier: Antichain::from_elem(Timestamp::minimum()),
             wallclock_lag_max: Default::default(),
-            wallclock_lag_metrics,
         }
     }
 
