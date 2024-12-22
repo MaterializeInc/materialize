@@ -17,7 +17,7 @@ use std::fmt::{Display, Formatter};
 use std::{fmt, mem};
 
 use itertools::Itertools;
-use mz_expr::virtual_syntax::{AlgExcept, Except, IR};
+use mz_expr::virtual_syntax::IR;
 use mz_expr::visit::{Visit, VisitChildren};
 use mz_expr::{func, CollectionPlan, Id, LetRecLimit, RowSetFinishing};
 // these happen to be unchanged at the moment, but there might be additions later
@@ -47,47 +47,6 @@ pub struct Hir;
 impl IR for Hir {
     type Relation = HirRelationExpr;
     type Scalar = HirScalarExpr;
-}
-
-impl AlgExcept for Hir {
-    fn except(all: &bool, lhs: Self::Relation, rhs: Self::Relation) -> Self::Relation {
-        if *all {
-            let rhs = rhs.negate();
-            HirRelationExpr::union(lhs, rhs).threshold()
-        } else {
-            let lhs = lhs.distinct();
-            let rhs = rhs.distinct().negate();
-            HirRelationExpr::union(lhs, rhs).threshold()
-        }
-    }
-
-    fn un_except<'a>(expr: &'a Self::Relation) -> Option<Except<'a, Self>> {
-        let mut result = None;
-
-        use HirRelationExpr::*;
-        if let Threshold { input } = expr {
-            if let Union { base: lhs, inputs } = input.as_ref() {
-                if let [rhs] = &inputs[..] {
-                    if let Negate { input: rhs } = rhs {
-                        match (lhs.as_ref(), rhs.as_ref()) {
-                            (Distinct { input: lhs }, Distinct { input: rhs }) => {
-                                let all = false;
-                                let lhs = lhs.as_ref();
-                                let rhs = rhs.as_ref();
-                                result = Some(Except { all, lhs, rhs })
-                            }
-                            (lhs, rhs) => {
-                                let all = true;
-                                result = Some(Except { all, lhs, rhs })
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        result
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -171,16 +130,17 @@ pub enum HirRelationExpr {
         /// User-supplied hint: how many rows will have the same group key.
         expected_group_size: Option<u64>,
     },
-    Negate {
-        input: Box<HirRelationExpr>,
-    },
     /// Keep rows from a dataflow where the row counts are positive.
     Threshold {
         input: Box<HirRelationExpr>,
     },
+    /// The accumulation of collections with positive or negative polarities.
+    ///
+    /// Negative collections are meant to cancel with records in the positive collections,
+    /// and their accumulation should be non-negative, assuming each input collection is.
     Union {
-        base: Box<HirRelationExpr>,
-        inputs: Vec<HirRelationExpr>,
+        positive: Vec<HirRelationExpr>,
+        negative: Vec<HirRelationExpr>,
     },
 }
 
@@ -1516,20 +1476,25 @@ impl HirRelationExpr {
                 RelationType::new(column_types)
             }
             // TODO(frank): check for removal; add primary key information.
-            HirRelationExpr::Distinct { input }
-            | HirRelationExpr::Negate { input }
-            | HirRelationExpr::Threshold { input } => input.typ(outers, params),
-            HirRelationExpr::Union { base, inputs } => {
-                let mut base_cols = base.typ(outers, params).column_types;
-                for input in inputs {
-                    for (base_col, col) in base_cols
-                        .iter_mut()
-                        .zip_eq(input.typ(outers, params).column_types)
-                    {
-                        *base_col = base_col.union(&col).unwrap();
+            HirRelationExpr::Distinct { input } | HirRelationExpr::Threshold { input } => {
+                input.typ(outers, params)
+            }
+            HirRelationExpr::Union { positive, negative } => {
+                let mut iter = positive.iter().chain(negative.iter());
+                if let Some(base) = iter.next() {
+                    let mut base_cols = base.typ(outers, params).column_types;
+                    for input in iter {
+                        for (base_col, col) in base_cols
+                            .iter_mut()
+                            .zip_eq(input.typ(outers, params).column_types)
+                        {
+                            *base_col = base_col.union(&col).unwrap();
+                        }
                     }
+                    RelationType::new(base_cols)
+                } else {
+                    panic!("Type of empty Union is undefined");
                 }
-                RelationType::new(base_cols)
             }
         })
     }
@@ -1546,10 +1511,15 @@ impl HirRelationExpr {
             HirRelationExpr::Filter { input, .. }
             | HirRelationExpr::TopK { input, .. }
             | HirRelationExpr::Distinct { input }
-            | HirRelationExpr::Negate { input }
             | HirRelationExpr::Threshold { input } => input.arity(),
             HirRelationExpr::Join { left, right, .. } => left.arity() + right.arity(),
-            HirRelationExpr::Union { base, .. } => base.arity(),
+            HirRelationExpr::Union { positive, negative } => {
+                if positive.is_empty() {
+                    negative[0].arity()
+                } else {
+                    positive[0].arity()
+                }
+            }
             HirRelationExpr::Reduce {
                 group_key,
                 aggregates,
@@ -1670,16 +1640,6 @@ impl HirRelationExpr {
         }
     }
 
-    pub fn negate(self) -> Self {
-        if let HirRelationExpr::Negate { input } = self {
-            *input
-        } else {
-            HirRelationExpr::Negate {
-                input: Box::new(self),
-            }
-        }
-    }
-
     pub fn distinct(self) -> Self {
         if let HirRelationExpr::Distinct { .. } = self {
             self
@@ -1701,22 +1661,50 @@ impl HirRelationExpr {
     }
 
     pub fn union(self, other: Self) -> Self {
-        let mut terms = Vec::new();
-        if let HirRelationExpr::Union { base, inputs } = self {
-            terms.push(*base);
-            terms.extend(inputs);
+        let mut pos = Vec::new();
+        let mut neg = Vec::new();
+        if let Self::Union { positive, negative } = self {
+            pos.extend(positive);
+            neg.extend(negative);
         } else {
-            terms.push(self);
+            pos.push(self);
         }
-        if let HirRelationExpr::Union { base, inputs } = other {
-            terms.push(*base);
-            terms.extend(inputs);
+        if let Self::Union { positive, negative } = other {
+            pos.extend(positive);
+            neg.extend(negative);
         } else {
-            terms.push(other);
+            pos.push(other);
         }
-        HirRelationExpr::Union {
-            base: Box::new(terms.remove(0)),
-            inputs: terms,
+        Self::Union {
+            positive: pos,
+            negative: neg,
+        }
+    }
+
+    /// Implements `self.union(other.negate())`.
+    pub fn minus(self, other: Self) -> Self {
+        Self::Union {
+            positive: vec![self],
+            negative: vec![other],
+        }
+    }
+
+    /// Implements `EXCEPT` and `EXCEPT ALL` using other operations.
+    pub fn except(self, other: Self, all: &bool) -> Self {
+        if *all {
+            self.minus(other).threshold()
+        } else {
+            self.distinct().minus(other.distinct()).threshold()
+        }
+    }
+
+    /// This produces a potentially negative collection.
+    ///
+    /// Use of this method opts out of certain guarantees, like correctness of unique keys.
+    pub fn negate_unguarded(self) -> Self {
+        Self::Union {
+            positive: vec![],
+            negative: vec![self],
         }
     }
 
@@ -1836,15 +1824,14 @@ impl HirRelationExpr {
             HirRelationExpr::TopK { input, .. } => {
                 f(input, depth)?;
             }
-            HirRelationExpr::Negate { input } => {
-                f(input, depth)?;
-            }
             HirRelationExpr::Threshold { input } => {
                 f(input, depth)?;
             }
-            HirRelationExpr::Union { base, inputs } => {
-                f(base, depth)?;
-                for input in inputs {
+            HirRelationExpr::Union { positive, negative } => {
+                for input in positive {
+                    f(input, depth)?;
+                }
+                for input in negative {
                     f(input, depth)?;
                 }
             }
@@ -1923,15 +1910,14 @@ impl HirRelationExpr {
             HirRelationExpr::TopK { input, .. } => {
                 f(input, depth)?;
             }
-            HirRelationExpr::Negate { input } => {
-                f(input, depth)?;
-            }
             HirRelationExpr::Threshold { input } => {
                 f(input, depth)?;
             }
-            HirRelationExpr::Union { base, inputs } => {
-                f(base, depth)?;
-                for input in inputs {
+            HirRelationExpr::Union { positive, negative } => {
+                for input in positive {
+                    f(input, depth)?;
+                }
+                for input in negative {
                     f(input, depth)?;
                 }
             }
@@ -1987,7 +1973,6 @@ impl HirRelationExpr {
                 | HirRelationExpr::LetRec { .. }
                 | HirRelationExpr::Project { .. }
                 | HirRelationExpr::Distinct { .. }
-                | HirRelationExpr::Negate { .. }
                 | HirRelationExpr::Threshold { .. }
                 | HirRelationExpr::Constant { .. }
                 | HirRelationExpr::Get { .. } => (),
@@ -2040,7 +2025,6 @@ impl HirRelationExpr {
                 | HirRelationExpr::LetRec { .. }
                 | HirRelationExpr::Project { .. }
                 | HirRelationExpr::Distinct { .. }
-                | HirRelationExpr::Negate { .. }
                 | HirRelationExpr::Threshold { .. }
                 | HirRelationExpr::Constant { .. }
                 | HirRelationExpr::Get { .. } => (),
@@ -2291,13 +2275,14 @@ impl VisitChildren<Self> for HirRelationExpr {
                 offset: _,
                 expected_group_size: _,
             }
-            | Negate { input }
             | Threshold { input } => {
                 f(input);
             }
-            Union { base, inputs } => {
-                f(base);
-                for input in inputs {
+            Union { positive, negative } => {
+                for input in positive {
+                    f(input);
+                }
+                for input in negative {
                     f(input);
                 }
             }
@@ -2378,13 +2363,14 @@ impl VisitChildren<Self> for HirRelationExpr {
                 offset: _,
                 expected_group_size: _,
             }
-            | Negate { input }
             | Threshold { input } => {
                 f(input);
             }
-            Union { base, inputs } => {
-                f(base);
-                for input in inputs {
+            Union { positive, negative } => {
+                for input in positive {
+                    f(input);
+                }
+                for input in negative {
                     f(input);
                 }
             }
@@ -2465,13 +2451,14 @@ impl VisitChildren<Self> for HirRelationExpr {
                 offset: _,
                 expected_group_size: _,
             }
-            | Negate { input }
             | Threshold { input } => {
                 f(input)?;
             }
-            Union { base, inputs } => {
-                f(base)?;
-                for input in inputs {
+            Union { positive, negative } => {
+                for input in positive {
+                    f(input)?;
+                }
+                for input in negative {
                     f(input)?;
                 }
             }
@@ -2553,13 +2540,14 @@ impl VisitChildren<Self> for HirRelationExpr {
                 offset: _,
                 expected_group_size: _,
             }
-            | Negate { input }
             | Threshold { input } => {
                 f(input)?;
             }
-            Union { base, inputs } => {
-                f(base)?;
-                for input in inputs {
+            Union { positive, negative } => {
+                for input in positive {
+                    f(input)?;
+                }
+                for input in negative {
                     f(input)?;
                 }
             }
@@ -2639,9 +2627,11 @@ impl VisitChildren<HirScalarExpr> for HirRelationExpr {
                 }
             }
             Distinct { input: _ }
-            | Negate { input: _ }
             | Threshold { input: _ }
-            | Union { base: _, inputs: _ } => (),
+            | Union {
+                positive: _,
+                negative: _,
+            } => (),
         }
     }
 
@@ -2711,9 +2701,11 @@ impl VisitChildren<HirScalarExpr> for HirRelationExpr {
                 offset: _,
                 expected_group_size: _,
             }
-            | Negate { input: _ }
             | Threshold { input: _ }
-            | Union { base: _, inputs: _ } => (),
+            | Union {
+                positive: _,
+                negative: _,
+            } => (),
         }
     }
 
@@ -2784,9 +2776,11 @@ impl VisitChildren<HirScalarExpr> for HirRelationExpr {
                 offset: _,
                 expected_group_size: _,
             }
-            | Negate { input: _ }
             | Threshold { input: _ }
-            | Union { base: _, inputs: _ } => (),
+            | Union {
+                positive: _,
+                negative: _,
+            } => (),
         }
         Ok(())
     }
@@ -2858,9 +2852,11 @@ impl VisitChildren<HirScalarExpr> for HirRelationExpr {
                 offset: _,
                 expected_group_size: _,
             }
-            | Negate { input: _ }
             | Threshold { input: _ }
-            | Union { base: _, inputs: _ } => (),
+            | Union {
+                positive: _,
+                negative: _,
+            } => (),
         }
         Ok(())
     }
