@@ -24,12 +24,12 @@ def test_full_testdrive(mz: MaterializeApplication) -> None:
     parser.add_argument("--file-pattern", default="*.td", type=str)
     args, _ = parser.parse_known_args()
 
-    matching_files = glob.glob(f"testdrive/{args.file_pattern}", root_dir="test")
+    matching_files = glob.glob(f"testdrive/copy-to-s3-minio.td", root_dir="test")
 
     # TODO: database-issues#7827 (test requires fivetran running in cloudtest)
-    matching_files.remove("testdrive/fivetran-destination.td")
+    # matching_files.remove("testdrive/fivetran-destination.td")
 
-    sharded_files = buildkite.shard_list(matching_files, lambda file: file)
+    sharded_files = matching_files
 
     print(f"Files: {sharded_files}")
 

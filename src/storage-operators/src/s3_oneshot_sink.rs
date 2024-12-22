@@ -438,6 +438,7 @@ where
                     0,
                     params.clone(),
                 )?;
+                info!("{worker_id}: forcing new file");
                 uploader.force_new_file().await?;
                 s3_uploaders.insert(0, uploader);
             }

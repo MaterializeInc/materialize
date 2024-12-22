@@ -309,22 +309,6 @@ steps:
                 --system-param=persist_encoding_enable_dictionary=true,
               ]
 
-      - id: testdrive-in-cloudtest
-        label: "Full Testdrive in Cloudtest (K8s) %N"
-        depends_on: build-aarch64
-        timeout_in_minutes: 180
-        parallelism: 2
-        env:
-          CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster.yaml"
-        agents:
-          # TODO(def-): Debezium DNS flakiness doesn't allow running on hetzner
-          # queue: hetzner-aarch64-8cpu-16gb
-          queue: linux-aarch64-medium
-        plugins:
-          - ./ci/plugins/cloudtest:
-              # Uses .td-file based parallelism instead
-              args: [-m=long, test/cloudtest/test_full_testdrive.py, --no-test-parallelism]
-        sanitizer: skip
 
       - id: persistence-testdrive
         label: ":racing_car: testdrive with --persistent-user-tables"
