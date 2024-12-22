@@ -2041,6 +2041,29 @@ impl RowPacker<'_> {
         I: IntoIterator<Item = D>,
         D: Borrow<Datum<'a>>,
     {
+        self.push_array_with(dims, |packer| {
+            let mut nelements = 0;
+            for datum in iter {
+                packer.push(datum);
+                nelements += 1;
+            }
+            Ok::<_, InvalidArrayError>(nelements)
+        })
+    }
+
+    /// Convenience function to construct an array from a function. The function must return the
+    /// number of elements it pushed into the array. It is undefined behavior if the function returns
+    /// a number different to the number of elements it pushed.
+    ///
+    /// Returns an error if the number of elements in `iter` does not match
+    /// the cardinality of the array as described by `dims`, or if the
+    /// number of dimensions exceeds [`MAX_ARRAY_DIMENSIONS`]. If an error
+    /// occurs, the packer's state will be unchanged.
+    pub fn push_array_with<F, E>(&mut self, dims: &[ArrayDimension], f: F) -> Result<(), E>
+    where
+        F: FnOnce(&mut RowPacker) -> Result<usize, E>,
+        E: From<InvalidArrayError>,
+    {
         // Arrays are encoded as follows.
         //
         // u8    ndims
@@ -2053,7 +2076,7 @@ impl RowPacker<'_> {
         // u8    element data, where elements are encoded in row-major order
 
         if dims.len() > usize::from(MAX_ARRAY_DIMENSIONS) {
-            return Err(InvalidArrayError::TooManyDimensions(dims.len()));
+            return Err(InvalidArrayError::TooManyDimensions(dims.len()).into());
         }
 
         let start = self.row.data.len();
@@ -2075,11 +2098,13 @@ impl RowPacker<'_> {
         // Write elements.
         let off = self.row.data.len();
         self.row.data.extend_from_slice(&[0; size_of::<u64>()]);
-        let mut nelements = 0;
-        for datum in iter {
-            self.push(*datum.borrow());
-            nelements += 1;
-        }
+        let nelements = match f(self) {
+            Ok(nelements) => nelements,
+            Err(e) => {
+                self.row.data.truncate(start);
+                return Err(e);
+            }
+        };
         let len = u64::cast_from(self.row.data.len() - off - size_of::<u64>());
         self.row.data[off..off + size_of::<u64>()].copy_from_slice(&len.to_le_bytes());
 
@@ -2094,7 +2119,8 @@ impl RowPacker<'_> {
             return Err(InvalidArrayError::WrongCardinality {
                 actual: nelements,
                 expected: cardinality,
-            });
+            }
+            .into());
         }
 
         Ok(())
@@ -2655,6 +2681,10 @@ impl RowArena {
         let mut row = Row::default();
         f(&mut row.packer())?;
         Ok(self.push_unary_row(row))
+    }
+
+    pub fn clear(&self) {
+        self.inner.borrow_mut().clear();
     }
 }
 
