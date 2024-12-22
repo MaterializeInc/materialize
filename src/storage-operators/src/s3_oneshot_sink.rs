@@ -9,8 +9,10 @@
 
 //! Uploads a consolidated collection to S3
 
+use std::any::Any;
 use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
+use std::rc::Rc;
 use std::str::FromStr;
 
 use anyhow::anyhow;
@@ -27,7 +29,9 @@ use mz_storage_types::connections::aws::AwsConnection;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sinks::{S3SinkFormat, S3UploadInfo};
-use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};
+use mz_timely_util::builder_async::{
+    Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
+};
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::Broadcast;
 use timely::dataflow::{Scope, Stream};
@@ -49,6 +53,8 @@ mod pgcopy;
 ///   - initialization: confirms the S3 path is empty and writes any sentinel files
 ///   - upload: uploads data to S3
 ///   - completion: removes the sentinel file and calls the `worker_callback`
+///
+/// Returns a token that should be held to keep the sink alive.
 pub fn copy_to<G, F>(
     input_collection: Collection<G, ((Row, u64), ()), Diff>,
     err_stream: Stream<G, (((DataflowError, u64), ()), G::Timestamp, Diff)>,
@@ -60,7 +66,8 @@ pub fn copy_to<G, F>(
     connection_id: CatalogItemId,
     params: CopyToParameters,
     worker_callback: F,
-) where
+) -> Rc<dyn Any>
+where
     G: Scope<Timestamp = Timestamp>,
     F: FnOnce(Result<u64, String>) -> () + 'static,
 {
@@ -68,7 +75,7 @@ pub fn copy_to<G, F>(
 
     let s3_key_manager = S3KeyManager::new(&sink_id, &connection_details.uri);
 
-    let start_stream = render_initialization_operator(
+    let (start_stream, start_token) = render_initialization_operator(
         scope.clone(),
         connection_context.clone(),
         aws_connection.clone(),
@@ -79,7 +86,7 @@ pub fn copy_to<G, F>(
         err_stream,
     );
 
-    let completion_stream = match connection_details.format {
+    let (completion_stream, upload_token) = match connection_details.format {
         S3SinkFormat::PgCopy(_) => render_upload_operator::<G, pgcopy::PgCopyUploader>(
             scope.clone(),
             connection_context.clone(),
@@ -106,7 +113,7 @@ pub fn copy_to<G, F>(
         ),
     };
 
-    render_completion_operator(
+    let completion_token = render_completion_operator(
         scope,
         connection_context,
         aws_connection,
@@ -116,6 +123,8 @@ pub fn copy_to<G, F>(
         completion_stream,
         worker_callback,
     );
+
+    Rc::new(vec![start_token, upload_token, completion_token])
 }
 
 /// Renders the 'initialization' operator, which does work on the leader worker only.
@@ -147,7 +156,7 @@ fn render_initialization_operator<G>(
     s3_key_manager: S3KeyManager,
     up_to: Antichain<G::Timestamp>,
     err_stream: Stream<G, (((DataflowError, u64), ()), G::Timestamp, Diff)>,
-) -> Stream<G, Result<(), String>>
+) -> (Stream<G, Result<(), String>>, PressOnDropButton)
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -170,7 +179,7 @@ where
         &start_handle,
     );
 
-    builder.build(move |caps| async move {
+    let button = builder.build(move |caps| async move {
         let [start_cap] = caps.try_into().unwrap();
 
         while let Some(event) = error_handle.next().await {
@@ -280,7 +289,7 @@ where
 
     // Broadcast the result to all workers so that they will all see any error that occurs
     // and exit before doing any unnecessary work
-    start_stream.broadcast()
+    (start_stream.broadcast(), button.press_on_drop())
 }
 
 /// Renders the 'completion' operator, which expects a `completion_stream`
@@ -303,7 +312,8 @@ fn render_completion_operator<G, F>(
     s3_key_manager: S3KeyManager,
     completion_stream: Stream<G, Result<u64, String>>,
     worker_callback: F,
-) where
+) -> PressOnDropButton
+where
     G: Scope<Timestamp = Timestamp>,
     F: FnOnce(Result<u64, String>) -> () + 'static,
 {
@@ -316,7 +326,7 @@ fn render_completion_operator<G, F>(
 
     let mut completion_input = builder.new_disconnected_input(&completion_stream, Pipeline);
 
-    builder.build(move |_| async move {
+    let button = builder.build(move |_| async move {
         // fallible async block to use the `?` operator for convenience
         let fallible_logic = async move {
             let mut row_count = None;
@@ -366,6 +376,8 @@ fn render_completion_operator<G, F>(
 
         worker_callback(fallible_logic.await.map_err(|e| e.to_string_with_causes()));
     });
+
+    button.press_on_drop()
 }
 
 /// Renders the `upload operator`, which waits on the `start_stream` to ensure
@@ -384,7 +396,7 @@ fn render_upload_operator<G, T>(
     up_to: Antichain<G::Timestamp>,
     start_stream: Stream<G, Result<(), String>>,
     params: CopyToParameters,
-) -> Stream<G, Result<u64, String>>
+) -> (Stream<G, Result<u64, String>>, PressOnDropButton)
 where
     G: Scope<Timestamp = Timestamp>,
     T: CopyToS3Uploader,
@@ -397,7 +409,7 @@ where
     let (completion_handle, completion_stream) = builder.new_output();
     let mut start_handle = builder.new_input_for(&start_stream, Pipeline, &completion_handle);
 
-    builder.build(move |caps| async move {
+    let button = builder.build(move |caps| async move {
         let [completion_cap] = caps.try_into().unwrap();
 
         // Drain any events in the start stream. Once this stream advances to the empty frontier we
@@ -513,7 +525,7 @@ where
         completion_handle.give(&completion_cap, res.map_err(|e| e.to_string_with_causes()));
     });
 
-    completion_stream
+    (completion_stream, button.press_on_drop())
 }
 
 /// dyncfg parameters for the copy_to operator, stored in this struct to avoid
