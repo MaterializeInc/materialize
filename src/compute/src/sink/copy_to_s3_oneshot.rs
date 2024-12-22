@@ -124,6 +124,13 @@ where
                 .get(&compute_state.worker_config),
         };
 
+        let shutdown_token: Rc<dyn Any> = Rc::new(scopeguard::guard((), move |_| {
+            tracing::info!("sink told to drop: {sink_id}");
+            if let Some(protocol_handle) = response_protocol_weak.upgrade() {
+                std::mem::drop(protocol_handle.borrow_mut().take())
+            }
+        }));
+
         mz_storage_operators::s3_oneshot_sink::copy_to(
             input,
             error_stream,
@@ -135,13 +142,10 @@ where
             self.connection_id,
             params,
             one_time_callback,
+            Rc::downgrade(&shutdown_token),
         );
 
-        Some(Rc::new(scopeguard::guard((), move |_| {
-            if let Some(protocol_handle) = response_protocol_weak.upgrade() {
-                std::mem::drop(protocol_handle.borrow_mut().take())
-            }
-        })))
+        Some(shutdown_token)
     }
 }
 

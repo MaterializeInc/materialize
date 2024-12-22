@@ -9,8 +9,10 @@
 
 //! Uploads a consolidated collection to S3
 
+use std::any::Any;
 use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
+use std::rc;
 use std::str::FromStr;
 
 use anyhow::anyhow;
@@ -60,6 +62,7 @@ pub fn copy_to<G, F>(
     connection_id: CatalogItemId,
     params: CopyToParameters,
     worker_callback: F,
+    shutdown_token: rc::Weak<dyn Any>,
 ) where
     G: Scope<Timestamp = Timestamp>,
     F: FnOnce(Result<u64, String>) -> () + 'static,
@@ -91,6 +94,7 @@ pub fn copy_to<G, F>(
             up_to,
             start_stream,
             params,
+            shutdown_token,
         ),
         S3SinkFormat::Parquet => render_upload_operator::<G, parquet::ParquetUploader>(
             scope.clone(),
@@ -103,6 +107,7 @@ pub fn copy_to<G, F>(
             up_to,
             start_stream,
             params,
+            shutdown_token,
         ),
     };
 
@@ -384,6 +389,7 @@ fn render_upload_operator<G, T>(
     up_to: Antichain<G::Timestamp>,
     start_stream: Stream<G, Result<(), String>>,
     params: CopyToParameters,
+    shutdown_token: rc::Weak<dyn Any>,
 ) -> Stream<G, Result<u64, String>>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -497,6 +503,23 @@ where
                         }
                     }
                     AsyncEvent::Progress(frontier) => {
+                        // We need to be *very* careful to check the shutdown
+                        // token here. A shutdown will cause a progress message
+                        // that advances to the empty frontier, and depending on
+                        // when the shutdown occurs we may have partial data
+                        // staged on S3. We *must not* call `finish` and must
+                        // instead abort the upload to avoid committing that
+                        // partial data.
+                        //
+                        // Note that the actual error we return here will not be
+                        // shown to the end client, because if the dataflow is
+                        // shutting down the end client has either already
+                        // received a response from another replica or
+                        // disconnected.
+                        if shutdown_token.strong_count() == 0 {
+                            anyhow::bail!("copy to s3 shutdown token triggered");
+                        }
+
                         if PartialOrder::less_equal(&up_to, &frontier) {
                             for uploader in s3_uploaders.values_mut() {
                                 uploader.finish().await?;
