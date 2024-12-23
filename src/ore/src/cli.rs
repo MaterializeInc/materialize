@@ -67,7 +67,7 @@ where
         })
         .collect();
 
-    let mut clap = O::command().args_override_self(true);
+    let mut clap = O::command();
 
     if !config.enable_version_flag {
         clap = clap.disable_version_flag(true);
