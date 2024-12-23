@@ -32,9 +32,10 @@ sha2 = "0.10.6"
 snap = { version = "1.1.0", optional = true }
 tracing = "0.1.37"
 uuid = "1.2.2"
-workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [features]
+default = ["workspace-hack"]
 snappy = ["byteorder", "crc32fast", "snap"]
 
 [package.metadata.cargo-udeps.ignore]

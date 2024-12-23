@@ -23,7 +23,7 @@ rust_library(
         proc_macro = True,
     ),
     compile_data = [],
-    crate_features = [],
+    crate_features = ["default"],
     data = [],
     proc_macro_deps = [] + all_crate_deps(proc_macro = True),
     rustc_env = {},
@@ -57,7 +57,7 @@ rust_test(
     ),
     compile_data = [],
     crate = ":mz_catalog_protos",
-    crate_features = [],
+    crate_features = ["default"],
     data = [] + glob(["protos/**"]),
     env = {},
     proc_macro_deps = [] + all_crate_deps(

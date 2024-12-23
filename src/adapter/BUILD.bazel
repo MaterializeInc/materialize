@@ -22,7 +22,7 @@ rust_library(
         proc_macro = True,
     ),
     compile_data = [],
-    crate_features = [],
+    crate_features = ["default"],
     data = [],
     disable_pipelining = True,
     proc_macro_deps = [] + all_crate_deps(proc_macro = True),
@@ -89,7 +89,7 @@ rust_test(
     ),
     compile_data = [],
     crate = ":mz_adapter",
-    crate_features = [],
+    crate_features = ["default"],
     data = [],
     env = {},
     proc_macro_deps = [] + all_crate_deps(

@@ -107,7 +107,7 @@ thiserror = "1.0.37"
 uncased = "0.9.7"
 url = "2.3.1"
 uuid = { version = "1.7.0", features = ["v4"] }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.4.0", features = ["async_tokio"] }
@@ -130,3 +130,6 @@ data = ["tests/testdata/sql"]
 
 [package.metadata.cargo-gazelle.test.timestamp_selection]
 data = ["tests/testdata/timestamp_selection"]
+
+[features]
+default = ["workspace-hack"]

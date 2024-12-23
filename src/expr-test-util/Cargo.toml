@@ -18,10 +18,13 @@ mz-repr-test-util = { path = "../repr-test-util" }
 proc-macro2 = "1.0.60"
 serde = { version = "1.0.152", features = ["derive"] }
 serde_json = "1.0.125"
-workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
 datadriven = "0.8.0"
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
+
+[features]
+default = ["workspace-hack"]
