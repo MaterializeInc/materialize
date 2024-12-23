@@ -237,7 +237,7 @@ for evaluation purposes only. The module deploys a sample infrastructure on AWS
       ```
 
    For production, if you have [opted for locally-attached storage](/self-managed/operational-guidelines/#locally-attached-nvme-storage-openebs),
-   include the storage configuration your configuration file.  See the
+   include the storage configuration in your configuration file.  See the
    [Locally-attached NVMe storage
    (OpenEBS)](/self-managed/operational-guidelines/#locally-attached-nvme-storage-openebs)
    for details.
@@ -279,13 +279,7 @@ To deploy Materialize:
 
 <a name="deploy-materialize-secrets"></a>
 
-1. {{< warning>}}
-
-   {{< self-managed/terraform-disclaimer >}}
-
-   {{< /warning >}}
-
-   For your backend configuration, create a file
+1. For your backend configuration, create a file
    `materialize-backend-secret.yaml` for your [Kubernetes
    Secret](https://kubernetes.io/docs/concepts/configuration/secret/).
 

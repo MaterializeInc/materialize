@@ -82,7 +82,7 @@ evaluation purposes only. The module deploys a sample infrastructure on GCP
 (region `us-central1`) with the following components:
 
 - Google Kubernetes Engine (GKE) cluster
-- Cloud SQL PostgreSQL database for metadata storage 
+- Cloud SQL PostgreSQL database for metadata storage
 - Cloud Storage bucket for blob storage
 - A dedicated VPC
 - Service accounts with proper IAM permissions
@@ -327,13 +327,7 @@ evaluation purposes only. The module deploys a sample infrastructure on GCP
 
 To deploy Materialize:
 
-1. {{< warning>}}
-
-   {{< self-managed/terraform-disclaimer >}}
-
-   {{< /warning >}}
-
-   For your backend configuration, create a file
+1. For your backend configuration, create a file
    `materialize-backend-secret.yaml` for your [Kubernetes
    Secret](https://kubernetes.io/docs/concepts/configuration/secret/).
 
