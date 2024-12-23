@@ -5625,7 +5625,13 @@ dependencies = [
  "anyhow",
  "async-trait",
  "futures",
+ "mz-adapter",
  "mz-orchestrator",
+ "mz-ore",
+ "mz-repr",
+ "mz-sql",
+ "tokio",
+ "uuid",
  "workspace-hack",
 ]
 

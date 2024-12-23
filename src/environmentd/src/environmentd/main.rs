@@ -318,6 +318,10 @@ pub struct Args {
     /// production, only testing.
     #[structopt(long, env = "ORCHESTRATOR_KUBERNETES_COVERAGE")]
     orchestrator_kubernetes_coverage: bool,
+    /// Template to use to generate the hostname for cluster replicas. Will
+    /// replace {name} with the replica name and {id} with the replica id.
+    #[structopt(long, env = "ORCHESTRATOR_EXTERNAL_HOSTNAME_TEMPLATE")]
+    orchestrator_external_hostname_template: Option<String>,
     /// The secrets controller implementation to use.
     #[structopt(
         long,
@@ -860,8 +864,13 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                       not currently usable with the external orchestrator"
                 );
             }
+            let Some(hostname_template) = args.orchestrator_external_hostname_template else {
+                bail!("--orchestrator-external-hostname-template is required when using Orchestrator::External")
+            };
 
-            let orchestrator = Arc::new(ExternalOrchestrator::new(ExternalOrchestratorConfig {}));
+            let orchestrator = Arc::new(ExternalOrchestrator::new(ExternalOrchestratorConfig {
+                hostname_template,
+            }));
             let secrets_controller: Arc<dyn SecretsController> = match args.secrets_controller {
                 SecretsControllerKind::Kubernetes => bail!(
                     "SecretsControllerKind::Kubernetes is not yet implemented for Orchestrator::External."
