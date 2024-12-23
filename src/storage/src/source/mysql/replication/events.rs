@@ -197,6 +197,11 @@ pub(super) async fn handle_query_event(
         (Some("commit"), None) => {
             is_complete_event = true;
         }
+        // Detect `CREATE TABLE <tbl>` statements which don't affect existing tables but do
+        // signify a complete event (e.g. for the purposes of advancing the GTID)
+        (Some("create"), Some("table")) => {
+            is_complete_event = true;
+        }
         _ => {}
     }
 
