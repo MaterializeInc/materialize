@@ -61,6 +61,11 @@ queries:
 
   - query: |
       ```mzsql
+      -- Assume quantity is an integer
       SELECT * FROM orders_view WHERE quantity = 'hello';
+      SELECT * FROM orders_view WHERE quantity::TEXT = 'hello';
       ```
-    index_usage: Index scan, assuming `quantity` is an integer.
+    index_usage: |
+      Index scan, assuming `quantity` field in `orders_view` is an integer.
+      In the first query, the quantity is implicitly cast to text.
+      In the second query, the quantity is explicitly cast to text.

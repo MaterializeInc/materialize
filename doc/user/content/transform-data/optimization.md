@@ -16,7 +16,7 @@ aliases:
 Indexes in Materialize maintain the complete up-to-date query results in memory
 (and not just the index keys and the pointers to data rows). Unlike some other
 databases, Materialize can use an index to serve query results even if the query
-does not specify a `WHERE` condition on the index key(s). Serving queries from
+does not specify a `WHERE` condition on the index keys. Serving queries from
 an index is fast since the results are already up-to-date and in memory.
 
 Materialize can use [indexes](/concepts/indexes/) to further optimize query
@@ -33,7 +33,7 @@ as your expected access patterns. Use the following as a guide:
 ### `WHERE` point lookups
 
 Unlike some other databases, Materialize can use an index to serve query results
-even if the query does not specify a `WHERE` condition on the index key(s). For
+even if the query does not specify a `WHERE` condition on the index keys. For
 some queries, Materialize can perform [**point
 lookups**](/concepts/indexes/#point-lookups) on the index (as opposed to an
 index scan) if the query's `WHERE` clause:
@@ -86,6 +86,21 @@ CREATE INDEX ON obj_name (<keys>);
     `WHERE quantity = 5 OR item = 'brownie'`), try to rewrite your query using a
     `UNION` (or `UNION ALL`), where each argument of the `UNION` has one of the
     original `OR` arguments.
+
+    For example, the query can be rewritten as:
+
+    ```mzsql
+    SELECT * FROM orders_view WHERE quantity = 5
+    UNION
+    SELECT * FROM orders_view WHERE item = 'brownie';
+    ```
+
+    Depending on your usage pattern, you may want point-lookup indexes on both
+    `quantity` and `item` (i.e., create two indexes, one on `quantity` and one
+    on `item`). However, since each index will hold a copy of the data, consider
+    the tradeoff between speed and memory usage. If the memory impact of having
+    both indexes is too high, you might want to take a more global look at all
+    of your queries to determine which index to build.
 
 #### Examples
 

@@ -111,15 +111,21 @@ CREATE INDEX idx_on_my_view IN CLUSTER active_cluster ON my_view (...);
 Indexes are local to a cluster. Queries in one cluster cannot use the indexes in another, different cluster.
 {{% /important %}}
 
-Unlike some other databases, Materialize can use an index to serve query
-results even if the query does not specify a `WHERE` condition on the index
-key.
+Unlike some other databases, Materialize can use an index to serve query results
+even if the query does not specify a `WHERE` condition on the index key. Serving
+queries from an index is fast since the results are already up-to-date and in
+memory.
 
 For example, consider the following index:
 
 ```mzsql
 CREATE INDEX idx_orders_view_qty ON orders_view (quantity);
 ```
+
+Materialize will maintain the `orders_view` in memory in `idx_orders_view_qty`,
+and it will be able to use the index to serve a various queries on the
+`orders_view` (and not just queries that specify conditions on
+`orders_view.quantity`).
 
 Materialize can use the index for the following queries (issued from the same
 cluster as the index) on `orders_view`:
@@ -133,12 +139,13 @@ SELECT * FROM orders_view WHERE quantity = 10;  -- point lookup on the index
 For the queries that do not specify a condition on the indexed field,
 Materialize scans the index. For the query that specifies an equality condition
 on the indexed field, Materialize performs a **point lookup** on the index
-(i.e., reads just the matching records from the index).
+(i.e., reads just the matching records from the index). Point lookups are the
+most efficient use of an index.
 
 #### Point lookups
 
-Materialize performs **point lookup** on the index if the query's `WHERE`
-clause:
+Materialize performs **point lookup** (i.e., reads just the matching records
+from the index) on the index if the query's `WHERE` clause:
 
 - Specifies equality (`=` or `IN`) condition and **only** equality conditions on
   **all** the indexed fields. The equality conditions must specify the **exact**
@@ -157,6 +164,8 @@ clause:
 
 - Only uses `AND` (conjunction) to combine conditions for **different** fields.
 
+Point lookups are the most efficient use of an index.
+
 For queries whose `WHERE` clause meets the point lookup criteria and includes
 conditions on additional fields (also using `AND` conjunction), Materialize
 performs a point lookup on the index keys and then filters the results using the
@@ -171,6 +180,10 @@ full index scan if the `WHERE` clause:
   equality condition that specifies a different value type than the index key
   type.
 - Uses OR (disjunction) to combine conditions for **different** fields.
+
+Full index scans are less efficient than point lookups.  The performance of full
+index scans will degrade with data volume; i.e., as you get more data, full
+scans will get slower.
 
 #### Examples
 
