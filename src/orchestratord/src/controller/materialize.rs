@@ -142,6 +142,24 @@ pub struct Args {
     default_certificate_specs: DefaultCertificateSpecs,
 }
 
+impl Args {
+    fn environmentd_internal_hostname(&self, namespace: &str, service_name: &str) -> String {
+        if let Some(host_override) = &self.environmentd_internal_http_host_override {
+            host_override.to_string()
+        } else {
+            format!("{}.{}.svc.cluster.local", service_name, namespace)
+        }
+    }
+
+    fn environmentd_internal_http_address(&self, namespace: &str, service_name: &str) -> String {
+        format!(
+            "{}:{}",
+            self.environmentd_internal_hostname(namespace, service_name),
+            self.environmentd_internal_http_port
+        )
+    }
+}
+
 #[derive(Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct DefaultCertificateSpecs {
