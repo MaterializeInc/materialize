@@ -57,7 +57,7 @@ toml==0.10.2
 twine==5.1.1
 types-Markdown==3.7.0.20241204
 types-prettytable==3.4.2.3
-types-psutil==5.9.5.10
+types-psutil==6.1.0.20241221
 types-PyMYSQL==1.1.0.20241103
 types-PyYAML==6.0.12.20240917
 types-requests==2.32.0.20241016
