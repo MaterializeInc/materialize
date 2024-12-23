@@ -11,12 +11,6 @@ Self-managed Materialize requires:
 The tutorial deploys Materialize to AWS Elastic Kubernetes Service (EKS) with a
 PostgreSQL RDS database as the metadata database and AWS S3 for blob storage.
 
-{{< important >}}
-
-For testing purposes only. For testing purposes only. For testing purposes only. ....
-
-{{< /important >}}
-
 ## Prerequisites
 
 ### Terraform
@@ -70,10 +64,10 @@ module](https://github.com/MaterializeInc/terraform-aws-materialize/blob/main/RE
 for evaluation purposes only. The module deploys a sample infrastructure on AWS
 (region `us-east-1`) with the following components:
 
-- EKS component
-- Networking component
-- Storage component (S3 for blob storage)
-- Database component for metadata storage (PostgreSQL RDS)
+- A Kuberneted (EKS) cluster
+- A dedicated VPC
+- An S3 for blob storage
+- An RDS PostgreSQL cluster and database for metadata storage
 
 {{< warning >}}
 

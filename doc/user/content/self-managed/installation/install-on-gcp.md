@@ -14,8 +14,6 @@ bucket for blob storage.
 
 {{< important >}}
 
-For testing purposes only. For testing purposes only. For testing purposes only. ....
-
 Assumes the `gke_config.machine_type = "e2-standard-4"` in the sample
 examples/simple Terraform module.
 
@@ -84,9 +82,9 @@ evaluation purposes only. The module deploys a sample infrastructure on GCP
 (region `us-central1`) with the following components:
 
 - Google Kubernetes Engine (GKE) cluster
-- Database component for metadata storage (Cloud SQL PostgreSQL database)
-- Storage component for blob storage (Cloud Storage bucket)
-- Required networking and security configurations
+- Cloud SQL PostgreSQL database for metadata storage 
+- Cloud Storage bucket for blob storage
+- A dedicated VPC
 - Service accounts with proper IAM permissions
 
 {{< warning >}}
