@@ -16,7 +16,7 @@ chrono = { version = "0.4.35", default-features = false, features = ["std"] }
 differential-dataflow = "0.13.2"
 futures = "0.3.25"
 http = "1.1.0"
-itertools = { version = "0.10.5" }
+itertools = { version = "0.12.1" }
 maplit = "1.0.2"
 mz-ccsr = { path = "../ccsr" }
 mz-cluster-client = { path = "../cluster-client" }

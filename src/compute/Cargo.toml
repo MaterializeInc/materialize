@@ -20,7 +20,7 @@ dec = { version = "0.4.8", features = ["serde"] }
 differential-dataflow = "0.13.2"
 differential-dogs3 = "0.1.2"
 futures = "0.3.25"
-itertools = "0.10.5"
+itertools = "0.12.1"
 lgalloc = "0.4"
 mz-build-info = { path = "../build-info" }
 mz-cluster = { path = "../cluster" }

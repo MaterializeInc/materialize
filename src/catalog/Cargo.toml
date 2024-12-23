@@ -22,7 +22,7 @@ differential-dataflow = "0.13.2"
 fail = { version = "0.5.1", features = ["failpoints"] }
 futures = "0.3.25"
 ipnet = "2.5.0"
-itertools = "0.10.5"
+itertools = "0.12.1"
 mz-adapter-types = { path = "../adapter-types" }
 mz-audit-log = { path = "../audit-log" }
 mz-build-info = { path = "../build-info" }
