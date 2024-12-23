@@ -107,33 +107,12 @@ for evaluation purposes only. The module deploys a sample infrastructure on AWS
 
 
    ```bash
-   cluster_name      = "my-test-eks"
-   environment       = "my-test"
-   vpc_name          = "my-test-vpc"
-   bucket_name       = "my-test-bucket"
-   service_account_name = "my-test-materialize-svc"
-   db_identifier     = "my-test-db"
+
+   # resources are prefixed with ${namespace}-${environment}
+   namespace         = "enter-your-namespace"       # Enter a namespace
+   environment       = "enter-your-environment"     # Enter an environment name
    database_password = "enter-your-secure-password" # Enter a secure password
 
-   tags = {
-     Environment = "my-test"
-     Team        = "my-test-team"
-     Project     = "my-test-project"
-   }
-
-   node_group_ami_type       = "AL2023_ARM_64_STANDARD"
-   node_group_instance_types = ["r6g.2xlarge"]
-   node_group_desired_size   = 2
-   node_group_min_size       = 1
-   node_group_max_size       = 3
-
-   db_instance_class    = "db.t3.large"
-   db_allocated_storage = 20
-   db_multi_az          = false
-
-   enable_monitoring = false
-   metrics_retention_days = 0
-   enable_cluster_creator_admin_permissions = true
    ```
 
 1. Initialize the terraform directory.
