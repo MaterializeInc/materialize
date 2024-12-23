@@ -1,5 +1,9 @@
 # dbt-materialize Changelog
 
+## 1.9.0 - 2024-12-17
+
+* Upgrade to `dbt-postgres` v1.9.0.
+
 ## 1.8.6 - 2024-09-25
 
 * Enable the `cluster` configuration for seeds, which allows specifying a target
