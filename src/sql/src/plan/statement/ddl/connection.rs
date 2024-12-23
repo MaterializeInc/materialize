@@ -262,16 +262,18 @@ impl ConnectionOptionExtracted {
                     let mut duplicate_azs: BTreeSet<String> = BTreeSet::new();
                     // Validate each AZ is supported
                     for connection_az in &connection.availability_zones {
-                        if unique_azs.contains(connection_az) {
-                            duplicate_azs.insert(connection_az.to_string());
-                        } else {
-                            unique_azs.insert(connection_az.to_string());
-                        }
-                        if !supported_azs.contains(connection_az) {
+                        if !connection_az.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+                            || !connection_az.contains("-az") {
                             return Err(PlanError::InvalidPrivatelinkAvailabilityZone {
                                 name: connection_az.to_string(),
                                 supported_azs,
                             });
+                        }
+
+                        if unique_azs.contains(connection_az) {
+                            duplicate_azs.insert(connection_az.to_string());
+                        } else {
+                            unique_azs.insert(connection_az.to_string());
                         }
                     }
                     if duplicate_azs.len() > 0 {
