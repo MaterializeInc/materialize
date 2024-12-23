@@ -63,16 +63,16 @@ pub enum DeploymentStatus {
 
 #[derive(Debug, Serialize)]
 pub struct Resources {
-    generation: u64,
-    environmentd_network_policies: Vec<NetworkPolicy>,
-    service_account: Box<ServiceAccount>,
-    role: Box<Role>,
-    role_binding: Box<RoleBinding>,
-    public_service: Box<Service>,
-    generation_service: Box<Service>,
-    persist_pubsub_service: Box<Service>,
-    environmentd_certificate: Box<Option<Certificate>>,
-    environmentd_statefulset: Box<StatefulSet>,
+    pub generation: u64,
+    pub environmentd_network_policies: Vec<NetworkPolicy>,
+    pub service_account: Box<ServiceAccount>,
+    pub role: Box<Role>,
+    pub role_binding: Box<RoleBinding>,
+    pub public_service: Box<Service>,
+    pub generation_service: Box<Service>,
+    pub persist_pubsub_service: Box<Service>,
+    pub environmentd_certificate: Box<Option<Certificate>>,
+    pub environmentd_statefulset: Box<StatefulSet>,
 }
 
 impl Resources {
