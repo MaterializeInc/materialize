@@ -595,7 +595,9 @@ impl PredicatePushdown {
                             .count()
                             > 1
                         {
-                            relation.take_safely();
+                            relation.take_safely_with_rel_type(
+                                relation.typ_with_input_types(&input_types),
+                            );
                             return Ok(());
                         }
 
