@@ -90,7 +90,10 @@ pub fn optimize_dataflow(
             transform_ctx,
         )?;
 
-        assert!(dataflow.objects_to_build.len() <= 2, "there should be at most two objects to build");
+        assert!(
+            dataflow.objects_to_build.len() <= 2,
+            "there should be at most two objects to build"
+        );
 
         optimize_dataflow_monotonic(dataflow, transform_ctx)?;
     }
