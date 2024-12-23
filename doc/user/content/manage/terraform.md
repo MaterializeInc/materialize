@@ -10,14 +10,14 @@ menu:
 
 [Terraform](https://www.terraform.io/) is an infrastructure-as-code tool that
 allows you to manage your resources in a declarative configuration language.
-Materialize maintains a[Terraform provider](https://registry.terraform.io/providers/MaterializeInc/materialize/latest/docs)
+Materialize maintains a [Terraform provider](https://registry.terraform.io/providers/MaterializeInc/materialize/latest/docs)
 to help you safely and predictably provision and manage connections, sources,
 and other database objects.
 
-Materialize also maintains several modules that make it easier to manage
-other cloud resources that Materialize depends on. Modules allow you to bypass
-manually configuring cloud resources and are an efficient way of deploying
-infrastructure with a single `terraform apply` command.
+Materialize also maintains [several modules](#terraform-modules) that make it
+easier to manage other cloud resources that Materialize depends on. Modules
+allow you to bypass manually configuring cloud resources and are an efficient
+way of deploying infrastructure with a single `terraform apply` command.
 
 ## Terraform provider
 
