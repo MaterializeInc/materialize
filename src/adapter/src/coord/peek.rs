@@ -320,7 +320,6 @@ pub fn create_fast_path_plan<T: Timestamp>(
             return Ok(Some(FastPathPlan::Constant(
                 rows.clone()
                     .map(|rows| rows.into_iter().map(|(row, diff)| (row, diff)).collect()),
-                // For best accuracy, we need to recalculate typ.
                 found_typ.clone(),
             )));
         } else {
