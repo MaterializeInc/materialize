@@ -60,7 +60,7 @@ CREATE INDEX ON obj_name (<keys>);
   If your index contains keys not specified in the query's `WHERE` clause, then
   Materialize performs a full index scan.
 
-- Specify all (or subset of) keys that are constrained in the query pattern's
+- Specify all (or a subset of) keys that are constrained in the query pattern's
   `WHERE` clause. If the index specifies all the keys, Materialize performs a
   point lookup only. If the index specifies a subset of keys, then Materialize
   performs a point lookup on the index keys and then filters these results using

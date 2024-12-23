@@ -108,7 +108,7 @@ CREATE INDEX idx_on_my_view IN CLUSTER active_cluster ON my_view (...);
 ### Index usage
 
 {{% important %}}
-Indexes are local to a cluster. Queries in a different cluster cannot use the indexes in another cluster.
+Indexes are local to a cluster. Queries in one cluster cannot use the indexes in another, different cluster.
 {{% /important %}}
 
 Unlike some other databases, Materialize can use an index to serve query
@@ -153,7 +153,7 @@ clause:
     to perform a point lookup.
 
   - If the index is on the `quantity` field which is an integer, the query must
-    specify equality condition on `quantity` with a value that is an integer.
+    specify an equality condition on `quantity` with a value that is an integer.
 
 - Only uses `AND` (conjunction) to combine conditions for **different** fields.
 
@@ -174,7 +174,7 @@ full index scan if the `WHERE` clause:
 
 #### Examples
 
-Consider the following index on a view:
+Consider again the following index on a view:
 
 ```mzsql
 CREATE INDEX idx_orders_view_qty on orders_view (quantity);
