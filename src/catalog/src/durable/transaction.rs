@@ -134,7 +134,7 @@ impl<'a> Transaction<'a> {
             txn_wal_shard,
         }: Snapshot,
         upper: mz_repr::Timestamp,
-    ) -> Result<Transaction, CatalogError> {
+    ) -> Result<Transaction<'a>, CatalogError> {
         Ok(Transaction {
             durable_catalog,
             databases: TableTransaction::new_with_uniqueness_fn(

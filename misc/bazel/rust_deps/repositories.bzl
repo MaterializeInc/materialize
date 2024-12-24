@@ -42,6 +42,15 @@ def rust_repositories():
         cargo_lockfile = "@cxxbridge-cmd//:Cargo.lock",
         lockfile = "//misc/bazel/rust_deps:cxxbridge-cmd/Cargo.cxxbridge-cmd.lock",
         manifests = ["@cxxbridge-cmd//:Cargo.toml"],
+        # Restricting the number of platforms we support _greatly_ reduces the
+        # amount of time it takes to "Splice Cargo Workspace".
+        supported_platform_triples = [
+            "aarch64-unknown-linux-gnu",
+            "x86_64-unknown-linux-gnu",
+            "aarch64-apple-darwin",
+            "x86_64-apple-darwin",
+            "wasm32-unknown-unknown",
+        ],
         isolated = False,
         # Only used if developing rules_rust.
         # generator = "@cargo_bazel_bootstrap//:cargo-bazel",

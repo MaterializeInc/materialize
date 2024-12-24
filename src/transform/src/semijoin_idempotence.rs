@@ -308,7 +308,7 @@ fn validate_replacement(
 /// A `Replacement` may be offered up by any `MirRelationExpr`, meant to be `B` from above or similar,
 /// and indicates that the offered expression can be projected onto columns such that it then exactly equals
 /// a column projection of `Get{id} semijoin replacement`.
-
+///
 /// Specifically,
 /// the `columns` member lists indexes `(a, b, c)` where column `b` of the offering expression corresponds to
 /// columns `a` in `Get{id}` and `c` in `replacement`, and for which the semijoin requires `a = c`. The values

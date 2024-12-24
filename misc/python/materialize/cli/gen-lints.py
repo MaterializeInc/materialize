@@ -22,6 +22,7 @@ import toml
 ALLOW_RUST_LINTS = [
     # Allows us to allow/deny new lints and support older versions of rust/clippy.
     "unknown_lints",
+    "non_local_definitions",
 ]
 
 ALLOW_RUST_DOC_LINTS = [
