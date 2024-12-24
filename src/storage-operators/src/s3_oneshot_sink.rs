@@ -42,6 +42,93 @@ use tracing::{debug, info};
 mod parquet;
 mod pgcopy;
 
+/// Performs preflight checks for a copy to operation.
+///
+/// Checks the S3 path for the sink to ensure it's empty (aside from files
+/// written by other instances of this sink), validates that we have appropriate
+/// permissions, and writes an INCOMPLETE sentinel file to indicate to the user
+/// that the upload is in-progress.
+///
+/// The INCOMPLETE sentinel is used to provide a single atomic operation that a
+/// user can wire up a notification on, to know when it is safe to start
+/// ingesting the data written by this sink to S3. Since the DeleteObject of the
+/// INCOMPLETE sentinel will only trigger one S3 notification, even if it's
+/// performed by multiple replicas it simplifies the user ergonomics by only
+/// having to listen for a single event (a PutObject sentinel would trigger once
+/// for each replica).
+pub async fn preflight(
+    connection_context: ConnectionContext,
+    aws_connection: &AwsConnection,
+    connection_details: &S3UploadInfo,
+    connection_id: CatalogItemId,
+    sink_id: GlobalId,
+) -> Result<(), anyhow::Error> {
+    info!(%sink_id, "s3 copy to initialization");
+
+    let s3_key_manager = S3KeyManager::new(&sink_id, &connection_details.uri);
+
+    let sdk_config = aws_connection
+        .load_sdk_config(&connection_context, connection_id, InTask::Yes)
+        .await?;
+
+    let client = mz_aws_util::s3::new_client(&sdk_config);
+    let bucket = s3_key_manager.bucket.clone();
+    let path_prefix = s3_key_manager.path_prefix().to_string();
+    let incomplete_sentinel_key = s3_key_manager.incomplete_sentinel_key();
+
+    // Check that the S3 bucket path is empty before beginning the upload,
+    // verify we have DeleteObject permissions,
+    // and upload the INCOMPLETE sentinel file to the S3 path.
+    // Since we race against other replicas running the same sink we allow
+    // for objects to exist in the path if they were created by this sink
+    // (identified by the sink_id prefix).
+
+    if let Some(files) = mz_aws_util::s3::list_bucket_path(&client, &bucket, &path_prefix).await? {
+        if !files.is_empty() {
+            Err(anyhow::anyhow!(
+                "S3 bucket path is not empty, contains {} objects",
+                files.len()
+            ))?;
+        }
+    }
+
+    // Confirm we have DeleteObject permissions before proceeding by trying to
+    // delete a known non-existent file.
+    // S3 will return an AccessDenied error whether or not the object exists,
+    // and no error if we have permissions and it doesn't.
+    // Other S3-compatible APIs (e.g. GCS) return a 404 error if the object
+    // does not exist, so we ignore that error.
+    match client
+        .delete_object()
+        .bucket(&bucket)
+        .key(s3_key_manager.data_key(0, 0, "delete_object_test"))
+        .send()
+        .await
+    {
+        Err(err) => {
+            let err_code = err.raw_response().map(|r| r.status().as_u16());
+            if err_code.map_or(false, |r| r == 403) {
+                Err(anyhow!("AccessDenied error when using DeleteObject"))?
+            } else if err_code.map_or(false, |r| r == 404) {
+                // ignore 404s
+            } else {
+                Err(anyhow!("Error when using DeleteObject: {}", err))?
+            }
+        }
+        Ok(_) => {}
+    };
+
+    debug!(%sink_id, "uploading INCOMPLETE sentinel file");
+    client
+        .put_object()
+        .bucket(bucket)
+        .key(incomplete_sentinel_key)
+        .send()
+        .await?;
+
+    Ok::<(), anyhow::Error>(())
+}
+
 /// Copy the rows from the input collection to s3.
 /// `worker_callback` is used to send the final count of rows uploaded to s3,
 /// or an error message if the operator failed. This is per-worker, and
@@ -75,16 +162,8 @@ where
 
     let s3_key_manager = S3KeyManager::new(&sink_id, &connection_details.uri);
 
-    let (start_stream, start_token) = render_initialization_operator(
-        scope.clone(),
-        connection_context.clone(),
-        aws_connection.clone(),
-        connection_id,
-        sink_id,
-        s3_key_manager.clone(),
-        up_to.clone(),
-        err_stream,
-    );
+    let (start_stream, start_token) =
+        render_initialization_operator(scope.clone(), sink_id, up_to.clone(), err_stream);
 
     let (completion_stream, upload_token) = match connection_details.format {
         S3SinkFormat::PgCopy(_) => render_upload_operator::<G, pgcopy::PgCopyUploader>(
@@ -129,31 +208,15 @@ where
 
 /// Renders the 'initialization' operator, which does work on the leader worker only.
 ///
-/// The leader worker first receives all errors from the `err_stream` and if it
+/// The leader worker receives all errors from the `err_stream` and if it
 /// encounters any errors will early exit and broadcast the error on the
 /// returned `start_stream`, to avoid any unnecessary work across all workers.
 ///
-/// The leader worker then checks the S3 path for the sink to ensure it's empty
-/// (aside from files written by other instances of this sink), validates that we
-/// have appropriate permissions, and writes an INCOMPLETE
-/// sentinel file to indicate to the user that the upload is in-progress.
-///
-/// The INCOMPLETE sentinel is used to provide a single atomic operation that a user
-/// can wire up a notification on, to know when it is safe to start ingesting the
-/// data written by this sink to S3. Since the DeleteObject of the INCOMPLETE sentinel
-/// will only trigger one S3 notification, even if it's performed by multiple replicas
-/// it simplifies the user ergonomics by only having to listen for a single event
-/// (a PutObject sentinel would trigger once for each replica).
-///
-/// Returns the `start_stream` with a result object indicating the success or failure
-/// of the initialization operation or an error received in the `err_stream`.
+/// Returns the `start_stream` with an error received in the `err_stream`, if
+/// any, otherwise `Ok(())`.
 fn render_initialization_operator<G>(
     scope: G,
-    connection_context: ConnectionContext,
-    aws_connection: AwsConnection,
-    connection_id: CatalogItemId,
     sink_id: GlobalId,
-    s3_key_manager: S3KeyManager,
     up_to: Antichain<G::Timestamp>,
     err_stream: Stream<G, (((DataflowError, u64), ()), G::Timestamp, Diff)>,
 ) -> (Stream<G, Result<(), String>>, PressOnDropButton)
@@ -205,86 +268,7 @@ where
             return;
         }
 
-        // fallible async block to use the `?` operator for convenience
-        let leader_work = async move {
-            info!(%sink_id, %worker_id, "s3 leader worker initialization");
-            let sdk_config = aws_connection
-                .load_sdk_config(&connection_context, connection_id, InTask::Yes)
-                .await?;
-
-            let client = mz_aws_util::s3::new_client(&sdk_config);
-            let bucket = s3_key_manager.bucket.clone();
-            let path_prefix = s3_key_manager.path_prefix().to_string();
-            let incomplete_sentinel_key = s3_key_manager.incomplete_sentinel_key();
-
-            // Check that the S3 bucket path is empty before beginning the upload,
-            // verify we have DeleteObject permissions,
-            // and upload the INCOMPLETE sentinel file to the S3 path.
-            // Since we race against other replicas running the same sink we allow
-            // for objects to exist in the path if they were created by this sink
-            // (identified by the sink_id prefix).
-            // TODO: Add logic to determine if other replicas have already completed
-            // a full upload, to avoid writing the incomplete sentinel file again
-            // if the upload is already done.
-            mz_ore::task::spawn(|| "copytos3:initialization", async move {
-                if let Some(files) =
-                    mz_aws_util::s3::list_bucket_path(&client, &bucket, &path_prefix).await?
-                {
-                    let files = files
-                        .iter()
-                        .filter(|key| !s3_key_manager.is_sink_object(key))
-                        .collect::<Vec<_>>();
-                    if !files.is_empty() {
-                        Err(anyhow::anyhow!(
-                            "S3 bucket path is not empty, contains {} objects",
-                            files.len()
-                        ))?;
-                    }
-                };
-
-                // Confirm we have DeleteObject permissions before proceeding by trying to
-                // delete a known non-existent file.
-                // S3 will return an AccessDenied error whether or not the object exists,
-                // and no error if we have permissions and it doesn't.
-                // Other S3-compatible APIs (e.g. GCS) return a 404 error if the object
-                // does not exist, so we ignore that error.
-                match client
-                    .delete_object()
-                    .bucket(&bucket)
-                    .key(s3_key_manager.data_key(0, 0, "delete_object_test"))
-                    .send()
-                    .await
-                {
-                    Err(err) => {
-                        let err_code = err.raw_response().map(|r| r.status().as_u16());
-                        if err_code.map_or(false, |r| r == 403) {
-                            Err(anyhow!("AccessDenied error when using DeleteObject"))?
-                        } else if err_code.map_or(false, |r| r == 404) {
-                            // ignore 404s
-                        } else {
-                            Err(anyhow!("Error when using DeleteObject: {}", err))?
-                        }
-                    }
-                    Ok(_) => {}
-                };
-
-                debug!(%sink_id, %worker_id, "uploading INCOMPLETE sentinel file");
-                client
-                    .put_object()
-                    .bucket(bucket)
-                    .key(incomplete_sentinel_key)
-                    .send()
-                    .await?;
-
-                Ok::<(), anyhow::Error>(())
-            })
-            .wait_and_assert_finished()
-            .await?;
-            Ok::<(), anyhow::Error>(())
-        };
-
-        let res = leader_work.await.map_err(|e| e.to_string_with_causes());
-        start_handle.give(&start_cap, res);
+        start_handle.give(&start_cap, Ok(()));
     });
 
     // Broadcast the result to all workers so that they will all see any error that occurs
@@ -580,11 +564,6 @@ impl S3KeyManager {
     /// The S3 key to use for the incomplete sentinel file
     fn incomplete_sentinel_key(&self) -> String {
         format!("{}INCOMPLETE", self.object_key_prefix)
-    }
-
-    /// Whether the given object key belongs to this sink instance
-    fn is_sink_object(&self, object_key: &str) -> bool {
-        object_key.starts_with(&self.object_key_prefix)
     }
 
     /// The key prefix based on the URI provided by the user. NOTE this doesn't

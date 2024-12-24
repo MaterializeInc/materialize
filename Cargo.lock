@@ -4273,6 +4273,7 @@ dependencies = [
  "mz-sql-parser",
  "mz-ssh-util",
  "mz-storage-client",
+ "mz-storage-operators",
  "mz-storage-types",
  "mz-timestamp-oracle",
  "mz-tls-util",
