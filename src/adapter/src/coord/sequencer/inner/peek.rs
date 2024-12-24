@@ -14,6 +14,7 @@ use std::sync::Arc;
 use http::Uri;
 use itertools::Either;
 use maplit::btreemap;
+use mz_compute_types::sinks::ComputeSinkConnection;
 use mz_controller_types::ClusterId;
 use mz_expr::{CollectionPlan, ResultSpec};
 use mz_ore::cast::CastFrom;
@@ -69,7 +70,8 @@ impl Staged for PeekStage {
             PeekStage::Finish(stage) => &mut stage.validity,
             PeekStage::ExplainPlan(stage) => &mut stage.validity,
             PeekStage::ExplainPushdown(stage) => &mut stage.validity,
-            PeekStage::CopyTo(stage) => &mut stage.validity,
+            PeekStage::CopyToPreflight(stage) => &mut stage.validity,
+            PeekStage::CopyToDataflow(stage) => &mut stage.validity,
         }
     }
 
@@ -94,7 +96,8 @@ impl Staged for PeekStage {
             PeekStage::ExplainPushdown(stage) => {
                 coord.peek_explain_pushdown(ctx.session(), stage).await
             }
-            PeekStage::CopyTo(stage) => coord.peek_copy_to_dataflow(ctx, stage).await,
+            PeekStage::CopyToPreflight(stage) => coord.peek_copy_to_preflight(stage).await,
+            PeekStage::CopyToDataflow(stage) => coord.peek_copy_to_dataflow(ctx, stage).await,
         }
     }
 
@@ -687,7 +690,7 @@ impl Coordinator {
                         }
                         Ok(Either::Right(global_lir_plan)) => {
                             let optimizer = optimizer.unwrap_right();
-                            PeekStage::CopyTo(PeekStageCopyTo {
+                            PeekStage::CopyToPreflight(PeekStageCopyTo {
                                 validity,
                                 optimizer,
                                 global_lir_plan,
@@ -945,6 +948,44 @@ impl Coordinator {
             },
         };
         Ok(StageResult::Response(resp))
+    }
+
+    #[instrument]
+    async fn peek_copy_to_preflight(
+        &mut self,
+        copy_to: PeekStageCopyTo,
+    ) -> Result<StageResult<Box<PeekStage>>, AdapterError> {
+        let connection_context = self.connection_context().clone();
+        Ok(StageResult::Handle(mz_ore::task::spawn(
+            || "peek copy to preflight",
+            async {
+                let sinks = &copy_to.global_lir_plan.df_desc().sink_exports;
+                if sinks.len() != 1 {
+                    return Err(AdapterError::Internal(
+                        "expected exactly one copy to s3 sink".into(),
+                    ));
+                }
+                let (sink_id, sink_desc) = sinks
+                    .first_key_value()
+                    .expect("known to be exactly one copy to s3 sink");
+                match &sink_desc.connection {
+                    ComputeSinkConnection::CopyToS3Oneshot(conn) => {
+                        mz_storage_types::sinks::s3_oneshot_sink::preflight(
+                            connection_context,
+                            &conn.aws_connection,
+                            &conn.upload_info,
+                            conn.connection_id,
+                            *sink_id,
+                        )
+                        .await?;
+                        Ok(Box::new(PeekStage::CopyToDataflow(copy_to)))
+                    }
+                    _ => Err(AdapterError::Internal(
+                        "expected copy to s3 oneshot sink".into(),
+                    )),
+                }
+            },
+        )))
     }
 
     #[instrument]

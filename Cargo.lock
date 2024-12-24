@@ -6880,6 +6880,7 @@ dependencies = [
  "fail",
  "futures",
  "hex",
+ "http 1.1.0",
  "insta",
  "itertools 0.10.5",
  "mysql_async",
