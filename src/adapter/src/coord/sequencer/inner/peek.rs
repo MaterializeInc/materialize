@@ -970,7 +970,7 @@ impl Coordinator {
                     .expect("known to be exactly one copy to s3 sink");
                 match &sink_desc.connection {
                     ComputeSinkConnection::CopyToS3Oneshot(conn) => {
-                        mz_storage_operators::s3_oneshot_sink::preflight(
+                        mz_storage_types::sinks::s3_oneshot_sink::preflight(
                             connection_context,
                             &conn.aws_connection,
                             &conn.upload_info,

@@ -17,10 +17,11 @@ use mz_ore::cast::CastFrom;
 use mz_ore::task::JoinHandleExt;
 use mz_pgcopy::{encode_copy_format, encode_copy_format_header, CopyFormatParams};
 use mz_repr::{GlobalId, RelationDesc, Row};
+use mz_storage_types::sinks::s3_oneshot_sink::S3KeyManager;
 use mz_storage_types::sinks::{S3SinkFormat, S3UploadInfo};
 use tracing::info;
 
-use super::{CopyToParameters, CopyToS3Uploader, S3KeyManager};
+use super::{CopyToParameters, CopyToS3Uploader};
 
 /// Required state to upload batches to S3
 pub(super) struct PgCopyUploader {

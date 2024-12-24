@@ -13,13 +13,11 @@ use std::any::Any;
 use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 use std::rc::Rc;
-use std::str::FromStr;
 
 use anyhow::anyhow;
 use aws_types::sdk_config::SdkConfig;
 use differential_dataflow::{Collection, Hashable};
 use futures::StreamExt;
-use http::Uri;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
@@ -28,6 +26,7 @@ use mz_repr::{CatalogItemId, Diff, GlobalId, Row, Timestamp};
 use mz_storage_types::connections::aws::AwsConnection;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::errors::DataflowError;
+use mz_storage_types::sinks::s3_oneshot_sink::S3KeyManager;
 use mz_storage_types::sinks::{S3SinkFormat, S3UploadInfo};
 use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
@@ -37,97 +36,10 @@ use timely::dataflow::operators::Broadcast;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use timely::PartialOrder;
-use tracing::{debug, info};
+use tracing::debug;
 
 mod parquet;
 mod pgcopy;
-
-/// Performs preflight checks for a copy to operation.
-///
-/// Checks the S3 path for the sink to ensure it's empty (aside from files
-/// written by other instances of this sink), validates that we have appropriate
-/// permissions, and writes an INCOMPLETE sentinel file to indicate to the user
-/// that the upload is in-progress.
-///
-/// The INCOMPLETE sentinel is used to provide a single atomic operation that a
-/// user can wire up a notification on, to know when it is safe to start
-/// ingesting the data written by this sink to S3. Since the DeleteObject of the
-/// INCOMPLETE sentinel will only trigger one S3 notification, even if it's
-/// performed by multiple replicas it simplifies the user ergonomics by only
-/// having to listen for a single event (a PutObject sentinel would trigger once
-/// for each replica).
-pub async fn preflight(
-    connection_context: ConnectionContext,
-    aws_connection: &AwsConnection,
-    connection_details: &S3UploadInfo,
-    connection_id: CatalogItemId,
-    sink_id: GlobalId,
-) -> Result<(), anyhow::Error> {
-    info!(%sink_id, "s3 copy to initialization");
-
-    let s3_key_manager = S3KeyManager::new(&sink_id, &connection_details.uri);
-
-    let sdk_config = aws_connection
-        .load_sdk_config(&connection_context, connection_id, InTask::Yes)
-        .await?;
-
-    let client = mz_aws_util::s3::new_client(&sdk_config);
-    let bucket = s3_key_manager.bucket.clone();
-    let path_prefix = s3_key_manager.path_prefix().to_string();
-    let incomplete_sentinel_key = s3_key_manager.incomplete_sentinel_key();
-
-    // Check that the S3 bucket path is empty before beginning the upload,
-    // verify we have DeleteObject permissions,
-    // and upload the INCOMPLETE sentinel file to the S3 path.
-    // Since we race against other replicas running the same sink we allow
-    // for objects to exist in the path if they were created by this sink
-    // (identified by the sink_id prefix).
-
-    if let Some(files) = mz_aws_util::s3::list_bucket_path(&client, &bucket, &path_prefix).await? {
-        if !files.is_empty() {
-            Err(anyhow::anyhow!(
-                "S3 bucket path is not empty, contains {} objects",
-                files.len()
-            ))?;
-        }
-    }
-
-    // Confirm we have DeleteObject permissions before proceeding by trying to
-    // delete a known non-existent file.
-    // S3 will return an AccessDenied error whether or not the object exists,
-    // and no error if we have permissions and it doesn't.
-    // Other S3-compatible APIs (e.g. GCS) return a 404 error if the object
-    // does not exist, so we ignore that error.
-    match client
-        .delete_object()
-        .bucket(&bucket)
-        .key(s3_key_manager.data_key(0, 0, "delete_object_test"))
-        .send()
-        .await
-    {
-        Err(err) => {
-            let err_code = err.raw_response().map(|r| r.status().as_u16());
-            if err_code.map_or(false, |r| r == 403) {
-                Err(anyhow!("AccessDenied error when using DeleteObject"))?
-            } else if err_code.map_or(false, |r| r == 404) {
-                // ignore 404s
-            } else {
-                Err(anyhow!("Error when using DeleteObject: {}", err))?
-            }
-        }
-        Ok(_) => {}
-    };
-
-    debug!(%sink_id, "uploading INCOMPLETE sentinel file");
-    client
-        .put_object()
-        .bucket(bucket)
-        .key(incomplete_sentinel_key)
-        .send()
-        .await?;
-
-    Ok::<(), anyhow::Error>(())
-}
 
 /// Copy the rows from the input collection to s3.
 /// `worker_callback` is used to send the final count of rows uploaded to s3,
@@ -525,55 +437,6 @@ pub struct CopyToParameters {
     pub arrow_builder_buffer_ratio: usize,
     // The size of each part in the multi-part upload to use when uploading files to S3.
     pub s3_multipart_part_size_bytes: usize,
-}
-
-/// Helper to manage object keys created by this sink based on the S3 URI provided
-/// by the user and the GlobalId that identifies this copy-to-s3 sink.
-/// Since there may be multiple compute replicas running their own copy of this sink
-/// we need to ensure the S3 keys are consistent such that we can detect when objects
-/// were created by an instance of this sink or not.
-#[derive(Clone)]
-struct S3KeyManager {
-    pub bucket: String,
-    object_key_prefix: String,
-}
-
-impl S3KeyManager {
-    pub fn new(sink_id: &GlobalId, s3_uri: &str) -> Self {
-        // This url is already validated to be a valid s3 url in sequencer.
-        let uri = Uri::from_str(s3_uri).expect("valid s3 url");
-        let bucket = uri.host().expect("s3 bucket");
-        // TODO: Can an empty path be provided?
-        let path = uri.path().trim_start_matches('/').trim_end_matches('/');
-
-        Self {
-            bucket: bucket.to_string(),
-            object_key_prefix: format!("{}/mz-{}-", path, sink_id),
-        }
-    }
-
-    /// The S3 key to use for a specific data file, based on the batch
-    /// it belongs to and the index within that batch.
-    fn data_key(&self, batch: u64, file_index: usize, extension: &str) -> String {
-        format!(
-            "{}batch-{:04}-{:04}.{}",
-            self.object_key_prefix, batch, file_index, extension
-        )
-    }
-
-    /// The S3 key to use for the incomplete sentinel file
-    fn incomplete_sentinel_key(&self) -> String {
-        format!("{}INCOMPLETE", self.object_key_prefix)
-    }
-
-    /// The key prefix based on the URI provided by the user. NOTE this doesn't
-    /// contain the additional prefix we include on all keys written by the sink
-    /// e.g. `mz-{sink_id}-batch-...`
-    /// This is useful when listing objects in the bucket with this prefix to
-    /// determine if its clear to upload.
-    fn path_prefix(&self) -> &str {
-        self.object_key_prefix.rsplit_once('/').expect("exists").0
-    }
 }
 
 /// This trait is used to abstract over the upload details for different file formats.

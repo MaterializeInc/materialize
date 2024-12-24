@@ -36,6 +36,8 @@ use crate::AlterCompatible;
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_types.sinks.rs"));
 
+pub mod s3_oneshot_sink;
+
 /// A sink for updates to a relational collection.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct StorageSinkDesc<S: StorageSinkDescFillState, T = mz_repr::Timestamp> {
