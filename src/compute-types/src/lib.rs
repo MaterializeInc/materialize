@@ -10,6 +10,8 @@
 #![warn(missing_docs)]
 
 //! Shared types for the `mz-compute*` crates
+//!
+//! NOP
 
 use std::time::Duration;
 
