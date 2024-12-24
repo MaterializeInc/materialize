@@ -9,11 +9,11 @@
 
 //! Service orchestration for tracing-aware services.
 
-use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
+use std::{any::Any, collections::BTreeMap};
 
 use async_trait::async_trait;
 use clap::{FromArgMatches, IntoApp};
@@ -374,6 +374,10 @@ impl Orchestrator for TracingOrchestrator {
             tracing_args: self.tracing_args.clone(),
         })
     }
+
+    fn as_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync> {
+        self
+    }
 }
 
 #[derive(Debug)]
@@ -523,6 +527,10 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
         config: mz_orchestrator::scheduling_config::ServiceSchedulingConfig,
     ) {
         self.inner.update_scheduling_config(config)
+    }
+
+    fn as_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync> {
+        self
     }
 }
 

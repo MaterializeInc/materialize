@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::any::Any;
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::sync::{Arc, Mutex};
@@ -205,6 +206,10 @@ impl Orchestrator for KubernetesOrchestrator {
                 _worker: worker,
             })
         }))
+    }
+
+    fn as_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync> {
+        self
     }
 }
 
@@ -1337,6 +1342,10 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
 
     fn update_scheduling_config(&self, config: ServiceSchedulingConfig) {
         *self.scheduling_config.write().expect("poisoned") = config;
+    }
+
+    fn as_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync> {
+        self
     }
 }
 

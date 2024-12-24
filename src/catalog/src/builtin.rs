@@ -9142,6 +9142,20 @@ pub const MZ_ANALYTICS_CLUSTER: BuiltinCluster = BuiltinCluster {
     replication_factor: 0,
 };
 
+pub static MZ_EXTERNAL_ORCHESTRATOR_SERVICES: LazyLock<BuiltinTable> =
+    LazyLock::new(|| BuiltinTable {
+        name: "mz_external_orchestrator_services",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::TABLE_MZ_EXTERNAL_ORCHESTRATOR_SERVICES_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", ScalarType::String.nullable(false))
+            .with_column("state", ScalarType::String.nullable(false))
+            .with_key(vec![0])
+            .finish(),
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+    });
+
 /// List of all builtin objects sorted topologically by dependency.
 pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::new(|| {
     let mut builtins = vec![

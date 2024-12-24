@@ -5102,6 +5102,7 @@ dependencies = [
  "mz-metrics",
  "mz-npm",
  "mz-orchestrator",
+ "mz-orchestrator-external",
  "mz-orchestrator-kubernetes",
  "mz-orchestrator-process",
  "mz-orchestrator-tracing",
@@ -5614,6 +5615,23 @@ dependencies = [
  "prost",
  "serde",
  "tonic-build",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-orchestrator-external"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "futures",
+ "mz-adapter",
+ "mz-orchestrator",
+ "mz-ore",
+ "mz-repr",
+ "mz-sql",
+ "tokio",
+ "uuid",
  "workspace-hack",
 ]
 

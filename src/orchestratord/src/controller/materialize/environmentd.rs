@@ -192,8 +192,10 @@ impl Resources {
                 return Ok(Some(retry_action));
             }
 
-            let environmentd_url =
-                environmentd_internal_http_address(args, namespace, &*self.generation_service);
+            let environmentd_url = args.environmentd_internal_http_address(
+                namespace,
+                &self.generation_service.name_unchecked(),
+            );
 
             let http_client = reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(10))
@@ -1310,23 +1312,6 @@ struct BecomeLeaderResponse {
 enum BecomeLeaderResult {
     Success,
     Failure { message: String },
-}
-
-fn environmentd_internal_http_address(
-    args: &super::Args,
-    namespace: &str,
-    generation_service: &Service,
-) -> String {
-    let host = if let Some(host_override) = &args.environmentd_internal_http_host_override {
-        host_override.to_string()
-    } else {
-        format!(
-            "{}.{}.svc.cluster.local",
-            generation_service.name_unchecked(),
-            namespace,
-        )
-    };
-    format!("{}:{}", host, args.environmentd_internal_http_port)
 }
 
 fn statefulset_pod_name(statefulset: &StatefulSet, idx: u64) -> String {

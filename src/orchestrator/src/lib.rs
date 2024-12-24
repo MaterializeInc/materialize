@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::any::Any;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::str::FromStr;
@@ -47,6 +48,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 pub trait Orchestrator: fmt::Debug + Send + Sync {
     /// Enter a namespace in the orchestrator.
     fn namespace(&self, namespace: &str) -> Arc<dyn NamespacedOrchestrator>;
+    fn as_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync>;
 }
 
 /// An orchestrator restricted to a single namespace.
@@ -84,6 +86,8 @@ pub trait NamespacedOrchestrator: fmt::Debug + Send + Sync {
     ) -> Result<Vec<ServiceProcessMetrics>, anyhow::Error>;
 
     fn update_scheduling_config(&self, config: scheduling_config::ServiceSchedulingConfig);
+
+    fn as_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync>;
 }
 
 /// An event describing a status change of an orchestrated service.
