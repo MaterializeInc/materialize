@@ -889,7 +889,13 @@ impl Coordinator {
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
                 kind:
                     mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
-            })) if plan.if_not_exists => Ok(ExecuteResponse::CreatedConnection),
+            })) if plan.if_not_exists => {
+                session.add_notice(AdapterNotice::ObjectAlreadyExists {
+                    name: plan.name.item,
+                    ty: "connection",
+                });
+                Ok(ExecuteResponse::CreatedConnection)
+            }
             Err(err) => Err(err),
         }
     }
