@@ -381,7 +381,7 @@ Notice that the index is actually _two_ `global_id`s: `u148` is the
 `winning_bids` view, while `u149` is the `wins_by_item` index.
 
 The `operator` is indented using [`REPEAT`](/sql/functions/#repeat) and
-`mz_lir_mapping.nesting`). The indenting, combined with ordering by
+`mz_lir_mapping.nesting`. The indenting, combined with ordering by
 `mz_lir_mapping.lir_id` descending, gives us a tree-shaped view of the
 LIR plan.
 
