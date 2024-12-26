@@ -394,7 +394,11 @@ table from the source).
 
 ### Attributing memory usage
 
-(If you have not read about [attributing computation time](#attributing-computation-time), please do so first, as it explains some core concepts.)
+{{< tip >}}
+
+If you have not read about [attributing computation time](#attributing-computation-time), please do so first, as it explains some core concepts.
+
+{{< /tip >}}
 
 We can attribute memory usage to our query by joining
 [`mz_introspection.mz_lir_mapping`](/sql/system-catalog/mz_introspection/#mz_lir_mapping)
