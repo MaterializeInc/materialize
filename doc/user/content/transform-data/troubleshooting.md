@@ -349,6 +349,7 @@ SELECT mo.name AS name, global_id, lir_id, parent_lir_id, REPEAT(' ', nesting * 
                 ON (mlm.operator_id_start <= mcodh.id AND mcodh.id < mlm.operator_id_end)
               JOIN mz_catalog.mz_objects mo
                 ON (mlm.global_id = mo.id)
+   WHERE mo.name IN ('wins_by_item', 'winning_bids')
 GROUP BY mo.name, global_id, lir_id, operator, parent_lir_id, nesting
 ORDER BY global_id, lir_id DESC;
 ```
@@ -367,18 +368,22 @@ Running this query on an auction generator will produce results that look someth
 | wins_by_item | u149      | 8      | null          | Arrange 7                        | 00:00:00.013887 | 9347   |
 | wins_by_item | u149      | 7      | 8             |   Get::PassArrangements u148     | null            | null   |
 
-The `duration` column lets us see that the `TopK` operator is where we
-spend the bulk of the query's computation time.
+The `duration` column shows that the `TopK` operator is where we
+spend the bulk of the query's computation time.  Notice that creating
+our index installs _two_ `global_id`s: `u148` is the dataflow for the
+`winning_bids` view uitself, while `u149` is the dataflow for the
+`wins_by_item` index on `winning_bids`.
 
 The query works by finding every dataflow operator in the range
 (`mz_lir_mapping.operator_id_start` inclusive to
 `mz_lir_mapping.operator_id_end` exclusive) and summing up the time
 spent (`SUM(duration_ns)`). The query joins with
 [`mz_catalog.mz_objects`](/sql/system-catalog/mz_catalog/#mz_objects)
-to find the actual name corresponding to the `global_id`.
-
-Notice that the index is actually _two_ `global_id`s: `u148` is the
-`winning_bids` view, while `u149` is the `wins_by_item` index.
+to find the actual name corresponding to the `global_id`.  The `WHERE
+mo.name IN ...`  clause of the query ensures we only see information
+about this index and view. If you leave this `WHERE` clause out, you
+will see information on _every_ view, materialized view, and index on
+your current cluster.
 
 The `operator` is indented using [`REPEAT`](/sql/functions/#repeat) and
 `mz_lir_mapping.nesting`. The indenting, combined with ordering by
@@ -413,6 +418,7 @@ with
                 ON (mlm.operator_id_start <= mas.operator_id AND mas.operator_id < mlm.operator_id_end)
               JOIN mz_catalog.mz_objects mo
                 ON (mlm.global_id = mo.id)
+   WHERE mo.name IN ('wins_by_item', 'winning_bids')
 GROUP BY mo.name, global_id, lir_id, operator, parent_lir_id, nesting
 ORDER BY global_id, lir_id DESC;
 ```
@@ -452,6 +458,7 @@ can attribute this to particular parts of our query using
                     mlm.operator_id_start <= megsa.region_id AND megsa.region_id < mlm.operator_id_end)
               JOIN mz_catalog.mz_objects mo
                 ON (mlm.global_id = mo.id)
+   WHERE mo.name IN ('wins_by_item', 'winning_bids')
 ORDER BY mlm.global_id, lir_id DESC;
 ```
 
@@ -518,24 +525,25 @@ You can identify worker skew by comparing a worker's time spent to the
 overall time spent across all workers:
 
 ```sql
-              SELECT mo.name AS name, global_id, lir_id, REPEAT(' ', 2 * nesting) || operator as operator,
+ SELECT mo.name AS name, global_id, lir_id, REPEAT(' ', 2 * nesting) || operator as operator,
                      worker_id,
                      SUM(elapsed_ns) / 1000 * '1 microsecond'::INTERVAL AS elapsed_ns,
                      SUM(aebi.total_ns) / 1000 * '1 microsecond'::INTERVAL  as avg_ns,
                      SUM(elapsed_ns) / SUM(aebi.total_ns) as ratio
-                FROM mz_introspection.mz_lir_mapping mlm
-  CROSS JOIN LATERAL (  SELECT SUM(elapsed_ns) AS total_ns
-                          FROM mz_introspection.mz_scheduling_elapsed_per_worker mse
-                         WHERE mlm.operator_id_start <= id AND id < mlm.operator_id_end
-                      GROUP BY worker_id) aebi
-  CROSS JOIN LATERAL (  SELECT worker_id, SUM(elapsed_ns) as elapsed_ns
-                          FROM mz_introspection.mz_scheduling_elapsed_per_worker mse
-                         WHERE mlm.operator_id_start <= id AND id < mlm.operator_id_end
-                      GROUP BY worker_id) epw
-                JOIN mz_catalog.mz_objects mo
-                  ON (mlm.global_id = mo.id)
-            GROUP BY mo.name, global_id, lir_id, nesting, operator, worker_id
-            ORDER BY global_id, lir_id DESC;
+   FROM                    mz_introspection.mz_lir_mapping mlm
+        CROSS JOIN LATERAL (  SELECT SUM(elapsed_ns) AS total_ns
+                                FROM mz_introspection.mz_scheduling_elapsed_per_worker mse
+                               WHERE mlm.operator_id_start <= id AND id < mlm.operator_id_end
+                            GROUP BY worker_id) aebi
+        CROSS JOIN LATERAL (  SELECT worker_id, SUM(elapsed_ns) as elapsed_ns
+                                FROM mz_introspection.mz_scheduling_elapsed_per_worker mse
+                               WHERE mlm.operator_id_start <= id AND id < mlm.operator_id_end
+                            GROUP BY worker_id) epw
+                      JOIN mz_catalog.mz_objects mo
+                        ON (mlm.global_id = mo.id)
+   WHERE mo.name IN ('wins_by_item', 'winning_bids')
+GROUP BY mo.name, global_id, lir_id, nesting, operator, worker_id
+ORDER BY global_id, lir_id DESC;
 ```
 
 | name         | global_id | lir_id | operator                   | worker_id | elapsed_ns      | avg_ns          | ratio                                     |
@@ -575,7 +583,8 @@ starting point. When building your own, keep the following in mind.
 
   1. `mz_lir_mapping.operator` is not stable and **should not be
      parsed**. If you want to traverse the LIR tree, use
-     `mz_lir_mapping.parent_lir_id`.
+     `mz_lir_mapping.parent_lir_id`. If there are metadata that would
+     be useful for us to provide that we do not, please let us know.
   2. Make sure you `GROUP BY global_id`---mixing `lir_id`s from
      different `global_id`s will produce nonsense.
   3. Use `REPEAT(' ', 2 * nesting) || operator` and `ORDER BY lir_id
@@ -584,6 +593,10 @@ starting point. When building your own, keep the following in mind.
      `mz_lir_mapping.operator_id_end` is exclusive. If they are equal
      to each other, that LIR operator does not correspond to any
      dataflow operators.
+  5. Join with `mz_catalog.mz_objects` and restrict based on
+     `mz_objects.name` to only see output for views, materialized
+     views, and indexes you're interested in. Otherwise you will see
+     information on everything installed in your current cluster.
 
 ## How do I troubleshoot slow queries?
 
