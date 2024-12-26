@@ -441,6 +441,12 @@ cheap in comparison, as is arranging the final output in the
 
 ### Attributing `TopK` hints
 
+{{< tip >}}
+
+If you have not read about [attributing computation time](#attributing-computation-time), please do so first, as it explains some core concepts.
+
+{{< /tip >}}
+
 The
 [`mz_introspection.mz_expected_group_size_advice`](/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice)
 looks at your running dataflow and suggests parameters you can set. We
@@ -515,6 +521,13 @@ uses a third of the memory it was using before:
 
 ### Localizing worker skew
 
+{{< tip >}}
+
+If you have not read about [attributing computation time](#attributing-computation-time), please do so first, as it explains some core concepts.
+
+{{< /tip >}}
+
+
 [Worker skew](/transform-data/dataflow-troubleshooting/#is-work-distributed-equally-across-workers) occurs when your data do not end up getting evenly
 partitioned between workers.  Worker skew can only happen when your
 cluster has more than one worker. (You can query
@@ -527,9 +540,10 @@ overall time spent across all workers:
 ```sql
  SELECT mo.name AS name, global_id, lir_id, REPEAT(' ', 2 * nesting) || operator as operator,
                      worker_id,
+                     ROUND(SUM(elapsed_ns) / SUM(aebi.total_ns), 2) as ratio,
                      SUM(elapsed_ns) / 1000 * '1 microsecond'::INTERVAL AS elapsed_ns,
-                     SUM(aebi.total_ns) / 1000 * '1 microsecond'::INTERVAL  as avg_ns,
-                     SUM(elapsed_ns) / SUM(aebi.total_ns) as ratio
+                     SUM(aebi.total_ns) / 1000 * '1 microsecond'::INTERVAL  as avg_ns
+
    FROM                    mz_introspection.mz_lir_mapping mlm
         CROSS JOIN LATERAL (  SELECT SUM(elapsed_ns) AS total_ns
                                 FROM mz_introspection.mz_scheduling_elapsed_per_worker mse
@@ -546,30 +560,34 @@ GROUP BY mo.name, global_id, lir_id, nesting, operator, worker_id
 ORDER BY global_id, lir_id DESC;
 ```
 
-| name         | global_id | lir_id | operator                   | worker_id | elapsed_ns      | avg_ns          | ratio                                     |
-| ------------ | --------- | ------ | -------------------------- | --------- | --------------- | --------------- | ----------------------------------------- |
-| winning_bids | u150      | 6      | TopK::Basic 5              | 0         | 00:00:02.359193 | 00:00:02.338105 | 1.00901943619301904208932433787196422606  |
-| winning_bids | u150      | 6      | TopK::Basic 5              | 1         | 00:00:02.342375 | 00:00:02.338105 | 1.0018262379840754650921842785877521019   |
-| winning_bids | u150      | 6      | TopK::Basic 5              | 2         | 00:00:02.314143 | 00:00:02.338105 | 0.989751590156994710647908375633282330915 |
-| winning_bids | u150      | 6      | TopK::Basic 5              | 3         | 00:00:02.336708 | 00:00:02.338105 | 0.999402735665910782170583007907001341123 |
-| winning_bids | u150      | 5      |   Join::Differential 2 » 4 | 0         | 00:00:00.557381 | 00:00:00.548652 | 1.01590883682808615066920883751285427977  |
-| winning_bids | u150      | 5      |   Join::Differential 2 » 4 | 1         | 00:00:00.542891 | 00:00:00.548652 | 0.98949878273761917487532841143193434597  |
-| winning_bids | u150      | 5      |   Join::Differential 2 » 4 | 2         | 00:00:00.546565 | 00:00:00.548652 | 0.99619568016440763325559996932924096555  |
-| winning_bids | u150      | 5      |   Join::Differential 2 » 4 | 3         | 00:00:00.547773 | 00:00:00.548652 | 0.99839670026988704119986278172597040871  |
-| winning_bids | u150      | 4      |     Arrange 3              | 0         | 00:00:00.314206 | 00:00:00.338216 | 0.929009114588746221704744632262170530522 |
-| winning_bids | u150      | 4      |     Arrange 3              | 1         | 00:00:00.306153 | 00:00:00.338216 | 0.905199632876776517170415418238708660282 |
-| winning_bids | u150      | 4      |     Arrange 3              | 2         | 00:00:00.432691 | 00:00:00.338216 | 1.27933123914530934762928875720815264567  |
-| winning_bids | u150      | 4      |     Arrange 3              | 3         | 00:00:00.299815 | 00:00:00.338216 | 0.886460013389167913495551192290968163528 |
-| winning_bids | u150      | 2      |     Arrange 1              | 0         | 00:00:00.258171 | 00:00:00.244214 | 1.05715143156633465139502061854023757049  |
-| winning_bids | u150      | 2      |     Arrange 1              | 1         | 00:00:00.234322 | 00:00:00.244214 | 0.959493923931760528554652347461354389562 |
-| winning_bids | u150      | 2      |     Arrange 1              | 2         | 00:00:00.230453 | 00:00:00.244214 | 0.943651272055032566225444196288453924574 |
-| winning_bids | u150      | 2      |     Arrange 1              | 3         | 00:00:00.25391  | 00:00:00.244214 | 1.03970337244687225382488283770995411537  |
-| wins_by_item | u151      | 8      | Arrange 7                  | 0         | 00:00:00.202201 | 00:00:00.204736 | 0.987618403431703110437750824708179947656 |
-| wins_by_item | u151      | 8      | Arrange 7                  | 1         | 00:00:00.216731 | 00:00:00.204736 | 1.05858895341593917863900275768799815376  |
-| wins_by_item | u151      | 8      | Arrange 7                  | 2         | 00:00:00.220717 | 00:00:00.204736 | 1.07805793303181678638721908696246766799  |
-| wins_by_item | u151      | 8      | Arrange 7                  | 3         | 00:00:00.179294 | 00:00:00.204736 | 0.875734710120540924536027330641354230589 |
+| name         | global_id | lir_id | operator                   | worker_id | ratio | elapsed_ns      | avg_ns          |
+| ------------ | --------- | ------ | -------------------------- | --------- | ----- | --------------- | --------------- |
+| winning_bids | u186      | 6      | TopK::Basic 5              | 0         | 1     | 00:00:03.172611 | 00:00:03.177245 |
+| winning_bids | u186      | 6      | TopK::Basic 5              | 1         | 1     | 00:00:03.175515 | 00:00:03.177245 |
+| winning_bids | u186      | 6      | TopK::Basic 5              | 2         | 1     | 00:00:03.174291 | 00:00:03.177245 |
+| winning_bids | u186      | 6      | TopK::Basic 5              | 3         | 1     | 00:00:03.186564 | 00:00:03.177245 |
+| winning_bids | u186      | 5      |   Join::Differential 2 » 4 | 0         | 0.97  | 00:00:00.157787 | 00:00:00.162148 |
+| winning_bids | u186      | 5      |   Join::Differential 2 » 4 | 1         | 1.05  | 00:00:00.170231 | 00:00:00.162148 |
+| winning_bids | u186      | 5      |   Join::Differential 2 » 4 | 2         | 1     | 00:00:00.162352 | 00:00:00.162148 |
+| winning_bids | u186      | 5      |   Join::Differential 2 » 4 | 3         | 0.98  | 00:00:00.158224 | 00:00:00.162148 |
+| winning_bids | u186      | 4      |     Arrange 3              | 0         | 0.67  | 00:00:00.059754 | 00:00:00.088972 |
+| winning_bids | u186      | 4      |     Arrange 3              | 1         | 0.64  | 00:00:00.057283 | 00:00:00.088972 |
+| winning_bids | u186      | 4      |     Arrange 3              | 2         | 2.02  | 00:00:00.179739 | 00:00:00.088972 |
+| winning_bids | u186      | 4      |     Arrange 3              | 3         | 0.66  | 00:00:00.059112 | 00:00:00.088972 |
+| winning_bids | u186      | 2      |     Arrange 1              | 0         | 0.82  | 00:00:00.023081 | 00:00:00.028271 |
+| winning_bids | u186      | 2      |     Arrange 1              | 1         | 1.61  | 00:00:00.045394 | 00:00:00.028271 |
+| winning_bids | u186      | 2      |     Arrange 1              | 2         | 0.77  | 00:00:00.021894 | 00:00:00.028271 |
+| winning_bids | u186      | 2      |     Arrange 1              | 3         | 0.8   | 00:00:00.022717 | 00:00:00.028271 |
+| wins_by_item | u187      | 8      | Arrange 7                  | 0         | 0.85  | 00:00:00.02085  | 00:00:00.024526 |
+| wins_by_item | u187      | 8      | Arrange 7                  | 1         | 1.27  | 00:00:00.031028 | 00:00:00.024526 |
+| wins_by_item | u187      | 8      | Arrange 7                  | 2         | 1.44  | 00:00:00.035279 | 00:00:00.024526 |
+| wins_by_item | u187      | 8      | Arrange 7                  | 3         | 0.45  | 00:00:00.010946 | 00:00:00.024526 |
 
-The `ratio` column tells you whether a worker is particularly over- or under-loaded.
+The `ratio` column tells you whether a worker is particularly over- or
+under-loaded: a `ratio` below 1 indicates a worker doing a below
+average amount of work, while a `ratio` above 1 indicates a worker
+doing an above average amount of work. There will always be some
+amount of variation, but very high ratios indicate a skewed workload.
 
 ### Writing your own attribution queries
 
