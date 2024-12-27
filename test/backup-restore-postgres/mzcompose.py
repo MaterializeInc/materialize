@@ -25,7 +25,7 @@ SERVICES = [
     Minio(setup_materialize=True),
     Mc(),
     Materialized(
-        external_minio=True,
+        external_blob_store=True,
         external_metadata_store=True,
         sanity_restart=False,
         metadata_store="postgres-metadata",

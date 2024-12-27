@@ -16,11 +16,10 @@ use anyhow::anyhow;
 use async_trait::async_trait;
 use azure_core::StatusCode;
 use azure_identity::create_default_credential;
-use azure_storage::{prelude::*, EMULATOR_ACCOUNT};
+use azure_storage::{prelude::*, CloudLocation, EMULATOR_ACCOUNT};
 use azure_storage_blobs::prelude::*;
 use bytes::Bytes;
 use futures_util::StreamExt;
-use tokio::runtime::Handle as AsyncHandle;
 use tracing::{info, warn};
 use url::Url;
 use uuid::Uuid;
@@ -31,25 +30,29 @@ use mz_ore::cast::CastFrom;
 use mz_ore::lgbytes::LgBytes;
 use mz_ore::metrics::MetricsRegistry;
 
-use crate::cfg::BlobKnobs;
 use crate::error::Error;
 use crate::location::{Blob, BlobMetadata, Determinate, ExternalError};
 use crate::metrics::S3BlobMetrics;
 
-/// Configuration for opening an [ABSBlob].
+/// Configuration for opening an [AzureBlob].
 #[derive(Clone, Debug)]
-pub struct ABSBlobConfig {
+pub struct AzureBlobConfig {
+    // The metrics struct here is a bit of a misnomer. We only need access
+    // to the LgBytes metrics, which has an Azure-specific field. For now,
+    // it saves considerable plumbing to reuse [S3BlobMetrics].
+    //
+    // TODO: spin up an AzureBlobMetrics and do the plumbing.
     metrics: S3BlobMetrics,
     client: ContainerClient,
     prefix: String,
     cfg: Arc<ConfigSet>,
 }
 
-impl ABSBlobConfig {
-    const EXTERNAL_TESTS_ABS_CONTAINER: &'static str =
-        "MZ_PERSIST_EXTERNAL_STORAGE_TEST_ABS_CONTAINER";
+impl AzureBlobConfig {
+    const EXTERNAL_TESTS_AZURE_CONTAINER: &'static str =
+        "MZ_PERSIST_EXTERNAL_STORAGE_TEST_AZURE_CONTAINER";
 
-    /// Returns a new [ABSBlobConfig] for use in production.
+    /// Returns a new [AzureBlobConfig] for use in production.
     ///
     /// Stores objects in the given container prepended with the (possibly empty)
     /// prefix. Azure credentials must be available in the process or environment.
@@ -63,9 +66,15 @@ impl ABSBlobConfig {
     ) -> Result<Self, Error> {
         let client = if account == EMULATOR_ACCOUNT {
             info!("Connecting to Azure emulator");
-            ClientBuilder::emulator()
-                .blob_service_client()
-                .container_client(container)
+            ClientBuilder::with_location(
+                CloudLocation::Emulator {
+                    address: url.domain().expect("domain for Azure emulator").to_string(),
+                    port: url.port().expect("port for Azure emulator"),
+                },
+                StorageCredentials::emulator(),
+            )
+            .blob_service_client()
+            .container_client(container)
         } else {
             let sas_credentials = match url.query() {
                 Some(query) => Some(StorageCredentials::sas_token(query)),
@@ -99,7 +108,7 @@ impl ABSBlobConfig {
         // and need to be refreshed. This can be done through `service_client.update_credentials`
         // but there'll be a fair bit of plumbing needed to make each mode work
 
-        Ok(ABSBlobConfig {
+        Ok(AzureBlobConfig {
             metrics,
             client,
             cfg,
@@ -107,16 +116,14 @@ impl ABSBlobConfig {
         })
     }
 
-    /// Returns a new [ABSBlobConfig] for use in unit tests.
-    pub async fn new_for_test() -> Result<Option<Self>, Error> {
-        // WIP: do we need this container name to be passed in?
-        let container_name = match std::env::var(Self::EXTERNAL_TESTS_ABS_CONTAINER) {
+    /// Returns a new [AzureBlobConfig] for use in unit tests.
+    pub fn new_for_test() -> Result<Option<Self>, Error> {
+        let container_name = match std::env::var(Self::EXTERNAL_TESTS_AZURE_CONTAINER) {
             Ok(container) => container,
             Err(_) => {
-                // WIP: figure out CI
-                // if mz_ore::env::is_var_truthy("CI") {
-                //     panic!("CI is supposed to run this test but something has gone wrong!");
-                // }
+                if mz_ore::env::is_var_truthy("CI") {
+                    panic!("CI is supposed to run this test but something has gone wrong!");
+                }
                 return Ok(None);
             }
         };
@@ -124,16 +131,12 @@ impl ABSBlobConfig {
         let prefix = Uuid::new_v4().to_string();
         let metrics = S3BlobMetrics::new(&MetricsRegistry::new());
 
-        let config = ABSBlobConfig::new(
+        let config = AzureBlobConfig::new(
             EMULATOR_ACCOUNT.to_string(),
             container_name.clone(),
             prefix,
             metrics,
-            Url::parse(&format!(
-                "http://devaccount1.blob.core.windows.net/{}",
-                container_name
-            ))
-            .expect("valid url"),
+            Url::parse(&format!("http://localhost:40111/{}", container_name)).expect("valid url"),
             Arc::new(ConfigSet::default()),
         )?;
 
@@ -150,37 +153,31 @@ impl ABSBlobConfig {
 
 /// Implementation of [Blob] backed by Azure Blob Storage.
 #[derive(Debug)]
-pub struct ABSBlob {
+pub struct AzureBlob {
     metrics: S3BlobMetrics,
     client: ContainerClient,
-    container_name: String,
     prefix: String,
-    cfg: Arc<ConfigSet>,
+    _cfg: Arc<ConfigSet>,
 }
 
-impl ABSBlob {
+impl AzureBlob {
     /// Opens the given location for non-exclusive read-write access.
-    pub async fn open(config: ABSBlobConfig) -> Result<Self, ExternalError> {
-        let container_name = config.client.container_name().to_string();
-
+    pub async fn open(config: AzureBlobConfig) -> Result<Self, ExternalError> {
         if config.client.service_client().account() == EMULATOR_ACCOUNT {
             // TODO: we could move this logic into the test harness.
             // it's currently here because it's surprisingly annoying to
             // create the container out-of-band
-            let _ = config.client.create().await;
+            if let Err(e) = config.client.create().await {
+                warn!("Failed to create container: {e}");
+            }
         }
 
-        let ret = ABSBlob {
+        let ret = AzureBlob {
             metrics: config.metrics,
             client: config.client,
-            container_name,
             prefix: config.prefix,
-            cfg: config.cfg,
+            _cfg: config.cfg,
         };
-
-        // Test connection before returning success
-        // let x = ret.client.blob_client("HEALTH_CHECK").get_properties().await;
-        // x.err
 
         Ok(ret)
     }
@@ -191,7 +188,7 @@ impl ABSBlob {
 }
 
 #[async_trait]
-impl Blob for ABSBlob {
+impl Blob for AzureBlob {
     async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError> {
         let path = self.get_path(key);
         let blob = self.client.blob_client(path);
@@ -219,7 +216,7 @@ impl Blob for ABSBlob {
             let mut buffer = self
                 .metrics
                 .lgbytes
-                .persist_abs
+                .persist_azure
                 .new_region(usize::cast_from(content_length));
 
             let mut body = response.data;
@@ -263,10 +260,7 @@ impl Blob for ABSBlob {
 
                 if let Some(key) = blob.name.strip_prefix(&strippable_root_prefix) {
                     let size_in_bytes = blob.properties.content_length;
-                    f(BlobMetadata {
-                        key: key,
-                        size_in_bytes,
-                    });
+                    f(BlobMetadata { key, size_in_bytes });
                 }
             }
         }
@@ -291,7 +285,7 @@ impl Blob for ABSBlob {
 
         match blob.get_properties().await {
             Ok(props) => {
-                let size = props.blob.properties.content_length as usize;
+                let size = usize::cast_from(props.blob.properties.content_length);
                 blob.delete()
                     .await
                     .map_err(|e| ExternalError::from(anyhow!("Azure blob delete error: {}", e)))?;
@@ -339,29 +333,30 @@ mod tests {
 
     use super::*;
 
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_method` on OS `linux`
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
-    async fn abs_blob() -> Result<(), ExternalError> {
-        let config = match ABSBlobConfig::new_for_test().await? {
+    async fn azure_blob() -> Result<(), ExternalError> {
+        let config = match AzureBlobConfig::new_for_test()? {
             Some(client) => client,
             None => {
                 info!(
                     "{} env not set: skipping test that uses external service",
-                    ABSBlobConfig::EXTERNAL_TESTS_ABS_CONTAINER
+                    AzureBlobConfig::EXTERNAL_TESTS_AZURE_CONTAINER
                 );
                 return Ok(());
             }
         };
 
-        blob_impl_test(move |path| {
+        blob_impl_test(move |_path| {
             let config = config.clone();
             async move {
-                let config = ABSBlobConfig {
+                let config = AzureBlobConfig {
                     metrics: config.metrics.clone(),
                     client: config.client.clone(),
                     cfg: Arc::new(ConfigSet::default()),
                     prefix: config.prefix.clone(),
                 };
-                ABSBlob::open(config).await
+                AzureBlob::open(config).await
             }
         })
         .await

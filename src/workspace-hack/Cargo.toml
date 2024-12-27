@@ -33,9 +33,10 @@ bstr-6f8ce4dd05d13bba = { package = "bstr", version = "0.2.14" }
 bstr-dff4ba8e3ae991db = { package = "bstr", version = "1.10.0" }
 byteorder = { version = "1.5.0" }
 bytes = { version = "1.4.0", features = ["serde"] }
-chrono = { version = "0.4.35", default-features = false, features = ["clock", "serde"] }
+chrono = { version = "0.4.35", default-features = false, features = ["clock", "serde", "wasmbind"] }
 clap = { version = "4.5.23", features = ["derive", "env", "string", "wrap_help"] }
 clap_builder = { version = "4.5.23", default-features = false, features = ["color", "env", "std", "string", "suggestions", "usage", "wrap_help"] }
+concurrent-queue = { version = "2.5.0" }
 console = { version = "0.15.5", default-features = false, features = ["ansi-parsing", "unicode-width"] }
 criterion = { version = "0.5.1", features = ["async_tokio", "html_reports"] }
 crossbeam-deque = { version = "0.8.3" }
@@ -46,6 +47,8 @@ debugid = { version = "0.8.0", default-features = false, features = ["serde"] }
 dec = { version = "0.4.8", default-features = false, features = ["serde"] }
 digest = { version = "0.10.6", features = ["mac", "std"] }
 either = { version = "1.8.0" }
+event-listener = { version = "5.3.1" }
+event-listener-strategy = { version = "0.5.2" }
 flate2 = { version = "1.0.24", features = ["zlib"] }
 form_urlencoded = { version = "1.2.1" }
 futures = { version = "0.3.25" }
@@ -106,7 +109,8 @@ rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", feat
 regex = { version = "1.10.5" }
 regex-automata = { version = "0.4.7", default-features = false, features = ["dfa-onepass", "dfa-search", "hybrid", "meta", "nfa", "perf", "unicode"] }
 regex-syntax = { version = "0.8.3" }
-reqwest = { version = "0.11.24", features = ["blocking", "json", "multipart", "native-tls-vendored"] }
+reqwest-5ef9efb8ec2df382 = { package = "reqwest", version = "0.12.4", default-features = false, features = ["blocking", "charset", "default-tls", "http2", "json", "stream"] }
+reqwest-a6292c17cd707f01 = { package = "reqwest", version = "0.11.24", features = ["blocking", "json", "multipart", "native-tls-vendored"] }
 schemars = { version = "0.8.11", features = ["uuid1"] }
 scopeguard = { version = "1.1.0" }
 semver = { version = "1.0.23", features = ["serde"] }
@@ -119,7 +123,7 @@ socket2 = { version = "0.5.7", default-features = false, features = ["all"] }
 subtle = { version = "2.4.1" }
 syn-dff4ba8e3ae991db = { package = "syn", version = "1.0.107", features = ["extra-traits", "full", "visit", "visit-mut"] }
 syn-f595c2ba2a3f28df = { package = "syn", version = "2.0.63", features = ["extra-traits", "full", "visit", "visit-mut"] }
-time = { version = "0.3.17", features = ["macros", "quickcheck", "serde-well-known"] }
+time = { version = "0.3.17", features = ["local-offset", "macros", "quickcheck", "serde-well-known"] }
 tokio = { version = "1.38.0", features = ["full", "test-util", "tracing"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde", "with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 tokio-stream = { version = "0.1.16", features = ["net", "sync"] }
@@ -128,8 +132,8 @@ toml_datetime = { version = "0.6.3", default-features = false, features = ["serd
 tonic = { version = "0.12.3", features = ["gzip"] }
 tower = { version = "0.4.13", features = ["balance", "buffer", "filter", "limit", "load-shed", "retry", "timeout", "util"] }
 tower-http = { version = "0.5.2", features = ["auth", "cors", "map-response-body", "trace", "util"] }
-tracing = { version = "0.1.37", features = ["log"] }
-tracing-core = { version = "0.1.30" }
+tracing = { version = "0.1.41", features = ["log"] }
+tracing-core = { version = "0.1.33" }
 tracing-subscriber = { version = "0.3.18", features = ["env-filter", "json"] }
 tungstenite = { version = "0.21.0" }
 twox-hash = { version = "1.6.3" }
@@ -164,9 +168,10 @@ bstr-dff4ba8e3ae991db = { package = "bstr", version = "1.10.0" }
 byteorder = { version = "1.5.0" }
 bytes = { version = "1.4.0", features = ["serde"] }
 cc = { version = "1.1.28", default-features = false, features = ["parallel"] }
-chrono = { version = "0.4.35", default-features = false, features = ["clock", "serde"] }
+chrono = { version = "0.4.35", default-features = false, features = ["clock", "serde", "wasmbind"] }
 clap = { version = "4.5.23", features = ["derive", "env", "string", "wrap_help"] }
 clap_builder = { version = "4.5.23", default-features = false, features = ["color", "env", "std", "string", "suggestions", "usage", "wrap_help"] }
+concurrent-queue = { version = "2.5.0" }
 console = { version = "0.15.5", default-features = false, features = ["ansi-parsing", "unicode-width"] }
 criterion = { version = "0.5.1", features = ["async_tokio", "html_reports"] }
 crossbeam-deque = { version = "0.8.3" }
@@ -177,6 +182,8 @@ debugid = { version = "0.8.0", default-features = false, features = ["serde"] }
 dec = { version = "0.4.8", default-features = false, features = ["serde"] }
 digest = { version = "0.10.6", features = ["mac", "std"] }
 either = { version = "1.8.0" }
+event-listener = { version = "5.3.1" }
+event-listener-strategy = { version = "0.5.2" }
 flate2 = { version = "1.0.24", features = ["zlib"] }
 form_urlencoded = { version = "1.2.1" }
 futures = { version = "0.3.25" }
@@ -238,7 +245,8 @@ rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", feat
 regex = { version = "1.10.5" }
 regex-automata = { version = "0.4.7", default-features = false, features = ["dfa-onepass", "dfa-search", "hybrid", "meta", "nfa", "perf", "unicode"] }
 regex-syntax = { version = "0.8.3" }
-reqwest = { version = "0.11.24", features = ["blocking", "json", "multipart", "native-tls-vendored"] }
+reqwest-5ef9efb8ec2df382 = { package = "reqwest", version = "0.12.4", default-features = false, features = ["blocking", "charset", "default-tls", "http2", "json", "stream"] }
+reqwest-a6292c17cd707f01 = { package = "reqwest", version = "0.11.24", features = ["blocking", "json", "multipart", "native-tls-vendored"] }
 schemars = { version = "0.8.11", features = ["uuid1"] }
 scopeguard = { version = "1.1.0" }
 semver = { version = "1.0.23", features = ["serde"] }
@@ -251,7 +259,7 @@ socket2 = { version = "0.5.7", default-features = false, features = ["all"] }
 subtle = { version = "2.4.1" }
 syn-dff4ba8e3ae991db = { package = "syn", version = "1.0.107", features = ["extra-traits", "full", "visit", "visit-mut"] }
 syn-f595c2ba2a3f28df = { package = "syn", version = "2.0.63", features = ["extra-traits", "full", "visit", "visit-mut"] }
-time = { version = "0.3.17", features = ["macros", "quickcheck", "serde-well-known"] }
+time = { version = "0.3.17", features = ["local-offset", "macros", "quickcheck", "serde-well-known"] }
 time-macros = { version = "0.2.6", default-features = false, features = ["formatting", "parsing", "serde"] }
 tokio = { version = "1.38.0", features = ["full", "test-util", "tracing"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde", "with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
@@ -261,8 +269,8 @@ toml_datetime = { version = "0.6.3", default-features = false, features = ["serd
 tonic = { version = "0.12.3", features = ["gzip"] }
 tower = { version = "0.4.13", features = ["balance", "buffer", "filter", "limit", "load-shed", "retry", "timeout", "util"] }
 tower-http = { version = "0.5.2", features = ["auth", "cors", "map-response-body", "trace", "util"] }
-tracing = { version = "0.1.37", features = ["log"] }
-tracing-core = { version = "0.1.30" }
+tracing = { version = "0.1.41", features = ["log"] }
+tracing-core = { version = "0.1.33" }
 tracing-subscriber = { version = "0.3.18", features = ["env-filter", "json"] }
 tungstenite = { version = "0.21.0" }
 twox-hash = { version = "1.6.3" }
@@ -280,19 +288,21 @@ zstd-sys = { version = "2.0.9", features = ["std"] }
 bitflags = { version = "2.4.1", default-features = false, features = ["std"] }
 camino = { version = "1.1.7", default-features = false, features = ["serde1"] }
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", default-features = false, features = ["runtime"] }
+linux-raw-sys = { version = "0.4.14", default-features = false, features = ["elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "xdp"] }
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
 pathdiff = { version = "0.2.1", default-features = false, features = ["camino"] }
 ring = { version = "0.17.7", features = ["std"] }
-rustix = { version = "0.38.43", features = ["fs", "termios"] }
+rustix = { version = "0.38.43", features = ["event", "fs", "net", "pipe", "process", "termios", "time"] }
 
 [target.x86_64-unknown-linux-gnu.build-dependencies]
 bitflags = { version = "2.4.1", default-features = false, features = ["std"] }
 camino = { version = "1.1.7", default-features = false, features = ["serde1"] }
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", default-features = false, features = ["runtime"] }
+linux-raw-sys = { version = "0.4.14", default-features = false, features = ["elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "xdp"] }
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
 pathdiff = { version = "0.2.1", default-features = false, features = ["camino"] }
 ring = { version = "0.17.7", features = ["std"] }
-rustix = { version = "0.38.43", features = ["fs", "termios"] }
+rustix = { version = "0.38.43", features = ["event", "fs", "net", "pipe", "process", "termios", "time"] }
 
 [target.x86_64-apple-darwin.dependencies]
 bitflags = { version = "2.4.1", default-features = false, features = ["std"] }
@@ -301,7 +311,7 @@ hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", default-featu
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
 pathdiff = { version = "0.2.1", default-features = false, features = ["camino"] }
 ring = { version = "0.17.7", features = ["std"] }
-rustix = { version = "0.38.43", features = ["fs", "termios"] }
+rustix = { version = "0.38.43", features = ["event", "fs", "net", "pipe", "process", "termios", "time"] }
 security-framework = { version = "2.7.0", features = ["alpn"] }
 
 [target.x86_64-apple-darwin.build-dependencies]
@@ -311,7 +321,7 @@ hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", default-featu
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
 pathdiff = { version = "0.2.1", default-features = false, features = ["camino"] }
 ring = { version = "0.17.7", features = ["std"] }
-rustix = { version = "0.38.43", features = ["fs", "termios"] }
+rustix = { version = "0.38.43", features = ["event", "fs", "net", "pipe", "process", "termios", "time"] }
 security-framework = { version = "2.7.0", features = ["alpn"] }
 
 ### END HAKARI SECTION

@@ -1077,6 +1077,13 @@ class Composition:
             f"No external metadata store found: {self.compose['services']}"
         )
 
+    def blob_store(self) -> str:
+        for name in ["azurite", "minio"]:
+            if name in self.compose["services"]:
+                print(f"BLOB STORE IS: {name}")
+                return name
+        raise RuntimeError(f"No external blob store found: {self.compose['services']}")
+
     def capture_logs(self, *services: str) -> None:
         # Capture logs into services.log since they will be lost otherwise
         # after dowing a composition.

@@ -19,6 +19,7 @@ from datetime import timedelta
 from enum import Enum
 
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services.azure import Azurite
 from materialize.mzcompose.services.balancerd import Balancerd
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.cockroach import Cockroach
@@ -43,18 +44,36 @@ from materialize.zippy.scenarios import *  # noqa: F401 F403
 
 
 def create_mzs(
-    additional_system_parameter_defaults: dict[str, str] | None = None
-) -> list[Materialized]:
+    azurite: bool,
+    transaction_isolation: bool,
+    additional_system_parameter_defaults: dict[str, str] | None = None,
+) -> list[Testdrive | Materialized]:
     return [
         Materialized(
             name=mz_name,
-            external_minio=True,
+            external_blob_store=True,
+            blob_store_is_azure=azurite,
             external_metadata_store=True,
             sanity_restart=False,
             metadata_store="cockroach",
             additional_system_parameter_defaults=additional_system_parameter_defaults,
         )
         for mz_name in ["materialized", "materialized2"]
+    ] + [
+        Testdrive(
+            materialize_url="postgres://materialize@balancerd:6875",
+            no_reset=True,
+            seed=1,
+            # Timeout increased since Large Zippy occasionally runs into them
+            default_timeout="1200s",
+            materialize_params={
+                "statement_timeout": "'1800s'",
+                "transaction_isolation": f"'{transaction_isolation}'",
+            },
+            metadata_store="cockroach",
+            external_blob_store=True,
+            blob_store_is_azure=azurite,
+        ),
     ]
 
 
@@ -65,11 +84,11 @@ SERVICES = [
     Postgres(),
     Cockroach(),
     Minio(setup_materialize=True, additional_directories=["copytos3"]),
+    Azurite(),
     Mc(),
     Balancerd(),
-    *create_mzs(),
+    *create_mzs(azurite=False, transaction_isolation=False),
     Clusterd(name="storaged"),
-    Testdrive(metadata_store="cockroach"),
     Grafana(),
     Prometheus(),
     SshBastionHost(),
@@ -157,10 +176,19 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         help="System parameters to set in Materialize, i.e. what you would set with `ALTER SYSTEM SET`",
     )
 
+    parser.add_argument(
+        "--azurite", action="store_true", help="Use Azurite as blob store instead of S3"
+    )
+
     args = parser.parse_args()
     scenario_class = globals()[args.scenario]
 
     c.up("zookeeper", "redpanda", "ssh-bastion-host")
+    if args.azurite:
+        c.up("azurite")
+    else:
+        del c.compose["services"]["azurite"]
+    # Required for backups, even with azurite
     c.enable_minio_versioning()
 
     if args.observability:
@@ -181,19 +209,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             restart="on-failure:5",
             setup_materialize=True,
         ),
-        Testdrive(
-            materialize_url="postgres://materialize@balancerd:6875",
-            no_reset=True,
-            seed=1,
-            # Timeout increased since Large Zippy occasionally runs into them
-            default_timeout="1200s",
-            materialize_params={
-                "statement_timeout": "'1800s'",
-                "transaction_isolation": f"'{args.transaction_isolation}'",
-            },
-            metadata_store="cockroach",
+        *create_mzs(
+            args.azurite,
+            args.transaction_isolation,
+            additional_system_parameter_defaults,
         ),
-        *create_mzs(additional_system_parameter_defaults),
     ):
         c.up("materialized")
 

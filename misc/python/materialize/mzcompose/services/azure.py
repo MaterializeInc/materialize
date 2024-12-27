@@ -7,14 +7,12 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import os
 
-from materialize import MZ_ROOT
-from materialize.mzcompose import loader
-from materialize.mzcompose.service import (
-    Service,
-    ServiceHealthcheck
-)
+from materialize.mzcompose.service import Service, ServiceHealthcheck
+
+
+def azure_blob_uri(address: str = "azurite") -> str:
+    return f"http://devstoreaccount1.{address}:10000/container"
 
 
 class Azurite(Service):
@@ -23,18 +21,30 @@ class Azurite(Service):
     def __init__(
         self,
         name: str = "azurite",
-        aliases: list[str] = ["azurite"],
+        aliases: list[str] = ["azurite", "devstoreaccount1.azurite"],
         image: str | None = None,
         command: list[str] | None = None,
         in_memory: bool = False,
         healthcheck: ServiceHealthcheck | None = None,
         stop_grace_period: str = "120s",
+        ports: list[int | str] = [10000],
+        allow_host_ports: bool = False,
     ):
         if image is None:
-            image = f"mcr.microsoft.com/azure-storage/azurite:{self.DEFAULT_AZURITE_TAG}"
+            image = (
+                f"mcr.microsoft.com/azure-storage/azurite:{self.DEFAULT_AZURITE_TAG}"
+            )
 
         if command is None:
-            command = ["azurite-blob", "--blobHost", "0.0.0.0:10000", "--blobPort", "10000"]
+            command = [
+                "azurite-blob",
+                "--blobHost",
+                "0.0.0.0",
+                "--blobPort",
+                "10000",
+                "--disableProductStyleUrl",
+                "--loose",
+            ]
 
         if in_memory:
             command.append("--inMemoryPersistence")
@@ -51,7 +61,8 @@ class Azurite(Service):
             config={
                 "image": image,
                 "networks": {"default": {"aliases": aliases}},
-                "ports": [10000],
+                "ports": ports,
+                "allow_host_ports": allow_host_ports,
                 "command": command,
                 "init": True,
                 "healthcheck": healthcheck,

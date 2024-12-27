@@ -15,6 +15,7 @@ from materialize.mzcompose.services.materialized import (
     Materialized,
 )
 from materialize.zippy.balancerd_capabilities import BalancerdIsRunning
+from materialize.zippy.blob_store_capabilities import BlobStoreIsRunning
 from materialize.zippy.crdb_capabilities import CockroachIsRunning
 from materialize.zippy.framework import (
     Action,
@@ -24,7 +25,6 @@ from materialize.zippy.framework import (
     Mz0dtDeployBaseAction,
     State,
 )
-from materialize.zippy.minio_capabilities import MinioIsRunning
 from materialize.zippy.mz_capabilities import MzIsRunning
 from materialize.zippy.view_capabilities import ViewExists
 
@@ -34,7 +34,7 @@ class MzStartParameterized(ActionFactory):
 
     @classmethod
     def requires(cls) -> set[type[Capability]]:
-        return {CockroachIsRunning, MinioIsRunning}
+        return {CockroachIsRunning, BlobStoreIsRunning}
 
     @classmethod
     def incompatible_with(cls) -> set[type[Capability]]:
@@ -59,7 +59,7 @@ class MzStart(Action):
 
     @classmethod
     def requires(cls) -> set[type[Capability]]:
-        return {CockroachIsRunning, MinioIsRunning}
+        return {CockroachIsRunning, BlobStoreIsRunning}
 
     @classmethod
     def incompatible_with(cls) -> set[type[Capability]]:
@@ -81,7 +81,8 @@ class MzStart(Action):
         with c.override(
             Materialized(
                 name=state.mz_service,
-                external_minio=True,
+                external_blob_store=True,
+                blob_store_is_azure=c.blob_store() == "azurite",
                 external_metadata_store=True,
                 deploy_generation=state.deploy_generation,
                 system_parameter_defaults=state.system_parameter_defaults,
@@ -158,7 +159,8 @@ class MzRestart(Action):
         with c.override(
             Materialized(
                 name=state.mz_service,
-                external_minio=True,
+                external_blob_store=True,
+                blob_store_is_azure=c.blob_store() == "azurite",
                 external_metadata_store=True,
                 deploy_generation=state.deploy_generation,
                 system_parameter_defaults=state.system_parameter_defaults,
@@ -190,7 +192,8 @@ class Mz0dtDeploy(Mz0dtDeployBaseAction):
         with c.override(
             Materialized(
                 name=state.mz_service,
-                external_minio=True,
+                external_blob_store=True,
+                blob_store_is_azure=c.blob_store() == "azurite",
                 external_metadata_store=True,
                 deploy_generation=state.deploy_generation,
                 system_parameter_defaults=state.system_parameter_defaults,
