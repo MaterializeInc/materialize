@@ -27,6 +27,7 @@ from materialize.mzcompose.composition import (
     WorkflowArgumentParser,
 )
 from materialize.mzcompose.services.mz import Mz
+from materialize.ui import UIError
 
 REGION = "aws/us-west-2"
 ENVIRONMENT = os.getenv("ENVIRONMENT", "production")
@@ -244,7 +245,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 def disable_region(c: Composition) -> None:
     print(f"Shutting down region {REGION} ...")
 
-    c.run("mz", "region", "disable", "--hard")
+    try:
+        c.run("mz", "region", "disable", "--hard")
+    except UIError:
+        # Can return: status 404 Not Found
+        pass
 
 
 def wait_for_cloud(c: Composition) -> None:
