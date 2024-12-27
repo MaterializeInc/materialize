@@ -17,7 +17,7 @@ clap = { version = "3.2.24", features = ["derive"] }
 dec = "0.4.8"
 fallible-iterator = "0.2.0"
 futures = "0.3.25"
-itertools = "0.10.5"
+itertools = "0.12.1"
 junit-report = "0.8.3"
 md-5 = "0.10.5"
 mz-build-info = { path = "../build-info" }

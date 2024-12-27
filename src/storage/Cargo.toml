@@ -33,7 +33,7 @@ futures = "0.3.25"
 globset = { version = "0.4.14", features = ["serde1"] }
 http = "1.1.0"
 indexmap = { version = "2.0.0", default-features = false, features = ["std"] }
-itertools = { version = "0.10.5" }
+itertools = { version = "0.12.1" }
 maplit = "1.0.2"
 mysql_async = { version = "0.34.1", default-features = false, features = ["minimal", "binlog"] }
 mysql_common = { version = "0.32.4", default-features = false, features = ["chrono"] }
@@ -109,7 +109,7 @@ datadriven = { version = "0.8.0", features = ["async"] }
 humantime = "2.1.0"
 mz-http-util = { path = "../http-util" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
-itertools = "0.10.5"
+itertools = "0.12.1"
 num_cpus = "1.14.0"
 tempfile = "3.8.1"
 tokio = { version = "1.38.0", features = ["test-util"] }
