@@ -44,7 +44,7 @@ tonic-build = "0.12.1"
 default = ["mz-build-tools/default", "workspace-hack"]
 
 [dev-dependencies]
-tempfile = "3.8.1"
+tempfile = "3.14.0"
 prometheus = { version = "0.13.3", default-features = false }
 
 [package.metadata.cargo-udeps.ignore]
