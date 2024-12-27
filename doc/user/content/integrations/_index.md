@@ -114,11 +114,12 @@ source requires enabling [**GTID-based binlog replication**](/sql/create-source/
 ### CockroachDB
 
 CockroachDB is supported as a [**source**](/concepts/sources) through
-[Changefeeds](/ingest-data/cockroachdb/) (via Kafka or other Kafka API-compatible broker).
+[Changefeeds](https://www.cockroachlabs.com/docs/stable/create-and-configure-changefeeds?)
+(via Kafka or other Kafka API-compatible broker).
 
 | Service                | Support level                    | Notes                                                                                                |             |
 | ---------------------- | -------------------------------- | ---------------------------------------------------------------------------------------------------- | ----------- |
-| CockroachDB _(via Changefeeds)_ | {{< supportLevel production >}}  | See the [CockroachDB Changefeed Guide](/ingest-data/cockroachdb/) for a step-by-step breakdown of the integration. |             |
+| CockroachDB _(via Changefeeds)_ | {{< supportLevel production >}}  | See the [CockroachDB CDC guide](/ingest-data/cdc-cockroachdb/) for a step-by-step breakdown of the integration. |             |
 
 ### Other databases
 

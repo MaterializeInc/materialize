@@ -113,7 +113,7 @@ guidance.
     CREATE SECRET csr_password AS '<CSR_PASSWORD>';
     ```
 
-1. Use the [`CREATE CONNECTION`](/sql/create-connection/kafka) command to create
+1. Use the [`CREATE CONNECTION`](/sql/create-connection/#kafka) command to create
    a connection object with access and authentication details for Materialize to
    use:
 
