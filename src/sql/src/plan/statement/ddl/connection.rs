@@ -9,6 +9,7 @@
 
 //! Data definition language (DDL) utilities for CONNECTION objects.
 
+use regex::Regex;
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::Context;
@@ -260,13 +261,10 @@ impl ConnectionOptionExtracted {
                 if let Some(supported_azs) = scx.catalog.aws_privatelink_availability_zones() {
                     let mut unique_azs: BTreeSet<String> = BTreeSet::new();
                     let mut duplicate_azs: BTreeSet<String> = BTreeSet::new();
+                    let az_pattern = Regex::new(r"^[a-z]{3,4}\d-az[1-6]$").unwrap();
                     // Validate each AZ is supported
                     for connection_az in &connection.availability_zones {
-                        if !connection_az
-                            .chars()
-                            .all(|c| c.is_ascii_alphanumeric() || c == '-')
-                            || !connection_az.contains("-az")
-                        {
+                        if !az_pattern.is_match(connection_az) {
                             return Err(PlanError::InvalidPrivatelinkAvailabilityZone {
                                 name: connection_az.to_string(),
                                 supported_azs,
