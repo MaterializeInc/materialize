@@ -17,7 +17,7 @@ bytes = "1.3.0"
 bytesize = "1.1.0"
 enum-kinds = "0.5.1"
 futures = "0.3.25"
-itertools = "0.10.5"
+itertools = "0.12.1"
 mz-adapter = { path = "../adapter" }
 mz-adapter-types = { path = "../adapter-types" }
 mz-expr = { path = "../expr" }

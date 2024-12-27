@@ -14,7 +14,7 @@ workspace = true
 bytesize = "1.1.0"
 datadriven = { version = "0.8.0", optional = true }
 enum-kinds = "0.5.1"
-itertools = "0.10.5"
+itertools = "0.12.1"
 mz-ore = { path = "../ore", default-features = false, features = ["stack", "test"] }
 mz-sql-lexer = { path = "../sql-lexer", default-features = false }
 phf = { version = "0.11.1", features = ["uncased"] }
