@@ -55,7 +55,9 @@ Kafka is supported as a [**source**](/concepts/sources), with features like **up
 
 ### Redpanda
 
-Being Kafka API-compatible, Redpanda is supported as a [**source**](/concepts/sources) and as a [**sink**](/concepts/sinks) at the same level and with the same features as Kafka.
+Being Kafka API-compatible, Redpanda is supported as a [**source**](/concepts/sources)
+and as a [**sink**](/concepts/sinks) at the same level and with the same
+features as Kafka.
 
 | Service        | Support level             | Notes                                                                                                                                                                                                                                                                                                                                 |             |
 | -------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
@@ -80,11 +82,17 @@ Being Kafka API-compatible, Redpanda is supported as a [**source**](/concepts/so
 
 ## Databases
 
-Materialize can efficiently maintain real-time materialized views on top of **Change Data Capture (CDC)** data originating from a database, either by directly consuming its replication stream or via [Debezium](/integrations/debezium/).
+Materialize can efficiently maintain real-time materialized views on top
+of **Change Data Capture (CDC)** data originating from a database, either by
+directly consuming its replication stream or via [Debezium](/integrations/debezium/).
 
 ### PostgreSQL
 
-PostgreSQL 11+ is supported as a [**source**](/concepts/sources), both through the [direct PostgreSQL source](/sql/create-source/postgres/) and through [Debezium](/integrations/debezium/) (via Kafka or Redpanda). Using a PostgreSQL instance as a source requires enabling **logical replication**.
+PostgreSQL 11+ is supported as a [**source**](/concepts/sources), both through
+the [direct PostgreSQL source](/sql/create-source/postgres/) and through
+[Debezium](/integrations/debezium/) (via Kafka or other Kafka API-compatible
+broker). Using a PostgreSQL instance as a source requires enabling **logical
+replication**.
 
 | Service                         | Support level                    | Notes                                                                                                                                                                                                                                                                                         |             |
 | ------------------------------- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
@@ -93,10 +101,10 @@ PostgreSQL 11+ is supported as a [**source**](/concepts/sources), both through t
 
 ### MySQL
 
-MySQL 5.7+ is supported as a [**source**](/concepts/sources)
-both through the [direct MySQL source](/sql/create-source/mysql/) and through
-[Debezium](/integrations/debezium/) (via Kafka or Redpanda). Using a MySQL
-database as a source requires enabling [**GTID-based binlog replication**](/sql/create-source/mysql/#change-data-capture).
+MySQL 5.7+ is supported as a [**source**](/concepts/sources) both through the
+[direct MySQL source](/sql/create-source/mysql/) and through [Debezium](/integrations/debezium/)
+(via Kafka or other Kafka API-compatible broker). Using a MySQL database as a
+source requires enabling [**GTID-based binlog replication**](/sql/create-source/mysql/#change-data-capture).
 
 | Service                | Support level                    | Notes                                                                                                |             |
 | ---------------------- | -------------------------------- | ---------------------------------------------------------------------------------------------------- | ----------- |
@@ -105,9 +113,8 @@ database as a source requires enabling [**GTID-based binlog replication**](/sql/
 
 ### CockroachDB
 
-CockroachDB is supported as a [**source**](/concepts/sources)
-through
-[Changefeeds](/ingest-data/cockroachdb/) (via Kafka or Redpanda).
+CockroachDB is supported as a [**source**](/concepts/sources) through
+[Changefeeds](/ingest-data/cockroachdb/) (via Kafka or other Kafka API-compatible broker).
 
 | Service                | Support level                    | Notes                                                                                                |             |
 | ---------------------- | -------------------------------- | ---------------------------------------------------------------------------------------------------- | ----------- |

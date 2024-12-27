@@ -1,0 +1,22 @@
+When a new source is created, Materialize performs a sync of all data available
+in the upstream Kafka topic before it starts ingesting new data — an operation
+known as _snapshotting_. Because the initial snapshot is persisted in the
+storage layer atomically (i.e., at the same ingestion timestamp), you
+will **not able to query the source until snapshotting is complete**.
+
+In this step, you'll monitor the progress of the initial snapshot using the
+observability features in the [Materialize Console](https://materialize.com/docs/console/).
+
+1. If not already logged in, [log in to the Materialize Console](https://console.materialize.com/).
+
+1. Navigate to **Monitoring** > **Sources** and click through to the source you
+   created in the previous step. In the source overview page, you will see a
+   progress bar with the status and progress of the snapshot.
+
+1. For the duration of the snapshotting operation, the source status will show
+   as `Snapshotting`. Once the source status transitions from `Snapshotting` to
+   `Running`, the source is ready for querying and you can move on to the next
+   step.
+
+   If the source fails to transition to this state, check the
+   [ingestion troubleshooting guide](https://materialize.com/docs/ingest-data/troubleshooting/).

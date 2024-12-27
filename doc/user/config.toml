@@ -38,6 +38,12 @@ identifier = 'sql-server'
 weight = 15
 
 [[menu.main]]
+name = "CockroachDB"
+parent = 'ingest-data'
+identifier = 'crdb'
+weight = 20
+
+[[menu.main]]
 name = "Redpanda"
 parent = 'ingest-data'
 identifier = 'redpanda'
