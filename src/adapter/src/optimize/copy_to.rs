@@ -139,6 +139,10 @@ pub struct GlobalLirPlan {
 }
 
 impl GlobalLirPlan {
+    pub fn df_desc(&self) -> &LirDataflowDescription {
+        &self.df_desc
+    }
+
     pub fn sink_id(&self) -> GlobalId {
         let sink_exports = &self.df_desc.sink_exports;
         let sink_id = sink_exports.keys().next().expect("valid sink");

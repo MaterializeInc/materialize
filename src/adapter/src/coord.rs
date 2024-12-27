@@ -426,8 +426,10 @@ pub enum PeekStage {
     /// Final stage for an explain.
     ExplainPlan(PeekStageExplainPlan),
     ExplainPushdown(PeekStageExplainPushdown),
-    /// Final stage for a copy to.
-    CopyTo(PeekStageCopyTo),
+    /// Preflight checks for a copy to operation.
+    CopyToPreflight(PeekStageCopyTo),
+    /// Final stage for a copy to which involves shipping the dataflow.
+    CopyToDataflow(PeekStageCopyTo),
 }
 
 #[derive(Debug)]

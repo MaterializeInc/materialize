@@ -17,6 +17,7 @@ use mz_aws_util::s3_uploader::{
 use mz_ore::cast::CastFrom;
 use mz_ore::future::OreFutureExt;
 use mz_repr::{GlobalId, RelationDesc, Row};
+use mz_storage_types::sinks::s3_oneshot_sink::S3KeyManager;
 use mz_storage_types::sinks::{S3SinkFormat, S3UploadInfo};
 use parquet::{
     arrow::arrow_writer::ArrowWriter,
@@ -25,7 +26,7 @@ use parquet::{
 };
 use tracing::{debug, info};
 
-use super::{CopyToParameters, CopyToS3Uploader, S3KeyManager};
+use super::{CopyToParameters, CopyToS3Uploader};
 
 /// Set the default capacity for the array builders inside the ArrowBuilder. This is the
 /// number of items each builder can hold before it needs to allocate more memory.
@@ -210,6 +211,11 @@ impl CopyToS3Uploader for ParquetUploader {
                 .run_in_task(|| "ParquetFile::finish")
                 .await?;
         }
+        Ok(())
+    }
+
+    async fn force_new_file(&mut self) -> Result<(), anyhow::Error> {
+        self.start_new_file().await?;
         Ok(())
     }
 }

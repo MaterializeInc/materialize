@@ -124,7 +124,7 @@ where
                 .get(&compute_state.worker_config),
         };
 
-        mz_storage_operators::s3_oneshot_sink::copy_to(
+        let token = mz_storage_operators::s3_oneshot_sink::copy_to(
             input,
             error_stream,
             sink.up_to.clone(),
@@ -138,6 +138,7 @@ where
         );
 
         Some(Rc::new(scopeguard::guard((), move |_| {
+            let _token = token;
             if let Some(protocol_handle) = response_protocol_weak.upgrade() {
                 std::mem::drop(protocol_handle.borrow_mut().take())
             }
