@@ -67,7 +67,7 @@ k8s-openapi = { version = "0.22.0", default-features = false, features = ["schem
 kube = { version = "0.92.1", default-features = false, features = ["client", "derive", "openssl-tls", "runtime", "ws"] }
 kube-client = { version = "0.92.1", default-features = false, features = ["jsonpatch", "openssl-tls", "ws"] }
 kube-core = { version = "0.92.1", default-features = false, features = ["jsonpatch", "schema", "ws"] }
-libc = { version = "0.2.153", features = ["extra_traits", "use_std"] }
+libc = { version = "0.2.169", features = ["extra_traits", "use_std"] }
 libz-sys = { version = "1.1.8", features = ["static"] }
 log = { version = "0.4.22", default-features = false, features = ["std"] }
 lru = { version = "0.12.3" }
@@ -199,7 +199,7 @@ k8s-openapi = { version = "0.22.0", default-features = false, features = ["schem
 kube = { version = "0.92.1", default-features = false, features = ["client", "derive", "openssl-tls", "runtime", "ws"] }
 kube-client = { version = "0.92.1", default-features = false, features = ["jsonpatch", "openssl-tls", "ws"] }
 kube-core = { version = "0.92.1", default-features = false, features = ["jsonpatch", "schema", "ws"] }
-libc = { version = "0.2.153", features = ["extra_traits", "use_std"] }
+libc = { version = "0.2.169", features = ["extra_traits", "use_std"] }
 libz-sys = { version = "1.1.8", features = ["static"] }
 log = { version = "0.4.22", default-features = false, features = ["std"] }
 lru = { version = "0.12.3" }
