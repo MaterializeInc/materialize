@@ -178,7 +178,7 @@ def run_workload(c: Composition, workload: Workload) -> None:
             Materialized(
                 name=mz_name,
                 external_metadata_store=True,
-                external_minio=True,
+                external_blob_store=True,
                 sanity_restart=False,
             )
             for mz_name in mzs

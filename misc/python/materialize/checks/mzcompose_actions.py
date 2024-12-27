@@ -72,7 +72,7 @@ class StartMz(MzcomposeAction):
             name=self.mz_service,
             image=image,
             external_metadata_store=True,
-            external_minio=True,
+            external_blob_store=True,
             environment_extra=self.environment_extra,
             system_parameter_defaults=self.system_parameter_defaults,
             additional_system_parameter_defaults=self.additional_system_parameter_defaults,

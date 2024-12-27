@@ -28,7 +28,7 @@ class BackupAndRestore(Action):
         with c.override(
             Materialized(
                 name=state.mz_service,
-                external_minio=True,
+                external_blob_store=True,
                 external_metadata_store=True,
                 deploy_generation=state.deploy_generation,
                 system_parameter_defaults=state.system_parameter_defaults,

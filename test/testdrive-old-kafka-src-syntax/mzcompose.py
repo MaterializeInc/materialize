@@ -37,9 +37,9 @@ SERVICES = [
     Postgres(),
     MySql(),
     Minio(setup_materialize=True, additional_directories=["copytos3"]),
-    Materialized(external_minio=True),
+    Materialized(external_blob_store=True),
     FivetranDestination(volumes_extra=["tmp:/share/tmp"]),
-    Testdrive(external_minio=True),
+    Testdrive(external_blob_store=True),
 ]
 
 
@@ -133,7 +133,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     materialized = Materialized(
         default_size=args.default_size,
-        external_minio=True,
+        external_blob_store=True,
         additional_system_parameter_defaults=additional_system_parameter_defaults,
     )
 
@@ -144,7 +144,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         validate_catalog_store=True,
         default_timeout=args.default_timeout,
         volumes_extra=["mzdata:/mzdata"],
-        external_minio=True,
+        external_blob_store=True,
         fivetran_destination=True,
         fivetran_destination_files_path="/share/tmp",
         entrypoint_extra=[

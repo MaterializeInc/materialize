@@ -7,14 +7,12 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import os
 
-from materialize import MZ_ROOT
-from materialize.mzcompose import loader
-from materialize.mzcompose.service import (
-    Service,
-    ServiceHealthcheck
-)
+from materialize.mzcompose.service import Service, ServiceHealthcheck
+
+
+def azure_blob_uri(address: str = "azurite") -> str:
+    return f"http://devstoreaccount1.{address}:10000/container"
 
 
 class Azurite(Service):
@@ -31,10 +29,18 @@ class Azurite(Service):
         stop_grace_period: str = "120s",
     ):
         if image is None:
-            image = f"mcr.microsoft.com/azure-storage/azurite:{self.DEFAULT_AZURITE_TAG}"
+            image = (
+                f"mcr.microsoft.com/azure-storage/azurite:{self.DEFAULT_AZURITE_TAG}"
+            )
 
         if command is None:
-            command = ["azurite-blob", "--blobHost", "0.0.0.0:10000", "--blobPort", "10000"]
+            command = [
+                "azurite-blob",
+                "--blobHost",
+                "0.0.0.0",
+                "--blobPort",
+                "10000",
+            ]
 
         if in_memory:
             command.append("--inMemoryPersistence")

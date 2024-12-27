@@ -83,7 +83,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     with c.override(
         Materialized(
-            external_minio="toxiproxy",
+            external_blob_store="toxiproxy",
             external_metadata_store="toxiproxy",
             ports=["6975:6875", "6976:6876", "6977:6877"],
             sanity_restart=sanity_restart,
