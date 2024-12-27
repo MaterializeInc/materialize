@@ -805,7 +805,7 @@ class Composition:
                     f"--materialize-internal-url=postgres://mz_system@{mz_service}:6877",
                 ]
             )
-        environment = {"CLUST_REPLICA_SIZES": json.dumps(cluster_replica_size_map())}
+        environment = {"CLUSTER_REPLICA_SIZES": json.dumps(cluster_replica_size_map())}
         return self.run(
             "testdrive",
             *args,
