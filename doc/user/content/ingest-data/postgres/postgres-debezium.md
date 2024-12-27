@@ -16,12 +16,10 @@ instead.
 {{< guided-tour-blurb-for-ingest-data >}}
 
 Change Data Capture (CDC) allows you to track and propagate changes in a
-PostgreSQL database to downstream consumers based on its Write-Ahead Log (WAL).
-
-This guide shows you how to use [Debezium](https://debezium.io/) and [Kafka](/sql/create-source/kafka/#using-debezium)
-to propagate CDC data from PostgreSQL to Materialize. In this
-guide, we'll cover how to use Materialize to create and efficiently maintain
-real-time query results on top of CDC data using Kafka and Debezium.
+PostgreSQL database to downstream consumers based on its Write-Ahead Log
+(`WAL`). In this guide, we’ll cover how to use Materialize to create and
+efficiently maintain real-time views with incrementally updated results
+on top of CDC data.
 
 ## Kafka + Debezium
 

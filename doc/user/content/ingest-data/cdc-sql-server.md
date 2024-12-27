@@ -15,8 +15,8 @@ menu:
 
 Change Data Capture (CDC) allows you to track and propagate changes in a SQL
 Server database to downstream consumers. In this guide, we’ll cover how to use
-Materialize to create and efficiently maintain real-time materialized views on
-top of CDC data.
+Materialize to create and efficiently maintain real-time views with
+incrementally updated results on top of CDC data.
 
 {{< tip >}}
 {{< guided-tour-blurb-for-ingest-data >}}

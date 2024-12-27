@@ -19,8 +19,8 @@ source instead.
 
 Change Data Capture (CDC) allows you to track and propagate changes in a MySQL
 database to downstream consumers based on its binary log (`binlog`). In this
-guide, we'll cover how to use Materialize to create and efficiently maintain
-real-time query results on top of CDC data using Kafka and Debezium.
+guide, we’ll cover how to use Materialize to create and efficiently maintain
+real-time views with incrementally updated results on top of CDC data.
 
 ## Kafka + Debezium
 
