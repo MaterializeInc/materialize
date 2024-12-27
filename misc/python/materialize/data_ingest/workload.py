@@ -46,8 +46,12 @@ class Workload:
     deploy_generation: int
 
     def __init__(
-        self, mz_service: str = "materailized", deploy_generation: int = 0
+        self,
+        azurite: bool,
+        mz_service: str = "materailized",
+        deploy_generation: int = 0,
     ) -> None:
+        self.azurite = azurite
         self.mz_service = mz_service
         self.deploy_generation = deploy_generation
 
@@ -62,11 +66,12 @@ class Workload:
 class SingleSensorUpdating(Workload):
     def __init__(
         self,
+        azurite: bool,
         composition: Composition | None = None,
         mz_service: str = "materialized",
         deploy_generation: int = 0,
     ) -> None:
-        super().__init__(mz_service, deploy_generation)
+        super().__init__(azurite, mz_service, deploy_generation)
         self.cycle = [
             TransactionDef(
                 [
@@ -83,34 +88,12 @@ class SingleSensorUpdating(Workload):
 class SingleSensorUpdatingDisruptions(Workload):
     def __init__(
         self,
+        azurite: bool,
         composition: Composition | None = None,
         mz_service: str = "materialized",
         deploy_generation: int = 0,
     ) -> None:
-        super().__init__(mz_service, deploy_generation)
-        self.cycle = [
-            TransactionDef(
-                [
-                    Upsert(
-                        keyspace=Keyspace.SINGLE_VALUE,
-                        count=Records.ONE,
-                        record_size=RecordSize.SMALL,
-                    ),
-                ]
-            ),
-        ]
-        if composition:
-            self.cycle.append(RestartMz(composition, probability=0.1, workload=self))
-
-
-class SingleSensorUpdating0dtDeploy(Workload):
-    def __init__(
-        self,
-        composition: Composition | None = None,
-        mz_service: str = "materialized",
-        deploy_generation: int = 0,
-    ) -> None:
-        super().__init__(mz_service, deploy_generation)
+        super().__init__(azurite, mz_service, deploy_generation)
         self.cycle = [
             TransactionDef(
                 [
@@ -124,18 +107,49 @@ class SingleSensorUpdating0dtDeploy(Workload):
         ]
         if composition:
             self.cycle.append(
-                ZeroDowntimeDeploy(composition, probability=0.1, workload=self)
+                RestartMz(
+                    composition, probability=0.1, workload=self, azurite=self.azurite
+                )
+            )
+
+
+class SingleSensorUpdating0dtDeploy(Workload):
+    def __init__(
+        self,
+        azurite: bool,
+        composition: Composition | None = None,
+        mz_service: str = "materialized",
+        deploy_generation: int = 0,
+    ) -> None:
+        super().__init__(azurite, mz_service, deploy_generation)
+        self.cycle = [
+            TransactionDef(
+                [
+                    Upsert(
+                        keyspace=Keyspace.SINGLE_VALUE,
+                        count=Records.ONE,
+                        record_size=RecordSize.SMALL,
+                    ),
+                ]
+            ),
+        ]
+        if composition:
+            self.cycle.append(
+                ZeroDowntimeDeploy(
+                    composition, probability=0.1, workload=self, azurite=self.azurite
+                )
             )
 
 
 class DeleteDataAtEndOfDay(Workload):
     def __init__(
         self,
+        azurite: bool,
         composition: Composition | None = None,
         mz_service: str = "materialized",
         deploy_generation: int = 0,
     ) -> None:
-        super().__init__(mz_service, deploy_generation)
+        super().__init__(azurite, mz_service, deploy_generation)
         insert = Insert(
             count=Records.SOME,
             record_size=RecordSize.SMALL,
@@ -163,46 +177,12 @@ class DeleteDataAtEndOfDay(Workload):
 class DeleteDataAtEndOfDayDisruptions(Workload):
     def __init__(
         self,
+        azurite: bool,
         composition: Composition | None = None,
         mz_service: str = "materialized",
         deploy_generation: int = 0,
     ) -> None:
-        super().__init__(mz_service, deploy_generation)
-        insert = Insert(
-            count=Records.SOME,
-            record_size=RecordSize.SMALL,
-        )
-        insert_phase = TransactionDef(
-            size=TransactionSize.HUGE,
-            operations=[insert],
-        )
-        # Delete all records in a single transaction
-        delete_phase = TransactionDef(
-            [
-                Delete(
-                    number_of_records=Records.ALL,
-                    record_size=RecordSize.SMALL,
-                    num=insert.max_key(),
-                )
-            ]
-        )
-        self.cycle = [
-            insert_phase,
-            delete_phase,
-        ]
-
-        if composition:
-            self.cycle.append(RestartMz(composition, probability=0.1, workload=self))
-
-
-class DeleteDataAtEndOfDay0dtDeploys(Workload):
-    def __init__(
-        self,
-        composition: Composition | None = None,
-        mz_service: str = "materialized",
-        deploy_generation: int = 0,
-    ) -> None:
-        super().__init__(mz_service, deploy_generation)
+        super().__init__(azurite, mz_service, deploy_generation)
         insert = Insert(
             count=Records.SOME,
             record_size=RecordSize.SMALL,
@@ -228,16 +208,58 @@ class DeleteDataAtEndOfDay0dtDeploys(Workload):
 
         if composition:
             self.cycle.append(
-                ZeroDowntimeDeploy(composition, probability=0.1, workload=self)
+                RestartMz(
+                    composition, probability=0.1, workload=self, azurite=self.azurite
+                )
+            )
+
+
+class DeleteDataAtEndOfDay0dtDeploys(Workload):
+    def __init__(
+        self,
+        azurite: bool,
+        composition: Composition | None = None,
+        mz_service: str = "materialized",
+        deploy_generation: int = 0,
+    ) -> None:
+        super().__init__(azurite, mz_service, deploy_generation)
+        insert = Insert(
+            count=Records.SOME,
+            record_size=RecordSize.SMALL,
+        )
+        insert_phase = TransactionDef(
+            size=TransactionSize.HUGE,
+            operations=[insert],
+        )
+        # Delete all records in a single transaction
+        delete_phase = TransactionDef(
+            [
+                Delete(
+                    number_of_records=Records.ALL,
+                    record_size=RecordSize.SMALL,
+                    num=insert.max_key(),
+                )
+            ]
+        )
+        self.cycle = [
+            insert_phase,
+            delete_phase,
+        ]
+
+        if composition:
+            self.cycle.append(
+                ZeroDowntimeDeploy(
+                    composition, probability=0.1, workload=self, azurite=self.azurite
+                )
             )
 
 
 # TODO: Implement
 # class ProgressivelyEnrichRecords(Workload):
 #    def __init__(
-#        self, composition: Composition | None = None, mz_service: str = "materialized", deploy_generation: int = 0
+#        self, azurite: bool, composition: Composition | None = None, mz_service: str = "materialized", deploy_generation: int = 0
 #    ) -> None:
-#        super().__init__(mz_service, deploy_generation)
+#        super().__init__(azurite, mz_service, deploy_generation)
 #        self.cycle: list[Definition] = [
 #        ]
 

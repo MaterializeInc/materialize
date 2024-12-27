@@ -26,6 +26,7 @@ from materialize.checks.scenarios_backup_restore import *  # noqa: F401 F403
 from materialize.checks.scenarios_upgrade import *  # noqa: F401 F403
 from materialize.checks.scenarios_zero_downtime import *  # noqa: F401 F403
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services.azure import Azurite
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.debezium import Debezium
@@ -48,19 +49,37 @@ TESTDRIVE_DEFAULT_TIMEOUT = os.environ.get("PLATFORM_CHECKS_TD_TIMEOUT", "300s")
 
 
 def create_mzs(
-    additional_system_parameter_defaults: dict[str, str] | None = None
-) -> list[Materialized]:
+    azurite: bool,
+    additional_system_parameter_defaults: dict[str, str] | None = None,
+) -> list[TestdriveService | Materialized]:
     return [
         Materialized(
             name=mz_name,
             external_metadata_store=True,
-            external_minio=True,
+            external_blob_store=True,
+            blob_store_is_azure=azurite,
             sanity_restart=False,
             volumes_extra=["secrets:/share/secrets"],
             metadata_store="cockroach",
             additional_system_parameter_defaults=additional_system_parameter_defaults,
         )
         for mz_name in ["materialized", "mz_1", "mz_2", "mz_3", "mz_4", "mz_5"]
+    ] + [
+        TestdriveService(
+            default_timeout=TESTDRIVE_DEFAULT_TIMEOUT,
+            materialize_params={"statement_timeout": f"'{TESTDRIVE_DEFAULT_TIMEOUT}'"},
+            external_blob_store=True,
+            blob_store_is_azure=azurite,
+            no_reset=True,
+            seed=1,
+            entrypoint_extra=[
+                "--var=replicas=1",
+                f"--var=default-replica-size={Materialized.Size.DEFAULT_SIZE}-{Materialized.Size.DEFAULT_SIZE}",
+                f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
+            ],
+            volumes_extra=["secrets:/share/secrets"],
+            metadata_store="cockroach",
+        )
     ]
 
 
@@ -73,6 +92,7 @@ SERVICES = [
         restart="on-failure:5",
     ),
     Minio(setup_materialize=True, additional_directories=["copytos3"]),
+    Azurite(),
     Mc(),
     Postgres(),
     MySql(),
@@ -117,20 +137,7 @@ SERVICES = [
     Clusterd(
         name="clusterd_compute_1"
     ),  # Started by some Scenarios, defined here only for the teardown
-    *create_mzs(),
-    TestdriveService(
-        default_timeout=TESTDRIVE_DEFAULT_TIMEOUT,
-        materialize_params={"statement_timeout": f"'{TESTDRIVE_DEFAULT_TIMEOUT}'"},
-        no_reset=True,
-        seed=1,
-        entrypoint_extra=[
-            "--var=replicas=1",
-            f"--var=default-replica-size={Materialized.Size.DEFAULT_SIZE}-{Materialized.Size.DEFAULT_SIZE}",
-            f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
-        ],
-        volumes_extra=["secrets:/share/secrets"],
-        metadata_store="cockroach",
-    ),
+    *create_mzs(azurite=False),
     Persistcli(),
     SshBastionHost(),
 ]
@@ -157,7 +164,6 @@ def setup(c: Composition) -> None:
         "postgres",
         "mysql",
         "debezium",
-        "minio",
         "ssh-bastion-host",
     )
 
@@ -211,6 +217,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         nargs="*",
         help="System parameters to set in Materialize, i.e. what you would set with `ALTER SYSTEM SET`",
     )
+    parser.add_argument(
+        "--azurite", action="store_true", help="Use Azurite as blob store instead of S3"
+    )
 
     args = parser.parse_args()
 
@@ -242,7 +251,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         assert len(x) == 2, f"--system-param '{val}' should be the format <key>=<val>"
         additional_system_parameter_defaults[x[0]] = x[1]
 
-    with c.override(*create_mzs(additional_system_parameter_defaults)):
+    with c.override(*create_mzs(args.azurite, additional_system_parameter_defaults)):
         executor = MzcomposeExecutor(composition=c)
         for scenario_class in scenarios:
             assert issubclass(
@@ -263,7 +272,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             if execution_mode in [ExecutionMode.SEQUENTIAL, ExecutionMode.PARALLEL]:
                 setup(c)
                 scenario = scenario_class(
-                    checks=checks, executor=executor, seed=args.seed
+                    checks=checks,
+                    executor=executor,
+                    azurite=args.azurite,
+                    seed=args.seed,
                 )
                 scenario.run()
                 teardown(c)
@@ -277,7 +289,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     )
                     setup(c)
                     scenario = scenario_class(
-                        checks=[check], executor=executor, seed=args.seed
+                        checks=[check],
+                        executor=executor,
+                        azurite=args.azurite,
+                        seed=args.seed,
                     )
                     scenario.run()
                     teardown(c)

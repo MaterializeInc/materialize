@@ -25,6 +25,7 @@ from materialize import MZ_ROOT, buildkite
 from materialize.mz_env_util import get_cloud_hostname
 from materialize.mzcompose import ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services.azure import Azurite
 from materialize.mzcompose.services.balancerd import Balancerd
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.kafka import Kafka as KafkaService
@@ -95,13 +96,14 @@ SERVICES = [
     Redpanda(),
     Cockroach(setup_materialize=True),
     Minio(setup_materialize=True),
+    Azurite(),
     KgenService(),
     Postgres(),
     MySql(),
     Balancerd(),
     # Overridden below
     Materialized(),
-    Testdrive(no_reset=True, seed=1, metadata_store="cockroach"),
+    Testdrive(),
     Mz(app_password=""),
 ]
 
@@ -438,12 +440,22 @@ def run_once(
                 default_size=args.size,
                 soft_assertions=False,
                 external_metadata_store=True,
-                external_minio=True,
+                external_blob_store=True,
+                # TODO: Better azurite support detection
+                blob_store_is_azure=args.azurite and bool(tag),
                 sanity_restart=False,
                 additional_system_parameter_defaults=ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS
                 | {"max_connections": "100000"},
                 metadata_store="cockroach",
-            )
+            ),
+            Testdrive(
+                no_reset=True,
+                seed=1,
+                metadata_store="cockroach",
+                external_blob_store=True,
+                # TODO: Better azurite support detection
+                blob_store_is_azure=args.azurite and bool(tag),
+            ),
         ]
         target = None
 
@@ -777,6 +789,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "--sqlite-store",
         action="store_true",
         help="Store results in SQLite instead of in memory",
+    )
+    parser.add_argument(
+        "--azurite", action="store_true", help="Use Azurite as blob store instead of S3"
     )
 
     args = parser.parse_args()

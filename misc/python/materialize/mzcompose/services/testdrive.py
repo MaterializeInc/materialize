@@ -18,6 +18,8 @@ from materialize.mzcompose.service import (
     ServiceConfig,
     ServiceDependency,
 )
+from materialize.mzcompose.services.azure import azure_blob_uri
+from materialize.mzcompose.services.minio import minio_blob_uri
 from materialize.mzcompose.services.postgres import METADATA_STORE
 
 
@@ -52,7 +54,8 @@ class Testdrive(Service):
         aws_secret_access_key: str | None = "minioadmin",
         no_consistency_checks: bool = False,
         external_metadata_store: bool = False,
-        external_minio: bool = False,
+        external_blob_store: bool = False,
+        blob_store_is_azure: bool = False,
         fivetran_destination: bool = False,
         fivetran_destination_url: str = "http://fivetran-destination:6874",
         fivetran_destination_files_path: str = "/share/tmp",
@@ -157,9 +160,14 @@ class Testdrive(Service):
                 f"--fivetran-destination-files-path={fivetran_destination_files_path}"
             )
 
-        if external_minio:
-            depends_graph["minio"] = {"condition": "service_healthy"}
-            persist_blob_url = "s3://minioadmin:minioadmin@persist/persist?endpoint=http://minio:9000/&region=minio"
+        if external_blob_store:
+            blob_store = "azurite" if blob_store_is_azure else "minio"
+            address = blob_store if external_blob_store == True else external_blob_store
+            persist_blob_url = (
+                azure_blob_uri(address)
+                if blob_store_is_azure
+                else minio_blob_uri(address)
+            )
             entrypoint.append(f"--persist-blob-url={persist_blob_url}")
         else:
             entrypoint.append("--persist-blob-url=file:///mzdata/persist/blob")
