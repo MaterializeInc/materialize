@@ -230,14 +230,14 @@ ignore = [
     "RUSTSEC-2021-0153",
     # proc-macro-error is unmaintained, possible alternative: proc-macro-error2
     "RUSTSEC-2024-0370",
-    # lexical-core: Multiple soundness issues, depends on arrow upgrading
-    "RUSTSEC-2023-0086",
     # Use standard library's IsTerminal trait instead of `atty` (unmaintained)
     "RUSTSEC-2024-0375",
     # `derivative` is unmaintained; consider using an alternative (unmaintained)
     "RUSTSEC-2024-0388",
     # `instant` is unmaintained, and the author recommends using the maintained [`web-time`] crate instead.
     "RUSTSEC-2024-0384",
+    # columnar: `Read` on uninitialized buffer may cause UB (ColumnarReadExt::read_typed_vec())
+    "RUSTSEC-2021-0087",
 
 ]
 
