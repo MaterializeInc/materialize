@@ -153,7 +153,10 @@ impl BlobConfig {
                 Ok(BlobConfig::Mem(tombstone))
             }
             "http" | "https" => match url.host().expect("hostname").to_string().split_once('.') {
-                Some((account, "blob.core.windows.net")) => {
+                // The Azurite emulator always uses the well-known account name devstoreaccount1
+                Some((account, "blob.core.windows.net")) | Some((account, _))
+                    if account == "devstoreaccount1" =>
+                {
                     if let Some(container) = url
                         .path_segments()
                         .expect("azure blob storage container")
