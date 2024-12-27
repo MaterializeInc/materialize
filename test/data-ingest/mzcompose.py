@@ -56,7 +56,7 @@ SERVICES = [
     # Fixed port so that we keep the same port after restarting Mz in disruptions
     Materialized(
         ports=["16875:6875"],
-        external_minio=True,
+        external_blob_store=True,
         external_metadata_store=True,
         system_parameter_defaults=get_default_system_parameters(zero_downtime=True),
         additional_system_parameter_defaults={"enable_table_keys": "true"},
@@ -65,7 +65,7 @@ SERVICES = [
     Materialized(
         name="materialized2",
         ports=["26875:6875"],
-        external_minio=True,
+        external_blob_store=True,
         external_metadata_store=True,
         system_parameter_defaults=get_default_system_parameters(zero_downtime=True),
         additional_system_parameter_defaults={"enable_table_keys": "true"},

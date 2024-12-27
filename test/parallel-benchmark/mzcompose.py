@@ -438,7 +438,7 @@ def run_once(
                 default_size=args.size,
                 soft_assertions=False,
                 external_metadata_store=True,
-                external_minio=True,
+                external_blob_store=True,
                 sanity_restart=False,
                 additional_system_parameter_defaults=ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS
                 | {"max_connections": "100000"},

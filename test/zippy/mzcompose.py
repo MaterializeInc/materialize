@@ -48,7 +48,7 @@ def create_mzs(
     return [
         Materialized(
             name=mz_name,
-            external_minio=True,
+            external_blob_store=True,
             external_metadata_store=True,
             sanity_restart=False,
             metadata_store="cockroach",

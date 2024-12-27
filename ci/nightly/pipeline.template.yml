@@ -338,6 +338,18 @@ steps:
               args: [--persistent-user-tables]
         skip: "Persistence tests disabled"
 
+      - id: azurite-testdrive
+        label: "testdrive with :azure: blob store"
+        depends_on: build-aarch64
+        timeout_in_minutes: 180
+        agents:
+          queue: hetzner-aarch64-8cpu-16gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: testdrive
+              args: [--azurite]
+
+
   - group: Limits
     key: limits-group
     steps:
