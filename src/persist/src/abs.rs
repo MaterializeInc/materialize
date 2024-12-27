@@ -16,7 +16,7 @@ use anyhow::anyhow;
 use async_trait::async_trait;
 use azure_core::StatusCode;
 use azure_identity::create_default_credential;
-use azure_storage::{prelude::*, EMULATOR_ACCOUNT};
+use azure_storage::{prelude::*, CloudLocation, EMULATOR_ACCOUNT};
 use azure_storage_blobs::prelude::*;
 use bytes::Bytes;
 use futures_util::StreamExt;
@@ -63,9 +63,15 @@ impl ABSBlobConfig {
     ) -> Result<Self, Error> {
         let client = if account == EMULATOR_ACCOUNT {
             info!("Connecting to Azure emulator");
-            ClientBuilder::emulator()
-                .blob_service_client()
-                .container_client(container)
+            ClientBuilder::with_location(
+                CloudLocation::Emulator {
+                    address: url.domain().expect("domain for Azure emulator").to_string(),
+                    port: url.port().expect("port for Azure emulator"),
+                },
+                StorageCredentials::emulator(),
+            )
+            .blob_service_client()
+            .container_client(container)
         } else {
             let sas_credentials = match url.query() {
                 Some(query) => Some(StorageCredentials::sas_token(query)),
@@ -167,7 +173,9 @@ impl ABSBlob {
             // TODO: we could move this logic into the test harness.
             // it's currently here because it's surprisingly annoying to
             // create the container out-of-band
-            let _ = config.client.create().await;
+            if let Err(e) = config.client.create().await {
+                warn!("Failed to create container: {e}");
+            }
         }
 
         let ret = ABSBlob {

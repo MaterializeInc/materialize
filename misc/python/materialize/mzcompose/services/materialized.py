@@ -27,6 +27,7 @@ from materialize.mzcompose.service import (
     ServiceConfig,
     ServiceDependency,
 )
+from materialize.mzcompose.services.azure import azure_blob_uri
 from materialize.mzcompose.services.minio import minio_blob_uri
 from materialize.mzcompose.services.postgres import METADATA_STORE
 
@@ -69,7 +70,8 @@ class Materialized(Service):
         environment_id: str | None = None,
         propagate_crashes: bool = True,
         external_metadata_store: str | bool = False,
-        external_minio: str | bool = False,
+        external_blob_store: str | bool = False,
+        blob_store_is_azure: bool = False,
         unsafe_mode: bool = True,
         restart: str | None = None,
         use_default_volumes: bool = True,
@@ -169,10 +171,15 @@ class Materialized(Service):
             environment_id = DEFAULT_MZ_ENVIRONMENT_ID
         command += [f"--environment-id={environment_id}"]
 
-        if external_minio:
-            depends_graph["minio"] = {"condition": "service_healthy"}
-            address = "minio" if external_minio == True else external_minio
-            persist_blob_url = minio_blob_uri(address)
+        if external_blob_store:
+            blob_store = "azurite" if blob_store_is_azure else "minio"
+            depends_graph[blob_store] = {"condition": "service_healthy"}
+            address = blob_store if external_blob_store == True else external_blob_store
+            persist_blob_url = (
+                azure_blob_uri(address)
+                if blob_store_is_azure
+                else minio_blob_uri(address)
+            )
 
         if persist_blob_url:
             command.append(f"--persist-blob-url={persist_blob_url}")

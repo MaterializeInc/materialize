@@ -10,28 +10,29 @@
 import time
 
 from materialize.mzcompose.composition import Composition
+from materialize.zippy.blob_store_capabilities import BlobStoreIsRunning
 from materialize.zippy.framework import Action, Capability, State
-from materialize.zippy.minio_capabilities import MinioIsRunning
 
 
-class MinioStart(Action):
-    """Starts a Minio instance."""
+class BlobStoreStart(Action):
+    """Starts a BlobStore instance."""
 
     def run(self, c: Composition, state: State) -> None:
-        c.up("minio")
+        c.up(c.blob_store())
 
     def provides(self) -> list[Capability]:
-        return [MinioIsRunning()]
+        return [BlobStoreIsRunning()]
 
 
-class MinioRestart(Action):
-    """Restart the Minio instance."""
+class BlobStoreRestart(Action):
+    """Restart the BlobStore instance."""
 
     @classmethod
     def requires(cls) -> set[type[Capability]]:
-        return {MinioIsRunning}
+        return {BlobStoreIsRunning}
 
     def run(self, c: Composition, state: State) -> None:
-        c.kill("minio")
+        blob_store = c.blob_store()
+        c.kill(blob_store)
         time.sleep(1)
-        c.up("minio")
+        c.up(blob_store)

@@ -84,6 +84,7 @@ from materialize.feature_benchmark.termination import (
     TerminationCondition,
 )
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services.azure import Azurite
 from materialize.mzcompose.services.balancerd import Balancerd
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.cockroach import Cockroach
@@ -136,6 +137,7 @@ SERVICES = [
     Redpanda(),
     Cockroach(setup_materialize=True),
     Minio(setup_materialize=True),
+    Azurite(),
     KgenService(),
     Postgres(),
     MySql(),
@@ -198,7 +200,13 @@ def run_one_scenario(
                 additional_system_parameter_defaults[param_name] = param_value
 
         mz_image = f"materialize/materialized:{tag}" if tag else None
-        mz = create_mz_service(mz_image, size, additional_system_parameter_defaults)
+        # TODO: Better azurite support detection
+        mz = create_mz_service(
+            mz_image,
+            size,
+            additional_system_parameter_defaults,
+            args.azurite and instance == "this",
+        )
         clusterd_image = f"materialize/clusterd:{tag}" if tag else None
         clusterd = create_clusterd_service(
             clusterd_image, size, additional_system_parameter_defaults
@@ -209,7 +217,13 @@ def run_one_scenario(
                 f"Unable to find materialize image with tag {tag}, proceeding with latest instead!"
             )
             mz_image = "materialize/materialized:latest"
-            mz = create_mz_service(mz_image, size, additional_system_parameter_defaults)
+            # TODO: Better azurite support detection
+            mz = create_mz_service(
+                mz_image,
+                size,
+                additional_system_parameter_defaults,
+                args.azurite and instance == "this",
+            )
             clusterd_image = f"materialize/clusterd:{tag}" if tag else None
             clusterd = create_clusterd_service(
                 clusterd_image, size, additional_system_parameter_defaults
@@ -225,6 +239,8 @@ def run_one_scenario(
                 default_timeout=default_timeout,
                 materialize_params={"statement_timeout": f"'{default_timeout}'"},
                 metadata_store="cockroach",
+                external_blob_store=True,
+                blob_store_is_azure=args.azurite,
             )
         ):
             c.testdrive(
@@ -310,6 +326,7 @@ def create_mz_service(
     mz_image: str | None,
     default_size: int,
     additional_system_parameter_defaults: dict[str, str] | None,
+    azurite: bool,
 ) -> Materialized:
     return Materialized(
         image=mz_image,
@@ -320,7 +337,8 @@ def create_mz_service(
         additional_system_parameter_defaults=additional_system_parameter_defaults,
         external_metadata_store=True,
         metadata_store="cockroach",
-        external_minio=True,
+        external_blob_store=True,
+        blob_store_is_azure=azurite,
         sanity_restart=False,
     )
 
@@ -463,6 +481,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     parser.add_argument(
         "--other-size", metavar="N", type=int, default=4, help="SIZE to use for 'OTHER'"
+    )
+    parser.add_argument(
+        "--azurite", action="store_true", help="Use Azurite as blob store instead of S3"
     )
 
     args = parser.parse_args()
