@@ -406,7 +406,6 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: mysql-cdc
-              args: ["--mysql-version=8.4.0"]
         agents:
           queue: hetzner-aarch64-4cpu-8gb
 

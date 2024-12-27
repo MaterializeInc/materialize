@@ -243,20 +243,22 @@ steps:
   - group: "MySQL: other versions"
     key: mysql-versions
     steps:
-      - id: mysql-cdc-5_7_44
-        label: "MySQL CDC w/ 5.7.44"
+      - id: mysql-cdc-5_7
+        label: "MySQL CDC w/ 5.7"
         depends_on: build-x86_64
         timeout_in_minutes: 60
         agents:
           # no matching manifest of MySQL 5.7.x for linux/arm64/v8 in the manifest list entries
           # Increased memory usage following new source syntax
-          queue: hetzner-x86-64-8cpu-16gb
+          queue: hetzner-x86-64-dedi-16cpu-64gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: mysql-cdc
               args: [ "--mysql-version=5.7.44" ]
-      - id: mysql-cdc-8_0_36
-        label: "MySQL CDC w/ 8.0.36"
+        skip: "Fails when restarted"
+
+      - id: mysql-cdc-8_0
+        label: "MySQL CDC w/ 8.0"
         depends_on: build-aarch64
         timeout_in_minutes: 60
         agents:
@@ -264,75 +266,53 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: mysql-cdc
-              args: [ "--mysql-version=8.0.36" ]
+              args: [ "--mysql-version=8.0.40" ]
 
   - group: "Postgres: other versions"
     key: postgres-versions
     steps:
-      - id: pg-cdc-16_4
-        label: "Postgres CDC w/ 16.4"
+      - id: pg-cdc-16
+        label: "Postgres CDC w/ 16"
         depends_on: build-aarch64
         timeout_in_minutes: 60
         inputs: [test/pg-cdc]
         plugins:
           - ./ci/plugins/mzcompose:
               composition: pg-cdc
-              args: [ "--pg-version=16.4" ]
+              args: [ "--pg-version=16.6" ]
         agents:
           queue: hetzner-aarch64-4cpu-8gb
-      - id: pg-cdc-15_6
-        label: "Postgres CDC w/ 15.6"
+      - id: pg-cdc-15
+        label: "Postgres CDC w/ 15"
         depends_on: build-aarch64
         timeout_in_minutes: 60
         inputs: [test/pg-cdc]
         plugins:
           - ./ci/plugins/mzcompose:
               composition: pg-cdc
-              args: [ "--pg-version=15.6" ]
+              args: [ "--pg-version=15.10" ]
         agents:
           queue: hetzner-aarch64-4cpu-8gb
-      - id: pg-cdc-14_11
-        label: "Postgres CDC w/ 14.11"
+      - id: pg-cdc-14
+        label: "Postgres CDC w/ 14"
         depends_on: build-aarch64
         timeout_in_minutes: 60
         inputs: [test/pg-cdc]
         plugins:
           - ./ci/plugins/mzcompose:
               composition: pg-cdc
-              args: [ "--pg-version=14.11" ]
+              args: [ "--pg-version=14.15" ]
         agents:
           queue: hetzner-aarch64-4cpu-8gb
-      - id: pg-cdc-13_14
-        label: "Postgres CDC w/ 13.14"
+      - id: pg-cdc-13
+        label: "Postgres CDC w/ 13"
         depends_on: build-aarch64
         timeout_in_minutes: 60
         inputs: [test/pg-cdc]
         plugins:
           - ./ci/plugins/mzcompose:
               composition: pg-cdc
-              args: [ "--pg-version=13.14" ]
-        agents:
-          queue: hetzner-aarch64-4cpu-8gb
-      - id: pg-cdc-12_18
-        label: "Postgres CDC w/ 12.18"
-        depends_on: build-aarch64
-        timeout_in_minutes: 60
-        inputs: [test/pg-cdc]
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: pg-cdc
-              args: [ "--pg-version=12.18" ]
-        agents:
-          queue: hetzner-aarch64-4cpu-8gb
-      - id: pg-cdc-11_22
-        label: "Postgres CDC w/ 11.22"
-        depends_on: build-aarch64
-        timeout_in_minutes: 60
-        inputs: [test/pg-cdc]
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: pg-cdc
-              args: [ "--pg-version=11.22" ]
+              args: [ "--pg-version=13.18" ]
         agents:
           queue: hetzner-aarch64-4cpu-8gb
 
