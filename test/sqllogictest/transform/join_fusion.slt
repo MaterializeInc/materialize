@@ -42,7 +42,7 @@ Explained Query:
           Filter (#0 > 0) AND (#1) IS NOT NULL // { arity: 2 }
             ReadStorage materialize.public.t1 // { arity: 2 }
         ArrangeBy keys=[[#1]] // { arity: 2 }
-          Filter (#1) IS NOT NULL // { arity: 2 }
+          Filter (#0) IS NOT NULL AND (#1) IS NOT NULL // { arity: 2 }
             ReadStorage materialize.public.t2 // { arity: 2 }
         ArrangeBy keys=[[#0]] // { arity: 2 }
           Filter (#0 > 0) // { arity: 2 }
@@ -51,7 +51,7 @@ Explained Query:
 Source materialize.public.t1
   filter=((#0 > 0) AND (#1) IS NOT NULL)
 Source materialize.public.t2
-  filter=((#1) IS NOT NULL)
+  filter=((#0) IS NOT NULL AND (#1) IS NOT NULL)
 Source materialize.public.t3
   filter=((#0 > 0))
 
