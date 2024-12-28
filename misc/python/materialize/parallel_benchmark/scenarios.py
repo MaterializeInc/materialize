@@ -350,7 +350,11 @@ class FlagUpdate(Scenario):
                     actions=[
                         OpenLoop(
                             action=ReuseConnQuery(
-                                "ALTER SYSTEM SET unsafe_enable_table_keys = true",
+                                # The particular flag and value used here
+                                # doesn't matter. It just needs to be a flag
+                                # that exists in both versions to be
+                                # benchmarked.
+                                "ALTER SYSTEM SET enable_disk_cluster_replicas = true",
                                 conn_info=conn_infos["mz_system"],
                             ),
                             dist=Periodic(per_second=1),

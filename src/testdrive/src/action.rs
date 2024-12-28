@@ -44,6 +44,7 @@ use rdkafka::producer::Producer;
 use rdkafka::ClientConfig;
 use regex::{Captures, Regex};
 use semver::Version;
+use tokio_postgres::error::{DbError, SqlState};
 use tracing::info;
 use url::Url;
 
@@ -451,16 +452,29 @@ impl State {
             .context("resetting materialize state: ALTER SYSTEM RESET ALL")?;
 
         // Dangerous functions are useful for tests so we enable it for all tests.
-        let unsafe_version = Version::parse("0.128.0-dev.1").expect("known to be valid");
-        let enable_unsafe_functions = if semver >= unsafe_version {
-            "unsafe_enable_unsafe_functions"
-        } else {
-            "enable_unsafe_functions"
-        };
-        inner_client
-            .batch_execute(&format!("ALTER SYSTEM SET {enable_unsafe_functions} = on"))
-            .await
-            .context("enabling dangerous functions")?;
+        {
+            let rename_version = Version::parse("0.128.0-dev.1").expect("known to be valid");
+            let enable_unsafe_functions = if semver >= rename_version {
+                "unsafe_enable_unsafe_functions"
+            } else {
+                "enable_unsafe_functions"
+            };
+            let res = inner_client
+                .batch_execute(&format!("ALTER SYSTEM SET {enable_unsafe_functions} = on"))
+                .await
+                .context("enabling dangerous functions");
+            if let Err(e) = res {
+                match e.root_cause().downcast_ref::<DbError>() {
+                    Some(e) if *e.code() == SqlState::CANT_CHANGE_RUNTIME_PARAM => {
+                        info!(
+                            "can't enable unsafe functions because the server is safe mode; \
+                             testdrive scripts will fail if they use unsafe functions",
+                        );
+                    }
+                    _ => return Err(e),
+                }
+            }
+        }
 
         for row in inner_client
             .query("SHOW DATABASES", &[])
