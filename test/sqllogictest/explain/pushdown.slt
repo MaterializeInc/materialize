@@ -47,7 +47,7 @@ ALTER SYSTEM SET enable_explain_pushdown = false
 ----
 COMPLETE 0
 
-query error db error: ERROR: EXPLAIN FILTER PUSHDOWN is not supported
+query error db error: ERROR: EXPLAIN FILTER PUSHDOWN is not available
 EXPLAIN FILTER PUSHDOWN FOR SELECT * FROM numbers where value > 10;
 
 # Even when the feature flag is enabled, the feature is blocked in adapter for most queries

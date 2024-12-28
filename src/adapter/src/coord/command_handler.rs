@@ -57,9 +57,7 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::{debug_span, info, warn, Instrument};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
-use crate::command::{
-    CatalogSnapshot, Command, ExecuteResponse, GetVariablesResponse, StartupResponse,
-};
+use crate::command::{CatalogSnapshot, Command, ExecuteResponse, StartupResponse};
 use crate::coord::appends::PendingWriteTxn;
 use crate::coord::{
     validate_ip_with_policy_rules, ConnMeta, Coordinator, DeferredPlanStatement, Message,
@@ -145,15 +143,8 @@ impl Coordinator {
                     self.handle_get_webhook(database, schema, name, tx);
                 }
 
-                Command::GetSystemVars { conn_id, tx } => {
-                    let conn = &self.active_conns[&conn_id];
-                    let vars = GetVariablesResponse::new(
-                        self.catalog.system_config().iter().filter(|var| {
-                            var.visible(conn.user(), Some(self.catalog.system_config()))
-                                .is_ok()
-                        }),
-                    );
-                    let _ = tx.send(Ok(vars));
+                Command::GetSystemVars { tx } => {
+                    let _ = tx.send(self.catalog.system_config().clone());
                 }
 
                 Command::SetSystemVars { vars, conn_id, tx } => {
@@ -161,9 +152,11 @@ impl Coordinator {
                     let conn = &self.active_conns[&conn_id];
 
                     for (name, value) in vars {
-                        if let Err(e) = self.catalog().system_config().get(&name).and_then(|var| {
-                            var.visible(conn.user(), Some(self.catalog.system_config()))
-                        }) {
+                        if let Err(e) =
+                            self.catalog().system_config().get(&name).and_then(|var| {
+                                var.visible(conn.user(), self.catalog.system_config())
+                            })
+                        {
                             let _ = tx.send(Err(e.into()));
                             return;
                         }

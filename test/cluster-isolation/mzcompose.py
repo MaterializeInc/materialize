@@ -30,7 +30,13 @@ SERVICES = [
     Kafka(),
     SchemaRegistry(),
     # We use mz_panic() in some test scenarios, so environmentd must stay up.
-    Materialized(propagate_crashes=False),
+    Materialized(
+        propagate_crashes=False,
+        additional_system_parameter_defaults={
+            "unsafe_enable_unsafe_functions": "true",
+            "unsafe_enable_unstable_dependencies": "true",
+        },
+    ),
     Clusterd(name="clusterd_1_1"),
     Clusterd(name="clusterd_1_2"),
     Clusterd(name="clusterd_2_1"),
@@ -58,9 +64,6 @@ disruptions = [
         name="pause-in-materialized-view",
         disruption=lambda c: c.testdrive(
             """
-$[version>=5500] postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_unstable_dependencies = true;
-
 > SET cluster=cluster1
 
 > CREATE TABLE sleep_table (sleep INTEGER);
@@ -237,7 +240,7 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
     c.up("materialized", "clusterd_1_1", "clusterd_1_2", "clusterd_2_1", "clusterd_2_2")
 
     c.sql(
-        "ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;",
+        "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
         port=6877,
         user="mz_system",
     )

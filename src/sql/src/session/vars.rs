@@ -179,7 +179,12 @@ pub trait Var: Debug {
     /// "Invisible" parameters return `VarErrors`.
     ///
     /// Variables marked as `internal` are only visible for the system user.
-    fn visible(&self, user: &User, system_vars: Option<&SystemVars>) -> Result<(), VarError>;
+    fn visible(&self, user: &User, system_vars: &SystemVars) -> Result<(), VarError>;
+
+    /// Reports whether the variable is only visible in unsafe mode.
+    fn is_unsafe(&self) -> bool {
+        self.name().starts_with("unsafe_")
+    }
 
     /// Upcast `self` to a `dyn Var`, useful when working with multiple different implementors of
     /// [`Var`].
@@ -349,7 +354,7 @@ impl Var for SessionVar {
     fn visible(
         &self,
         user: &User,
-        system_vars: Option<&super::vars::SystemVars>,
+        system_vars: &super::vars::SystemVars,
     ) -> Result<(), super::vars::VarError> {
         self.definition.visible(user, system_vars)
     }
@@ -452,6 +457,12 @@ impl SessionVars {
     /// values for this session) that are expected to be sent to the client when
     /// a new connection is established or when their value changes.
     pub fn notify_set(&self) -> impl Iterator<Item = &dyn Var> {
+        // WARNING: variables in this set are not checked for visibility, and
+        // are assumed to be visible for all sessions.
+        //
+        // This is fixible with some elbow grease, but at the moment it seems
+        // unlikely that we'll have a variable in the notify set that shouldn't
+        // be visible to all sessions.
         [
             &APPLICATION_NAME,
             &CLIENT_ENCODING,
@@ -471,7 +482,7 @@ impl SessionVars {
             &SEARCH_PATH,
         ]
         .into_iter()
-        .map(|p| self.get(None, p.name()).expect("SystemVars known to exist"))
+        .map(|v| self.vars[v.name].as_var())
         // Including `mz_version` in the notify set is a Materialize
         // extension. Doing so allows applications to detect whether they
         // are talking to Materialize or PostgreSQL without an additional
@@ -499,7 +510,7 @@ impl SessionVars {
     /// named accessor to access the variable with its true Rust type. For
     /// example, `self.get("sql_safe_updates").value()` returns the string
     /// `"true"` or `"false"`, while `self.sql_safe_updates()` returns a bool.
-    pub fn get(&self, system_vars: Option<&SystemVars>, name: &str) -> Result<&dyn Var, VarError> {
+    pub fn get(&self, system_vars: &SystemVars, name: &str) -> Result<&dyn Var, VarError> {
         let name = compat_translate_name(name);
 
         let name = UncasedStr::new(name);
@@ -545,7 +556,7 @@ impl SessionVars {
     /// not exist, an error is returned.
     pub fn set(
         &mut self,
-        system_vars: Option<&SystemVars>,
+        system_vars: &SystemVars,
         name: &str,
         input: VarInput,
         local: bool,
@@ -596,7 +607,7 @@ impl SessionVars {
     /// requires, this function returns an error.
     pub fn reset(
         &mut self,
-        system_vars: Option<&SystemVars>,
+        system_vars: &SystemVars,
         name: &str,
         local: bool,
     ) -> Result<(), VarError> {
@@ -836,8 +847,21 @@ impl SessionVars {
     }
 
     pub fn set_cluster(&mut self, cluster: String) {
-        self.set(None, CLUSTER.name(), VarInput::Flat(&cluster), false)
-            .expect("setting cluster from string succeeds");
+        let var = self
+            .vars
+            .get_mut(UncasedStr::new(CLUSTER.name()))
+            .expect("cluster variable must exist");
+        var.set(VarInput::Flat(&cluster), false)
+            .expect("setting cluster must succeed");
+    }
+
+    pub fn set_local_transaction_isolation(&mut self, transaction_isolation: IsolationLevel) {
+        let var = self
+            .vars
+            .get_mut(UncasedStr::new(TRANSACTION_ISOLATION.name()))
+            .expect("transaction_isolation variable must exist");
+        var.set(VarInput::Flat(transaction_isolation.as_str()), true)
+            .expect("setting transaction isolation must succeed");
     }
 
     pub fn get_statement_logging_sample_rate(&self) -> Numeric {
@@ -1007,11 +1031,7 @@ impl Var for SystemVar {
         self.definition.type_name()
     }
 
-    fn visible(
-        &self,
-        user: &User,
-        system_vars: Option<&super::vars::SystemVars>,
-    ) -> Result<(), super::vars::VarError> {
+    fn visible(&self, user: &User, system_vars: &SystemVars) -> Result<(), VarError> {
         self.definition.visible(user, system_vars)
     }
 }
@@ -2315,53 +2335,24 @@ pub struct FeatureFlag {
     pub feature_desc: &'static str,
 }
 
-impl Var for FeatureFlag {
-    fn name(&self) -> &'static str {
-        self.flag.name()
-    }
-
-    fn value(&self) -> String {
-        self.flag.value()
-    }
-
-    fn description(&self) -> &'static str {
-        self.flag.description()
-    }
-
-    fn type_name(&self) -> Cow<'static, str> {
-        self.flag.type_name()
-    }
-
-    fn visible(&self, user: &User, system_vars: Option<&SystemVars>) -> Result<(), VarError> {
-        self.flag.visible(user, system_vars)
-    }
-}
-
 impl FeatureFlag {
-    pub fn enabled(
-        &self,
-        system_vars: Option<&SystemVars>,
-        feature: Option<String>,
-        detail: Option<String>,
-    ) -> Result<(), VarError> {
-        match system_vars {
-            Some(system_vars) if *system_vars.expect_value::<bool>(self.flag) => Ok(()),
-            _ => Err(VarError::RequiresFeatureFlag {
-                feature: feature.unwrap_or(self.feature_desc.to_string()),
-                detail,
-                name_hint: system_vars
-                    .map(|s| {
-                        if s.allow_unsafe {
-                            Some(self.flag.name)
-                        } else {
-                            None
-                        }
-                    })
-                    .flatten(),
-            }),
+    /// Returns an error unless the feature flag is enabled in the provided
+    /// `system_vars`.
+    pub fn require(&'static self, system_vars: &SystemVars) -> Result<(), VarError> {
+        match *system_vars.expect_value::<bool>(self.flag) {
+            true => Ok(()),
+            false => Err(VarError::RequiresFeatureFlag { feature_flag: self }),
         }
     }
 }
+
+impl PartialEq for FeatureFlag {
+    fn eq(&self, other: &FeatureFlag) -> bool {
+        self.flag.name() == other.flag.name()
+    }
+}
+
+impl Eq for FeatureFlag {}
 
 impl Var for MzVersion {
     fn name(&self) -> &'static str {
@@ -2381,7 +2372,7 @@ impl Var for MzVersion {
         String::type_name()
     }
 
-    fn visible(&self, _: &User, _: Option<&SystemVars>) -> Result<(), VarError> {
+    fn visible(&self, _: &User, _: &SystemVars) -> Result<(), VarError> {
         Ok(())
     }
 }
@@ -2403,7 +2394,7 @@ impl Var for User {
         bool::type_name()
     }
 
-    fn visible(&self, _: &User, _: Option<&SystemVars>) -> Result<(), VarError> {
+    fn visible(&self, _: &User, _: &SystemVars) -> Result<(), VarError> {
         Ok(())
     }
 }

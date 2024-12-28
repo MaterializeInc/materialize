@@ -40,7 +40,7 @@ ALTER SOURCE mz_internal.mz_storage_shards RENAME TO foo;
 ----
 db error: ERROR: system item 'mz_internal.mz_storage_shards' cannot be modified
 
-query error Expected one of IGNORE or TIMELINE or TIMESTAMP or RETAIN, found SIZE
+query error Expected one of TIMESTAMP or RETAIN, found SIZE
 ALTER SOURCE mz_internal.mz_storage_shards RESET (size);
 
 statement ok
@@ -62,13 +62,13 @@ d   kafka   (empty)
 statement ok
 CREATE CLUSTER other_cluster SIZE '1', REPLICATION FACTOR 0
 
-query error db error: ERROR: ALTER \.\.\. SET CLUSTER syntax is not supported
+query error db error: ERROR: ALTER \.\.\. SET CLUSTER syntax is not available
 ALTER MATERIALIZED VIEW does_not_exist SET CLUSTER quickstart
 
-query error db error: ERROR: ALTER \.\.\. SET CLUSTER syntax is not supported
+query error db error: ERROR: ALTER \.\.\. SET CLUSTER syntax is not available
 ALTER SOURCE does_not_exist SET CLUSTER quickstart
 
-query error db error: ERROR: ALTER \.\.\. SET CLUSTER syntax is not supported
+query error db error: ERROR: ALTER \.\.\. SET CLUSTER syntax is not available
 ALTER SINK does_not_exist SET CLUSTER quickstart
 
 simple conn=mz_system,user=mz_system

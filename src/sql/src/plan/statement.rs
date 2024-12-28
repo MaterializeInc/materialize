@@ -302,7 +302,7 @@ pub fn plan(
                     == SchemaSpecifier::Id(catalog.get_mz_unsafe_schema_id())
         })
     {
-        scx.require_feature_flag(&vars::ENABLE_UNSAFE_FUNCTIONS)?;
+        scx.require_feature_flag(&vars::UNSAFE_ENABLE_UNSAFE_FUNCTIONS)?;
     }
 
     let plan = match stmt {
@@ -822,27 +822,14 @@ impl<'a> StatementContext<'a> {
     }
 
     /// Returns an error if the named `FeatureFlag` is not set to `on`.
-    pub fn require_feature_flag(&self, flag: &FeatureFlag) -> Result<(), PlanError> {
-        flag.enabled(Some(self.catalog.system_vars()), None, None)?;
-        Ok(())
-    }
-
-    /// Equivalent to [`Self::require_feature_flag`] but with the ability for the caller to control
-    /// the error message.
-    pub fn require_feature_flag_w_dynamic_desc(
-        &self,
-        flag: &FeatureFlag,
-        desc: String,
-        detail: String,
-    ) -> Result<(), PlanError> {
-        flag.enabled(Some(self.catalog.system_vars()), Some(desc), Some(detail))?;
+    pub fn require_feature_flag(&self, flag: &'static FeatureFlag) -> Result<(), PlanError> {
+        flag.require(self.catalog.system_vars())?;
         Ok(())
     }
 
     /// Returns true if the named [`FeatureFlag`] is set to `on`, returns false otherwise.
-    pub fn is_feature_flag_enabled(&self, flag: &FeatureFlag) -> bool {
-        flag.enabled(Some(self.catalog.system_vars()), None, None)
-            .is_ok()
+    pub fn is_feature_flag_enabled(&self, flag: &'static FeatureFlag) -> bool {
+        self.require_feature_flag(flag).is_ok()
     }
 
     pub fn finalize_param_types(self) -> Result<Vec<ScalarType>, PlanError> {

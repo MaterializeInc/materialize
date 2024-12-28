@@ -1520,8 +1520,6 @@ impl_display!(KeyConstraint);
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CreateSourceOptionName {
-    IgnoreKeys,
-    Timeline,
     TimestampInterval,
     RetainHistory,
 }
@@ -1529,8 +1527,6 @@ pub enum CreateSourceOptionName {
 impl AstDisplay for CreateSourceOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str(match self {
-            CreateSourceOptionName::IgnoreKeys => "IGNORE KEYS",
-            CreateSourceOptionName::Timeline => "TIMELINE",
             CreateSourceOptionName::TimestampInterval => "TIMESTAMP INTERVAL",
             CreateSourceOptionName::RetainHistory => "RETAIN HISTORY",
         })
@@ -1546,10 +1542,9 @@ impl WithOptionName for CreateSourceOptionName {
     /// on the conservative side and return `true`.
     fn redact_value(&self) -> bool {
         match self {
-            CreateSourceOptionName::IgnoreKeys
-            | CreateSourceOptionName::Timeline
-            | CreateSourceOptionName::TimestampInterval
-            | CreateSourceOptionName::RetainHistory => false,
+            CreateSourceOptionName::TimestampInterval | CreateSourceOptionName::RetainHistory => {
+                false
+            }
         }
     }
 }

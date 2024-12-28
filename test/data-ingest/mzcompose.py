@@ -59,7 +59,7 @@ SERVICES = [
         external_minio=True,
         external_metadata_store=True,
         system_parameter_defaults=get_default_system_parameters(zero_downtime=True),
-        additional_system_parameter_defaults={"enable_table_keys": "true"},
+        additional_system_parameter_defaults={"unsafe_enable_table_keys": "true"},
         sanity_restart=False,
     ),
     Materialized(
@@ -68,7 +68,7 @@ SERVICES = [
         external_minio=True,
         external_metadata_store=True,
         system_parameter_defaults=get_default_system_parameters(zero_downtime=True),
-        additional_system_parameter_defaults={"enable_table_keys": "true"},
+        additional_system_parameter_defaults={"unsafe_enable_table_keys": "true"},
         sanity_restart=False,
     ),
     Clusterd(name="clusterd1", options=["--scratch-directory=/mzdata/source_data"]),

@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true;
+ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;
 
 # Create a cluster that we can make unavailable.
 > CREATE CLUSTER compute REPLICAS (

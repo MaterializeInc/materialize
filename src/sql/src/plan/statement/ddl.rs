@@ -40,7 +40,6 @@ use mz_repr::{
     preserves_order, strconv, CatalogItemId, ColumnName, ColumnType, RelationDesc, RelationType,
     RelationVersionSelector, ScalarType, Timestamp,
 };
-use mz_sql_parser::ast::display::comma_separated;
 use mz_sql_parser::ast::{
     self, AlterClusterAction, AlterClusterStatement, AlterConnectionAction, AlterConnectionOption,
     AlterConnectionOptionName, AlterConnectionStatement, AlterIndexAction, AlterIndexStatement,
@@ -370,12 +369,12 @@ pub fn plan_create_table(
             TableConstraint::ForeignKey { .. } => {
                 // Foreign key constraints are not presently enforced. We allow
                 // them with feature flags for sqllogictest's sake.
-                scx.require_feature_flag(&vars::ENABLE_TABLE_FOREIGN_KEY)?
+                scx.require_feature_flag(&vars::UNSAFE_ENABLE_TABLE_FOREIGN_KEY)?
             }
             TableConstraint::Check { .. } => {
                 // Check constraints are not presently enforced. We allow them
                 // with feature flags for sqllogictest's sake.
-                scx.require_feature_flag(&vars::ENABLE_TABLE_CHECK_CONSTRAINT)?
+                scx.require_feature_flag(&vars::UNSAFE_ENABLE_TABLE_CHECK_CONSTRAINT)?
             }
         }
     }
@@ -383,7 +382,7 @@ pub fn plan_create_table(
     if !keys.is_empty() {
         // Unique constraints are not presently enforced. We allow them with feature flags for
         // sqllogictest's sake.
-        scx.require_feature_flag(&vars::ENABLE_TABLE_KEYS)?
+        scx.require_feature_flag(&vars::UNSAFE_ENABLE_TABLE_KEYS)?
     }
 
     let typ = RelationType::new(column_types).with_keys(keys);
@@ -468,8 +467,6 @@ pub fn describe_create_subsource(
 
 generate_extracted_config!(
     CreateSourceOption,
-    (IgnoreKeys, bool),
-    (Timeline, String),
     (TimestampInterval, Duration),
     (RetainHistory, OptionalDuration)
 );
@@ -686,45 +683,9 @@ pub fn plan_create_source(
                 "CREATE SOURCE (ENVELOPE|FORMAT|INCLUDE)".to_string(),
             ))?;
         }
-        if with_options
-            .iter()
-            .find(|op| op.name == CreateSourceOptionName::IgnoreKeys)
-            .is_some()
-        {
-            Err(PlanError::UseTablesForSources(
-                "CREATE SOURCE WITH (IGNORE KEYS)".to_string(),
-            ))?;
-        }
-        if with_options
-            .iter()
-            .find(|op| op.name == CreateSourceOptionName::Timeline)
-            .is_some()
-        {
-            Err(PlanError::UseTablesForSources(
-                "CREATE SOURCE WITH (TIMELINE)".to_string(),
-            ))?;
-        }
     }
 
     let envelope = envelope.clone().unwrap_or(ast::SourceEnvelope::None);
-
-    let allowed_with_options = vec![
-        CreateSourceOptionName::TimestampInterval,
-        CreateSourceOptionName::RetainHistory,
-    ];
-    if let Some(op) = with_options
-        .iter()
-        .find(|op| !allowed_with_options.contains(&op.name))
-    {
-        scx.require_feature_flag_w_dynamic_desc(
-            &vars::ENABLE_CREATE_SOURCE_DENYLIST_WITH_OPTIONS,
-            format!("CREATE SOURCE...WITH ({}..)", op.name.to_ast_string()),
-            format!(
-                "permitted options are {}",
-                comma_separated(&allowed_with_options)
-            ),
-        )?;
-    }
 
     if !matches!(source_connection, CreateSourceConnection::Kafka { .. })
         && include_metadata
@@ -988,9 +949,7 @@ pub fn plan_create_source(
     };
 
     let CreateSourceOptionExtracted {
-        timeline,
         timestamp_interval,
-        ignore_keys,
         retain_history,
         seen: _,
     } = CreateSourceOptionExtracted::try_from(with_options.clone())?;
@@ -1010,7 +969,6 @@ pub fn plan_create_source(
         format,
         Some(external_connection.default_key_desc()),
         external_connection.default_value_desc(),
-        ignore_keys,
         include_metadata,
         metadata_columns_desc,
         &external_connection,
@@ -1134,22 +1092,12 @@ pub fn plan_create_source(
 
     let create_sql = normalize::create_statement(scx, Statement::CreateSource(stmt))?;
 
-    // Allow users to specify a timeline. If they do not, determine a default
-    // timeline for the source.
-    let timeline = match timeline {
-        None => match envelope {
-            SourceEnvelope::CdcV2 => {
-                Timeline::External(scx.catalog.resolve_full_name(&name).to_string())
-            }
-            _ => Timeline::EpochMilliseconds,
-        },
-        // TODO(benesch): if we stabilize this, can we find a better name than
-        // `mz_epoch_ms`? Maybe just `mz_system`?
-        Some(timeline) if timeline == "mz_epoch_ms" => Timeline::EpochMilliseconds,
-        Some(timeline) if timeline.starts_with("mz_") => {
-            return Err(PlanError::UnacceptableTimelineName(timeline));
+    // Determine a default timeline for the source.
+    let timeline = match envelope {
+        SourceEnvelope::CdcV2 => {
+            Timeline::External(scx.catalog.resolve_full_name(&name).to_string())
         }
-        Some(timeline) => Timeline::User(timeline),
+        _ => Timeline::EpochMilliseconds,
     };
 
     let compaction_window = plan_retain_history_option(scx, retain_history)?;
@@ -1178,7 +1126,6 @@ fn apply_source_envelope_encoding(
     format: &Option<FormatSpecifier<Aug>>,
     key_desc: Option<RelationDesc>,
     value_desc: RelationDesc,
-    ignore_keys: Option<bool>,
     include_metadata: &[SourceIncludeMetadata],
     metadata_columns_desc: Vec<(&str, ColumnType)>,
     source_connection: &GenericSourceConnection<ReferencedConnection>,
@@ -1347,11 +1294,7 @@ fn apply_source_envelope_encoding(
     };
 
     let metadata_desc = included_column_desc(metadata_columns_desc);
-    let (envelope, mut desc) = envelope.desc(key_desc, value_desc, metadata_desc)?;
-
-    if ignore_keys.unwrap_or(false) {
-        desc = desc.without_keys();
-    }
+    let (envelope, desc) = envelope.desc(key_desc, value_desc, metadata_desc)?;
 
     Ok((desc, envelope, encoding))
 }
@@ -1607,8 +1550,6 @@ generate_extracted_config!(
     (TextColumns, Vec::<Ident>, Default(vec![])),
     (ExcludeColumns, Vec::<Ident>, Default(vec![])),
     (PartitionBy, Vec<Ident>),
-    (Timeline, String),
-    (IgnoreKeys, bool),
     (Details, String)
 );
 
@@ -1640,8 +1581,6 @@ pub fn plan_create_table_from_source(
         exclude_columns,
         partition_by,
         details,
-        timeline,
-        ignore_keys,
         seen: _,
     } = with_options.clone().try_into()?;
 
@@ -1801,7 +1740,6 @@ pub fn plan_create_table_from_source(
         format,
         key_desc,
         value_desc,
-        ignore_keys,
         include_metadata,
         metadata_columns_desc,
         source_connection,
@@ -1819,20 +1757,11 @@ pub fn plan_create_table_from_source(
 
     // Allow users to specify a timeline. If they do not, determine a default
     // timeline for the source.
-    let timeline = match timeline {
-        None => match envelope {
-            SourceEnvelope::CdcV2 => {
-                Timeline::External(scx.catalog.resolve_full_name(&name).to_string())
-            }
-            _ => Timeline::EpochMilliseconds,
-        },
-        // TODO(benesch): if we stabilize this, can we find a better name than
-        // `mz_epoch_ms`? Maybe just `mz_system`?
-        Some(timeline) if timeline == "mz_epoch_ms" => Timeline::EpochMilliseconds,
-        Some(timeline) if timeline.starts_with("mz_") => {
-            return Err(PlanError::UnacceptableTimelineName(timeline));
+    let timeline = match envelope {
+        SourceEnvelope::CdcV2 => {
+            Timeline::External(scx.catalog.resolve_full_name(&name).to_string())
         }
-        Some(timeline) => Timeline::User(timeline),
+        _ => Timeline::EpochMilliseconds,
     };
 
     if let Some(partition_by) = partition_by {
@@ -3229,26 +3158,6 @@ fn plan_sink(
         return Err(PlanError::MissingName(CatalogItemType::Sink));
     };
     let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name)?)?;
-
-    const ALLOWED_WITH_OPTIONS: &[CreateSinkOptionName] = &[
-        CreateSinkOptionName::Snapshot,
-        CreateSinkOptionName::Version,
-        CreateSinkOptionName::PartitionStrategy,
-    ];
-
-    if let Some(op) = with_options
-        .iter()
-        .find(|op| !ALLOWED_WITH_OPTIONS.contains(&op.name))
-    {
-        scx.require_feature_flag_w_dynamic_desc(
-            &vars::ENABLE_CREATE_SOURCE_DENYLIST_WITH_OPTIONS,
-            format!("CREATE SINK...WITH ({}..)", op.name.to_ast_string()),
-            format!(
-                "permitted options are {}",
-                comma_separated(ALLOWED_WITH_OPTIONS)
-            ),
-        )?;
-    }
 
     let envelope = match envelope {
         Some(ast::SinkEnvelope::Upsert) => SinkEnvelope::Upsert,
@@ -4816,7 +4725,7 @@ fn plan_replica_config(
             compute_addresses,
             workers,
         ) => {
-            scx.require_feature_flag(&vars::ENABLE_UNORCHESTRATED_CLUSTER_REPLICAS)?;
+            scx.require_feature_flag(&vars::UNSAFE_ENABLE_UNORCHESTRATED_CLUSTER_REPLICAS)?;
 
             // When manually testing Materialize in unsafe mode, it's easy to
             // accidentally omit one of these options, so we try to produce

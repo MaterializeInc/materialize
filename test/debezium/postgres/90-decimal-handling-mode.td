@@ -57,8 +57,7 @@ $ http-request method=PUT url=http://debezium:8083/connectors/psql-connector/con
 
 # PUT requests do not take effect immediately, we need to sleep
 
-> SELECT mz_unsafe.mz_sleep(10)
-<null>
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="10s"
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE decimal_handling_mode_double (f1 DECIMAL(10,3) PRIMARY KEY);
@@ -99,8 +98,7 @@ $ http-request method=PUT url=http://debezium:8083/connectors/psql-connector/con
   "topic.prefix": "postgres"
 }
 
-> SELECT mz_unsafe.mz_sleep(10)
-<null>
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="10s"
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE decimal_handling_mode_string (f1 DECIMAL(10,3) PRIMARY KEY);
@@ -140,5 +138,4 @@ $ http-request method=PUT url=http://debezium:8083/connectors/psql-connector/con
   "topic.prefix": "postgres"
 }
 
-> SELECT mz_unsafe.mz_sleep(10)
-<null>
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="10s"

@@ -75,16 +75,10 @@ impl SystemParameterBackend {
 
     /// Pull the current values for all [SynchronizedParameters] from the
     /// [SystemParameterBackend].
-    pub async fn pull(&mut self, params: &mut SynchronizedParameters) {
-        match self.session_client.get_system_vars().await {
-            Ok(vars) => {
-                for (name, value) in vars {
-                    params.modify(&name, &value);
-                }
-            }
-            Err(error) => {
-                error!("cannot execute `SHOW ALL` query: {}", error)
-            }
+    pub async fn pull(&self, params: &mut SynchronizedParameters) {
+        let vars = self.session_client.get_system_vars().await;
+        for var in vars.iter() {
+            params.modify(var.name(), &var.value());
         }
     }
 }

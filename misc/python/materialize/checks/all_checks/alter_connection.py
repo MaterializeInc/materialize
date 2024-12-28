@@ -53,9 +53,6 @@ class AlterConnectionSshChangeBase(Check):
             + dedent(
                 f"""
                 $ postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
-                ALTER SYSTEM SET enable_table_keys = true;
-
-                $ postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
                 ALTER SYSTEM SET enable_connection_validation_syntax = true
 
                 $ kafka-create-topic topic=alter-connection-{i}a

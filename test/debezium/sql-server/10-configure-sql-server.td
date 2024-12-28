@@ -16,8 +16,7 @@
 # > on server 67f36c260951 executing sys.sp_cdc_enable_db_internal on line 205 (code: 22830, state: 1, class: 16)
 #
 
-> SELECT mz_unsafe.mz_sleep(10);
-<null>
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="10s"
 
 $ sql-server-connect name=sql-server
 server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID=sa;Password=${arg.sa-password}

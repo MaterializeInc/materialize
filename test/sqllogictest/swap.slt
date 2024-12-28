@@ -145,7 +145,7 @@ ALTER SYSTEM SET enable_alter_swap TO false;
 ----
 COMPLETE 0
 
-statement error db error: ERROR: the ALTER SWAP feature for objects is not supported
+statement error db error: ERROR: the ALTER SWAP feature for objects is not available
 ALTER CLUSTER bar SWAP WITH foo;
 
 # Cleanup.

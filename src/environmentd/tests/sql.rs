@@ -306,8 +306,10 @@ async fn test_drop_connection_race() {
 
 #[mz_ore::test]
 fn test_time() {
-    let server = test_util::TestHarness::default().start_blocking();
-    server.enable_feature_flags(&["enable_unsafe_functions"]);
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .start_blocking();
+    server.enable_feature_flags(&["unsafe_enable_unsafe_functions"]);
     let mut client = server.connect(postgres::NoTls).unwrap();
 
     // Confirm that `now()` and `current_timestamp()` both return a
@@ -1521,10 +1523,11 @@ async fn test_utilization_hold() {
 async fn test_github_12546() {
     let server = test_util::TestHarness::default()
         .with_propagate_crashes(false)
+        .unsafe_mode()
         .start()
         .await;
     server
-        .enable_feature_flags(&["enable_unsafe_functions"])
+        .enable_feature_flags(&["unsafe_enable_unsafe_functions"])
         .await;
 
     let (client, conn_task) = server.connect().with_handle().await.unwrap();
@@ -2133,8 +2136,10 @@ fn test_support_user_permissions() {
 
 #[mz_ore::test]
 fn test_idle_in_transaction_session_timeout() {
-    let server = test_util::TestHarness::default().start_blocking();
-    server.enable_feature_flags(&["enable_unsafe_functions"]);
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .start_blocking();
+    server.enable_feature_flags(&["unsafe_enable_unsafe_functions"]);
 
     let mut client = server.connect(postgres::NoTls).unwrap();
     client
@@ -2536,47 +2541,6 @@ fn test_dont_drop_sinks_twice() {
 
     drop(out);
     client_a.close().expect("failed to drop client");
-}
-
-#[mz_ore::test]
-fn test_timelines_persist_after_failed_transaction() {
-    let server = test_util::TestHarness::default()
-        .unsafe_mode()
-        .start_blocking();
-    server.enable_feature_flags(&["enable_create_source_denylist_with_options"]);
-
-    let mut client = server.connect(postgres::NoTls).unwrap();
-
-    client.batch_execute(
-        "CREATE SOURCE counter FROM LOAD GENERATOR COUNTER (TICK INTERVAL '10ms') WITH (TIMELINE 'my_timline')"
-    )
-    .unwrap();
-
-    // Should be able to query the source.
-    client
-        .query("SELECT * FROM counter", &[])
-        .expect("failed to select from LOAD GENERATOR");
-
-    fail::cfg("catalog_transact", "return(1)").expect("failed to set the fail_point");
-
-    // Should fail to drop the source, because of the fail_point.
-    let result = client.batch_execute("DROP SOURCE counter");
-
-    // Assert the error we get back is from our fail_point
-    assert_err!(result);
-    let err = result.unwrap_err();
-    assert!(err.to_string().contains("failpoint: Some(\"1\")"));
-
-    fail::remove("catalog_transact");
-
-    // Should still be able to query the source, since we shouldn't have cleaned up the
-    // timeline or source because of the failed transaction.
-    client
-        .query("SELECT * FROM counter", &[])
-        .expect("failed to select from LOAD GENERATOR");
-
-    // Dropping the source should also work now.
-    client.batch_execute("DROP SOURCE counter").unwrap();
 }
 
 // This can almost be tested with SLT using the simple directive, but
@@ -3817,9 +3781,12 @@ async fn test_serialized_ddl_serial() {
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // too slow
 async fn test_serialized_ddl_cancel() {
-    let server = test_util::TestHarness::default().start().await;
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .start()
+        .await;
     server
-        .enable_feature_flags(&["enable_unsafe_functions"])
+        .enable_feature_flags(&["unsafe_enable_unsafe_functions"])
         .await;
 
     let client1 = server.connect().await.unwrap();

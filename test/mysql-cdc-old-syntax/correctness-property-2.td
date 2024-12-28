@@ -11,7 +11,7 @@ $ set-sql-timeout duration=1s
 $ set-max-tries max-tries=20
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_unorchestrated_cluster_replicas = true
+ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true
 
 $ set count=10000
 

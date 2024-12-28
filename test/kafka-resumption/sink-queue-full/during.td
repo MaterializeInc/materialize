@@ -11,7 +11,7 @@ $ kafka-ingest topic=largeinput format=bytes repeat=11000000
 A,B,0
 
 # Long enough to ingest all the data
-> SELECT mz_unsafe.mz_sleep(60);
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="60s"
 <null>
 
 > SELECT count(*) FROM largeinput_tbl

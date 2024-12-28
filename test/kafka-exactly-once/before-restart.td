@@ -131,5 +131,5 @@ $ kafka-verify-data headers=materialize-timestamp format=avro sink=materialize.p
 # get correct results even with compaction, which re-timestamps earlier data
 # at later timestamps upon restarting.
 
-> SELECT mz_unsafe.mz_sleep(5);
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="5s"
 <null>

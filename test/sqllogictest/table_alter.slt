@@ -14,7 +14,7 @@ mode cockroach
 statement ok
 CREATE TABLE t (a int)
 
-statement error Enable ALTER TABLE ... ADD COLUMN ... is not supported
+statement error Enable ALTER TABLE ... ADD COLUMN ... is not available
 ALTER TABLE t ADD COLUMN b int;
 
 # Enable the ALTER TABLE feature.

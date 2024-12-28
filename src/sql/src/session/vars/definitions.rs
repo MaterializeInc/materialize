@@ -65,8 +65,9 @@ pub struct VarDefinition {
     pub value: VarDefaultValue,
     /// Constraint that must be upheld for this variable to be valid.
     pub constraint: Option<ValueConstraint>,
-    /// Optionally hides this variable if it's related to a feature flag being enabled.
-    pub feature_flag: Option<&'static FeatureFlag>,
+    /// When set, prevents getting or setting the variable unless the specified
+    /// feature flag is enabled.
+    pub require_feature_flag: Option<&'static FeatureFlag>,
 
     /// Method to parse [`VarInput`] into a type that implements [`Value`].
     ///
@@ -107,7 +108,7 @@ impl VarDefinition {
             parse: V::parse_dyn_value,
             type_name: V::type_name,
             constraint: None,
-            feature_flag: None,
+            require_feature_flag: None,
         }
     }
 
@@ -126,7 +127,7 @@ impl VarDefinition {
             parse: V::parse_dyn_value,
             type_name: V::type_name,
             constraint: None,
-            feature_flag: None,
+            require_feature_flag: None,
         }
     }
 
@@ -145,7 +146,7 @@ impl VarDefinition {
             parse: V::parse_dyn_value,
             type_name: V::type_name,
             constraint: None,
-            feature_flag: None,
+            require_feature_flag: None,
         }
     }
 
@@ -170,7 +171,7 @@ impl VarDefinition {
     }
 
     pub const fn with_feature_flag(mut self, feature_flag: &'static FeatureFlag) -> Self {
-        self.feature_flag = Some(feature_flag);
+        self.require_feature_flag = Some(feature_flag);
         self
     }
 
@@ -200,23 +201,14 @@ impl Var for VarDefinition {
         (self.type_name)()
     }
 
-    fn visible(
-        &self,
-        user: &User,
-        system_vars: Option<&super::SystemVars>,
-    ) -> Result<(), VarError> {
+    fn visible(&self, user: &User, system_vars: &super::SystemVars) -> Result<(), VarError> {
         if !self.user_visible && user != &*SYSTEM_USER && user != &*SUPPORT_USER {
             Err(VarError::UnknownParameter(self.name().to_string()))
-        } else if self.name().starts_with("unsafe")
-            && match system_vars {
-                None => true,
-                Some(system_vars) => !system_vars.allow_unsafe(),
-            }
-        {
+        } else if self.is_unsafe() && !system_vars.allow_unsafe() {
             Err(VarError::RequiresUnsafeMode(self.name()))
         } else {
-            if let Some(flag) = self.feature_flag {
-                flag.enabled(system_vars, None, None)?;
+            if let Some(flag) = self.require_feature_flag {
+                flag.require(system_vars)?;
             }
 
             Ok(())
@@ -1811,18 +1803,6 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
-        name: enable_create_sink_denylist_with_options,
-        desc: "CREATE SINK with unsafe options",
-        default: false,
-        enable_for_item_parsing: true,
-    },
-    {
-        name: enable_create_source_denylist_with_options,
-        desc: "CREATE SOURCE with unsafe options",
-        default: false,
-        enable_for_item_parsing: true,
-    },
-    {
         name: enable_date_bin_hopping,
         desc: "the date_bin_hopping function",
         default: false,
@@ -1920,31 +1900,31 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
-        name: enable_table_check_constraint,
+        name: unsafe_enable_table_check_constraint,
         desc: "CREATE TABLE with a check constraint",
         default: false,
         enable_for_item_parsing: true,
     },
     {
-        name: enable_table_foreign_key,
+        name: unsafe_enable_table_foreign_key,
         desc: "CREATE TABLE with a foreign key",
         default: false,
         enable_for_item_parsing: true,
     },
     {
-        name: enable_table_keys,
+        name: unsafe_enable_table_keys,
         desc: "CREATE TABLE with a primary key or unique constraint",
         default: false,
         enable_for_item_parsing: true,
     },
     {
-        name: enable_unorchestrated_cluster_replicas,
+        name: unsafe_enable_unorchestrated_cluster_replicas,
         desc: "unorchestrated cluster replicas",
         default: false,
         enable_for_item_parsing: true,
     },
     {
-        name: enable_unstable_dependencies,
+        name: unsafe_enable_unstable_dependencies,
         desc: "depending on unstable objects",
         default: false,
         enable_for_item_parsing: true,
@@ -1980,7 +1960,7 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
-        name: enable_unsafe_functions,
+        name: unsafe_enable_unsafe_functions,
         desc: "executing potentially dangerous functions",
         default: false,
         enable_for_item_parsing: true,

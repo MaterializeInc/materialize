@@ -2943,12 +2943,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_source_option_name(&mut self) -> Result<CreateSourceOptionName, ParserError> {
-        let name = match self.expect_one_of_keywords(&[IGNORE, TIMELINE, TIMESTAMP, RETAIN])? {
-            IGNORE => {
-                self.expect_keyword(KEYS)?;
-                CreateSourceOptionName::IgnoreKeys
-            }
-            TIMELINE => CreateSourceOptionName::Timeline,
+        let name = match self.expect_one_of_keywords(&[TIMESTAMP, RETAIN])? {
             TIMESTAMP => {
                 self.expect_keyword(INTERVAL)?;
                 CreateSourceOptionName::TimestampInterval
@@ -4838,73 +4833,60 @@ impl<'a> Parser<'a> {
     fn parse_table_from_source_option(
         &mut self,
     ) -> Result<TableFromSourceOption<Raw>, ParserError> {
-        let option = match self
-            .expect_one_of_keywords(&[TEXT, EXCLUDE, IGNORE, DETAILS, PARTITION, TIMELINE])?
-        {
-            ref keyword @ (TEXT | EXCLUDE) => {
-                self.expect_keyword(COLUMNS)?;
+        let option =
+            match self.expect_one_of_keywords(&[TEXT, EXCLUDE, IGNORE, DETAILS, PARTITION])? {
+                ref keyword @ (TEXT | EXCLUDE) => {
+                    self.expect_keyword(COLUMNS)?;
 
-                let _ = self.consume_token(&Token::Eq);
+                    let _ = self.consume_token(&Token::Eq);
 
-                let value = self
-                    .parse_option_sequence(Parser::parse_identifier)?
-                    .map(|inner| {
-                        WithOptionValue::Sequence(
-                            inner.into_iter().map(WithOptionValue::Ident).collect_vec(),
-                        )
-                    });
+                    let value =
+                        self.parse_option_sequence(Parser::parse_identifier)?
+                            .map(|inner| {
+                                WithOptionValue::Sequence(
+                                    inner.into_iter().map(WithOptionValue::Ident).collect_vec(),
+                                )
+                            });
 
-                TableFromSourceOption {
-                    name: match *keyword {
-                        TEXT => TableFromSourceOptionName::TextColumns,
-                        EXCLUDE => TableFromSourceOptionName::ExcludeColumns,
-                        _ => unreachable!(),
-                    },
-                    value,
-                }
-            }
-            DETAILS => TableFromSourceOption {
-                name: TableFromSourceOptionName::Details,
-                value: self.parse_optional_option_value()?,
-            },
-            IGNORE => {
-                match self.expect_one_of_keywords(&[COLUMNS, KEYS])? {
-                    COLUMNS => {
-                        let _ = self.consume_token(&Token::Eq);
-
-                        let value =
-                            self.parse_option_sequence(Parser::parse_identifier)?
-                                .map(|inner| {
-                                    WithOptionValue::Sequence(
-                                        inner.into_iter().map(WithOptionValue::Ident).collect_vec(),
-                                    )
-                                });
-                        TableFromSourceOption {
-                            // IGNORE is historical syntax for this option.
-                            name: TableFromSourceOptionName::ExcludeColumns,
-                            value,
-                        }
+                    TableFromSourceOption {
+                        name: match *keyword {
+                            TEXT => TableFromSourceOptionName::TextColumns,
+                            EXCLUDE => TableFromSourceOptionName::ExcludeColumns,
+                            _ => unreachable!(),
+                        },
+                        value,
                     }
-                    KEYS => TableFromSourceOption {
-                        name: TableFromSourceOptionName::IgnoreKeys,
-                        value: self.parse_optional_option_value()?,
-                    },
-                    _ => unreachable!(),
                 }
-            }
-            PARTITION => {
-                self.expect_keyword(BY)?;
-                TableFromSourceOption {
-                    name: TableFromSourceOptionName::PartitionBy,
+                DETAILS => TableFromSourceOption {
+                    name: TableFromSourceOptionName::Details,
                     value: self.parse_optional_option_value()?,
+                },
+                IGNORE => {
+                    self.expect_keyword(COLUMNS)?;
+                    let _ = self.consume_token(&Token::Eq);
+
+                    let value =
+                        self.parse_option_sequence(Parser::parse_identifier)?
+                            .map(|inner| {
+                                WithOptionValue::Sequence(
+                                    inner.into_iter().map(WithOptionValue::Ident).collect_vec(),
+                                )
+                            });
+                    TableFromSourceOption {
+                        // IGNORE is historical syntax for this option.
+                        name: TableFromSourceOptionName::ExcludeColumns,
+                        value,
+                    }
                 }
-            }
-            TIMELINE => TableFromSourceOption {
-                name: TableFromSourceOptionName::Timeline,
-                value: self.parse_optional_option_value()?,
-            },
-            _ => unreachable!(),
-        };
+                PARTITION => {
+                    self.expect_keyword(BY)?;
+                    TableFromSourceOption {
+                        name: TableFromSourceOptionName::PartitionBy,
+                        value: self.parse_optional_option_value()?,
+                    }
+                }
+                _ => unreachable!(),
+            };
         Ok(option)
     }
 
