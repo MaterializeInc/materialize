@@ -257,6 +257,22 @@ def is_any_date_time_expression(expression: Expression) -> bool:
     )
 
 
+def is_timezone_conversion_expression(expression: Expression) -> bool:
+    return expression.matches(
+        partial(
+            matches_fun_by_any_name,
+            function_names_in_lower_case={"timezone"},
+        ),
+        True,
+    ) or expression.matches(
+        partial(
+            matches_op_by_any_pattern,
+            patterns={"$ AT TIME ZONE $::TEXT"},
+        ),
+        True,
+    )
+
+
 def is_known_to_return_non_integer_number(expression: Expression):
     return_type_spec = expression.resolve_return_type_spec()
 
