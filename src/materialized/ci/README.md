@@ -1,4 +1,5 @@
-The Materialize Emulator is an all-in-one Docker image available on Docker Hub, offering the fastest way to get hands-on experience with Materialize in a local environment.
+The Materialize Emulator is an all-in-one Docker image available on Docker Hub, offering the fastest way to get hands-on
+experience with Materialize in a local environment.
 
 |                           | **Materialize Emulator**                                          | **Materialize**                                                              |
 |---------------------------|-------------------------------------------------------------------|------------------------------------------------------------------------------|
@@ -13,6 +14,29 @@ The Materialize Emulator is an all-in-one Docker image available on Docker Hub, 
 | **Fault tolerance**        | ❌                                                                          | ✔️                                                                           |
 | **Horizontal scalability** | ❌                                                                          | ✔️                                                                           |
 | **GUI**                    | ❌                                                                          | ✔️ Materialize Console                                                       |
+
+## Resource requirements
+
+The Materialize Emulator requires resources proportional to the workload size and complexity. Each workload comes
+at different resource requirements, but as a starting point we recommend the following allocation, which needs
+to be adjusted based on replica sizes.
+* At least 16GiB of RAM.
+* At least 4 vCPU cores.
+* At least 50GiB of disk space.
+
+The emulator can run with less resources, but performance may be degraded. While Materialize Cloud
+is designed to scale horizontally, the emulator is limited to a single node without performance isolation.
+This means a single replica can consume all available resources, potentially impacting other replicas.
+
+The emulator uses disk space for storing data, logs, and metadata. The emulator requires an NVMe SSD
+for optimal performance.
+
+The emulator's performance is not representative of a real Materialize deployment.
+
+## Cluster and replica sizes
+
+The emulator supports the similar cluster and replica sizes that Materialize offers. The sizes represent a
+proportional increase in CPU resources. For more details, consult the documentation on [cluster sizes](https://materialize.com/docs/sql/create-cluster/#size).
 
 ## Usage
 
@@ -34,10 +58,10 @@ To connect to the SQL interface using `psql`:
 psql postgres://materialize@localhost:6875/materialize
 ```
 
-To view logs for the embedded CockroachDB server:
+To view logs for the embedded PostgreSQL server:
 
 ```
-docker exec <CONTAINER-ID> cat /mzdata/cockroach/logs/cockroach.log
+docker exec <CONTAINER-ID> cat /var/log/postgresql/postgresql-16-main.log
 ```
 
 ## Technical Support
