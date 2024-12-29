@@ -79,10 +79,9 @@ Threshold
     Distinct
       Project (#0)
         Get materialize.public.t
-    Negate
-      Distinct
-        Project (#1)
-          Get materialize.public.mv
+    Distinct
+      Project (#1)
+        Get materialize.public.mv
 
 Target cluster: quickstart
 
@@ -93,11 +92,14 @@ query T multiline
 EXPLAIN RAW PLAN AS TEXT FOR
 SELECT a FROM t EXCEPT SELECT b FROM mv
 ----
-Except
-  Project (#0)
-    Get materialize.public.t
-  Project (#1)
-    Get materialize.public.mv
+Threshold
+  Union
+    Distinct
+      Project (#0)
+        Get materialize.public.t
+    Distinct
+      Project (#1)
+        Get materialize.public.mv
 
 Target cluster: quickstart
 
@@ -108,11 +110,12 @@ query T multiline
 EXPLAIN RAW PLAN AS TEXT FOR
 SELECT a FROM t EXCEPT ALL SELECT b FROM mv
 ----
-ExceptAll
-  Project (#0)
-    Get materialize.public.t
-  Project (#1)
-    Get materialize.public.mv
+Threshold
+  Union
+    Project (#0)
+      Get materialize.public.t
+    Project (#1)
+      Get materialize.public.mv
 
 Target cluster: quickstart
 
