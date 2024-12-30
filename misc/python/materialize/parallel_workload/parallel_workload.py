@@ -150,7 +150,7 @@ def run(
     for i in range(num_threads):
         weights: list[float]
         if complexity == Complexity.DDL:
-            weights = [0, 0, 30, 0, 100]
+            weights = [60, 30, 30, 30, 100]
         elif complexity == Complexity.DML:
             weights = [60, 30, 30, 30, 0]
         elif complexity == Complexity.Read:
