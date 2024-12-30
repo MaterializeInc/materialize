@@ -14,7 +14,7 @@ workspace = true
 
 [dependencies]
 anyhow = "1.0.66"
-async-trait = "0.1.68"
+async-trait = "0.1.83"
 aws-config = { version = "1.2.0", default-features = false }
 aws-credential-types = { version = "1.1.1", features = ["hardcoded-credentials"] }
 aws-sdk-secretsmanager = { version = "1.20.0", default-features = false, features = ["rt-tokio"] }

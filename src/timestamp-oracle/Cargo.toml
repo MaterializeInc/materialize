@@ -11,7 +11,7 @@ workspace = true
 
 [dependencies]
 anyhow = "1.0.66"
-async-trait = "0.1.68"
+async-trait = "0.1.83"
 dec = "0.4.8"
 deadpool-postgres = "0.10.3"
 futures = "0.3.25"
