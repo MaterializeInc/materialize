@@ -124,7 +124,7 @@ struct Args {
         value_name = "FILTER",
         default_value = "librdkafka=off,mz_kafka_util::client=off,warn"
     )]
-    log_filter: EnvFilter,
+    log_filter: String,
     /// Glob patterns of testdrive scripts to run.
     globs: Vec<String>,
     /// Automatically rewrite the testdrive file with the correct results when they are not as
@@ -285,7 +285,7 @@ async fn main() {
     let args: Args = cli::parse_args(CliConfig::default());
 
     tracing_subscriber::fmt()
-        .with_env_filter(args.log_filter)
+        .with_env_filter(EnvFilter::from(args.log_filter))
         .with_writer(io::stdout)
         .init();
 

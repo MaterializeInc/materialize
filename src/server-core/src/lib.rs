@@ -21,6 +21,7 @@ use std::time::Duration;
 
 use anyhow::bail;
 use async_trait::async_trait;
+use clap::builder::ArgPredicate;
 use futures::stream::{BoxStream, Stream, StreamExt};
 use mz_dyncfg::{Config, ConfigSet};
 use mz_ore::channel::trigger;
@@ -525,9 +526,9 @@ pub struct TlsCliArgs {
         long, env = "TLS_MODE",
         value_parser = ["disable", "require"],
         default_value = "disable",
-        default_value_ifs = &[
-            ("frontegg-tenant", None, Some("require")),
-            ("frontegg-resolver-template", None, Some("require")),
+        default_value_ifs = [
+            ("frontegg-tenant", ArgPredicate::IsPresent, Some("require")),
+            ("frontegg-resolver-template", ArgPredicate::IsPresent, Some("require")),
         ],
         value_name = "MODE",
     )]
@@ -537,7 +538,7 @@ pub struct TlsCliArgs {
         long,
         env = "TLS_CERT",
         requires = "tls-key",
-        required_if_eq_any(&[("tls-mode", "require")]),
+        required_if_eq_any([("tls-mode", "require")]),
         value_name = "PATH"
     )]
     tls_cert: Option<PathBuf>,
@@ -546,7 +547,7 @@ pub struct TlsCliArgs {
         long,
         env = "TLS_KEY",
         requires = "tls-cert",
-        required_if_eq_any(&[("tls-mode", "require")]),
+        required_if_eq_any([("tls-mode", "require")]),
         value_name = "PATH"
     )]
     tls_key: Option<PathBuf>,

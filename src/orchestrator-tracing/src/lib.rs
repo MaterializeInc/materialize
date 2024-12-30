@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use clap::{FromArgMatches, IntoApp};
+use clap::{CommandFactory, FromArgMatches};
 use derivative::Derivative;
 use futures_core::stream::BoxStream;
 use http::header::{HeaderName, HeaderValue};

@@ -58,7 +58,7 @@ struct Args {
     ///
     /// See environmentd's `--log-filter` option for details.
     #[clap(long, value_name = "FILTER", default_value = "off")]
-    log_filter: EnvFilter,
+    log_filter: String,
 }
 
 #[tokio::main]
@@ -73,7 +73,7 @@ async fn run() -> anyhow::Result<()> {
     let args: Args = cli::parse_args(CliConfig::default());
 
     tracing_subscriber::fmt()
-        .with_env_filter(args.log_filter)
+        .with_env_filter(EnvFilter::from(args.log_filter))
         .with_writer(io::stderr)
         .init();
 

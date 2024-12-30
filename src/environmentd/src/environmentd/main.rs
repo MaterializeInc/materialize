@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 use std::{cmp, env, iter, thread};
 
 use anyhow::{bail, Context};
-use clap::{ArgAction, ArgEnum, Parser};
+use clap::{ArgAction, Parser, ValueEnum};
 use fail::FailScenario;
 use http::header::HeaderValue;
 use ipnet::IpNet;
@@ -206,7 +206,7 @@ pub struct Args {
 
     // === Orchestrator options. ===
     /// The service orchestrator implementation to use.
-    #[structopt(long, arg_enum, env = "ORCHESTRATOR")]
+    #[structopt(long, value_enum, env = "ORCHESTRATOR")]
     orchestrator: OrchestratorKind,
     /// Name of a non-default Kubernetes scheduler, if any.
     #[structopt(long, env = "ORCHESTRATOR_KUBERNETES_SCHEDULER_NAME")]
@@ -239,7 +239,7 @@ pub struct Args {
         long,
         env = "ORCHESTRATOR_KUBERNETES_IMAGE_PULL_POLICY",
         default_value = "always",
-        arg_enum
+        value_enum
     )]
     orchestrator_kubernetes_image_pull_policy: KubernetesImagePullPolicy,
     /// The init container for services created by the Kubernetes orchestrator.
@@ -325,11 +325,11 @@ pub struct Args {
     /// The secrets controller implementation to use.
     #[structopt(
         long,
-        arg_enum,
+        value_enum,
         env = "SECRETS_CONTROLLER",
-        default_value_ifs(&[
-            ("orchestrator", Some("kubernetes"), Some("kubernetes")),
-            ("orchestrator", Some("process"), Some("local-file"))
+        default_value_ifs([
+            ("orchestrator", "kubernetes", Some("kubernetes")),
+            ("orchestrator", "process", Some("local-file"))
         ]),
         default_value("kubernetes"), // This shouldn't be possible, but it makes clap happy.
     )]
@@ -349,7 +349,7 @@ pub struct Args {
         long,
         env = "CLUSTERD_IMAGE",
         required_if_eq("orchestrator", "kubernetes"),
-        default_value_if("orchestrator", Some("process"), Some("clusterd"))
+        default_value_if("orchestrator", "process", Some("clusterd"))
     )]
     clusterd_image: Option<String>,
     /// A number representing the environment's generation.
@@ -589,7 +589,7 @@ pub struct Args {
     /// `unsafe_builtin_table_fingerprint_whitespace_version`.
     /// This argument is meant for testing only and as the names suggests
     /// should not be set in production.
-    #[clap(long, arg_enum, requires = "unsafe-mode")]
+    #[clap(long, value_enum, requires = "unsafe-mode")]
     unsafe_builtin_table_fingerprint_whitespace: Option<UnsafeBuiltinTableFingerprintWhitespace>,
     /// Controls the amount of whitespace injected by
     /// `unsafe_builtin_table_fingerprint_whitespace`.
@@ -600,7 +600,7 @@ pub struct Args {
     unsafe_builtin_table_fingerprint_whitespace_version: usize,
 }
 
-#[derive(ArgEnum, Debug, Clone)]
+#[derive(ValueEnum, Debug, Clone)]
 enum OrchestratorKind {
     Kubernetes,
     Process,

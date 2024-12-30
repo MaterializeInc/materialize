@@ -10,7 +10,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use clap::ArgEnum;
+use clap::ValueEnum;
 use mz_aws_secrets_controller::AwsSecretsClient;
 use mz_orchestrator_kubernetes::secrets::KubernetesSecretsReader;
 use mz_orchestrator_process::secrets::ProcessSecretsReader;
@@ -19,7 +19,7 @@ use mz_secrets::SecretsReader;
 #[derive(clap::Parser, Clone, Debug)]
 pub struct SecretsReaderCliArgs {
     /// The secrets reader implementation to use.
-    #[structopt(long, arg_enum, env = "SECRETS_READER")]
+    #[structopt(long, value_enum, env = "SECRETS_READER")]
     pub secrets_reader: SecretsControllerKind,
     /// When using the process secrets reader, the directory on the filesystem
     /// where secrets are stored.
@@ -50,7 +50,7 @@ pub struct SecretsReaderCliArgs {
     pub secrets_reader_name_prefix: Option<String>,
 }
 
-#[derive(ArgEnum, Debug, Clone, Copy)]
+#[derive(ValueEnum, Debug, Clone, Copy)]
 pub enum SecretsControllerKind {
     LocalFile,
     Kubernetes,

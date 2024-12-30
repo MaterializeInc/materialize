@@ -478,14 +478,14 @@ impl<'a> ValueGenerator<'a> {
     }
 }
 
-#[derive(clap::ArgEnum, PartialEq, Debug, Clone)]
+#[derive(clap::ValueEnum, PartialEq, Debug, Clone)]
 pub enum KeyFormat {
     Avro,
     Random,
     Sequential,
 }
 
-#[derive(clap::ArgEnum, PartialEq, Debug, Clone)]
+#[derive(clap::ValueEnum, PartialEq, Debug, Clone)]
 pub enum ValueFormat {
     Bytes,
     Avro,
@@ -529,7 +529,7 @@ struct Args {
         short = 'k',
         long = "keys",
         ignore_case = true,
-        arg_enum,
+        value_enum,
         default_value = "sequential"
     )]
     key_format: KeyFormat,
@@ -554,7 +554,7 @@ struct Args {
         short = 'v',
         long = "values",
         ignore_case = true,
-        arg_enum,
+        value_enum,
         default_value = "bytes"
     )]
     value_format: ValueFormat,

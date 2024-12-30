@@ -87,7 +87,7 @@ pub struct Args {
     balancerd_node_selector: Vec<KeyValueArg<String, String>>,
     #[clap(long)]
     console_node_selector: Vec<KeyValueArg<String, String>>,
-    #[clap(long, default_value = "always", arg_enum)]
+    #[clap(long, default_value = "always", value_enum)]
     image_pull_policy: KubernetesImagePullPolicy,
     #[clap(flatten)]
     network_policies: NetworkPolicyConfig,
@@ -142,7 +142,7 @@ pub struct Args {
     default_certificate_specs: DefaultCertificateSpecs,
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Clone, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct DefaultCertificateSpecs {
     balancerd_external: Option<MaterializeCertSpec>,
