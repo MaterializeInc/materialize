@@ -54,7 +54,7 @@ def create_mzs(
         Materialized(
             name=mz_name,
             external_metadata_store=True,
-            external_minio=True,
+            external_blob_store=True,
             sanity_restart=False,
             volumes_extra=["secrets:/share/secrets"],
             metadata_store="cockroach",

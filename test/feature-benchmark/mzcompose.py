@@ -320,7 +320,7 @@ def create_mz_service(
         additional_system_parameter_defaults=additional_system_parameter_defaults,
         external_metadata_store=True,
         metadata_store="cockroach",
-        external_minio=True,
+        external_blob_store=True,
         sanity_restart=False,
     )
 

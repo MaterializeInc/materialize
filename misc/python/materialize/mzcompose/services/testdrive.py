@@ -52,7 +52,7 @@ class Testdrive(Service):
         aws_secret_access_key: str | None = "minioadmin",
         no_consistency_checks: bool = False,
         external_metadata_store: bool = False,
-        external_minio: bool = False,
+        external_blob_store: bool = False,
         fivetran_destination: bool = False,
         fivetran_destination_url: str = "http://fivetran-destination:6874",
         fivetran_destination_files_path: str = "/share/tmp",
@@ -157,7 +157,7 @@ class Testdrive(Service):
                 f"--fivetran-destination-files-path={fivetran_destination_files_path}"
             )
 
-        if external_minio:
+        if external_blob_store:
             depends_graph["minio"] = {"condition": "service_healthy"}
             persist_blob_url = "s3://minioadmin:minioadmin@persist/persist?endpoint=http://minio:9000/&region=minio"
             entrypoint.append(f"--persist-blob-url={persist_blob_url}")

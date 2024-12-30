@@ -1614,7 +1614,7 @@ class KillAction(Action):
         with self.composition.override(
             Materialized(
                 restart="on-failure",
-                external_minio="toxiproxy",
+                external_blob_store="toxiproxy",
                 external_metadata_store="toxiproxy",
                 ports=["6975:6875", "6976:6876", "6977:6877"],
                 sanity_restart=self.sanity_restart,
@@ -1655,7 +1655,7 @@ class ZeroDowntimeDeployAction(Action):
         with self.composition.override(
             Materialized(
                 name=mz_service,
-                external_minio="toxiproxy",
+                external_blob_store="toxiproxy",
                 external_metadata_store="toxiproxy",
                 ports=ports,
                 sanity_restart=self.sanity_restart,

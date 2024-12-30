@@ -4560,6 +4560,7 @@ dependencies = [
  "proptest",
  "proptest-derive",
  "prost",
+ "prost-build",
  "rand",
  "semver",
  "serde",

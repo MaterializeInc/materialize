@@ -82,7 +82,7 @@ class RestartMz(TransactionDef):
                 Materialized(
                     name=self.workload.mz_service,
                     ports=ports,
-                    external_minio=True,
+                    external_blob_store=True,
                     external_metadata_store=True,
                     system_parameter_defaults=get_default_system_parameters(
                         zero_downtime=True
@@ -131,7 +131,7 @@ class ZeroDowntimeDeploy(TransactionDef):
                 Materialized(
                     name=self.workload.mz_service,
                     ports=ports,
-                    external_minio=True,
+                    external_blob_store=True,
                     external_metadata_store=True,
                     system_parameter_defaults=get_default_system_parameters(
                         zero_downtime=True
