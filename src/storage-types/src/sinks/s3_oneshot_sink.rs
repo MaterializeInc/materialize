@@ -56,9 +56,6 @@ pub async fn preflight(
     // Check that the S3 bucket path is empty before beginning the upload,
     // verify we have DeleteObject permissions,
     // and upload the INCOMPLETE sentinel file to the S3 path.
-    // Since we race against other replicas running the same sink we allow
-    // for objects to exist in the path if they were created by this sink
-    // (identified by the sink_id prefix).
 
     if let Some(files) = mz_aws_util::s3::list_bucket_path(&client, &bucket, &path_prefix).await? {
         if !files.is_empty() {

@@ -53,7 +53,6 @@ where
             sink_id,
             response_buffer: Some(Rc::clone(&compute_state.copy_to_response_buffer)),
         })));
-        let response_protocol_weak = Rc::downgrade(&response_protocol_handle);
         let connection_context = compute_state.context.connection_context.clone();
 
         let one_time_callback = move |count: Result<u64, String>| {
@@ -137,12 +136,7 @@ where
             one_time_callback,
         );
 
-        Some(Rc::new(scopeguard::guard((), move |_| {
-            let _token = token;
-            if let Some(protocol_handle) = response_protocol_weak.upgrade() {
-                std::mem::drop(protocol_handle.borrow_mut().take())
-            }
-        })))
+        Some(token)
     }
 }
 
