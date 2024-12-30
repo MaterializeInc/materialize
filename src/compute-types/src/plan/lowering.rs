@@ -20,6 +20,7 @@ use mz_ore::{assert_none, soft_assert_eq_or_log, soft_panic_or_log};
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::GlobalId;
 use timely::progress::Timestamp;
+use tracing::{span, Level};
 
 use crate::dataflows::{BuildDesc, DataflowDescription, IndexImport};
 use crate::plan::join::{DeltaJoinPlan, JoinPlan, LinearJoinPlan};
@@ -102,7 +103,10 @@ impl Context {
         let mut objects_to_build = Vec::with_capacity(desc.objects_to_build.len());
         for build in desc.objects_to_build {
             self.debug_info.id = build.id;
-            let (plan, keys) = self.lower_mir_expr(&build.plan)?;
+            let plan = &build.plan;
+            let (plan, keys) =
+                span!(target: "optimizer", Level::INFO, "lower_mir_expr", "id" = ?build.id, "plan" = ?plan)
+                    .in_scope(|| self.lower_mir_expr(plan))?;
 
             self.arrangements.insert(Id::Global(build.id), keys);
             objects_to_build.push(BuildDesc { id: build.id, plan });
