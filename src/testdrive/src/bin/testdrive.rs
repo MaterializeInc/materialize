@@ -17,6 +17,7 @@ use std::{io, process};
 
 use aws_credential_types::Credentials;
 use aws_types::region::Region;
+use clap::ArgAction;
 use globset::GlobBuilder;
 use itertools::Itertools;
 use mz_build_info::{build_info, BuildInfo};
@@ -59,11 +60,11 @@ struct Args {
     )]
     var: Vec<String>,
     /// A random number to distinguish each testdrive run.
-    #[clap(long, value_name = "N")]
+    #[clap(long, value_name = "N", action = ArgAction::Set)]
     seed: Option<u32>,
     /// Whether to reset Materialize state before executing each script and
     /// to clean up AWS state after each script.
-    #[clap(long)]
+    #[clap(long, action = ArgAction::SetTrue)]
     no_reset: bool,
     /// Force the use of the specified temporary directory.
     ///
@@ -136,14 +137,16 @@ struct Args {
     #[clap(
         long,
         default_value = "postgres://materialize@localhost:6875",
-        value_name = "URL"
+        value_name = "URL",
+        action = ArgAction::Set,
     )]
     materialize_url: tokio_postgres::Config,
     /// materialize internal SQL connection string.
     #[clap(
         long,
         default_value = "postgres://materialize@localhost:6877",
-        value_name = "INTERNAL_URL"
+        value_name = "INTERNAL_URL",
+        action = ArgAction::Set,
     )]
     materialize_internal_url: tokio_postgres::Config,
     #[clap(long)]
@@ -172,7 +175,8 @@ struct Args {
     #[clap(
         long,
         value_name = "PERSIST_CONSENSUS_URL",
-        required_if_eq("validate-catalog-store", "true")
+        required_if_eq("validate-catalog-store", "true"),
+        action = ArgAction::Set,
     )]
     persist_consensus_url: Option<SensitiveUrl>,
     /// Handle to the persist blob storage.
@@ -188,7 +192,8 @@ struct Args {
     #[clap(
         long,
         value_name = "ENCRYPTION://HOST:PORT",
-        default_value = "localhost:9092"
+        default_value = "localhost:9092",
+        action = ArgAction::Set,
     )]
     kafka_addr: String,
     /// Default number of partitions to create for topics
