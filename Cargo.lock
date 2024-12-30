@@ -485,17 +485,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
-name = "atty"
-version = "0.2.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d9b39be18770d11421cdb1b9947a45dd3f37e93092cbf377614828a319d5fee8"
-dependencies = [
- "hermit-abi 0.1.19",
- "libc",
- "winapi",
-]
-
-[[package]]
 name = "auto_impl"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1288,7 +1277,7 @@ dependencies = [
  "anyhow",
  "camino",
  "cargo_toml",
- "clap 4.5.23",
+ "clap",
  "convert_case",
  "guppy",
  "md-5",
@@ -1476,18 +1465,6 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "3.2.25"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ea181bf566f71cb9a5d17a59e1871af638180a18fb0035c92ae62b705207123"
-dependencies = [
- "bitflags 1.3.2",
- "clap_lex 0.2.4",
- "indexmap 1.9.1",
- "textwrap",
-]
-
-[[package]]
-name = "clap"
 version = "4.5.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3135e7ec2ef7b10c6ed8950f0f792ed96ee093fa088608f1c76e569722700c84"
@@ -1504,7 +1481,7 @@ checksum = "30582fc632330df2bd26877bde0c1f4470d57c582bbc070376afcd04d8cb4838"
 dependencies = [
  "anstream",
  "anstyle",
- "clap_lex 0.7.4",
+ "clap_lex",
  "strsim 0.11.1",
  "terminal_size 0.4.1",
 ]
@@ -1519,15 +1496,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.63",
-]
-
-[[package]]
-name = "clap_lex"
-version = "0.2.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2850f2f5a82cbf437dd5af4d49848fbdfc27c157c3d010345776f952765261c5"
-dependencies = [
- "os_str_bytes",
 ]
 
 [[package]]
@@ -1784,20 +1752,20 @@ dependencies = [
 
 [[package]]
 name = "criterion"
-version = "0.4.0"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e7c76e09c1aae2bc52b3d2f29e13c6572553b30c4aa1b8a49fd70de6412654cb"
+checksum = "f2b12d017a929603d80db1831cd3a24082f8137ce19c69e6447f54f5fc8d692f"
 dependencies = [
  "anes",
- "atty",
  "cast",
  "ciborium",
- "clap 3.2.25",
+ "clap",
  "criterion-plot",
  "futures",
+ "is-terminal",
  "itertools 0.10.5",
- "lazy_static",
  "num-traits",
+ "once_cell",
  "oorandom",
  "plotters",
  "rayon",
@@ -3000,15 +2968,6 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
 name = "hermit-abi"
-version = "0.1.19"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "62b467343b94ba476dcb2500d242dadbb39557df889310ac77c5d99100aaac33"
-dependencies = [
- "libc",
-]
-
-[[package]]
-name = "hermit-abi"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ee512640fe35acbfb4bb779db6f0d80704c2cacfa2e39b601ef3e3f47d1ae4c7"
@@ -3021,6 +2980,12 @@ name = "hermit-abi"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fed44880c466736ef9a5c5b5facefb5ed0785676d0c02d612db14e54f0d84286"
+
+[[package]]
+name = "hermit-abi"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fbf6a919d6cf397374f7dfeeea91d974c7c0a7221d0d0f4f20d859d329e53fcc"
 
 [[package]]
 name = "hex"
@@ -3452,6 +3417,17 @@ name = "ipnet"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "879d54834c8c76457ef4293a689b2a8c59b076067ad77b15efafbb05f92a592b"
+
+[[package]]
+name = "is-terminal"
+version = "0.4.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "261f68e344040fbd0edea105bef17c66edf46f984ddb1115b775ce31be948f4b"
+dependencies = [
+ "hermit-abi 0.4.0",
+ "libc",
+ "windows-sys 0.52.0",
+]
 
 [[package]]
 name = "is_terminal_polyfill"
@@ -4269,7 +4245,7 @@ version = "0.3.0"
 dependencies = [
  "assert_cmd",
  "axum",
- "clap 4.5.23",
+ "clap",
  "csv",
  "dirs",
  "hyper 1.4.1",
@@ -4534,7 +4510,7 @@ dependencies = [
  "bytes",
  "bytesize",
  "chrono",
- "clap 4.5.23",
+ "clap",
  "domain",
  "futures",
  "humantime",
@@ -4606,7 +4582,7 @@ dependencies = [
  "bytes",
  "bytesize",
  "chrono",
- "clap 4.5.23",
+ "clap",
  "derivative",
  "differential-dataflow",
  "fail",
@@ -4672,7 +4648,7 @@ version = "0.128.0-dev.1"
 dependencies = [
  "anyhow",
  "arrow",
- "clap 4.5.23",
+ "clap",
  "futures",
  "mz-adapter",
  "mz-build-info",
@@ -4799,7 +4775,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "bytesize",
- "clap 4.5.23",
+ "clap",
  "crossbeam-channel",
  "dec",
  "differential-dataflow",
@@ -4863,7 +4839,7 @@ version = "0.128.0-dev.1"
 dependencies = [
  "anyhow",
  "axum",
- "clap 4.5.23",
+ "clap",
  "fail",
  "futures",
  "hyper 1.4.1",
@@ -4902,7 +4878,7 @@ dependencies = [
  "async-stream",
  "async-trait",
  "bytesize",
- "clap 4.5.23",
+ "clap",
  "core_affinity",
  "crossbeam-channel",
  "dec",
@@ -5151,7 +5127,7 @@ dependencies = [
  "bytesize",
  "cc",
  "chrono",
- "clap 4.5.23",
+ "clap",
  "datadriven",
  "derivative",
  "fail",
@@ -5359,7 +5335,7 @@ version = "0.0.0"
 dependencies = [
  "async-compression",
  "bytes",
- "clap 4.5.23",
+ "clap",
  "csv-async",
  "futures",
  "insta",
@@ -5399,7 +5375,7 @@ dependencies = [
  "anyhow",
  "axum",
  "base64 0.13.1",
- "clap 4.5.23",
+ "clap",
  "derivative",
  "futures",
  "jsonwebtoken",
@@ -5445,7 +5421,7 @@ dependencies = [
  "axum-extra",
  "base64 0.22.0",
  "chrono",
- "clap 4.5.23",
+ "clap",
  "hyper 1.4.1",
  "jsonwebtoken",
  "mz-frontegg-auth",
@@ -5493,7 +5469,7 @@ dependencies = [
  "byteorder",
  "bytes",
  "chrono",
- "clap 4.5.23",
+ "clap",
  "criterion",
  "differential-dataflow",
  "itertools 0.12.1",
@@ -5528,7 +5504,7 @@ dependencies = [
  "aws-types",
  "base64 0.22.0",
  "chrono",
- "clap 4.5.23",
+ "clap",
  "crossbeam",
  "fancy-regex",
  "futures",
@@ -5713,7 +5689,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
- "clap 4.5.23",
+ "clap",
  "fail",
  "futures",
  "k8s-openapi",
@@ -5766,7 +5742,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "clap 4.5.23",
+ "clap",
  "derivative",
  "futures-core",
  "http 1.1.0",
@@ -5794,7 +5770,7 @@ dependencies = [
  "async-trait",
  "axum",
  "chrono",
- "clap 4.5.23",
+ "clap",
  "futures",
  "http 1.1.0",
  "k8s-controller",
@@ -5833,7 +5809,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "chrono",
- "clap 4.5.23",
+ "clap",
  "compact_bytes",
  "console-subscriber",
  "criterion",
@@ -5958,7 +5934,7 @@ dependencies = [
  "async-stream",
  "async-trait",
  "bytes",
- "clap 4.5.23",
+ "clap",
  "criterion",
  "datadriven",
  "differential-dataflow",
@@ -6086,7 +6062,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "bytes",
- "clap 4.5.23",
+ "clap",
  "datadriven",
  "fallible-iterator",
  "mz-ore",
@@ -6427,7 +6403,7 @@ dependencies = [
  "aws-config",
  "aws-sdk-s3",
  "bytefmt",
- "clap 4.5.23",
+ "clap",
  "futures",
  "indicatif",
  "mz-aws-util",
@@ -6472,7 +6448,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "clap 4.5.23",
+ "clap",
  "futures",
  "mz-dyncfg",
  "mz-ore",
@@ -6494,7 +6470,7 @@ dependencies = [
  "anyhow",
  "async-stream",
  "async-trait",
- "clap 4.5.23",
+ "clap",
  "crossbeam-channel",
  "futures",
  "http 1.1.0",
@@ -6538,7 +6514,7 @@ dependencies = [
  "aws-sdk-sts",
  "bitflags 1.3.2",
  "chrono",
- "clap 4.5.23",
+ "clap",
  "datadriven",
  "derivative",
  "dynfmt",
@@ -6662,7 +6638,7 @@ dependencies = [
  "anyhow",
  "bytes",
  "chrono",
- "clap 4.5.23",
+ "clap",
  "dec",
  "fallible-iterator",
  "futures",
@@ -6743,7 +6719,7 @@ dependencies = [
  "bytes",
  "bytesize",
  "chrono",
- "clap 4.5.23",
+ "clap",
  "columnation",
  "crossbeam-channel",
  "csv-core",
@@ -7050,7 +7026,7 @@ dependencies = [
  "byteorder",
  "bytes",
  "chrono",
- "clap 4.5.23",
+ "clap",
  "flate2",
  "futures",
  "globset",
@@ -7697,12 +7673,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "os_str_bytes"
-version = "6.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e2355d85b9a3786f481747ced0e0ff2ba35213a1f9bd406ed906554d7af805a1"
-
-[[package]]
 name = "outref"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7855,7 +7825,7 @@ dependencies = [
  "async-trait",
  "axum",
  "bytes",
- "clap 4.5.23",
+ "clap",
  "differential-dataflow",
  "futures",
  "humantime",
@@ -8335,7 +8305,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8650aabb6c35b860610e9cff5dc1af886c9e25073b7b1712a68972af4281302"
 dependencies = [
  "bytes",
- "heck 0.4.0",
+ "heck 0.5.0",
  "itertools 0.12.1",
  "log",
  "multimap",
@@ -11342,7 +11312,7 @@ dependencies = [
  "camino",
  "cc",
  "chrono",
- "clap 4.5.23",
+ "clap",
  "console",
  "criterion",
  "crossbeam-deque",

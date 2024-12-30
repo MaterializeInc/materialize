@@ -68,7 +68,7 @@ proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
-criterion = { version = "0.4.0" }
+criterion = { version = "0.5.1" }
 datadriven = "0.8.0"
 mz-expr-test-util = { path = "../expr-test-util" }
 mz-ore = { path = "../ore" }
