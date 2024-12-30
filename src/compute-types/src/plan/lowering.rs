@@ -17,6 +17,7 @@ use mz_expr::{
     MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, TableFunc,
 };
 use mz_ore::{assert_none, soft_assert_eq_or_log, soft_panic_or_log};
+use mz_repr::explain::ExplainConfig;
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::GlobalId;
 use timely::progress::Timestamp;
@@ -105,7 +106,10 @@ impl Context {
             self.debug_info.id = build.id;
             let plan = &build.plan;
             let (plan, keys) =
-                span!(target: "optimizer", Level::INFO, "lower_mir_expr", "id" = ?build.id, "plan" = ?plan)
+                span!(target: "optimizer", Level::INFO, "lower_mir_expr", "id" = ?build.id, "plan" = plan.explain(&ExplainConfig {
+                    redacted: true,
+                    ..Default::default()
+                }, None))
                     .in_scope(|| self.lower_mir_expr(plan))?;
 
             self.arrangements.insert(Id::Global(build.id), keys);
