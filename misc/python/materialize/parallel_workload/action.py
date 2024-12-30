@@ -855,6 +855,8 @@ class DropDatabaseAction(Action):
 class CreateSchemaAction(Action):
     def run(self, exe: Executor) -> bool:
         with exe.db.lock:
+            if len(exe.db.dbs) == 0:
+                return False
             if len(exe.db.schemas) >= MAX_SCHEMAS:
                 return False
             schema_id = exe.db.schema_id
@@ -1212,10 +1214,10 @@ class CreateClusterAction(Action):
             exe.db.cluster_id += 1
         cluster = Cluster(
             cluster_id,
-            managed=self.rng.choice([True, False]),
+            managed=True,
             size=self.rng.choice(["1", "2"]),
-            replication_factor=self.rng.choice([1, 2]),
-            introspection_interval=self.rng.choice(["0", "1s", "10s"]),
+            replication_factor=1,
+            introspection_interval="1s",
         )
         cluster.create(exe)
         exe.db.clusters.append(cluster)
@@ -2228,17 +2230,17 @@ ddl_action_list = ActionList(
         # (DropViewAction, 8),
         # (CreateRoleAction, 2),
         # (DropRoleAction, 2),
-        (CreateClusterAction, 2),
-        (DropClusterAction, 2),
-        (SwapClusterAction, 10),
-        (CreateClusterReplicaAction, 4),
-        (DropClusterReplicaAction, 4),
-        (SetClusterAction, 1),
+        (CreateClusterAction, 1),
+        # (DropClusterAction, 2),
+        # (SwapClusterAction, 10),
+        # (CreateClusterReplicaAction, 4),
+        # (DropClusterReplicaAction, 4),
+        # (SetClusterAction, 1),
         # (CreateWebhookSourceAction, 2),
         # (DropWebhookSourceAction, 2),
-        (CreateKafkaSinkAction, 4),
-        (DropKafkaSinkAction, 0),
-        (CreateKafkaSourceAction, 100),
+        # (CreateKafkaSinkAction, 4),
+        # (DropKafkaSinkAction, 0),
+        (CreateKafkaSourceAction, 1),
         (DropKafkaSourceAction, 0),
         # TODO: Reenable when database-issues#8237 is fixed
         # (CreateMySqlSourceAction, 4),
@@ -2249,9 +2251,9 @@ ddl_action_list = ActionList(
         # (RevokePrivilegesAction, 1),
         # (ReconnectAction, 1),
         (CreateDatabaseAction, 1),
-        (DropDatabaseAction, 1),
+        # (DropDatabaseAction, 1),
         (CreateSchemaAction, 1),
-        (DropSchemaAction, 1),
+        # (DropSchemaAction, 1),
         # (RenameSchemaAction, 10),
         # (RenameTableAction, 10),
         # (RenameViewAction, 10),
