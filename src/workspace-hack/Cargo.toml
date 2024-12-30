@@ -34,7 +34,8 @@ bstr-dff4ba8e3ae991db = { package = "bstr", version = "1.10.0" }
 byteorder = { version = "1.5.0" }
 bytes = { version = "1.4.0", features = ["serde"] }
 chrono = { version = "0.4.35", default-features = false, features = ["clock", "serde"] }
-clap = { version = "4.5.23", features = ["derive", "env", "wrap_help"] }
+clap = { version = "4.5.23", features = ["derive", "env", "string", "wrap_help"] }
+clap_builder = { version = "4.5.23", default-features = false, features = ["color", "env", "std", "string", "suggestions", "usage", "wrap_help"] }
 console = { version = "0.15.5", default-features = false, features = ["ansi-parsing", "unicode-width"] }
 criterion = { version = "0.5.1", features = ["async_tokio", "html_reports"] }
 crossbeam-deque = { version = "0.8.3" }
@@ -119,7 +120,6 @@ socket2 = { version = "0.5.7", default-features = false, features = ["all"] }
 subtle = { version = "2.4.1" }
 syn-dff4ba8e3ae991db = { package = "syn", version = "1.0.107", features = ["extra-traits", "full", "visit", "visit-mut"] }
 syn-f595c2ba2a3f28df = { package = "syn", version = "2.0.63", features = ["extra-traits", "full", "visit", "visit-mut"] }
-textwrap = { version = "0.16.1", default-features = false, features = ["terminal_size"] }
 time = { version = "0.3.17", features = ["macros", "quickcheck", "serde-well-known"] }
 tokio = { version = "1.38.0", features = ["full", "test-util", "tracing"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde", "with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
@@ -166,7 +166,8 @@ byteorder = { version = "1.5.0" }
 bytes = { version = "1.4.0", features = ["serde"] }
 cc = { version = "1.1.28", default-features = false, features = ["parallel"] }
 chrono = { version = "0.4.35", default-features = false, features = ["clock", "serde"] }
-clap = { version = "4.5.23", features = ["derive", "env", "wrap_help"] }
+clap = { version = "4.5.23", features = ["derive", "env", "string", "wrap_help"] }
+clap_builder = { version = "4.5.23", default-features = false, features = ["color", "env", "std", "string", "suggestions", "usage", "wrap_help"] }
 console = { version = "0.15.5", default-features = false, features = ["ansi-parsing", "unicode-width"] }
 criterion = { version = "0.5.1", features = ["async_tokio", "html_reports"] }
 crossbeam-deque = { version = "0.8.3" }
@@ -252,7 +253,6 @@ socket2 = { version = "0.5.7", default-features = false, features = ["all"] }
 subtle = { version = "2.4.1" }
 syn-dff4ba8e3ae991db = { package = "syn", version = "1.0.107", features = ["extra-traits", "full", "visit", "visit-mut"] }
 syn-f595c2ba2a3f28df = { package = "syn", version = "2.0.63", features = ["extra-traits", "full", "visit", "visit-mut"] }
-textwrap = { version = "0.16.1", default-features = false, features = ["terminal_size"] }
 time = { version = "0.3.17", features = ["macros", "quickcheck", "serde-well-known"] }
 time-macros = { version = "0.2.6", default-features = false, features = ["formatting", "parsing", "serde"] }
 tokio = { version = "1.38.0", features = ["full", "test-util", "tracing"] }
@@ -285,6 +285,7 @@ hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", default-featu
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
 pathdiff = { version = "0.2.1", default-features = false, features = ["camino"] }
 ring = { version = "0.17.7", features = ["std"] }
+rustix = { version = "0.38.42", features = ["fs", "termios"] }
 
 [target.x86_64-unknown-linux-gnu.build-dependencies]
 bitflags = { version = "2.4.1", default-features = false, features = ["std"] }
@@ -293,6 +294,7 @@ hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", default-featu
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
 pathdiff = { version = "0.2.1", default-features = false, features = ["camino"] }
 ring = { version = "0.17.7", features = ["std"] }
+rustix = { version = "0.38.42", features = ["fs", "termios"] }
 
 [target.x86_64-apple-darwin.dependencies]
 bitflags = { version = "2.4.1", default-features = false, features = ["std"] }
@@ -301,6 +303,7 @@ hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", default-featu
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
 pathdiff = { version = "0.2.1", default-features = false, features = ["camino"] }
 ring = { version = "0.17.7", features = ["std"] }
+rustix = { version = "0.38.42", features = ["fs", "termios"] }
 security-framework = { version = "2.7.0", features = ["alpn"] }
 
 [target.x86_64-apple-darwin.build-dependencies]
@@ -310,6 +313,7 @@ hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", default-featu
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
 pathdiff = { version = "0.2.1", default-features = false, features = ["camino"] }
 ring = { version = "0.17.7", features = ["std"] }
+rustix = { version = "0.38.42", features = ["fs", "termios"] }
 security-framework = { version = "2.7.0", features = ["alpn"] }
 
 ### END HAKARI SECTION
