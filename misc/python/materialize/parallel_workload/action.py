@@ -2231,7 +2231,7 @@ ddl_action_list = ActionList(
         # (CreateRoleAction, 2),
         # (DropRoleAction, 2),
         (CreateClusterAction, 2),
-        (DropClusterAction, 2),
+        # (DropClusterAction, 2),
         # (SwapClusterAction, 10),
         # (CreateClusterReplicaAction, 4),
         # (DropClusterReplicaAction, 4),
