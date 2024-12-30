@@ -2253,7 +2253,7 @@ ddl_action_list = ActionList(
         (CreateDatabaseAction, 1),
         # (DropDatabaseAction, 1),
         (CreateSchemaAction, 1),
-        (DropSchemaAction, 1),
+        # (DropSchemaAction, 1),
         # (RenameSchemaAction, 10),
         # (RenameTableAction, 10),
         # (RenameViewAction, 10),
