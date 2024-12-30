@@ -61,6 +61,7 @@ fn main() {
                 "storage-types/src/connections.proto",
                 "storage-types/src/errors.proto",
                 "storage-types/src/instances.proto",
+                "storage-types/src/oneshot_sources.proto",
                 "storage-types/src/parameters.proto",
                 "storage-types/src/sinks.proto",
                 "storage-types/src/sources.proto",

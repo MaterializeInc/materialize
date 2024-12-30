@@ -28,8 +28,9 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_pgwire_common::Format;
 use mz_repr::role_id::RoleId;
+use mz_repr::table::TableData;
 use mz_repr::user::ExternalUserMetadata;
-use mz_repr::{CatalogItemId, Datum, Diff, Row, RowIterator, ScalarType, TimestampManipulation};
+use mz_repr::{CatalogItemId, Datum, Row, RowIterator, ScalarType, TimestampManipulation};
 use mz_sql::ast::{AstInfo, Raw, Statement, TransactionAccessMode};
 use mz_sql::plan::{Params, PlanContext, QueryWhen, StatementDesc};
 use mz_sql::session::metadata::SessionMetadata;
@@ -1447,7 +1448,7 @@ pub struct WriteOp {
     /// The target table.
     pub id: CatalogItemId,
     /// The data rows.
-    pub rows: Vec<(Row, Diff)>,
+    pub rows: TableData,
 }
 
 /// Whether a transaction requires linearization.

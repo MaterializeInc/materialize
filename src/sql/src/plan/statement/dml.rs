@@ -53,7 +53,6 @@ use crate::normalize;
 use crate::plan::query::{plan_expr, plan_up_to, ExprContext, QueryLifetime};
 use crate::plan::scope::Scope;
 use crate::plan::statement::{ddl, StatementContext, StatementDesc};
-use crate::plan::with_options;
 use crate::plan::{
     self, side_effecting_func, transform_ast, CopyToPlan, CreateSinkPlan, ExplainPushdownPlan,
     ExplainSinkSchemaPlan, ExplainTimestampPlan,
@@ -62,6 +61,7 @@ use crate::plan::{
     query, CopyFormat, CopyFromPlan, ExplainPlanPlan, InsertPlan, MutationKind, Params, Plan,
     PlanError, QueryContext, ReadThenWritePlan, SelectPlan, SubscribeFrom, SubscribePlan,
 };
+use crate::plan::{with_options, CopyFromSource};
 use crate::session::vars;
 
 // TODO(benesch): currently, describing a `SELECT` or `INSERT` query
@@ -1101,6 +1101,7 @@ fn plan_copy_to_expr(
 
 fn plan_copy_from(
     scx: &StatementContext,
+    target: &CopyTarget<Aug>,
     table_name: ResolvedItemName,
     columns: Vec<Ident>,
     format: CopyFormat,
@@ -1112,6 +1113,30 @@ fn plan_copy_from(
             None => Ok(()),
         }
     }
+
+    let source = match target {
+        CopyTarget::Stdin => CopyFromSource::Stdin,
+        CopyTarget::Expr(from) => {
+            // Converting the to expr to a HirScalarExpr
+            let mut from_expr = from.clone();
+            transform_ast::transform(scx, &mut from_expr)?;
+            let relation_type = RelationDesc::empty();
+            let ecx = &ExprContext {
+                qcx: &QueryContext::root(scx, QueryLifetime::OneShot),
+                name: "COPY FROM target",
+                scope: &Scope::empty(),
+                relation_type: relation_type.typ(),
+                allow_aggregates: false,
+                allow_subqueries: false,
+                allow_parameters: false,
+                allow_windows: false,
+            };
+            let from = plan_expr(ecx, &from_expr)?.type_as(ecx, &ScalarType::String)?;
+
+            CopyFromSource::Url(from)
+        }
+        CopyTarget::Stdout => sql_bail!("COPY FROM {} not supported", target),
+    };
 
     let params = match format {
         CopyFormat::Text => {
@@ -1148,6 +1173,7 @@ fn plan_copy_from(
     let (id, _, columns) = query::plan_copy_from(scx, table_name, columns)?;
     Ok(Plan::CopyFrom(CopyFromPlan {
         id,
+        source,
         columns,
         params,
     }))
@@ -1224,9 +1250,10 @@ pub fn plan_copy(
                 )?),
             }
         }
-        (CopyDirection::From, CopyTarget::Stdin) => match relation {
+        (CopyDirection::From, target) => match relation {
             CopyRelation::Named { name, columns } => plan_copy_from(
                 scx,
+                target,
                 name,
                 columns,
                 format.unwrap_or(CopyFormat::Text),
