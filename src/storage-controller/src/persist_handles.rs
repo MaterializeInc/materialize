@@ -24,6 +24,7 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::ShardId;
 use mz_persist_types::Codec64;
+use mz_repr::table::TableData;
 use mz_repr::{Diff, GlobalId, TimestampManipulation};
 use mz_storage_client::client::{TimestamplessUpdate, Update};
 use mz_storage_types::controller::{InvalidUpper, TxnsCodecRow};
@@ -74,7 +75,7 @@ enum PersistTableWriteCmd<T: Timestamp + Lattice + Codec64> {
     Append {
         write_ts: T,
         advance_to: T,
-        updates: Vec<(GlobalId, Vec<TimestamplessUpdate>)>,
+        updates: Vec<(GlobalId, Vec<TableData>)>,
         tx: tokio::sync::oneshot::Sender<Result<(), StorageError<T>>>,
     },
     Shutdown,
@@ -223,7 +224,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWrite
         &self,
         write_ts: T,
         advance_to: T,
-        updates: Vec<(GlobalId, Vec<TimestamplessUpdate>)>,
+        updates: Vec<(GlobalId, Vec<TableData>)>,
     ) -> tokio::sync::oneshot::Receiver<Result<(), StorageError<T>>> {
         let (tx, rx) = tokio::sync::oneshot::channel();
         if updates.is_empty() {
@@ -380,7 +381,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
         &mut self,
         write_ts: T,
         advance_to: T,
-        updates: Vec<(GlobalId, Vec<TimestamplessUpdate>)>,
+        updates: Vec<(GlobalId, Vec<TableData>)>,
         tx: tokio::sync::oneshot::Sender<Result<(), StorageError<T>>>,
     ) {
         debug!(
@@ -420,9 +421,18 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
                 continue;
             };
             for update in updates {
-                let () = txn
-                    .write(data_id, SourceData(Ok(update.row)), (), update.diff)
-                    .await;
+                match update {
+                    TableData::Rows(updates) => {
+                        for (row, diff) in updates {
+                            let () = txn.write(data_id, SourceData(Ok(row)), (), diff).await;
+                        }
+                    }
+                    TableData::Batches(batches) => {
+                        for batch in batches {
+                            let () = txn.write_batch(data_id, batch);
+                        }
+                    }
+                }
             }
         }
         // Sneak in any txns shard tidying from previous commits.

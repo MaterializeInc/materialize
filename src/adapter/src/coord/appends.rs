@@ -21,12 +21,14 @@ use mz_ore::metrics::MetricsFutureExt;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{assert_none, instrument};
+use mz_repr::table::TableData;
 use mz_repr::{CatalogItemId, Diff, Row, Timestamp};
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan::Plan;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_storage_client::client::TimestamplessUpdate;
 use mz_timestamp_oracle::WriteTimestamp;
+use smallvec::SmallVec;
 use tokio::sync::{oneshot, Notify, OwnedMutexGuard, OwnedSemaphorePermit, Semaphore};
 use tracing::{debug_span, info, warn, Instrument, Span};
 
@@ -109,7 +111,7 @@ pub struct DeferredPlan {
 #[derive(Debug)]
 pub struct DeferredWrite {
     pub span: Span,
-    pub writes: BTreeMap<CatalogItemId, Vec<(Row, i64)>>,
+    pub writes: BTreeMap<CatalogItemId, TableData>,
     pub pending_txn: PendingTxn,
 }
 
@@ -129,7 +131,7 @@ pub(crate) enum PendingWriteTxn {
     User {
         span: Span,
         /// List of all write operations within the transaction.
-        writes: BTreeMap<CatalogItemId, Vec<(Row, Diff)>>,
+        writes: BTreeMap<CatalogItemId, TableData>,
         /// If they exist, should contain locks for each [`CatalogItemId`] in `writes`.
         write_locks: Option<WriteLocks>,
         /// Inner transaction.
@@ -447,7 +449,7 @@ impl Coordinator {
             .await
             .unwrap_or_terminate("unable to confirm leadership");
 
-        let mut appends: BTreeMap<CatalogItemId, Vec<(Row, Diff)>> = BTreeMap::new();
+        let mut appends: BTreeMap<CatalogItemId, SmallVec<[TableData; 1]>> = BTreeMap::new();
         let mut responses = Vec::with_capacity(validated_writes.len());
         let mut notifies = Vec::new();
 
@@ -465,14 +467,14 @@ impl Coordinator {
                         },
                 } => {
                     assert_none!(write_locks, "should have merged together all locks above");
-                    for (id, rows) in writes {
+                    for (id, data) in writes {
                         // If the table that some write was targeting has been deleted while the
                         // write was waiting, then the write will be ignored and we respond to the
                         // client that the write was successful. This is only possible if the write
                         // and the delete were concurrent. Therefore, we are free to order the
                         // write before the delete without violating any consistency guarantees.
                         if self.catalog().try_get_entry(&id).is_some() {
-                            appends.entry(id).or_default().extend(rows);
+                            appends.entry(id).or_default().push(data);
                         }
                     }
                     if let Some(id) = ctx.extra().contents() {
@@ -483,10 +485,8 @@ impl Coordinator {
                 }
                 PendingWriteTxn::System { updates, source } => {
                     for update in updates {
-                        appends
-                            .entry(update.id)
-                            .or_default()
-                            .push((update.row, update.diff));
+                        let data = TableData::Rows(vec![(update.row, update.diff)]);
+                        appends.entry(update.id).or_default().push(data);
                     }
                     // Once the write completes we notify any waiters.
                     if let BuiltinTableUpdateSource::Internal(tx) = source {
@@ -496,9 +496,10 @@ impl Coordinator {
             }
         }
 
-        for (_, updates) in &mut appends {
-            differential_dataflow::consolidation::consolidate(updates);
-        }
+        // for (_, updates) in &mut appends {
+        //     differential_dataflow::consolidation::consolidate(updates);
+        // }
+
         // Add table advancements for all tables.
         for table in self.catalog().entries().filter(|entry| entry.is_table()) {
             appends.entry(table.id()).or_default();
@@ -507,11 +508,8 @@ impl Coordinator {
             .into_iter()
             .map(|(id, updates)| {
                 let gid = self.catalog().get_entry(&id).latest_global_id();
-                let updates: Vec<_> = updates
-                    .into_iter()
-                    .map(|(row, diff)| TimestamplessUpdate { row, diff })
-                    .collect();
-                (gid, updates)
+                // TODO(parkmycar): Use SmallVec throughout.
+                (gid, updates.into_vec())
             })
             .collect();
 

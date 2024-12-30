@@ -37,6 +37,7 @@ use mz_persist_client::read::{Cursor, ReadHandle};
 use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
 use mz_persist_types::schema::SchemaId;
 use mz_persist_types::{Codec64, Opaque, ShardId};
+use mz_repr::table::TableData;
 use mz_repr::{Diff, GlobalId, RelationDesc, Row};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::inline::InlinedConnection;
@@ -594,7 +595,7 @@ pub trait StorageController: Debug {
         &mut self,
         write_ts: Self::Timestamp,
         advance_to: Self::Timestamp,
-        commands: Vec<(GlobalId, Vec<TimestamplessUpdate>)>,
+        commands: Vec<(GlobalId, Vec<TableData>)>,
     ) -> Result<
         tokio::sync::oneshot::Receiver<Result<(), StorageError<Self::Timestamp>>>,
         StorageError<Self::Timestamp>,

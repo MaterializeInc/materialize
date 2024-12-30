@@ -52,6 +52,7 @@ mz-ore = { path = "../ore", features = [
     "test",
     "tracing_",
 ], default-features = false }
+mz-persist-client = { path = "../persist-client", default-features = false }
 mz-persist-types = { path = "../persist-types", default-features = false }
 mz-pgtz = { path = "../pgtz", default-features = false }
 mz-proto = { path = "../proto", features = ["chrono"], default-features = false }

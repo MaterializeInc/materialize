@@ -7,23 +7,33 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use mz_repr::{Datum, GlobalId, RowArena};
+use std::collections::BTreeMap;
+
+use mz_adapter_types::connection::ConnectionId;
+use mz_ore::cast::{CastFrom, CastInto};
+use mz_persist_client::batch::ProtoBatch;
+use mz_repr::table::TableData;
+use mz_repr::{CatalogItemId, Datum, GlobalId, RowArena};
 use mz_sql::plan::{self, CopyFromSource, HirScalarExpr};
+use mz_sql::session::metadata::SessionMetadata;
 use mz_storage_types::oneshot_sources::OneshotIngestionRequest;
+use smallvec::SmallVec;
 use url::Url;
 
+use crate::coord::appends::{DeferredWrite, DeferredWriteOp};
 use crate::coord::sequencer::inner::return_if_err;
-use crate::coord::{Coordinator, TargetCluster};
+use crate::coord::{Coordinator, PendingTxn, TargetCluster};
 use crate::optimize::dataflows::{prep_scalar_expr, EvalTime, ExprPrepStyle};
+use crate::session::{TransactionOps, WriteOp};
 use crate::{AdapterError, ExecuteContext, ExecuteResponse};
 
 impl Coordinator {
     pub(crate) async fn sequence_copy_from(
         &mut self,
-        ctx: &ExecuteContext,
+        ctx: ExecuteContext,
         plan: plan::CopyFromPlan,
         target_cluster: TargetCluster,
-    ) -> Result<ExecuteResponse, AdapterError> {
+    ) {
         let plan::CopyFromPlan {
             id,
             source,
@@ -33,7 +43,9 @@ impl Coordinator {
 
         let from_expr = match source {
             CopyFromSource::Url(from_expr) => from_expr,
-            CopyFromSource::Stdin => coord_bail!("COPY FROM STDIN should be handled elsewhere"),
+            CopyFromSource::Stdin => {
+                unreachable!("COPY FROM STDIN should be handled elsewhere")
+            }
         };
 
         let eval_url = |from: HirScalarExpr| -> Result<Url, AdapterError> {
@@ -60,7 +72,7 @@ impl Coordinator {
             Url::parse(eval_string)
                 .map_err(|err| AdapterError::Unstructured(anyhow::anyhow!("{err}")))
         };
-        let url = eval_url(from_expr)?;
+        let url = return_if_err!(eval_url(from_expr), ctx);
 
         let dest_table = self
             .catalog()
@@ -76,16 +88,64 @@ impl Coordinator {
             format: mz_storage_types::oneshot_sources::ContentFormat::Csv,
         };
 
-        let target_cluster = self
+        let cluster_id = self
             .catalog()
-            .resolve_target_cluster(target_cluster, ctx.session())?;
+            .resolve_target_cluster(target_cluster, ctx.session())
+            .expect("TODO do this in planning")
+            .id;
 
-        self.controller
+        // When we finish staging the Batches in Persist, we'll send a command
+        // to the Coordinator.
+        let command_tx = self.internal_cmd_tx.clone();
+        let conn_id = ctx.session().conn_id().clone();
+        let closure = Box::new(move |batches| {
+            let _ = command_tx.send(crate::coord::Message::StagedBatches {
+                conn_id,
+                table_id: id,
+                batches,
+            });
+        });
+        // Stash the execute context so we can cancel the COPY.
+        self.active_copies
+            .insert(ctx.session().conn_id().clone(), ctx);
+
+        let _result = self
+            .controller
             .storage
-            .create_oneshot_ingestion(ingestion_id, collection_id, target_cluster.id, request)
-            .await?;
+            .create_oneshot_ingestion(ingestion_id, collection_id, cluster_id, request, closure)
+            .await;
+    }
 
-        // TODO(parkmycar)
-        Ok(ExecuteResponse::Copied(100))
+    pub(crate) fn commit_staged_batches(
+        &mut self,
+        conn_id: ConnectionId,
+        table_id: CatalogItemId,
+        batches: Vec<(ProtoBatch, u64)>,
+    ) {
+        let mut ctx = self.active_copies.remove(&conn_id).expect("TODO");
+
+        let mut all_batches = SmallVec::default();
+        let mut row_count = 0usize;
+
+        // TODO(parkmycar): This count isn't correct, we set it to 0 in proto
+        // decoding, but also there is no point in keeping it around since the
+        // Batch itself tracks the length.
+        for (batch, _count) in batches {
+            let count = batch.batch.as_ref().expect("missing Batch").len.cast_into();
+            all_batches.push(batch);
+            row_count = row_count.saturating_add(count);
+        }
+
+        // Stage a WriteOp, then when the Session is retired we complete the
+        // transaction, which handles acquiring the write lock for `table_id`,
+        // advancing the timestamps of the staged batches, and waiting for
+        // everything to complete before sending a response to the client.
+        ctx.session_mut()
+            .add_transaction_ops(TransactionOps::Writes(vec![WriteOp {
+                id: table_id,
+                rows: TableData::Batches(all_batches),
+            }]))
+            .expect("TODO");
+        ctx.retire(Ok(ExecuteResponse::Copied(row_count)));
     }
 }

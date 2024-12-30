@@ -21,7 +21,7 @@ use futures::StreamExt;
 use mz_dyncfg::{Config, ConfigSet, ConfigValHandle};
 use mz_ore::collections::HashSet;
 use mz_ore::instrument;
-use mz_persist_client::batch::Batch;
+use mz_persist_client::batch::{Batch, ProtoBatch};
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_TXN;
 use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::write::WriteHandle;

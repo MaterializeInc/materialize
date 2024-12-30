@@ -49,6 +49,7 @@ use mz_persist_types::Codec64;
 use mz_proto::RustType;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::timestamp::CheckedTimestamp;
+use mz_repr::table::TableData;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, TimestampManipulation};
 use mz_storage_client::client::{
     ProtoStorageCommand, ProtoStorageResponse, RunIngestionCommand, RunOneshotIngestionCommand,
@@ -1384,7 +1385,7 @@ where
             instance.send(StorageCommand::RunOneshotIngestion(oneshot_cmd));
             let novel = self
                 .pending_oneshot_ingestions
-                .insert(collection_id, result_tx);
+                .insert(ingestion_id, result_tx);
             assert!(novel.is_none());
         }
 
@@ -1779,7 +1780,7 @@ where
         &mut self,
         write_ts: Self::Timestamp,
         advance_to: Self::Timestamp,
-        commands: Vec<(GlobalId, Vec<TimestamplessUpdate>)>,
+        commands: Vec<(GlobalId, Vec<TableData>)>,
     ) -> Result<
         tokio::sync::oneshot::Receiver<Result<(), StorageError<Self::Timestamp>>>,
         StorageError<Self::Timestamp>,

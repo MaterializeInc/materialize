@@ -35,6 +35,7 @@ use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::explain::json::json_string;
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::role_id::RoleId;
+use mz_repr::table::TableData;
 use mz_repr::{
     CatalogItemId, Datum, Diff, GlobalId, IntoRowIterator, RelationVersion,
     RelationVersionSelector, Row, RowArena, RowIterator, Timestamp,
@@ -2199,10 +2200,12 @@ impl Coordinator {
                     },
                 };
 
-                let mut collected_writes: BTreeMap<CatalogItemId, Vec<_>> = BTreeMap::new();
+                let mut collected_writes: BTreeMap<CatalogItemId, _> = BTreeMap::new();
                 for WriteOp { id, rows } in writes {
-                    let total_rows = collected_writes.entry(id).or_default();
-                    total_rows.extend(rows);
+                    let novel = collected_writes.insert(id, rows);
+                    // let novel = total_rows.insert(rows);
+                    // TODO(parkmycar): This isn't correct.
+                    assert_none!(novel);
                 }
 
                 self.submit_write(PendingWriteTxn::User {

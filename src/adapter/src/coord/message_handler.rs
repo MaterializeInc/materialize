@@ -112,6 +112,9 @@ impl Coordinator {
             Message::LinearizeReads => {
                 self.message_linearize_reads().boxed_local().await;
             }
+            Message::StagedBatches { conn_id, table_id, batches } => {
+                self.commit_staged_batches(conn_id, table_id, batches);
+            },
             Message::StorageUsageSchedule => {
                 self.schedule_storage_usage_collection().boxed_local().await;
             }

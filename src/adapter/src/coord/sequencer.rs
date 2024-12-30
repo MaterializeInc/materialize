@@ -18,6 +18,7 @@ use inner::return_if_err;
 use mz_expr::row::RowCollection;
 use mz_expr::{MirRelationExpr, RowSetFinishing};
 use mz_ore::tracing::OpenTelemetryContext;
+use mz_repr::table::TableData;
 use mz_repr::{CatalogItemId, Diff, GlobalId};
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::ResolvedIds;
@@ -373,9 +374,7 @@ impl Coordinator {
                         );
                     }
                     CopyFromSource::Url(_) => {
-                        let result = self.sequence_copy_from(&ctx, plan, target_cluster).await;
-                        tracing::error!(?result, "CALLED COPY FROM");
-                        ctx.retire(result);
+                        self.sequence_copy_from(ctx, plan, target_cluster).await;
                     }
                 },
                 Plan::ExplainPlan(plan) => {
@@ -834,7 +833,7 @@ impl Coordinator {
 
         session.add_transaction_ops(TransactionOps::Writes(vec![WriteOp {
             id: plan.id,
-            rows: plan.updates,
+            rows: TableData::Rows(plan.updates),
         }]))?;
         if !plan.returning.is_empty() {
             let finishing = RowSetFinishing {
