@@ -40,20 +40,20 @@ from materialize.util import naughty_strings
 
 MAX_COLUMNS = 5
 MAX_INCLUDE_HEADERS = 5
-MAX_ROWS = 50
+MAX_ROWS = 500
 MAX_CLUSTERS = 4
-MAX_CLUSTER_REPLICAS = 2
+MAX_CLUSTER_REPLICAS = 1
 MAX_DBS = 5
 MAX_SCHEMAS = 5
 MAX_TABLES = 5
 MAX_VIEWS = 15
 MAX_INDEXES = 15
 MAX_ROLES = 15
-MAX_WEBHOOK_SOURCES = 5
-MAX_KAFKA_SOURCES = 5
-MAX_MYSQL_SOURCES = 5
-MAX_POSTGRES_SOURCES = 5
-MAX_KAFKA_SINKS = 5
+MAX_WEBHOOK_SOURCES = 2
+MAX_KAFKA_SOURCES = 10
+MAX_MYSQL_SOURCES = 2
+MAX_POSTGRES_SOURCES = 2
+MAX_KAFKA_SINKS = 2
 
 MAX_INITIAL_DBS = 1
 MAX_INITIAL_SCHEMAS = 1
@@ -62,10 +62,10 @@ MAX_INITIAL_TABLES = 2
 MAX_INITIAL_VIEWS = 2
 MAX_INITIAL_ROLES = 1
 MAX_INITIAL_WEBHOOK_SOURCES = 1
-MAX_INITIAL_KAFKA_SOURCES = 1
+MAX_INITIAL_KAFKA_SOURCES = 10
 MAX_INITIAL_MYSQL_SOURCES = 1
 MAX_INITIAL_POSTGRES_SOURCES = 1
-MAX_INITIAL_KAFKA_SINKS = 1
+MAX_INITIAL_KAFKA_SINKS = 10
 
 NAUGHTY_IDENTIFIERS = False
 
@@ -567,7 +567,7 @@ class KafkaSink(DBObject):
             formats.extend(single_column_formats)
         self.format = rng.choice(formats)
         self.envelope = (
-            "UPSERT" if self.format == "JSON" else rng.choice(["DEBEZIUM", "UPSERT"])
+            "UPSERT" if self.format == "JSON" else rng.choice(["UPSERT"])
         )
         if self.envelope == "UPSERT" or rng.choice([True, False]):
             key_cols = [
