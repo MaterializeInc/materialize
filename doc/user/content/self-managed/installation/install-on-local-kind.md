@@ -9,11 +9,7 @@ robots: "noindex, nofollow"
 The following tutorial deploys self-managed Materialize onto a local
 [`kind`](https://kind.sigs.k8s.io/) cluster. Self-managed Materialize requires:
 
-- A Kubernetes (v1.19+) environment.
-
-- PostgreSQL or CockroachDB as a metadata database.
-
-- Blob storage.
+{{% self-managed/requirements-list %}}
 
 The tutorial uses a local `kind` cluster and deploys the following components:
 
