@@ -322,7 +322,6 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     workflows_with_internal_sharding = ["cdc"]
-    # Otherwise we are running all workflows
     sharded_workflows = workflows_with_internal_sharding + buildkite.shard_list(
         [w for w in c.workflows if w not in workflows_with_internal_sharding],
         lambda w: w,
