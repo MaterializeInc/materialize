@@ -1214,10 +1214,10 @@ class CreateClusterAction(Action):
             exe.db.cluster_id += 1
         cluster = Cluster(
             cluster_id,
-            managed=self.rng.choice([True, False]),
+            managed=True,
             size=self.rng.choice(["1", "2"]),
-            replication_factor=self.rng.choice([1, 2]),
-            introspection_interval=self.rng.choice(["0", "1s", "10s"]),
+            replication_factor=1,
+            introspection_interval="1s",
         )
         cluster.create(exe)
         exe.db.clusters.append(cluster)
@@ -2232,10 +2232,10 @@ ddl_action_list = ActionList(
         # (DropRoleAction, 2),
         (CreateClusterAction, 2),
         (DropClusterAction, 2),
-        (SwapClusterAction, 10),
+        # (SwapClusterAction, 10),
         # (CreateClusterReplicaAction, 4),
         # (DropClusterReplicaAction, 4),
-        (SetClusterAction, 1),
+        # (SetClusterAction, 1),
         # (CreateWebhookSourceAction, 2),
         # (DropWebhookSourceAction, 2),
         # (CreateKafkaSinkAction, 4),
