@@ -67,7 +67,7 @@ serde = { version = "1.0.152", features = ["derive"] }
 serde_json = { version = "1.0.125", features = ["arbitrary_precision", "preserve_order"] }
 smallvec = { version = "1.10.0", features = ["serde", "union"] }
 static_assertions = "1.1"
-strsim = "0.10"
+strsim = "0.11.1"
 timely = "0.15.1"
 tokio-postgres = { version = "0.7.8" }
 tracing-core = "0.1.30"
