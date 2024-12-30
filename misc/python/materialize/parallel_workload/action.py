@@ -855,6 +855,8 @@ class DropDatabaseAction(Action):
 class CreateSchemaAction(Action):
     def run(self, exe: Executor) -> bool:
         with exe.db.lock:
+            if len(exe.db.dbs) == 0:
+                return False
             if len(exe.db.schemas) >= MAX_SCHEMAS:
                 return False
             schema_id = exe.db.schema_id
