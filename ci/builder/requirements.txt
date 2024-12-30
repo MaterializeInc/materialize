@@ -32,14 +32,16 @@ pandas==2.2.3
 pandas-stubs==2.2.3.241126
 parameterized==0.9.0
 paramiko==3.5.0
-pdoc==15.0.0
+pdoc==15.0.1
 # We can revert back to standard pg8000 versions once https://github.com/tlocke/pg8000/pull/161 is released
 pg8000@git+https://github.com/tlocke/pg8000@46c00021ade1d19466b07ed30392386c5f0a6b8e
 prettytable==3.12.0
 psutil==6.1.0
 psycopg==3.2.3
 psycopg-binary==3.2.3
-pydantic==2.10.4
+# pydantic >= 2.9 causes pdoc 15.0.1 to fail: UserWarning: Error parsing type annotation dict[str, Any] | None for pydantic.main.BaseModel.__pydantic_extra__: 'function' object is not subscriptable
+# See also https://github.com/mitmproxy/pdoc/issues/741
+pydantic==2.8.2
 pyelftools==0.31
 pyjwt==2.9.0
 PyMySQL==1.1.1
