@@ -598,7 +598,11 @@ impl ExecuteResponse {
                 &[AlteredSystemConfiguration]
             }
             Close => &[ClosedCursor],
-            PlanKind::CopyFrom => &[ExecuteResponseKind::CopyFrom],
+            PlanKind::CopyFrom => &[
+                ExecuteResponseKind::CopyFrom,
+                // TODO(parkmycar): Maybe not..?
+                ExecuteResponseKind::Copied,
+            ],
             PlanKind::CopyTo => &[ExecuteResponseKind::Copied],
             PlanKind::Comment => &[ExecuteResponseKind::Comment],
             CommitTransaction => &[TransactionCommitted, TransactionRolledBack],

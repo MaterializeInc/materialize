@@ -21,11 +21,14 @@ use std::iter;
 use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
 use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig, TryIntoTimelyConfig};
+use mz_ore::assert_none;
+use mz_persist_client::batch::ProtoBatch;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Diff, GlobalId, Row};
 use mz_service::client::{GenericClient, Partitionable, PartitionedState};
 use mz_service::grpc::{GrpcClient, GrpcServer, ProtoServiceTypes, ResponseStream};
 use mz_storage_types::controller::CollectionMetadata;
+use mz_storage_types::oneshot_sources::{OneshotIngestionRequest, ProtoOneshotIngestionRequest};
 use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::sinks::{MetadataFilled, StorageSinkDesc};
 use mz_storage_types::sources::IngestionDescription;
@@ -119,6 +122,7 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
     UpdateConfiguration(StorageParameters),
     /// Run the enumerated sources, each associated with its identifier.
     RunIngestions(Vec<RunIngestionCommand>),
+    RunOneshotIngestion(RunOneshotIngestionCommand),
     /// Enable compaction in storage-managed collections.
     ///
     /// Each entry in the vector names a collection and provides a frontier after which
@@ -137,7 +141,7 @@ impl<T> StorageCommand<T> {
             | AllowWrites
             | UpdateConfiguration(_)
             | AllowCompaction(_) => false,
-            RunIngestions(_) | RunSinks(_) => true,
+            RunIngestions(_) | RunSinks(_) | RunOneshotIngestion(_) => true,
         }
     }
 }
@@ -180,6 +184,47 @@ impl RustType<ProtoRunIngestionCommand> for RunIngestionCommand {
             description: proto
                 .description
                 .into_rust_if_some("ProtoRunIngestionCommand::description")?,
+        })
+    }
+}
+
+/// A command that starts ingesting the given ingestion description
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct RunOneshotIngestionCommand {
+    /// The ID of the ingestion dataflow.
+    pub ingestion_id: GlobalId,
+    /// The ID of collection we'll stage batches for.
+    pub collection_id: GlobalId,
+    /// Metadata for the collection we'll stage batches for.
+    pub collection_meta: CollectionMetadata,
+    /// Details for the oneshot ingestion.
+    pub request: OneshotIngestionRequest,
+}
+
+impl RustType<ProtoRunOneshotIngestionCommand> for RunOneshotIngestionCommand {
+    fn into_proto(&self) -> ProtoRunOneshotIngestionCommand {
+        ProtoRunOneshotIngestionCommand {
+            ingestion_id: Some(self.ingestion_id.into_proto()),
+            collection_id: Some(self.collection_id.into_proto()),
+            storage_metadata: Some(self.collection_meta.into_proto()),
+            request: Some(self.request.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: ProtoRunOneshotIngestionCommand) -> Result<Self, TryFromProtoError> {
+        Ok(RunOneshotIngestionCommand {
+            ingestion_id: proto
+                .ingestion_id
+                .into_rust_if_some("ProtoRunOneshotIngestionCommand::ingestion_id")?,
+            collection_id: proto
+                .collection_id
+                .into_rust_if_some("ProtoRunOneshotIngestionCommand::collection_id")?,
+            collection_meta: proto
+                .storage_metadata
+                .into_rust_if_some("ProtoRunOneshotIngestionCommand::storage_metadata")?,
+            request: proto
+                .request
+                .into_rust_if_some("ProtoRunOneshotIngestionCommand::request")?,
         })
     }
 }
@@ -246,6 +291,9 @@ impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
                 StorageCommand::RunIngestions(sources) => CreateSources(ProtoCreateSources {
                     sources: sources.into_proto(),
                 }),
+                StorageCommand::RunOneshotIngestion(oneshot) => {
+                    OneshotIngestion(oneshot.into_proto())
+                }
                 StorageCommand::RunSinks(sinks) => RunSinks(ProtoRunSinks {
                     sinks: sinks.into_proto(),
                 }),
@@ -276,6 +324,9 @@ impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
             }
             Some(RunSinks(ProtoRunSinks { sinks })) => {
                 Ok(StorageCommand::RunSinks(sinks.into_rust()?))
+            }
+            Some(OneshotIngestion(oneshot)) => {
+                Ok(StorageCommand::RunOneshotIngestion(oneshot.into_rust()?))
             }
             None => Err(TryFromProtoError::missing_field(
                 "ProtoStorageCommand::kind",
@@ -543,6 +594,8 @@ pub enum StorageResponse<T = mz_repr::Timestamp> {
     FrontierUppers(Vec<(GlobalId, Antichain<T>)>),
     /// Punctuation indicates that no more responses will be transmitted for the specified ids
     DroppedIds(BTreeSet<GlobalId>),
+    /// TODO
+    StagedBatches(BTreeMap<GlobalId, Vec<(ProtoBatch, u64)>>),
 
     /// A list of statistics updates, currently only for sources.
     StatisticsUpdates(Vec<SourceStatisticsUpdate>, Vec<SinkStatisticsUpdate>),
@@ -554,7 +607,9 @@ pub enum StorageResponse<T = mz_repr::Timestamp> {
 impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
     fn into_proto(&self) -> ProtoStorageResponse {
         use proto_storage_response::Kind::*;
-        use proto_storage_response::{ProtoDroppedIds, ProtoStatisticsUpdates, ProtoStatusUpdates};
+        use proto_storage_response::{
+            ProtoDroppedIds, ProtoStagedBatches, ProtoStatisticsUpdates, ProtoStatusUpdates,
+        };
         ProtoStorageResponse {
             kind: Some(match self {
                 StorageResponse::FrontierUppers(traces) => FrontierUppers(traces.into_proto()),
@@ -576,6 +631,21 @@ impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
                 StorageResponse::StatusUpdates(updates) => StatusUpdates(ProtoStatusUpdates {
                     updates: updates.into_proto(),
                 }),
+                StorageResponse::StagedBatches(staged) => {
+                    let batches = staged
+                        .into_iter()
+                        .map(|(collection_id, batches)| {
+                            proto_storage_response::proto_staged_batches::Inner {
+                                id: Some(collection_id.into_proto()),
+                                batches: batches
+                                    .into_iter()
+                                    .map(|(batch, _)| batch.clone())
+                                    .collect(),
+                            }
+                        })
+                        .collect();
+                    StagedBatches(ProtoStagedBatches { batches })
+                }
             }),
         }
     }
@@ -604,6 +674,22 @@ impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
             )),
             Some(StatusUpdates(ProtoStatusUpdates { updates })) => {
                 Ok(StorageResponse::StatusUpdates(updates.into_rust()?))
+            }
+            Some(StagedBatches(staged)) => {
+                let batches = staged
+                    .batches
+                    .into_iter()
+                    .map(|inner| {
+                        let id = inner.id.expect("TODO").into_rust().expect("TODO");
+                        let batches: Vec<_> = inner
+                            .batches
+                            .into_iter()
+                            .map(|batch| (batch, 0u64))
+                            .collect();
+                        (id, batches)
+                    })
+                    .collect();
+                Ok(StorageResponse::StagedBatches(batches))
             }
             None => Err(TryFromProtoError::missing_field(
                 "ProtoStorageResponse::kind",
@@ -638,6 +724,8 @@ pub struct PartitionedStorageState<T> {
     /// Upper frontiers for sources and sinks, both unioned across all partitions and from each
     /// individual partition.
     uppers: BTreeMap<GlobalId, (MutableAntichain<T>, Vec<Option<Antichain<T>>>)>,
+    /// TODO
+    oneshot_source_responses: BTreeMap<GlobalId, BTreeMap<usize, Vec<(ProtoBatch, u64)>>>,
 }
 
 impl<T> Partitionable<StorageCommand<T>, StorageResponse<T>>
@@ -651,6 +739,7 @@ where
         PartitionedStorageState {
             parts,
             uppers: BTreeMap::new(),
+            oneshot_source_responses: BTreeMap::new(),
         }
     }
 }
@@ -681,7 +770,8 @@ where
             StorageCommand::InitializationComplete
             | StorageCommand::AllowWrites
             | StorageCommand::UpdateConfiguration(_)
-            | StorageCommand::AllowCompaction(_) => {}
+            | StorageCommand::AllowCompaction(_)
+            | StorageCommand::RunOneshotIngestion(_) => {}
         };
     }
 
@@ -804,6 +894,37 @@ where
             }
             StorageResponse::StatusUpdates(updates) => {
                 Some(Ok(StorageResponse::StatusUpdates(updates)))
+            }
+            StorageResponse::StagedBatches(batches) => {
+                let mut finished_batches = BTreeMap::new();
+
+                for (collection_id, batches) in batches {
+                    tracing::info!(%shard_id, %collection_id, "got batch");
+
+                    let entry = self
+                        .oneshot_source_responses
+                        .entry(collection_id)
+                        .or_default();
+                    let novel = entry.insert(shard_id, batches);
+                    assert_none!(novel, "Duplicate oneshot source response");
+
+                    // Check if we've received responses from all shards.
+                    if entry.len() == self.parts {
+                        let entry = self
+                            .oneshot_source_responses
+                            .remove(&collection_id)
+                            .expect("checked above");
+                        let all_batches: Vec<_> = entry.into_values().flatten().collect();
+
+                        finished_batches.insert(collection_id, all_batches);
+                    }
+                }
+
+                if !finished_batches.is_empty() {
+                    Some(Ok(StorageResponse::StagedBatches(finished_batches)))
+                } else {
+                    None
+                }
             }
         }
     }

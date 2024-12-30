@@ -6333,9 +6333,12 @@ impl<'a> Parser<'a> {
                     )
                     .map_no_statement_parser_err();
                 }
-                self.expect_keyword(STDIN)
-                    .map_parser_err(StatementKind::Copy)?;
-                (CopyDirection::From, CopyTarget::Stdin)
+                if self.parse_keyword(STDIN) {
+                    (CopyDirection::From, CopyTarget::Stdin)
+                } else {
+                    let url_expr = self.parse_expr().map_parser_err(StatementKind::Copy)?;
+                    (CopyDirection::From, CopyTarget::Expr(url_expr))
+                }
             }
             TO => {
                 if self.parse_keyword(STDOUT) {

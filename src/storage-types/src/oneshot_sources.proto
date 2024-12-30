@@ -7,10 +7,22 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Shared Storage dataflow operators
+syntax = "proto3";
 
-pub mod metrics;
-pub mod oneshot_source;
-pub mod persist_source;
-pub mod s3_oneshot_sink;
-pub mod stats;
+package mz_storage_types.oneshot_sources;
+
+message ProtoOneshotIngestionRequest {
+    oneof source {
+        ProtoHttpContentSource http = 1;
+    }
+
+    oneof format {
+        ProtoCsvContentFormat csv = 2;
+    }
+}
+
+message ProtoHttpContentSource {
+    string url = 1;
+}
+
+message ProtoCsvContentFormat {}

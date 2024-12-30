@@ -32,6 +32,7 @@ use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_cluster_client::metrics::WallclockLagMetrics;
 use mz_cluster_client::ReplicaId;
 use mz_ore::collections::CollectionExt;
+use mz_persist_client::batch::ProtoBatch;
 use mz_persist_client::read::{Cursor, ReadHandle};
 use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
 use mz_persist_types::schema::SchemaId;
@@ -41,6 +42,7 @@ use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::inline::InlinedConnection;
 use mz_storage_types::controller::{CollectionMetadata, StorageError};
 use mz_storage_types::instances::StorageInstanceId;
+use mz_storage_types::oneshot_sources::OneshotIngestionRequest;
 use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::read_holds::{ReadHold, ReadHoldError};
 use mz_storage_types::read_policy::ReadPolicy;
@@ -506,6 +508,16 @@ pub trait StorageController: Debug {
     async fn create_exports(
         &mut self,
         exports: Vec<(GlobalId, ExportDescription<Self::Timestamp>)>,
+    ) -> Result<(), StorageError<Self::Timestamp>>;
+
+    /// Create a oneshot ingestion.
+    async fn create_oneshot_ingestion(
+        &mut self,
+        ingestion_id: GlobalId,
+        collection_id: GlobalId,
+        instance_id: StorageInstanceId,
+        request: OneshotIngestionRequest,
+        result_tx: Box<dyn FnOnce(Vec<(ProtoBatch, u64)>) -> () + Send + Sync + 'static>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
     /// Alter the sink identified by the given id to match the provided `ExportDescription`.

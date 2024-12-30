@@ -12,6 +12,7 @@ use std::time::Instant;
 use mz_repr::{GlobalId, Row};
 use mz_rocksdb::config::SharedWriteBufferManager;
 use mz_storage_types::controller::CollectionMetadata;
+use mz_storage_types::oneshot_sources::OneshotIngestionRequest;
 use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::sinks::{MetadataFilled, StorageSinkDesc};
 use mz_storage_types::sources::IngestionDescription;
@@ -81,6 +82,18 @@ pub enum InternalStorageCommand {
         /// A frontier in the source time domain with the property that all updates not beyond it
         /// have already been durably ingested.
         source_resume_uppers: BTreeMap<GlobalId, Vec<Row>>,
+    },
+    /// Render a oneshot ingestion dataflow that fetches data from an external system and stages
+    /// batches in Persist, that can later be appended to the shard.
+    RunOneshotIngestion {
+        /// ID of the running dataflow that is doing the ingestion.
+        ingestion_id: GlobalId,
+        /// ID of the collection we'll create batches for.
+        collection_id: GlobalId,
+        /// Metadata of the collection we'll create batches for.
+        collection_meta: CollectionMetadata,
+        /// Description of the oneshot ingestion.
+        request: OneshotIngestionRequest,
     },
     /// Render a sink dataflow.
     RunSinkDataflow(

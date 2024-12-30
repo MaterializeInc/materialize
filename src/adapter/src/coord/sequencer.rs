@@ -22,8 +22,8 @@ use mz_repr::{CatalogItemId, Diff, GlobalId};
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{
-    self, AbortTransactionPlan, CommitTransactionPlan, CreateRolePlan, CreateSourcePlanBundle,
-    FetchPlan, MutationKind, Params, Plan, PlanKind, RaisePlan,
+    self, AbortTransactionPlan, CommitTransactionPlan, CopyFromSource, CreateRolePlan,
+    CreateSourcePlanBundle, FetchPlan, MutationKind, Params, Plan, PlanKind, RaisePlan,
 };
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
@@ -359,18 +359,25 @@ impl Coordinator {
                     self.sequence_peek(ctx, show_columns_plan.select_plan, target_cluster, max)
                         .await;
                 }
-                Plan::CopyFrom(plan) => {
-                    let (tx, _, session, ctx_extra) = ctx.into_parts();
-                    tx.send(
-                        Ok(ExecuteResponse::CopyFrom {
-                            id: plan.id,
-                            columns: plan.columns,
-                            params: plan.params,
-                            ctx_extra,
-                        }),
-                        session,
-                    );
-                }
+                Plan::CopyFrom(plan) => match plan.source {
+                    CopyFromSource::Stdin => {
+                        let (tx, _, session, ctx_extra) = ctx.into_parts();
+                        tx.send(
+                            Ok(ExecuteResponse::CopyFrom {
+                                id: plan.id,
+                                columns: plan.columns,
+                                params: plan.params,
+                                ctx_extra,
+                            }),
+                            session,
+                        );
+                    }
+                    CopyFromSource::Url(_) => {
+                        let result = self.sequence_copy_from(&ctx, plan, target_cluster).await;
+                        tracing::error!(?result, "CALLED COPY FROM");
+                        ctx.retire(result);
+                    }
+                },
                 Plan::ExplainPlan(plan) => {
                     self.sequence_explain_plan(ctx, plan, target_cluster).await;
                 }

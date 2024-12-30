@@ -35,6 +35,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::task::AbortOnDropHandle;
 use mz_ore::{assert_none, instrument, soft_panic_or_log};
+use mz_persist_client::batch::ProtoBatch;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
 use mz_persist_client::read::ReadHandle;
@@ -50,8 +51,8 @@ use mz_repr::adt::interval::Interval;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, TimestampManipulation};
 use mz_storage_client::client::{
-    ProtoStorageCommand, ProtoStorageResponse, RunIngestionCommand, RunSinkCommand, Status,
-    StatusUpdate, StorageCommand, StorageResponse, TimestamplessUpdate,
+    ProtoStorageCommand, ProtoStorageResponse, RunIngestionCommand, RunOneshotIngestionCommand,
+    RunSinkCommand, Status, StatusUpdate, StorageCommand, StorageResponse, TimestamplessUpdate,
 };
 use mz_storage_client::controller::{
     BoxFuture, CollectionDescription, DataSource, ExportDescription, ExportState,
@@ -72,6 +73,7 @@ use mz_storage_types::connections::inline::InlinedConnection;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::{AlterError, CollectionMetadata, StorageError, TxnsCodecRow};
 use mz_storage_types::instances::StorageInstanceId;
+use mz_storage_types::oneshot_sources::OneshotIngestionRequest;
 use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::read_holds::{ReadHold, ReadHoldError};
 use mz_storage_types::read_policy::ReadPolicy;
@@ -88,8 +90,8 @@ use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::Timestamp as TimelyTimestamp;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
-use tokio::sync::mpsc;
 use tokio::sync::watch::{channel, Sender};
+use tokio::sync::{mpsc, oneshot};
 use tokio::time::error::Elapsed;
 use tokio::time::MissedTickBehavior;
 use tracing::{debug, info, warn};
@@ -160,6 +162,10 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// Channel for receiving table handle drops.
     #[derivative(Debug = "ignore")]
     pending_table_handle_drops_rx: mpsc::UnboundedReceiver<GlobalId>,
+    /// Closues that can be used to send responses from oneshot ingestions.
+    #[derivative(Debug = "ignore")]
+    pending_oneshot_ingestions:
+        BTreeMap<GlobalId, Box<dyn FnOnce(Vec<(ProtoBatch, u64)>) -> () + Send + 'static>>,
 
     /// Interface for managed collections
     pub(crate) collection_manager: collection_mgmt::CollectionManager<T>,
@@ -1346,6 +1352,45 @@ where
         Ok(())
     }
 
+    /// Create a oneshot ingestion.
+    async fn create_oneshot_ingestion(
+        &mut self,
+        ingestion_id: GlobalId,
+        collection_id: GlobalId,
+        instance_id: StorageInstanceId,
+        request: OneshotIngestionRequest,
+        result_tx: Box<dyn FnOnce(Vec<(ProtoBatch, u64)>) -> () + Send + Sync + 'static>,
+    ) -> Result<(), StorageError<Self::Timestamp>> {
+        let collection_meta = self
+            .collections
+            .get(&collection_id)
+            .ok_or_else(|| StorageError::IdentifierMissing(collection_id))?
+            .collection_metadata
+            .clone();
+        let instance = self.instances.get_mut(&instance_id).ok_or_else(|| {
+            StorageError::ExportInstanceMissing {
+                storage_instance_id: instance_id,
+                export_id: ingestion_id,
+            }
+        })?;
+        let oneshot_cmd = RunOneshotIngestionCommand {
+            ingestion_id,
+            collection_id,
+            collection_meta,
+            request,
+        };
+
+        if !self.read_only {
+            instance.send(StorageCommand::RunOneshotIngestion(oneshot_cmd));
+            let novel = self
+                .pending_oneshot_ingestions
+                .insert(collection_id, result_tx);
+            assert!(novel.is_none());
+        }
+
+        Ok(())
+    }
+
     async fn alter_export(
         &mut self,
         id: GlobalId,
@@ -2066,6 +2111,15 @@ where
                 }
                 self.record_status_updates(updates);
             }
+            Some(StorageResponse::StagedBatches(batches)) => {
+                for (collection_id, batches) in batches {
+                    let sender = self
+                        .pending_oneshot_ingestions
+                        .remove(&collection_id)
+                        .expect("TODO");
+                    (sender)(batches);
+                }
+            }
         }
 
         // IDs of sources that were dropped whose statuses should be updated.
@@ -2523,6 +2577,7 @@ where
             pending_compaction_commands: vec![],
             pending_table_handle_drops_tx,
             pending_table_handle_drops_rx,
+            pending_oneshot_ingestions: BTreeMap::default(),
             collection_manager,
             introspection_ids,
             introspection_tokens,

@@ -131,6 +131,7 @@ filegroup(
         "src/client.proto",
         "src/statistics.proto",
         "//src/cluster-client:all_protos",
+        "//src/persist-client:all_protos",
         "//src/proto:all_protos",
         "//src/repr:all_protos",
         "//src/storage-types:all_protos",
