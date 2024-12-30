@@ -278,6 +278,8 @@ def _verify_exactly_n_replication_slots_exist(pg_conn: Connection, n: int) -> No
 
 
 def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
+    pg_version = get_targeted_pg_version(parser)
+
     parser.add_argument(
         "filter",
         nargs="*",
@@ -304,7 +306,6 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
         "test-certs", "cat", "/secrets/postgres.key", capture=True
     ).stdout
 
-    pg_version = get_targeted_pg_version(parser)
     with c.override(create_postgres(pg_version=pg_version)):
         c.up("materialized", "test-certs", "postgres")
         c.run_testdrive_files(
@@ -320,37 +321,31 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    remaining_args = [arg for arg in parser.args if not arg.startswith("--pg-version")]
+    workflows_with_internal_sharding = ["cdc"]
+    # Otherwise we are running all workflows
+    sharded_workflows = workflows_with_internal_sharding + buildkite.shard_list(
+        [w for w in c.workflows if w not in workflows_with_internal_sharding],
+        lambda w: w,
+    )
+    print(
+        f"Workflows in shard with index {buildkite.get_parallelism_index()}: {sharded_workflows}"
+    )
+    for name in sharded_workflows:
+        if name == "default":
+            continue
 
-    # If args were passed then we are running the main CDC workflow
-    if remaining_args:
-        workflow_cdc(c, parser)
-    else:
-        workflows_with_internal_sharding = ["cdc"]
-        # Otherwise we are running all workflows
-        sharded_workflows = workflows_with_internal_sharding + buildkite.shard_list(
-            [w for w in c.workflows if w not in workflows_with_internal_sharding],
-            lambda w: w,
-        )
-        print(
-            f"Workflows in shard with index {buildkite.get_parallelism_index()}: {sharded_workflows}"
-        )
-        for name in sharded_workflows:
-            if name == "default":
-                continue
+        # TODO: Flaky, reenable when database-issues#7611 is fixed
+        if name == "statuses":
+            continue
 
-            # TODO: Flaky, reenable when database-issues#7611 is fixed
-            if name == "statuses":
-                continue
+        # TODO: Flaky, reenable when database-issues#8447 is fixed
+        if name == "silent-connection-drop":
+            continue
 
-            # TODO: Flaky, reenable when database-issues#8447 is fixed
-            if name == "silent-connection-drop":
-                continue
+        c.kill("postgres")
+        c.rm("postgres")
+        c.kill("materialized")
+        c.rm("materialized")
 
-            c.kill("postgres")
-            c.rm("postgres")
-            c.kill("materialized")
-            c.rm("materialized")
-
-            with c.test_case(name):
-                c.workflow(name)
+        with c.test_case(name):
+            c.workflow(name, *parser.args)

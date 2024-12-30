@@ -70,32 +70,26 @@ def get_targeted_mysql_version(parser: WorkflowArgumentParser) -> str:
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    remaining_args = [
-        arg for arg in parser.args if not arg.startswith("--mysql-version")
-    ]
+    workflows_with_internal_sharding = ["cdc"]
+    # Otherwise we are running all workflows
+    sharded_workflows = workflows_with_internal_sharding + buildkite.shard_list(
+        [w for w in c.workflows if w not in workflows_with_internal_sharding],
+        lambda w: w,
+    )
+    print(
+        f"Workflows in shard with index {buildkite.get_parallelism_index()}: {sharded_workflows}"
+    )
+    for name in sharded_workflows:
+        if name == "default":
+            continue
 
-    # If args were passed then we are running the main CDC workflow
-    if remaining_args:
-        workflow_cdc(c, parser)
-    else:
-        workflows_with_internal_sharding = ["cdc"]
-        # Otherwise we are running all workflows
-        sharded_workflows = workflows_with_internal_sharding + buildkite.shard_list(
-            [w for w in c.workflows if w not in workflows_with_internal_sharding],
-            lambda w: w,
-        )
-        print(
-            f"Workflows in shard with index {buildkite.get_parallelism_index()}: {sharded_workflows}"
-        )
-        for name in sharded_workflows:
-            if name == "default":
-                continue
-
-            with c.test_case(name):
-                c.workflow(name)
+        with c.test_case(name):
+            c.workflow(name, *parser.args)
 
 
 def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
+    mysql_version = get_targeted_mysql_version(parser)
+
     parser.add_argument(
         "filter",
         nargs="*",
@@ -112,7 +106,6 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     print(f"Files: {sharded_files}")
 
-    mysql_version = get_targeted_mysql_version(parser)
     with c.override(create_mysql(mysql_version)):
         c.up("materialized", "mysql")
 
