@@ -26,6 +26,7 @@ class Clusterd(Service):
         options: list[str] = [],
         restart: str = "no",
         stop_grace_period: str = "120s",
+        scratch_directory: str = "/scratch",
     ) -> None:
         environment = [
             "CLUSTERD_LOG_FILTER",
@@ -39,7 +40,7 @@ class Clusterd(Service):
 
         environment += [f"CLUSTERD_ENVIRONMENT_ID={environment_id}"]
 
-        options = ["--scratch-directory=/scratch", *options]
+        options = [f"--scratch-directory={scratch_directory}", *options]
 
         config: ServiceConfig = {}
 

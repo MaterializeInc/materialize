@@ -189,7 +189,6 @@ def workflow_rehydration(c: Composition) -> None:
             Clusterd(
                 name="clusterd1",
                 options=[
-                    "--scratch-directory=/scratch",
                     "--announce-memory-limit=1048376000",  # 1GiB
                 ],
             ),
@@ -222,7 +221,6 @@ def workflow_rehydration(c: Composition) -> None:
             Clusterd(
                 name="clusterd1",
                 options=[
-                    "--scratch-directory=/scratch",
                     "--announce-memory-limit=1048376000",  # 1GiB
                 ],
             ),
@@ -518,9 +516,6 @@ def workflow_autospill(c: Composition) -> None:
             mz,
             Clusterd(
                 name="clusterd1",
-                options=[
-                    "--scratch-directory=/scratch",
-                ],
             ),
             Testdrive(no_reset=True, consistent_seed=True),
         ):
@@ -572,9 +567,6 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
         ),
         Clusterd(
             name="clusterd1",
-            options=[
-                "--scratch-directory=/scratch",
-            ],
         ),
     ):
         c.up("testdrive", persistent=True)
