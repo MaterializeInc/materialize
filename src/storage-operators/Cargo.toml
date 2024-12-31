@@ -12,7 +12,14 @@ workspace = true
 [dependencies]
 anyhow = "1.0.66"
 arrow = { version = "53.3.0", default-features = false }
-async-compression = { version = "0.4.5", features = ["brotli", "bzip2", "gzip", "tokio", "xz", "zstd"] }
+async-compression = { version = "0.4.5", features = [
+    "brotli",
+    "bzip2",
+    "gzip",
+    "tokio",
+    "xz",
+    "zstd",
+] }
 async-stream = "0.3.3"
 aws-types = "1.1.1"
 bytes = "1.3.0"
@@ -29,13 +36,15 @@ mz-ore = { path = "../ore", features = ["async", "tracing_"] }
 mz-persist-client = { path = "../persist-client" }
 mz-persist-types = { path = "../persist-types" }
 mz-pgcopy = { path = "../pgcopy" }
+mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr" }
 mz-storage-types = { path = "../storage-types" }
 mz-timely-util = { path = "../timely-util" }
 mz-txn-wal = { path = "../txn-wal" }
-parquet = { version = "53.3.0", default-features = false, features = ["arrow", "snap"] }
+parquet = { version = "53.3.0", default-features = false, features = ["arrow", "async", "snap"] }
 prometheus = { version = "0.13.3", default-features = false }
 proptest = { version = "1.6.0", default-features = false, features = ["std"] }
+prost = "0.13.2"
 reqwest = { version = "0.11.13", features = ["stream"] }
 sentry = { version = "0.29.1" }
 serde = { version = "1.0.152", features = ["derive"] }

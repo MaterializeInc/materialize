@@ -18,6 +18,7 @@ message ProtoOneshotIngestionRequest {
 
     oneof format {
         ProtoCsvContentFormat csv = 2;
+        ProtoParquetContentFormat parquet = 3;
     }
 }
 
@@ -26,3 +27,5 @@ message ProtoHttpContentSource {
 }
 
 message ProtoCsvContentFormat {}
+
+message ProtoParquetContentFormat {}

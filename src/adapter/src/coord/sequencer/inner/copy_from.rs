@@ -7,22 +7,20 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeMap;
-
 use mz_adapter_types::connection::ConnectionId;
-use mz_ore::cast::{CastFrom, CastInto};
+use mz_ore::cast::CastInto;
 use mz_persist_client::batch::ProtoBatch;
+use mz_pgcopy::CopyFormatParams;
 use mz_repr::table::TableData;
-use mz_repr::{CatalogItemId, Datum, GlobalId, RowArena};
+use mz_repr::{CatalogItemId, Datum, RowArena};
 use mz_sql::plan::{self, CopyFromSource, HirScalarExpr};
 use mz_sql::session::metadata::SessionMetadata;
 use mz_storage_types::oneshot_sources::OneshotIngestionRequest;
 use smallvec::SmallVec;
 use url::Url;
 
-use crate::coord::appends::{DeferredWrite, DeferredWriteOp};
 use crate::coord::sequencer::inner::return_if_err;
-use crate::coord::{Coordinator, PendingTxn, TargetCluster};
+use crate::coord::{Coordinator, TargetCluster};
 use crate::optimize::dataflows::{prep_scalar_expr, EvalTime, ExprPrepStyle};
 use crate::session::{TransactionOps, WriteOp};
 use crate::{AdapterError, ExecuteContext, ExecuteResponse};
@@ -81,11 +79,21 @@ impl Coordinator {
             .expect("TODO SHOULD BE A TABLE");
 
         let collection_id = dest_table.global_id_writes();
-        // TODO(parkmycar).
-        let ingestion_id = GlobalId::Transient(100000);
+        let (_, ingestion_id) = self.transient_id_gen.allocate_id();
+
+        let format = match params {
+            CopyFormatParams::Csv(_) => mz_storage_types::oneshot_sources::ContentFormat::Csv,
+            CopyFormatParams::Parquet => mz_storage_types::oneshot_sources::ContentFormat::Parquet,
+            CopyFormatParams::Text(_) | CopyFormatParams::Binary => {
+                ctx.retire(Err(AdapterError::Unsupported(
+                    "text or binary in COPY FROM",
+                )));
+                return;
+            }
+        };
         let request = OneshotIngestionRequest {
             source: mz_storage_types::oneshot_sources::ContentSource::Http { url },
-            format: mz_storage_types::oneshot_sources::ContentFormat::Csv,
+            format,
         };
 
         let cluster_id = self

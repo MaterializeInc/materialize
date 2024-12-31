@@ -43,8 +43,11 @@ use tracing::info;
 
 use crate::oneshot_source::csv::{CsvDecoder, CsvRecord, CsvWorkRequest};
 use crate::oneshot_source::http_source::{HttpChecksum, HttpObject, HttpOneshotSource};
+use crate::oneshot_source::parquet::{ParquetFormat, ParquetRowGroup, ParquetWorkRequest};
 
 pub mod csv;
+pub mod parquet;
+
 pub mod http_source;
 
 pub fn render<G, F>(
@@ -71,6 +74,10 @@ where
         ContentFormat::Csv => {
             let format = CsvDecoder::default();
             FormatKind::Csv(format)
+        }
+        ContentFormat::Parquet => {
+            let format = ParquetFormat::new(collection_meta.relation_desc.clone());
+            FormatKind::Parquet(format)
         }
     };
 
@@ -511,10 +518,14 @@ impl fmt::Display for StorageErrorX {
 pub enum StorageErrorXKind {
     #[error("csv decoding error: {0}")]
     CsvDecoding(#[from] csv_async::Error),
+    #[error("parquet error: {0}")]
+    ParquetError(#[from] ::parquet::errors::ParquetError),
     #[error("reqwest error: {0}")]
     Reqwest(#[from] reqwest::Error),
     #[error("invalid reqwest header: {0}")]
     InvalidHeader(#[from] reqwest::header::ToStrError),
+    #[error("failed to get the size of an object")]
+    MissingSize,
     #[error("something went wrong: {0}")]
     Generic(String),
 }
@@ -587,6 +598,9 @@ pub trait OneshotObject {
     /// Name of the object, including any extensions.
     fn name(&self) -> &str;
 
+    /// Size of this object in bytes.
+    fn size(&self) -> usize;
+
     /// Encodings of the _entire_ object, if any.
     ///
     /// Note: The object may internally use compression, e.g. a Parquet file
@@ -604,11 +618,18 @@ pub enum Encoding {
     Zstd,
 }
 
-pub trait OneshotSource: Clone + Send {
+pub trait OneshotSource: Clone + Send + Unpin {
     /// An individual unit within the source, e.g. a file.
-    type Object: OneshotObject + Debug + Clone + Send + Serialize + DeserializeOwned + 'static;
+    type Object: OneshotObject
+        + Debug
+        + Clone
+        + Send
+        + Unpin
+        + Serialize
+        + DeserializeOwned
+        + 'static;
     /// Checksum for a [`Self::Object`].
-    type Checksum: Debug + Clone + Send + Serialize + DeserializeOwned + 'static;
+    type Checksum: Debug + Clone + Send + Unpin + Serialize + DeserializeOwned + 'static;
 
     /// Returns all of the objects for this source.
     fn list<'a>(
@@ -620,7 +641,7 @@ pub trait OneshotSource: Clone + Send {
         &'s self,
         object: Self::Object,
         checksum: Self::Checksum,
-        range: Option<std::ops::Range<usize>>,
+        range: Option<std::ops::RangeInclusive<usize>>,
     ) -> BoxStream<'s, Result<Bytes, StorageErrorX>>;
 }
 
@@ -652,7 +673,7 @@ impl OneshotSource for SourceKind {
         &'s self,
         object: Self::Object,
         checksum: Self::Checksum,
-        range: Option<std::ops::Range<usize>>,
+        range: Option<std::ops::RangeInclusive<usize>>,
     ) -> BoxStream<'s, Result<Bytes, StorageErrorX>> {
         match (self, object, checksum) {
             (SourceKind::Http(http), ObjectKind::Http(object), ChecksumKind::Http(checksum)) => {
@@ -671,6 +692,12 @@ impl OneshotObject for ObjectKind {
     fn name(&self) -> &str {
         match self {
             ObjectKind::Http(object) => object.name(),
+        }
+    }
+
+    fn size(&self) -> usize {
+        match self {
+            ObjectKind::Http(object) => object.size(),
         }
     }
 
@@ -701,7 +728,7 @@ pub trait OneshotFormat: Clone {
         checksum: S::Checksum,
     ) -> impl Future<Output = Result<Vec<Self::WorkRequest<S>>, StorageErrorX>> + Send;
 
-    fn process_work<'a, S: OneshotSource + Sync>(
+    fn process_work<'a, S: OneshotSource + Sync + 'static>(
         &'a self,
         source: &'a S,
         request: Self::WorkRequest<S>,
@@ -714,9 +741,10 @@ pub trait OneshotFormat: Clone {
     ) -> Result<usize, StorageErrorX>;
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub(crate) enum FormatKind {
     Csv(CsvDecoder),
+    Parquet(ParquetFormat),
 }
 
 impl OneshotFormat for FormatKind {
@@ -742,10 +770,19 @@ impl OneshotFormat for FormatKind {
                     .collect();
                 Ok(work)
             }
+            FormatKind::Parquet(parquet) => {
+                let work = parquet
+                    .split_work(source, object, checksum)
+                    .await?
+                    .into_iter()
+                    .map(|request| RequestKind::Parquet(request))
+                    .collect();
+                Ok(work)
+            }
         }
     }
 
-    fn process_work<'a, S: OneshotSource + Sync>(
+    fn process_work<'a, S: OneshotSource + Sync + 'static>(
         &'a self,
         source: &'a S,
         request: Self::WorkRequest<S>,
@@ -755,6 +792,14 @@ impl OneshotFormat for FormatKind {
                 .process_work(source, request)
                 .map_ok(|chunk| RecordChunkKind::Csv(chunk))
                 .boxed(),
+            (FormatKind::Parquet(parquet), RequestKind::Parquet(request)) => parquet
+                .process_work(source, request)
+                .map_ok(|chunk| RecordChunkKind::Parquet(chunk))
+                .boxed(),
+            (FormatKind::Parquet(_), RequestKind::Csv(_))
+            | (FormatKind::Csv(_), RequestKind::Parquet(_)) => {
+                unreachable!("programming error, {self:?}")
+            }
         }
     }
 
@@ -765,6 +810,13 @@ impl OneshotFormat for FormatKind {
     ) -> Result<usize, StorageErrorX> {
         match (self, chunk) {
             (FormatKind::Csv(csv), RecordChunkKind::Csv(chunk)) => csv.decode_chunk(chunk, rows),
+            (FormatKind::Parquet(parquet), RecordChunkKind::Parquet(chunk)) => {
+                parquet.decode_chunk(chunk, rows)
+            }
+            (FormatKind::Parquet(_), RecordChunkKind::Csv(_))
+            | (FormatKind::Csv(_), RecordChunkKind::Parquet(_)) => {
+                unreachable!("programming error, {self:?}")
+            }
         }
     }
 }
@@ -772,11 +824,13 @@ impl OneshotFormat for FormatKind {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) enum RequestKind<O, C> {
     Csv(CsvWorkRequest<O, C>),
+    Parquet(ParquetWorkRequest<O, C>),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) enum RecordChunkKind {
     Csv(CsvRecord),
+    Parquet(ParquetRowGroup),
 }
 
 // #[cfg(test)]

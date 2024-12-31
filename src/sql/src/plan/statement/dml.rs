@@ -1167,7 +1167,7 @@ fn plan_copy_from(
             )
         }
         CopyFormat::Binary => bail_unsupported!("FORMAT BINARY"),
-        CopyFormat::Parquet => bail_unsupported!("FORMAT PARQUET"),
+        CopyFormat::Parquet => CopyFormatParams::Parquet,
     };
 
     let (id, _, columns) = query::plan_copy_from(scx, table_name, columns)?;

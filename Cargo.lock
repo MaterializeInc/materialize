@@ -414,11 +414,14 @@ version = "0.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bc2d0cfb2a7388d34f590e76686704c494ed7aaceed62ee1ba35cbf363abc2a5"
 dependencies = [
+ "brotli 3.5.0",
+ "bzip2",
  "flate2",
  "futures-core",
  "memchr",
  "pin-project-lite",
  "tokio",
+ "xz2",
  "zstd",
  "zstd-safe",
 ]
@@ -1136,13 +1139,34 @@ dependencies = [
 
 [[package]]
 name = "brotli"
+version = "3.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d640d25bc63c50fb1f0b545ffd80207d2e10a4c965530809b40ba3386825c391"
+dependencies = [
+ "alloc-no-stdlib",
+ "alloc-stdlib",
+ "brotli-decompressor 2.5.1",
+]
+
+[[package]]
+name = "brotli"
 version = "7.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cc97b8f16f944bba54f0433f07e30be199b6dc2bd25937444bbad560bcea29bd"
 dependencies = [
  "alloc-no-stdlib",
  "alloc-stdlib",
- "brotli-decompressor",
+ "brotli-decompressor 4.0.1",
+]
+
+[[package]]
+name = "brotli-decompressor"
+version = "2.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4e2e4afe60d7dd600fdd3de8d0f08c2b7ec039712e3b6137ff98b7004e82de4f"
+dependencies = [
+ "alloc-no-stdlib",
+ "alloc-stdlib",
 ]
 
 [[package]]
@@ -1248,6 +1272,16 @@ name = "bytesize"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6c58ec36aac5066d5ca17df51b3e70279f5670a72102f5752cb7e7c856adfc70"
+
+[[package]]
+name = "bzip2"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bdb116a6ef3f6c3698828873ad02c3014b3c85cadb88496095628e3ef1e347f8"
+dependencies = [
+ "bzip2-sys",
+ "libc",
+]
 
 [[package]]
 name = "bzip2-sys"
@@ -3978,6 +4012,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "75761162ae2b0e580d7e7c390558127e5f01b4194debd6221fd8c207fc80e3f5"
 dependencies = [
  "twox-hash",
+]
+
+[[package]]
+name = "lzma-sys"
+version = "0.1.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5fda04ab3764e6cde78b9974eec4f779acaba7c4e84b36eca3cf77c581b85d27"
+dependencies = [
+ "cc",
+ "libc",
+ "pkg-config",
 ]
 
 [[package]]
@@ -6872,6 +6917,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "arrow",
+ "async-compression",
  "async-stream",
  "aws-types",
  "bytes",
@@ -6888,6 +6934,7 @@ dependencies = [
  "mz-persist-client",
  "mz-persist-types",
  "mz-pgcopy",
+ "mz-proto",
  "mz-repr",
  "mz-storage-types",
  "mz-timely-util",
@@ -6895,9 +6942,11 @@ dependencies = [
  "parquet",
  "prometheus",
  "proptest",
+ "prost",
  "reqwest 0.11.24",
  "sentry",
  "serde",
+ "smallvec",
  "thiserror",
  "timely",
  "tokio",
@@ -7735,10 +7784,11 @@ dependencies = [
  "arrow-schema",
  "arrow-select",
  "base64 0.22.0",
- "brotli",
+ "brotli 7.0.0",
  "bytes",
  "chrono",
  "flate2",
+ "futures",
  "half 2.4.1",
  "hashbrown 0.15.2",
  "lz4_flex",
@@ -7748,6 +7798,7 @@ dependencies = [
  "seq-macro",
  "snap",
  "thrift",
+ "tokio",
  "twox-hash",
  "zstd",
  "zstd-sys",
@@ -11480,6 +11531,15 @@ name = "xmlparser"
 version = "0.13.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4d25c75bf9ea12c4040a97f829154768bbbce366287e2dc044af160cd79a13fd"
+
+[[package]]
+name = "xz2"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "388c44dc09d76f1536602ead6d325eb532f5c122f17782bd57fb47baeeb767e2"
+dependencies = [
+ "lzma-sys",
+]
 
 [[package]]
 name = "yaml-rust"
