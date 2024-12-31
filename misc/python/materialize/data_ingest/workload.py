@@ -71,9 +71,10 @@ class SingleSensorUpdating(Workload):
             TransactionDef(
                 [
                     Upsert(
+                        # XXX: keyspace is ignored?!
                         keyspace=Keyspace.SINGLE_VALUE,
-                        count=Records.ONE,
-                        record_size=RecordSize.SMALL,
+                        count=Records.HUNDRED,
+                        record_size=RecordSize.TINY,
                     )
                 ]
             )

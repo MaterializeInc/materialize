@@ -23,6 +23,7 @@ from materialize.data_ingest.data_type import (
     NUMBER_TYPES,
     Bytea,
     DataType,
+    Int,
     Jsonb,
     Text,
     TextTextMap,
@@ -499,14 +500,10 @@ class KafkaSource(DBObject):
         self.cluster = cluster
         self.schema = schema
         self.num_rows = 0
-        fields = []
-        for i in range(rng.randint(1, 10)):
-            fields.append(
-                # naughtify: Invalid schema
-                Field(f"key{i}", rng.choice(DATA_TYPES_FOR_AVRO), True)
-            )
-        for i in range(rng.randint(0, 20)):
-            fields.append(Field(f"value{i}", rng.choice(DATA_TYPES_FOR_AVRO), False))
+        fields = [
+            Field("key", Int, True),
+            Field("val", Int, False),
+        ]
         self.columns = [
             KafkaColumn(field.name, field.data_type, False, self) for field in fields
         ]
