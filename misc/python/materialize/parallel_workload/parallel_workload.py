@@ -147,7 +147,7 @@ def run(
 
     workers = []
     threads = []
-    for i in range(num_threads):
+    if False:
         weights: list[float]
         if complexity == Complexity.DDL:
             weights = [0, 0, 30, 0, 0]
