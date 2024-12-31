@@ -36,6 +36,7 @@ use mz_catalog::durable::BootstrapArgs;
 use mz_cloud_resources::CloudResourceController;
 use mz_controller::ControllerConfig;
 use mz_frontegg_auth::Authenticator as FronteggAuthentication;
+use mz_orchestrator_external::ExternalOrchestrator;
 use mz_ore::future::OreFutureExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
@@ -612,6 +613,8 @@ impl Listeners {
             connection_limiter.update_superuser_reserved(superuser_reserved);
         });
 
+        let orchestrator = Arc::clone(&config.controller.orchestrator);
+
         let webhook_concurrency_limit = WebhookConcurrencyLimiter::default();
         let (adapter_handle, adapter_client) = mz_adapter::serve(mz_adapter::Config {
             connection_context: config.controller.connection_context.clone(),
@@ -667,6 +670,13 @@ impl Listeners {
 
         let serve_postamble_start = Instant::now();
         info!("startup: envd serve: postamble beginning");
+
+        // Install an adapter client in the orchestrator
+        if let Some(external_orchestrator) =
+            orchestrator.as_any().downcast_ref::<ExternalOrchestrator>()
+        {
+            external_orchestrator.set_adapter_client(adapter_client.clone());
+        }
 
         // Install an adapter client in the internal HTTP server.
         internal_http_adapter_client_tx

@@ -39,6 +39,7 @@ use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceController};
 use mz_controller::ControllerConfig;
 use mz_frontegg_auth::{Authenticator, FronteggCliArgs};
 use mz_orchestrator::Orchestrator;
+use mz_orchestrator_external::{ExternalOrchestrator, ExternalOrchestratorConfig};
 use mz_orchestrator_kubernetes::{
     KubernetesImagePullPolicy, KubernetesOrchestrator, KubernetesOrchestratorConfig,
 };
@@ -317,6 +318,10 @@ pub struct Args {
     /// production, only testing.
     #[structopt(long, env = "ORCHESTRATOR_KUBERNETES_COVERAGE")]
     orchestrator_kubernetes_coverage: bool,
+    /// Template to use to generate the hostname for cluster replicas. Will
+    /// replace {name} with the replica name and {id} with the replica id.
+    #[structopt(long, env = "ORCHESTRATOR_EXTERNAL_HOSTNAME_TEMPLATE")]
+    orchestrator_external_hostname_template: Option<String>,
     /// The secrets controller implementation to use.
     #[structopt(
         long,
@@ -599,6 +604,7 @@ pub struct Args {
 enum OrchestratorKind {
     Kubernetes,
     Process,
+    External,
 }
 
 // TODO [Alex Hunt] move this to a shared function that can be imported by the
@@ -849,6 +855,45 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                     sc
                 }
             };
+            (orchestrator, secrets_controller, None)
+        }
+        OrchestratorKind::External => {
+            if args.orchestrator_process_scratch_directory.is_some() {
+                bail!(
+                    "--orchestrator-process-scratch-directory is \
+                      not currently usable with the external orchestrator"
+                );
+            }
+            let Some(hostname_template) = args.orchestrator_external_hostname_template else {
+                bail!("--orchestrator-external-hostname-template is required when using Orchestrator::External")
+            };
+
+            let orchestrator = Arc::new(ExternalOrchestrator::new(ExternalOrchestratorConfig {
+                hostname_template,
+            }));
+            let secrets_controller: Arc<dyn SecretsController> = match args.secrets_controller {
+                SecretsControllerKind::Kubernetes => bail!(
+                    "SecretsControllerKind::Kubernetes is not yet implemented for Orchestrator::External."
+                ),
+                SecretsControllerKind::AwsSecretsManager => {
+                    Arc::new(
+                        runtime.block_on(AwsSecretsController::new(
+                            // TODO [Alex Hunt] move this to a shared function that can be imported by the
+                            // region-controller.
+                            &aws_secrets_controller_prefix(&args.environment_id),
+                            &aws_secrets_controller_key_alias(&args.environment_id),
+                            args.aws_secrets_controller_tags
+                                .into_iter()
+                                .map(|tag| (tag.key, tag.value))
+                                .collect(),
+                        )),
+                    )
+                }
+                SecretsControllerKind::LocalFile => bail!(
+                    "SecretsControllerKind::LocalFile is not compatible with Orchestrator::External."
+                ),
+            };
+            // TODO: secrets and vpc endpoints need to be implemented here
             (orchestrator, secrets_controller, None)
         }
     };

@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::any::Any;
 use std::collections::BTreeMap;
 use std::env;
 use std::ffi::OsStr;
@@ -290,6 +291,10 @@ impl Orchestrator for ProcessOrchestrator {
             })
         }))
     }
+
+    fn as_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync> {
+        self
+    }
 }
 
 /// Configuration for a [`NamespacedProcessOrchestrator`].
@@ -411,6 +416,10 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
         _config: mz_orchestrator::scheduling_config::ServiceSchedulingConfig,
     ) {
         // This orchestrator ignores scheduling constraints.
+    }
+
+    fn as_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync> {
+        self
     }
 }
 

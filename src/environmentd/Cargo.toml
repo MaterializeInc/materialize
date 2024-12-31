@@ -55,6 +55,7 @@ mz-http-util = { path = "../http-util" }
 mz-interchange = { path = "../interchange" }
 mz-metrics = { path = "../metrics" }
 mz-orchestrator = { path = "../orchestrator" }
+mz-orchestrator-external = { path = "../orchestrator-external" }
 mz-orchestrator-kubernetes = { path = "../orchestrator-kubernetes" }
 mz-orchestrator-process = { path = "../orchestrator-process" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }

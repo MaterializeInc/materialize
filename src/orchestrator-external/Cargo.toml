@@ -1,0 +1,29 @@
+[package]
+name = "mz-orchestrator-external"
+description = "Service orchestration via an external orchestrator."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = "1.0.66"
+async-trait = "0.1.68"
+futures = "0.3.25"
+mz-adapter = { path = "../adapter" }
+mz-orchestrator = { path = "../orchestrator" }
+mz-ore = { path = "../ore" }
+mz-repr = { path = "../repr" }
+mz-sql = { path = "../sql" }
+tokio = "1.32.0"
+uuid = { version = "1.7.0", features = ["v4"] }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+
+[features]
+default = ["workspace-hack"]
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["workspace-hack"]
