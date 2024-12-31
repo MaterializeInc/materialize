@@ -492,6 +492,7 @@ class KafkaSource(DBObject):
         schema: Schema,
         ports: dict[str, int],
         rng: random.Random,
+        mz_service: str | None = None,
     ):
         super().__init__()
         self.source_id = source_id
@@ -516,6 +517,7 @@ class KafkaSource(DBObject):
             schema.db.name(),
             schema.name(),
             cluster.name(),
+            mz_service,
         )
         workload = rng.choice(list(WORKLOADS))()
         for transaction_def in workload.cycle:
@@ -964,7 +966,7 @@ class Database:
         ]
         self.webhook_source_id = len(self.webhook_sources)
         self.kafka_sources = [
-            KafkaSource(i, rng.choice(self.clusters), rng.choice(self.schemas), self.ports, rng)
+            KafkaSource(i, rng.choice(self.clusters), rng.choice(self.schemas), self.ports, rng, mz_service="materialized")
             for i in range(rng.randint(0, MAX_INITIAL_KAFKA_SOURCES))
         ]
         self.mysql_sources = []
