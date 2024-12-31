@@ -963,7 +963,10 @@ class Database:
             for i in range(rng.randint(0, MAX_INITIAL_WEBHOOK_SOURCES))
         ]
         self.webhook_source_id = len(self.webhook_sources)
-        self.kafka_sources = []
+        self.kafka_sources = [
+            KafkaSource(i, rng.choice(self.clusters), rng.choice(self.schemas), self.ports, rng)
+            for i in range(rng.randint(0, MAX_INITIAL_KAFKA_SOURCES))
+        ]
         self.mysql_sources = []
         self.postgres_sources = []
         self.kafka_sinks = []
