@@ -17,11 +17,11 @@ clap = { version = "3.2.24", features = ["derive"] }
 fail = { version = "0.5.1", features = ["failpoints"] }
 futures = "0.3.25"
 maplit = "1.0.2"
-mz-cloud-resources = { path = "../cloud-resources" }
-mz-orchestrator = { path = "../orchestrator" }
+mz-cloud-resources = { path = "../cloud-resources", default-features = false, features = ["vpc-endpoints"] }
+mz-orchestrator = { path = "../orchestrator", default-features = false }
 mz-ore = { path = "../ore", default-features = false, features = ["async"]  }
-mz-secrets = { path = "../secrets" }
-mz-repr = { path = "../repr" }
+mz-secrets = { path = "../secrets", default-features = false }
+mz-repr = { path = "../repr", default-features = false }
 k8s-openapi = { version = "0.22.0", features = ["v1_29"] }
 kube = { version = "0.92.1", default-features = false, features = ["client", "runtime", "ws"] }
 serde = { version = "1.0.152", features = ["derive"] }
