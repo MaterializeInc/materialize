@@ -12,7 +12,7 @@ workspace = true
 [dependencies]
 chrono = { version = "0.4.35", default-features = false, features = ["serde", "std"] }
 chrono-tz = { version = "0.8.1", features = ["serde", "case-insensitive"] }
-mz-lowertest = { path = "../lowertest" }
+mz-lowertest = { path = "../lowertest", default-features = false }
 mz-ore = { path = "../ore", features = ["test"], default-features = false }
 mz-proto = { path = "../proto", features = ["chrono"], default-features = false }
 phf = { version = "0.11.1", default-features = false }

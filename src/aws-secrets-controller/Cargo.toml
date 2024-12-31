@@ -20,9 +20,9 @@ aws-credential-types = { version = "1.1.1", features = ["hardcoded-credentials"]
 aws-sdk-secretsmanager = { version = "1.20.0", default-features = false, features = ["rt-tokio"] }
 aws-types = "1.1.1"
 futures = { version = "0.3.25" }
-mz-aws-util = { path = "../aws-util" }
-mz-secrets = { path = "../secrets" }
-mz-repr = { path = "../repr" }
+mz-aws-util = { path = "../aws-util", default-features = false }
+mz-secrets = { path = "../secrets", default-features = false }
+mz-repr = { path = "../repr", default-features = false }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 tracing = "0.1.37"
 uuid = "1.7.0"

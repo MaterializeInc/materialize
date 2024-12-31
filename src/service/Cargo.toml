@@ -19,13 +19,13 @@ futures = "0.3.25"
 http = "1.1.0"
 hyper-util = "0.1.6"
 itertools = "0.12.1"
-mz-aws-secrets-controller = { path = "../aws-secrets-controller" }
-mz-build-info = { path = "../build-info" }
-mz-proto = { path = "../proto" }
-mz-repr = { path = "../repr" }
-mz-secrets = { path = "../secrets" }
-mz-orchestrator-process = { path = "../orchestrator-process" }
-mz-orchestrator-kubernetes = { path = "../orchestrator-kubernetes" }
+mz-aws-secrets-controller = { path = "../aws-secrets-controller", default-features = false }
+mz-build-info = { path = "../build-info", default-features = false }
+mz-proto = { path = "../proto", default-features = false }
+mz-repr = { path = "../repr", default-features = false }
+mz-secrets = { path = "../secrets", default-features = false }
+mz-orchestrator-process = { path = "../orchestrator-process", default-features = false }
+mz-orchestrator-kubernetes = { path = "../orchestrator-kubernetes", default-features = false }
 mz-ore = { path = "../ore", default-features = false }
 os_info = "3.5.1"
 prometheus = { version = "0.13.3", default-features = false }

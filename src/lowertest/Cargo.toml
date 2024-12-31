@@ -10,7 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
-mz-lowertest-derive = { path = "../lowertest-derive" }
+mz-lowertest-derive = { path = "../lowertest-derive", default-features = false }
 mz-ore = { path = "../ore", features = ["test"], default-features = false }
 proc-macro2 = "1.0.60"
 serde = { version = "1.0.152", features = ["derive"] }

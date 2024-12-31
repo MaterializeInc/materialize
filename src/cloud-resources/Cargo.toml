@@ -26,7 +26,7 @@ uuid = { version = "1.2", features = ["serde", "v4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 async-trait = { version = "0.1.83", optional = true }
-mz-repr = { path = "../repr", optional = true }
+mz-repr = { path = "../repr", default-features = false, optional = true }
 
 [features]
 default = ["workspace-hack", "vpc-endpoints"]
