@@ -162,10 +162,14 @@ class UpgradeEntireMzFourVersions(Scenario):
     """Test upgrade X-4 -> X-3 -> X-2 -> X-1 -> X"""
 
     def __init__(
-        self, checks: list[type[Check]], executor: Executor, seed: str | None = None
+        self,
+        checks: list[type[Check]],
+        executor: Executor,
+        azurite: bool,
+        seed: str | None = None,
     ):
         self.minor_versions = get_minor_versions()
-        super().__init__(checks, executor, seed)
+        super().__init__(checks, executor, azurite, seed)
 
     def base_version(self) -> MzVersion:
         return self.minor_versions[3]

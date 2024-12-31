@@ -45,10 +45,15 @@ from materialize.mz_version import MzVersion
 
 class Scenario:
     def __init__(
-        self, checks: list[type[Check]], executor: Executor, seed: str | None = None
+        self,
+        checks: list[type[Check]],
+        executor: Executor,
+        azurite: bool,
+        seed: str | None = None,
     ) -> None:
         self._checks = checks
         self.executor = executor
+        self.azurite = azurite
         self.rng = None if seed is None else Random(seed)
         self._base_version = MzVersion.parse_cargo()
 
@@ -269,10 +274,11 @@ class SystemVarChange(Scenario):
         self,
         checks: list[type[Check]],
         executor: Executor,
+        azurite: bool,
         seed: str | None,
         change_entries: list[SystemVarChangeEntry],
     ):
-        super().__init__(checks, executor, seed)
+        super().__init__(checks, executor, azurite, seed)
         self.change_entries = change_entries
 
     def actions(self) -> list[Action]:

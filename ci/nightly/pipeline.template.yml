@@ -175,6 +175,7 @@ steps:
               args:
                 - --other-tag
                 - common-ancestor
+                - --azurite
 
   - group: Kafka
     key: kafka
@@ -224,7 +225,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: testdrive
-              args: [--redpanda]
+              args: [--redpanda, --azurite]
 
       - id: redpanda-testdrive-aarch64
         label: ":panda_face: :racing_car: testdrive aarch64"
@@ -235,7 +236,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: testdrive
-              args: [--redpanda]
+              args: [--redpanda, --azurite]
         skip: "Disabled due to taking too long for the value provided"
 
       # TODO(def-) Remove this when old upsert implementation is removed
@@ -248,7 +249,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: testdrive
-              args: [--system-param=storage_use_continual_feedback_upsert=false]
+              args: [--system-param=storage_use_continual_feedback_upsert=false, --azurite]
 
       - id: testdrive-partitions-5
         label: ":racing_car: testdrive with --kafka-default-partitions 5"
@@ -259,7 +260,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: testdrive
-              args: [--kafka-default-partitions=5]
+              args: [--kafka-default-partitions=5, --azurite]
 
       - id: testdrive-replicas-4
         label: ":racing_car: testdrive 4 replicas"
@@ -270,7 +271,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: testdrive
-              args: [--replicas=4]
+              args: [--replicas=4, --azurite]
 
       - id: testdrive-size-1
         label: ":racing_car: testdrive with SIZE 1"
@@ -281,7 +282,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: testdrive
-              args: [--default-size=1]
+              args: [--default-size=1, --azurite]
 
       - id: testdrive-size-8
         label: ":racing_car: testdrive with SIZE 8"
@@ -292,7 +293,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: testdrive
-              args: [--default-size=8]
+              args: [--default-size=8, --azurite]
 
       - id: testdrive-structured-persist-arrow
         label: ":racing_car: testdrive with Structured Persist (Only Structured)"
@@ -307,6 +308,7 @@ steps:
                 --system-param=persist_part_decode_format=arrow,
                 --system-param=persist_batch_columnar_format=both_v2,
                 --system-param=persist_encoding_enable_dictionary=true,
+                --azurite,
               ]
 
       - id: testdrive-in-cloudtest
@@ -466,7 +468,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: zippy
-              args: [--scenario=KafkaSources, --actions=10000, --max-execution-time=30m]
+              args: [--scenario=KafkaSources, --actions=10000, --max-execution-time=30m, --azurite]
 
       # TODO(def-) Remove this when old upsert implementation is removed
       - id: zippy-kafka-sources-old-upsert
@@ -478,7 +480,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: zippy
-              args: [--scenario=KafkaSources, --actions=10000, --max-execution-time=30m, --system-param=storage_use_continual_feedback_upsert=false]
+              args: [--scenario=KafkaSources, --actions=10000, --max-execution-time=30m, --system-param=storage_use_continual_feedback_upsert=false, --azurite]
 
       - id: zippy-kafka-parallel-insert
         label: "Zippy Kafka Parallel Insert"
@@ -489,7 +491,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: zippy
-              args: [--scenario=KafkaParallelInsert, --transaction-isolation=serializable, --actions=10000, --max-execution-time=30m]
+              args: [--scenario=KafkaParallelInsert, --transaction-isolation=serializable, --actions=10000, --max-execution-time=30m, --azurite]
 
       - id: zippy-user-tables
         label: "Zippy User Tables"
@@ -500,7 +502,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: zippy
-              args: [--scenario=UserTables, --actions=10000, --max-execution-time=30m]
+              args: [--scenario=UserTables, --actions=10000, --max-execution-time=30m, --azurite]
 
       - id: zippy-postgres-cdc
         label: "Zippy Postgres CDC"
@@ -511,7 +513,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: zippy
-              args: [--scenario=PostgresCdc, --actions=10000, --max-execution-time=30m]
+              args: [--scenario=PostgresCdc, --actions=10000, --max-execution-time=30m, --azurite]
 
       - id: zippy-mysql-cdc
         label: "Zippy MySQL CDC"
@@ -522,7 +524,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: zippy
-              args: [--scenario=MySqlCdc, --actions=10000, --max-execution-time=30m]
+              args: [--scenario=MySqlCdc, --actions=10000, --max-execution-time=30m, --azurite]
 
       - id: zippy-debezium-postgres
         label: "Zippy Debezium Postgres"
@@ -533,7 +535,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: zippy
-              args: [--scenario=DebeziumPostgres, --actions=10000, --max-execution-time=30m]
+              args: [--scenario=DebeziumPostgres, --actions=10000, --max-execution-time=30m, --azurite]
 
       - id: zippy-cluster-replicas
         label: "Zippy Cluster Replicas"
@@ -544,7 +546,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: zippy
-              args: [--scenario=ClusterReplicas, --actions=10000, --max-execution-time=30m]
+              args: [--scenario=ClusterReplicas, --actions=10000, --max-execution-time=30m, --azurite]
 
       - id: zippy-crdb-latest
         label: "Zippy w/ latest CRDB"
@@ -556,7 +558,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: zippy
               # TODO: Reenable --cockroach-tag=latest when https://github.com/cockroachdb/cockroach/issues/136678 is fixed
-              args: [--scenario=KafkaSources, --actions=10000, --max-execution-time=30m]
+              args: [--scenario=KafkaSources, --actions=10000, --max-execution-time=30m, --azurite]
 
       - id: zippy-alter-connection
         label: "Zippy w/ alter connection"
@@ -567,7 +569,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: zippy
-              args: [--scenario=AlterConnectionWithKafkaSources, --actions=10000, --max-execution-time=30m]
+              args: [--scenario=AlterConnectionWithKafkaSources, --actions=10000, --max-execution-time=30m, --azurite]
 
   - group: CDC with old source syntax
     key: cdc-old-source-syntax
@@ -642,6 +644,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: testdrive-old-kafka-src-syntax
+              args: [--azurite]
         agents:
           queue: hetzner-aarch64-8cpu-16gb
 
@@ -700,7 +703,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=RestartEntireMz, "--seed=$BUILDKITE_JOB_ID"]
+              args: [--scenario=RestartEntireMz, "--seed=$BUILDKITE_JOB_ID", --azurite]
 
       # TODO(def-) Remove this when old upsert implementation is removed
       - id: checks-restart-entire-mz-old-upsert
@@ -715,7 +718,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=RestartEntireMz, --system-param=storage_use_continual_feedback_upsert=false, "--seed=$BUILDKITE_JOB_ID"]
+              args: [--scenario=RestartEntireMz, --system-param=storage_use_continual_feedback_upsert=false, "--seed=$BUILDKITE_JOB_ID", --azurite]
 
       - id: checks-backup-rollback
         label: "Checks + backup + rollback to previous %N"
@@ -727,7 +730,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=BackupAndRestoreToPreviousState, "--seed=$BUILDKITE_JOB_ID"]
+              args: [--scenario=BackupAndRestoreToPreviousState, "--seed=$BUILDKITE_JOB_ID", --azurite]
 
       - id: checks-parallel-drop-create-default-replica
         label: "Checks parallel + DROP/CREATE replica %N"
@@ -739,7 +742,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=DropCreateDefaultReplica, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID"]
+              args: [--scenario=DropCreateDefaultReplica, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID", --azurite]
 
       - id: checks-parallel-restart-clusterd-compute
         label: "Checks parallel + restart compute clusterd %N"
@@ -751,7 +754,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=RestartClusterdCompute, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID"]
+              args: [--scenario=RestartClusterdCompute, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID", --azurite]
 
       - id: checks-parallel-restart-entire-mz
         label: "Checks parallel + restart of the entire Mz %N"
@@ -763,7 +766,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=RestartEntireMz, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID"]
+              args: [--scenario=RestartEntireMz, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID", --azurite]
 
       - id: checks-parallel-restart-environmentd-clusterd-storage
         label: "Checks parallel + restart of environmentd & storage clusterd %N"
@@ -775,7 +778,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=RestartEnvironmentdClusterdStorage, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID"]
+              args: [--scenario=RestartEnvironmentdClusterdStorage, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID", --azurite]
 
       - id: checks-parallel-kill-clusterd-storage
         label: "Checks parallel + kill storage clusterd %N"
@@ -787,7 +790,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=KillClusterdStorage, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID"]
+              args: [--scenario=KillClusterdStorage, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID", --azurite]
 
       - id: checks-upgrade-entire-mz
         label: "Checks upgrade, whole-Mz restart %N"
@@ -799,7 +802,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=UpgradeEntireMz, "--seed=$BUILDKITE_JOB_ID"]
+              args: [--scenario=UpgradeEntireMz, "--seed=$BUILDKITE_JOB_ID", --azurite]
 
       - id: checks-preflight-check-rollback
         label: "Checks preflight-check and roll back upgrade %N"
@@ -811,7 +814,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=PreflightCheckRollback, "--seed=$BUILDKITE_JOB_ID"]
+              args: [--scenario=PreflightCheckRollback, "--seed=$BUILDKITE_JOB_ID", --azurite]
 
       - id: checks-upgrade-entire-mz-two-versions
         label: "Checks upgrade across two versions %N"
@@ -823,7 +826,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=UpgradeEntireMzTwoVersions, "--seed=$BUILDKITE_JOB_ID"]
+              args: [--scenario=UpgradeEntireMzTwoVersions, "--seed=$BUILDKITE_JOB_ID", --azurite]
 
       - id: checks-upgrade-entire-mz-four-versions
         label: "Checks upgrade across four versions %N"
@@ -835,7 +838,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=UpgradeEntireMzFourVersions, "--seed=$BUILDKITE_JOB_ID"]
+              args: [--scenario=UpgradeEntireMzFourVersions, "--seed=$BUILDKITE_JOB_ID", --azurite]
 
       - id: checks-0dt-restart-entire-mz-forced-migrations
         label: "Checks 0dt restart of the entire Mz with forced migrations %N"
@@ -847,7 +850,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=ZeroDowntimeRestartEntireMzForcedMigrations, "--seed=$BUILDKITE_JOB_ID"]
+              args: [--scenario=ZeroDowntimeRestartEntireMzForcedMigrations, "--seed=$BUILDKITE_JOB_ID", --azurite]
 
       - id: checks-0dt-upgrade-entire-mz
         label: "Checks 0dt upgrade, whole-Mz restart %N"
@@ -894,7 +897,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=ZeroDowntimeBumpedVersion, "--seed=$BUILDKITE_JOB_ID"]
+              args: [--scenario=ZeroDowntimeBumpedVersion, "--seed=$BUILDKITE_JOB_ID", --azurite]
 
       - id: cloudtest-upgrade
         label: "Platform checks upgrade in Cloudtest/K8s"
@@ -1422,6 +1425,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: data-ingest
+          args: --azurite
 
   - group: "Parallel Workload"
     key: parallel-workload
@@ -1436,7 +1440,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
-              args: [--runtime=1500, --complexity=dml, --threads=16]
+              args: [--runtime=1500, --complexity=dml, --threads=16, --azurite]
 
       - id: parallel-workload-ddl
         label: "Parallel Workload (DDL)"
@@ -1448,7 +1452,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
-              args: [--runtime=1500, --threads=8]
+              args: [--runtime=1500, --threads=8, --azurite]
 
       - id: parallel-workload-ddl-only
         label: "Parallel Workload (DDL Only)"
@@ -1460,7 +1464,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
-              args: [--runtime=1500, --complexity=ddl-only, --threads=2]
+              args: [--runtime=1500, --complexity=ddl-only, --threads=2, --azurite]
 
       - id: parallel-workload-many-threads
         label: "Parallel Workload (many threads)"
@@ -1473,7 +1477,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
-              args: [--runtime=1500, --threads=100]
+              args: [--runtime=1500, --threads=100, --azurite]
         skip: "Too unstable at the moment"
 
       - id: parallel-workload-rename-naughty
@@ -1486,7 +1490,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
-              args: [--runtime=1500, --scenario=rename, --naughty-identifiers, --threads=16]
+              args: [--runtime=1500, --scenario=rename, --naughty-identifiers, --threads=16, --azurite]
 
       - id: parallel-workload-rename
         label: "Parallel Workload (rename)"
@@ -1498,7 +1502,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
-              args: [--runtime=1500, --scenario=rename, --threads=16]
+              args: [--runtime=1500, --scenario=rename, --threads=16, --azurite]
 
       - id: parallel-workload-cancel
         label: "Parallel Workload (cancel)"
@@ -1511,7 +1515,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
-              args: [--runtime=1500, --scenario=cancel, --threads=16]
+              args: [--runtime=1500, --scenario=cancel, --threads=16, --azurite]
 
       - id: parallel-workload-kill
         label: "Parallel Workload (kill)"
@@ -1523,7 +1527,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
-              args: [--runtime=1500, --scenario=kill, --threads=8]
+              args: [--runtime=1500, --scenario=kill, --threads=8, --azurite]
 
       - id: parallel-workload-backup-restore
         label: "Parallel Workload (backup & restore)"
@@ -1536,7 +1540,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
-              args: [--runtime=1500, --scenario=backup-restore, --naughty-identifiers, --threads=16]
+              args: [--runtime=1500, --scenario=backup-restore, --naughty-identifiers, --threads=16, --azurite]
 
       - id: parallel-workload-0dt
         label: "Parallel Workload (0dt deploy)"
@@ -1548,7 +1552,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
-              args: [--runtime=1500, --scenario=0dt-deploy, --threads=16]
+              args: [--runtime=1500, --scenario=0dt-deploy, --threads=16, --azurite]
 
   - id: incident-70
     label: "Test for incident 70"
@@ -1636,6 +1640,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: txn-wal-fencing
+          args: [--azurite]
     agents:
       queue: hetzner-aarch64-8cpu-16gb
 

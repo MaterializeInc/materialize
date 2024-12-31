@@ -61,6 +61,7 @@ class StartMz(MzcomposeAction):
         self.restart = restart
         self.force_migrations = force_migrations
         self.publish = publish
+        self.scenario = scenario
 
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
@@ -73,6 +74,7 @@ class StartMz(MzcomposeAction):
             image=image,
             external_metadata_store=True,
             external_blob_store=True,
+            blob_store_is_azure=self.scenario.azurite,
             environment_extra=self.environment_extra,
             system_parameter_defaults=self.system_parameter_defaults,
             additional_system_parameter_defaults=self.additional_system_parameter_defaults,

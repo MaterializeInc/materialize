@@ -517,7 +517,7 @@ class KafkaSource(DBObject):
             schema.name(),
             cluster.name(),
         )
-        workload = rng.choice(list(WORKLOADS))()
+        workload = rng.choice(list(WORKLOADS))(azurite=False)
         for transaction_def in workload.cycle:
             for definition in transaction_def.operations:
                 if type(definition) == Insert and definition.count > MAX_ROWS:
@@ -677,7 +677,7 @@ class MySqlSource(DBObject):
             schema.name(),
             cluster.name(),
         )
-        self.generator = rng.choice(list(WORKLOADS))().generate(fields)
+        self.generator = rng.choice(list(WORKLOADS))(azurite=False).generate(fields)
         self.lock = threading.Lock()
 
     def name(self) -> str:
@@ -745,7 +745,7 @@ class PostgresSource(DBObject):
             schema.name(),
             cluster.name(),
         )
-        self.generator = rng.choice(list(WORKLOADS))().generate(fields)
+        self.generator = rng.choice(list(WORKLOADS))(azurite=False).generate(fields)
         self.lock = threading.Lock()
 
     def name(self) -> str:

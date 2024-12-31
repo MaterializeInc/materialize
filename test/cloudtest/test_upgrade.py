@@ -91,5 +91,5 @@ def test_upgrade(aws_region: str | None, log_filter: str | None, dev: bool) -> N
             AlterConnectionHost,
         }
     )
-    scenario = CloudtestUpgrade(checks=checks, executor=executor)
+    scenario = CloudtestUpgrade(checks=checks, executor=executor, azurite=False)
     scenario.run()

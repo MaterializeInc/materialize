@@ -64,11 +64,16 @@ class RestartMz(TransactionDef):
     workload: "Workload"
 
     def __init__(
-        self, composition: Composition, probability: float, workload: "Workload"
+        self,
+        composition: Composition,
+        probability: float,
+        workload: "Workload",
+        azurite: bool,
     ):
         self.composition = composition
         self.probability = probability
         self.workload = workload
+        self.azurite = azurite
 
     def generate(self, fields: list[Field]) -> Iterator[Transaction | None]:
         if random.random() < self.probability:
@@ -83,6 +88,7 @@ class RestartMz(TransactionDef):
                     name=self.workload.mz_service,
                     ports=ports,
                     external_blob_store=True,
+                    blob_store_is_azure=self.azurite,
                     external_metadata_store=True,
                     system_parameter_defaults=get_default_system_parameters(
                         zero_downtime=True
@@ -104,11 +110,16 @@ class ZeroDowntimeDeploy(TransactionDef):
     workload: "Workload"
 
     def __init__(
-        self, composition: Composition, probability: float, workload: "Workload"
+        self,
+        composition: Composition,
+        probability: float,
+        workload: "Workload",
+        azurite: bool,
     ):
         self.composition = composition
         self.probability = probability
         self.workload = workload
+        self.azurite = azurite
 
     def generate(self, fields: list[Field]) -> Iterator[Transaction | None]:
         if random.random() < self.probability:
@@ -130,6 +141,7 @@ class ZeroDowntimeDeploy(TransactionDef):
                     name=self.workload.mz_service,
                     ports=ports,
                     external_blob_store=True,
+                    blob_store_is_azure=self.azurite,
                     external_metadata_store=True,
                     system_parameter_defaults=get_default_system_parameters(
                         zero_downtime=True

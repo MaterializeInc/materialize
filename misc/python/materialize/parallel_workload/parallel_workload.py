@@ -68,6 +68,7 @@ def run(
     num_threads: int | None,
     naughty_identifiers: bool,
     composition: Composition | None,
+    azurite: bool,
     sanity_restart: bool,
 ) -> None:
     num_threads = num_threads or os.cpu_count() or 10
@@ -222,7 +223,7 @@ def run(
         assert composition, "Kill scenario only works in mzcompose"
         worker = Worker(
             worker_rng,
-            [KillAction(worker_rng, composition, sanity_restart)],
+            [KillAction(worker_rng, composition, azurite, sanity_restart)],
             [1],
             end_time,
             autocommit=False,
@@ -246,6 +247,7 @@ def run(
                 ZeroDowntimeDeployAction(
                     worker_rng,
                     composition,
+                    azurite,
                     sanity_restart,
                 )
             ],
@@ -474,6 +476,9 @@ def parse_common_args(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="Whether to initialize expensive parts like SQLsmith, sources, sinks (for fast local testing, reduces coverage)",
     )
+    parser.add_argument(
+        "--azurite", action="store_true", help="Use Azurite as blob store instead of S3"
+    )
 
 
 def main() -> int:
@@ -525,6 +530,7 @@ def main() -> int:
         args.threads,
         args.naughty_identifiers,
         composition=None,  # only works in mzcompose
+        azurite=args.azurite,
         sanity_restart=False,  # only works in mzcompose
     )
     return 0

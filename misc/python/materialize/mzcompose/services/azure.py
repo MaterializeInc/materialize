@@ -41,6 +41,7 @@ class Azurite(Service):
                 "--blobPort",
                 "10000",
                 "--disableProductStyleUrl",
+                "--loose",
             ]
 
         if in_memory:

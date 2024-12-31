@@ -104,11 +104,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     dependencies = [
         "fivetran-destination",
-        "minio",
-        "azurite",
         "materialized",
         "postgres",
         "mysql",
+        "minio",
     ]
     if args.redpanda:
         dependencies += ["redpanda"]

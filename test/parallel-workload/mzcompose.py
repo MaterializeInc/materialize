@@ -20,6 +20,7 @@ import requests
 
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.service import Service
+from materialize.mzcompose.services.azure import Azurite
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
@@ -48,6 +49,7 @@ SERVICES = [
     ),
     SchemaRegistry(),
     Minio(setup_materialize=True, additional_directories=["copytos3"]),
+    Azurite(),
     Mc(),
     Materialized(),
     Materialized(name="materialized2"),
@@ -72,7 +74,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "zookeeper",
         "kafka",
         "schema-registry",
-        "minio",
         "materialized",
     ]
 
@@ -84,6 +85,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     with c.override(
         Materialized(
             external_blob_store="toxiproxy",
+            blob_store_is_azure=args.azurite,
             external_metadata_store="toxiproxy",
             ports=["6975:6875", "6976:6876", "6977:6877"],
             sanity_restart=sanity_restart,
@@ -91,7 +93,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         ),
         Toxiproxy(seed=random.randrange(2**63)),
     ):
-        toxiproxy_start(c)
+        toxiproxy_start(c, args.azurite)
         c.up(*service_names)
         c.up("mc", persistent=True)
         c.exec(
@@ -124,6 +126,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             args.threads,
             args.naughty_identifiers,
             c,
+            args.azurite,
             sanity_restart,
         )
         # Don't wait for potentially hanging threads that we are ignoring
@@ -137,7 +140,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         #     return
 
 
-def toxiproxy_start(c: Composition) -> None:
+def toxiproxy_start(c: Composition, azurite: bool) -> None:
     c.up("toxiproxy")
 
     port = c.default_port("toxiproxy")
@@ -162,6 +165,16 @@ def toxiproxy_start(c: Composition) -> None:
     )
     assert r.status_code == 201, r
     r = requests.post(
+        f"http://localhost:{port}/proxies",
+        json={
+            "name": "azurite",
+            "listen": "0.0.0.0:10000",
+            "upstream": "azurite:10000",
+            "enabled": True,
+        },
+    )
+    assert r.status_code == 201, r
+    r = requests.post(
         f"http://localhost:{port}/proxies/cockroach/toxics",
         json={
             "name": "cockroach",
@@ -174,6 +187,15 @@ def toxiproxy_start(c: Composition) -> None:
         f"http://localhost:{port}/proxies/minio/toxics",
         json={
             "name": "minio",
+            "type": "latency",
+            "attributes": {"latency": 0, "jitter": 100},
+        },
+    )
+    assert r.status_code == 200, r
+    r = requests.post(
+        f"http://localhost:{port}/proxies/minio/toxics",
+        json={
+            "name": "azurite",
             "type": "latency",
             "attributes": {"latency": 0, "jitter": 100},
         },
