@@ -66,7 +66,6 @@ def workflow_simple(c: Composition) -> None:
 
     seed = random.getrandbits(16)
     c.run_testdrive_files(
-        "--no-reset",
         "--max-errors=1",
         f"--seed={seed}",
         f"--temp-dir=/share/tmp/kafka-resumption-{seed}",
@@ -125,7 +124,6 @@ def workflow_resumption(c: Composition) -> None:
         print(f"Running failure mode {failure_mode}...")
 
         c.run_testdrive_files(
-            "--no-reset",
             f"--seed={seed}{i}",
             f"--temp-dir=/share/tmp/kafka-resumption-{seed}",
             "resumption/toxiproxy-setup.td",  # without toxify
@@ -137,7 +135,6 @@ def workflow_resumption(c: Composition) -> None:
         t1.start()
         time.sleep(10)
         c.run_testdrive_files(
-            "--no-reset",
             "resumption/toxiproxy-restore-connection.td",
         )
         t1.join()
@@ -152,7 +149,6 @@ def workflow_resumption(c: Composition) -> None:
         c.up("toxiproxy")
 
         c.run_testdrive_files(
-            "--no-reset",
             "resumption/mz-reset.td",
         )
 

@@ -1353,7 +1353,7 @@ class Composition:
         args = args + [f"--source={caller.filename}:{caller.lineno}"]
 
         if mz_service is not None:
-            args += [
+            args = args + [
                 f"--materialize-url=postgres://materialize@{mz_service}:6875",
                 f"--materialize-internal-url=postgres://mz_system@{mz_service}:6877",
                 f"--persist-consensus-url=postgres://root@{mz_service}:26257?options=--search_path=consensus",

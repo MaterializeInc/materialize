@@ -79,10 +79,10 @@ class KafkaTransactionLogGreaterThan1:
             Testdrive(
                 no_reset=True,
                 seed=seed,
+                kafka_url="badkafka",
                 entrypoint_extra=[
                     "--initial-backoff=1s",
                     "--backoff-factor=0",
-                    "--kafka-addr=badkafka",
                 ],
             ),
         ):

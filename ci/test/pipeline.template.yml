@@ -558,7 +558,7 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
 
       - id: kafka-rtr
-        label: Kafka RTR tests
+        label: "Kafka RTR tests %N"
         depends_on: build-aarch64
         timeout_in_minutes: 30
         parallelism: 2
