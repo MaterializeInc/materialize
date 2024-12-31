@@ -109,7 +109,7 @@ pub struct TracingCliArgs {
         long,
         env = "OPENTELEMETRY_MAX_BATCH_QUEUE_SIZE",
         default_value = "2048",
-        requires = "opentelemetry-endpoint"
+        requires = "opentelemetry_endpoint"
     )]
     pub opentelemetry_max_batch_queue_size: usize,
     /// The max number of spans to export in a single batch.
@@ -117,7 +117,7 @@ pub struct TracingCliArgs {
         long,
         env = "OPENTELEMETRY_MAX_EXPORT_BATCH_SIZE",
         default_value = "512",
-        requires = "opentelemetry-endpoint"
+        requires = "opentelemetry_endpoint"
     )]
     pub opentelemetry_max_export_batch_size: usize,
     /// The max number of concurrent export tasks.
@@ -125,7 +125,7 @@ pub struct TracingCliArgs {
         long,
         env = "OPENTELEMETRY_MAX_CONCURRENT_EXPORTS",
         default_value = "1",
-        requires = "opentelemetry-endpoint"
+        requires = "opentelemetry_endpoint"
     )]
     pub opentelemetry_max_concurrent_exports: usize,
     /// The delay between sequential sending of batches.
@@ -133,7 +133,7 @@ pub struct TracingCliArgs {
         long,
         env = "OPENTELEMETRY_SCHED_DELAY",
         default_value = "5000ms",
-        requires = "opentelemetry-endpoint",
+        requires = "opentelemetry_endpoint",
         value_parser = humantime::parse_duration,
     )]
     pub opentelemetry_sched_delay: Duration,
@@ -142,7 +142,7 @@ pub struct TracingCliArgs {
         long,
         env = "OPENTELEMETRY_MAX_EXPORT_TIMEOUT",
         default_value = "30s",
-        requires = "opentelemetry-endpoint",
+        requires = "opentelemetry_endpoint",
         value_parser = humantime::parse_duration,
     )]
     pub opentelemetry_max_export_timeout: Duration,
@@ -162,7 +162,7 @@ pub struct TracingCliArgs {
     #[clap(
         long,
         env = "OPENTELEMETRY_HEADER",
-        requires = "opentelemetry-endpoint",
+        requires = "opentelemetry_endpoint",
         value_name = "NAME=VALUE",
         use_value_delimiter = true
     )]
@@ -177,7 +177,7 @@ pub struct TracingCliArgs {
     #[clap(
         long,
         env = "STARTUP_OPENTELEMETRY_FILTER",
-        requires = "opentelemetry-endpoint",
+        requires = "opentelemetry_endpoint",
         default_value = "info"
     )]
     pub startup_opentelemetry_filter: CloneableEnvFilter,
@@ -208,7 +208,7 @@ pub struct TracingCliArgs {
     #[clap(
         long,
         env = "TOKIO_CONSOLE_PUBLISH_INTERVAL",
-        requires = "tokio-console-listen-addr",
+        requires = "tokio_console_listen_addr",
         value_parser = humantime::parse_duration,
         default_value = "1s",
     )]
@@ -220,7 +220,7 @@ pub struct TracingCliArgs {
     #[clap(
         long,
         env = "TOKIO_CONSOLE_RETENTION",
-        requires = "tokio-console-listen-addr",
+        requires = "tokio_console_listen_addr",
         value_parser = humantime::parse_duration,
         default_value = "1h",
     )]

@@ -527,8 +527,8 @@ pub struct TlsCliArgs {
         value_parser = ["disable", "require"],
         default_value = "disable",
         default_value_ifs = [
-            ("frontegg-tenant", ArgPredicate::IsPresent, Some("require")),
-            ("frontegg-resolver-template", ArgPredicate::IsPresent, Some("require")),
+            ("frontegg_tenant", ArgPredicate::IsPresent, Some("require")),
+            ("frontegg_resolver_template", ArgPredicate::IsPresent, Some("require")),
         ],
         value_name = "MODE",
     )]
@@ -537,8 +537,8 @@ pub struct TlsCliArgs {
     #[clap(
         long,
         env = "TLS_CERT",
-        requires = "tls-key",
-        required_if_eq_any([("tls-mode", "require")]),
+        requires = "tls_key",
+        required_if_eq_any([("tls_mode", "require")]),
         value_name = "PATH"
     )]
     tls_cert: Option<PathBuf>,
@@ -546,8 +546,8 @@ pub struct TlsCliArgs {
     #[clap(
         long,
         env = "TLS_KEY",
-        requires = "tls-cert",
-        required_if_eq_any([("tls-mode", "require")]),
+        requires = "tls_cert",
+        required_if_eq_any([("tls_mode", "require")]),
         value_name = "PATH"
     )]
     tls_key: Option<PathBuf>,

@@ -341,7 +341,7 @@ pub struct Args {
         env = "AWS_SECRETS_CONTROLLER_TAGS",
         action = ArgAction::Append,
         value_delimiter = ';',
-        required_if_eq("secrets-controller", "aws-secrets-manager")
+        required_if_eq("secrets_controller", "aws-secrets-manager")
     )]
     aws_secrets_controller_tags: Vec<KeyValueArg<String, String>>,
     /// The clusterd image reference to use.
@@ -365,8 +365,8 @@ pub struct Args {
         long,
         env = "METADATA_BACKEND_URL",
         conflicts_with_all = &[
-            "persist-consensus-url",
-            "timestamp-oracle-url",
+            "persist_consensus_url",
+            "timestamp_oracle_url",
         ],
     )]
     metadata_backend_url: Option<SensitiveUrl>,
@@ -425,7 +425,7 @@ pub struct Args {
     #[clap(
         long,
         env = "CLUSTER_REPLICA_SIZES",
-        requires = "bootstrap-default-cluster-replica-size"
+        requires = "bootstrap_default_cluster_replica_size"
     )]
     cluster_replica_sizes: String,
     /// An API key for Segment. Enables export of audit events to Segment.
@@ -589,14 +589,14 @@ pub struct Args {
     /// `unsafe_builtin_table_fingerprint_whitespace_version`.
     /// This argument is meant for testing only and as the names suggests
     /// should not be set in production.
-    #[clap(long, value_enum, requires = "unsafe-mode")]
+    #[clap(long, value_enum, requires = "unsafe_mode")]
     unsafe_builtin_table_fingerprint_whitespace: Option<UnsafeBuiltinTableFingerprintWhitespace>,
     /// Controls the amount of whitespace injected by
     /// `unsafe_builtin_table_fingerprint_whitespace`.
     /// Incrementing this value can allow triggering multiple builtin
     /// migrations from a single test. This argument is meant for testing only
     /// and as the names suggests should not be set in production.
-    #[clap(long, requires = "unsafe-mode", default_value = "1")]
+    #[clap(long, requires = "unsafe_mode", default_value = "1")]
     unsafe_builtin_table_fingerprint_whitespace_version: usize,
 }
 

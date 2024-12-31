@@ -25,7 +25,7 @@ pub struct SecretsReaderCliArgs {
     /// where secrets are stored.
     #[structopt(
         long,
-        required_if_eq("secrets-reader", "local-file"),
+        required_if_eq("secrets_reader", "local-file"),
         env = "SECRETS_READER_LOCAL_FILE_DIR"
     )]
     pub secrets_reader_local_file_dir: Option<PathBuf>,
@@ -33,14 +33,14 @@ pub struct SecretsReaderCliArgs {
     /// load.
     #[structopt(
         long,
-        required_if_eq("secrets-reader", "kubernetes"),
+        required_if_eq("secrets_reader", "kubernetes"),
         env = "SECRETS_READER_KUBERNETES_CONTEXT"
     )]
     pub secrets_reader_kubernetes_context: Option<String>,
     /// When using the AWS secrets reader, we need both of the following.
     #[structopt(
         long,
-        required_if_eq("secrets-reader", "aws-secrets-manager"),
+        required_if_eq("secrets_reader", "aws-secrets-manager"),
         env = "SECRETS_READER_AWS_PREFIX"
     )]
     pub secrets_reader_aws_prefix: Option<String>,
