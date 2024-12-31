@@ -11,7 +11,7 @@ workspace = true
 
 [dependencies]
 chrono = { version = "0.4.35", default-features = false, features = ["serde", "std"] }
-chrono-tz = { version = "0.8.1", features = ["serde", "case-insensitive"] }
+chrono-tz = { version = "0.9.0", features = ["serde", "case-insensitive"] }
 mz-lowertest = { path = "../lowertest", default-features = false }
 mz-ore = { path = "../ore", features = ["test"], default-features = false }
 mz-proto = { path = "../proto", features = ["chrono"], default-features = false }
@@ -25,7 +25,7 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = tru
 
 [build-dependencies]
 anyhow = "1.0.66"
-chrono-tz = { version = "0.8.1", features = ["serde", "case-insensitive"] }
+chrono-tz = { version = "0.9.0", features = ["serde", "case-insensitive"] }
 mz-build-tools = { path = "../build-tools", default-features = false }
 mz-ore = { path = "../ore", default-features = false }
 phf_codegen = "0.11.1"
