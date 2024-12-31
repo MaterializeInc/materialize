@@ -73,6 +73,7 @@ ERROR_RE = re.compile(
     | has\ overflowed\ its\ stack
     | internal\ error:
     | \*\ FATAL:
+    | was\ provided\ more\ than\ once,\ but\ cannot\ be\ used\ multiple\ times
     | (^|\ )fatal: # used in frontegg-mock
     | [Oo]ut\ [Oo]f\ [Mm]emory
     | cannot\ migrate\ from\ catalog

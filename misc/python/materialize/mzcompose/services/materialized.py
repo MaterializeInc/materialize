@@ -165,9 +165,10 @@ class Materialized(Service):
 
         if force_migrations is not None and image is None:
             command += [
-                "--unsafe-mode",
                 f"--unsafe-builtin-table-fingerprint-whitespace={force_migrations}",
             ]
+            if not unsafe_mode:
+                command += ["--unsafe-mode"]
 
         self.default_storage_size = "1" if default_size == 1 else f"{default_size}-1"
 

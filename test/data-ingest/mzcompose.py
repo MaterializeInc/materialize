@@ -71,7 +71,7 @@ SERVICES = [
         additional_system_parameter_defaults={"unsafe_enable_table_keys": "true"},
         sanity_restart=False,
     ),
-    Clusterd(name="clusterd1", options=["--scratch-directory=/mzdata/source_data"]),
+    Clusterd(name="clusterd1", scratch_directory="/mzdata/source_data"),
 ]
 
 
