@@ -519,7 +519,9 @@ class KafkaSource(DBObject):
             cluster.name(),
             mz_service,
         )
-        workload = rng.choice(list(WORKLOADS))()
+        workload_cls = rng.choice(list(WORKLOADS))
+        print(f"Source {source_id} data generator: {workload_cls.__name__}")
+        workload = workload_cls()
         for transaction_def in workload.cycle:
             for definition in transaction_def.operations:
                 if type(definition) == Insert and definition.count > MAX_ROWS:
