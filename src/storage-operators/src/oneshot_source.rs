@@ -40,10 +40,9 @@ use timely::dataflow::operators::Map;
 use timely::dataflow::{Scope, Stream as TimelyStream};
 use timely::progress::Antichain;
 use tracing::info;
-use url::Url;
 
 use crate::oneshot_source::csv::{CsvDecoder, CsvRecord, CsvWorkRequest};
-use crate::oneshot_source::http_source::{HttpChecksum, HttpOneshotSource};
+use crate::oneshot_source::http_source::{HttpChecksum, HttpObject, HttpOneshotSource};
 
 pub mod csv;
 pub mod http_source;
@@ -435,7 +434,7 @@ where
             .await
             .expect("failed to create Batch");
 
-        // Turn out Batch into a ProtoBatch that will later be linked in to
+        // Turn our Batch into a ProtoBatch that will later be linked in to
         // the shard.
         //
         // Note: By turning this into a ProtoBatch, the onus is now on us to
@@ -584,9 +583,30 @@ impl<T> StorageErrorXContext<T> for Result<T, StorageErrorX> {
     }
 }
 
+pub trait OneshotObject {
+    /// Name of the object, including any extensions.
+    fn name(&self) -> &str;
+
+    /// Encodings of the _entire_ object, if any.
+    ///
+    /// Note: The object may internally use compression, e.g. a Parquet file
+    /// could compress its column chunks, but if the Parquet file itself is not
+    /// compressed then this would return `None`.
+    fn encodings(&self) -> &[Encoding];
+}
+
+#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+pub enum Encoding {
+    Brotli,
+    Bzip2,
+    Gzip,
+    Xz,
+    Zstd,
+}
+
 pub trait OneshotSource: Clone + Send {
     /// An individual unit within the source, e.g. a file.
-    type Object: Debug + Clone + Send + Serialize + DeserializeOwned + 'static;
+    type Object: OneshotObject + Debug + Clone + Send + Serialize + DeserializeOwned + 'static;
     /// Checksum for a [`Self::Object`].
     type Checksum: Debug + Clone + Send + Serialize + DeserializeOwned + 'static;
 
@@ -595,7 +615,7 @@ pub trait OneshotSource: Clone + Send {
         &'a self,
     ) -> impl Future<Output = Result<Vec<(Self::Object, Self::Checksum)>, StorageErrorX>> + Send;
 
-    /// Resturns a stream of the data for a specific object.
+    /// Returns a stream of the data for a specific object.
     fn get<'s>(
         &'s self,
         object: Self::Object,
@@ -644,7 +664,21 @@ impl OneshotSource for SourceKind {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) enum ObjectKind {
-    Http(Url),
+    Http(HttpObject),
+}
+
+impl OneshotObject for ObjectKind {
+    fn name(&self) -> &str {
+        match self {
+            ObjectKind::Http(object) => object.name(),
+        }
+    }
+
+    fn encodings(&self) -> &[Encoding] {
+        match self {
+            ObjectKind::Http(object) => object.encodings(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

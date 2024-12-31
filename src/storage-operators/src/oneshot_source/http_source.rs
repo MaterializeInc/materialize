@@ -9,19 +9,15 @@
 
 //! Generic HTTP oneshot source that will fetch a file from the public internet.
 
-use std::future::Future;
-use std::pin::Pin;
-
 use bytes::Bytes;
-use futures::future::FutureExt;
 use futures::stream::{BoxStream, StreamExt};
-use futures::{Stream, TryStreamExt};
+use futures::TryStreamExt;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::oneshot_source::{
-    OneshotSource, StorageErrorX, StorageErrorXContext, StorageErrorXKind,
+    Encoding, OneshotObject, OneshotSource, StorageErrorX, StorageErrorXContext,
 };
 
 /// Generic oneshot source that fetches a file from a URL on the public internet.
@@ -34,6 +30,27 @@ pub struct HttpOneshotSource {
 impl HttpOneshotSource {
     pub fn new(client: Client, origin: Url) -> Self {
         HttpOneshotSource { client, origin }
+    }
+}
+
+/// Object returned from an [`HttpOneshotSource`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HttpObject {
+    /// [`Url`] to access the file.
+    url: Url,
+    /// Name of the file.
+    filename: String,
+    /// Any values reporting from the [`Content-Encoding`](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Encoding) header.
+    content_encoding: Vec<Encoding>,
+}
+
+impl OneshotObject for HttpObject {
+    fn name(&self) -> &str {
+        &self.filename
+    }
+
+    fn encodings(&self) -> &[Encoding] {
+        &self.content_encoding
     }
 }
 
@@ -58,7 +75,7 @@ impl HttpChecksum {
 }
 
 impl OneshotSource for HttpOneshotSource {
-    type Object = Url;
+    type Object = HttpObject;
     type Checksum = HttpChecksum;
 
     async fn list<'a>(&'a self) -> Result<Vec<(Self::Object, Self::Checksum)>, StorageErrorX> {
@@ -95,7 +112,20 @@ impl OneshotSource for HttpOneshotSource {
 
         // TODO(parkmycar): We should probably check the content-type as well. At least for advisory purposes.
 
-        Ok(vec![(self.origin.clone(), checksum)])
+        let filename = self
+            .origin
+            .path_segments()
+            .and_then(|segments| segments.rev().next())
+            .map(|s| s.to_string())
+            .unwrap_or_default();
+        let object = HttpObject {
+            url: self.origin.clone(),
+            filename,
+            content_encoding: vec![],
+        };
+        tracing::info!(?object, "found objects");
+
+        Ok(vec![(object, checksum)])
     }
 
     fn get<'s>(
@@ -120,10 +150,6 @@ impl OneshotSource for HttpOneshotSource {
 
         futures::stream::once(initial_response)
             .try_flatten()
-            // .flat_map(|result| match result {
-            //     Ok(stream) => stream.right_stream(),
-            //     Err(err) => futures::stream::once(async move { Err(err) }).left_stream(),
-            // })
             .boxed()
     }
 }
