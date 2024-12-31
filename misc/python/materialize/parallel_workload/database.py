@@ -57,15 +57,15 @@ MAX_KAFKA_SINKS = 2
 
 MAX_INITIAL_DBS = 1
 MAX_INITIAL_SCHEMAS = 1
-MAX_INITIAL_CLUSTERS = 2
-MAX_INITIAL_TABLES = 2
-MAX_INITIAL_VIEWS = 2
-MAX_INITIAL_ROLES = 1
-MAX_INITIAL_WEBHOOK_SOURCES = 1
-MAX_INITIAL_KAFKA_SOURCES = 10
-MAX_INITIAL_MYSQL_SOURCES = 1
-MAX_INITIAL_POSTGRES_SOURCES = 1
-MAX_INITIAL_KAFKA_SINKS = 10
+MAX_INITIAL_CLUSTERS = 10
+MAX_INITIAL_TABLES = 0
+MAX_INITIAL_VIEWS = 0
+MAX_INITIAL_ROLES = 0
+MAX_INITIAL_WEBHOOK_SOURCES = 0
+MAX_INITIAL_KAFKA_SOURCES = 25
+MAX_INITIAL_MYSQL_SOURCES = 0
+MAX_INITIAL_POSTGRES_SOURCES = 0
+MAX_INITIAL_KAFKA_SINKS = 0
 
 NAUGHTY_IDENTIFIERS = False
 
@@ -929,11 +929,11 @@ class Database:
         self.schema_id = len(self.schemas)
         self.tables = [
             Table(rng, i, rng.choice(self.schemas))
-            for i in range(rng.randint(2, MAX_INITIAL_TABLES))
+            for i in range(rng.randint(0, MAX_INITIAL_TABLES))
         ]
         self.table_id = len(self.tables)
         self.views = []
-        for i in range(rng.randint(2, MAX_INITIAL_VIEWS)):
+        for i in range(rng.randint(0, MAX_INITIAL_VIEWS)):
             # Only use tables for now since LIMIT 1 and statement_timeout are
             # not effective yet at preventing long-running queries and OoMs.
             base_object = rng.choice(self.tables)
