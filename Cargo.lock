@@ -92,6 +92,55 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4b46cbb362ab8752921c97e041f5e366ee6297bd428a31275b9fcf1e380f7299"
 
 [[package]]
+name = "anstream"
+version = "0.6.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8acc5369981196006228e28809f761875c0327210a891e941f4c683b3a99529b"
+dependencies = [
+ "anstyle",
+ "anstyle-parse",
+ "anstyle-query",
+ "anstyle-wincon",
+ "colorchoice",
+ "is_terminal_polyfill",
+ "utf8parse",
+]
+
+[[package]]
+name = "anstyle"
+version = "1.0.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "55cc3b69f167a1ef2e161439aa98aed94e6028e5f9a59be9a6ffb47aef1651f9"
+
+[[package]]
+name = "anstyle-parse"
+version = "0.2.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3b2d16507662817a6a20a9ea92df6652ee4f94f914589377d69f3b21bc5798a9"
+dependencies = [
+ "utf8parse",
+]
+
+[[package]]
+name = "anstyle-query"
+version = "1.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "79947af37f4177cfead1110013d678905c37501914fba0efea834c3fe9a8d60c"
+dependencies = [
+ "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "anstyle-wincon"
+version = "3.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2109dbce0e72be3ec00bed26e6a7479ca384ad226efdd66db8fa2e3a38c83125"
+dependencies = [
+ "anstyle",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
 name = "anyhow"
 version = "1.0.66"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1239,7 +1288,7 @@ dependencies = [
  "anyhow",
  "camino",
  "cargo_toml",
- "clap",
+ "clap 4.5.23",
  "convert_case",
  "guppy",
  "md-5",
@@ -1427,33 +1476,49 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "3.2.24"
+version = "3.2.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eef2b3ded6a26dfaec672a742c93c8cf6b689220324da509ec5caa20de55dc83"
+checksum = "4ea181bf566f71cb9a5d17a59e1871af638180a18fb0035c92ae62b705207123"
 dependencies = [
- "atty",
  "bitflags 1.3.2",
- "clap_derive",
- "clap_lex",
+ "clap_lex 0.2.2",
  "indexmap 1.9.1",
- "once_cell",
- "strsim",
- "termcolor",
- "terminal_size",
  "textwrap",
 ]
 
 [[package]]
-name = "clap_derive"
-version = "3.2.24"
+name = "clap"
+version = "4.5.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d756c5824fc5c0c1ee8e36000f576968dbcb2081def956c83fad6f40acd46f96"
+checksum = "3135e7ec2ef7b10c6ed8950f0f792ed96ee093fa088608f1c76e569722700c84"
 dependencies = [
- "heck",
- "proc-macro-error",
+ "clap_builder",
+ "clap_derive",
+]
+
+[[package]]
+name = "clap_builder"
+version = "4.5.23"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "30582fc632330df2bd26877bde0c1f4470d57c582bbc070376afcd04d8cb4838"
+dependencies = [
+ "anstream",
+ "anstyle",
+ "clap_lex 0.7.4",
+ "strsim 0.11.1",
+ "terminal_size 0.4.1",
+]
+
+[[package]]
+name = "clap_derive"
+version = "4.5.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4ac6a0c7b1a9e9a5186361f67dfa1b88213572f427fb9ab038efb2bd8c582dab"
+dependencies = [
+ "heck 0.5.0",
  "proc-macro2",
  "quote",
- "syn 1.0.107",
+ "syn 2.0.63",
 ]
 
 [[package]]
@@ -1464,6 +1529,12 @@ checksum = "5538cd660450ebeb4234cfecf8f2284b844ffc4c50531e66d584ad5b91293613"
 dependencies = [
  "os_str_bytes",
 ]
+
+[[package]]
+name = "clap_lex"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f46ad14479a25103f283c0f10005961cf086d8dc42205bb44c46ac563475dca6"
 
 [[package]]
 name = "cmake"
@@ -1483,6 +1554,12 @@ dependencies = [
  "termcolor",
  "unicode-width",
 ]
+
+[[package]]
+name = "colorchoice"
+version = "1.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5b63caa9aa9397e2d9480a9b13673856c78d8ac123288526c37d7839f2a86990"
 
 [[package]]
 name = "columnar"
@@ -1715,7 +1792,7 @@ dependencies = [
  "atty",
  "cast",
  "ciborium",
- "clap",
+ "clap 3.2.25",
  "criterion-plot",
  "futures",
  "itertools 0.10.5",
@@ -1932,7 +2009,7 @@ dependencies = [
  "ident_case",
  "proc-macro2",
  "quote",
- "strsim",
+ "strsim 0.10.0",
  "syn 2.0.63",
 ]
 
@@ -2273,7 +2350,7 @@ version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c9720bba047d567ffc8a3cba48bf19126600e249ab7f128e9233e6376976a116"
 dependencies = [
- "heck",
+ "heck 0.4.0",
  "proc-macro2",
  "quote",
  "syn 1.0.107",
@@ -2916,6 +2993,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2540771e65fc8cb83cd6e8a237f70c319bd5c29f78ed1084ba5d50eeac86f7f9"
 
 [[package]]
+name = "heck"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
+
+[[package]]
 name = "hermit-abi"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3369,6 +3452,12 @@ name = "ipnet"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "879d54834c8c76457ef4293a689b2a8c59b076067ad77b15efafbb05f92a592b"
+
+[[package]]
+name = "is_terminal_polyfill"
+version = "1.70.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7943c866cc5cd64cbc25b2e01621d07fa8eb2a1a23160ee81ce38704e97b8ecf"
 
 [[package]]
 name = "itertools"
@@ -4180,7 +4269,7 @@ version = "0.3.0"
 dependencies = [
  "assert_cmd",
  "axum",
- "clap",
+ "clap 4.5.23",
  "csv",
  "dirs",
  "hyper 1.4.1",
@@ -4445,7 +4534,7 @@ dependencies = [
  "bytes",
  "bytesize",
  "chrono",
- "clap",
+ "clap 4.5.23",
  "domain",
  "futures",
  "humantime",
@@ -4517,7 +4606,7 @@ dependencies = [
  "bytes",
  "bytesize",
  "chrono",
- "clap",
+ "clap 4.5.23",
  "derivative",
  "differential-dataflow",
  "fail",
@@ -4583,7 +4672,7 @@ version = "0.128.0-dev.1"
 dependencies = [
  "anyhow",
  "arrow",
- "clap",
+ "clap 4.5.23",
  "futures",
  "mz-adapter",
  "mz-build-info",
@@ -4710,7 +4799,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "bytesize",
- "clap",
+ "clap 4.5.23",
  "crossbeam-channel",
  "dec",
  "differential-dataflow",
@@ -4774,7 +4863,7 @@ version = "0.128.0-dev.1"
 dependencies = [
  "anyhow",
  "axum",
- "clap",
+ "clap 4.5.23",
  "fail",
  "futures",
  "hyper 1.4.1",
@@ -4813,7 +4902,7 @@ dependencies = [
  "async-stream",
  "async-trait",
  "bytesize",
- "clap",
+ "clap 4.5.23",
  "core_affinity",
  "crossbeam-channel",
  "dec",
@@ -5062,7 +5151,7 @@ dependencies = [
  "bytesize",
  "cc",
  "chrono",
- "clap",
+ "clap 4.5.23",
  "datadriven",
  "derivative",
  "fail",
@@ -5270,7 +5359,7 @@ version = "0.0.0"
 dependencies = [
  "async-compression",
  "bytes",
- "clap",
+ "clap 4.5.23",
  "csv-async",
  "futures",
  "insta",
@@ -5310,7 +5399,7 @@ dependencies = [
  "anyhow",
  "axum",
  "base64 0.13.1",
- "clap",
+ "clap 4.5.23",
  "derivative",
  "futures",
  "jsonwebtoken",
@@ -5356,7 +5445,7 @@ dependencies = [
  "axum-extra",
  "base64 0.22.0",
  "chrono",
- "clap",
+ "clap 4.5.23",
  "hyper 1.4.1",
  "jsonwebtoken",
  "mz-frontegg-auth",
@@ -5404,7 +5493,7 @@ dependencies = [
  "byteorder",
  "bytes",
  "chrono",
- "clap",
+ "clap 4.5.23",
  "criterion",
  "differential-dataflow",
  "itertools 0.12.1",
@@ -5439,7 +5528,7 @@ dependencies = [
  "aws-types",
  "base64 0.22.0",
  "chrono",
- "clap",
+ "clap 4.5.23",
  "crossbeam",
  "fancy-regex",
  "futures",
@@ -5624,7 +5713,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
- "clap",
+ "clap 4.5.23",
  "fail",
  "futures",
  "k8s-openapi",
@@ -5677,7 +5766,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "clap",
+ "clap 4.5.23",
  "derivative",
  "futures-core",
  "http 1.1.0",
@@ -5705,7 +5794,7 @@ dependencies = [
  "async-trait",
  "axum",
  "chrono",
- "clap",
+ "clap 4.5.23",
  "futures",
  "http 1.1.0",
  "k8s-controller",
@@ -5744,7 +5833,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "chrono",
- "clap",
+ "clap 4.5.23",
  "compact_bytes",
  "console-subscriber",
  "criterion",
@@ -5869,7 +5958,7 @@ dependencies = [
  "async-stream",
  "async-trait",
  "bytes",
- "clap",
+ "clap 4.5.23",
  "criterion",
  "datadriven",
  "differential-dataflow",
@@ -5997,7 +6086,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "bytes",
- "clap",
+ "clap 4.5.23",
  "datadriven",
  "fallible-iterator",
  "mz-ore",
@@ -6256,7 +6345,7 @@ dependencies = [
  "serde_json",
  "smallvec",
  "static_assertions",
- "strsim",
+ "strsim 0.10.0",
  "thiserror",
  "timely",
  "tokio-postgres",
@@ -6338,7 +6427,7 @@ dependencies = [
  "aws-config",
  "aws-sdk-s3",
  "bytefmt",
- "clap",
+ "clap 4.5.23",
  "futures",
  "indicatif",
  "mz-aws-util",
@@ -6383,7 +6472,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "clap",
+ "clap 4.5.23",
  "futures",
  "mz-dyncfg",
  "mz-ore",
@@ -6405,7 +6494,7 @@ dependencies = [
  "anyhow",
  "async-stream",
  "async-trait",
- "clap",
+ "clap 4.5.23",
  "crossbeam-channel",
  "futures",
  "http 1.1.0",
@@ -6449,7 +6538,7 @@ dependencies = [
  "aws-sdk-sts",
  "bitflags 1.3.2",
  "chrono",
- "clap",
+ "clap 4.5.23",
  "datadriven",
  "derivative",
  "dynfmt",
@@ -6573,7 +6662,7 @@ dependencies = [
  "anyhow",
  "bytes",
  "chrono",
- "clap",
+ "clap 4.5.23",
  "dec",
  "fallible-iterator",
  "futures",
@@ -6654,7 +6743,7 @@ dependencies = [
  "bytes",
  "bytesize",
  "chrono",
- "clap",
+ "clap 4.5.23",
  "columnation",
  "crossbeam-channel",
  "csv-core",
@@ -6961,7 +7050,7 @@ dependencies = [
  "byteorder",
  "bytes",
  "chrono",
- "clap",
+ "clap 4.5.23",
  "flate2",
  "futures",
  "globset",
@@ -7766,7 +7855,7 @@ dependencies = [
  "async-trait",
  "axum",
  "bytes",
- "clap",
+ "clap 4.5.23",
  "differential-dataflow",
  "futures",
  "humantime",
@@ -7994,7 +8083,7 @@ dependencies = [
 [[package]]
 name = "postgres-protocol"
 version = "0.6.7"
-source = "git+https://github.com/MaterializeInc/rust-postgres#548f00c4cbcf7bd714c29cfd2fea7685040c9987"
+source = "git+https://github.com/MaterializeInc/rust-postgres#7d2f14e35e97973995c39662cde618036a0f9484"
 dependencies = [
  "base64 0.22.0",
  "byteorder",
@@ -8026,7 +8115,7 @@ dependencies = [
 [[package]]
 name = "postgres-types"
 version = "0.2.7"
-source = "git+https://github.com/MaterializeInc/rust-postgres#548f00c4cbcf7bd714c29cfd2fea7685040c9987"
+source = "git+https://github.com/MaterializeInc/rust-postgres#7d2f14e35e97973995c39662cde618036a0f9484"
 dependencies = [
  "bytes",
  "chrono",
@@ -8246,7 +8335,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8650aabb6c35b860610e9cff5dc1af886c9e25073b7b1712a68972af4281302"
 dependencies = [
  "bytes",
- "heck",
+ "heck 0.4.0",
  "itertools 0.12.1",
  "log",
  "multimap",
@@ -9584,6 +9673,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "73473c0e59e6d5812c5dfe2a064a6444949f089e20eec9a2e5506596494e4623"
 
 [[package]]
+name = "strsim"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
+
+[[package]]
 name = "subprocess"
 version = "0.2.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9723,7 +9818,7 @@ version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "beca1b4eaceb4f2755df858b88d9b9315b7ccfd1ffd0d7a48a52602301f01a57"
 dependencies = [
- "heck",
+ "heck 0.4.0",
  "proc-macro-error",
  "proc-macro2",
  "quote",
@@ -9813,12 +9908,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "terminal_size"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5352447f921fda68cf61b4101566c0bdb5104eff6804d0678e5227580ab6a4e9"
+dependencies = [
+ "rustix 0.38.42",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
 name = "textwrap"
 version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "23d434d3f8967a09480fb04132ebe0a3e088c173e6d0ee7897abbdf4eab0f8b9"
 dependencies = [
- "terminal_size",
+ "terminal_size 0.2.6",
 ]
 
 [[package]]
@@ -10133,7 +10238,7 @@ dependencies = [
 [[package]]
 name = "tokio-postgres"
 version = "0.7.11"
-source = "git+https://github.com/MaterializeInc/rust-postgres#548f00c4cbcf7bd714c29cfd2fea7685040c9987"
+source = "git+https://github.com/MaterializeInc/rust-postgres#7d2f14e35e97973995c39662cde618036a0f9484"
 dependencies = [
  "async-trait",
  "byteorder",
@@ -11237,7 +11342,7 @@ dependencies = [
  "camino",
  "cc",
  "chrono",
- "clap",
+ "clap 4.5.23",
  "console",
  "criterion",
  "crossbeam-deque",
