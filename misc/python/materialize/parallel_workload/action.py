@@ -2251,7 +2251,7 @@ ddl_action_list = ActionList(
         # (RevokePrivilegesAction, 1),
         # (ReconnectAction, 1),
         (CreateDatabaseAction, 1),
-        # (DropDatabaseAction, 1),
+        (DropDatabaseAction, 1),
         (CreateSchemaAction, 1),
         # (DropSchemaAction, 1),
         # (RenameSchemaAction, 10),
