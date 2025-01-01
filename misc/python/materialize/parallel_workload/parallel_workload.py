@@ -445,7 +445,7 @@ def print_stats(
 
 
 def parse_common_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--seed", type=str, default=str(int(time.time())))
+    parser.add_argument("--seed", type=str, default=1735682216)
     parser.add_argument("--runtime", default=600, type=int, help="Runtime in seconds")
     parser.add_argument(
         "--complexity",
