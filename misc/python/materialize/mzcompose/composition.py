@@ -1501,7 +1501,7 @@ class Composition:
         timeout: int | None = None,
         sleep_time: float | None = 1.0,
     ) -> None:
-        timeout = timeout or (1800 if ui.env_is_truthy("CI_COVERAGE_ENABLED") else 900)
+        timeout = timeout or 50
         print(
             f"Awaiting {mz_service} deployment status {status.value} for {timeout}s",
             end="",
