@@ -1680,7 +1680,6 @@ class ZeroDowntimeDeployAction(Action):
                 DeploymentStatus.IS_LEADER, mz_service
             )
 
-        time.sleep(60)
         return True
 
 
