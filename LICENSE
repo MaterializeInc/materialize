@@ -13,8 +13,8 @@ Business Source License 1.1
 
 Licensor:                  Materialize, Inc.
 
-Licensed Work:             Materialize Version 20241231
-                           The Licensed Work is © 2024 Materialize, Inc.
+Licensed Work:             Materialize Version 20250101
+                           The Licensed Work is © 2025 Materialize, Inc.
 
 Additional Use Grant:      Within a single installation of Materialize, you
                            may create one compute cluster with one
@@ -32,7 +32,7 @@ Additional Use Grant:      Within a single installation of Materialize, you
                            whose definitions are controlled by such third
                            parties.
 
-Change Date:               December 31, 2028
+Change Date:               January 01, 2029
 
 Change License:            Apache License, Version 2.0
 
