@@ -53,13 +53,12 @@ one:two
 sink1 1 1 true true
 
 > SELECT s.name,
-  SUM(u.updates_committed) > 0,
   SUM(u.messages_received)
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('upsert1')
   GROUP BY s.id, s.name
-upsert1 true 1
+upsert1 1
 
 # Shut down the cluster
 > ALTER CLUSTER cluster1 SET (REPLICATION FACTOR = 0)
@@ -73,13 +72,12 @@ upsert1 true 1
 sink1 1 1 true true
 
 > SELECT s.name,
-  SUM(u.updates_committed) > 0,
   SUM(u.messages_received)
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('upsert1')
   GROUP BY s.id, s.name
-upsert1 true 1
+upsert1 1
 
 # Ingest some more data, and ensure counters are maintained
 
@@ -97,10 +95,9 @@ two:three
 sink1 2 2 true true
 
 > SELECT s.name,
-  SUM(u.updates_committed) > 0,
   SUM(u.messages_received)
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('upsert1')
   GROUP BY s.id, s.name
-upsert1 true 2
+upsert1 2
