@@ -11,11 +11,14 @@
 
 use mz_persist_client::batch::ProtoBatch;
 use mz_proto::{IntoRustIfSome, RustType};
+use mz_repr::CatalogItemId;
 use mz_timely_util::builder_async::PressOnDropButton;
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::UnboundedReceiver;
 use url::Url;
+
+use crate::connections::aws::AwsConnection;
 
 include!(concat!(
     env!("OUT_DIR"),
@@ -59,7 +62,14 @@ impl RustType<ProtoOneshotIngestionRequest> for OneshotIngestionRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub enum ContentSource {
-    Http { url: Url },
+    Http {
+        url: Url,
+    },
+    AwsS3 {
+        connection: AwsConnection,
+        id: CatalogItemId,
+        bucket: String,
+    },
 }
 
 impl RustType<proto_oneshot_ingestion_request::Source> for ContentSource {
@@ -70,6 +80,15 @@ impl RustType<proto_oneshot_ingestion_request::Source> for ContentSource {
                     url: url.to_string(),
                 })
             }
+            ContentSource::AwsS3 {
+                connection,
+                id,
+                bucket,
+            } => proto_oneshot_ingestion_request::Source::AwsS3(ProtoAwsS3Source {
+                connection: Some(connection.into_proto()),
+                id: Some(id.into_proto()),
+                bucket: bucket.to_string(),
+            }),
         }
     }
 
@@ -80,6 +99,15 @@ impl RustType<proto_oneshot_ingestion_request::Source> for ContentSource {
             proto_oneshot_ingestion_request::Source::Http(source) => {
                 let url = Url::parse(&source.url).expect("failed to roundtrip Url");
                 Ok(ContentSource::Http { url })
+            }
+            proto_oneshot_ingestion_request::Source::AwsS3(source) => {
+                let connection = source.connection.into_rust_if_some("AwsS3::connection")?;
+                let id = source.id.into_rust_if_some("AwsS3::id")?;
+                Ok(ContentSource::AwsS3 {
+                    connection,
+                    id,
+                    bucket: source.bucket,
+                })
             }
         }
     }

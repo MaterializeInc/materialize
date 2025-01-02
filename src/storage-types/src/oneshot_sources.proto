@@ -9,11 +9,15 @@
 
 syntax = "proto3";
 
+import "repr/src/catalog_item_id.proto";
+import "storage-types/src/connections/aws.proto";
+
 package mz_storage_types.oneshot_sources;
 
 message ProtoOneshotIngestionRequest {
     oneof source {
         ProtoHttpContentSource http = 1;
+        ProtoAwsS3Source aws_s3 = 4;
     }
 
     oneof format {
@@ -24,6 +28,12 @@ message ProtoOneshotIngestionRequest {
 
 message ProtoHttpContentSource {
     string url = 1;
+}
+
+message ProtoAwsS3Source {
+    mz_storage_types.connections.aws.ProtoAwsConnection connection = 1;
+    mz_repr.catalog_item_id.ProtoCatalogItemId id = 2;
+    string bucket = 3;
 }
 
 message ProtoCsvContentFormat {}

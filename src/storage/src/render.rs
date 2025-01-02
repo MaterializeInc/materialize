@@ -506,11 +506,16 @@ pub(crate) fn build_oneshot_ingestion_dataflow<A: Allocate>(
         // but the receiver has gone away?
         let _ = results_tx.send(result);
     };
+    let connection_context = storage_state
+        .storage_configuration
+        .connection_context
+        .clone();
 
     let tokens = timely_worker.dataflow(|scope| {
         mz_storage_operators::oneshot_source::render(
             scope.clone(),
             Arc::clone(&storage_state.persist_clients),
+            connection_context,
             collection_id,
             collection_meta,
             description,

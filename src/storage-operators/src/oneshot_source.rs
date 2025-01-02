@@ -20,6 +20,7 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::Diagnostics;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
+use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::oneshot_sources::{ContentFormat, ContentSource, OneshotIngestionRequest};
 use mz_storage_types::sources::SourceData;
@@ -41,6 +42,7 @@ use timely::dataflow::{Scope, Stream as TimelyStream};
 use timely::progress::Antichain;
 use tracing::info;
 
+use crate::oneshot_source::aws_source::{AwsS3Source, S3Checksum, S3Object};
 use crate::oneshot_source::csv::{CsvDecoder, CsvRecord, CsvWorkRequest};
 use crate::oneshot_source::http_source::{HttpChecksum, HttpObject, HttpOneshotSource};
 use crate::oneshot_source::parquet::{ParquetFormat, ParquetRowGroup, ParquetWorkRequest};
@@ -48,11 +50,13 @@ use crate::oneshot_source::parquet::{ParquetFormat, ParquetRowGroup, ParquetWork
 pub mod csv;
 pub mod parquet;
 
+pub mod aws_source;
 pub mod http_source;
 
 pub fn render<G, F>(
     scope: G,
     persist_clients: Arc<PersistClientCache>,
+    connection_context: ConnectionContext,
     collection_id: GlobalId,
     collection_meta: CollectionMetadata,
     request: OneshotIngestionRequest,
@@ -68,6 +72,14 @@ where
         ContentSource::Http { url } => {
             let source = HttpOneshotSource::new(reqwest::Client::default(), url);
             SourceKind::Http(source)
+        }
+        ContentSource::AwsS3 {
+            connection,
+            id,
+            bucket,
+        } => {
+            let source = AwsS3Source::new(connection, connection_context, id, bucket);
+            SourceKind::AwsS3(source)
         }
     };
     let format = match format {
@@ -522,10 +534,16 @@ pub enum StorageErrorXKind {
     ParquetError(#[from] ::parquet::errors::ParquetError),
     #[error("reqwest error: {0}")]
     Reqwest(#[from] reqwest::Error),
+    #[error("aws s3 request error: {0}")]
+    AwsS3Request(String),
+    #[error("aws s3 bytestream error: {0}")]
+    AwsS3Bytes(#[from] aws_smithy_types::byte_stream::error::Error),
     #[error("invalid reqwest header: {0}")]
     InvalidHeader(#[from] reqwest::header::ToStrError),
     #[error("failed to get the size of an object")]
     MissingSize,
+    #[error("object is missing the required '{0}' field")]
+    MissingField(&'static str),
     #[error("something went wrong: {0}")]
     Generic(String),
 }
@@ -648,6 +666,7 @@ pub trait OneshotSource: Clone + Send + Unpin {
 #[derive(Clone)]
 pub(crate) enum SourceKind {
     Http(HttpOneshotSource),
+    AwsS3(AwsS3Source),
 }
 
 impl OneshotSource for SourceKind {
@@ -657,11 +676,21 @@ impl OneshotSource for SourceKind {
     async fn list<'a>(&'a self) -> Result<Vec<(Self::Object, Self::Checksum)>, StorageErrorX> {
         match self {
             SourceKind::Http(http) => {
-                let objects = http.list().await?;
+                let objects = http.list().await.context("http")?;
                 let objects = objects
                     .into_iter()
                     .map(|(object, checksum)| {
                         (ObjectKind::Http(object), ChecksumKind::Http(checksum))
+                    })
+                    .collect();
+                Ok(objects)
+            }
+            SourceKind::AwsS3(s3) => {
+                let objects = s3.list().await.context("s3")?;
+                let objects = objects
+                    .into_iter()
+                    .map(|(object, checksum)| {
+                        (ObjectKind::AwsS3(object), ChecksumKind::AwsS3(checksum))
                     })
                     .collect();
                 Ok(objects)
@@ -679,6 +708,12 @@ impl OneshotSource for SourceKind {
             (SourceKind::Http(http), ObjectKind::Http(object), ChecksumKind::Http(checksum)) => {
                 http.get(object, checksum, range)
             }
+            (SourceKind::AwsS3(s3), ObjectKind::AwsS3(object), ChecksumKind::AwsS3(checksum)) => {
+                s3.get(object, checksum, range)
+            }
+            (SourceKind::AwsS3(_) | SourceKind::Http(_), _, _) => {
+                unreachable!("programming error! wrong source, object, and checksum kind");
+            }
         }
     }
 }
@@ -686,24 +721,28 @@ impl OneshotSource for SourceKind {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) enum ObjectKind {
     Http(HttpObject),
+    AwsS3(S3Object),
 }
 
 impl OneshotObject for ObjectKind {
     fn name(&self) -> &str {
         match self {
             ObjectKind::Http(object) => object.name(),
+            ObjectKind::AwsS3(object) => object.name(),
         }
     }
 
     fn size(&self) -> usize {
         match self {
             ObjectKind::Http(object) => object.size(),
+            ObjectKind::AwsS3(object) => object.size(),
         }
     }
 
     fn encodings(&self) -> &[Encoding] {
         match self {
             ObjectKind::Http(object) => object.encodings(),
+            ObjectKind::AwsS3(object) => object.encodings(),
         }
     }
 }
@@ -711,6 +750,7 @@ impl OneshotObject for ObjectKind {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) enum ChecksumKind {
     Http(HttpChecksum),
+    AwsS3(S3Checksum),
 }
 
 pub trait OneshotFormat: Clone {
