@@ -177,10 +177,7 @@ impl<'a> Transaction<'a> {
             system_configurations: TableTransaction::new(system_configurations)?,
             default_privileges: TableTransaction::new(default_privileges)?,
             system_privileges: TableTransaction::new(system_privileges)?,
-            storage_collection_metadata: TableTransaction::new_with_uniqueness_fn(
-                storage_collection_metadata,
-                |a: &StorageCollectionMetadataValue, b| a.shard == b.shard,
-            )?,
+            storage_collection_metadata: TableTransaction::new(storage_collection_metadata)?,
             unfinalized_shards: TableTransaction::new(unfinalized_shards)?,
             // Uniqueness violations for this value occur at the key rather than
             // the value (the key is the unit struct `()` so this is a singleton

@@ -730,7 +730,7 @@ impl<'a> StatementContext<'a> {
     pub fn get_item_by_resolved_name(
         &self,
         name: &ResolvedItemName,
-    ) -> Result<Box<dyn CatalogCollectionItem>, PlanError> {
+    ) -> Result<Box<dyn CatalogCollectionItem + '_>, PlanError> {
         match name {
             ResolvedItemName::Item { id, version, .. } => {
                 Ok(self.get_item(id).at_version(*version))
@@ -744,7 +744,7 @@ impl<'a> StatementContext<'a> {
     pub fn get_column_by_resolved_name(
         &self,
         name: &ColumnName<Aug>,
-    ) -> Result<(Box<dyn CatalogCollectionItem>, usize), PlanError> {
+    ) -> Result<(Box<dyn CatalogCollectionItem + '_>, usize), PlanError> {
         match (&name.relation, &name.column) {
             (
                 ResolvedItemName::Item { id, version, .. },
