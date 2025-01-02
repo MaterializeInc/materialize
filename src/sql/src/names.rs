@@ -1276,7 +1276,7 @@ pub struct NameResolver<'a> {
 }
 
 impl<'a> NameResolver<'a> {
-    fn new(catalog: &'a dyn SessionCatalog) -> NameResolver {
+    fn new(catalog: &'a dyn SessionCatalog) -> NameResolver<'a> {
         NameResolver {
             catalog,
             ctes: BTreeMap::new(),

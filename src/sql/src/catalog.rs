@@ -199,13 +199,13 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
     fn resolve_cluster<'a, 'b>(
         &'a self,
         cluster_name: Option<&'b str>,
-    ) -> Result<&dyn CatalogCluster<'a>, CatalogError>;
+    ) -> Result<&'a dyn CatalogCluster<'a>, CatalogError>;
 
     /// Resolves the named cluster replica.
     fn resolve_cluster_replica<'a, 'b>(
         &'a self,
         cluster_replica_name: &'b QualifiedReplica,
-    ) -> Result<&dyn CatalogClusterReplica<'a>, CatalogError>;
+    ) -> Result<&'a dyn CatalogClusterReplica<'a>, CatalogError>;
 
     /// Resolves a partially-specified item name, that is NOT a function or
     /// type. (For resolving functions or types, please use
