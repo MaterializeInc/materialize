@@ -1234,7 +1234,7 @@ pub fn crate_features<'a>(
 /// TODO(parkmycar): Make the list of platforms configurable.
 pub fn platform_feature_sets<'a>(
     package: &'a PackageMetadata<'a>,
-) -> BTreeMap<PlatformVariant, FeatureSet> {
+) -> BTreeMap<PlatformVariant, FeatureSet<'a>> {
     // Resolve a feature graph for all crates that depend on this one.
     let dependents = package
         .to_package_query(DependencyDirection::Reverse)

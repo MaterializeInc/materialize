@@ -309,7 +309,7 @@ impl RetrievedSourceReferences {
         &'a self,
         requested: Option<&ExternalReferences>,
         source_name: &UnresolvedItemName,
-    ) -> Result<Vec<RequestedSourceExport<&ReferenceMetadata>>, PlanError> {
+    ) -> Result<Vec<RequestedSourceExport<&'a ReferenceMetadata>>, PlanError> {
         // Filter all available references to those requested by the `ExternalReferences`
         // specification and include any alias that the user has specified.
         // TODO(database-issues#8620): The alias handling can be removed once subsources are removed.

@@ -593,6 +593,7 @@ impl<A: Blob + 'static> Blob for Tasked<A> {
     }
 }
 
+/// Test helpers for the crate.
 #[cfg(test)]
 pub mod tests {
     use std::future::Future;
@@ -630,6 +631,7 @@ pub mod tests {
         Ok(keys)
     }
 
+    /// Common test impl for different blob implementations.
     pub async fn blob_impl_test<
         B: Blob,
         F: Future<Output = Result<B, ExternalError>>,
@@ -801,6 +803,7 @@ pub mod tests {
         Ok(())
     }
 
+    /// Common test impl for different consensus implementations.
     pub async fn consensus_impl_test<
         C: Consensus,
         F: Future<Output = Result<C, ExternalError>>,
