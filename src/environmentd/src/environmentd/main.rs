@@ -110,7 +110,8 @@ pub struct Args {
         long,
         env = "SQL_LISTEN_ADDR",
         value_name = "HOST:PORT",
-        default_value = "127.0.0.1:6875"
+        default_value = "127.0.0.1:6875",
+        action = ArgAction::Set,
     )]
     sql_listen_addr: SocketAddr,
     /// The address on which to listen for untrusted HTTP connections.
@@ -122,7 +123,8 @@ pub struct Args {
         long,
         env = "HTTP_LISTEN_ADDR",
         value_name = "HOST:PORT",
-        default_value = "127.0.0.1:6876"
+        default_value = "127.0.0.1:6876",
+        action = ArgAction::Set,
     )]
     http_listen_addr: SocketAddr,
     /// The address on which to listen for trusted SQL connections.
@@ -135,7 +137,8 @@ pub struct Args {
         long,
         value_name = "HOST:PORT",
         env = "INTERNAL_SQL_LISTEN_ADDR",
-        default_value = "127.0.0.1:6877"
+        default_value = "127.0.0.1:6877",
+        action = ArgAction::Set,
     )]
     internal_sql_listen_addr: SocketAddr,
     /// The address on which to listen for trusted HTTP connections.
@@ -147,7 +150,8 @@ pub struct Args {
         long,
         value_name = "HOST:PORT",
         env = "INTERNAL_HTTP_LISTEN_ADDR",
-        default_value = "127.0.0.1:6878"
+        default_value = "127.0.0.1:6878",
+        action = ArgAction::Set,
     )]
     internal_http_listen_addr: SocketAddr,
     /// The address on which to listen for Persist PubSub connections.
@@ -159,7 +163,8 @@ pub struct Args {
         long,
         value_name = "HOST:PORT",
         env = "INTERNAL_PERSIST_PUBSUB_LISTEN_ADDR",
-        default_value = "127.0.0.1:6879"
+        default_value = "127.0.0.1:6879",
+        action = ArgAction::Set,
     )]
     internal_persist_pubsub_listen_addr: SocketAddr,
     /// Enable cross-origin resource sharing (CORS) for HTTP requests from the
