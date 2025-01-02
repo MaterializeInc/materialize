@@ -37,7 +37,7 @@ use tracing::{debug, error, info, info_span, trace, Instrument};
 use crate::open_loop::api::{BenchmarkReader, BenchmarkWriter};
 
 /// Different benchmark configurations.
-#[derive(clap::ArgEnum, Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
+#[derive(clap::ValueEnum, Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
 enum BenchmarkType {
     /// Data is written straight into persistence from the data generator.
     RawWriter,
@@ -66,7 +66,7 @@ pub struct Args {
     blob_uri: SensitiveUrl,
 
     /// The type of benchmark to run
-    #[clap(arg_enum, long, default_value_t = BenchmarkType::RawWriter)]
+    #[clap(value_enum, long, default_value_t = BenchmarkType::RawWriter)]
     benchmark_type: BenchmarkType,
 
     /// Runtime in a whole number of seconds

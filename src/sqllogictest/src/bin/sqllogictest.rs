@@ -76,7 +76,7 @@ struct Args {
     #[clap(long)]
     enable_table_keys: bool,
     /// Divide the test files into shards and run only the test files in this shard.
-    #[clap(long, requires = "shard-count", value_name = "N")]
+    #[clap(long, requires = "shard_count", value_name = "N")]
     shard: Option<usize>,
     /// Total number of shards in use.
     #[clap(long, requires = "shard", value_name = "N")]

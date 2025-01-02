@@ -29,7 +29,7 @@ use std::string::ToString;
 use std::sync::LazyLock;
 use std::sync::Mutex;
 
-use clap::clap_derive::ArgEnum;
+use clap::clap_derive::ValueEnum;
 use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, TimelyLog};
 use mz_ore::collections::HashMap;
 use mz_pgrepr::oid;
@@ -352,7 +352,7 @@ impl Fingerprint for &BuiltinLog {
 
 /// Allows tests to inject arbitrary amounts of whitespace to forcibly change the fingerprint and
 /// trigger a builtin migration.
-#[derive(Debug, Clone, ArgEnum)]
+#[derive(Debug, Clone, ValueEnum)]
 pub enum UnsafeBuiltinTableFingerprintWhitespace {
     /// Inject whitespace into all builtin table fingerprints.
     All,

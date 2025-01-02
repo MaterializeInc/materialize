@@ -67,7 +67,7 @@ serde = { version = "1.0.152", features = ["derive"] }
 serde_json = { version = "1.0.125", features = ["arbitrary_precision", "preserve_order"] }
 smallvec = { version = "1.10.0", features = ["serde", "union"] }
 static_assertions = "1.1"
-strsim = "0.10"
+strsim = "0.11.1"
 timely = "0.15.1"
 tokio-postgres = { version = "0.7.8" }
 tracing-core = "0.1.30"
@@ -83,7 +83,7 @@ tracing-subscriber = { version = "0.3.16", default-features = false, optional = 
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
-criterion = { version = "0.4.0" }
+criterion = { version = "0.5.1" }
 insta = { version = "1.33.0", features = ["json"] }
 mz-persist = { path = "../persist" }
 rand = "0.8.5"

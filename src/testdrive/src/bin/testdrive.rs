@@ -104,7 +104,7 @@ struct Args {
     shuffle_tests: bool,
     /// Divide the test files into shards and run only the test files in this
     /// shard.
-    #[clap(long, requires = "shard-count", value_name = "N")]
+    #[clap(long, requires = "shard_count", value_name = "N")]
     shard: Option<usize>,
     /// Total number of shards in use.
     #[clap(long, requires = "shard", value_name = "N")]
@@ -124,7 +124,7 @@ struct Args {
         value_name = "FILTER",
         default_value = "librdkafka=off,mz_kafka_util::client=off,warn"
     )]
-    log_filter: EnvFilter,
+    log_filter: String,
     /// Glob patterns of testdrive scripts to run.
     globs: Vec<String>,
     /// Automatically rewrite the testdrive file with the correct results when they are not as
@@ -175,7 +175,7 @@ struct Args {
     #[clap(
         long,
         value_name = "PERSIST_CONSENSUS_URL",
-        required_if_eq("validate-catalog-store", "true"),
+        required_if_eq("validate_catalog_store", "true"),
         action = ArgAction::Set,
     )]
     persist_consensus_url: Option<SensitiveUrl>,
@@ -183,7 +183,7 @@ struct Args {
     #[clap(
         long,
         value_name = "PERSIST_BLOB_URL",
-        required_if_eq("validate-catalog-store", "true")
+        required_if_eq("validate_catalog_store", "true")
     )]
     persist_blob_url: Option<SensitiveUrl>,
 
@@ -228,7 +228,7 @@ struct Args {
     /// Cannot be specified if --aws-endpoint is specified.
     #[clap(
         long,
-        conflicts_with = "aws-endpoint",
+        conflicts_with = "aws_endpoint",
         value_name = "REGION",
         env = "AWS_REGION"
     )]
@@ -239,7 +239,7 @@ struct Args {
     /// Cannot be specified if --aws-region is specified.
     #[clap(
         long,
-        conflicts_with = "aws-region",
+        conflicts_with = "aws_region",
         value_name = "URL",
         env = "AWS_ENDPOINT"
     )]
@@ -285,7 +285,7 @@ async fn main() {
     let args: Args = cli::parse_args(CliConfig::default());
 
     tracing_subscriber::fmt()
-        .with_env_filter(args.log_filter)
+        .with_env_filter(EnvFilter::from(args.log_filter))
         .with_writer(io::stdout)
         .init();
 

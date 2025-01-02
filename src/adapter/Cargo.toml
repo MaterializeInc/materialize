@@ -110,7 +110,7 @@ uuid = { version = "1.7.0", features = ["v4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
-criterion = { version = "0.4.0", features = ["async_tokio"] }
+criterion = { version = "0.5.1", features = ["async_tokio"] }
 datadriven = "0.8.0"
 
 [[bench]]

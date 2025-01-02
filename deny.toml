@@ -90,6 +90,9 @@ skip = [
     # A few crates -> `num_enum_derive` -> `proc-macro-crate` -> `toml_edit v0.19.14`.
     { name = "toml_edit", version = "0.19.14" },
 
+    # tabled_derive and enum-as-inner
+    { name = "heck", version = "0.4.0" },
+
     # There are some crates in our dependency tree that have yet to upgrade to
     # `hyper 1.*`. As of now these are:
     #     * `aws-config`

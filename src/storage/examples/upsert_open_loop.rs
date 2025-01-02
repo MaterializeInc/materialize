@@ -153,7 +153,7 @@ pub struct Args {
     num_timely_workers: usize,
 
     /// Runtime in a whole number of seconds
-    #[clap(long, parse(try_from_str = humantime::parse_duration), value_name = "S", default_value = "60s")]
+    #[clap(long, value_parser = humantime::parse_duration, value_name = "S", default_value = "60s")]
     runtime: Duration,
 
     /// How many records writers should emit per second, per source.
@@ -178,7 +178,7 @@ pub struct Args {
     batch_size: usize,
 
     /// Duration between subsequent informational log outputs.
-    #[clap(long, parse(try_from_str = humantime::parse_duration), value_name = "L", default_value = "1s")]
+    #[clap(long, value_parser = humantime::parse_duration, value_name = "L", default_value = "1s")]
     logging_granularity: Duration,
 
     /// The address of the internal HTTP server.
@@ -193,7 +193,7 @@ pub struct Args {
     tracing: TracingCliArgs,
 
     /// The type of key-value store to use.
-    #[clap(arg_enum, long, default_value_t = KeyValueStore::Noop)]
+    #[clap(value_enum, long, default_value_t = KeyValueStore::Noop)]
     key_value_store: KeyValueStore,
 
     /// Wether to buffer (and reduce) batches of records in the UPSERT operator. The materialize
@@ -245,7 +245,7 @@ pub struct Args {
 }
 
 /// Different key-value stores under examination.
-#[derive(clap::ArgEnum, Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
+#[derive(clap::ValueEnum, Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
 enum KeyValueStore {
     /// Pass data straight through, without running any upsert logic.
     Noop,

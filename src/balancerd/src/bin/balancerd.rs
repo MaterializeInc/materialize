@@ -67,14 +67,14 @@ pub struct ServiceArgs {
     #[clap(
         long,
         value_name = "HOST:PORT",
-        conflicts_with = "frontegg-resolver-template"
+        conflicts_with = "frontegg_resolver_template"
     )]
     static_resolver_addr: Option<String>,
     /// Frontegg resolver address template. `{}` is replaced with the user's frontegg tenant id to
     /// get a DNS address. The first IP that address resolves to is the proxy destinations.
     #[clap(long,
         value_name = "HOST.{}.NAME:PORT",
-        requires_all = &["frontegg-api-token-url", "frontegg-admin-role"],
+        requires_all = &["frontegg_api_token_url", "frontegg_admin_role"],
     )]
     frontegg_resolver_template: Option<String>,
     /// HTTPS resolver address template. `{}` is replaced with the first subdomain of the HTTPS SNI
@@ -90,33 +90,33 @@ pub struct ServiceArgs {
     #[clap(
         long,
         value_name = "/path/to/configmap/dir/",
-        required_unless_present = "static-resolver-addr"
+        required_unless_present = "static_resolver_addr"
     )]
     cancellation_resolver_dir: Option<PathBuf>,
 
     /// JWK used to validate JWTs during Frontegg authentication as a PEM public
     /// key. Can optionally be base64 encoded with the URL-safe alphabet.
-    #[clap(long, env = "FRONTEGG_JWK", requires = "frontegg-resolver-template")]
+    #[clap(long, env = "FRONTEGG_JWK", requires = "frontegg_resolver_template")]
     frontegg_jwk: Option<String>,
     /// Path of JWK used to validate JWTs during Frontegg authentication as a PEM public key.
     #[clap(
         long,
         env = "FRONTEGG_JWK_FILE",
-        requires = "frontegg-resolver-template"
+        requires = "frontegg_resolver_template"
     )]
     frontegg_jwk_file: Option<PathBuf>,
     /// The full URL (including path) to the Frontegg api-token endpoint.
     #[clap(
         long,
         env = "FRONTEGG_API_TOKEN_URL",
-        requires = "frontegg-resolver-template"
+        requires = "frontegg_resolver_template"
     )]
     frontegg_api_token_url: Option<String>,
     /// The name of the admin role in Frontegg.
     #[clap(
         long,
         env = "FRONTEGG_ADMIN_ROLE",
-        requires = "frontegg-resolver-template"
+        requires = "frontegg_resolver_template"
     )]
     frontegg_admin_role: Option<String>,
 

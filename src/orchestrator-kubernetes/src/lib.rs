@@ -16,7 +16,7 @@ use std::{env, fmt};
 use anyhow::{anyhow, Context};
 use async_trait::async_trait;
 use chrono::Utc;
-use clap::ArgEnum;
+use clap::ValueEnum;
 use cloud_resource_controller::KubernetesResourceReader;
 use futures::stream::{BoxStream, StreamExt};
 use futures::TryFutureExt;
@@ -108,7 +108,7 @@ impl KubernetesOrchestratorConfig {
 }
 
 /// Specifies whether Kubernetes should pull Docker images when creating pods.
-#[derive(ArgEnum, Debug, Clone, Copy)]
+#[derive(ValueEnum, Debug, Clone, Copy)]
 pub enum KubernetesImagePullPolicy {
     /// Always pull the Docker image from the registry.
     Always,
