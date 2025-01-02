@@ -1152,10 +1152,9 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                             .columnar
                             .arrow()
                             .measure_part_build(|| {
-                                updates.get_or_make_structured::<K, V>(
-                                    write_schemas.key.as_ref(),
-                                    write_schemas.val.as_ref(),
-                                )
+                                updates
+                                    .structured()
+                                    .expect("builder should fill this in???")
                             })
                             .clone();
                         BlobTraceUpdates::Both(records, structured)
