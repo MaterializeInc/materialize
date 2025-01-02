@@ -241,8 +241,8 @@ fn ast_rewrite_sources_to_tables(
     use mz_persist_types::ShardId;
     use mz_proto::RustType;
     use mz_sql::ast::{
-        CreateSourceConnection, CreateSourceOptionName, CreateSourceStatement,
-        CreateSubsourceOptionName, CreateSubsourceStatement, CreateTableFromSourceStatement, Ident,
+        CreateSourceConnection, CreateSourceStatement, CreateSubsourceOptionName,
+        CreateSubsourceStatement, CreateTableFromSourceStatement, Ident,
         KafkaSourceConfigOptionName, LoadGenerator, MySqlConfigOptionName, PgConfigOptionName,
         RawItemName, TableFromSourceColumns, TableFromSourceOption, TableFromSourceOptionName,
         UnresolvedItemName, Value, WithOptionValue,
@@ -519,7 +519,7 @@ fn ast_rewrite_sources_to_tables(
                 include_metadata,
                 format,
                 envelope,
-                mut with_options,
+                with_options,
                 if_not_exists,
                 in_cluster,
                 progress_subsource,
@@ -611,35 +611,12 @@ fn ast_rewrite_sources_to_tables(
                     }
                     _ => unreachable!("match determined above"),
                 };
-                let mut table_with_options = vec![TableFromSourceOption {
+                let table_with_options = vec![TableFromSourceOption {
                     name: TableFromSourceOptionName::Details,
                     value: Some(WithOptionValue::Value(Value::String(hex::encode(
                         details.into_proto().encode_to_vec(),
                     )))),
                 }];
-
-                // Move over the IgnoreKeys option if it exists.
-                if let Some(i) = with_options
-                    .iter()
-                    .position(|opt| opt.name == CreateSourceOptionName::IgnoreKeys)
-                {
-                    let option = with_options.remove(i);
-                    table_with_options.push(TableFromSourceOption {
-                        name: TableFromSourceOptionName::IgnoreKeys,
-                        value: option.value,
-                    });
-                };
-                // Move over the Timeline option if it exists.
-                if let Some(i) = with_options
-                    .iter()
-                    .position(|opt| opt.name == CreateSourceOptionName::Timeline)
-                {
-                    let option = with_options.remove(i);
-                    table_with_options.push(TableFromSourceOption {
-                        name: TableFromSourceOptionName::Timeline,
-                        value: option.value,
-                    });
-                }
 
                 // Generate the same external-reference that would have been generated
                 // during purification for single-output sources.
