@@ -171,7 +171,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         # Assert using force
         output = c.run(
-            "mz", "secret", "create", "CI_SECRET", "force", stdin=secret, capture=True
+            "mz", "secret", "create", "CI_SECRET", "--force", stdin=secret, capture=True
         )
         assert output.returncode == 0
 
