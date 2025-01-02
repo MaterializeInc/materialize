@@ -98,7 +98,7 @@ impl Default for ColumnarRecords {
 
 impl fmt::Debug for ColumnarRecords {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        fmt::Debug::fmt(&self.borrow(), fmt)
+        fmt.debug_list().entries(self.iter()).finish()
     }
 }
 
@@ -118,7 +118,7 @@ impl ColumnarRecords {
             timestamps,
             diffs,
         };
-        assert_eq!(records.borrow().validate(), Ok(()));
+        assert_eq!(records.validate(), Ok(()));
         records
     }
 
@@ -160,29 +160,26 @@ impl ColumnarRecords {
     /// Read the record at `idx`, if there is one.
     ///
     /// Returns None if `idx >= self.len()`.
-    pub fn get<'a>(&'a self, idx: usize) -> Option<((&'a [u8], &'a [u8]), [u8; 8], [u8; 8])> {
-        self.borrow().get(idx)
-    }
-
-    /// Borrow Self as a [ColumnarRecordsRef].
-    fn borrow<'a>(&'a self) -> ColumnarRecordsRef<'a> {
-        // The ColumnarRecords constructor already validates, so don't bother
-        // doing it again.
-        //
-        // TODO: Forcing everything through a `fn new` would make this more
-        // obvious.
-        ColumnarRecordsRef {
-            len: self.len,
-            key_data: &self.key_data,
-            val_data: &self.val_data,
-            timestamps: self.timestamps.values(),
-            diffs: self.diffs.values(),
+    pub fn get(&self, idx: usize) -> Option<((&[u8], &[u8]), [u8; 8], [u8; 8])> {
+        if idx >= self.len {
+            return None;
         }
+
+        // There used to be `debug_assert_eq!(self.validate(), Ok(()))`, but it
+        // resulted in accidentally O(n^2) behavior in debug mode. Instead, we
+        // push that responsibility to the ColumnarRecordsRef constructor.
+        let key = self.key_data.value(idx);
+        let val = self.val_data.value(idx);
+        let ts = i64::to_le_bytes(self.timestamps.values()[idx]);
+        let diff = i64::to_le_bytes(self.diffs.values()[idx]);
+        Some(((key, val), ts, diff))
     }
 
     /// Iterate through the records in Self.
-    pub fn iter<'a>(&'a self) -> ColumnarRecordsIter<'a> {
-        self.borrow().iter()
+    pub fn iter(
+        &self,
+    ) -> impl Iterator<Item = ((&[u8], &[u8]), [u8; 8], [u8; 8])> + ExactSizeIterator {
+        (0..self.len).map(move |idx| self.get(idx).unwrap())
     }
 
     /// Concatenate the given records together, column-by-column.
@@ -210,124 +207,6 @@ impl ColumnarRecords {
         }
     }
 }
-
-/// A reference to a [ColumnarRecords].
-#[derive(Clone)]
-struct ColumnarRecordsRef<'a> {
-    len: usize,
-    key_data: &'a BinaryArray,
-    val_data: &'a BinaryArray,
-    timestamps: &'a [i64],
-    diffs: &'a [i64],
-}
-
-impl<'a> fmt::Debug for ColumnarRecordsRef<'a> {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        fmt.debug_list().entries(self.iter()).finish()
-    }
-}
-
-impl<'a> ColumnarRecordsRef<'a> {
-    fn validate(&self) -> Result<(), String> {
-        let validate_array = |name: &str, array: &dyn Array| {
-            let len = array.len();
-            if len != self.len {
-                return Err(format!("expected {} {name} got {len}", self.len));
-            }
-            let null_count = array.null_count();
-            if null_count > 0 {
-                return Err(format!("{null_count} unexpected nulls in {name} array"));
-            }
-            Ok(())
-        };
-
-        let key_data_size =
-            self.key_data.values().len() + self.key_data.offsets().inner().inner().len();
-        if key_data_size > KEY_VAL_DATA_MAX_LEN {
-            return Err(format!(
-                "expected encoded key offsets and data size to be less than or equal to {} got {}",
-                KEY_VAL_DATA_MAX_LEN, key_data_size
-            ));
-        }
-        validate_array("keys", &self.key_data)?;
-
-        let val_data_size =
-            self.val_data.values().len() + self.val_data.offsets().inner().inner().len();
-        if val_data_size > KEY_VAL_DATA_MAX_LEN {
-            return Err(format!(
-                "expected encoded val offsets and data size to be less than or equal to {} got {}",
-                KEY_VAL_DATA_MAX_LEN, val_data_size
-            ));
-        }
-        validate_array("vals", &self.val_data)?;
-
-        if self.diffs.len() != self.len {
-            return Err(format!(
-                "expected {} diffs got {}",
-                self.len,
-                self.diffs.len()
-            ));
-        }
-        if self.timestamps.len() != self.len {
-            return Err(format!(
-                "expected {} timestamps got {}",
-                self.len,
-                self.timestamps.len()
-            ));
-        }
-
-        Ok(())
-    }
-
-    /// Read the record at `idx`, if there is one.
-    ///
-    /// Returns None if `idx >= self.len()`.
-    fn get(&self, idx: usize) -> Option<((&'a [u8], &'a [u8]), [u8; 8], [u8; 8])> {
-        if idx >= self.len {
-            return None;
-        }
-
-        // There used to be `debug_assert_eq!(self.validate(), Ok(()))`, but it
-        // resulted in accidentally O(n^2) behavior in debug mode. Instead, we
-        // push that responsibility to the ColumnarRecordsRef constructor.
-        let key = self.key_data.value(idx);
-        let val = self.val_data.value(idx);
-        let ts = i64::to_le_bytes(self.timestamps[idx]);
-        let diff = i64::to_le_bytes(self.diffs[idx]);
-        Some(((key, val), ts, diff))
-    }
-
-    /// Iterate through the records in Self.
-    fn iter(&self) -> ColumnarRecordsIter<'a> {
-        ColumnarRecordsIter {
-            idx: 0,
-            records: self.clone(),
-        }
-    }
-}
-
-/// An [Iterator] over the records in a [ColumnarRecords].
-#[derive(Clone, Debug)]
-pub struct ColumnarRecordsIter<'a> {
-    idx: usize,
-    records: ColumnarRecordsRef<'a>,
-}
-
-impl<'a> Iterator for ColumnarRecordsIter<'a> {
-    type Item = ((&'a [u8], &'a [u8]), [u8; 8], [u8; 8]);
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        (self.records.len, Some(self.records.len))
-    }
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let ret = self.records.get(self.idx);
-        self.idx += 1;
-        ret
-    }
-}
-
-impl<'a> ExactSizeIterator for ColumnarRecordsIter<'a> {}
 
 /// An abstraction to incrementally add ((Key, Value), Time, i64) records
 /// in a columnar representation, and eventually get back a [ColumnarRecords].
@@ -437,7 +316,7 @@ impl ColumnarRecordsBuilder {
             timestamps: self.timestamps.into(),
             diffs: self.diffs.into(),
         };
-        debug_assert_eq!(ret.borrow().validate(), Ok(()));
+        debug_assert_eq!(ret.validate(), Ok(()));
         ret
     }
 
@@ -474,13 +353,63 @@ impl ColumnarRecords {
             diffs: realloc_array(&proto.diffs.into(), lgbytes),
         };
         let () = ret
-            .borrow()
             .validate()
             .map_err(TryFromProtoError::InvalidPersistState)?;
         let ext =
             ColumnarRecordsStructuredExt::from_proto(proto.key_structured, proto.val_structured)?;
 
         Ok((ret, ext))
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        let validate_array = |name: &str, array: &dyn Array| {
+            let len = array.len();
+            if len != self.len {
+                return Err(format!("expected {} {name} got {len}", self.len));
+            }
+            let null_count = array.null_count();
+            if null_count > 0 {
+                return Err(format!("{null_count} unexpected nulls in {name} array"));
+            }
+            Ok(())
+        };
+
+        let key_data_size =
+            self.key_data.values().len() + self.key_data.offsets().inner().inner().len();
+        if key_data_size > KEY_VAL_DATA_MAX_LEN {
+            return Err(format!(
+                "expected encoded key offsets and data size to be less than or equal to {} got {}",
+                KEY_VAL_DATA_MAX_LEN, key_data_size
+            ));
+        }
+        validate_array("keys", &self.key_data)?;
+
+        let val_data_size =
+            self.val_data.values().len() + self.val_data.offsets().inner().inner().len();
+        if val_data_size > KEY_VAL_DATA_MAX_LEN {
+            return Err(format!(
+                "expected encoded val offsets and data size to be less than or equal to {} got {}",
+                KEY_VAL_DATA_MAX_LEN, val_data_size
+            ));
+        }
+        validate_array("vals", &self.val_data)?;
+
+        if self.diffs.len() != self.len {
+            return Err(format!(
+                "expected {} diffs got {}",
+                self.len,
+                self.diffs.len()
+            ));
+        }
+        if self.timestamps.len() != self.len {
+            return Err(format!(
+                "expected {} timestamps got {}",
+                self.len,
+                self.timestamps.len()
+            ));
+        }
+
+        Ok(())
     }
 }
 
