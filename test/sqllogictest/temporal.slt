@@ -168,8 +168,6 @@ CREATE VIEW dev_fy2023.count_by_day AS
         NOT (CAST('2024-01-01' AS timestamp) <= date_trunc('day', ts)) AND
         CAST('2023-01-01' AS timestamp) <= date_trunc('day', ts);
 
-# This test will break in the year 10000. If you've survived that far then congratulations. Please
-# update the years 10000 and 10001 in the view dev.mock_data_days to a much larger year.
 query TIT
 SELECT *, 'fy2023' AS origin FROM dev_fy2023.count_by_day
 UNION ALL
