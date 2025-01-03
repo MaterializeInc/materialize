@@ -80,14 +80,25 @@ impl Unit for Unitless {
     }
 }
 
-/// Unit for converting KiB values to bytes expressed i64.
-struct KilobytesToBytes;
-impl Unit for KilobytesToBytes {
+/// Unit for converting maxrss values to bytes expressed as i64.
+///
+/// The maxrss unit depends on the OS:
+///  * Linux: KiB
+///  * macOS: bytes
+struct MaxrssToBytes;
+impl Unit for MaxrssToBytes {
     type Gauge = IntGauge;
     type From = libc::c_long;
     type To = i64;
+
+    #[cfg(not(target_os = "macos"))]
     fn from(value: Self::From) -> Self::To {
         value.saturating_mul(1024)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn from(value: Self::From) -> Self::To {
+        value
     }
 }
 
@@ -95,7 +106,7 @@ metrics! {
     mz_metrics_libc
     (ru_utime, "user CPU time used", "_seconds_total", Timeval),
     (ru_stime, "system CPU time used", "_seconds_total", Timeval),
-    (ru_maxrss, "maximum resident set size", "_bytes", KilobytesToBytes),
+    (ru_maxrss, "maximum resident set size", "_bytes", MaxrssToBytes),
     (ru_minflt, "page reclaims (soft page faults)", "_total", Unitless),
     (ru_majflt, "page faults (hard page faults)", "_total", Unitless),
     (ru_inblock, "block input operations", "_total", Unitless),
