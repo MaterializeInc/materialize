@@ -38,6 +38,9 @@ class KafkaFormats(Check):
             PROTOBUF
             + dedent(
                 """
+                $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+                ALTER SYSTEM SET force_source_table_syntax = true
+                
                 > CREATE CLUSTER kafka_formats REPLICAS (kafka_formats_r1 (SIZE '4'))
 
                 > SET cluster=kafka_formats
