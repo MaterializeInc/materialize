@@ -20,6 +20,7 @@ one
 
 # ensure after envd has restarted, we have maintained statistics.
 > SELECT s.name,
+  SUM(u.updates_committed) > 0,
   SUM(u.messages_received) >= 2,
   SUM(u.offset_known),
   SUM(u.offset_committed)
@@ -27,8 +28,16 @@ one
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('remote1', 'remote2')
   GROUP BY s.id, s.name
-remote1 true 1 1
-remote2 true 1 1
+remote1 true true 1 1
+remote2 true true 1 1
+
+> SELECT s.name,
+  SUM(u.updates_committed)
+  FROM mz_sources s
+  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  WHERE s.name IN ('webhook_text')
+  GROUP BY s.id, s.name
+webhook_text 1
 
 $ kafka-ingest format=bytes topic=remote1
 two
@@ -46,6 +55,7 @@ two
 
 # Ensure that offsets/counters can be updated correctly.
 > SELECT s.name,
+  SUM(u.updates_committed) > 0,
   SUM(u.messages_received) >= 4,
   SUM(u.offset_known),
   SUM(u.offset_committed)
@@ -53,5 +63,13 @@ two
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('remote1', 'remote2')
   GROUP BY s.id, s.name
-remote1 true 2 2
-remote2 true 2 2
+remote1 true true 2 2
+remote2 true true 2 2
+
+> SELECT s.name,
+  SUM(u.updates_committed)
+  FROM mz_sources s
+  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  WHERE s.name IN ('webhook_text')
+  GROUP BY s.id, s.name
+webhook_text 2
