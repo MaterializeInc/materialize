@@ -92,10 +92,9 @@ use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::{Scope, Stream as TimelyStream};
 use timely::progress::Antichain;
 use tracing::info;
-use url::Url;
 
 use crate::oneshot_source::csv::{CsvDecoder, CsvRecord, CsvWorkRequest};
-use crate::oneshot_source::http_source::{HttpChecksum, HttpOneshotSource};
+use crate::oneshot_source::http_source::{HttpChecksum, HttpObject, HttpOneshotSource};
 
 pub mod csv;
 pub mod http_source;
@@ -138,8 +137,8 @@ where
         }
     };
     let format = match format {
-        ContentFormat::Csv => {
-            let format = CsvDecoder::default();
+        ContentFormat::Csv(params) => {
+            let format = CsvDecoder::new(params, &collection_meta.relation_desc);
             FormatKind::Csv(format)
         }
     };
@@ -520,7 +519,7 @@ where
             .await
             .expect("failed to create Batch");
 
-        // Turn out Batch into a ProtoBatch that will later be linked in to
+        // Turn our Batch into a ProtoBatch that will later be linked in to
         // the shard.
         //
         // Note: By turning this into a ProtoBatch, the onus is now on us to
@@ -576,10 +575,32 @@ pub fn render_completion_operator<G, F>(
     });
 }
 
+/// An object that will be fetched from a [`OneshotSource`].
+pub trait OneshotObject {
+    /// Name of the object, including any extensions.
+    fn name(&self) -> &str;
+
+    /// Encodings of the _entire_ object, if any.
+    ///
+    /// Note: The object may internally use compression, e.g. a Parquet file
+    /// could compress its column chunks, but if the Parquet file itself is not
+    /// compressed then this would return `None`.
+    fn encodings(&self) -> &[Encoding];
+}
+
+/// Encoding of a [`OneshotObject`].
+#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+pub enum Encoding {
+    Bzip2,
+    Gzip,
+    Xz,
+    Zstd,
+}
+
 /// Defines a remote system that we can fetch data from for a "one time" ingestion.
 pub trait OneshotSource: Clone + Send {
     /// An individual unit within the source, e.g. a file.
-    type Object: Debug + Clone + Send + Serialize + DeserializeOwned + 'static;
+    type Object: OneshotObject + Debug + Clone + Send + Serialize + DeserializeOwned + 'static;
     /// Checksum for a [`Self::Object`].
     type Checksum: Debug + Clone + Send + Serialize + DeserializeOwned + 'static;
 
@@ -646,7 +667,21 @@ impl OneshotSource for SourceKind {
 /// Enum wrapper for [`OneshotSource::Object`], see [`SourceKind`] for more details.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) enum ObjectKind {
-    Http(Url),
+    Http(HttpObject),
+}
+
+impl OneshotObject for ObjectKind {
+    fn name(&self) -> &str {
+        match self {
+            ObjectKind::Http(object) => object.name(),
+        }
+    }
+
+    fn encodings(&self) -> &[Encoding] {
+        match self {
+            ObjectKind::Http(object) => object.encodings(),
+        }
+    }
 }
 
 /// Enum wrapper for [`OneshotSource::Checksum`], see [`SourceKind`] for more details.
@@ -795,6 +830,10 @@ pub enum StorageErrorXKind {
     Reqwest(Arc<str>),
     #[error("invalid reqwest header: {0}")]
     InvalidHeader(Arc<str>),
+    #[error("failed to decode Row from a record batch: {0}")]
+    InvalidRecordBatch(Arc<str>),
+    #[error("programming error: {0}")]
+    ProgrammingError(Arc<str>),
     #[error("something went wrong: {0}")]
     Generic(String),
 }
@@ -825,8 +864,16 @@ impl StorageErrorXKind {
         }
     }
 
+    pub fn invalid_record_batch<S: Into<Arc<str>>>(error: S) -> StorageErrorXKind {
+        StorageErrorXKind::InvalidRecordBatch(error.into())
+    }
+
     pub fn generic<C: Display>(error: C) -> StorageErrorXKind {
         StorageErrorXKind::Generic(error.to_string())
+    }
+
+    pub fn programming_error<S: Into<Arc<str>>>(error: S) -> StorageErrorXKind {
+        StorageErrorXKind::ProgrammingError(error.into())
     }
 }
 

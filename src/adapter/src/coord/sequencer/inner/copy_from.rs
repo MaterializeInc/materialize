@@ -10,6 +10,7 @@
 use mz_adapter_types::connection::ConnectionId;
 use mz_ore::cast::CastInto;
 use mz_persist_client::batch::ProtoBatch;
+use mz_pgcopy::CopyFormatParams;
 use mz_repr::{CatalogItemId, Datum, RowArena};
 use mz_sql::plan::{self, CopyFromSource, HirScalarExpr};
 use mz_sql::session::metadata::SessionMetadata;
@@ -36,7 +37,7 @@ impl Coordinator {
             id,
             source,
             columns: _,
-            params: _,
+            params,
         } = plan;
 
         let from_expr = match source {
@@ -80,9 +81,21 @@ impl Coordinator {
         // Generate a unique UUID for our ingestion.
         let ingestion_id = Uuid::new_v4();
         let collection_id = dest_table.global_id_writes();
+
+        let format = match params {
+            CopyFormatParams::Csv(csv) => {
+                mz_storage_types::oneshot_sources::ContentFormat::Csv(csv.to_owned())
+            }
+            CopyFormatParams::Text(_) | CopyFormatParams::Binary => {
+                mz_ore::soft_panic_or_log!("unsupported formats should be rejected in planning");
+                ctx.retire(Err(AdapterError::Unsupported("COPY FROM URL format")));
+                return;
+            }
+        };
+
         let request = OneshotIngestionRequest {
             source: mz_storage_types::oneshot_sources::ContentSource::Http { url },
-            format: mz_storage_types::oneshot_sources::ContentFormat::Csv,
+            format,
         };
 
         let target_cluster = match self
