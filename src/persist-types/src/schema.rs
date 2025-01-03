@@ -12,7 +12,7 @@
 use std::str::FromStr;
 use std::sync::Arc;
 
-use arrow::array::{new_null_array, Array, AsArray, ListArray, StructArray};
+use arrow::array::{new_null_array, Array, AsArray, ListArray, NullArray, StructArray};
 use arrow::datatypes::{DataType, Field, FieldRef, Fields, SchemaBuilder};
 use itertools::Itertools;
 use mz_ore::cast::CastFrom;
@@ -108,9 +108,17 @@ pub(crate) enum StructArrayMigration {
         name: String,
         typ: DataType,
     },
+    /// Drop the field of the provided name.
     DropField {
         name: String,
     },
+    /// Replace the field with a NullArray.
+    ///
+    /// Special case for projecting away all of the columns in a StructArray.
+    MakeNull {
+        name: String,
+    },
+    /// Make the field of the provided name nullable.
     AlterFieldNullable {
         name: String,
     },
@@ -159,6 +167,8 @@ impl ArrayMigration {
                 for migration in migrations {
                     migration.migrate(len, &mut fields, &mut arrays);
                 }
+                assert_eq!(fields.len(), arrays.len(), "invalid migration");
+
                 Arc::new(StructArray::new(fields, arrays, nulls))
             }
             List(field, entry_migration) => {
@@ -183,7 +193,7 @@ impl StructArrayMigration {
         use StructArrayMigration::*;
         match self {
             AddFieldNullableAtEnd { .. } => false,
-            DropField { .. } => true,
+            DropField { .. } | MakeNull { .. } => true,
             AlterFieldNullable { .. } => false,
             Recurse { migration, .. } => migration.contains_drop(),
         }
@@ -205,6 +215,20 @@ impl StructArrayMigration {
                 arrays.remove(idx);
                 let mut f = SchemaBuilder::from(&*fields);
                 f.remove(idx);
+                *fields = f.finish().fields;
+            }
+            MakeNull { name } => {
+                let (idx, _) = fields
+                    .find(name)
+                    .unwrap_or_else(|| panic!("expected to find field {} in {:?}", name, fields));
+                let array_len = arrays
+                    .get(idx)
+                    .expect("checked above that this exists")
+                    .len();
+                arrays[idx] = Arc::new(NullArray::new(array_len));
+                let mut f = SchemaBuilder::from(&*fields);
+                let field = f.field_mut(idx);
+                *field = Arc::new(Field::new(name.clone(), DataType::Null, true));
                 *fields = f.finish().fields;
             }
             AlterFieldNullable { name } => {
@@ -334,6 +358,22 @@ fn backward_compatible_struct(old: &Fields, new: &Fields) -> Option<ArrayMigrati
         if o.is_nullable() && !n.is_nullable() {
             return None;
         }
+
+        // Special case, dropping all of the fields in a StructArray.
+        //
+        // Note: In the SourceDataColumnarEncoder we model empty Rows as a
+        // NullArray and use the validity bitmask on the 'err' column to
+        // determine whether or not a field is actually null.
+        if matches!(o.data_type(), DataType::Struct(_))
+            && o.is_nullable()
+            && n.data_type().is_null()
+        {
+            field_migrations.push(MakeNull {
+                name: n.name().clone(),
+            });
+            continue;
+        }
+
         // However, allowed to make a non-nullable field nullable.
         let make_nullable = !o.is_nullable() && n.is_nullable();
 
@@ -352,7 +392,9 @@ fn backward_compatible_struct(old: &Fields, new: &Fields) -> Option<ArrayMigrati
                         NoOp => true,
                         List(_field, child) => recursively_all_nullable(child),
                         Struct(children) => children.iter().all(|child| match child {
-                            AddFieldNullableAtEnd { .. } | DropField { .. } => false,
+                            AddFieldNullableAtEnd { .. } | DropField { .. } | MakeNull { .. } => {
+                                false
+                            }
                             AlterFieldNullable { .. } => true,
                             Recurse { migration, .. } => recursively_all_nullable(migration),
                         }),

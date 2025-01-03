@@ -13,7 +13,7 @@ use mz_expr::{ColumnSpecs, Interpreter, MapFilterProject, ResultSpec, Unmaterial
 use mz_persist_types::stats::{
     BytesStats, ColumnStatKinds, JsonStats, PartStats, PartStatsMetrics,
 };
-use mz_repr::{ColumnType, Datum, RelationDesc, RowArena, ScalarType};
+use mz_repr::{ColumnIndex, ColumnType, Datum, RelationDesc, RowArena, ScalarType};
 
 /// Bundles together a relation desc with the stats for a specific part, and translates between
 /// Persist's stats representation and the `ResultSpec`s that are used for eg. filter pushdown.
@@ -52,9 +52,9 @@ impl RelationPartStats<'_> {
             return true;
         }
 
-        for (id, _) in self.desc.typ().column_types.iter().enumerate() {
-            let result_spec = self.col_stats(id, &arena);
-            ranges.push_column(id, result_spec);
+        for (pos, (idx, _name, _typ)) in self.desc.iter_all().enumerate() {
+            let result_spec = self.col_stats(idx, &arena);
+            ranges.push_column(pos, result_spec);
         }
         let result = ranges.mfp_filter(mfp).range;
         result.may_contain(Datum::True) || result.may_fail()
@@ -100,21 +100,21 @@ impl RelationPartStats<'_> {
         }
     }
 
-    pub fn col_stats<'a>(&'a self, id: usize, arena: &'a RowArena) -> ResultSpec<'a> {
-        let value_range = match self.col_values(id, arena) {
+    pub fn col_stats<'a>(&'a self, idx: &ColumnIndex, arena: &'a RowArena) -> ResultSpec<'a> {
+        let value_range = match self.col_values(idx, arena) {
             Some(spec) => spec,
             None => ResultSpec::anything(),
         };
-        let json_range = self.col_json(id, arena).unwrap_or(ResultSpec::anything());
+        let json_range = self.col_json(idx, arena).unwrap_or(ResultSpec::anything());
 
         // If this is not a JSON column or we don't have JSON stats, json_range is
         // [ResultSpec::anything] and this is a noop.
         value_range.intersect(json_range)
     }
 
-    fn col_json<'a>(&'a self, idx: usize, arena: &'a RowArena) -> Option<ResultSpec<'a>> {
-        let name = self.desc.get_name(idx);
-        let typ = &self.desc.typ().column_types[idx];
+    fn col_json<'a>(&'a self, idx: &ColumnIndex, arena: &'a RowArena) -> Option<ResultSpec<'a>> {
+        let name = self.desc.get_name_idx(idx);
+        let typ = &self.desc.get_type(idx);
 
         let ok_stats = self.stats.key.col("ok")?;
         let ok_stats = ok_stats
@@ -185,9 +185,9 @@ impl RelationPartStats<'_> {
         num_oks.map(|num_oks| num_results - num_oks)
     }
 
-    fn col_values<'a>(&'a self, idx: usize, arena: &'a RowArena) -> Option<ResultSpec<'a>> {
-        let name = self.desc.get_name(idx);
-        let typ = &self.desc.typ().column_types[idx];
+    fn col_values<'a>(&'a self, idx: &ColumnIndex, arena: &'a RowArena) -> Option<ResultSpec<'a>> {
+        let name = self.desc.get_name_idx(idx);
+        let typ = self.desc.get_type(idx);
 
         let ok_stats = self.stats.key.cols.get("ok")?;
         let ColumnStatKinds::Struct(ok_stats) = &ok_stats.values else {
@@ -259,7 +259,7 @@ mod tests {
 
         // Validate that the stats would include all of the provided datums.
         for datum in datums {
-            let spec = stats.col_stats(0, &arena);
+            let spec = stats.col_stats(&ColumnIndex::from_raw(0), &arena);
             assert!(spec.may_contain(*datum));
         }
 

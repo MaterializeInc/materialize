@@ -119,6 +119,7 @@ use differential_dataflow::{AsCollection, Collection, Data};
 use futures::channel::oneshot;
 use futures::FutureExt;
 use mz_compute_types::dataflows::{DataflowDescription, IndexDesc};
+use mz_compute_types::dyncfgs::COMPUTE_APPLY_COLUMN_DEMANDS;
 use mz_compute_types::plan::render_plan::{
     self, BindStage, LetBind, LetFreePlan, RecBind, RenderPlan,
 };
@@ -204,6 +205,7 @@ pub fn build_compute_dataflow<A: Allocate>(
         .collect::<Vec<_>>();
 
     let worker_logging = timely_worker.log_register().get("timely");
+    let apply_demands = COMPUTE_APPLY_COLUMN_DEMANDS.get(&compute_state.worker_config);
 
     let name = format!("Dataflow: {}", &dataflow.debug_name);
     let input_name = format!("InputRegion: {}", &dataflow.debug_name);
@@ -224,7 +226,24 @@ pub fn build_compute_dataflow<A: Allocate>(
             // Import declared sources into the rendering context.
             for (source_id, (source, _monotonic)) in dataflow.source_imports.iter() {
                 region.region_named(&format!("Source({:?})", source_id), |inner| {
-                    let mut mfp = source.arguments.operators.clone().map(|ops| {
+                    let mut read_schema = None;
+                    let mut mfp = source.arguments.operators.clone().map(|mut ops| {
+                        // If enabled, we read from Persist with a `RelationDesc` that
+                        // omits uneeded columns.
+                        if apply_demands {
+                            let demands = ops.demand();
+                            let new_desc =
+                                source.storage_metadata.relation_desc.apply_demand(&demands);
+                            let new_arity = demands.len();
+                            let remap: BTreeMap<_, _> = demands
+                                .into_iter()
+                                .enumerate()
+                                .map(|(new, old)| (old, new))
+                                .collect();
+                            ops.permute_fn(|old_idx| remap[&old_idx], new_arity);
+                            read_schema = Some(new_desc);
+                        }
+
                         mz_expr::MfpPlan::create_from(ops)
                             .expect("Linear operators should always be valid")
                     });
@@ -247,6 +266,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                         &compute_state.txns_ctx,
                         &compute_state.worker_config,
                         source.storage_metadata.clone(),
+                        read_schema,
                         dataflow.as_of.clone(),
                         snapshot_mode,
                         until.clone(),
