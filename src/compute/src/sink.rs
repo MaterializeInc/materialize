@@ -9,6 +9,7 @@
 
 mod copy_to_s3_oneshot;
 mod correction;
+mod correction_v2;
 mod materialized_view;
 mod materialized_view_v2;
 mod refresh;
