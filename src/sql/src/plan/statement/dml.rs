@@ -62,7 +62,7 @@ use crate::plan::{
     PlanError, QueryContext, ReadThenWritePlan, SelectPlan, SubscribeFrom, SubscribePlan,
 };
 use crate::plan::{with_options, CopyFromSource};
-use crate::session::vars;
+use crate::session::vars::{self, ENABLE_COPY_FROM_REMOTE};
 
 // TODO(benesch): currently, describing a `SELECT` or `INSERT` query
 // plans the whole query to determine its shape and parameter types,
@@ -1117,6 +1117,8 @@ fn plan_copy_from(
     let source = match target {
         CopyTarget::Stdin => CopyFromSource::Stdin,
         CopyTarget::Expr(from) => {
+            scx.require_feature_flag(&ENABLE_COPY_FROM_REMOTE)?;
+
             // Converting the to expr to a HirScalarExpr
             let mut from_expr = from.clone();
             transform_ast::transform(scx, &mut from_expr)?;
