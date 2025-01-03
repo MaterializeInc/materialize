@@ -1,0 +1,68 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License in the LICENSE file at the
+# root of this repository, or online at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Builds xz from the lzma-sys crate."""
+
+cc_library(
+    name = "xz",
+    srcs = glob(
+        include = [
+            "xz-5.2/src/liblzma/api/**/*.c",
+            "xz-5.2/src/liblzma/lzma/**/*.c",
+            "xz-5.2/src/liblzma/lzma/**/*.h",
+            "xz-5.2/src/liblzma/lz/**/*.c",
+            "xz-5.2/src/liblzma/lz/**/*.h",
+            "xz-5.2/src/liblzma/check/**/*.c",
+            "xz-5.2/src/liblzma/check/**/*.h",
+            "xz-5.2/src/liblzma/simple/**/*.c",
+            "xz-5.2/src/liblzma/simple/**/*.h",
+            "xz-5.2/src/liblzma/delta/**/*.c",
+            "xz-5.2/src/liblzma/delta/**/*.h",
+            "xz-5.2/src/liblzma/common/**/*.c",
+            "xz-5.2/src/liblzma/common/**/*.h",
+            "xz-5.2/src/liblzma/rangecoder/**/*.c",
+            "xz-5.2/src/liblzma/rangecoder/**/*.h",
+            "xz-5.2/src/common/**/*.h",
+        ],
+        exclude = [
+            "**/*crc32_small*",
+            "**/*crc64_small*",
+            "**/*tablegen*",
+        ],
+    ) + [
+        "config.h",
+        "xz-5.2/src/common/tuklib_cpucores.c",
+        "xz-5.2/src/common/tuklib_physmem.c",
+    ],
+    hdrs = glob(["xz-5.2/src/liblzma/api/**/*.h"]),
+    copts = [
+        "-std=c99",
+        "-pthread",
+    ],
+    includes = [
+        "xz-5.2/src/common",
+        "xz-5.2/src/liblzma/api",
+        "xz-5.2/src/liblzma/check",
+        "xz-5.2/src/liblzma/common",
+        "xz-5.2/src/liblzma/delta",
+        "xz-5.2/src/liblzma/lz",
+        "xz-5.2/src/liblzma/lzma",
+        "xz-5.2/src/liblzma/rangecoder",
+        "xz-5.2/src/liblzma/simple",
+        # The current working directory.
+        "",
+    ],
+    local_defines = ["HAVE_CONFIG_H=1"],
+)

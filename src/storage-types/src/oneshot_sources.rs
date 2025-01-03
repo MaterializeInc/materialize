@@ -9,6 +9,7 @@
 
 //! Types for oneshot sources.
 
+use mz_pgcopy::CopyCsvFormatParams;
 use mz_proto::{IntoRustIfSome, RustType};
 use mz_timely_util::builder_async::PressOnDropButton;
 
@@ -90,14 +91,16 @@ impl RustType<proto_oneshot_ingestion_request::Source> for ContentSource {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub enum ContentFormat {
-    Csv,
+    Csv(CopyCsvFormatParams<'static>),
 }
 
 impl RustType<proto_oneshot_ingestion_request::Format> for ContentFormat {
     fn into_proto(&self) -> proto_oneshot_ingestion_request::Format {
         match self {
-            ContentFormat::Csv => {
-                proto_oneshot_ingestion_request::Format::Csv(ProtoCsvContentFormat::default())
+            ContentFormat::Csv(params) => {
+                proto_oneshot_ingestion_request::Format::Csv(ProtoCsvContentFormat {
+                    params: Some(params.into_proto()),
+                })
             }
         }
     }
@@ -106,8 +109,9 @@ impl RustType<proto_oneshot_ingestion_request::Format> for ContentFormat {
         proto: proto_oneshot_ingestion_request::Format,
     ) -> Result<Self, mz_proto::TryFromProtoError> {
         match proto {
-            proto_oneshot_ingestion_request::Format::Csv(ProtoCsvContentFormat {}) => {
-                Ok(ContentFormat::Csv)
+            proto_oneshot_ingestion_request::Format::Csv(ProtoCsvContentFormat { params }) => {
+                let params = params.into_rust_if_some("ProtoCsvContentFormat::params")?;
+                Ok(ContentFormat::Csv(params))
             }
         }
     }
