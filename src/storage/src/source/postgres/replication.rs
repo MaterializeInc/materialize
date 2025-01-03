@@ -995,7 +995,7 @@ where
     let mut row = Vec::with_capacity(iter.len());
     for data in iter {
         let datum = match data {
-            TupleData::Text(bytes) => Some(bytes.clone()),
+            TupleData::Text(bytes) /*| TupleData::Binary(bytes)*/ => Some(bytes.clone()),
             TupleData::Null => None,
             TupleData::UnchangedToast => return Err(DefiniteError::MissingToast),
         };
