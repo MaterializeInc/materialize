@@ -169,6 +169,7 @@ mod tests {
     use super::*;
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
     fn test_merge_tree() {
         // Exhaustively test the merge tree for small sizes.
         for max_len in 2..8 {
