@@ -1756,6 +1756,49 @@ mod tests {
 
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    async fn batch_delete() {
+        let cache = PersistClientCache::new_no_metrics();
+        cache.cfg.set_config(&INLINE_WRITES_SINGLE_MAX_BYTES, 0);
+        cache.cfg.set_config(&INLINE_WRITES_TOTAL_MAX_BYTES, 0);
+        cache.cfg.set_config(&BATCH_DELETE_ENABLED, true);
+        let client = cache
+            .open(PersistLocation::new_in_mem())
+            .await
+            .expect("client construction failed");
+        let shard_id = ShardId::new();
+        let (mut write, _) = client
+            .expect_open::<String, String, u64, i64>(shard_id)
+            .await;
+
+        let batch = write
+            .expect_batch(
+                &[
+                    (("1".into(), "one".into()), 1, 1),
+                    (("2".into(), "two".into()), 2, 1),
+                    (("3".into(), "three".into()), 3, 1),
+                ],
+                0,
+                4,
+            )
+            .await;
+
+        assert_eq!(batch.batch.part_count(), 1);
+        let part_key = batch.batch.parts[0]
+            .expect_hollow_part()
+            .key
+            .complete(&shard_id);
+
+        let part_bytes = client.blob.get(&part_key).await.expect("invalid usage");
+        assert!(part_bytes.is_some());
+
+        batch.delete().await;
+
+        let part_bytes = client.blob.get(&part_key).await.expect("invalid usage");
+        assert!(part_bytes.is_none());
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn batch_builder_partial_order() {
         let cache = PersistClientCache::new_no_metrics();
         // Set blob_target_size to 0 so that each row gets forced into its own batch part
