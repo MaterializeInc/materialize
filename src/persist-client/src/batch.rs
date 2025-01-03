@@ -554,7 +554,7 @@ where
     pub(crate) key_buf: Vec<u8>,
     pub(crate) val_buf: Vec<u8>,
 
-    buffer: BatchBuffer,
+    records_builder: ColumnarRecordsBuilder,
     pub(crate) builder: BatchBuilderInternal<K, V, T, D>,
 }
 
@@ -570,17 +570,17 @@ where
         inline_desc: Description<T>,
         metrics: Arc<Metrics>,
     ) -> Self {
-        let buffer = BatchBuffer::new(Arc::clone(&metrics), builder.parts.cfg.blob_target_size);
         Self {
             metrics,
             inline_desc,
             inclusive_upper: Antichain::new(),
             key_buf: vec![],
             val_buf: vec![],
-            buffer,
+            records_builder: ColumnarRecordsBuilder::default(),
             builder,
         }
     }
+
     /// Finish writing this batch and return a handle to the written batch.
     ///
     /// This fails if any of the updates in this batch are beyond the given
@@ -611,8 +611,9 @@ where
             }
         }
 
+        let records = self.records_builder.finish(&self.metrics.columnar);
         self.builder
-            .flush_part(self.inline_desc.clone(), self.buffer.drain())
+            .flush_part(self.inline_desc.clone(), BlobTraceUpdates::Row(records))
             .await;
 
         self.builder
@@ -659,10 +660,29 @@ where
         }
         self.inclusive_upper.insert(Reverse(ts.clone()));
 
-        let added = if let Some(full_batch) =
-            self.buffer
-                .push(&self.key_buf, &self.val_buf, ts.clone(), diff.clone())
+        let update = (
+            (self.key_buf.as_slice(), self.val_buf.as_slice()),
+            ts.encode(),
+            diff.encode(),
+        );
+        assert!(
+            self.records_builder.push(update),
+            "single update overflowed an i32"
+        );
+
+        // if we've filled up a batch part, flush out to blob to keep our memory usage capped.
+        let added = if self.records_builder.total_bytes() >= self.builder.parts.cfg.blob_target_size
         {
+            // TODO: we're in a position to do a very good estimate here, instead of using the default.
+            let builder = mem::take(&mut self.records_builder);
+            let records = builder.finish(&self.metrics.columnar);
+            assert_eq!(self.records_builder.len(), 0);
+            Some(BlobTraceUpdates::Row(records))
+        } else {
+            None
+        };
+
+        let added = if let Some(full_batch) = added {
             self.builder
                 .flush_part(self.inline_desc.clone(), full_batch)
                 .await;
@@ -835,52 +855,6 @@ pub(crate) fn validate_schema<K: Codec, V: Codec>(
     };
     let () = val_valid
         .unwrap_or_else(|err| panic!("constructing batch with mismatched val schema: {}", err));
-}
-
-#[derive(Debug)]
-struct BatchBuffer {
-    metrics: Arc<Metrics>,
-    blob_target_size: usize,
-    records_builder: ColumnarRecordsBuilder,
-}
-
-impl BatchBuffer {
-    fn new(metrics: Arc<Metrics>, blob_target_size: usize) -> Self {
-        BatchBuffer {
-            metrics,
-            blob_target_size,
-            records_builder: ColumnarRecordsBuilder::default(),
-        }
-    }
-
-    fn push<T: Codec64, D: Codec64>(
-        &mut self,
-        key: &[u8],
-        val: &[u8],
-        ts: T,
-        diff: D,
-    ) -> Option<BlobTraceUpdates> {
-        let update = ((key, val), ts.encode(), diff.encode());
-        assert!(
-            self.records_builder.push(update),
-            "single update overflowed an i32"
-        );
-
-        // if we've filled up a batch part, flush out to blob to keep our memory usage capped.
-        if self.records_builder.total_bytes() >= self.blob_target_size {
-            Some(self.drain())
-        } else {
-            None
-        }
-    }
-
-    fn drain(&mut self) -> BlobTraceUpdates {
-        // TODO: we're in a position to do a very good estimate here, instead of using the default.
-        let builder = mem::take(&mut self.records_builder);
-        let records = builder.finish(&self.metrics.columnar);
-        assert_eq!(self.records_builder.len(), 0);
-        BlobTraceUpdates::Row(records)
-    }
 }
 
 #[derive(Debug)]
