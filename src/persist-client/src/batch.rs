@@ -162,13 +162,13 @@ where
     /// marks them as deleted.
     #[instrument(level = "debug", fields(shard = %self.shard_id()))]
     pub async fn delete(mut self) {
-        self.mark_consumed();
         if !self.batch_delete_enabled {
+            self.mark_consumed();
             return;
         }
         let mut deletes = PartDeletes::default();
-        for part in self.batch.parts.iter() {
-            deletes.add(part);
+        for part in self.batch.parts.drain(..) {
+            deletes.add(&part);
         }
         let () = deletes
             .delete(
