@@ -40,12 +40,6 @@ pub(crate) fn attempt_left_join_magic(
 ) -> Result<Option<MirRelationExpr>, PlanError> {
     use mz_expr::LocalId;
 
-    tracing::debug!(
-        inputs = rights.len() + 1,
-        outer_arity = get_outer.arity(),
-        "attempt_left_join_magic"
-    );
-
     let inc_metrics = |case: &str| {
         if let Some(metrics) = context.metrics {
             metrics.inc_outer_join_lowering(case);
@@ -53,6 +47,12 @@ pub(crate) fn attempt_left_join_magic(
     };
 
     let oa = get_outer.arity();
+    tracing::debug!(
+        inputs = rights.len() + 1,
+        outer_arity = oa,
+        "attempt_left_join_magic"
+    );
+
     if oa > 0 {
         // Bail out in correlated contexts for now. Even though the code below
         // supports them, we want to test this code path more thoroughly before
@@ -77,14 +77,20 @@ pub(crate) fn attempt_left_join_magic(
     let left = left
         .clone()
         .applied_to(id_gen, get_outer.clone(), col_map, cte_map, context)?;
-    let lt = left.typ().column_types.into_iter().skip(oa).collect_vec();
+    let full_left_typ = left.typ();
+    let lt = full_left_typ
+        .column_types
+        .iter()
+        .skip(oa)
+        .cloned()
+        .collect_vec();
     let la = lt.len();
 
     // Create a new let binding to use as input.
     // We may use these relations multiple times to extract augmenting values.
     let id = LocalId::new(id_gen.allocate_id());
     // The join body that we will iteratively develop.
-    let mut body = MirRelationExpr::local_get(id, left.typ());
+    let mut body = MirRelationExpr::local_get(id, full_left_typ);
     bindings.push((id, body.clone(), left));
     bound_to.extend((0..la).map(|_| 1));
     arities.push(la);
@@ -112,10 +118,16 @@ pub(crate) fn attempt_left_join_magic(
             .clone()
             .map(vec![HirScalarExpr::literal_true()]) // add a bit to mark "real" rows.
             .applied_to(id_gen, get_outer.clone(), &right_col_map, cte_map, context)?;
-        let rt = right.typ().column_types.into_iter().skip(oa).collect_vec();
+        let full_right_typ = right.typ();
+        let rt = full_right_typ
+            .column_types
+            .iter()
+            .skip(oa)
+            .cloned()
+            .collect_vec();
         let ra = rt.len() - 1; // don't count the new column
 
-        let mut right_type = right.typ();
+        let mut right_type = full_right_typ;
         // Create a binding for `right`, unadulterated.
         let id = LocalId::new(id_gen.allocate_id());
         let get_right = MirRelationExpr::local_get(id, right_type.clone());
@@ -152,7 +164,7 @@ pub(crate) fn attempt_left_join_magic(
 
         // if `on` added any new columns, .. no clue what to do.
         // Return with failure, to avoid any confusion.
-        if product.typ().column_types.len() > oa + ba + ra + 1 {
+        if product.arity() > oa + ba + ra + 1 {
             tracing::debug!(case = 3, index, "attempt_left_join_magic");
             inc_metrics("voj_3");
             return Ok(None);
@@ -225,7 +237,7 @@ pub(crate) fn attempt_left_join_magic(
                 MirRelationExpr::Constant {
                     rows: Ok(vec![(
                         mz_repr::Row::pack(
-                            std::iter::repeat(mz_repr::Datum::Null).take(get_left.arity()),
+                            std::iter::repeat(mz_repr::Datum::Null).take(left_typ.arity()),
                         ),
                         1,
                     )]),
