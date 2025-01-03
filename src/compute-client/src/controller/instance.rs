@@ -38,13 +38,14 @@ use mz_repr::adt::interval::Interval;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{Datum, Diff, GlobalId, Row};
 use mz_storage_client::controller::IntrospectionType;
-use mz_storage_types::read_holds::ReadHold;
+use mz_storage_types::read_holds::{self, ReadHold};
 use mz_storage_types::read_policy::ReadPolicy;
 use serde::Serialize;
 use thiserror::Error;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use timely::PartialOrder;
+use tokio::sync::mpsc::error::SendError;
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
@@ -129,15 +130,23 @@ impl From<CollectionMissing> for ReadPolicyError {
 pub type Command<T> = Box<dyn FnOnce(&mut Instance<T>) + Send>;
 
 /// A client for an [`Instance`] task.
-#[derive(Debug)]
+#[derive(Clone, derivative::Derivative)]
+#[derivative(Debug)]
 pub(super) struct Client<T: ComputeControllerTimestamp> {
     /// A sender for commands for the instance.
     command_tx: mpsc::UnboundedSender<Command<T>>,
+    /// A sender for read hold changes for collections installed on the instance.
+    #[derivative(Debug = "ignore")]
+    read_hold_tx: read_holds::ChangeTx<T>,
 }
 
 impl<T: ComputeControllerTimestamp> Client<T> {
-    pub fn send(&self, command: Command<T>) {
-        self.command_tx.send(command).expect("instance not dropped");
+    pub fn send(&self, command: Command<T>) -> Result<(), SendError<Command<T>>> {
+        self.command_tx.send(command)
+    }
+
+    pub fn read_hold_tx(&self) -> read_holds::ChangeTx<T> {
+        Arc::clone(&self.read_hold_tx)
     }
 }
 
@@ -158,10 +167,19 @@ where
         dyncfg: Arc<ConfigSet>,
         response_tx: mpsc::UnboundedSender<ComputeControllerResponse<T>>,
         introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
-        read_holds_tx: mpsc::UnboundedSender<(GlobalId, ChangeBatch<T>)>,
-        read_holds_rx: mpsc::UnboundedReceiver<(GlobalId, ChangeBatch<T>)>,
     ) -> Self {
         let (command_tx, command_rx) = mpsc::unbounded_channel();
+
+        let read_hold_tx: read_holds::ChangeTx<_> = {
+            let command_tx = command_tx.clone();
+            Arc::new(move |id, change: ChangeBatch<_>| {
+                let cmd: Command<_> = {
+                    let change = change.clone();
+                    Box::new(move |i| i.apply_read_hold_change(id, change.clone()))
+                };
+                command_tx.send(cmd).map_err(|_| SendError((id, change)))
+            })
+        };
 
         mz_ore::task::spawn(
             || format!("compute-instance-{id}"),
@@ -176,14 +194,16 @@ where
                 dyncfg,
                 command_rx,
                 response_tx,
+                Arc::clone(&read_hold_tx),
                 introspection_tx,
-                read_holds_tx,
-                read_holds_rx,
             )
             .run(),
         );
 
-        Self { command_tx }
+        Self {
+            command_tx,
+            read_hold_tx,
+        }
     }
 }
 
@@ -276,17 +296,7 @@ pub(super) struct Instance<T: ComputeControllerTimestamp> {
     ///
     /// Copies of this sender are given to [`ReadHold`]s that are created in
     /// [`CollectionState::new`].
-    read_holds_tx: mpsc::UnboundedSender<(GlobalId, ChangeBatch<T>)>,
-    /// Receiver for updates to collection read holds.
-    ///
-    /// Received updates are applied by [`Instance::apply_read_hold_changes`].
-    read_holds_rx: mpsc::UnboundedReceiver<(GlobalId, ChangeBatch<T>)>,
-    /// Stashed read hold changes.
-    ///
-    /// Used by [`Instance::apply_read_hold_changes`] to stash read hold changes that cannot be
-    /// applied immediately until they can be applied.
-    stashed_read_hold_changes: BTreeMap<GlobalId, ChangeBatch<T>>,
-
+    read_hold_tx: read_holds::ChangeTx<T>,
     /// A sender for responses from replicas.
     replica_tx: mz_ore::channel::InstrumentedUnboundedSender<ReplicaResponse<T>, IntCounter>,
     /// A receiver for responses from replicas.
@@ -364,7 +374,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             shared,
             storage_dependencies,
             compute_dependencies,
-            self.read_holds_tx.clone(),
+            Arc::clone(&self.read_hold_tx),
             introspection,
         );
         // If the collection is write-only, clear its read policy to reflect that.
@@ -796,9 +806,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             now: _,
             wallclock_lag: _,
             wallclock_lag_last_refresh,
-            read_holds_tx: _,
-            read_holds_rx: _,
-            stashed_read_hold_changes,
+            read_hold_tx: _,
             replica_tx: _,
             replica_rx: _,
         } = self;
@@ -833,10 +841,6 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             .map(|(id, epoch)| (id.to_string(), epoch))
             .collect();
         let wallclock_lag_last_refresh = format!("{wallclock_lag_last_refresh:?}");
-        let stashed_read_hold_changes: BTreeMap<_, _> = stashed_read_hold_changes
-            .iter()
-            .map(|(id, changes)| (id.to_string(), changes))
-            .collect();
 
         let map = serde_json::Map::from_iter([
             field("initialized", initialized)?,
@@ -849,7 +853,6 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             field("envd_epoch", envd_epoch)?,
             field("replica_epochs", replica_epochs)?,
             field("wallclock_lag_last_refresh", wallclock_lag_last_refresh)?,
-            field("stashed_read_hold_changes", stashed_read_hold_changes)?,
         ]);
         Ok(serde_json::Value::Object(map))
     }
@@ -871,9 +874,8 @@ where
         dyncfg: Arc<ConfigSet>,
         command_rx: mpsc::UnboundedReceiver<Command<T>>,
         response_tx: mpsc::UnboundedSender<ComputeControllerResponse<T>>,
+        read_hold_tx: read_holds::ChangeTx<T>,
         introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
-        read_holds_tx: mpsc::UnboundedSender<(GlobalId, ChangeBatch<T>)>,
-        read_holds_rx: mpsc::UnboundedReceiver<(GlobalId, ChangeBatch<T>)>,
     ) -> Self {
         let mut collections = BTreeMap::new();
         let mut log_sources = BTreeMap::new();
@@ -881,7 +883,7 @@ where
             let collection = CollectionState::new_log_collection(
                 id,
                 shared,
-                read_holds_tx.clone(),
+                Arc::clone(&read_hold_tx),
                 introspection_tx.clone(),
             );
             collections.insert(id, collection);
@@ -916,9 +918,7 @@ where
             now,
             wallclock_lag,
             wallclock_lag_last_refresh: Instant::now(),
-            read_holds_tx,
-            read_holds_rx,
-            stashed_read_hold_changes: Default::default(),
+            read_hold_tx,
             replica_tx,
             replica_rx,
         }
@@ -981,20 +981,32 @@ where
         }
     }
 
-    /// Check that the current instance is empty.
+    /// Shut down this instance.
     ///
-    /// This method exists to help us find bugs where the client drops a compute instance that
-    /// still has replicas or collections installed, and later assumes that said
-    /// replicas/collections still exists.
+    /// This method runs various assertions ensuring the instance state is empty. It exists to help
+    /// us find bugs where the client drops a compute instance that still has replicas or
+    /// collections installed, and later assumes that said replicas/collections still exists.
     ///
     /// # Panics
     ///
     /// Panics if the compute instance still has active replicas.
     /// Panics if the compute instance still has collections installed.
     #[mz_ore::instrument(level = "debug")]
-    pub fn check_empty(&mut self) {
+    pub fn shutdown(&mut self) {
+        // Taking the `command_rx` ensures that the [`Instance::run`] loop terminates.
+        let (_tx, rx) = mpsc::unbounded_channel();
+        let mut command_rx = std::mem::replace(&mut self.command_rx, rx);
+
+        // Apply all outstanding read hold changes. This might cause read hold downgrades to be
+        // added to `command_tx`, so we need to apply those in a loop.
+        //
+        // TODO(teskje): Make `Command` an enum and assert that all received commands are read
+        // hold downgrades.
+        while let Ok(cmd) = command_rx.try_recv() {
+            cmd(self);
+        }
+
         // Collections might have been dropped but not cleaned up yet.
-        self.apply_read_hold_changes();
         self.cleanup_collections();
 
         let stray_replicas: Vec<_> = self.replicas.keys().collect();
@@ -1660,92 +1672,62 @@ where
         });
     }
 
-    /// Apply collection read hold changes pending in `read_holds_rx`.
-    fn apply_read_hold_changes(&mut self) {
-        let mut allowed_compaction = BTreeMap::new();
-        let mut stashed_changes = std::mem::take(&mut self.stashed_read_hold_changes);
-
-        // It's more efficient to apply updates for greater IDs before updates for smaller IDs,
-        // since ID order usually matches dependency order and downgrading read holds on a
-        // collection can cause downgrades on its dependencies. So instead of processing changes as
-        // they come in, we batch them up as much as we can and process them in reverse ID order.
-        let mut recv_batch = || {
-            let mut batch = std::mem::take(&mut stashed_changes);
-            while let Ok((id, mut update)) = self.read_holds_rx.try_recv() {
-                batch
-                    .entry(id)
-                    .and_modify(|e| e.extend(update.drain()))
-                    .or_insert(update);
-            }
-
-            let has_updates = !batch.is_empty();
-            has_updates.then_some(batch)
+    /// Apply a collection read hold change.
+    fn apply_read_hold_change(&mut self, id: GlobalId, mut update: ChangeBatch<T>) {
+        let Some(collection) = self.collections.get_mut(&id) else {
+            soft_panic_or_log!(
+                "read hold change for absent collection (id={id}, changes={update:?})"
+            );
+            return;
         };
 
-        while let Some(batch) = recv_batch() {
-            for (id, mut update) in batch.into_iter().rev() {
-                let Some(collection) = self.collections.get_mut(&id) else {
-                    // The `ComputeController` provides a sync API for creating collections and
-                    // taking out read holds on them, without waiting for the collection to be
-                    // created in the `Instance`. Thus we might see read hold changes for
-                    // collections that haven't been created yet. Stash them for later application.
-                    self.stashed_read_hold_changes
-                        .entry(id)
-                        .and_modify(|e| e.extend(update.drain()))
-                        .or_insert(update);
-                    continue;
-                };
-
-                let new_since = collection.shared.lock_read_capabilities(|caps| {
-                    // Sanity check to prevent corrupted `read_capabilities`, which can cause hard-to-debug
-                    // issues (usually stuck read frontiers).
-                    let read_frontier = caps.frontier();
-                    for (time, diff) in update.iter() {
-                        let count = caps.count_for(time) + diff;
-                        assert!(
-                            count >= 0,
-                            "invalid read capabilities update: negative capability \
-                     (id={id:?}, read_capabilities={caps:?}, update={update:?})",
-                        );
-                        assert!(
-                            count == 0 || read_frontier.less_equal(time),
-                            "invalid read capabilities update: frontier regression \
-                     (id={id:?}, read_capabilities={caps:?}, update={update:?})",
-                        );
-                    }
-
-                    // Apply read capability updates and learn about resulting changes to the read
-                    // frontier.
-                    let changes = caps.update_iter(update.drain());
-
-                    let changed = changes.count() > 0;
-                    changed.then(|| caps.frontier().to_owned())
-                });
-
-                let Some(new_since) = new_since else {
-                    continue; // read frontier did not change
-                };
-
-                // Propagate read frontier update to dependencies.
-                for read_hold in collection.compute_dependencies.values_mut() {
-                    read_hold
-                        .try_downgrade(new_since.clone())
-                        .expect("frontiers don't regress");
-                }
-                for read_hold in collection.storage_dependencies.values_mut() {
-                    read_hold
-                        .try_downgrade(new_since.clone())
-                        .expect("frontiers don't regress");
-                }
-
-                allowed_compaction.insert(id, new_since);
+        let new_since = collection.shared.lock_read_capabilities(|caps| {
+            // Sanity check to prevent corrupted `read_capabilities`, which can cause hard-to-debug
+            // issues (usually stuck read frontiers).
+            let read_frontier = caps.frontier();
+            for (time, diff) in update.iter() {
+                let count = caps.count_for(time) + diff;
+                assert!(
+                    count >= 0,
+                    "invalid read capabilities update: negative capability \
+             (id={id:?}, read_capabilities={caps:?}, update={update:?})",
+                );
+                assert!(
+                    count == 0 || read_frontier.less_equal(time),
+                    "invalid read capabilities update: frontier regression \
+             (id={id:?}, read_capabilities={caps:?}, update={update:?})",
+                );
             }
+
+            // Apply read capability updates and learn about resulting changes to the read
+            // frontier.
+            let changes = caps.update_iter(update.drain());
+
+            let changed = changes.count() > 0;
+            changed.then(|| caps.frontier().to_owned())
+        });
+
+        let Some(new_since) = new_since else {
+            return; // read frontier did not change
+        };
+
+        // Propagate read frontier update to dependencies.
+        for read_hold in collection.compute_dependencies.values_mut() {
+            read_hold
+                .try_downgrade(new_since.clone())
+                .expect("frontiers don't regress");
+        }
+        for read_hold in collection.storage_dependencies.values_mut() {
+            read_hold
+                .try_downgrade(new_since.clone())
+                .expect("frontiers don't regress");
         }
 
-        // Produce `AllowCompaction` commands.
-        for (id, frontier) in allowed_compaction {
-            self.send(ComputeCommand::AllowCompaction { id, frontier });
-        }
+        // Produce `AllowCompaction` command.
+        self.send(ComputeCommand::AllowCompaction {
+            id,
+            frontier: new_since,
+        });
     }
 
     /// Fulfills a registered peek and cleans up associated state.
@@ -2094,7 +2076,6 @@ where
     pub fn maintain(&mut self) {
         self.rehydrate_failed_replicas();
         self.downgrade_warmup_capabilities();
-        self.apply_read_hold_changes();
         self.schedule_collections();
         self.cleanup_collections();
         self.update_frontier_introspection();
@@ -2167,7 +2148,7 @@ impl<T: ComputeControllerTimestamp> CollectionState<T> {
         shared: SharedCollectionState<T>,
         storage_dependencies: BTreeMap<GlobalId, ReadHold<T>>,
         compute_dependencies: BTreeMap<GlobalId, ReadHold<T>>,
-        read_holds_tx: mpsc::UnboundedSender<(GlobalId, ChangeBatch<T>)>,
+        read_hold_tx: read_holds::ChangeTx<T>,
         introspection: CollectionIntrospection<T>,
     ) -> Self {
         // A collection is not readable before the `as_of`.
@@ -2182,8 +2163,9 @@ impl<T: ComputeControllerTimestamp> CollectionState<T> {
         // Initialize collection read holds.
         // Note that the implied read hold was already added to the `read_capabilities` when
         // `shared` was created, so we only need to add the warmup read hold here.
-        let implied_read_hold = ReadHold::new(collection_id, since.clone(), read_holds_tx.clone());
-        let warmup_read_hold = ReadHold::new(collection_id, since.clone(), read_holds_tx);
+        let implied_read_hold =
+            ReadHold::new(collection_id, since.clone(), Arc::clone(&read_hold_tx));
+        let warmup_read_hold = ReadHold::new(collection_id, since.clone(), read_hold_tx);
 
         let updates = warmup_read_hold.since().iter().map(|t| (t.clone(), 1));
         shared.lock_read_capabilities(|c| {
@@ -2208,7 +2190,7 @@ impl<T: ComputeControllerTimestamp> CollectionState<T> {
     fn new_log_collection(
         id: GlobalId,
         shared: SharedCollectionState<T>,
-        read_holds_tx: mpsc::UnboundedSender<(GlobalId, ChangeBatch<T>)>,
+        read_hold_tx: read_holds::ChangeTx<T>,
         introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
     ) -> Self {
         let since = Antichain::from_elem(T::minimum());
@@ -2220,7 +2202,7 @@ impl<T: ComputeControllerTimestamp> CollectionState<T> {
             shared,
             Default::default(),
             Default::default(),
-            read_holds_tx,
+            read_hold_tx,
             introspection,
         );
         state.log_collection = true;
@@ -2272,7 +2254,7 @@ pub(super) struct SharedCollectionState<T> {
     /// This accumulation contains the capabilities held by all [`ReadHold`]s given out for the
     /// collection, including `implied_read_hold` and `warmup_read_hold`.
     ///
-    /// NOTE: This field may only be modified by [`Instance::apply_read_hold_changes`] and
+    /// NOTE: This field may only be modified by [`Instance::apply_read_hold_change`] and
     /// `ComputeController::acquire_read_hold`. Nobody else should modify read capabilities
     /// directly. Instead, collection users should manage read holds through [`ReadHold`] objects
     /// acquired through `ComputeController::acquire_read_hold`.
