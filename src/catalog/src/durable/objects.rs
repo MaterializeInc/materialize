@@ -509,6 +509,12 @@ pub struct Item {
     pub extra_versions: BTreeMap<RelationVersion, GlobalId>,
 }
 
+impl Item {
+    pub fn item_type(&self) -> CatalogItemType {
+        item_type(&self.create_sql)
+    }
+}
+
 impl DurableType for Item {
     type Key = ItemKey;
     type Value = ItemValue;
@@ -1289,32 +1295,36 @@ pub struct ItemValue {
 }
 
 impl ItemValue {
-    pub(crate) fn item_type(&self) -> CatalogItemType {
-        // NOTE(benesch): the implementation of this method is hideous, but is
-        // there a better alternative? Storing the object type alongside the
-        // `create_sql` would introduce the possibility of skew.
-        let mut tokens = self.create_sql.split_whitespace();
-        assert_eq!(tokens.next(), Some("CREATE"));
-        match tokens.next() {
-            Some("TABLE") => CatalogItemType::Table,
-            Some("SOURCE") | Some("SUBSOURCE") => CatalogItemType::Source,
-            Some("SINK") => CatalogItemType::Sink,
-            Some("VIEW") => CatalogItemType::View,
-            Some("MATERIALIZED") => {
-                assert_eq!(tokens.next(), Some("VIEW"));
-                CatalogItemType::MaterializedView
-            }
-            Some("CONTINUAL") => {
-                assert_eq!(tokens.next(), Some("TASK"));
-                CatalogItemType::ContinualTask
-            }
-            Some("INDEX") => CatalogItemType::Index,
-            Some("TYPE") => CatalogItemType::Type,
-            Some("FUNCTION") => CatalogItemType::Func,
-            Some("SECRET") => CatalogItemType::Secret,
-            Some("CONNECTION") => CatalogItemType::Connection,
-            _ => panic!("unexpected create sql: {}", self.create_sql),
+    pub fn item_type(&self) -> CatalogItemType {
+        item_type(&self.create_sql)
+    }
+}
+
+fn item_type(create_sql: &str) -> CatalogItemType {
+    // NOTE(benesch): the implementation of this method is hideous, but is
+    // there a better alternative? Storing the object type alongside the
+    // `create_sql` would introduce the possibility of skew.
+    let mut tokens = create_sql.split_whitespace();
+    assert_eq!(tokens.next(), Some("CREATE"));
+    match tokens.next() {
+        Some("TABLE") => CatalogItemType::Table,
+        Some("SOURCE") | Some("SUBSOURCE") => CatalogItemType::Source,
+        Some("SINK") => CatalogItemType::Sink,
+        Some("VIEW") => CatalogItemType::View,
+        Some("MATERIALIZED") => {
+            assert_eq!(tokens.next(), Some("VIEW"));
+            CatalogItemType::MaterializedView
         }
+        Some("CONTINUAL") => {
+            assert_eq!(tokens.next(), Some("TASK"));
+            CatalogItemType::ContinualTask
+        }
+        Some("INDEX") => CatalogItemType::Index,
+        Some("TYPE") => CatalogItemType::Type,
+        Some("FUNCTION") => CatalogItemType::Func,
+        Some("SECRET") => CatalogItemType::Secret,
+        Some("CONNECTION") => CatalogItemType::Connection,
+        _ => panic!("unexpected create sql: {}", create_sql),
     }
 }
 
