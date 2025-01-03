@@ -28,6 +28,12 @@ def get_ancestor_overrides_for_performance_regressions(
 
     min_ancestor_mz_version_per_commit = dict()
 
+    if scenario_class_name == "FastPathOrderByLimit":
+        # PR#30872 (rust: Upgrade to 1.83.0) increases wallclock
+        min_ancestor_mz_version_per_commit[
+            "74ebdd68dd2e9ec860837d52866ab9db61a0a49e"
+        ] = MzVersion.parse_mz("v0.129.0")
+
     if scenario_class_name == "OptbenchTPCHQ01":
         # PR#30806 ([optimizer] report per-transform metrics) increases wallclock
         min_ancestor_mz_version_per_commit[
