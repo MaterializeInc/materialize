@@ -198,6 +198,9 @@ fn attempt_join_simplification(
     let input_mapper = JoinInputMapper::new(inputs);
 
     if let Some((ltr, rtl)) = semijoin_bijection(inputs, equivalences) {
+        // If semijoin_bijection returns `Some(...)`, then `inputs.len() == 2`.
+        assert_eq!(inputs.len(), 2);
+
         // Collect the `Get` identifiers each input might present as.
         let ids0 = as_filtered_get(&inputs[0], gets_behind_gets)
             .iter()
@@ -207,6 +210,10 @@ fn attempt_join_simplification(
             .iter()
             .map(|(id, _)| *id)
             .collect::<Vec<_>>();
+
+        // Record the types of the inputs, for use in both loops below.
+        let typ0 = inputs[0].typ().column_types;
+        let typ1 = inputs[1].typ().column_types;
 
         // Consider replacing the second input for the benefit of the first.
         if distinct_on_keys_of(&inputs[1], &rtl)
@@ -222,8 +229,6 @@ fn attempt_join_simplification(
                         // The pushdown is for the benefit of CSE on the `A` expressions,
                         // in the not uncommon case of nullable foreign keys in outer joins.
                         // TODO: Discover the transform that would not require this code.
-                        let typ0 = inputs[0].typ().column_types;
-                        let typ1 = inputs[1].typ().column_types;
                         let mut is_not_nulls = Vec::new();
                         for (col0, col1) in ltr.iter() {
                             if !typ1[*col1].nullable && typ0[*col0].nullable {
@@ -256,8 +261,6 @@ fn attempt_join_simplification(
                         // The pushdown is for the benefit of CSE on the `A` expressions,
                         // in the not uncommon case of nullable foreign keys in outer joins.
                         // TODO: Discover the transform that would not require this code.
-                        let typ0 = inputs[0].typ().column_types;
-                        let typ1 = inputs[1].typ().column_types;
                         let mut is_not_nulls = Vec::new();
                         for (col1, col0) in rtl.iter() {
                             if !typ0[*col0].nullable && typ1[*col1].nullable {
