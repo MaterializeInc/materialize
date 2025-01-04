@@ -359,6 +359,7 @@ where
         key: Option<Row>,
         mut logic: L,
         refuel: usize,
+        max_demand: usize,
     ) -> timely::dataflow::Stream<S, I::Item>
     where
         T: Timestamp + Lattice + Columnation,
@@ -376,8 +377,9 @@ where
                     key,
                     move |k, v, t, d| {
                         let mut datums_borrow = datums.borrow();
-                        datums_borrow.extend(k.to_datum_iter());
-                        datums_borrow.extend(v.to_datum_iter());
+                        datums_borrow.extend(k.to_datum_iter().take(max_demand));
+                        let max_demand = max_demand.saturating_sub(datums_borrow.len());
+                        datums_borrow.extend(v.to_datum_iter().take(max_demand));
                         logic(&mut datums_borrow, t, d)
                     },
                     refuel,
@@ -470,6 +472,7 @@ where
         key: Option<Row>,
         mut logic: L,
         refuel: usize,
+        max_demand: usize,
     ) -> timely::dataflow::Stream<S, I::Item>
     where
         I: IntoIterator<Item = (D, S::Timestamp, Diff)>,
@@ -489,8 +492,9 @@ where
                 key,
                 move |k, v, t, d| {
                     let mut datums_borrow = datums.borrow();
-                    datums_borrow.extend(k.to_datum_iter());
-                    datums_borrow.extend(v.to_datum_iter());
+                    datums_borrow.extend(k.to_datum_iter().take(max_demand));
+                    let max_demand = max_demand.saturating_sub(datums_borrow.len());
+                    datums_borrow.extend(v.to_datum_iter().take(max_demand));
                     logic(&mut datums_borrow, t, d)
                 },
                 refuel,
@@ -570,6 +574,7 @@ where
     pub fn flat_map<D, I, C, L>(
         &self,
         key: Option<Row>,
+        max_demand: usize,
         constructor: C,
     ) -> (
         timely::dataflow::Stream<S, I::Item>,
@@ -589,13 +594,13 @@ where
         match &self {
             ArrangementFlavor::Local(oks, errs) => {
                 let logic = constructor();
-                let oks = oks.flat_map(key, logic, refuel);
+                let oks = oks.flat_map(key, logic, refuel, max_demand);
                 let errs = errs.as_collection(|k, &()| k.clone());
                 (oks, errs)
             }
             ArrangementFlavor::Trace(_, oks, errs) => {
                 let logic = constructor();
-                let oks = oks.flat_map(key, logic, refuel);
+                let oks = oks.flat_map(key, logic, refuel, max_demand);
                 let errs = errs.as_collection(|k, &()| k.clone());
                 (oks, errs)
             }
@@ -806,6 +811,7 @@ where
     pub fn flat_map<D, I, C, L>(
         &self,
         key_val: Option<(Vec<MirScalarExpr>, Option<Row>)>,
+        max_demand: usize,
         constructor: C,
     ) -> (
         timely::dataflow::Stream<S, I::Item>,
@@ -824,7 +830,7 @@ where
             let flavor = self
                 .arrangement(&key)
                 .expect("Should have ensured during planning that this arrangement exists.");
-            flavor.flat_map(val, constructor)
+            flavor.flat_map(val, max_demand, constructor)
         } else {
             use timely::dataflow::operators::Map;
             let (oks, errs) = self
@@ -834,8 +840,9 @@ where
             let mut logic = constructor();
             let mut datums = DatumVec::new();
             (
-                oks.inner
-                    .flat_map(move |(v, t, d)| logic(&mut datums.borrow_with(&v), &t, &d)),
+                oks.inner.flat_map(move |(v, t, d)| {
+                    logic(&mut datums.borrow_with_limit(&v, max_demand), &t, &d)
+                }),
                 errs,
             )
         }
@@ -941,6 +948,8 @@ where
         Collection<S, mz_repr::Row, Diff>,
         Collection<S, DataflowError, Diff>,
     ) {
+        let max_demand = mfp.demand().iter().max().map(|x| *x + 1).unwrap_or(0);
+        mfp.permute_fn(|c| c, max_demand);
         mfp.optimize();
         let mfp_plan = mfp.into_plan().unwrap();
 
@@ -959,7 +968,7 @@ where
             let key = key_val.map(|(k, _v)| k);
             return self.as_specific_collection(key.as_deref());
         }
-        let (stream, errors) = self.flat_map(key_val, || {
+        let (stream, errors) = self.flat_map(key_val, max_demand, || {
             let mut datum_vec = DatumVec::new();
             // Wrap in an `Rc` so that lifetimes work out.
             let until = std::rc::Rc::new(until);
