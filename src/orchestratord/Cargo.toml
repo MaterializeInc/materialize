@@ -44,8 +44,11 @@ tracing = "0.1.37"
 urlencoding = "2.1.2"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
+[build-dependencies]
+mz-build-tools = { path = "../build-tools", default-features = false, optional = true }
+
 [features]
-default = ["mz-alloc-default", "workspace-hack"]
+default = ["mz-alloc-default", "mz-build-tools", "mz-build-tools/default", "workspace-hack"]
 jemalloc = ["mz-alloc/jemalloc"]
 
 [package.metadata.cargo-udeps.ignore]

@@ -35,7 +35,7 @@ pub mod environmentd;
 pub mod tls;
 
 #[derive(clap::Parser)]
-pub struct Args {
+pub struct MaterializeControllerArgs {
     #[clap(long)]
     cloud_provider: CloudProvider,
     #[clap(long)]
@@ -206,7 +206,7 @@ impl Display for Error {
 }
 
 pub struct Context {
-    config: Args,
+    config: MaterializeControllerArgs,
     tracing: TracingCliArgs,
     orchestratord_namespace: String,
     metrics: Arc<Metrics>,
@@ -215,7 +215,7 @@ pub struct Context {
 
 impl Context {
     pub fn new(
-        config: Args,
+        config: MaterializeControllerArgs,
         tracing: TracingCliArgs,
         orchestratord_namespace: String,
         metrics: Arc<Metrics>,

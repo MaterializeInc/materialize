@@ -45,7 +45,7 @@ pub struct Args {
     metrics_listen_address: SocketAddr,
 
     #[clap(flatten)]
-    materialize_controller_args: controller::materialize::Args,
+    materialize_controller_args: controller::materialize::MaterializeControllerArgs,
 
     #[clap(flatten)]
     tracing: TracingCliArgs,

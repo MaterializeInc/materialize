@@ -5757,6 +5757,7 @@ dependencies = [
  "mz-alloc",
  "mz-alloc-default",
  "mz-build-info",
+ "mz-build-tools",
  "mz-cloud-provider",
  "mz-cloud-resources",
  "mz-orchestrator-kubernetes",

@@ -25,6 +25,7 @@ rust_library(
     crate_features = [
         "default",
         "mz-alloc-default",
+        "mz-build-tools",
     ],
     data = [],
     proc_macro_deps = [] + all_crate_deps(proc_macro = True),
@@ -58,6 +59,7 @@ rust_test(
     crate_features = [
         "default",
         "mz-alloc-default",
+        "mz-build-tools",
     ],
     data = [],
     env = {},
