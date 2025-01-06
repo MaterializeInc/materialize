@@ -1576,7 +1576,12 @@ fn render_metadata_fetcher<G: Scope<Timestamp = KafkaTimestamp>>(
                 let error = MetadataUpdate::TransientError(status);
                 let timestamp = (config.now_fn)().into();
                 metadata_output.give(&metadata_cap, (timestamp, error));
-                return;
+
+                // IMPORTANT: wedge forever until the `SuspendAndRestart` is processed.
+                // Returning would incorrectly present to the remap operator as progress to the
+                // empty frontier which would be incorrectly recorded to the remap shard.
+                std::future::pending::<()>().await;
+                unreachable!("pending future never returns");
             }
         };
 
