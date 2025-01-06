@@ -261,10 +261,9 @@ impl ConnectionOptionExtracted {
                 if let Some(supported_azs) = scx.catalog.aws_privatelink_availability_zones() {
                     let mut unique_azs: BTreeSet<String> = BTreeSet::new();
                     let mut duplicate_azs: BTreeSet<String> = BTreeSet::new();
-                    let az_pattern = Regex::new(r"^[a-z]{3,4}\d-az[1-6]$").unwrap();
                     // Validate each AZ is supported
                     for connection_az in &connection.availability_zones {
-                        if !az_pattern.is_match(connection_az) {
+                        if !is_valid_az_format(connection_az) {
                             return Err(PlanError::InvalidPrivatelinkAvailabilityZone {
                                 name: connection_az.to_string(),
                                 supported_azs,
@@ -739,4 +738,36 @@ fn plan_kafka_security(
     }
 
     Ok((tls, sasl))
+}
+
+fn is_valid_az_format(az: &str) -> bool {
+    let az_pattern = Regex::new(r"^[a-z]{3,4}\d-az[1-6]$").unwrap();
+    az_pattern.is_match(az)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_az_format() {
+        // Valid patterns
+        assert!(is_valid_az_format("use1-az1"));
+        assert!(is_valid_az_format("usw2-az3"));
+        assert!(is_valid_az_format("euw1-az2"));
+        assert!(is_valid_az_format("apse1-az4"));
+        assert!(is_valid_az_format("apne2-az5"));
+        assert!(is_valid_az_format("cac1-az6"));
+
+        // Invalid patterns
+        assert!(!is_valid_az_format("invalid"));
+        assert!(!is_valid_az_format("use1-az7"));
+        assert!(!is_valid_az_format("USE1-az1"));
+        assert!(!is_valid_az_format("use-az1"));
+        assert!(!is_valid_az_format("useast-az1"));
+        assert!(!is_valid_az_format("use1az1"));
+        assert!(!is_valid_az_format("use1-az0"));
+        assert!(!is_valid_az_format(""));
+        assert!(!is_valid_az_format("use1-AZ1"));
+    }
 }
