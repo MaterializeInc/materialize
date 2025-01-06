@@ -155,6 +155,7 @@ filegroup(
         "src/controller.proto",
         "src/errors.proto",
         "src/instances.proto",
+        "src/oneshot_sources.proto",
         "src/parameters.proto",
         "src/sinks.proto",
         "src/sources.proto",

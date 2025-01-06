@@ -16,6 +16,7 @@ pub mod controller;
 pub mod dyncfgs;
 pub mod errors;
 pub mod instances;
+pub mod oneshot_sources;
 pub mod parameters;
 pub mod read_holds;
 pub mod read_policy;

@@ -2112,23 +2112,25 @@ dependencies = [
 
 [[package]]
 name = "csv-async"
-version = "1.2.6"
+version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "71933d3f2d0481d5111cb2817b15b6961961458ec58adf8008194e6c850046f4"
+checksum = "d37fe5b0d07f4a8260ce1e9a81413e88f459af0f2dfc55c15e96868a2f99c0f0"
 dependencies = [
- "bstr 1.10.0",
  "cfg-if",
  "csv-core",
  "futures",
+ "itoa",
+ "ryu",
+ "serde",
  "tokio",
  "tokio-stream",
 ]
 
 [[package]]
 name = "csv-core"
-version = "0.1.10"
+version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2b2466559f260f48ad25fe6317b3c8dac77b5bdb5763ac7d9d6103530663bc90"
+checksum = "5efa2b3d7902f4b634a20cae3c9c4e6209dc4779feb6863329607560143efa70"
 dependencies = [
  "memchr",
 ]
@@ -7100,7 +7102,9 @@ dependencies = [
  "arrow",
  "async-stream",
  "aws-types",
+ "bytes",
  "bytesize",
+ "csv-async",
  "differential-dataflow",
  "futures",
  "http 1.1.0",
@@ -7119,12 +7123,16 @@ dependencies = [
  "parquet",
  "prometheus",
  "proptest",
+ "reqwest",
  "sentry",
  "serde",
  "thiserror",
  "timely",
  "tokio",
+ "tokio-stream",
+ "tokio-util",
  "tracing",
+ "url",
  "uuid",
  "workspace-hack",
 ]
@@ -9021,10 +9029,12 @@ dependencies = [
  "system-configuration",
  "tokio",
  "tokio-native-tls",
+ "tokio-util",
  "tower-service",
  "url",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "wasm-streams",
  "web-sys",
  "winreg 0.50.0",
 ]
