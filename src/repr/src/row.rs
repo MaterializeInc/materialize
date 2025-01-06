@@ -133,15 +133,6 @@ impl Row {
             packer.try_push_proto(d)?;
         }
 
-        let num_columns = desc.typ().column_types.len();
-        mz_ore::soft_assert_eq_or_log!(
-            self.iter().count(),
-            num_columns,
-            "wrong number of columns when decoding a Row!, got {row:?}, expected {desc:?}",
-            row = self,
-            desc = desc,
-        );
-
         Ok(())
     }
 

@@ -96,7 +96,7 @@ impl ColumnDecoder<()> for UnitColumnar {
     }
 
     fn goodbytes(&self) -> usize {
-        std::mem::size_of::<UnitColumnar>()
+        0
     }
 
     fn stats(&self) -> StructStats {

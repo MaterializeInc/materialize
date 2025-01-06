@@ -1243,43 +1243,14 @@ impl DatumColumnDecoder {
             DatumColumnDecoder::MzAclItem(a) => ArrayOrd::Binary(a.clone()).goodbytes(),
             DatumColumnDecoder::Range(a) => ArrayOrd::Binary(a.clone()).goodbytes(),
             DatumColumnDecoder::Json(a) => ArrayOrd::String(a.clone()).goodbytes(),
-            DatumColumnDecoder::Array {
-                dim_offsets,
-                dims,
-                val_offsets,
-                vals,
-                nulls,
-            } => {
-                dim_offsets.inner().inner().len()
-                    + ArrayOrd::FixedSizeBinary(dims.clone()).goodbytes()
-                    + val_offsets.inner().inner().len()
-                    + vals.goodbytes()
-                    + nulls.as_ref().map(|b| b.len()).unwrap_or(0)
+            DatumColumnDecoder::Array { dims, vals, .. } => {
+                (dims.len() * PackedArrayDimension::SIZE) + vals.goodbytes()
             }
-            DatumColumnDecoder::List {
-                offsets,
-                values,
-                nulls,
-            } => {
-                offsets.inner().inner().len()
-                    + values.goodbytes()
-                    + nulls.as_ref().map(|b| b.len()).unwrap_or(0)
+            DatumColumnDecoder::List { values, .. } => values.goodbytes(),
+            DatumColumnDecoder::Map { keys, vals, .. } => {
+                ArrayOrd::String(keys.clone()).goodbytes() + vals.goodbytes()
             }
-            DatumColumnDecoder::Map {
-                offsets,
-                keys,
-                vals,
-                nulls,
-            } => {
-                offsets.inner().inner().len()
-                    + ArrayOrd::String(keys.clone()).goodbytes()
-                    + vals.goodbytes()
-                    + nulls.as_ref().map(|b| b.len()).unwrap_or(0)
-            }
-            DatumColumnDecoder::Record { fields, nulls } => {
-                fields.iter().map(|f| f.goodbytes()).sum::<usize>()
-                    + nulls.as_ref().map(|b| b.len()).unwrap_or(0)
-            }
+            DatumColumnDecoder::Record { fields, .. } => fields.iter().map(|f| f.goodbytes()).sum(),
             DatumColumnDecoder::RecordEmpty(a) => ArrayOrd::Bool(a.clone()).goodbytes(),
         }
     }
