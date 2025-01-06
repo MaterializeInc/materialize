@@ -1284,7 +1284,8 @@ impl Catalog {
     }
 
     pub fn user_cluster_replicas(&self) -> impl Iterator<Item = &ClusterReplica> {
-        self.user_clusters().flat_map(|cluster| cluster.replicas())
+        self.user_clusters()
+            .flat_map(|cluster| cluster.user_replicas())
     }
 
     pub fn databases(&self) -> impl Iterator<Item = &Database> {

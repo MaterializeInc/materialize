@@ -681,13 +681,15 @@ impl Coordinator {
         // `catalog_transact` will do this validation too, but allocating
         // replica IDs is expensive enough that we need to do this validation
         // before allocating replica IDs. See database-issues#6046.
-        self.validate_resource_limit(
-            0,
-            i64::from(replication_factor),
-            SystemVars::max_replicas_per_cluster,
-            "cluster replica",
-            MAX_REPLICAS_PER_CLUSTER.name(),
-        )?;
+        if cluster_id.is_user() {
+            self.validate_resource_limit(
+                0,
+                i64::from(replication_factor),
+                SystemVars::max_replicas_per_cluster,
+                "cluster replica",
+                MAX_REPLICAS_PER_CLUSTER.name(),
+            )?;
+        }
 
         for replica_name in (0..replication_factor).map(managed_cluster_replica_name) {
             self.create_managed_cluster_replica_op(
@@ -809,13 +811,15 @@ impl Coordinator {
         // `catalog_transact` will do this validation too, but allocating
         // replica IDs is expensive enough that we need to do this validation
         // before allocating replica IDs. See database-issues#6046.
-        self.validate_resource_limit(
-            0,
-            i64::try_from(replicas.len()).unwrap_or(i64::MAX),
-            SystemVars::max_replicas_per_cluster,
-            "cluster replica",
-            MAX_REPLICAS_PER_CLUSTER.name(),
-        )?;
+        if id.is_user() {
+            self.validate_resource_limit(
+                0,
+                i64::try_from(replicas.len()).unwrap_or(i64::MAX),
+                SystemVars::max_replicas_per_cluster,
+                "cluster replica",
+                MAX_REPLICAS_PER_CLUSTER.name(),
+            )?;
+        }
 
         for (replica_name, replica_config) in replicas {
             // If the AZ was not specified, choose one, round-robin, from the ones with
@@ -1163,13 +1167,15 @@ impl Coordinator {
         // replica IDs is expensive enough that we need to do this validation
         // before allocating replica IDs. See database-issues#6046.
         if new_replication_factor > replication_factor {
-            self.validate_resource_limit(
-                usize::cast_from(*replication_factor),
-                i64::from(*new_replication_factor) - i64::from(*replication_factor),
-                SystemVars::max_replicas_per_cluster,
-                "cluster replica",
-                MAX_REPLICAS_PER_CLUSTER.name(),
-            )?;
+            if cluster_id.is_user() {
+                self.validate_resource_limit(
+                    usize::cast_from(*replication_factor),
+                    i64::from(*new_replication_factor) - i64::from(*replication_factor),
+                    SystemVars::max_replicas_per_cluster,
+                    "cluster replica",
+                    MAX_REPLICAS_PER_CLUSTER.name(),
+                )?;
+            }
         }
 
         if new_size != size
