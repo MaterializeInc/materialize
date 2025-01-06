@@ -59,7 +59,7 @@ impl FlatMapToMap {
                         match (iter.next(), iter.next()) {
                             (None, _) => {
                                 // If there are no elements in the literal argument, no output.
-                                relation.take_safely();
+                                relation.take_safely(None);
                             }
                             (Some((row, 1)), None) => {
                                 *relation =

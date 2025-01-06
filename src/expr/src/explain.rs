@@ -239,7 +239,7 @@ pub fn enforce_linear_chains(expr: &mut MirRelationExpr) -> Result<(), ExplainEr
                 //     .map(|id| LocalId::new(1000_u64 + u64::cast_from(id_map.len()) + id))
                 //     .unwrap();
                 let id = id_gen.next().unwrap();
-                let value = input.take_safely();
+                let value = input.take_safely(None);
                 // generate a `let $fresh_id = $body in $fresh_id` to replace this input
                 let mut binding = MirRelationExpr::Let {
                     id,

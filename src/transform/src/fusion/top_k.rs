@@ -112,7 +112,7 @@ impl TopK {
                     }
 
                     if let Some(0) = limit.as_ref().and_then(|l| l.as_literal_int64()) {
-                        relation.take_safely();
+                        relation.take_safely(None);
                         break;
                     }
 
