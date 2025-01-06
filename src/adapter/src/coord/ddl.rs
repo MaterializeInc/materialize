@@ -1398,14 +1398,18 @@ impl Coordinator {
                     cluster_id, config, ..
                 } => {
                     *new_replicas_per_cluster.entry(*cluster_id).or_insert(0) += 1;
-                    if let ReplicaLocation::Managed(location) = &config.location {
-                        let replica_allocation = self
-                            .catalog()
-                            .cluster_replica_sizes()
-                            .0
-                            .get(location.size_for_billing())
-                            .expect("location size is validated against the cluster replica sizes");
-                        new_credit_consumption_rate += replica_allocation.credits_per_hour
+                    if cluster_id.is_user() {
+                        if let ReplicaLocation::Managed(location) = &config.location {
+                            let replica_allocation = self
+                                .catalog()
+                                .cluster_replica_sizes()
+                                .0
+                                .get(location.size_for_billing())
+                                .expect(
+                                    "location size is validated against the cluster replica sizes",
+                                );
+                            new_credit_consumption_rate += replica_allocation.credits_per_hour
+                        }
                     }
                 }
                 Op::CreateItem { name, item, .. } => {
@@ -1460,18 +1464,21 @@ impl Coordinator {
                                 *new_replicas_per_cluster.entry(*cluster_id).or_insert(0) -= 1;
                                 let cluster =
                                     self.catalog().get_cluster_replica(*cluster_id, *replica_id);
-                                if let ReplicaLocation::Managed(location) = &cluster.config.location
-                                {
-                                    let replica_allocation = self
-                                .catalog()
-                                .cluster_replica_sizes()
-                                .0
-                                .get(location.size_for_billing())
-                                .expect(
-                                    "location size is validated against the cluster replica sizes",
-                                );
-                                    new_credit_consumption_rate -=
-                                        replica_allocation.credits_per_hour
+                                if cluster_id.is_user() {
+                                    if let ReplicaLocation::Managed(location) =
+                                        &cluster.config.location
+                                    {
+                                        let replica_allocation = self
+                                            .catalog()
+                                            .cluster_replica_sizes()
+                                            .0
+                                            .get(location.size_for_billing())
+                                            .expect(
+                                                "location size is validated against the cluster replica sizes",
+                                            );
+                                        new_credit_consumption_rate -=
+                                            replica_allocation.credits_per_hour
+                                    }
                                 }
                             }
                             DropObjectInfo::Database(_) => {
