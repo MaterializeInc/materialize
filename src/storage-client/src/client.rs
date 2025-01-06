@@ -968,6 +968,25 @@ pub struct TimestamplessUpdate {
     pub diff: Diff,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum TableData {
+    /// Rows that still need to be persisted and appended.
+    ///
+    /// The contained [`Row`]s are _not_ consolidated.
+    Rows(Vec<(Row, Diff)>),
+    /// Batches already staged in Persist ready to be appended.
+    Batches(SmallVec<[ProtoBatch; 1]>),
+}
+
+impl TableData {
+    pub fn is_empty(&self) -> bool {
+        match self {
+            TableData::Rows(rows) => rows.is_empty(),
+            TableData::Batches(batches) => batches.is_empty(),
+        }
+    }
+}
+
 impl RustType<ProtoTrace> for (GlobalId, Antichain<mz_repr::Timestamp>) {
     fn into_proto(&self) -> ProtoTrace {
         ProtoTrace {

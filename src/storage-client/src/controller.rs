@@ -51,7 +51,7 @@ use timely::progress::Timestamp as TimelyTimestamp;
 use timely::progress::{Antichain, Timestamp};
 use tokio::sync::{mpsc, oneshot};
 
-use crate::client::{AppendOnlyUpdate, StatusUpdate, TimestamplessUpdate};
+use crate::client::{AppendOnlyUpdate, StatusUpdate, TableData};
 use crate::statistics::WebhookStatistics;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, Eq, PartialEq, Hash, PartialOrd, Ord)]
@@ -575,7 +575,7 @@ pub trait StorageController: Debug {
         &mut self,
         write_ts: Self::Timestamp,
         advance_to: Self::Timestamp,
-        commands: Vec<(GlobalId, Vec<TimestamplessUpdate>)>,
+        commands: Vec<(GlobalId, Vec<TableData>)>,
     ) -> Result<
         tokio::sync::oneshot::Receiver<Result<(), StorageError<Self::Timestamp>>>,
         StorageError<Self::Timestamp>,

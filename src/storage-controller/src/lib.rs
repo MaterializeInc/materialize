@@ -50,7 +50,7 @@ use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationVersion, Row, TimestampManipulation};
 use mz_storage_client::client::{
     ProtoStorageCommand, ProtoStorageResponse, RunIngestionCommand, RunOneshotIngestionCommand,
-    StatusUpdate, StorageCommand, StorageResponse, TimestamplessUpdate,
+    RunSinkCommand, Status, StatusUpdate, StorageCommand, StorageResponse, TableData,
 };
 use mz_storage_client::controller::{
     BoxFuture, CollectionDescription, DataSource, ExportDescription, ExportState,
@@ -71,6 +71,7 @@ use mz_storage_types::connections::inline::InlinedConnection;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::{AlterError, CollectionMetadata, StorageError, TxnsCodecRow};
 use mz_storage_types::instances::StorageInstanceId;
+use mz_storage_types::oneshot_sources::{OneshotIngestionRequest, OneshotResultCallback};
 use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::read_policy::ReadPolicy;
@@ -1812,7 +1813,7 @@ where
         &mut self,
         write_ts: Self::Timestamp,
         advance_to: Self::Timestamp,
-        commands: Vec<(GlobalId, Vec<TimestamplessUpdate>)>,
+        commands: Vec<(GlobalId, Vec<TableData>)>,
     ) -> Result<
         tokio::sync::oneshot::Receiver<Result<(), StorageError<Self::Timestamp>>>,
         StorageError<Self::Timestamp>,

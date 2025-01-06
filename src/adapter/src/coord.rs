@@ -124,6 +124,7 @@ use mz_ore::vec::VecExt;
 use mz_ore::{
     assert_none, instrument, soft_assert_eq_or_log, soft_assert_or_log, soft_panic_or_log, stack,
 };
+use mz_persist_client::batch::ProtoBatch;
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::global_id::TransientIdGen;
@@ -144,7 +145,7 @@ use mz_sql::session::user::User;
 use mz_sql::session::vars::SystemVars;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::ExplainStage;
-use mz_storage_client::client::TimestamplessUpdate;
+use mz_storage_client::client::TableData;
 use mz_storage_client::controller::{CollectionDescription, DataSource};
 use mz_storage_types::connections::inline::{IntoInlineConnection, ReferencedConnection};
 use mz_storage_types::connections::Connection as StorageConnection;
@@ -2218,13 +2219,7 @@ impl Coordinator {
                 );
                 let appends = appends
                     .into_iter()
-                    .map(|(id, updates)| {
-                        let updates = updates
-                            .into_iter()
-                            .map(|(row, diff)| TimestamplessUpdate { row, diff })
-                            .collect();
-                        (id, updates)
-                    })
+                    .map(|(id, updates)| (id, vec![TableData::Rows(updates)]))
                     .collect();
                 let fut = self
                     .controller
