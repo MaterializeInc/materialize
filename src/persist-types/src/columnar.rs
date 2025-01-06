@@ -189,14 +189,12 @@ pub fn schema2_to_codec<A: Codec + Default>(
     let mut buffer = vec![];
 
     for i in 0..len {
-        if decoder.is_null(i) {
-            builder.append_null();
-        } else {
-            decoder.decode(i, &mut value);
-            Codec::encode(&value, &mut buffer);
-            builder.append_value(&buffer);
-            buffer.clear()
-        }
+        // The binary encoding of key/value types can never be null.
+        // Defer to the implementation-defined behaviour for null entries in that case.
+        decoder.decode(i, &mut value);
+        Codec::encode(&value, &mut buffer);
+        builder.append_value(&buffer);
+        buffer.clear()
     }
 
     Ok(BinaryBuilder::finish(&mut builder))
