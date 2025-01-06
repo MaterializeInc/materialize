@@ -933,8 +933,19 @@ pub struct ShowColumnsPlan {
 #[derive(Debug)]
 pub struct CopyFromPlan {
     pub id: CatalogItemId,
+    pub source: CopyFromSource,
     pub columns: Vec<usize>,
     pub params: CopyFormatParams<'static>,
+}
+
+#[derive(Debug)]
+pub enum CopyFromSource {
+    /// Copying from a file local to the user, transmitted via pgwire.
+    Stdin,
+    /// A remote resource, e.g. S3.
+    ///
+    /// The contained [`HirScalarExpr`] evaluates to the Url for the remote resource.
+    Url(HirScalarExpr),
 }
 
 #[derive(Debug, Clone)]

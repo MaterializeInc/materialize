@@ -1239,6 +1239,7 @@ impl Coordinator {
         self.cancel_compute_sinks_for_conn(&conn_id).await;
         self.cancel_cluster_reconfigurations_for_conn(&conn_id)
             .await;
+        self.cancel_pending_copy(&conn_id);
         if let Some((tx, _rx)) = self.staged_cancellation.get_mut(&conn_id) {
             let _ = tx.send(true);
         }
@@ -1273,6 +1274,7 @@ impl Coordinator {
             .dec();
         self.cancel_pending_peeks(conn.conn_id());
         self.cancel_pending_watchsets(&conn_id);
+        self.cancel_pending_copy(&conn_id);
         self.end_session_for_statement_logging(conn.uuid());
 
         // Queue the builtin table update, but do not wait for it to complete. We explicitly do

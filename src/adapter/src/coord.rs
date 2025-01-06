@@ -254,6 +254,11 @@ pub enum Message {
         conn_id: ConnectionId,
     },
     LinearizeReads,
+    StagedBatches {
+        conn_id: ConnectionId,
+        table_id: CatalogItemId,
+        batches: Vec<Result<ProtoBatch, String>>,
+    },
     StorageUsageSchedule,
     StorageUsageFetch,
     StorageUsageUpdate(ShardsUsageReferenced),
@@ -354,6 +359,7 @@ impl Message {
             Message::ClusterEvent(_) => "cluster_event",
             Message::CancelPendingPeeks { .. } => "cancel_pending_peeks",
             Message::LinearizeReads => "linearize_reads",
+            Message::StagedBatches { .. } => "staged_batches",
             Message::StorageUsageSchedule => "storage_usage_schedule",
             Message::StorageUsageFetch => "storage_usage_fetch",
             Message::StorageUsageUpdate(_) => "storage_usage_update",
@@ -1659,6 +1665,10 @@ pub struct Coordinator {
     active_compute_sinks: BTreeMap<GlobalId, ActiveComputeSink>,
     /// A map from active webhooks to their invalidation handle.
     active_webhooks: BTreeMap<CatalogItemId, WebhookAppenderInvalidator>,
+    /// A map of active `COPY FROM` statements. The Coordinator waits for `clusterd`
+    /// to stage Batches in Persist that we will then link into the shard.
+    active_copies: BTreeMap<ConnectionId, ExecuteContext>,
+
     /// A map from connection ids to a watch channel that is set to `true` if the connection
     /// received a cancel request.
     staged_cancellation: BTreeMap<ConnectionId, (watch::Sender<bool>, watch::Receiver<bool>)>,
@@ -4184,6 +4194,7 @@ pub fn serve(
                     serialized_ddl: LockedVecDeque::new(),
                     active_compute_sinks: BTreeMap::new(),
                     active_webhooks: BTreeMap::new(),
+                    active_copies: BTreeMap::new(),
                     staged_cancellation: BTreeMap::new(),
                     introspection_subscribes: BTreeMap::new(),
                     write_locks: BTreeMap::new(),
