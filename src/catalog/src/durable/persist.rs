@@ -115,10 +115,10 @@ const CATALOG_SEED: usize = 1;
 /// Persist guarantees that the shard versions are non-decreasing, so we don't need to worry about
 /// race conditions where the shard version decreases after reading it.
 const UPGRADE_SEED: usize = 2;
-/// Seed used to generate the persist shard ID for builtin table migrations.
-pub const BUILTIN_MIGRATION_SEED: usize = 3;
-/// Seed used to generate the persist shard ID for the expression cache.
-pub const EXPRESSION_CACHE_SEED: usize = 4;
+/// Legacy seed used to generate the persist shard ID for builtin table migrations. DO NOT REUSE.
+pub const _BUILTIN_MIGRATION_SEED: usize = 3;
+/// Legacy seed used to generate the persist shard ID for the expression cache. DO NOT REUSE.
+pub const _EXPRESSION_CACHE_SEED: usize = 4;
 
 /// Durable catalog mode that dictates the effect of mutable operations.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]

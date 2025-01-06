@@ -38,7 +38,7 @@ pub use crate::durable::objects::{
     ReplicaLocation, Role, Schema, SourceReference, SourceReferences, StorageCollectionMetadata,
     SystemConfiguration, SystemObjectDescription, SystemObjectMapping, UnfinalizedShard,
 };
-pub use crate::durable::persist::{shard_id, BUILTIN_MIGRATION_SEED, EXPRESSION_CACHE_SEED};
+pub use crate::durable::persist::shard_id;
 use crate::durable::persist::{Timestamp, UnopenedPersistCatalogState};
 pub use crate::durable::transaction::Transaction;
 use crate::durable::transaction::TransactionBatch;

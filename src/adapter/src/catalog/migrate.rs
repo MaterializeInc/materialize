@@ -10,14 +10,10 @@
 use std::collections::BTreeMap;
 
 use mz_catalog::builtin::BuiltinTable;
-use mz_catalog::durable::{
-    shard_id, Transaction, BUILTIN_MIGRATION_SEED, BUILTIN_MIGRATION_SHARD_KEY,
-    EXPRESSION_CACHE_SEED, EXPRESSION_CACHE_SHARD_KEY,
-};
+use mz_catalog::durable::Transaction;
 use mz_catalog::memory::objects::StateUpdate;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NowFn;
-use mz_persist_types::ShardId;
 use mz_repr::{CatalogItemId, Timestamp};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql_parser::ast::{Raw, Statement};
@@ -190,40 +186,11 @@ pub(crate) async fn migrate(
 
 /// Migrations that run only on the durable catalog before any data is loaded into memory.
 pub(crate) fn durable_migrate(
-    tx: &mut Transaction,
-    organization_id: Uuid,
+    _tx: &mut Transaction,
+    _organization_id: Uuid,
     _boot_ts: Timestamp,
 ) -> Result<(), anyhow::Error> {
-    // Insert the builtin migration shard into the settings collection.
-    if tx.get_builtin_migration_shard().is_none() {
-        let builtin_migration_shard = builtin_migration_shard_id(organization_id);
-        tx.set_setting(
-            BUILTIN_MIGRATION_SHARD_KEY.to_string(),
-            Some(builtin_migration_shard.to_string()),
-        )?;
-    }
-
-    // Insert the expression cache shard into the settings collection.
-    if tx.get_expression_cache_shard().is_none() {
-        let expression_cache_shard = expression_cache_shard_id(organization_id);
-        tx.set_setting(
-            EXPRESSION_CACHE_SHARD_KEY.to_string(),
-            Some(expression_cache_shard.to_string()),
-        )?;
-    }
     Ok(())
-}
-
-/// Deterministically generate a builtin table migration shard ID for the given
-/// `organization_id`.
-fn builtin_migration_shard_id(organization_id: Uuid) -> ShardId {
-    shard_id(organization_id, BUILTIN_MIGRATION_SEED)
-}
-
-/// Deterministically generate an expression cache shard ID for the given
-/// `organization_id`.
-pub fn expression_cache_shard_id(organization_id: Uuid) -> ShardId {
-    shard_id(organization_id, EXPRESSION_CACHE_SEED)
 }
 
 // Add new migrations below their appropriate heading, and precede them with a
