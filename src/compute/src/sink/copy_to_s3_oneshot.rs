@@ -9,7 +9,6 @@
 
 use std::any::Any;
 use std::cell::RefCell;
-use std::ops::DerefMut;
 use std::rc::Rc;
 
 use differential_dataflow::{AsCollection, Collection, Hashable};
@@ -47,18 +46,13 @@ where
         err_collection: Collection<G, DataflowError, Diff>,
         _ct_times: Option<Collection<G, (), Diff>>,
     ) -> Option<Rc<dyn Any>> {
-        // An encapsulation of the copy to response protocol.
-        // Used to send rows and errors if this fails.
-        let response_protocol_handle = Rc::new(RefCell::new(Some(ResponseProtocol {
+        // Set up a callback to communicate the result of the copy-to operation to the controller.
+        let mut response_protocol = ResponseProtocol {
             sink_id,
             response_buffer: Some(Rc::clone(&compute_state.copy_to_response_buffer)),
-        })));
-        let connection_context = compute_state.context.connection_context.clone();
-
-        let one_time_callback = move |count: Result<u64, String>| {
-            if let Some(response_protocol) = response_protocol_handle.borrow_mut().deref_mut() {
-                response_protocol.send(count);
-            }
+        };
+        let result_callback = move |count: Result<u64, String>| {
+            response_protocol.send(count);
         };
 
         // Splitting the data across a known number of batches to distribute load across the cluster.
@@ -128,12 +122,12 @@ where
             error_stream,
             sink.up_to.clone(),
             self.upload_info.clone(),
-            connection_context,
+            compute_state.context.connection_context.clone(),
             self.aws_connection.clone(),
             sink_id,
             self.connection_id,
             params,
-            one_time_callback,
+            result_callback,
         );
 
         Some(token)
