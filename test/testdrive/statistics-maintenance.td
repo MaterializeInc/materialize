@@ -46,6 +46,13 @@ one:two
   VALUE FORMAT BYTES
   ENVELOPE UPSERT
 
+# The `CREATE TABLE ... FROM SOURCE` commands caused a recreation of the
+# respective source dataflows, during which we might have lost the statistics
+# about committed updates from the snapshot. Ingest some more data to ensure we
+# see some `updates_committed`.
+$ kafka-ingest format=bytes topic=upsert key-format=bytes key-terminator=:
+two:three
+
 # Ensure we produce statistics
 > SELECT s.name, SUM(u.messages_staged), SUM(u.messages_committed), SUM(u.bytes_staged) > 0, SUM(bytes_staged) = SUM(bytes_committed)
   FROM mz_sinks s
@@ -88,7 +95,7 @@ upsert1 true true
 > ALTER CLUSTER cluster1 SET (REPLICATION FACTOR = 1)
 > INSERT INTO t VALUES ('key1', 'value')
 $ kafka-ingest format=bytes topic=upsert key-format=bytes key-terminator=:
-two:three
+three:four
 
 # Statistics should remain the same
 > SELECT s.name, SUM(u.messages_staged), SUM(u.messages_committed), SUM(u.bytes_staged) > 0, SUM(bytes_staged) = SUM(bytes_committed)
