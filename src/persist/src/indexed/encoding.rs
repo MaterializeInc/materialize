@@ -13,7 +13,7 @@
 // Ditto for Log* and the Log. The others are used internally in these top-level
 // structs.
 
-use arrow::array::{Array, ArrayRef};
+use arrow::array::{Array, ArrayRef, Int64Array};
 use arrow::datatypes::DataType;
 use std::fmt::{self, Debug};
 use std::marker::PhantomData;
@@ -207,6 +207,16 @@ impl BlobTraceUpdates {
     /// The number of updates.
     pub fn len(&self) -> usize {
         self.records().len()
+    }
+
+    /// The updates' timestamps as an integer array.
+    pub fn timestamps(&self) -> &Int64Array {
+        self.records().timestamps()
+    }
+
+    /// The updates' diffs as an integer array.
+    pub fn diffs(&self) -> &Int64Array {
+        self.records().diffs()
     }
 
     /// Return the [`ColumnarRecords`] of the blob.

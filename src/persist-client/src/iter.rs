@@ -261,7 +261,8 @@ impl<K: Codec, V: Codec, T: Codec64, D: Codec64> RowSort<T, D> for StructuredSor
     }
 
     fn get(updates: &Self::Updates, index: usize) -> Option<(Self::KV<'_>, T, D)> {
-        let (_, t, d) = updates.data.records().get(index)?;
+        let t = updates.data.timestamps().values().get(index)?.to_le_bytes();
+        let d = updates.data.diffs().values().get(index)?.to_le_bytes();
         Some((
             (updates.key_ord.at(index), Some(updates.val_ord.at(index))),
             T::decode(t),

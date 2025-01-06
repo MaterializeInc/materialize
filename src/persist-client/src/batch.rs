@@ -9,7 +9,7 @@
 
 //! A handle to a batch of updates
 
-use arrow::array::Array;
+use arrow::array::{Array, Int64Array};
 use differential_dataflow::Hashable;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
@@ -244,7 +244,7 @@ where
                     .decode::<T>(&self.metrics.columnar)
                     .expect("valid inline part");
                 let diffs_sum =
-                    diffs_sum::<D>(updates.updates.records()).expect("inline parts are not empty");
+                    diffs_sum::<D>(updates.updates.diffs()).expect("inline parts are not empty");
                 let mut write_schemas = write_schemas.clone();
                 write_schemas.id = *schema_id;
 
@@ -803,7 +803,7 @@ where
         if num_updates == 0 {
             return;
         }
-        let diffs_sum = diffs_sum::<D>(columnar.records()).expect("part is non empty");
+        let diffs_sum = diffs_sum::<D>(columnar.diffs()).expect("part is non empty");
 
         let start = Instant::now();
         self.parts
@@ -1272,7 +1272,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
     ) -> BatchPart<T> {
         let partial_key = PartialBatchKey::new(&cfg.writer_key, &PartId::new());
         let key = partial_key.complete(&shard_metrics.shard_id);
-        let goodbytes = updates.updates.records().goodbytes();
+        let goodbytes = updates.updates.goodbytes();
         let metrics_ = Arc::clone(&metrics);
         let schema_id = write_schemas.id;
 
@@ -1598,10 +1598,10 @@ impl<T: Timestamp> PartDeletes<T> {
 }
 
 /// Returns the total sum of diffs or None if there were no updates.
-fn diffs_sum<D: Semigroup + Codec64>(updates: &ColumnarRecords) -> Option<D> {
+fn diffs_sum<D: Semigroup + Codec64>(updates: &Int64Array) -> Option<D> {
     let mut sum = None;
-    for (_kv, _t, d) in updates.iter() {
-        let d = D::decode(d);
+    for d in updates.values().iter() {
+        let d = D::decode(d.to_le_bytes());
         match &mut sum {
             None => sum = Some(d),
             Some(x) => x.plus_equals(&d),

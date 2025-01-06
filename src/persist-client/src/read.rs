@@ -974,8 +974,8 @@ where
                     let mut v = V::default();
                     key_decoder.decode(i, &mut k);
                     val_decoder.decode(i, &mut v);
-                    let t = T::decode(iter.records().timestamps().value(i).to_le_bytes());
-                    let d = D::decode(iter.records().diffs().value(i).to_le_bytes());
+                    let t = T::decode(iter.timestamps().value(i).to_le_bytes());
+                    let d = D::decode(iter.diffs().value(i).to_le_bytes());
                     ((Ok(k), Ok(v)), t, d)
                 });
 

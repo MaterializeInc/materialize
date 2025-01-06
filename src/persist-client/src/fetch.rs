@@ -436,7 +436,7 @@ where
             .expect("internal error: invalid encoded state");
         read_metrics
             .part_goodbytes
-            .inc_by(u64::cast_from(parsed.updates.records().goodbytes()));
+            .inc_by(u64::cast_from(parsed.updates.goodbytes()));
         EncodedPart::from_hollow(read_metrics.clone(), registered_desc, part, parsed)
     })
 }
@@ -776,7 +776,7 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
         part_decode_format: PartDecodeFormat,
         stats: Option<&LazyPartStats>,
     ) -> Self {
-        let part_len = u64::cast_from(part.part.updates.records().len());
+        let part_len = u64::cast_from(part.part.updates.len());
         match &migration {
             PartMigration::SameSchema { .. } => metrics.schema.migration_count_same.inc(),
             PartMigration::Codec { .. } => {
@@ -1105,7 +1105,7 @@ where
 
     fn size_hint(&self) -> (usize, Option<usize>) {
         // We don't know in advance how restrictive the filter will be.
-        let max_len = self.part.part.updates.records().len();
+        let max_len = self.part.part.updates.len();
         (0, Some(max_len))
     }
 }
@@ -1403,7 +1403,7 @@ impl Cursor {
 
     /// Returns true if the cursor is past the end of the part data.
     pub fn is_exhausted<T: Timestamp + Codec64>(&self, part: &EncodedPart<T>) -> bool {
-        self.idx >= part.part.updates.records().len()
+        self.idx >= part.part.updates.len()
     }
 
     /// Advance the cursor just past the end of the most recent update, if there is one.
