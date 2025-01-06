@@ -78,7 +78,7 @@ impl ArrowReader {
             let column = array
                 .column_by_name(col_name.as_str())
                 .ok_or_else(|| anyhow::anyhow!("'{col_name}' not found"))?;
-            let reader = scalar_type_and_array_to_reader(&col_type.scalar_type, column.clone())
+            let reader = scalar_type_and_array_to_reader(&col_type.scalar_type, Arc::clone(column))
                 .context(col_name.clone())?;
 
             readers.push(reader);
@@ -258,7 +258,7 @@ fn scalar_type_and_array_to_reader(
         ) => {
             let array = downcast_array::<ListArray>(array);
             let inner_decoder =
-                scalar_type_and_array_to_reader(&element_type, Arc::clone(array.values()))
+                scalar_type_and_array_to_reader(element_type, Arc::clone(array.values()))
                     .context("list")?;
             Ok(ColReader::List {
                 offsets: array.offsets().clone(),
@@ -275,7 +275,7 @@ fn scalar_type_and_array_to_reader(
         ) => {
             let array = downcast_array::<LargeListArray>(array);
             let inner_decoder =
-                scalar_type_and_array_to_reader(&element_type, Arc::clone(array.values()))
+                scalar_type_and_array_to_reader(element_type, Arc::clone(array.values()))
                     .context("large list")?;
             Ok(ColReader::LargeList {
                 offsets: array.offsets().clone(),
