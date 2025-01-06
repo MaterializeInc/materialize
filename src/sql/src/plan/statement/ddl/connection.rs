@@ -749,7 +749,7 @@ fn is_valid_az_format(az: &str) -> bool {
 mod tests {
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn test_az_format() {
         // Valid patterns
         assert!(is_valid_az_format("use1-az1"));
