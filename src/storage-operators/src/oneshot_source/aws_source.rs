@@ -119,6 +119,10 @@ impl OneshotObject for S3Object {
         &self.name
     }
 
+    fn size(&self) -> usize {
+        self.size
+    }
+
     fn encodings(&self) -> &[super::Encoding] {
         &[]
     }

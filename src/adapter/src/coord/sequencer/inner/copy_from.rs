@@ -80,6 +80,7 @@ impl Coordinator {
             CopyFormatParams::Csv(csv) => {
                 mz_storage_types::oneshot_sources::ContentFormat::Csv(csv.to_owned())
             }
+            CopyFormatParams::Parquet => mz_storage_types::oneshot_sources::ContentFormat::Parquet,
             CopyFormatParams::Text(_) | CopyFormatParams::Binary => {
                 mz_ore::soft_panic_or_log!("unsupported formats should be rejected in planning");
                 ctx.retire(Err(AdapterError::Unsupported("COPY FROM URL format")));

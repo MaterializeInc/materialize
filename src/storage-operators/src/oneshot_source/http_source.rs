@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::oneshot_source::{
-    Encoding, OneshotObject, OneshotSource, StorageErrorX, StorageErrorXContext,
+    Encoding, OneshotObject, OneshotSource, StorageErrorX, StorageErrorXContext, StorageErrorXKind,
 };
 
 /// Generic oneshot source that fetches a file from a URL on the public internet.
@@ -43,6 +43,8 @@ pub struct HttpObject {
     url: Url,
     /// Name of the file.
     filename: String,
+    /// Size of this file reported by the [`Content-Length`](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Length) header
+    size: usize,
     /// Any values reporting from the [`Content-Encoding`](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Encoding) header.
     content_encoding: Vec<Encoding>,
 }
@@ -50,6 +52,10 @@ pub struct HttpObject {
 impl OneshotObject for HttpObject {
     fn name(&self) -> &str {
         &self.filename
+    }
+
+    fn size(&self) -> usize {
+        self.size
     }
 
     fn encodings(&self) -> &[Encoding] {
@@ -107,6 +113,15 @@ impl OneshotSource for HttpOneshotSource {
             HttpChecksum::None
         };
 
+        // Get the size of the object from the Conent-Length header.
+        let size = get_header(&reqwest::header::CONTENT_LENGTH)
+            .ok_or_else(|| StorageErrorXKind::MissingSize)
+            .and_then(|s| {
+                s.parse::<usize>()
+                    .map_err(|e| StorageErrorXKind::generic(e))
+            })
+            .context("content-length header")?;
+
         // TODO(cf1): We should probably check the content-type as well. At least for advisory purposes.
 
         let filename = self
@@ -118,6 +133,7 @@ impl OneshotSource for HttpOneshotSource {
         let object = HttpObject {
             url: self.origin.clone(),
             filename,
+            size,
             content_encoding: vec![],
         };
         tracing::info!(?object, "found objects");
@@ -129,13 +145,23 @@ impl OneshotSource for HttpOneshotSource {
         &'s self,
         object: Self::Object,
         _checksum: Self::Checksum,
-        _range: Option<std::ops::RangeInclusive<usize>>,
+        range: Option<std::ops::RangeInclusive<usize>>,
     ) -> BoxStream<'s, Result<Bytes, StorageErrorX>> {
-        // TODO(cf1): Support the range param.
         // TODO(cf1): Validate our checksum.
 
         let initial_response = async move {
-            let response = self.client.get(object.url).send().await.context("get")?;
+            let mut request = self.client.get(object.url);
+
+            if let Some(range) = &range {
+                let value = format!("bytes={}-{}", range.start(), range.end());
+                request = request.header(&reqwest::header::RANGE, value);
+            }
+
+            // TODO(parkmycar): We should probably assert that the response contains
+            // an appropriate Content-Range header in the response, and maybe that we
+            // got back an HTTP 206?
+
+            let response = request.send().await.context("get")?;
             let bytes_stream = response.bytes_stream().err_into();
 
             Ok::<_, StorageErrorX>(bytes_stream)

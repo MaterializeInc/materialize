@@ -99,8 +99,10 @@ use tracing::info;
 use crate::oneshot_source::aws_source::{AwsS3Source, S3Checksum, S3Object};
 use crate::oneshot_source::csv::{CsvDecoder, CsvRecord, CsvWorkRequest};
 use crate::oneshot_source::http_source::{HttpChecksum, HttpObject, HttpOneshotSource};
+use crate::oneshot_source::parquet::{ParquetFormat, ParquetRowGroup, ParquetWorkRequest};
 
 pub mod csv;
+pub mod parquet;
 
 pub mod aws_source;
 pub mod http_source;
@@ -161,6 +163,10 @@ where
         ContentFormat::Csv(params) => {
             let format = CsvDecoder::new(params, &collection_meta.relation_desc);
             FormatKind::Csv(format)
+        }
+        ContentFormat::Parquet => {
+            let format = ParquetFormat::new(collection_meta.relation_desc.clone());
+            FormatKind::Parquet(format)
         }
     };
 
@@ -627,6 +633,9 @@ pub trait OneshotObject {
     /// Name of the object, including any extensions.
     fn name(&self) -> &str;
 
+    /// Size of this object in bytes.
+    fn size(&self) -> usize;
+
     /// Encodings of the _entire_ object, if any.
     ///
     /// Note: The object may internally use compression, e.g. a Parquet file
@@ -645,11 +654,18 @@ pub enum Encoding {
 }
 
 /// Defines a remote system that we can fetch data from for a "one time" ingestion.
-pub trait OneshotSource: Clone + Send {
+pub trait OneshotSource: Clone + Send + Unpin {
     /// An individual unit within the source, e.g. a file.
-    type Object: OneshotObject + Debug + Clone + Send + Serialize + DeserializeOwned + 'static;
+    type Object: OneshotObject
+        + Debug
+        + Clone
+        + Send
+        + Unpin
+        + Serialize
+        + DeserializeOwned
+        + 'static;
     /// Checksum for a [`Self::Object`].
-    type Checksum: Debug + Clone + Send + Serialize + DeserializeOwned + 'static;
+    type Checksum: Debug + Clone + Send + Unpin + Serialize + DeserializeOwned + 'static;
 
     /// Do any initialization work for this source.
     fn init(&self) -> impl Future<Output = Result<(), StorageErrorX>>;
@@ -754,6 +770,13 @@ impl OneshotObject for ObjectKind {
         }
     }
 
+    fn size(&self) -> usize {
+        match self {
+            ObjectKind::Http(object) => object.size(),
+            ObjectKind::AwsS3(object) => object.size(),
+        }
+    }
+
     fn encodings(&self) -> &[Encoding] {
         match self {
             ObjectKind::Http(object) => object.encodings(),
@@ -791,7 +814,7 @@ pub trait OneshotFormat: Clone {
 
     /// Given a work request, fetch data from the [`OneshotSource`] and return it in a format that
     /// can later be decoded.
-    fn fetch_work<'a, S: OneshotSource + Sync>(
+    fn fetch_work<'a, S: OneshotSource + Sync + 'static>(
         &'a self,
         source: &'a S,
         request: Self::WorkRequest<S>,
@@ -811,9 +834,10 @@ pub trait OneshotFormat: Clone {
 /// making the trait object safe and it's easier to just wrap it in an enum. Also, this wrapper
 /// provides a convenient place to add [`StorageErrorXContext::context`] for all of our format
 /// types.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) enum FormatKind {
     Csv(CsvDecoder),
+    Parquet(ParquetFormat),
 }
 
 impl OneshotFormat for FormatKind {
@@ -840,10 +864,20 @@ impl OneshotFormat for FormatKind {
                     .collect();
                 Ok(work)
             }
+            FormatKind::Parquet(parquet) => {
+                let work = parquet
+                    .split_work(source, object, checksum)
+                    .await
+                    .context("parquet")?
+                    .into_iter()
+                    .map(RequestKind::Parquet)
+                    .collect();
+                Ok(work)
+            }
         }
     }
 
-    fn fetch_work<'a, S: OneshotSource + Sync>(
+    fn fetch_work<'a, S: OneshotSource + Sync + 'static>(
         &'a self,
         source: &'a S,
         request: Self::WorkRequest<S>,
@@ -854,6 +888,15 @@ impl OneshotFormat for FormatKind {
                 .map_ok(RecordChunkKind::Csv)
                 .map(|result| result.context("csv"))
                 .boxed(),
+            (FormatKind::Parquet(parquet), RequestKind::Parquet(request)) => parquet
+                .fetch_work(source, request)
+                .map_ok(RecordChunkKind::Parquet)
+                .map(|result| result.context("parquet"))
+                .boxed(),
+            (FormatKind::Parquet(_), RequestKind::Csv(_))
+            | (FormatKind::Csv(_), RequestKind::Parquet(_)) => {
+                unreachable!("programming error, {self:?}")
+            }
         }
     }
 
@@ -866,6 +909,13 @@ impl OneshotFormat for FormatKind {
             (FormatKind::Csv(csv), RecordChunkKind::Csv(chunk)) => {
                 csv.decode_chunk(chunk, rows).context("csv")
             }
+            (FormatKind::Parquet(parquet), RecordChunkKind::Parquet(chunk)) => {
+                parquet.decode_chunk(chunk, rows).context("parquet")
+            }
+            (FormatKind::Parquet(_), RecordChunkKind::Csv(_))
+            | (FormatKind::Csv(_), RecordChunkKind::Parquet(_)) => {
+                unreachable!("programming error, {self:?}")
+            }
         }
     }
 }
@@ -873,11 +923,13 @@ impl OneshotFormat for FormatKind {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) enum RequestKind<O, C> {
     Csv(CsvWorkRequest<O, C>),
+    Parquet(ParquetWorkRequest<O, C>),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) enum RecordChunkKind {
     Csv(CsvRecord),
+    Parquet(ParquetRowGroup),
 }
 
 pub(crate) enum ObjectFilter {
@@ -936,6 +988,8 @@ impl fmt::Display for StorageErrorX {
 pub enum StorageErrorXKind {
     #[error("csv decoding error: {0}")]
     CsvDecoding(Arc<str>),
+    #[error("parquet error: {0}")]
+    ParquetError(Arc<str>),
     #[error("reqwest error: {0}")]
     Reqwest(Arc<str>),
     #[error("aws s3 request error: {0}")]
@@ -977,6 +1031,12 @@ impl From<reqwest::header::ToStrError> for StorageErrorXKind {
 impl From<aws_smithy_types::byte_stream::error::Error> for StorageErrorXKind {
     fn from(err: aws_smithy_types::byte_stream::error::Error) -> Self {
         StorageErrorXKind::AwsS3Request(err.to_string())
+    }
+}
+
+impl From<::parquet::errors::ParquetError> for StorageErrorXKind {
+    fn from(err: ::parquet::errors::ParquetError) -> Self {
+        StorageErrorXKind::ParquetError(err.to_string().into())
     }
 }
 
