@@ -4686,10 +4686,13 @@ dependencies = [
  "anyhow",
  "arrow",
  "chrono",
+ "half 2.4.1",
  "mz-ore",
  "mz-repr",
+ "ordered-float 4.2.0",
  "serde",
  "serde_json",
+ "uuid",
  "workspace-hack",
 ]
 
@@ -11730,6 +11733,7 @@ dependencies = [
  "futures-task",
  "futures-util",
  "getrandom 0.2.10",
+ "half 2.4.1",
  "hashbrown 0.14.5",
  "hyper 0.14.27",
  "hyper 1.4.1",

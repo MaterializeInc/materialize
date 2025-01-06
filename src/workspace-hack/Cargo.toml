@@ -59,6 +59,7 @@ futures-sink = { version = "0.3.30" }
 futures-task = { version = "0.3.30" }
 futures-util = { version = "0.3.30", features = ["channel", "io", "sink"] }
 getrandom = { version = "0.2.10", default-features = false, features = ["std"] }
+half = { version = "2.4.1", features = ["num-traits"] }
 hashbrown = { version = "0.14.5", features = ["raw"] }
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", features = ["client", "http1", "http2", "stream", "tcp"] }
 hyper-dff4ba8e3ae991db = { package = "hyper", version = "1.4.1", features = ["client", "http1", "http2", "server"] }
@@ -193,6 +194,7 @@ futures-sink = { version = "0.3.30" }
 futures-task = { version = "0.3.30" }
 futures-util = { version = "0.3.30", features = ["channel", "io", "sink"] }
 getrandom = { version = "0.2.10", default-features = false, features = ["std"] }
+half = { version = "2.4.1", features = ["num-traits"] }
 hashbrown = { version = "0.14.5", features = ["raw"] }
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", features = ["client", "http1", "http2", "stream", "tcp"] }
 hyper-dff4ba8e3ae991db = { package = "hyper", version = "1.4.1", features = ["client", "http1", "http2", "server"] }

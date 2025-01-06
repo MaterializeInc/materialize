@@ -13,10 +13,13 @@ workspace = true
 anyhow = "1.0.66"
 arrow = { version = "53.3.0", default-features = false }
 chrono = { version = "0.4.35", default-features = false, features = ["std"] }
+half = "2"
 mz-repr = { path = "../repr" }
 mz-ore = { path = "../ore" }
+ordered-float = { version = "4.2.0" }
 serde = { version = "1.0.152" }
 serde_json = "1.0.125"
+uuid = "1.2.2"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [package.metadata.cargo-udeps.ignore]
