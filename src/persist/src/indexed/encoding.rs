@@ -13,12 +13,9 @@
 // Ditto for Log* and the Log. The others are used internally in these top-level
 // structs.
 
-use arrow::array::{Array, ArrayRef, Int64Array};
+use arrow::array::{Array, ArrayRef, BinaryArray, Int64Array};
+use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::DataType;
-use std::fmt::{self, Debug};
-use std::marker::PhantomData;
-use std::sync::Arc;
-
 use bytes::{BufMut, Bytes};
 use differential_dataflow::trace::Description;
 use mz_ore::bytes::SegmentedBytes;
@@ -29,12 +26,14 @@ use mz_persist_types::columnar::{codec_to_schema2, data_type};
 use mz_persist_types::parquet::EncodingConfig;
 use mz_persist_types::schema::backward_compatible;
 use mz_persist_types::{Codec, Codec64};
-use mz_proto::RustType;
+use mz_proto::{RustType, TryFromProtoError};
 use proptest::arbitrary::Arbitrary;
 use proptest::prelude::*;
 use proptest::strategy::{BoxedStrategy, Just};
 use prost::Message;
-use serde::Serialize;
+use std::fmt::{self, Debug};
+use std::marker::PhantomData;
+use std::sync::Arc;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tracing::error;
@@ -45,6 +44,7 @@ use crate::gen::persist::{
     ProtoBatchFormat, ProtoBatchPartInline, ProtoColumnarRecords, ProtoU64Antichain,
     ProtoU64Description,
 };
+use crate::indexed::columnar::arrow::realloc_array;
 use crate::indexed::columnar::parquet::{decode_trace_parquet, encode_trace_parquet};
 use crate::indexed::columnar::{ColumnarRecords, ColumnarRecordsStructuredExt};
 use crate::location::Blob;
@@ -325,6 +325,39 @@ impl BlobTraceUpdates {
             .concat_bytes
             .inc_by(u64::cast_from(out.goodbytes()));
         Ok(out)
+    }
+
+    /// See [RustType::from_proto].
+    pub fn from_proto(
+        lgbytes: &ColumnarMetrics,
+        proto: ProtoColumnarRecords,
+    ) -> Result<Self, TryFromProtoError> {
+        let binary_array = |data: Bytes, offsets: Vec<i32>| match BinaryArray::try_new(
+            OffsetBuffer::new(offsets.into()),
+            ::arrow::buffer::Buffer::from_bytes(data.into()),
+            None,
+        ) {
+            Ok(data) => Ok(realloc_array(&data, lgbytes)),
+            Err(e) => Err(TryFromProtoError::InvalidFieldError(format!(
+                "Unable to decode binary array from repeated proto fields: {e:?}"
+            ))),
+        };
+
+        let ret = ColumnarRecords::new(
+            binary_array(proto.key_data, proto.key_offsets)?,
+            binary_array(proto.val_data, proto.val_offsets)?,
+            realloc_array(&proto.timestamps.into(), lgbytes),
+            realloc_array(&proto.diffs.into(), lgbytes),
+        );
+        let ext =
+            ColumnarRecordsStructuredExt::from_proto(proto.key_structured, proto.val_structured)?;
+
+        let updates = match ext {
+            None => Self::Row(ret),
+            Some(ext) => Self::Both(ret, ext),
+        };
+
+        Ok(updates)
     }
 
     /// See [RustType::into_proto].

@@ -16,13 +16,10 @@ use std::mem::size_of;
 use ::arrow::array::{
     make_array, Array, ArrayRef, AsArray, BinaryArray, BinaryBuilder, Int64Array,
 };
-use ::arrow::buffer::OffsetBuffer;
 use ::arrow::datatypes::ToByteSlice;
-use bytes::Bytes;
 use mz_persist_types::arrow::{ArrayOrd, ProtoArrayData};
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 
-use crate::gen::persist::ProtoColumnarRecords;
 use crate::indexed::columnar::arrow::realloc_array;
 use crate::metrics::ColumnarMetrics;
 
@@ -329,38 +326,6 @@ impl ColumnarRecordsBuilder {
 }
 
 impl ColumnarRecords {
-    /// See [RustType::from_proto].
-    pub fn from_proto(
-        lgbytes: &ColumnarMetrics,
-        proto: ProtoColumnarRecords,
-    ) -> Result<(Self, Option<ColumnarRecordsStructuredExt>), TryFromProtoError> {
-        let binary_array = |data: Bytes, offsets: Vec<i32>| match BinaryArray::try_new(
-            OffsetBuffer::new(offsets.into()),
-            ::arrow::buffer::Buffer::from_bytes(data.into()),
-            None,
-        ) {
-            Ok(data) => Ok(realloc_array(&data, lgbytes)),
-            Err(e) => Err(TryFromProtoError::InvalidFieldError(format!(
-                "Unable to decode binary array from repeated proto fields: {e:?}"
-            ))),
-        };
-
-        let ret = ColumnarRecords {
-            len: proto.len.into_rust()?,
-            key_data: binary_array(proto.key_data, proto.key_offsets)?,
-            val_data: binary_array(proto.val_data, proto.val_offsets)?,
-            timestamps: realloc_array(&proto.timestamps.into(), lgbytes),
-            diffs: realloc_array(&proto.diffs.into(), lgbytes),
-        };
-        let () = ret
-            .validate()
-            .map_err(TryFromProtoError::InvalidPersistState)?;
-        let ext =
-            ColumnarRecordsStructuredExt::from_proto(proto.key_structured, proto.val_structured)?;
-
-        Ok((ret, ext))
-    }
-
     fn validate(&self) -> Result<(), String> {
         let validate_array = |name: &str, array: &dyn Array| {
             let len = array.len();
@@ -453,7 +418,7 @@ impl ColumnarRecordsStructuredExt {
     }
 
     /// See [`RustType::from_proto`].
-    fn from_proto(
+    pub fn from_proto(
         key: Option<ProtoArrayData>,
         val: Option<ProtoArrayData>,
     ) -> Result<Option<Self>, TryFromProtoError> {
