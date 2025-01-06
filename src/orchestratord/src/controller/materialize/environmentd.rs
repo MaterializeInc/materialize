@@ -77,7 +77,7 @@ pub struct Resources {
 
 impl Resources {
     pub fn new(
-        config: &super::Args,
+        config: &super::MaterializeControllerArgs,
         tracing: &TracingCliArgs,
         orchestratord_namespace: &str,
         mz: &Materialize,
@@ -116,7 +116,7 @@ impl Resources {
     pub async fn apply(
         &self,
         client: &Client,
-        args: &super::Args,
+        args: &super::MaterializeControllerArgs,
         increment_generation: bool,
         namespace: &str,
     ) -> Result<Option<Action>, anyhow::Error> {
@@ -333,7 +333,7 @@ impl Resources {
 }
 
 fn create_environmentd_network_policies(
-    config: &super::Args,
+    config: &super::MaterializeControllerArgs,
     mz: &Materialize,
     orchestratord_namespace: &str,
 ) -> Vec<NetworkPolicy> {
@@ -502,7 +502,10 @@ fn create_environmentd_network_policies(
     network_policies
 }
 
-fn create_service_account_object(config: &super::Args, mz: &Materialize) -> ServiceAccount {
+fn create_service_account_object(
+    config: &super::MaterializeControllerArgs,
+    mz: &Materialize,
+) -> ServiceAccount {
     let annotations = if config.cloud_provider == CloudProvider::Aws {
         let role_arn = mz
             .spec
@@ -620,7 +623,7 @@ fn create_role_binding_object(mz: &Materialize) -> RoleBinding {
 }
 
 fn create_public_service_object(
-    config: &super::Args,
+    config: &super::MaterializeControllerArgs,
     mz: &Materialize,
     generation: u64,
 ) -> Service {
@@ -628,7 +631,7 @@ fn create_public_service_object(
 }
 
 fn create_generation_service_object(
-    config: &super::Args,
+    config: &super::MaterializeControllerArgs,
     mz: &Materialize,
     generation: u64,
 ) -> Service {
@@ -641,7 +644,7 @@ fn create_generation_service_object(
 }
 
 fn create_base_service_object(
-    config: &super::Args,
+    config: &super::MaterializeControllerArgs,
     mz: &Materialize,
     generation: u64,
     service_name: &str,
@@ -691,7 +694,7 @@ fn create_base_service_object(
 }
 
 fn create_persist_pubsub_service(
-    config: &super::Args,
+    config: &super::MaterializeControllerArgs,
     mz: &Materialize,
     generation: u64,
 ) -> Service {
@@ -715,7 +718,10 @@ fn create_persist_pubsub_service(
     }
 }
 
-fn create_environmentd_certificate(config: &super::Args, mz: &Materialize) -> Option<Certificate> {
+fn create_environmentd_certificate(
+    config: &super::MaterializeControllerArgs,
+    mz: &Materialize,
+) -> Option<Certificate> {
     create_certificate(
         config.default_certificate_specs.internal.clone(),
         mz,
@@ -730,7 +736,7 @@ fn create_environmentd_certificate(config: &super::Args, mz: &Materialize) -> Op
 }
 
 fn create_environmentd_statefulset_object(
-    config: &super::Args,
+    config: &super::MaterializeControllerArgs,
     tracing: &TracingCliArgs,
     mz: &Materialize,
     generation: u64,
@@ -1313,7 +1319,7 @@ enum BecomeLeaderResult {
 }
 
 fn environmentd_internal_http_address(
-    args: &super::Args,
+    args: &super::MaterializeControllerArgs,
     namespace: &str,
     generation_service: &Service,
 ) -> String {
