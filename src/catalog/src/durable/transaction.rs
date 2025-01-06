@@ -1121,25 +1121,18 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    /// Removes the role `name` from the transaction.
+    /// Removes all user roles in `roles` from the transaction.
     ///
-    /// Returns an error if `name` is not found.
+    /// Returns an error if any id in `roles` is not found.
     ///
-    /// Runtime is linear with respect to the total number of roles in the catalog.
-    /// DO NOT call this function in a loop, use [`Self::remove_roles`] instead.
-    pub fn remove_role(&mut self, name: &str) -> Result<(), CatalogError> {
-        let roles = self.roles.delete(|_k, v| v.name == name, self.op_id);
+    /// NOTE: On error, there still may be some roles removed from the transaction. It
+    /// is up to the caller to either abort the transaction or commit.
+    pub fn remove_user_roles(&mut self, roles: &BTreeSet<RoleId>) -> Result<(), CatalogError> {
         assert!(
-            roles.iter().all(|(k, _)| k.id.is_user()),
+            roles.iter().all(|id| id.is_user()),
             "cannot delete non-user roles"
         );
-        let n = roles.len();
-        assert!(n <= 1);
-        if n == 1 {
-            Ok(())
-        } else {
-            Err(SqlCatalogError::UnknownRole(name.to_owned()).into())
-        }
+        self.remove_roles(roles)
     }
 
     /// Removes all roles in `roles` from the transaction.
@@ -1158,10 +1151,6 @@ impl<'a> Transaction<'a> {
             .map(|role_id| (RoleKey { id: *role_id }, None))
             .collect();
         let mut prev = self.roles.set_many(to_remove, self.op_id)?;
-        assert!(
-            prev.iter().all(|(k, _)| k.id.is_user()),
-            "cannot delete non-user roles"
-        );
 
         prev.retain(|_k, v| v.is_none());
         if !prev.is_empty() {
