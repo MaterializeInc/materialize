@@ -86,6 +86,7 @@ use mz_ore::now::NowFn;
 use mz_ore::tracing::TracingHandle;
 use mz_ore::vec::VecExt;
 use mz_ore::{soft_assert_or_log, soft_panic_or_log};
+use mz_persist_client::batch::ProtoBatch;
 use mz_persist_client::cache::PersistClientCache;
 use mz_repr::{GlobalId, Timestamp};
 use mz_rocksdb::config::SharedWriteBufferManager;
@@ -95,6 +96,7 @@ use mz_storage_client::client::{
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::CollectionMetadata;
+use mz_storage_types::oneshot_sources::OneshotIngestionDescription;
 use mz_storage_types::sinks::{MetadataFilled, StorageSinkDesc};
 use mz_storage_types::sources::IngestionDescription;
 use mz_storage_types::AlterCompatible;
@@ -213,6 +215,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
             reported_frontiers: BTreeMap::new(),
             ingestions: BTreeMap::new(),
             exports: BTreeMap::new(),
+            oneshot_ingestions: BTreeMap::new(),
             now,
             timely_worker_index: timely_worker.index(),
             timely_worker_peers: timely_worker.peers(),
@@ -274,6 +277,8 @@ pub struct StorageState {
     pub ingestions: BTreeMap<GlobalId, IngestionDescription<CollectionMetadata>>,
     /// Descriptions of each installed export.
     pub exports: BTreeMap<GlobalId, StorageSinkDesc<MetadataFilled, mz_repr::Timestamp>>,
+    /// Descriptions of oneshot ingestsions that are currently running.
+    pub oneshot_ingestions: BTreeMap<GlobalId, OneshotIngestionDescription<ProtoBatch>>,
     /// Undocumented
     pub now: NowFn,
     /// Index of the associated timely dataflow worker.
@@ -448,6 +453,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
             }
 
             self.report_frontier_progress(&response_tx);
+            self.process_oneshot_ingestions(&response_tx);
 
             // Report status updates if any are present
             if self.storage_state.object_status_updates.borrow().len() > 0 {
@@ -699,6 +705,21 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     source_resume_uppers,
                 );
             }
+            InternalStorageCommand::RunOneshotIngestion {
+                ingestion_id,
+                collection_id,
+                collection_meta,
+                request,
+            } => {
+                crate::render::build_oneshot_ingestion_dataflow(
+                    self.timely_worker,
+                    &mut self.storage_state,
+                    ingestion_id,
+                    collection_id,
+                    collection_meta,
+                    request,
+                );
+            }
             InternalStorageCommand::RunSinkDataflow(sink_id, sink_description) => {
                 info!(
                     "worker {}/{} trying to (re-)start sink {sink_id}",
@@ -839,6 +860,39 @@ impl<'w, A: Allocate> Worker<'w, A> {
         let _ = response_tx.send(response);
     }
 
+    fn process_oneshot_ingestions(&mut self, response_tx: &ResponseSender) {
+        use tokio::sync::mpsc::error::TryRecvError;
+
+        let mut to_remove = vec![];
+
+        for (ingestion_id, ingestion_state) in &mut self.storage_state.oneshot_ingestions {
+            loop {
+                match ingestion_state.results.try_recv() {
+                    Ok(result) => {
+                        let response = match result {
+                            Ok(maybe_batch) => maybe_batch.into_iter().map(Result::Ok).collect(),
+                            Err(err) => vec![Err(err)],
+                        };
+                        let staged_batches = BTreeMap::from([(*ingestion_id, response)]);
+                        let _ = response_tx.send(StorageResponse::StagedBatches(staged_batches));
+                    }
+                    Err(TryRecvError::Empty) => {
+                        break;
+                    }
+                    Err(TryRecvError::Disconnected) => {
+                        to_remove.push(*ingestion_id);
+                        break;
+                    }
+                }
+            }
+        }
+
+        for ingestion_id in to_remove {
+            tracing::info!(?ingestion_id, "removing oneshot ingestion");
+            self.storage_state.oneshot_ingestions.remove(&ingestion_id);
+        }
+    }
+
     /// Extract commands until `InitializationComplete`, and make the worker
     /// reflect those commands. If the worker can not be made to reflect the
     /// commands, return an error.
@@ -899,6 +953,10 @@ impl<'w, A: Allocate> Worker<'w, A> {
                                 .expect("only alter compatible ingestions permitted");
                         }
                     }
+                }
+                StorageCommand::RunOneshotIngestion(oneshot) => {
+                    info!(%worker_id, ?oneshot, "reconcile: received RunOneshotIngestion command");
+                    // nothing to do?
                 }
                 StorageCommand::RunSinks(exports) => {
                     info!(%worker_id, ?exports, "reconcile: received RunSinks command");
@@ -1025,7 +1083,8 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 StorageCommand::InitializationComplete
                 | StorageCommand::AllowWrites
                 | StorageCommand::UpdateConfiguration(_)
-                | StorageCommand::AllowCompaction(_) => (),
+                | StorageCommand::AllowCompaction(_)
+                | StorageCommand::RunOneshotIngestion(_) => (),
             }
         }
 
@@ -1160,6 +1219,18 @@ impl StorageState {
                     if self.timely_worker_index == 0 {
                         self.async_worker.update_frontiers(id, description);
                     }
+                }
+            }
+            StorageCommand::RunOneshotIngestion(oneshot) => {
+                if self.timely_worker_index == 0 {
+                    self.internal_cmd_tx.borrow_mut().broadcast(
+                        InternalStorageCommand::RunOneshotIngestion {
+                            ingestion_id: oneshot.ingestion_id,
+                            collection_id: oneshot.collection_id,
+                            collection_meta: oneshot.collection_meta,
+                            request: oneshot.request,
+                        },
+                    );
                 }
             }
             StorageCommand::RunSinks(exports) => {

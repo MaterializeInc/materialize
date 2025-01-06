@@ -10,8 +10,10 @@
 //! Types for oneshot sources.
 
 use mz_proto::{IntoRustIfSome, RustType};
+use mz_timely_util::builder_async::PressOnDropButton;
 
 use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc::UnboundedReceiver;
 use url::Url;
 
 include!(concat!(
@@ -19,6 +21,44 @@ include!(concat!(
     "/mz_storage_types.oneshot_sources.rs"
 ));
 
+/// Callback type used to send the result of a oneshot source.
+pub type OneshotResultCallback<Batch> =
+    Box<dyn FnOnce(Vec<Result<Batch, String>>) -> () + Send + 'static>;
+
+pub struct OneshotIngestionDescription<Batch> {
+    /// Tokens for the running dataflows.
+    pub tokens: Vec<PressOnDropButton>,
+    /// Receiving end of the channel the dataflow uses to report results.
+    pub results: UnboundedReceiver<Result<Option<Batch>, String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct OneshotIngestionRequest {
+    pub source: ContentSource,
+    pub format: ContentFormat,
+}
+
+impl RustType<ProtoOneshotIngestionRequest> for OneshotIngestionRequest {
+    fn into_proto(&self) -> ProtoOneshotIngestionRequest {
+        ProtoOneshotIngestionRequest {
+            source: Some(self.source.into_proto()),
+            format: Some(self.format.into_proto()),
+        }
+    }
+
+    fn from_proto(
+        proto: ProtoOneshotIngestionRequest,
+    ) -> Result<Self, mz_proto::TryFromProtoError> {
+        let source = proto
+            .source
+            .into_rust_if_some("ProtoOneshotIngestionRequest::source")?;
+        let format = proto
+            .format
+            .into_rust_if_some("ProtoOneshotIngestionRequest::format")?;
+
+        Ok(OneshotIngestionRequest { source, format })
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub enum ContentSource {

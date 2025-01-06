@@ -35,6 +35,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::task::AbortOnDropHandle;
 use mz_ore::{assert_none, instrument, soft_panic_or_log};
+use mz_persist_client::batch::ProtoBatch;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
 use mz_persist_client::read::ReadHandle;
@@ -48,7 +49,7 @@ use mz_repr::adt::interval::Interval;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationVersion, Row, TimestampManipulation};
 use mz_storage_client::client::{
-    ProtoStorageCommand, ProtoStorageResponse, RunIngestionCommand, RunSinkCommand, Status,
+    ProtoStorageCommand, ProtoStorageResponse, RunIngestionCommand, RunOneshotIngestionCommand,
     StatusUpdate, StorageCommand, StorageResponse, TimestamplessUpdate,
 };
 use mz_storage_client::controller::{
@@ -158,6 +159,9 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// Channel for receiving table handle drops.
     #[derivative(Debug = "ignore")]
     pending_table_handle_drops_rx: mpsc::UnboundedReceiver<GlobalId>,
+    /// Closues that can be used to send responses from oneshot ingestions.
+    #[derivative(Debug = "ignore")]
+    pending_oneshot_ingestions: BTreeMap<GlobalId, OneshotResultCallback<ProtoBatch>>,
 
     /// Interface for managed collections
     pub(crate) collection_manager: collection_mgmt::CollectionManager<T>,
@@ -1379,6 +1383,45 @@ where
         Ok(())
     }
 
+    /// Create a oneshot ingestion.
+    async fn create_oneshot_ingestion(
+        &mut self,
+        ingestion_id: GlobalId,
+        collection_id: GlobalId,
+        instance_id: StorageInstanceId,
+        request: OneshotIngestionRequest,
+        result_tx: OneshotResultCallback<ProtoBatch>,
+    ) -> Result<(), StorageError<Self::Timestamp>> {
+        let collection_meta = self
+            .collections
+            .get(&collection_id)
+            .ok_or_else(|| StorageError::IdentifierMissing(collection_id))?
+            .collection_metadata
+            .clone();
+        let instance = self.instances.get_mut(&instance_id).ok_or_else(|| {
+            StorageError::ExportInstanceMissing {
+                storage_instance_id: instance_id,
+                export_id: ingestion_id,
+            }
+        })?;
+        let oneshot_cmd = RunOneshotIngestionCommand {
+            ingestion_id,
+            collection_id,
+            collection_meta,
+            request,
+        };
+
+        if !self.read_only {
+            instance.send(StorageCommand::RunOneshotIngestion(oneshot_cmd));
+            let novel = self
+                .pending_oneshot_ingestions
+                .insert(ingestion_id, result_tx);
+            assert!(novel.is_none());
+        }
+
+        Ok(())
+    }
+
     async fn alter_export(
         &mut self,
         id: GlobalId,
@@ -1972,6 +2015,15 @@ where
                 }
                 self.record_status_updates(updates);
             }
+            Some(StorageResponse::StagedBatches(batches)) => {
+                for (collection_id, batches) in batches {
+                    let sender = self
+                        .pending_oneshot_ingestions
+                        .remove(&collection_id)
+                        .expect("TODO");
+                    (sender)(batches);
+                }
+            }
         }
 
         // IDs of sources that were dropped whose statuses should be updated.
@@ -2407,6 +2459,7 @@ where
             pending_compaction_commands: vec![],
             pending_table_handle_drops_tx,
             pending_table_handle_drops_rx,
+            pending_oneshot_ingestions: BTreeMap::default(),
             collection_manager,
             introspection_ids,
             introspection_tokens,
