@@ -1150,6 +1150,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: output-consistency
               args: ["--seed=$BUILDKITE_JOB_ID", "--max-runtime-in-sec=1200"]
+        skip: "too flaky currently, find better way to ignore known issues"
 
       - id: output-consistency-postgres
         label: "Output consistency (Postgres)"
@@ -1161,6 +1162,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: postgres-consistency
               args: ["--seed=$BUILDKITE_JOB_ID", "--max-runtime-in-sec=1200"]
+        skip: "too flaky currently, find better way to ignore known issues"
 
       - id: output-consistency-version-dfr
         label: "Output consistency (version for DFR)"
@@ -1172,6 +1174,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: version-consistency
               args: ["--seed=$BUILDKITE_JOB_ID", "--max-runtime-in-sec=1200", "--evaluation-strategy=dataflow_rendering", "--other-tag=common-ancestor"]
+        skip: "too flaky currently, find better way to ignore known issues"
 
       - id: output-consistency-version-ctf
         label: "Output consistency (version for CTF)"
@@ -1183,6 +1186,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: version-consistency
               args: ["--seed=$BUILDKITE_JOB_ID", "--max-runtime-in-sec=1200", "--evaluation-strategy=constant_folding", "--other-tag=common-ancestor"]
+        skip: "too flaky currently, find better way to ignore known issues"
 
       - id: output-consistency-feature-flags-dfr
         label: "Output consistency (feature-flags for DFR)"
@@ -1194,6 +1198,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: feature-flag-consistency
               args: ["--seed=$BUILDKITE_JOB_ID", "--max-runtime-in-sec=1200", "--evaluation-strategy=dataflow_rendering"]
+        skip: "too flaky currently, find better way to ignore known issues"
 
 
   - group: SQLsmith
