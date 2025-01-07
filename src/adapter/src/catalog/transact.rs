@@ -1423,7 +1423,7 @@ impl Catalog {
                 }
 
                 // Drop any roles.
-                tx.remove_roles(&delta.roles)?;
+                tx.remove_user_roles(&delta.roles)?;
 
                 for role_id in delta.roles {
                     let role = state

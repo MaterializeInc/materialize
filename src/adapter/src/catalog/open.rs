@@ -28,7 +28,7 @@ use mz_catalog::config::{ClusterReplicaSizeMap, StateConfig};
 use mz_catalog::durable::objects::{
     SystemObjectDescription, SystemObjectMapping, SystemObjectUniqueIdentifier,
 };
-use mz_catalog::durable::{ClusterVariant, ClusterVariantManaged, Transaction};
+use mz_catalog::durable::{ClusterReplica, ClusterVariant, ClusterVariantManaged, Transaction};
 use mz_catalog::expr_cache::{
     ExpressionCacheConfig, ExpressionCacheHandle, GlobalExpressions, LocalExpressions,
 };
@@ -323,21 +323,18 @@ impl Catalog {
                 support_cluster: config.builtin_support_cluster_replica_size,
                 analytics_cluster: config.builtin_analytics_cluster_replica_size,
             };
-            // TODO(jkosh44) These functions should clean up old clusters, replicas, and
-            // roles like they do for builtin items and introspection sources, but they
-            // don't.
-            add_new_builtin_clusters_migration(
+            add_new_remove_old_builtin_clusters_migration(
                 &mut txn,
                 &cluster_sizes,
                 &state.cluster_replica_sizes,
             )?;
             add_new_remove_old_builtin_introspection_source_migration(&mut txn)?;
-            add_new_builtin_cluster_replicas_migration(
+            add_new_remove_old_builtin_cluster_replicas_migration(
                 &mut txn,
                 &cluster_sizes,
                 &state.cluster_replica_sizes,
             )?;
-            add_new_builtin_roles_migration(&mut txn)?;
+            add_new_remove_old_builtin_roles_migration(&mut txn)?;
             remove_invalid_config_param_role_defaults_migration(&mut txn)?;
             (migrated_builtins, new_builtin_collections)
         };
@@ -1223,14 +1220,20 @@ fn add_new_remove_old_builtin_items_migration(
     Ok((migrated_builtin_ids, new_builtin_collections))
 }
 
-fn add_new_builtin_clusters_migration(
+fn add_new_remove_old_builtin_clusters_migration(
     txn: &mut mz_catalog::durable::Transaction<'_>,
     builtin_cluster_sizes: &BuiltinBootstrapClusterSizes,
     cluster_sizes: &ClusterReplicaSizeMap,
 ) -> Result<(), mz_catalog::durable::CatalogError> {
-    let cluster_names: BTreeSet<_> = txn.get_clusters().map(|cluster| cluster.name).collect();
+    let mut durable_clusters: BTreeMap<_, _> = txn
+        .get_clusters()
+        .filter(|cluster| cluster.id.is_system())
+        .map(|cluster| (cluster.name.to_string(), cluster))
+        .collect();
+
+    // Add new clusters.
     for builtin_cluster in BUILTIN_CLUSTERS {
-        if !cluster_names.contains(builtin_cluster.name) {
+        if durable_clusters.remove(builtin_cluster.name).is_none() {
             let cluster_size = builtin_cluster_sizes.get_size(builtin_cluster.name)?;
             let cluster_allocation = cluster_sizes.get_allocation_by_name(&cluster_size)?;
             txn.insert_system_cluster(
@@ -1254,6 +1257,14 @@ fn add_new_builtin_clusters_migration(
             )?;
         }
     }
+
+    // Remove old clusters.
+    let old_clusters = durable_clusters
+        .values()
+        .map(|cluster| cluster.id)
+        .collect();
+    txn.remove_clusters(&old_clusters)?;
+
     Ok(())
 }
 
@@ -1292,12 +1303,18 @@ fn add_new_remove_old_builtin_introspection_source_migration(
     Ok(())
 }
 
-fn add_new_builtin_roles_migration(
+fn add_new_remove_old_builtin_roles_migration(
     txn: &mut mz_catalog::durable::Transaction<'_>,
 ) -> Result<(), mz_catalog::durable::CatalogError> {
-    let role_names: BTreeSet<_> = txn.get_roles().map(|role| role.name).collect();
+    let mut durable_roles: BTreeMap<_, _> = txn
+        .get_roles()
+        .filter(|role| role.id.is_system() || role.id.is_predefined())
+        .map(|role| (role.name.to_string(), role))
+        .collect();
+
+    // Add new roles.
     for builtin_role in BUILTIN_ROLES {
-        if !role_names.contains(builtin_role.name) {
+        if durable_roles.remove(builtin_role.name).is_none() {
             txn.insert_builtin_role(
                 builtin_role.id,
                 builtin_role.name.to_string(),
@@ -1308,10 +1325,15 @@ fn add_new_builtin_roles_migration(
             )?;
         }
     }
+
+    // Remove old roles.
+    let old_roles = durable_roles.values().map(|role| role.id).collect();
+    txn.remove_roles(&old_roles)?;
+
     Ok(())
 }
 
-fn add_new_builtin_cluster_replicas_migration(
+fn add_new_remove_old_builtin_cluster_replicas_migration(
     txn: &mut Transaction<'_>,
     builtin_cluster_sizes: &BuiltinBootstrapClusterSizes,
     cluster_sizes: &ClusterReplicaSizeMap,
@@ -1321,23 +1343,27 @@ fn add_new_builtin_cluster_replicas_migration(
         .map(|cluster| (cluster.name.clone(), cluster.clone()))
         .collect();
 
-    let replicas: BTreeMap<_, _> =
-        txn.get_cluster_replicas()
-            .fold(BTreeMap::new(), |mut acc, replica| {
-                acc.entry(replica.cluster_id)
-                    .or_insert_with(BTreeSet::new)
-                    .insert(replica.name);
-                acc
-            });
+    let mut durable_replicas: BTreeMap<ClusterId, BTreeMap<String, ClusterReplica>> = txn
+        .get_cluster_replicas()
+        .filter(|replica| replica.replica_id.is_system())
+        .fold(BTreeMap::new(), |mut acc, replica| {
+            acc.entry(replica.cluster_id)
+                .or_insert_with(BTreeMap::new)
+                .insert(replica.name.to_string(), replica);
+            acc
+        });
 
+    // Add new replicas.
     for builtin_replica in BUILTIN_CLUSTER_REPLICAS {
         let cluster = cluster_lookup
             .get(builtin_replica.cluster_name)
             .expect("builtin cluster replica references non-existent cluster");
-        let replica_names = replicas.get(&cluster.id);
-        if matches!(replica_names, None)
-            || matches!(replica_names, Some(names) if !names.contains(builtin_replica.name))
-        {
+        // `empty_map` is a hack to simplify the if statement below.
+        let mut empty_map: BTreeMap<String, ClusterReplica> = BTreeMap::new();
+        let replica_names = durable_replicas
+            .get_mut(&cluster.id)
+            .unwrap_or(&mut empty_map);
+        if replica_names.remove(builtin_replica.name).is_none() {
             let replica_size = match cluster.config.variant {
                 ClusterVariant::Managed(ClusterVariantManaged { ref size, .. }) => size.clone(),
                 ClusterVariant::Unmanaged => {
@@ -1355,6 +1381,13 @@ fn add_new_builtin_cluster_replicas_migration(
             )?;
         }
     }
+
+    // Remove old replicas.
+    let old_replicas = durable_replicas
+        .values()
+        .flat_map(|replicas| replicas.values().map(|replica| replica.replica_id))
+        .collect();
+    txn.remove_cluster_replicas(&old_replicas)?;
 
     Ok(())
 }
