@@ -165,7 +165,7 @@ steps:
     key: benchmark
     steps:
       - id: feature-benchmark-scale-plus-one
-        label: "Feature benchmark against 'common-ancestor' with --scale=+1 %N"
+        label: "Feature benchmark against 'common-ancestor' with --scale=+1"
         depends_on: build-x86_64
         timeout_in_minutes: 2880
         parallelism: 8
@@ -320,7 +320,7 @@ steps:
     key: platform-checks
     steps:
       - id: checks-restart-cockroach
-        label: "Checks + restart Cockroach %N"
+        label: "Checks + restart Cockroach"
         depends_on: build-aarch64
         timeout_in_minutes: 180
         # Sometimes runs into query timeouts or entire test timeouts with parallelism 1, too much state, same in all other platform-checks
@@ -334,7 +334,7 @@ steps:
               args: [--scenario=RestartCockroach, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-backup-restore-before-manipulate
-        label: "Checks backup + restore between the two manipulate() %N"
+        label: "Checks backup + restore between the two manipulate()"
         depends_on: build-aarch64
         timeout_in_minutes: 180
         parallelism: 2
@@ -346,7 +346,7 @@ steps:
               args: [--scenario=BackupAndRestoreBeforeManipulate, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-backup-restore-after-manipulate
-        label: "Checks backup + restore after manipulate() %N"
+        label: "Checks backup + restore after manipulate()"
         depends_on: build-aarch64
         timeout_in_minutes: 180
         parallelism: 2
@@ -358,7 +358,7 @@ steps:
               args: [--scenario=BackupAndRestoreAfterManipulate, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-backup-multi
-        label: "Checks + multiple backups/restores %N"
+        label: "Checks + multiple backups/restores"
         depends_on: build-aarch64
         timeout_in_minutes: 180
         parallelism: 2
@@ -370,7 +370,7 @@ steps:
               args: [--scenario=BackupAndRestoreMulti, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-preflight-check-continue
-        label: "Checks preflight-check and continue upgrade %N"
+        label: "Checks preflight-check and continue upgrade"
         depends_on: build-aarch64
         timeout_in_minutes: 180
         parallelism: 2
@@ -382,7 +382,7 @@ steps:
               args: [--scenario=PreflightCheckContinue, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-upgrade-clusterd-compute-first
-        label: "Platform checks upgrade, restarting compute clusterd first %N"
+        label: "Platform checks upgrade, restarting compute clusterd first"
         depends_on: build-aarch64
         timeout_in_minutes: 180
         parallelism: 2
@@ -394,7 +394,7 @@ steps:
               args: [--scenario=UpgradeClusterdComputeFirst, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-upgrade-clusterd-compute-last
-        label: "Platform checks upgrade, restarting compute clusterd last %N"
+        label: "Platform checks upgrade, restarting compute clusterd last"
         depends_on: build-aarch64
         timeout_in_minutes: 180
         parallelism: 2
@@ -406,7 +406,7 @@ steps:
               args: [--scenario=UpgradeClusterdComputeLast, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-kill-clusterd-storage
-        label: "Checks + kill storage clusterd %N"
+        label: "Checks + kill storage clusterd"
         depends_on: build-aarch64
         timeout_in_minutes: 180
         parallelism: 2
@@ -429,7 +429,7 @@ steps:
               args: [--scenario=RestartSourcePostgres, --check=PgCdc, --check=PgCdcNoWait, --check=PgCdcMzNow, --check=SshPg]
 
       - id: checks-restart-clusterd-compute
-        label: "Checks + restart clusterd compute %N"
+        label: "Checks + restart clusterd compute"
         depends_on: build-aarch64
         timeout_in_minutes: 180
         parallelism: 2
@@ -441,7 +441,7 @@ steps:
               args: [--scenario=RestartClusterdCompute, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-drop-create-default-replica
-        label: "Checks + DROP/CREATE replica %N"
+        label: "Checks + DROP/CREATE replica"
         depends_on: build-aarch64
         timeout_in_minutes: 180
         parallelism: 2
@@ -454,7 +454,7 @@ steps:
               args: [--scenario=DropCreateDefaultReplica, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-0dt-restart-entire-mz
-        label: "Checks 0dt restart of the entire Mz %N"
+        label: "Checks 0dt restart of the entire Mz"
         depends_on: build-aarch64
         timeout_in_minutes: 60
         parallelism: 2
@@ -466,7 +466,7 @@ steps:
               args: [--scenario=ZeroDowntimeRestartEntireMz, "--seed=$BUILDKITE_JOB_ID"]
 
   - id: limits
-    label: "Product limits (finding new limits) %N"
+    label: "Product limits (finding new limits)"
     depends_on: build-aarch64
     agents:
       queue: hetzner-aarch64-16cpu-32gb

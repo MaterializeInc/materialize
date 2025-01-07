@@ -487,6 +487,21 @@ def set_default_agents_queue(pipeline: Any) -> None:
             step["agents"] = {"queue": DEFAULT_AGENT}
 
 
+def set_parallelism_name(pipeline: Any) -> None:
+    def visit(step: Any) -> None:
+        if step.get("parallelism", 1) > 1:
+            step["label"] += " %N"
+
+    for config in pipeline["steps"]:
+        if "trigger" in config or "wait" in config or "block" in config:
+            continue
+        if "group" in config:
+            for inner_config in config.get("steps", []):
+                visit(inner_config)
+            continue
+        visit(config)
+
+
 def check_depends_on(pipeline: Any, pipeline_name: str) -> None:
     if pipeline_name not in ("test", "nightly", "release-qualification"):
         return
