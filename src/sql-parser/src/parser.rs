@@ -6299,6 +6299,13 @@ impl<'a> Parser<'a> {
 
     /// Parse a copy statement
     fn parse_copy(&mut self) -> Result<Statement<Raw>, ParserStatementError> {
+        // We support an optional "INTO" keyword for COPY INTO <table> FROM
+        let maybe_into_pos = if self.parse_keyword(Keyword::Into) {
+            Some(self.peek_prev_pos())
+        } else {
+            None
+        };
+
         let relation = if self.consume_token(&Token::LParen) {
             let query = self.parse_statement()?.ast;
             self.expect_token(&Token::RParen)
@@ -6338,6 +6345,13 @@ impl<'a> Parser<'a> {
                 (CopyDirection::From, CopyTarget::Stdin)
             }
             TO => {
+                // We only support the INTO keyword for 'COPY FROM'.
+                if let Some(into_pos) = maybe_into_pos {
+                    return self
+                        .expected(into_pos, "identifier", Some(Token::Keyword(Keyword::Into)))
+                        .map_parser_err(StatementKind::Copy);
+                }
+
                 if self.parse_keyword(STDOUT) {
                     (CopyDirection::To, CopyTarget::Stdout)
                 } else {
