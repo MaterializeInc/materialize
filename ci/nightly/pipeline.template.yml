@@ -80,7 +80,7 @@ steps:
     key: benchmark
     steps:
       - id: feature-benchmark
-        label: "Feature benchmark against merge base or 'latest' %N"
+        label: "Feature benchmark against merge base or 'latest'"
         depends_on: build-x86_64
         timeout_in_minutes: 720
         parallelism: 8
@@ -180,7 +180,7 @@ steps:
     key: kafka
     steps:
       - id: kafka-matrix
-        label: Kafka smoke test against previous Kafka versions %N
+        label: Kafka smoke test against previous Kafka versions
         depends_on: build-aarch64
         timeout_in_minutes: 120
         parallelism: 2
@@ -310,7 +310,7 @@ steps:
               ]
 
       - id: testdrive-in-cloudtest
-        label: "Full Testdrive in Cloudtest (K8s) %N"
+        label: "Full Testdrive in Cloudtest (K8s)"
         depends_on: build-aarch64
         timeout_in_minutes: 180
         parallelism: 2
@@ -342,7 +342,7 @@ steps:
     key: limits-group
     steps:
       - id: limits
-        label: "Product limits %N"
+        label: "Product limits"
         depends_on: build-aarch64
         agents:
           queue: hetzner-aarch64-16cpu-32gb
@@ -377,7 +377,7 @@ steps:
               limit: 1
 
       - id: bounded-memory
-        label: "Bounded Memory %N"
+        label: "Bounded Memory"
         depends_on: build-aarch64
         timeout_in_minutes: 90
         parallelism: 2
@@ -387,7 +387,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: bounded-memory
       - id: bounded-memory-search
-        label: "Bounded Memory Search (materialized only) %N"
+        label: "Bounded Memory Search (materialized only)"
         depends_on: build-aarch64
         timeout_in_minutes: 150
         parallelism: 8
@@ -623,7 +623,7 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
 
       - id: testdrive-old-kafka-src-syntax
-        label: "Testdrive %N (before Kafka source versioning)"
+        label: "Testdrive (before Kafka source versioning)"
         depends_on: build-aarch64
         timeout_in_minutes: 180
         plugins:
@@ -676,7 +676,7 @@ steps:
     key: platform-checks
     steps:
       - id: checks-restart-entire-mz
-        label: "Checks + restart of the entire Mz %N"
+        label: "Checks + restart of the entire Mz"
         depends_on: build-aarch64
         timeout_in_minutes: 180
         # Sometimes runs into query timeouts or entire test timeouts with parallelism 1, too much state, same in all other platform-checks
@@ -691,7 +691,7 @@ steps:
 
       # TODO(def-) Remove this when old upsert implementation is removed
       - id: checks-restart-entire-mz-old-upsert
-        label: "Checks + restart of the entire Mz with old Upsert %N"
+        label: "Checks + restart of the entire Mz with old Upsert"
         depends_on: build-aarch64
         timeout_in_minutes: 180
         # Sometimes runs into query timeouts or entire test timeouts with parallelism 1, too much state, same in all other platform-checks
@@ -705,7 +705,7 @@ steps:
               args: [--scenario=RestartEntireMz, --system-param=storage_use_continual_feedback_upsert=false, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-backup-rollback
-        label: "Checks + backup + rollback to previous %N"
+        label: "Checks + backup + rollback to previous"
         depends_on: build-aarch64
         timeout_in_minutes: 180
         parallelism: 2
@@ -717,7 +717,7 @@ steps:
               args: [--scenario=BackupAndRestoreToPreviousState, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-parallel-drop-create-default-replica
-        label: "Checks parallel + DROP/CREATE replica %N"
+        label: "Checks parallel + DROP/CREATE replica"
         depends_on: build-aarch64
         timeout_in_minutes: 180
         parallelism: 2
@@ -729,7 +729,7 @@ steps:
               args: [--scenario=DropCreateDefaultReplica, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-parallel-restart-clusterd-compute
-        label: "Checks parallel + restart compute clusterd %N"
+        label: "Checks parallel + restart compute clusterd"
         depends_on: build-aarch64
         timeout_in_minutes: 180
         parallelism: 2
@@ -741,7 +741,7 @@ steps:
               args: [--scenario=RestartClusterdCompute, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-parallel-restart-entire-mz
-        label: "Checks parallel + restart of the entire Mz %N"
+        label: "Checks parallel + restart of the entire Mz"
         depends_on: build-aarch64
         timeout_in_minutes: 180
         parallelism: 2
@@ -753,7 +753,7 @@ steps:
               args: [--scenario=RestartEntireMz, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-parallel-restart-environmentd-clusterd-storage
-        label: "Checks parallel + restart of environmentd & storage clusterd %N"
+        label: "Checks parallel + restart of environmentd & storage clusterd"
         depends_on: build-aarch64
         timeout_in_minutes: 180
         parallelism: 2
@@ -765,7 +765,7 @@ steps:
               args: [--scenario=RestartEnvironmentdClusterdStorage, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-parallel-kill-clusterd-storage
-        label: "Checks parallel + kill storage clusterd %N"
+        label: "Checks parallel + kill storage clusterd"
         depends_on: build-aarch64
         timeout_in_minutes: 180
         parallelism: 2
@@ -777,7 +777,7 @@ steps:
               args: [--scenario=KillClusterdStorage, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-upgrade-entire-mz
-        label: "Checks upgrade, whole-Mz restart %N"
+        label: "Checks upgrade, whole-Mz restart"
         depends_on: build-aarch64
         timeout_in_minutes: 180
         parallelism: 2
@@ -789,7 +789,7 @@ steps:
               args: [--scenario=UpgradeEntireMz, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-preflight-check-rollback
-        label: "Checks preflight-check and roll back upgrade %N"
+        label: "Checks preflight-check and roll back upgrade"
         depends_on: build-aarch64
         timeout_in_minutes: 180
         parallelism: 2
@@ -801,7 +801,7 @@ steps:
               args: [--scenario=PreflightCheckRollback, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-upgrade-entire-mz-two-versions
-        label: "Checks upgrade across two versions %N"
+        label: "Checks upgrade across two versions"
         depends_on: build-aarch64
         timeout_in_minutes: 180
         parallelism: 2
@@ -813,7 +813,7 @@ steps:
               args: [--scenario=UpgradeEntireMzTwoVersions, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-upgrade-entire-mz-four-versions
-        label: "Checks upgrade across four versions %N"
+        label: "Checks upgrade across four versions"
         depends_on: build-aarch64
         timeout_in_minutes: 180
         parallelism: 2
@@ -825,7 +825,7 @@ steps:
               args: [--scenario=UpgradeEntireMzFourVersions, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-0dt-restart-entire-mz-forced-migrations
-        label: "Checks 0dt restart of the entire Mz with forced migrations %N"
+        label: "Checks 0dt restart of the entire Mz with forced migrations"
         depends_on: build-aarch64
         timeout_in_minutes: 60
         parallelism: 2
@@ -837,7 +837,7 @@ steps:
               args: [--scenario=ZeroDowntimeRestartEntireMzForcedMigrations, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-0dt-upgrade-entire-mz
-        label: "Checks 0dt upgrade, whole-Mz restart %N"
+        label: "Checks 0dt upgrade, whole-Mz restart"
         depends_on: build-aarch64
         timeout_in_minutes: 60
         parallelism: 2
@@ -849,7 +849,7 @@ steps:
               args: [--scenario=ZeroDowntimeUpgradeEntireMz, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-0dt-upgrade-entire-mz-two-versions
-        label: "Checks 0dt upgrade across two versions %N"
+        label: "Checks 0dt upgrade across two versions"
         depends_on: build-aarch64
         timeout_in_minutes: 60
         parallelism: 2
@@ -861,7 +861,7 @@ steps:
               args: [--scenario=ZeroDowntimeUpgradeEntireMzTwoVersions, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-0dt-upgrade-entire-mz-four-versions
-        label: "Checks 0dt upgrade across four versions %N"
+        label: "Checks 0dt upgrade across four versions"
         depends_on: build-aarch64
         timeout_in_minutes: 60
         parallelism: 2
@@ -1405,7 +1405,7 @@ steps:
           composition: retain-history
 
   - id: data-ingest
-    label: "Data Ingest %N"
+    label: "Data Ingest"
     depends_on: build-aarch64
     timeout_in_minutes: 90
     parallelism: 2
@@ -1621,7 +1621,7 @@ steps:
         sanitizer: skip
 
   - id: txn-wal-fencing
-    label: Txn-wal fencing %N
+    label: Txn-wal fencing
     depends_on: build-aarch64
     timeout_in_minutes: 120
     parallelism: 2
@@ -1699,7 +1699,7 @@ steps:
       queue: hetzner-aarch64-8cpu-16gb
 
   - id: sqllogictest
-    label: ":bulb: SQL logic tests %N"
+    label: ":bulb: SQL logic tests"
     depends_on: build-aarch64
     timeout_in_minutes: 240
     parallelism: 10

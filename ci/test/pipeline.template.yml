@@ -296,7 +296,7 @@ steps:
       queue: builder-linux-aarch64-mem
 
   - id: testdrive
-    label: "Testdrive %N"
+    label: "Testdrive"
     depends_on: build-aarch64
     timeout_in_minutes: 40
     inputs: [test/testdrive]
@@ -308,7 +308,7 @@ steps:
       queue: hetzner-aarch64-8cpu-16gb
 
   - id: cluster-tests
-    label: "Cluster tests %N"
+    label: "Cluster tests"
     depends_on: build-aarch64
     timeout_in_minutes: 30
     inputs: [test/cluster]
@@ -320,7 +320,7 @@ steps:
       queue: hetzner-aarch64-8cpu-16gb
 
   - id: sqllogictest-fast
-    label: "Fast SQL logic tests %N"
+    label: "Fast SQL logic tests"
     depends_on: build-aarch64
     timeout_in_minutes: 30
     parallelism: 5
@@ -343,7 +343,7 @@ steps:
       queue: hetzner-aarch64-4cpu-8gb
 
   - id: legacy-upgrade
-    label: "Legacy upgrade tests (last version from docs) %N"
+    label: "Legacy upgrade tests (last version from docs)"
     parallelism: 2
     depends_on: build-aarch64
     timeout_in_minutes: 60
@@ -398,7 +398,7 @@ steps:
     key: mysql-tests
     steps:
       - id: mysql-cdc
-        label: "MySQL CDC tests %N"
+        label: "MySQL CDC tests"
         parallelism: 2
         depends_on: build-aarch64
         timeout_in_minutes: 30
@@ -410,7 +410,7 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
 
       - id: mysql-cdc-resumption
-        label: "MySQL CDC resumption tests %N"
+        label: "MySQL CDC resumption tests"
         parallelism: 4
         depends_on: build-aarch64
         timeout_in_minutes: 30
@@ -436,7 +436,7 @@ steps:
     key: postgres-tests
     steps:
       - id: pg-cdc
-        label: "Postgres CDC tests %N"
+        label: "Postgres CDC tests"
         parallelism: 2
         depends_on: build-aarch64
         timeout_in_minutes: 30
@@ -449,7 +449,7 @@ steps:
         # the mzbuild postgres version will be used, which depends on the Dockerfile specification
 
       - id: pg-cdc-resumption
-        label: "Postgres CDC resumption tests %N"
+        label: "Postgres CDC resumption tests"
         parallelism: 5
         depends_on: build-aarch64
         timeout_in_minutes: 30
@@ -558,7 +558,7 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
 
       - id: kafka-rtr
-        label: "Kafka RTR tests %N"
+        label: "Kafka RTR tests"
         depends_on: build-aarch64
         timeout_in_minutes: 30
         parallelism: 2
@@ -586,7 +586,7 @@ steps:
     key: platform-checks
     steps:
       - id: checks-restart-environmentd-clusterd-storage
-        label: "Checks + restart of environmentd & storage clusterd %N"
+        label: "Checks + restart of environmentd & storage clusterd"
         depends_on: build-aarch64
         inputs: [misc/python/materialize/checks]
         timeout_in_minutes: 45
@@ -603,7 +603,7 @@ steps:
                 ]
 
       - id: checks-no-restart-no-upgrade
-        label: "Checks without restart or upgrade %N"
+        label: "Checks without restart or upgrade"
         depends_on: build-aarch64
         inputs: [misc/python/materialize/checks]
         timeout_in_minutes: 45
@@ -616,7 +616,7 @@ steps:
               args: [--scenario=NoRestartNoUpgrade, "--seed=$BUILDKITE_JOB_ID"]
 
   - id: source-sink-errors
-    label: "Source/Sink Error Reporting %N"
+    label: "Source/Sink Error Reporting"
     depends_on: build-aarch64
     parallelism: 2
     timeout_in_minutes: 30
