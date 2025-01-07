@@ -116,11 +116,6 @@ build:debuginfo-full --copt=-g2
 build:debuginfo-full --strip=never
 build:debuginfo-full --@rules_rust//:extra_rustc_flag=-Cstrip=none
 
-build:debuginfo-limited --@rules_rust//:extra_rustc_flag=-Cdebuginfo=line-tables-only
-build:debuginfo-limited --copt=-gline-tables-only
-build:debuginfo-limited --strip=never
-build:debuginfo-limited --@rules_rust//:extra_rustc_flag=-Cstrip=none
-
 build:debuginfo-none --@rules_rust//:extra_rustc_flag=-Cdebuginfo=0
 build:debuginfo-none --copt=-g0
 build:debuginfo-none --strip=always
@@ -173,9 +168,7 @@ build:release-lto --@rules_rust//:extra_rustc_flag=-Clto=thin
 # too large and we OOD/OOM.
 build:release-tagged --config=release --config=release-lto --config=release-stamp --config=debuginfo-full
 # PRs in CI.
-#
-# Not doing a full stamp nor omitting full debug info, greatly speeds up compile times.
-build:release-dev --config=release --config=release-lto --config=debuginfo-limited
+build:release-dev --config=release --config=release-lto --config=debuginfo-full
 
 # "Optimized" Build.
 #
