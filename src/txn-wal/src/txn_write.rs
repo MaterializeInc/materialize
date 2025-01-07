@@ -180,8 +180,10 @@ where
                     let commit_ts = commit_ts.clone();
                     txn_batches_updates.push(async move {
                         let mut batches = updates
-                            .batches
+                            .staged
                             .into_iter()
+                            .map(|staged| data_write.batch_from_transmittable_batch(staged))
+                            .chain(updates.batches.into_iter())
                             .map(|mut batch| {
                                 batch
                                     .rewrite_ts(
@@ -192,18 +194,6 @@ where
                                 batch.into_transmittable_batch()
                             })
                             .collect::<Vec<_>>();
-
-                        let staged_batches = updates.staged.into_iter().map(|staged| {
-                            let mut batch = data_write.batch_from_transmittable_batch(staged);
-                            batch
-                                .rewrite_ts(
-                                    &Antichain::from_elem(commit_ts.clone()),
-                                    Antichain::from_elem(commit_ts.step_forward()),
-                                )
-                                .expect("invalid usage");
-                            batch.into_transmittable_batch()
-                        });
-                        batches.extend(staged_batches);
 
                         if !updates.writes.is_empty() {
                             let mut batch = data_write.builder(Antichain::from_elem(T::minimum()));

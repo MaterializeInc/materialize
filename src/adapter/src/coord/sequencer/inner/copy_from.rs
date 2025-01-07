@@ -54,12 +54,10 @@ impl Coordinator {
             let mut from = from.lower_uncorrelated()?;
             prep_scalar_expr(&mut from, style)?;
 
+            // TODO(cf3): Add structured errors for the below uses of `coord_bail!`
+            // and AdapterError::Unstructured.
             let temp_storage = RowArena::new();
             let eval_result = from.eval(&[], &temp_storage)?;
-
-            if eval_result == Datum::Null {
-                coord_bail!("COPY FROM target value cannot be NULL");
-            }
             let eval_string = match eval_result {
                 Datum::Null => coord_bail!("COPY FROM target value cannot be NULL"),
                 Datum::String(url_str) => url_str,
@@ -71,11 +69,12 @@ impl Coordinator {
         };
         let url = return_if_err!(eval_url(from_expr), ctx);
 
-        let dest_table = self
-            .catalog()
-            .get_entry(&id)
-            .table()
-            .expect("TODO SHOULD BE A TABLE");
+        // We check in planning that we're copying into a Table, but be defensive.
+        let Some(dest_table) = self.catalog().get_entry(&id).table() else {
+            let typ = self.catalog().get_entry(&id).item().typ();
+            let msg = format!("programming error: expected a Table found {typ:?}");
+            return ctx.retire(Err(AdapterError::Unstructured(anyhow::anyhow!(msg))));
+        };
 
         let collection_id = dest_table.global_id_writes();
         let (_, ingestion_id) = self.transient_id_gen.allocate_id();
@@ -84,11 +83,16 @@ impl Coordinator {
             format: mz_storage_types::oneshot_sources::ContentFormat::Csv,
         };
 
-        let cluster_id = self
+        let target_cluster = match self
             .catalog()
             .resolve_target_cluster(target_cluster, ctx.session())
-            .expect("TODO do this in planning")
-            .id;
+        {
+            Ok(cluster) => cluster,
+            Err(err) => {
+                return ctx.retire(Err(err));
+            }
+        };
+        let cluster_id = target_cluster.id;
 
         // When we finish staging the Batches in Persist, we'll send a command
         // to the Coordinator.
@@ -142,8 +146,8 @@ impl Coordinator {
         if let Some(error) = all_errors.pop() {
             tracing::warn!(?error, ?all_errors, "failed COPY FROM");
 
-            // TODO(parkmycar): Cleanup the existing ProtoBatches to prevent leaking them.
-            // TODO(parkmycar): Carry structured errors all the way through.
+            // TODO(cf1): Cleanup the existing ProtoBatches to prevent leaking them.
+            // TODO(cf2): Carry structured errors all the way through.
 
             ctx.retire(Err(AdapterError::Unstructured(anyhow::anyhow!(
                 "COPY FROM: {error}"
@@ -173,7 +177,7 @@ impl Coordinator {
     /// Cancel any active `COPY FROM` statements/oneshot ingestions.
     #[mz_ore::instrument(level = "debug")]
     pub(crate) fn cancel_pending_copy(&mut self, conn_id: &ConnectionId) {
-        // TODO(parkmycar): Also cancel the dataflow running on clusterd.
+        // TODO(cf1): Also cancel the dataflow running on clusterd.
         if let Some(ctx) = self.active_copies.remove(conn_id) {
             ctx.retire(Err(AdapterError::Canceled));
         }

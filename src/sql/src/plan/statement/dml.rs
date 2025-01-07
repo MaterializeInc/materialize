@@ -1127,7 +1127,7 @@ fn plan_copy_from(
         CopyTarget::Expr(from) => {
             scx.require_feature_flag(&ENABLE_COPY_FROM_REMOTE)?;
 
-            // Converting the to expr to a HirScalarExpr
+            // Converting the expr to an HirScalarExpr
             let mut from_expr = from.clone();
             transform_ast::transform(scx, &mut from_expr)?;
             let relation_type = RelationDesc::empty();
@@ -1145,7 +1145,7 @@ fn plan_copy_from(
 
             CopyFromSource::Url(from)
         }
-        CopyTarget::Stdout => sql_bail!("COPY FROM {} not supported", target),
+        CopyTarget::Stdout => bail_never_supported!("COPY FROM {} not supported", target),
     };
 
     let params = match format {
