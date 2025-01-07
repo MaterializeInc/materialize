@@ -58,7 +58,18 @@ one
 > SELECT * from remote2_tbl
 one
 
+# The `CREATE TABLE ... FROM SOURCE` commands caused a recreation of the
+# respective source dataflows, during which we might have lost the
+# statistics about committed updates from the snapshot. Ingest some more data
+# to ensure we see some `updates_committed`.
+
+$ kafka-ingest format=bytes topic=remote1
+two
+$ kafka-ingest format=bytes topic=remote2
+two
+
 > SELECT s.name,
+  SUM(u.updates_committed) > 0,
   SUM(u.messages_received) >= 2,
   SUM(u.offset_known),
   SUM(u.offset_committed)
@@ -66,5 +77,13 @@ one
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('remote1', 'remote2')
   GROUP BY s.id, s.name
-remote1 true 1 1
-remote2 true 1 1
+remote1 true true 2 2
+remote2 true true 2 2
+
+> SELECT s.name,
+  SUM(u.updates_committed)
+  FROM mz_sources s
+  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  WHERE s.name IN ('webhook_text')
+  GROUP BY s.id, s.name
+webhook_text 1

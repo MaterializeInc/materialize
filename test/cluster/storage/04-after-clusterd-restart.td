@@ -17,26 +17,30 @@ $ set-sql-timeout duration=180s
 one
 two
 three
+four
 > SELECT * from remote2
 one
 two
 three
+four
 
 $ kafka-ingest format=bytes topic=remote1
-four
+five
 $ kafka-ingest format=bytes topic=remote2
-four
+five
 
 > SELECT * from remote1
 one
 two
 three
 four
+five
 > SELECT * from remote2
 one
 two
 three
 four
+five
 
 > SELECT s.name,
   SUM(u.offset_known),
@@ -45,5 +49,5 @@ four
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('remote1', 'remote2')
   GROUP BY s.id, s.name
-remote1 4 4
-remote2 4 4
+remote1 5 5
+remote2 5 5

@@ -9,6 +9,8 @@
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true
+ALTER SYSTEM SET storage_statistics_collection_interval = 1000
+ALTER SYSTEM SET storage_statistics_interval = 1000
 
 > CREATE CLUSTER cluster1 REPLICAS (r1 (SIZE '2'))
 
@@ -82,8 +84,12 @@ one:two
 > CREATE TABLE subsources_cluster.organizations FROM SOURCE subsources_cluster.s (REFERENCE organizations);
 > CREATE TABLE subsources_cluster.users FROM SOURCE subsources_cluster.s (REFERENCE users);
 
-# NOTE: These queries are slow to succeed because the default metrics scraping
-# interval is 30 seconds. Here we are just ensuring metrics were populated.
+# The `CREATE TABLE ... FROM SOURCE` commands caused a recreation of the
+# respective source dataflows, during which we might have lost the statistics
+# about committed updates from the snapshot. Ingest some more data to ensure we
+# see some `updates_committed`.
+$ kafka-ingest format=bytes topic=upsert key-format=bytes key-terminator=:
+two:three
 
 > SELECT s.name, SUM(u.messages_staged), SUM(u.messages_committed), SUM(u.bytes_staged) > 0, SUM(bytes_staged) = SUM(bytes_committed)
   FROM mz_sinks s
@@ -92,6 +98,17 @@ one:two
   GROUP BY s.name
 sink_size 1 1 true true
 sink_cluster 1 1 true true
+
+> SELECT s.name,
+  SUM(u.updates_committed) > 0
+  FROM mz_sources s
+  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  WHERE s.name IN ('upsert_size', 'upsert_cluster', 's', 'bids')
+  GROUP BY s.id, s.name
+upsert_size true
+upsert_cluster true
+s false
+s false
 
 # We have to obtain these before we delete the sink.
 $ set-from-sql var=sink-size-id
