@@ -1040,13 +1040,10 @@ pub fn plan_create_source(
         // We only define primary-export details for this source if we are still supporting
         // the legacy source syntax. Otherwise, we will not output to the primary collection.
         // TODO(database-issues#8620): Remove this field once the new syntax is enabled everywhere
-        primary_export: match force_source_table_syntax {
-            false => Some(SourceExportDataConfig {
-                encoding,
-                envelope: envelope.clone(),
-            }),
-            true => None,
-        },
+        primary_export: Some(SourceExportDataConfig {
+            encoding,
+            envelope: envelope.clone(),
+        }),
         timestamp_interval,
     };
 

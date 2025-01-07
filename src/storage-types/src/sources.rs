@@ -833,6 +833,8 @@ pub struct SourceDesc<C: ConnectionAccess = InlinedConnection> {
     /// primary collection for this source.
     /// TODO(database-issues#8620): This will be removed once sources no longer export
     /// to primary collections and only export to explicit SourceExports (tables).
+    /// The value for this is ALWAYS `Some`, because we couldn't figure out how to get
+    /// `None` to work.
     pub primary_export: Option<SourceExportDataConfig<C>>,
 }
 
