@@ -266,7 +266,6 @@ $ kafka-ingest format=avro topic=non-dbz-data-varying-partition schema=${non-dbz
   IN CLUSTER non_dbz_data_varying_partition_cluster
   FROM KAFKA CONNECTION kafka_conn (
     TOPIC 'testdrive-non-dbz-data-varying-partition-${testdrive.seed}',
-    TOPIC METADATA REFRESH INTERVAL = '10ms',
     START OFFSET=[1]
   )
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
@@ -296,7 +295,6 @@ a  b
   IN CLUSTER non_dbz_data_varying_partition_2_cluster
   FROM KAFKA CONNECTION kafka_conn (
     TOPIC 'testdrive-non-dbz-data-varying-partition-${testdrive.seed}',
-    TOPIC METADATA REFRESH INTERVAL = '10ms',
     START OFFSET=[1,1]
   )
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'

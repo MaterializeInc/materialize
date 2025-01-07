@@ -31,23 +31,15 @@ one
 > CREATE CONNECTION kafka_conn_dynamic
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT, SSH TUNNEL thancred);
 
-# Create source with a faster metadata refresh interval so
-# errors are detected every second instead of every minute.
 > CREATE SOURCE fixed_text IN CLUSTER sc
-  FROM KAFKA CONNECTION kafka_conn_using (
-    TOPIC 'testdrive-thetopic-${testdrive.seed}',
-    TOPIC METADATA REFRESH INTERVAL '1s'
-  )
+  FROM KAFKA CONNECTION kafka_conn_using (TOPIC 'testdrive-thetopic-${testdrive.seed}')
 
 > CREATE TABLE fixed_text_tbl FROM SOURCE fixed_text (REFERENCE "testdrive-thetopic-${testdrive.seed}")
   FORMAT TEXT
   ENVELOPE NONE
 
 > CREATE SOURCE dynamic_text  IN CLUSTER sc
-  FROM KAFKA CONNECTION kafka_conn_dynamic (
-    TOPIC 'testdrive-thetopic-${testdrive.seed}',
-    TOPIC METADATA REFRESH INTERVAL '1s'
-  )
+  FROM KAFKA CONNECTION kafka_conn_dynamic (TOPIC 'testdrive-thetopic-${testdrive.seed}')
 
 > CREATE TABLE dynamic_text_tbl FROM SOURCE dynamic_text (REFERENCE "testdrive-thetopic-${testdrive.seed}")
   FORMAT TEXT

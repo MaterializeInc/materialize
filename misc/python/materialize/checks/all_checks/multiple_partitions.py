@@ -34,7 +34,7 @@ class MultiplePartitions(Check):
                 $ kafka-ingest format=avro key-format=avro topic=multiple-partitions-topic key-schema=${keyschema} schema=${schema} repeat=100
                 {"key1": "A${kafka-ingest.iteration}"} {"f1": "A${kafka-ingest.iteration}"}
 
-                > CREATE SOURCE multiple_partitions_source_src FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-multiple-partitions-topic-${testdrive.seed}', TOPIC METADATA REFRESH INTERVAL '500ms');
+                > CREATE SOURCE multiple_partitions_source_src FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-multiple-partitions-topic-${testdrive.seed}');
                 > CREATE TABLE multiple_partitions_source FROM SOURCE multiple_partitions_source_src (REFERENCE "testdrive-multiple-partitions-topic-${testdrive.seed}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT;
 

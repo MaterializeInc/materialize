@@ -79,7 +79,6 @@ grape:grape
 > CREATE SOURCE append_time_offset_1
   IN CLUSTER append_time_offset_1_cluster
   FROM KAFKA CONNECTION kafka_conn (
-      TOPIC METADATA REFRESH INTERVAL = '10ms',
       START TIMESTAMP=1,
       TOPIC 'testdrive-t1-${testdrive.seed}'
     )
@@ -92,7 +91,6 @@ grape:grape
 > CREATE SOURCE append_time_offset_2
   IN CLUSTER append_time_offset_2_cluster
   FROM KAFKA CONNECTION kafka_conn (
-      TOPIC METADATA REFRESH INTERVAL = '10ms',
       START TIMESTAMP=2,
       TOPIC 'testdrive-t1-${testdrive.seed}'
     )
@@ -105,7 +103,6 @@ grape:grape
 > CREATE SOURCE append_time_offset_3
   IN CLUSTER append_time_offset_3_cluster
   FROM KAFKA CONNECTION kafka_conn (
-      TOPIC METADATA REFRESH INTERVAL = '10ms',
       START TIMESTAMP=3,
       TOPIC 'testdrive-t1-${testdrive.seed}'
     )
@@ -118,7 +115,6 @@ grape:grape
 > CREATE SOURCE append_time_offset_4
   IN CLUSTER append_time_offset_4_cluster
   FROM KAFKA CONNECTION kafka_conn (
-      TOPIC METADATA REFRESH INTERVAL = '10ms',
       START TIMESTAMP=4,
       TOPIC 'testdrive-t1-${testdrive.seed}'
     )
@@ -131,7 +127,6 @@ grape:grape
 > CREATE SOURCE append_time_offset_5
   IN CLUSTER append_time_offset_5_cluster
   FROM KAFKA CONNECTION kafka_conn (
-      TOPIC METADATA REFRESH INTERVAL = '10ms',
       START TIMESTAMP=5,
       TOPIC 'testdrive-t1-${testdrive.seed}'
     )
@@ -228,8 +223,7 @@ grape:grape
   IN CLUSTER upsert_time_offset_0_cluster
   FROM KAFKA CONNECTION kafka_conn (
       START TIMESTAMP=0,
-      TOPIC 'testdrive-t2-${testdrive.seed}',
-      TOPIC METADATA REFRESH INTERVAL '10ms'
+      TOPIC 'testdrive-t2-${testdrive.seed}'
   )
 
 > CREATE TABLE upsert_time_offset_0_tbl FROM SOURCE upsert_time_offset_0 (REFERENCE "testdrive-t2-${testdrive.seed}")
@@ -242,8 +236,7 @@ grape:grape
   IN CLUSTER upsert_time_offset_1_cluster
   FROM KAFKA CONNECTION kafka_conn (
       START TIMESTAMP 1,
-      TOPIC 'testdrive-t2-${testdrive.seed}',
-      TOPIC METADATA REFRESH INTERVAL '10ms'
+      TOPIC 'testdrive-t2-${testdrive.seed}'
   )
 
 > CREATE TABLE upsert_time_offset_1_tbl FROM SOURCE upsert_time_offset_1 (REFERENCE "testdrive-t2-${testdrive.seed}")
@@ -256,8 +249,7 @@ grape:grape
   IN CLUSTER upsert_time_offset_2_cluster
   FROM KAFKA CONNECTION kafka_conn (
       START TIMESTAMP 2,
-      TOPIC 'testdrive-t2-${testdrive.seed}',
-      TOPIC METADATA REFRESH INTERVAL '10ms'
+      TOPIC 'testdrive-t2-${testdrive.seed}'
   )
 
 > CREATE TABLE upsert_time_offset_2_tbl FROM SOURCE upsert_time_offset_2 (REFERENCE "testdrive-t2-${testdrive.seed}")
@@ -270,8 +262,7 @@ grape:grape
   IN CLUSTER upsert_time_offset_3_cluster
   FROM KAFKA CONNECTION kafka_conn (
       START TIMESTAMP 3,
-      TOPIC 'testdrive-t2-${testdrive.seed}',
-      TOPIC METADATA REFRESH INTERVAL '10ms'
+      TOPIC 'testdrive-t2-${testdrive.seed}'
   )
 
 > CREATE TABLE upsert_time_offset_3_tbl FROM SOURCE upsert_time_offset_3 (REFERENCE "testdrive-t2-${testdrive.seed}")
@@ -284,8 +275,7 @@ grape:grape
   IN CLUSTER upsert_time_offset_4_cluster
   FROM KAFKA CONNECTION kafka_conn (
       START TIMESTAMP 4,
-      TOPIC 'testdrive-t2-${testdrive.seed}',
-      TOPIC METADATA REFRESH INTERVAL '10ms'
+      TOPIC 'testdrive-t2-${testdrive.seed}'
   )
 
 > CREATE TABLE upsert_time_offset_4_tbl FROM SOURCE upsert_time_offset_4 (REFERENCE "testdrive-t2-${testdrive.seed}")
@@ -298,8 +288,7 @@ grape:grape
   IN CLUSTER upsert_time_offset_5_cluster
   FROM KAFKA CONNECTION kafka_conn (
       START TIMESTAMP 5,
-      TOPIC 'testdrive-t2-${testdrive.seed}',
-      TOPIC METADATA REFRESH INTERVAL '10ms'
+      TOPIC 'testdrive-t2-${testdrive.seed}'
   )
 
 > CREATE TABLE upsert_time_offset_5_tbl FROM SOURCE upsert_time_offset_5 (REFERENCE "testdrive-t2-${testdrive.seed}")
