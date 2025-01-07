@@ -1667,10 +1667,9 @@ impl SourceDataRowColumnarDecoder {
     }
 
     pub fn goodbytes(&self) -> usize {
-        let self_size = std::mem::size_of::<SourceDataRowColumnarDecoder>();
         match self {
-            SourceDataRowColumnarDecoder::Row(decoder) => self_size + decoder.goodbytes(),
-            SourceDataRowColumnarDecoder::EmptyRow => self_size,
+            SourceDataRowColumnarDecoder::Row(decoder) => decoder.goodbytes(),
+            SourceDataRowColumnarDecoder::EmptyRow => 0,
         }
     }
 }
