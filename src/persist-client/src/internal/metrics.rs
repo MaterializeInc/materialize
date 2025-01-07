@@ -2377,6 +2377,7 @@ pub struct PushdownMetrics {
     pub(crate) parts_faked_bytes: IntCounter,
     pub(crate) parts_stats_trimmed_count: IntCounter,
     pub(crate) parts_stats_trimmed_bytes: IntCounter,
+    pub(crate) parts_projection_trimmed_bytes: IntCounter,
     pub part_stats: PartStatsMetrics,
 }
 
@@ -2430,6 +2431,10 @@ impl PushdownMetrics {
             parts_stats_trimmed_bytes: registry.register(metric!(
                 name: "mz_persist_pushdown_parts_stats_trimmed_bytes",
                 help: "total bytes trimmed from part stats",
+            )),
+            parts_projection_trimmed_bytes: registry.register(metric!(
+                name: "mz_persist_pushdown_parts_projection_trimmed_bytes",
+                help: "total bytes trimmed from columnar data because of projection pushdown",
             )),
             part_stats: PartStatsMetrics::new(registry),
         }

@@ -121,29 +121,17 @@ impl Row {
         proto: &ProtoRow,
         desc: &RelationDesc,
     ) -> Result<(), String> {
-        let mut col_idx = 0;
         let mut packer = self.packer();
-        for d in proto.datums.iter() {
+        for (col_idx, _, _) in desc.iter_all() {
+            let d = match proto.datums.get(col_idx.to_raw()) {
+                Some(x) => x,
+                None => {
+                    packer.push(Datum::Null);
+                    continue;
+                }
+            };
             packer.try_push_proto(d)?;
-            col_idx += 1;
         }
-
-        let num_columns = desc.typ().column_types.len();
-        if col_idx < num_columns {
-            let missing_columns = col_idx..num_columns;
-            for _ in missing_columns {
-                packer.push(Datum::Null);
-                col_idx += 1;
-            }
-        }
-
-        mz_ore::soft_assert_eq_or_log!(
-            col_idx,
-            num_columns,
-            "wrong number of columns when decoding a Row!, got {row:?}, expected {desc:?}",
-            row = self,
-            desc = desc,
-        );
 
         Ok(())
     }

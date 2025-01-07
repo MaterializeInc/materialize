@@ -20,6 +20,7 @@ use arrow::array::{
 use bytes::{BufMut, Bytes};
 use timely::order::Product;
 
+use crate::arrow::ArrayOrd;
 use crate::columnar::{ColumnDecoder, ColumnEncoder, Schema2};
 use crate::stats::{ColumnStatKinds, ColumnarStats, NoneStats, StructStats};
 use crate::{Codec, Codec64, Opaque, ShardId};
@@ -92,6 +93,10 @@ impl ColumnDecoder<()> for UnitColumnar {
         } else {
             panic!("index out of bounds, idx: {idx}, len: {}", self.len);
         }
+    }
+
+    fn goodbytes(&self) -> usize {
+        0
     }
 
     fn stats(&self) -> StructStats {
@@ -281,6 +286,9 @@ impl<T: SimpleColumnarData> ColumnDecoder<T> for SimpleColumnarDecoder<T> {
     }
     fn is_null(&self, idx: usize) -> bool {
         self.0.is_null(idx)
+    }
+    fn goodbytes(&self) -> usize {
+        ArrayOrd::new(&self.0).goodbytes()
     }
 
     fn stats(&self) -> StructStats {
@@ -599,6 +607,10 @@ impl<T> ColumnDecoder<T> for TodoColumnarDecoder<T> {
     }
 
     fn is_null(&self, _idx: usize) -> bool {
+        panic!("TODO")
+    }
+
+    fn goodbytes(&self) -> usize {
         panic!("TODO")
     }
 

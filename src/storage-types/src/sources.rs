@@ -26,6 +26,7 @@ use itertools::Itertools;
 use kafka::KafkaSourceExportDetails;
 use load_generator::{LoadGeneratorOutput, LoadGeneratorSourceExportDetails};
 use mz_ore::assert_none;
+use mz_persist_types::arrow::ArrayOrd;
 use mz_persist_types::columnar::{ColumnDecoder, ColumnEncoder, Schema2};
 use mz_persist_types::stats::{
     ColumnNullStats, ColumnStatKinds, ColumnarStats, PrimitiveStats, StructStats,
@@ -1664,6 +1665,13 @@ impl SourceDataRowColumnarDecoder {
             }
         }
     }
+
+    pub fn goodbytes(&self) -> usize {
+        match self {
+            SourceDataRowColumnarDecoder::Row(decoder) => decoder.goodbytes(),
+            SourceDataRowColumnarDecoder::EmptyRow => 0,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -1752,6 +1760,10 @@ impl ColumnDecoder<SourceData> for SourceDataColumnarDecoder {
         assert!(!err_null || !row_null, "SourceData should never be null!");
 
         false
+    }
+
+    fn goodbytes(&self) -> usize {
+        self.row_decoder.goodbytes() + ArrayOrd::Binary(self.err_decoder.clone()).goodbytes()
     }
 
     fn stats(&self) -> StructStats {
@@ -1943,16 +1955,20 @@ mod tests {
     use bytes::Bytes;
     use mz_expr::EvalError;
     use mz_ore::assert_err;
+    use mz_ore::metrics::MetricsRegistry;
     use mz_persist::indexed::columnar::arrow::{realloc_any, realloc_array};
     use mz_persist::metrics::ColumnarMetrics;
     use mz_persist_types::parquet::EncodingConfig;
     use mz_persist_types::schema::{backward_compatible, Migration};
+    use mz_persist_types::stats::{PartStats, PartStatsMetrics};
     use mz_repr::{
-        arb_relation_desc_diff, PropRelationDescDiff, ProtoRelationDesc, RelationDescBuilder,
-        ScalarType,
+        arb_relation_desc_diff, arb_relation_desc_projection, ColumnIndex, DatumVec,
+        PropRelationDescDiff, ProtoRelationDesc, RelationDescBuilder, RowArena, ScalarType,
     };
     use proptest::prelude::*;
     use proptest::strategy::{Union, ValueTree};
+
+    use crate::stats::RelationPartStats;
 
     use super::*;
 
@@ -1970,13 +1986,21 @@ mod tests {
     }
 
     #[track_caller]
-    fn roundtrip_source_data(desc: RelationDesc, datas: Vec<SourceData>, config: &EncodingConfig) {
+    fn roundtrip_source_data(
+        desc: &RelationDesc,
+        datas: Vec<SourceData>,
+        read_desc: &RelationDesc,
+        config: &EncodingConfig,
+    ) {
         let metrics = ColumnarMetrics::disconnected();
-        let mut encoder = <RelationDesc as Schema2<SourceData>>::encoder(&desc).unwrap();
+        let mut encoder = <RelationDesc as Schema2<SourceData>>::encoder(desc).unwrap();
         for data in &datas {
             encoder.append(data);
         }
         let col = encoder.finish();
+
+        // The top-level StructArray for SourceData should always be non-nullable.
+        assert!(!col.is_nullable());
 
         // Reallocate our arrays with lgalloc.
         let col = realloc_array(&col, &metrics);
@@ -2024,23 +2048,68 @@ mod tests {
             .clone();
 
         // Try generating stats for the data, just to make sure we don't panic.
-        let _ = <RelationDesc as Schema2<SourceData>>::decoder_any(&desc, &rnd_col)
+        let stats = <RelationDesc as Schema2<SourceData>>::decoder_any(desc, &rnd_col)
             .expect("valid decoder")
             .stats();
 
         // Read back all of our data and assert it roundtrips.
         let mut rnd_data = SourceData(Ok(Row::default()));
-        let decoder = <RelationDesc as Schema2<SourceData>>::decoder(&desc, rnd_col).unwrap();
-        for (idx, og_data) in datas.into_iter().enumerate() {
+        let decoder =
+            <RelationDesc as Schema2<SourceData>>::decoder(desc, rnd_col.clone()).unwrap();
+        for (idx, og_data) in datas.iter().enumerate() {
             decoder.decode(idx, &mut rnd_data);
-            assert_eq!(og_data, rnd_data);
+            assert_eq!(og_data, &rnd_data);
+        }
+
+        // Read back all of our data a second time with a projection applied, and make sure the
+        // stats are valid.
+        let stats_metrics = PartStatsMetrics::new(&MetricsRegistry::new());
+        let stats = RelationPartStats {
+            name: "test",
+            metrics: &stats_metrics,
+            stats: &PartStats { key: stats },
+            desc: read_desc,
+        };
+        let mut datum_vec = DatumVec::new();
+        let arena = RowArena::default();
+        let decoder = <RelationDesc as Schema2<SourceData>>::decoder(read_desc, rnd_col).unwrap();
+
+        for (idx, og_data) in datas.iter().enumerate() {
+            decoder.decode(idx, &mut rnd_data);
+            match (&og_data.0, &rnd_data.0) {
+                (Ok(og_row), Ok(rnd_row)) => {
+                    // Filter down to just the Datums in the projection schema.
+                    {
+                        let datums = datum_vec.borrow_with(og_row);
+                        let projected_datums =
+                            datums.iter().enumerate().filter_map(|(idx, datum)| {
+                                read_desc
+                                    .contains_index(&ColumnIndex::from_raw(idx))
+                                    .then_some(datum)
+                            });
+                        let og_projected_row = Row::pack(projected_datums);
+                        assert_eq!(&og_projected_row, rnd_row);
+                    }
+
+                    // Validate the stats for all of our projected columns.
+                    {
+                        let proj_datums = datum_vec.borrow_with(rnd_row);
+                        for (pos, (idx, _, _)) in read_desc.iter_all().enumerate() {
+                            let spec = stats.col_stats(idx, &arena);
+                            assert!(spec.may_contain(proj_datums[pos]));
+                        }
+                    }
+                }
+                (Err(_), Err(_)) => assert_eq!(og_data, &rnd_data),
+                (_, _) => panic!("decoded to a different type? {og_data:?} {rnd_data:?}"),
+            }
         }
 
         // Verify that the RelationDesc itself roundtrips through
         // {encode,decode}_schema.
-        let encoded_schema = SourceData::encode_schema(&desc);
+        let encoded_schema = SourceData::encode_schema(desc);
         let roundtrip_desc = SourceData::decode_schema(&encoded_schema);
-        assert_eq!(desc, roundtrip_desc);
+        assert_eq!(desc, &roundtrip_desc);
 
         // Verify that the RelationDesc is backward compatible with itself (this
         // mostly checks for `unimplemented!` type panics).
@@ -2066,13 +2135,19 @@ mod tests {
         }
         let num_rows = Union::new_weighted(weights);
 
-        let strat = (any::<RelationDesc>(), num_rows).prop_flat_map(|(desc, num_rows)| {
-            proptest::collection::vec(arb_source_data_for_relation_desc(&desc), num_rows)
-                .prop_map(move |datas| (desc.clone(), datas))
-        });
+        // TODO(parkmycar): There are so many clones going on here, and maybe we can avoid them?
+        let strat = (any::<RelationDesc>(), num_rows)
+            .prop_flat_map(|(desc, num_rows)| {
+                arb_relation_desc_projection(desc.clone())
+                    .prop_map(move |read_desc| (desc.clone(), read_desc, num_rows.clone()))
+            })
+            .prop_flat_map(|(desc, read_desc, num_rows)| {
+                proptest::collection::vec(arb_source_data_for_relation_desc(&desc), num_rows)
+                    .prop_map(move |datas| (desc.clone(), datas, read_desc.clone()))
+            });
 
-        proptest!(|((config, (desc, source_datas)) in (any::<EncodingConfig>(), strat))| {
-            roundtrip_source_data(desc, source_datas, &config);
+        proptest!(|((config, (desc, source_datas, read_desc)) in (any::<EncodingConfig>(), strat))| {
+            roundtrip_source_data(&desc, source_datas, &read_desc, &config);
         });
     }
 
@@ -2088,7 +2163,7 @@ mod tests {
             EvalError::DateOutOfRange.into(),
         )))];
         let config = EncodingConfig::default();
-        roundtrip_source_data(desc, source_datas, &config);
+        roundtrip_source_data(&desc, source_datas, &desc, &config);
     }
 
     fn is_sorted(array: &dyn Array) -> bool {
@@ -2151,8 +2226,20 @@ mod tests {
     }
 
     #[mz_ore::test]
+    fn backward_compatible_project_away_all() {
+        let old = RelationDesc::from_names_and_types([("a", ScalarType::Bool.nullable(true))]);
+        let new = RelationDesc::empty();
+
+        let old_data_type = get_data_type(&old);
+        let new_data_type = get_data_type(&new);
+
+        let migration = backward_compatible(&old_data_type, &new_data_type);
+        assert!(migration.is_some());
+    }
+
+    #[mz_ore::test]
     #[cfg_attr(miri, ignore)]
-    fn backward_compatible_migrate1() {
+    fn backward_compatible_migrate() {
         let strat = (any::<RelationDesc>(), any::<RelationDesc>()).prop_flat_map(|(old, new)| {
             proptest::collection::vec(arb_source_data_for_relation_desc(&old), 2)
                 .prop_map(move |datas| (old.clone(), new.clone(), datas))
@@ -2180,8 +2267,7 @@ mod tests {
                     typ: ColumnType { nullable, .. },
                     ..
                 } => *nullable,
-                // TODO(parkmycar): Re-enable DropColumn.
-                // PropRelationDescDiff::DropColumn { .. } => true,
+                PropRelationDescDiff::DropColumn { .. } => true,
                 _ => false,
             });
 
@@ -2226,7 +2312,7 @@ mod tests {
         // Note: This case should be covered by the `all_source_data_roundtrips` test above, but
         // it's a special case that we explicitly want to exercise.
         proptest!(|((config, (desc, source_datas)) in (any::<EncodingConfig>(), rows))| {
-            roundtrip_source_data(desc, source_datas, &config);
+            roundtrip_source_data(&desc, source_datas, &desc, &config);
         });
     }
 
