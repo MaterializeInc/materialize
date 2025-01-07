@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+$ postgres-connect name=mz_analytics url=postgres://mz_analytics:materialize@${testdrive.materialize-internal-sql-addr}
 
 ! ALTER SYSTEM SET max_tables TO 42
 contains:permission denied to alter system
@@ -108,6 +109,21 @@ ALTER SYSTEM SET max_replicas_per_cluster = 1
 
 ! CREATE CLUSTER REPLICA c1.r2 SIZE '1'
 contains:creating cluster replica would violate max_replicas_per_cluster limit (desired: 2, limit: 1, current: 1)
+
+> SELECT COUNT(*) FROM mz_cluster_replicas JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id WHERE mz_clusters.name = 'mz_analytics'
+0
+
+$ postgres-execute connection=mz_analytics
+ALTER CLUSTER mz_analytics SET (REPLICATION FACTOR = 2)
+
+> SELECT COUNT(*) FROM mz_cluster_replicas JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id WHERE mz_clusters.name = 'mz_analytics'
+2
+
+$ postgres-execute connection=mz_analytics
+ALTER CLUSTER mz_analytics SET (REPLICATION FACTOR = 0)
+
+> SELECT COUNT(*) FROM mz_cluster_replicas JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id WHERE mz_clusters.name = 'mz_analytics'
+0
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET max_replicas_per_cluster = 100
@@ -435,6 +451,21 @@ ALTER SYSTEM SET max_credit_consumption_rate = 3
 
 ! CREATE CLUSTER REPLICA c1.r3 SIZE '1'
 contains:creating cluster replica would violate max_credit_consumption_rate limit (desired: 4, limit: 3, current: 3)
+
+> SELECT COUNT(*) FROM mz_cluster_replicas JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id WHERE mz_clusters.name = 'mz_analytics'
+0
+
+$ postgres-execute connection=mz_analytics
+ALTER CLUSTER mz_analytics SET (REPLICATION FACTOR = 1)
+
+> SELECT COUNT(*) FROM mz_cluster_replicas JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id WHERE mz_clusters.name = 'mz_analytics'
+1
+
+$ postgres-execute connection=mz_analytics
+ALTER CLUSTER mz_analytics SET (REPLICATION FACTOR = 0)
+
+> SELECT COUNT(*) FROM mz_cluster_replicas JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id WHERE mz_clusters.name = 'mz_analytics'
+0
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET max_credit_consumption_rate = 4.0
