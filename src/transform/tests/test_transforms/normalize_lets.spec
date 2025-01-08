@@ -201,16 +201,16 @@ Return
     Union
       Get l2
       Get l2
-  With
+  With Mutually Recursive
     cte l2 =
       Filter (#0 > 0)
         Get l1
-With Mutually Recursive
-  cte l1 =
-    Union
-      Get l0
-      Get l0
-      Get l1
+    cte l1 =
+      Union
+        Get l0
+        Get l0
+        Get l1
+With
   cte l0 =
     Map (null)
       Get t0
