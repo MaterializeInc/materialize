@@ -4903,6 +4903,7 @@ dependencies = [
  "bytesize",
  "chrono",
  "crossbeam-channel",
+ "derivative",
  "differential-dataflow",
  "futures",
  "http 1.1.0",
