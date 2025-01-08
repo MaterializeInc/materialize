@@ -81,6 +81,8 @@ pub enum InternalStorageCommand {
         /// A frontier in the source time domain with the property that all updates not beyond it
         /// have already been durably ingested.
         source_resume_uppers: BTreeMap<GlobalId, Vec<Row>>,
+        /// The upper of the ingestion collection's shard.
+        ingestion_upper: Antichain<mz_repr::Timestamp>,
     },
     /// Render a sink dataflow.
     RunSinkDataflow(
