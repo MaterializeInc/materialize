@@ -8,12 +8,16 @@
 # by the Apache License, Version 2.0.
 
 import hashlib
+import os
 import pathlib
 import subprocess
+from enum import Enum
 
 import requests
 
 from materialize import MZ_ROOT, ui
+from materialize.build_config import BuildConfig
+from materialize.teleport import TeleportProxy
 
 """Utilities for interacting with Bazel from python scripts"""
 
@@ -135,3 +139,57 @@ def toolchain_hashes(stable, nightly) -> dict[str, dict[str, str]]:
                 hashes[arch][channel][tool] = sha256_hash.hexdigest()
 
     return hashes
+
+
+def remote_cache_arg(config: BuildConfig) -> list[str]:
+    """List of arguments that could possibly enable use of a remote cache."""
+
+    ci_remote = os.getenv("CI_BAZEL_REMOTE_CACHE")
+    config_remote = config.bazel.remote_cache
+
+    if ci_remote:
+        remote_cache = ci_remote
+    elif config_remote:
+        bazel_remote = RemoteCache(config_remote)
+        remote_cache = bazel_remote.address()
+    else:
+        remote_cache = None
+
+    if remote_cache:
+        return [f"--remote_cache={remote_cache}"]
+    else:
+        return []
+
+
+class RemoteCache:
+    """The remote cache we're conecting to."""
+
+    def __init__(self, value: str):
+        if value.startswith("teleport"):
+            app_name = value.split(":")[1]
+            self.kind = RemoteCacheKind.teleport
+            self.data = app_name
+        else:
+            self.kind = RemoteCacheKind.normal
+            self.data = value
+
+    def address(self) -> str:
+        """Address for connecting to this remote cache."""
+        if self.kind == RemoteCacheKind.normal:
+            return self.data
+        else:
+            TeleportProxy.spawn(self.data, "6889")
+            return "http://localhost:6889"
+
+
+class RemoteCacheKind(Enum):
+    """Kind of remote cache we're connecting to."""
+
+    teleport = "teleport"
+    """Connecting to a remote cache through a teleport proxy."""
+
+    normal = "normal"
+    """An HTTP address for the cache."""
+
+    def __str__(self):
+        return self.value

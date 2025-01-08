@@ -31,6 +31,8 @@ import pg8000.native
 import psutil
 
 from materialize import MZ_ROOT, rustc_flags, spawn, ui
+from materialize.bazel import remote_cache_arg
+from materialize.build_config import BuildConfig
 from materialize.mzcompose import (
     bootstrap_cluster_replica_size,
     cluster_replica_size_map,
@@ -396,8 +398,8 @@ def main() -> int:
 def _bazel_build(
     args: argparse.Namespace, extra_programs: list[str] = []
 ) -> tuple[int, list[str]]:
-    dict(os.environ)
-    command = _bazel_command(args, ["build"])
+    config = BuildConfig.read()
+    command = _bazel_command(args, config, ["build"])
 
     programs = [*REQUIRED_SERVICES, *extra_programs]
     targets = [_bazel_target(program) for program in programs]
@@ -420,16 +422,21 @@ def _bazel_target(program: str) -> str:
         raise UIError(f"unknown program {program}")
 
 
-def _bazel_command(args: argparse.Namespace, subcommands: list[str]) -> list[str]:
+def _bazel_command(
+    args: argparse.Namespace, config: BuildConfig | None, subcommands: list[str]
+) -> list[str]:
     command = ["bazel"] + subcommands
 
     if args.release:
-        command += ["--config=release"]
+        command += ["--config=optimized"]
+    if config:
+        command += remote_cache_arg(config)
+
     return command
 
 
 def _bazel_artifact_path(args: argparse.Namespace, program: str) -> pathlib.Path:
-    cmd = _bazel_command(args, ["cquery", "--output=files"]) + [program]
+    cmd = _bazel_command(args, None, ["cquery", "--output=files"]) + [program]
     raw_path = subprocess.check_output(cmd, text=True)
     relative_path = pathlib.Path(raw_path.strip())
     return MZ_ROOT / relative_path
