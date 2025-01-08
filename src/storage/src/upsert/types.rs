@@ -391,16 +391,10 @@ impl<T: Eq, O> StateValue<T, O> {
                     provisional_value: (Some(provisional_value), provisional_ts, provisional_order),
                 })
             }
-            StateValue::Value(Value::Tombstone(_)) => {
-                // This cannot happen with how the new feedback UPSERT uses
-                // state. There are only ever provisional tombstones, and all
-                // updates that are merged/consolidated into upsert state come
-                // from the persist input, which doesn't need tombstones.
-                //
-                // Regular, finalized tombstones are only used by the classic
-                // UPSERT operator when doing partial processing.
-                panic!("cannot turn a finalized tombstone into a provisional value")
-            }
+            StateValue::Value(Value::Tombstone(_)) => StateValue::Value(Value::ProvisionalValue {
+                finalized_value: None,
+                provisional_value: (Some(provisional_value), provisional_ts, provisional_order),
+            }),
             StateValue::Value(Value::ProvisionalValue {
                 finalized_value,
                 provisional_value: _,
