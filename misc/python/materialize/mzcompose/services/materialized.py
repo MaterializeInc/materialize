@@ -31,6 +31,26 @@ from materialize.mzcompose.services.minio import minio_blob_uri
 from materialize.mzcompose.services.postgres import METADATA_STORE
 
 
+class MaterializeEmulator(Service):
+    """Just the Materialize Emulator with its defaults unchanged"""
+
+    def __init__(self, image: str | None = None):
+        name = "materialized"
+
+        config: ServiceConfig = {
+            "mzbuild": name,
+            "ports": [6875, 6876, 6877, 6878, 6880, 6881, 26257],
+            "healthcheck": {
+                "test": ["CMD", "curl", "-f", "localhost:6878/api/readyz"],
+                "interval": "1s",
+                # A fully loaded Materialize can take a long time to start.
+                "start_period": "600s",
+            },
+        }
+
+        super().__init__(name=name, config=config)
+
+
 class Materialized(Service):
     class Size:
         DEFAULT_SIZE = 4
