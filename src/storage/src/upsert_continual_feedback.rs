@@ -267,6 +267,7 @@ where
                         worker_id = %source_config.worker_id,
                         source_id = %source_config.id,
                         persist_stash = %persist_stash.len(),
+                        %hydrating,
                         %last_rehydration_chunk,
                         ?resume_upper,
                         ?persist_upper,
