@@ -11,6 +11,14 @@ mode cockroach
 
 # We have some tests also in cockroach/like.slt, but those go through const folding. The below tests avoid const folding.
 
+# Run all tests on a multi-process cluster, because there were some serialization issues in the past that happened
+# only on multi-process clusters.
+statement ok
+CREATE CLUSTER multiprocess REPLICAS (a (SIZE '2-2'));
+
+statement ok
+SET cluster = 'multiprocess';
+
 statement ok
 CREATE TABLE t(s string, like_pat string, regex_pat string);
 
@@ -29,7 +37,7 @@ Explained Query:
 Source materialize.public.t
   filter=(like["a%"](#0))
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
@@ -50,7 +58,7 @@ Explained Query:
 Source materialize.public.t
   filter=(ilike["a%"](#0))
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
@@ -72,7 +80,7 @@ Explained Query:
 Source materialize.public.t
   filter=(NOT(ilike["a%"](#0)))
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
@@ -94,7 +102,7 @@ Explained Query:
 Source materialize.public.t
   filter=(NOT(ilike["a%"](#0)))
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
@@ -112,7 +120,7 @@ Explained Query:
 Source materialize.public.t
   filter=((#0 like #1))
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
@@ -133,7 +141,7 @@ Explained Query:
 Source materialize.public.t
   filter=((#0 ilike #1))
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
@@ -206,3 +214,6 @@ SELECT text_val LIKE '%1%2%' FROM t2;
 ----
 false
 true
+
+statement ok
+DROP CLUSTER multiprocess;

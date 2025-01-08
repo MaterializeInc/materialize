@@ -9,6 +9,14 @@
 
 mode cockroach
 
+# Run all tests on a multi-process cluster, because there were some serialization issues in the past that happened
+# only on multi-process clusters.
+statement ok
+CREATE CLUSTER multiprocess REPLICAS (a (SIZE '2-2'));
+
+statement ok
+SET cluster = 'multiprocess';
+
 statement ok
 CREATE TABLE data (input text)
 
@@ -61,7 +69,7 @@ Explained Query:
 
 Source materialize.public.data
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
@@ -76,7 +84,7 @@ Explained Query:
 
 Source materialize.public.data
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
@@ -88,7 +96,7 @@ Explained Query (fast path):
   Constant
     - (null)
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
@@ -105,7 +113,7 @@ Explained Query (fast path):
   Constant
     - ({"ABC"})
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
@@ -161,7 +169,7 @@ Explained Query:
 Source materialize.public.t
   filter=(is_regexp_match["a.*", case_insensitive=false](#0))
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
@@ -183,7 +191,7 @@ Explained Query:
 Source materialize.public.t
   filter=(is_regexp_match["a.*", case_insensitive=true](#0))
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
@@ -204,7 +212,7 @@ Explained Query:
 
 Source materialize.public.t
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
@@ -231,7 +239,7 @@ Explained Query:
 
 Source materialize.public.t
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
@@ -289,7 +297,7 @@ Explained Query:
 Source materialize.public.t
   filter=((#0 ~ #2))
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
@@ -312,7 +320,7 @@ Explained Query:
 Source materialize.public.t
   filter=((#0 ~* #2))
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
@@ -334,7 +342,7 @@ Explained Query:
 
 Source materialize.public.t
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
@@ -366,7 +374,7 @@ Explained Query:
 
 Source materialize.public.t
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
@@ -437,7 +445,7 @@ Explained Query:
 
 Source materialize.public.t
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
@@ -541,7 +549,7 @@ Explained Query (fast path):
   Constant
     - ("FOOBARBAZ")
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
@@ -558,7 +566,7 @@ Explained Query (fast path):
   Constant
     - ("FOOXBAZ")
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
@@ -599,7 +607,7 @@ Explained Query:
 
 Source materialize.public.r
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
@@ -626,7 +634,7 @@ Explained Query:
 
 Source materialize.public.r
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
@@ -653,7 +661,7 @@ Explained Query:
 
 Source materialize.public.r
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
@@ -680,7 +688,7 @@ Explained Query:
 
 Source materialize.public.r
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
@@ -705,7 +713,7 @@ SELECT regexp_replace('foobarbaz', 'b(..', 'X', 'ig');
 Explained Query (fast path):
   Error "invalid regular expression: regex parse error:\n    b(..\n     ^\nerror: unclosed group"
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
@@ -735,7 +743,7 @@ error: unclosed group(#0, #2))
 
 Source materialize.public.e
 
-Target cluster: quickstart
+Target cluster: multiprocess
 
 EOF
 
@@ -747,3 +755,6 @@ SELECT s, regexp_replace(s, regex, replacement, 'ig') FROM e;
 
 query error invalid regular expression flag: x
 SELECT regexp_replace(s, regex, replacement, 'igx') FROM e;
+
+statement ok
+DROP CLUSTER multiprocess;
