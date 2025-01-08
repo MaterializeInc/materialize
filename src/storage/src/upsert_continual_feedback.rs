@@ -739,20 +739,16 @@ where
 
         match value {
             Some(value) => {
-                let existing_value = existing_state_cell.as_ref();
-
-                let old_value = if let Some(old_value) = existing_value {
-                    old_value.provisional_value_ref(&ts)
-                } else {
-                    None
-                };
-
-                if let Some(old_value) = old_value {
-                    output_updates.push((old_value.clone(), ts.clone(), -1));
+                if let Some(old_value) = existing_state_cell.as_ref() {
+                    if let Some(old_value) = old_value.provisional_value_ref(&ts) {
+                        output_updates.push((old_value.clone(), ts.clone(), -1));
+                    }
                 }
 
                 match &drain_style {
                     DrainStyle::AtTime { .. } => {
+                        let existing_value = existing_state_cell.take();
+
                         let new_value = match existing_value {
                             Some(existing_value) => existing_value.clone().into_provisional_value(
                                 value.clone(),
@@ -765,6 +761,7 @@ where
                                 Some(from_time.0.clone()),
                             ),
                         };
+
                         existing_state_cell.replace(new_value);
                     }
                     DrainStyle::ToUpper { .. } => {
@@ -775,19 +772,16 @@ where
                 output_updates.push((value, ts, 1));
             }
             None => {
-                let existing_value = existing_state_cell.take();
-
-                let old_value = if let Some(old_value) = existing_value.as_ref() {
-                    old_value.provisional_value_ref(&ts)
-                } else {
-                    None
-                };
-                if let Some(old_value) = old_value {
-                    output_updates.push((old_value.clone(), ts.clone(), -1));
+                if let Some(old_value) = existing_state_cell.as_ref() {
+                    if let Some(old_value) = old_value.provisional_value_ref(&ts) {
+                        output_updates.push((old_value.clone(), ts.clone(), -1));
+                    }
                 }
 
                 match &drain_style {
                     DrainStyle::AtTime { .. } => {
+                        let existing_value = existing_state_cell.take();
+
                         let new_value = match existing_value {
                             Some(existing_value) => existing_value
                                 .into_provisional_tombstone(ts.clone(), Some(from_time.0.clone())),
@@ -796,6 +790,7 @@ where
                                 Some(from_time.0.clone()),
                             ),
                         };
+
                         existing_state_cell.replace(new_value);
                     }
                     DrainStyle::ToUpper { .. } => {
