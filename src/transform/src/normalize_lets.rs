@@ -132,32 +132,12 @@ impl NormalizeLets {
 
         // A final bottom-up traversal to normalize the shape of nested LetRec blocks
         relation.try_visit_mut_post(&mut |relation| -> Result<(), RecursionLimitError> {
-            // Disassemble `LetRec` into a `Let` stack if possible.
-            // If a `LetRec` remains, return the would-be `Let` bindings to it.
-            // This is to maintain `LetRec`-freedom for `LetRec`-free expressions.
-            let mut bindings = let_motion::harvest_non_recursive(relation);
-            if let MirRelationExpr::LetRec {
-                ids,
-                values,
-                limits,
-                body: _,
-            } = relation
-            {
-                bindings.extend(ids.drain(..).zip(values.drain(..).zip(limits.drain(..))));
-                support::replace_bindings_from_map(bindings, ids, values, limits);
-            } else {
-                for (id, (value, max_iter)) in bindings.into_iter().rev() {
-                    assert_none!(max_iter);
-                    *relation = MirRelationExpr::Let {
-                        id,
-                        value: Box::new(value),
-                        body: Box::new(relation.take_dangerous()),
-                    };
-                }
-            }
-
             // Move a non-recursive suffix of bindings from the end of the LetRec
             // to the LetRec body.
+            // This is unsafe when applied to expressions which contain `ArrangeBy`,
+            // as if the extracted suffixes reference arrangements they will not be
+            // able to access those arrangements from outside the `LetRec` scope.
+            // It happens to work at the moment, so we don't touch it but should fix.
             let bindings = let_motion::harvest_nonrec_suffix(relation)?;
             if let MirRelationExpr::LetRec {
                 ids: _,
@@ -181,6 +161,20 @@ impl NormalizeLets {
                         body: Box::new(relation.take_dangerous()),
                     };
                 }
+            }
+
+            // Extract `Let` prefixes from `LetRec`, to reveal their non-recursive nature.
+            // This assists with hoisting e.g. arrangements out of `LetRec` blocks, a thing
+            // we don't promise to do, but it can be helpful to do. This also exposes more
+            // AST nodes to non-`LetRec` analyses, which don't always have parity with `LetRec`.
+            let bindings = let_motion::harvest_non_recursive(relation);
+            for (id, (value, max_iter)) in bindings.into_iter().rev() {
+                assert_none!(max_iter);
+                *relation = MirRelationExpr::Let {
+                    id,
+                    value: Box::new(value),
+                    body: Box::new(relation.take_dangerous()),
+                };
             }
 
             Ok(())
@@ -596,7 +590,7 @@ mod let_motion {
     }
 
     /// Harvest any safe-to-lower non-recursive suffix of binding from a
-    /// `LetRec` expression.
+    /// `LetRec` expression, potentially wrapped in a stack of `Let`s.
     pub(crate) fn harvest_nonrec_suffix(
         expr: &mut MirRelationExpr,
     ) -> Result<BTreeMap<LocalId, MirRelationExpr>, RecursionLimitError> {
