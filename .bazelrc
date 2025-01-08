@@ -116,8 +116,8 @@ build:debuginfo-full --copt=-g2
 build:debuginfo-full --strip=never
 build:debuginfo-full --@rules_rust//:extra_rustc_flag=-Cstrip=none
 
-build:debuginfo-limited --@rules_rust//:extra_rustc_flag=-Cdebuginfo=line-tables-only
-build:debuginfo-limited --copt=-gline-tables-only
+build:debuginfo-limited --@rules_rust//:extra_rustc_flag=-Cdebuginfo=1
+build:debuginfo-limited --copt=-g1
 build:debuginfo-limited --strip=never
 build:debuginfo-limited --@rules_rust//:extra_rustc_flag=-Cstrip=none
 
