@@ -27,7 +27,7 @@
 //!             ┃    Discover   ┃
 //!             ┃    objects    ┃
 //!             ┗━━━━━━━┯━━━━━━━┛
-//!           ┌─────────┴──────────┐
+//!           ┌───< Distribute >───┐
 //!           │                    │
 //!     ┏━━━━━v━━━━┓         ┏━━━━━v━━━━┓
 //!     ┃  Split   ┃   ...   ┃  Split   ┃
@@ -81,7 +81,6 @@ use mz_storage_types::sources::SourceData;
 use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
-use mz_timely_util::operator::StreamExt as TimelyStreamExt;
 use mz_timely_util::pact::Distribute;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -107,12 +106,9 @@ pub mod http_source;
 /// Roughly the operators we render do the following:
 ///
 /// 1. Discover objects with a [`OneshotSource`].
-///   1a. Distribute
 /// 2. Split objects into separate units of work based on the [`OneshotFormat`].
-///   2a. Distribute
 /// 3. Process individual units of work (aka fetch byte blobs) with the
 ///    [`OneshotFormat`] and [`OneshotSource`].
-///   3a. Distribute
 /// 4. Decode the fetched byte blobs into [`Row`]s.
 /// 5. Stage the [`Row`]s into Persist returning [`ProtoBatch`]es.
 ///
@@ -202,10 +198,11 @@ where
     G: Scope<Timestamp = Timestamp>,
     S: OneshotSource + 'static,
 {
+    // Only a single worker is responsible for discovering objects.
     let worker_id = scope.index();
     let num_workers = scope.peers();
-    let leader_id = usize::cast_from((collection_id, "discover").hashed()) % num_workers;
-    let is_leader = worker_id == leader_id;
+    let active_worker_id = usize::cast_from((collection_id, "discover").hashed()) % num_workers;
+    let is_active_worker = worker_id == active_worker_id;
 
     let mut builder = AsyncOperatorBuilder::new("CopyFrom-discover".to_string(), scope.clone());
 
@@ -214,20 +211,21 @@ where
     let shutdown = builder.build(move |caps| async move {
         let [start_cap] = caps.try_into().unwrap();
 
-        if !is_leader {
+        if !is_active_worker {
             return;
         }
 
         info!(%collection_id, %worker_id, "CopyFrom Leader Discover");
 
-        // Wrap our work in a block to capture `?`.
-        let work = async move {
-            mz_ore::task::spawn(|| "discover", async move { source.list().await })
-                .await
-                .expect("failed to spawn task")
-        }
-        .await
-        .context("discover");
+        // Spawn a separate task for listing to move any IO to a tokio thread.
+        let work =
+            mz_ore::task::spawn(
+                || "discover",
+                async move { source.list().await.context("list") },
+            )
+            .await
+            .expect("failed to spawn task")
+            .context("discover");
 
         match work {
             Ok(objects) => objects
@@ -237,7 +235,7 @@ where
         }
     });
 
-    (start_stream.distribute(), shutdown.press_on_drop())
+    (start_stream, shutdown.press_on_drop())
 }
 
 /// Render an operator that given a stream of [`OneshotSource::Object`]s will split them into units
@@ -308,7 +306,7 @@ where
         }
     });
 
-    (request_stream.distribute(), shutdown.press_on_drop())
+    (request_stream, shutdown.press_on_drop())
 }
 
 /// Render an operator that given a stream [`OneshotFormat::WorkRequest`]s will fetch chunks of the
@@ -375,7 +373,7 @@ where
         }
     });
 
-    (record_stream.distribute(), shutdown.press_on_drop())
+    (record_stream, shutdown.press_on_drop())
 }
 
 /// Render an operator that given a stream of [`OneshotFormat::RecordChunk`]s will decode these
@@ -395,7 +393,7 @@ where
     let mut builder = AsyncOperatorBuilder::new("CopyFrom-decode_chunk".to_string(), scope.clone());
 
     let (row_handle, row_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
-    let mut record_chunk_handle = builder.new_input_for(record_chunks, Pipeline, &row_handle);
+    let mut record_chunk_handle = builder.new_input_for(record_chunks, Distribute, &row_handle);
 
     let shutdown = builder.build(move |caps| async move {
         let [_row_cap] = caps.try_into().unwrap();
@@ -477,7 +475,8 @@ where
             .await
             .expect("could not open Persist shard");
 
-        // TODO(parkmcar): Use different timestamps here.
+        // TODO(cf2): Should we use different timestamps here? Using MIN feels a bit weird
+        // and instead the Coordinator could provide timestamps, but that isn't obviously better?
         let lower = mz_repr::Timestamp::MIN;
         let upper = Antichain::from_elem(lower.step_forward());
 
@@ -533,7 +532,7 @@ where
         // Note: By turning this into a ProtoBatch, the onus is now on us to
         // cleanup the Batch if it's never linked into the shard.
         //
-        // TODO(parkmycar): Make sure these batches get cleaned up if another
+        // TODO(cf2): Make sure these batches get cleaned up if another
         // worker encounters an error.
         let proto_batch = batch.into_transmittable_batch();
 
