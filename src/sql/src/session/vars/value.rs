@@ -75,9 +75,14 @@ impl<'a> PartialEq for &'a dyn Value {
 }
 impl<'a> Eq for &'a dyn Value {}
 
-/// Helper trait ...
+/// Helper trait to cast a `&dyn T` to a `&dyn Any`.
 ///
-/// TODO(parkmycar): Document why this exists
+/// In Rust all types that are `'static` implement [`std::any::Any`] and thus can be casted to a
+/// `&dyn Any`. But once you create a trait object, the type is erased and thus so is the
+/// implementation for [`Any`]. This trait essentially adds a types' [`Any`] impl to the vtable
+/// created when casted to trait object, if [`AsAny`] is a supertrait.
+///
+/// See [`Value`] for an example of using [`AsAny`].
 pub trait AsAny {
     fn as_any(&self) -> &dyn Any;
 }
