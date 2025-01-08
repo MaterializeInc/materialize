@@ -42,11 +42,11 @@ With
   cte l0 =
     Get t0
 ----
-Return // { types: "(Int64, Int16)" }
-  Get l0 // { types: "(Int64, Int16)" }
 With
   cte l0 =
     Get t0 // { types: "(Int64, Int16)" }
+Return // { types: "(Int64, Int16)" }
+  Get l0 // { types: "(Int64, Int16)" }
 
 # Local Get in a LetRec block
 explain with=types
@@ -56,11 +56,11 @@ With Mutually Recursive
   cte l0 = // { types: "(bigint, smallint)" }
     Get t0
 ----
-Return // { types: "(Int64, Int16)" }
-  Get l0 // { types: "(Int64, Int16)" }
 With Mutually Recursive
   cte l0 =
     Get t0 // { types: "(Int64, Int16)" }
+Return // { types: "(Int64, Int16)" }
+  Get l0 // { types: "(Int64, Int16)" }
 
 # Project
 explain with=types

@@ -149,17 +149,9 @@ EXPLAIN WITH(arity, join implementations) SELECT  MIN( o_orderkey  )
   AND o_orderkey  = (  SELECT l_orderkey  FROM lineitem  WHERE l_orderkey  =  38  )
 ----
 Explained Query:
-  Return // { arity: 1 }
-    Union // { arity: 1 }
-      Get l1 // { arity: 1 }
-      Map (null) // { arity: 1 }
-        Union // { arity: 0 }
-          Negate // { arity: 0 }
-            Project () // { arity: 0 }
-              Get l1 // { arity: 1 }
-          Constant // { arity: 0 }
-            - ()
   With
+    cte l0 =
+      ReadIndex on=materialize.public.lineitem fk_lineitem_orderkey=[lookup value=(38)] // { arity: 9 }
     cte l1 =
       Reduce aggregates=[min(#0)] // { arity: 1 }
         Project (#1) // { arity: 1 }
@@ -186,8 +178,16 @@ Explained Query:
                       Reduce aggregates=[count(*)] // { arity: 1 }
                         Project () // { arity: 0 }
                           Get l0 // { arity: 9 }
-    cte l0 =
-      ReadIndex on=materialize.public.lineitem fk_lineitem_orderkey=[lookup value=(38)] // { arity: 9 }
+  Return // { arity: 1 }
+    Union // { arity: 1 }
+      Get l1 // { arity: 1 }
+      Map (null) // { arity: 1 }
+        Union // { arity: 0 }
+          Negate // { arity: 0 }
+            Project () // { arity: 0 }
+              Get l1 // { arity: 1 }
+          Constant // { arity: 0 }
+            - ()
 
 Used Indexes:
   - materialize.public.pk_orders_orderkey (*** full scan ***)
@@ -206,6 +206,11 @@ EXPLAIN WITH(arity, join implementations) SELECT l_partkey AS col24843 , l_order
   AND l_extendedprice = MOD (o_totalprice , 5 ) ;
 ----
 Explained Query:
+  With
+    cte l0 =
+      ArrangeBy keys=[[#0]] // { arity: 1 }
+        Constant // { arity: 1 }
+          - (134)
   Return // { arity: 3 }
     Project (#1, #0, #1) // { arity: 3 }
       Join on=(#2 = #4 AND #3 = #5) type=delta // { arity: 6 }
@@ -224,11 +229,6 @@ Explained Query:
         ArrangeBy keys=[[]] // { arity: 0 }
           Project () // { arity: 0 }
             ReadIndex on=materialize.public.customer pk_customer_custkey=[lookup values=<Get l0>] // { arity: 4 }
-  With
-    cte l0 =
-      ArrangeBy keys=[[#0]] // { arity: 1 }
-        Constant // { arity: 1 }
-          - (134)
 
 Used Indexes:
   - materialize.public.pk_customer_custkey (lookup)
@@ -248,6 +248,11 @@ EXPLAIN WITH(arity, join implementations) SELECT *
   AND l_shipDATE = o_orderdate;
 ----
 Explained Query:
+  With
+    cte l0 =
+      ArrangeBy keys=[[#0]] // { arity: 1 }
+        Constant // { arity: 1 }
+          - (229)
   Return // { arity: 15 }
     Project (#0..=#9, #4, #5, #12..=#14) // { arity: 15 }
       Join on=(#4 = #10 AND #5 = #11) type=delta // { arity: 15 }
@@ -264,11 +269,6 @@ Explained Query:
         ArrangeBy keys=[[]] // { arity: 3 }
           Project (#0..=#2) // { arity: 3 }
             ReadIndex on=materialize.public.customer pk_customer_custkey=[lookup values=<Get l0>] // { arity: 4 }
-  With
-    cte l0 =
-      ArrangeBy keys=[[#0]] // { arity: 1 }
-        Constant // { arity: 1 }
-          - (229)
 
 Used Indexes:
   - materialize.public.pk_customer_custkey (lookup)

@@ -50,11 +50,11 @@ With
   cte l0 =
     Get t0
 ----
-Return // { column_names: "(c0, c1)" }
-  Get l0 // { column_names: "(c0, c1)" }
 With
   cte l0 =
     Get t0 // { column_names: "(c0, c1)" }
+Return // { column_names: "(c0, c1)" }
+  Get l0 // { column_names: "(c0, c1)" }
 
 # Local Get in a LetRec block
 explain with=column_names
@@ -64,11 +64,11 @@ With Mutually Recursive
   cte l0 = // { types: "(bigint, bigint)" }
     Get t0
 ----
-Return // { column_names: "(c0, c1)" }
-  Get l0 // { column_names: "(c0, c1)" }
 With Mutually Recursive
   cte l0 =
     Get t0 // { column_names: "(c0, c1)" }
+Return // { column_names: "(c0, c1)" }
+  Get l0 // { column_names: "(c0, c1)" }
 
 # Project
 explain with=column_names

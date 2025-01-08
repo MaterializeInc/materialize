@@ -268,43 +268,648 @@ EXPLAIN WITH MUTUALLY RECURSIVE
 SELECT * FROM part1, part2;
 ----
 Explained Query:
-  Return
-    CrossJoin type=differential
-      ArrangeBy keys=[[]]
-        Project (#1)
-          Map (bigint_to_integer(#0))
-            Union
-              Get l40
-              Map (null)
-                Union
-                  Negate
-                    Project ()
-                      Get l40
-                  Constant
-                    - ()
-      ArrangeBy keys=[[]]
-        Project (#1)
-          Map (bigint_to_integer(#0))
-            Union
-              Get l81
-              Map (null)
-                Union
-                  Negate
-                    Project ()
-                      Get l81
-                  Constant
-                    - ()
   With
-    cte l81 =
+    cte l0 =
+      Project (#3, #4)
+        Map (regexp_split_to_array[" ", case_insensitive=false](#1), array_index(#2, 1), text_to_integer(array_index(#2, 2)))
+          FlatMap unnest_array(regexp_split_to_array["\n", case_insensitive=false](#0))
+            ReadStorage materialize.public.input
+    cte l1 =
+      Project (#0)
+        Get l0
+    cte l2 =
+      ArrangeBy keys=[[]]
+        Constant
+          - (1)
+          - (2)
+          - (3)
+          - (4)
+          - (5)
+    cte l3 =
+      Map (substr(#0, #1, 1))
+        CrossJoin type=differential
+          ArrangeBy keys=[[]]
+            Get l1
+          Get l2
+    cte l4 =
+      Project (#0, #3)
+        Map (bigint_to_integer(#2))
+          Reduce group_by=[#0, #1] aggregates=[count(*)]
+            Project (#0, #2)
+              Get l3
+    cte l5 =
+      Distinct project=[#0]
+        Get l1
+    cte l6 =
+      Reduce group_by=[#0] aggregates=[any((#0 = #1))]
+        CrossJoin type=differential
+          ArrangeBy keys=[[]]
+            Get l5
+          ArrangeBy keys=[[]]
+            Project (#0)
+              Filter (#1 = 5)
+                Get l4
+    cte l7 =
+      Union
+        Get l6
+        Map (false)
+          Union
+            Negate
+              Project (#0)
+                Get l6
+            Get l5
+    cte l8 =
+      Project (#0, #1, #3)
+        Join on=(#0 = #2) type=differential
+          ArrangeBy keys=[[#0]]
+            Get l0
+          ArrangeBy keys=[[#0]]
+            Union
+              Get l7
+              Map (null)
+                Union
+                  Negate
+                    Project (#0)
+                      Get l7
+                  Get l5
+    cte l9 =
+      Filter ((#2) IS NULL OR (#2 = false))
+        Get l8
+    cte l10 =
+      Distinct project=[#0]
+        Project (#0)
+          Get l9
+    cte l11 =
+      Reduce group_by=[#0] aggregates=[any((#0 = #1))]
+        CrossJoin type=differential
+          ArrangeBy keys=[[]]
+            Get l10
+          ArrangeBy keys=[[]]
+            Project (#0)
+              Filter (#1 = 4)
+                Get l4
+    cte l12 =
+      Union
+        Get l11
+        Map (false)
+          Union
+            Negate
+              Project (#0)
+                Get l11
+            Get l10
+    cte l13 =
+      Project (#0, #1, #3)
+        Join on=(#0 = #2) type=differential
+          ArrangeBy keys=[[#0]]
+            Project (#0, #1)
+              Get l9
+          ArrangeBy keys=[[#0]]
+            Union
+              Get l12
+              Map (null)
+                Union
+                  Negate
+                    Project (#0)
+                      Get l12
+                  Get l10
+    cte l14 =
+      Filter ((#2) IS NULL OR (#2 = false))
+        Get l13
+    cte l15 =
+      Distinct project=[#0]
+        Project (#0)
+          Get l14
+    cte l16 =
+      ArrangeBy keys=[[]]
+        Project (#0)
+          Filter (#1 = 3)
+            Get l4
+    cte l17 =
+      Reduce group_by=[#0] aggregates=[any((#0 = #1))]
+        CrossJoin type=differential
+          ArrangeBy keys=[[]]
+            Get l15
+          Get l16
+    cte l18 =
+      Union
+        Get l17
+        Map (false)
+          Union
+            Negate
+              Project (#0)
+                Get l17
+            Get l15
+    cte l19 =
+      Project (#0, #1, #3)
+        Join on=(#0 = #2) type=differential
+          ArrangeBy keys=[[#0]]
+            Project (#0, #1)
+              Get l14
+          ArrangeBy keys=[[#0]]
+            Union
+              Get l18
+              Map (null)
+                Union
+                  Negate
+                    Project (#0)
+                      Get l18
+                  Get l15
+    cte l20 =
+      Distinct project=[#0]
+        Project (#0)
+          Get l19
+    cte l21 =
+      ArrangeBy keys=[[]]
+        Project (#0)
+          Filter (#1 = 2)
+            Get l4
+    cte l22 =
+      Reduce group_by=[#0] aggregates=[any((#0 = #1))]
+        CrossJoin type=differential
+          ArrangeBy keys=[[]]
+            Get l20
+          Get l21
+    cte l23 =
+      Union
+        Get l22
+        Map (false)
+          Union
+            Negate
+              Project (#0)
+                Get l22
+            Get l20
+    cte l24 =
+      Project (#0..=#2, #4)
+        Join on=(#0 = #3) type=differential
+          ArrangeBy keys=[[#0]]
+            Get l19
+          ArrangeBy keys=[[#0]]
+            Union
+              Get l23
+              Map (null)
+                Union
+                  Negate
+                    Project (#0)
+                      Get l23
+                  Get l20
+    cte l25 =
+      Filter ((#4) IS NULL OR (#4 = false))
+        Map ((#2 AND #3))
+          Get l24
+    cte l26 =
+      Distinct project=[#0]
+        Project (#0)
+          Get l25
+    cte l27 =
+      Reduce group_by=[#0] aggregates=[any((#0 = #1))]
+        CrossJoin type=differential
+          ArrangeBy keys=[[]]
+            Get l26
+          Get l16
+    cte l28 =
+      Union
+        Get l27
+        Map (false)
+          Union
+            Negate
+              Project (#0)
+                Get l27
+            Get l26
+    cte l29 =
+      Project (#0, #1, #3)
+        Join on=(#0 = #2) type=differential
+          ArrangeBy keys=[[#0]]
+            Project (#0, #1)
+              Get l25
+          ArrangeBy keys=[[#0]]
+            Union
+              Get l28
+              Map (null)
+                Union
+                  Negate
+                    Project (#0)
+                      Get l28
+                  Get l26
+    cte l30 =
+      Filter ((#2) IS NULL OR (#2 = false))
+        Get l29
+    cte l31 =
+      Distinct project=[#0]
+        Project (#0)
+          Get l30
+    cte l32 =
+      Reduce group_by=[#0] aggregates=[any((#0 = #1))]
+        Project (#0, #1)
+          Filter (#2 = 2)
+            Reduce group_by=[#0, #1] aggregates=[count(*)]
+              CrossJoin type=differential
+                ArrangeBy keys=[[]]
+                  Get l31
+                Get l21
+    cte l33 =
+      Union
+        Get l32
+        Map (false)
+          Union
+            Negate
+              Project (#0)
+                Get l32
+            Get l31
+    cte l34 =
+      Project (#0, #1, #3)
+        Join on=(#0 = #2) type=differential
+          ArrangeBy keys=[[#0]]
+            Project (#0, #1)
+              Get l30
+          ArrangeBy keys=[[#0]]
+            Union
+              Get l33
+              Map (null)
+                Union
+                  Negate
+                    Project (#0)
+                      Get l33
+                  Get l31
+    cte l35 =
+      Filter ((#2) IS NULL OR (#2 = false))
+        Get l34
+    cte l36 =
+      Distinct project=[#0]
+        Project (#0)
+          Get l35
+    cte l37 =
+      Reduce group_by=[#0] aggregates=[any((#0 = #1))]
+        CrossJoin type=differential
+          ArrangeBy keys=[[]]
+            Get l36
+          Get l21
+    cte l38 =
+      Union
+        Get l37
+        Map (false)
+          Union
+            Negate
+              Project (#0)
+                Get l37
+            Get l36
+    cte l39 =
+      Project (#1..=#3)
+        Map (translate(#0, "AKQJT98765432", "ABCDEFGHIJKLM"))
+          Union
+            Project (#0, #1, #3)
+              Filter #2
+                Map (1)
+                  Get l8
+            Project (#0, #1, #3)
+              Filter #2
+                Map (2)
+                  Get l13
+            Project (#0, #1, #4)
+              Filter #2 AND #3
+                Map (3)
+                  Get l24
+            Project (#0, #1, #3)
+              Filter #2
+                Map (4)
+                  Get l29
+            Project (#0, #1, #3)
+              Filter #2
+                Map (5)
+                  Get l34
+            Project (#0, #1, #4)
+              Map (case when #3 then 6 else 7 end)
+                Join on=(#0 = #2) type=differential
+                  ArrangeBy keys=[[#0]]
+                    Project (#0, #1)
+                      Get l35
+                  ArrangeBy keys=[[#0]]
+                    Union
+                      Get l38
+                      Map (null)
+                        Union
+                          Negate
+                            Project (#0)
+                              Get l38
+                          Get l36
+    cte l40 =
       Reduce aggregates=[sum(#0)]
         Project (#0)
           Filter ((#1 < #3) OR ((#1 = #3) AND (#2 <= #4)))
             CrossJoin type=differential
               ArrangeBy keys=[[]]
-                Get l80
+                Get l39
               ArrangeBy keys=[[]]
                 Project (#1, #2)
-                  Get l80
+                  Get l39
+    cte l41 =
+      Filter (#0) IS NOT NULL
+        Get l3
+    cte l42 =
+      Distinct project=[#0..=#2]
+        Union
+          Project (#0, #2, #1)
+            Get l41
+          Project (#0, #3, #1)
+            Join on=(#0 = #2) type=differential
+              ArrangeBy keys=[[#0]]
+                Project (#0, #1)
+                  Filter (#2 = "J") AND (#0) IS NOT NULL
+                    Get l3
+              ArrangeBy keys=[[#0]]
+                Project (#0, #2)
+                  Get l41
+    cte l43 =
+      Distinct project=[#0, ((((#1 || #2) || #3) || #4) || #5)]
+        Project (#0, #1, #3, #5, #7, #9)
+          Join on=(#0 = #2 = #4 = #6 = #8) type=delta
+            ArrangeBy keys=[[#0]]
+              Project (#0, #1)
+                Filter (#2 = 1)
+                  Get l42
+            ArrangeBy keys=[[#0]]
+              Project (#0, #1)
+                Filter (#2 = 2)
+                  Get l42
+            ArrangeBy keys=[[#0]]
+              Project (#0, #1)
+                Filter (#2 = 3)
+                  Get l42
+            ArrangeBy keys=[[#0]]
+              Project (#0, #1)
+                Filter (#2 = 4)
+                  Get l42
+            ArrangeBy keys=[[#0]]
+              Project (#0, #1)
+                Filter (#2 = 5)
+                  Get l42
+    cte l44 =
+      Project (#1)
+        Get l43
+    cte l45 =
+      Project (#0, #3)
+        Map (bigint_to_integer(#2))
+          Reduce group_by=[#0, #1] aggregates=[count(*)]
+            Project (#0, #1)
+              Distinct project=[#0, substr(#0, #1, 1), #1]
+                CrossJoin type=differential
+                  ArrangeBy keys=[[]]
+                    Get l44
+                  Get l2
+    cte l46 =
+      Distinct project=[#0]
+        Get l44
+    cte l47 =
+      Reduce group_by=[#0] aggregates=[any((#0 = #1))]
+        CrossJoin type=differential
+          ArrangeBy keys=[[]]
+            Get l46
+          ArrangeBy keys=[[]]
+            Project (#0)
+              Filter (#1 = 5)
+                Get l45
+    cte l48 =
+      Union
+        Get l47
+        Map (false)
+          Union
+            Negate
+              Project (#0)
+                Get l47
+            Get l46
+    cte l49 =
+      Project (#0, #1, #3)
+        Join on=(#1 = #2) type=differential
+          ArrangeBy keys=[[#1]]
+            Get l43
+          ArrangeBy keys=[[#0]]
+            Union
+              Get l48
+              Map (null)
+                Union
+                  Negate
+                    Project (#0)
+                      Get l48
+                  Get l46
+    cte l50 =
+      Filter ((#2) IS NULL OR (#2 = false))
+        Get l49
+    cte l51 =
+      Distinct project=[#0]
+        Project (#1)
+          Get l50
+    cte l52 =
+      Reduce group_by=[#0] aggregates=[any((#0 = #1))]
+        CrossJoin type=differential
+          ArrangeBy keys=[[]]
+            Get l51
+          ArrangeBy keys=[[]]
+            Project (#0)
+              Filter (#1 = 4)
+                Get l45
+    cte l53 =
+      Union
+        Get l52
+        Map (false)
+          Union
+            Negate
+              Project (#0)
+                Get l52
+            Get l51
+    cte l54 =
+      Project (#0, #1, #3)
+        Join on=(#1 = #2) type=differential
+          ArrangeBy keys=[[#1]]
+            Project (#0, #1)
+              Get l50
+          ArrangeBy keys=[[#0]]
+            Union
+              Get l53
+              Map (null)
+                Union
+                  Negate
+                    Project (#0)
+                      Get l53
+                  Get l51
+    cte l55 =
+      Filter ((#2) IS NULL OR (#2 = false))
+        Get l54
+    cte l56 =
+      Distinct project=[#0]
+        Project (#1)
+          Get l55
+    cte l57 =
+      ArrangeBy keys=[[]]
+        Project (#0)
+          Filter (#1 = 3)
+            Get l45
+    cte l58 =
+      Reduce group_by=[#0] aggregates=[any((#0 = #1))]
+        CrossJoin type=differential
+          ArrangeBy keys=[[]]
+            Get l56
+          Get l57
+    cte l59 =
+      Union
+        Get l58
+        Map (false)
+          Union
+            Negate
+              Project (#0)
+                Get l58
+            Get l56
+    cte l60 =
+      Project (#0, #1, #3)
+        Join on=(#1 = #2) type=differential
+          ArrangeBy keys=[[#1]]
+            Project (#0, #1)
+              Get l55
+          ArrangeBy keys=[[#0]]
+            Union
+              Get l59
+              Map (null)
+                Union
+                  Negate
+                    Project (#0)
+                      Get l59
+                  Get l56
+    cte l61 =
+      Distinct project=[#0]
+        Project (#1)
+          Get l60
+    cte l62 =
+      ArrangeBy keys=[[]]
+        Project (#0)
+          Filter (#1 = 2)
+            Get l45
+    cte l63 =
+      Reduce group_by=[#0] aggregates=[any((#0 = #1))]
+        CrossJoin type=differential
+          ArrangeBy keys=[[]]
+            Get l61
+          Get l62
+    cte l64 =
+      Union
+        Get l63
+        Map (false)
+          Union
+            Negate
+              Project (#0)
+                Get l63
+            Get l61
+    cte l65 =
+      Project (#0..=#2, #4)
+        Join on=(#1 = #3) type=differential
+          ArrangeBy keys=[[#1]]
+            Get l60
+          ArrangeBy keys=[[#0]]
+            Union
+              Get l64
+              Map (null)
+                Union
+                  Negate
+                    Project (#0)
+                      Get l64
+                  Get l61
+    cte l66 =
+      Filter ((#4) IS NULL OR (#4 = false))
+        Map ((#2 AND #3))
+          Get l65
+    cte l67 =
+      Distinct project=[#0]
+        Project (#1)
+          Get l66
+    cte l68 =
+      Reduce group_by=[#0] aggregates=[any((#0 = #1))]
+        CrossJoin type=differential
+          ArrangeBy keys=[[]]
+            Get l67
+          Get l57
+    cte l69 =
+      Union
+        Get l68
+        Map (false)
+          Union
+            Negate
+              Project (#0)
+                Get l68
+            Get l67
+    cte l70 =
+      Project (#0, #1, #3)
+        Join on=(#1 = #2) type=differential
+          ArrangeBy keys=[[#1]]
+            Project (#0, #1)
+              Get l66
+          ArrangeBy keys=[[#0]]
+            Union
+              Get l69
+              Map (null)
+                Union
+                  Negate
+                    Project (#0)
+                      Get l69
+                  Get l67
+    cte l71 =
+      Filter ((#2) IS NULL OR (#2 = false))
+        Get l70
+    cte l72 =
+      Distinct project=[#0]
+        Project (#1)
+          Get l71
+    cte l73 =
+      Reduce group_by=[#0] aggregates=[any((#0 = #1))]
+        Project (#0, #1)
+          Filter (#2 = 2)
+            Reduce group_by=[#0, #1] aggregates=[count(*)]
+              CrossJoin type=differential
+                ArrangeBy keys=[[]]
+                  Get l72
+                Get l62
+    cte l74 =
+      Union
+        Get l73
+        Map (false)
+          Union
+            Negate
+              Project (#0)
+                Get l73
+            Get l72
+    cte l75 =
+      Project (#0, #1, #3)
+        Join on=(#1 = #2) type=differential
+          ArrangeBy keys=[[#1]]
+            Project (#0, #1)
+              Get l71
+          ArrangeBy keys=[[#0]]
+            Union
+              Get l74
+              Map (null)
+                Union
+                  Negate
+                    Project (#0)
+                      Get l74
+                  Get l72
+    cte l76 =
+      Filter ((#2) IS NULL OR (#2 = false))
+        Get l75
+    cte l77 =
+      Distinct project=[#0]
+        Project (#1)
+          Get l76
+    cte l78 =
+      Reduce group_by=[#0] aggregates=[any((#0 = #1))]
+        CrossJoin type=differential
+          ArrangeBy keys=[[]]
+            Get l77
+          Get l62
+    cte l79 =
+      Union
+        Get l78
+        Map (false)
+          Union
+            Negate
+              Project (#0)
+                Get l78
+            Get l77
     cte l80 =
       Project (#1, #3, #4)
         Join on=(#0 = #2) type=differential
@@ -350,647 +955,42 @@ Explained Query:
                                   Project (#0)
                                     Get l79
                                 Get l77
-    cte l79 =
-      Union
-        Get l78
-        Map (false)
-          Union
-            Negate
-              Project (#0)
-                Get l78
-            Get l77
-    cte l78 =
-      Reduce group_by=[#0] aggregates=[any((#0 = #1))]
-        CrossJoin type=differential
-          ArrangeBy keys=[[]]
-            Get l77
-          Get l62
-    cte l77 =
-      Distinct project=[#0]
-        Project (#1)
-          Get l76
-    cte l76 =
-      Filter ((#2) IS NULL OR (#2 = false))
-        Get l75
-    cte l75 =
-      Project (#0, #1, #3)
-        Join on=(#1 = #2) type=differential
-          ArrangeBy keys=[[#1]]
-            Project (#0, #1)
-              Get l71
-          ArrangeBy keys=[[#0]]
-            Union
-              Get l74
-              Map (null)
-                Union
-                  Negate
-                    Project (#0)
-                      Get l74
-                  Get l72
-    cte l74 =
-      Union
-        Get l73
-        Map (false)
-          Union
-            Negate
-              Project (#0)
-                Get l73
-            Get l72
-    cte l73 =
-      Reduce group_by=[#0] aggregates=[any((#0 = #1))]
-        Project (#0, #1)
-          Filter (#2 = 2)
-            Reduce group_by=[#0, #1] aggregates=[count(*)]
-              CrossJoin type=differential
-                ArrangeBy keys=[[]]
-                  Get l72
-                Get l62
-    cte l72 =
-      Distinct project=[#0]
-        Project (#1)
-          Get l71
-    cte l71 =
-      Filter ((#2) IS NULL OR (#2 = false))
-        Get l70
-    cte l70 =
-      Project (#0, #1, #3)
-        Join on=(#1 = #2) type=differential
-          ArrangeBy keys=[[#1]]
-            Project (#0, #1)
-              Get l66
-          ArrangeBy keys=[[#0]]
-            Union
-              Get l69
-              Map (null)
-                Union
-                  Negate
-                    Project (#0)
-                      Get l69
-                  Get l67
-    cte l69 =
-      Union
-        Get l68
-        Map (false)
-          Union
-            Negate
-              Project (#0)
-                Get l68
-            Get l67
-    cte l68 =
-      Reduce group_by=[#0] aggregates=[any((#0 = #1))]
-        CrossJoin type=differential
-          ArrangeBy keys=[[]]
-            Get l67
-          Get l57
-    cte l67 =
-      Distinct project=[#0]
-        Project (#1)
-          Get l66
-    cte l66 =
-      Filter ((#4) IS NULL OR (#4 = false))
-        Map ((#2 AND #3))
-          Get l65
-    cte l65 =
-      Project (#0..=#2, #4)
-        Join on=(#1 = #3) type=differential
-          ArrangeBy keys=[[#1]]
-            Get l60
-          ArrangeBy keys=[[#0]]
-            Union
-              Get l64
-              Map (null)
-                Union
-                  Negate
-                    Project (#0)
-                      Get l64
-                  Get l61
-    cte l64 =
-      Union
-        Get l63
-        Map (false)
-          Union
-            Negate
-              Project (#0)
-                Get l63
-            Get l61
-    cte l63 =
-      Reduce group_by=[#0] aggregates=[any((#0 = #1))]
-        CrossJoin type=differential
-          ArrangeBy keys=[[]]
-            Get l61
-          Get l62
-    cte l62 =
-      ArrangeBy keys=[[]]
-        Project (#0)
-          Filter (#1 = 2)
-            Get l45
-    cte l61 =
-      Distinct project=[#0]
-        Project (#1)
-          Get l60
-    cte l60 =
-      Project (#0, #1, #3)
-        Join on=(#1 = #2) type=differential
-          ArrangeBy keys=[[#1]]
-            Project (#0, #1)
-              Get l55
-          ArrangeBy keys=[[#0]]
-            Union
-              Get l59
-              Map (null)
-                Union
-                  Negate
-                    Project (#0)
-                      Get l59
-                  Get l56
-    cte l59 =
-      Union
-        Get l58
-        Map (false)
-          Union
-            Negate
-              Project (#0)
-                Get l58
-            Get l56
-    cte l58 =
-      Reduce group_by=[#0] aggregates=[any((#0 = #1))]
-        CrossJoin type=differential
-          ArrangeBy keys=[[]]
-            Get l56
-          Get l57
-    cte l57 =
-      ArrangeBy keys=[[]]
-        Project (#0)
-          Filter (#1 = 3)
-            Get l45
-    cte l56 =
-      Distinct project=[#0]
-        Project (#1)
-          Get l55
-    cte l55 =
-      Filter ((#2) IS NULL OR (#2 = false))
-        Get l54
-    cte l54 =
-      Project (#0, #1, #3)
-        Join on=(#1 = #2) type=differential
-          ArrangeBy keys=[[#1]]
-            Project (#0, #1)
-              Get l50
-          ArrangeBy keys=[[#0]]
-            Union
-              Get l53
-              Map (null)
-                Union
-                  Negate
-                    Project (#0)
-                      Get l53
-                  Get l51
-    cte l53 =
-      Union
-        Get l52
-        Map (false)
-          Union
-            Negate
-              Project (#0)
-                Get l52
-            Get l51
-    cte l52 =
-      Reduce group_by=[#0] aggregates=[any((#0 = #1))]
-        CrossJoin type=differential
-          ArrangeBy keys=[[]]
-            Get l51
-          ArrangeBy keys=[[]]
-            Project (#0)
-              Filter (#1 = 4)
-                Get l45
-    cte l51 =
-      Distinct project=[#0]
-        Project (#1)
-          Get l50
-    cte l50 =
-      Filter ((#2) IS NULL OR (#2 = false))
-        Get l49
-    cte l49 =
-      Project (#0, #1, #3)
-        Join on=(#1 = #2) type=differential
-          ArrangeBy keys=[[#1]]
-            Get l43
-          ArrangeBy keys=[[#0]]
-            Union
-              Get l48
-              Map (null)
-                Union
-                  Negate
-                    Project (#0)
-                      Get l48
-                  Get l46
-    cte l48 =
-      Union
-        Get l47
-        Map (false)
-          Union
-            Negate
-              Project (#0)
-                Get l47
-            Get l46
-    cte l47 =
-      Reduce group_by=[#0] aggregates=[any((#0 = #1))]
-        CrossJoin type=differential
-          ArrangeBy keys=[[]]
-            Get l46
-          ArrangeBy keys=[[]]
-            Project (#0)
-              Filter (#1 = 5)
-                Get l45
-    cte l46 =
-      Distinct project=[#0]
-        Get l44
-    cte l45 =
-      Project (#0, #3)
-        Map (bigint_to_integer(#2))
-          Reduce group_by=[#0, #1] aggregates=[count(*)]
-            Project (#0, #1)
-              Distinct project=[#0, substr(#0, #1, 1), #1]
-                CrossJoin type=differential
-                  ArrangeBy keys=[[]]
-                    Get l44
-                  Get l2
-    cte l44 =
-      Project (#1)
-        Get l43
-    cte l43 =
-      Distinct project=[#0, ((((#1 || #2) || #3) || #4) || #5)]
-        Project (#0, #1, #3, #5, #7, #9)
-          Join on=(#0 = #2 = #4 = #6 = #8) type=delta
-            ArrangeBy keys=[[#0]]
-              Project (#0, #1)
-                Filter (#2 = 1)
-                  Get l42
-            ArrangeBy keys=[[#0]]
-              Project (#0, #1)
-                Filter (#2 = 2)
-                  Get l42
-            ArrangeBy keys=[[#0]]
-              Project (#0, #1)
-                Filter (#2 = 3)
-                  Get l42
-            ArrangeBy keys=[[#0]]
-              Project (#0, #1)
-                Filter (#2 = 4)
-                  Get l42
-            ArrangeBy keys=[[#0]]
-              Project (#0, #1)
-                Filter (#2 = 5)
-                  Get l42
-    cte l42 =
-      Distinct project=[#0..=#2]
-        Union
-          Project (#0, #2, #1)
-            Get l41
-          Project (#0, #3, #1)
-            Join on=(#0 = #2) type=differential
-              ArrangeBy keys=[[#0]]
-                Project (#0, #1)
-                  Filter (#2 = "J") AND (#0) IS NOT NULL
-                    Get l3
-              ArrangeBy keys=[[#0]]
-                Project (#0, #2)
-                  Get l41
-    cte l41 =
-      Filter (#0) IS NOT NULL
-        Get l3
-    cte l40 =
+    cte l81 =
       Reduce aggregates=[sum(#0)]
         Project (#0)
           Filter ((#1 < #3) OR ((#1 = #3) AND (#2 <= #4)))
             CrossJoin type=differential
               ArrangeBy keys=[[]]
-                Get l39
+                Get l80
               ArrangeBy keys=[[]]
                 Project (#1, #2)
-                  Get l39
-    cte l39 =
-      Project (#1..=#3)
-        Map (translate(#0, "AKQJT98765432", "ABCDEFGHIJKLM"))
-          Union
-            Project (#0, #1, #3)
-              Filter #2
-                Map (1)
-                  Get l8
-            Project (#0, #1, #3)
-              Filter #2
-                Map (2)
-                  Get l13
-            Project (#0, #1, #4)
-              Filter #2 AND #3
-                Map (3)
-                  Get l24
-            Project (#0, #1, #3)
-              Filter #2
-                Map (4)
-                  Get l29
-            Project (#0, #1, #3)
-              Filter #2
-                Map (5)
-                  Get l34
-            Project (#0, #1, #4)
-              Map (case when #3 then 6 else 7 end)
-                Join on=(#0 = #2) type=differential
-                  ArrangeBy keys=[[#0]]
-                    Project (#0, #1)
-                      Get l35
-                  ArrangeBy keys=[[#0]]
-                    Union
-                      Get l38
-                      Map (null)
-                        Union
-                          Negate
-                            Project (#0)
-                              Get l38
-                          Get l36
-    cte l38 =
-      Union
-        Get l37
-        Map (false)
-          Union
-            Negate
-              Project (#0)
-                Get l37
-            Get l36
-    cte l37 =
-      Reduce group_by=[#0] aggregates=[any((#0 = #1))]
-        CrossJoin type=differential
-          ArrangeBy keys=[[]]
-            Get l36
-          Get l21
-    cte l36 =
-      Distinct project=[#0]
-        Project (#0)
-          Get l35
-    cte l35 =
-      Filter ((#2) IS NULL OR (#2 = false))
-        Get l34
-    cte l34 =
-      Project (#0, #1, #3)
-        Join on=(#0 = #2) type=differential
-          ArrangeBy keys=[[#0]]
-            Project (#0, #1)
-              Get l30
-          ArrangeBy keys=[[#0]]
-            Union
-              Get l33
-              Map (null)
-                Union
-                  Negate
-                    Project (#0)
-                      Get l33
-                  Get l31
-    cte l33 =
-      Union
-        Get l32
-        Map (false)
-          Union
-            Negate
-              Project (#0)
-                Get l32
-            Get l31
-    cte l32 =
-      Reduce group_by=[#0] aggregates=[any((#0 = #1))]
-        Project (#0, #1)
-          Filter (#2 = 2)
-            Reduce group_by=[#0, #1] aggregates=[count(*)]
-              CrossJoin type=differential
-                ArrangeBy keys=[[]]
-                  Get l31
-                Get l21
-    cte l31 =
-      Distinct project=[#0]
-        Project (#0)
-          Get l30
-    cte l30 =
-      Filter ((#2) IS NULL OR (#2 = false))
-        Get l29
-    cte l29 =
-      Project (#0, #1, #3)
-        Join on=(#0 = #2) type=differential
-          ArrangeBy keys=[[#0]]
-            Project (#0, #1)
-              Get l25
-          ArrangeBy keys=[[#0]]
-            Union
-              Get l28
-              Map (null)
-                Union
-                  Negate
-                    Project (#0)
-                      Get l28
-                  Get l26
-    cte l28 =
-      Union
-        Get l27
-        Map (false)
-          Union
-            Negate
-              Project (#0)
-                Get l27
-            Get l26
-    cte l27 =
-      Reduce group_by=[#0] aggregates=[any((#0 = #1))]
-        CrossJoin type=differential
-          ArrangeBy keys=[[]]
-            Get l26
-          Get l16
-    cte l26 =
-      Distinct project=[#0]
-        Project (#0)
-          Get l25
-    cte l25 =
-      Filter ((#4) IS NULL OR (#4 = false))
-        Map ((#2 AND #3))
-          Get l24
-    cte l24 =
-      Project (#0..=#2, #4)
-        Join on=(#0 = #3) type=differential
-          ArrangeBy keys=[[#0]]
-            Get l19
-          ArrangeBy keys=[[#0]]
-            Union
-              Get l23
-              Map (null)
-                Union
-                  Negate
-                    Project (#0)
-                      Get l23
-                  Get l20
-    cte l23 =
-      Union
-        Get l22
-        Map (false)
-          Union
-            Negate
-              Project (#0)
-                Get l22
-            Get l20
-    cte l22 =
-      Reduce group_by=[#0] aggregates=[any((#0 = #1))]
-        CrossJoin type=differential
-          ArrangeBy keys=[[]]
-            Get l20
-          Get l21
-    cte l21 =
+                  Get l80
+  Return
+    CrossJoin type=differential
       ArrangeBy keys=[[]]
-        Project (#0)
-          Filter (#1 = 2)
-            Get l4
-    cte l20 =
-      Distinct project=[#0]
-        Project (#0)
-          Get l19
-    cte l19 =
-      Project (#0, #1, #3)
-        Join on=(#0 = #2) type=differential
-          ArrangeBy keys=[[#0]]
-            Project (#0, #1)
-              Get l14
-          ArrangeBy keys=[[#0]]
+        Project (#1)
+          Map (bigint_to_integer(#0))
             Union
-              Get l18
+              Get l40
               Map (null)
                 Union
                   Negate
-                    Project (#0)
-                      Get l18
-                  Get l15
-    cte l18 =
-      Union
-        Get l17
-        Map (false)
-          Union
-            Negate
-              Project (#0)
-                Get l17
-            Get l15
-    cte l17 =
-      Reduce group_by=[#0] aggregates=[any((#0 = #1))]
-        CrossJoin type=differential
-          ArrangeBy keys=[[]]
-            Get l15
-          Get l16
-    cte l16 =
+                    Project ()
+                      Get l40
+                  Constant
+                    - ()
       ArrangeBy keys=[[]]
-        Project (#0)
-          Filter (#1 = 3)
-            Get l4
-    cte l15 =
-      Distinct project=[#0]
-        Project (#0)
-          Get l14
-    cte l14 =
-      Filter ((#2) IS NULL OR (#2 = false))
-        Get l13
-    cte l13 =
-      Project (#0, #1, #3)
-        Join on=(#0 = #2) type=differential
-          ArrangeBy keys=[[#0]]
-            Project (#0, #1)
-              Get l9
-          ArrangeBy keys=[[#0]]
+        Project (#1)
+          Map (bigint_to_integer(#0))
             Union
-              Get l12
+              Get l81
               Map (null)
                 Union
                   Negate
-                    Project (#0)
-                      Get l12
-                  Get l10
-    cte l12 =
-      Union
-        Get l11
-        Map (false)
-          Union
-            Negate
-              Project (#0)
-                Get l11
-            Get l10
-    cte l11 =
-      Reduce group_by=[#0] aggregates=[any((#0 = #1))]
-        CrossJoin type=differential
-          ArrangeBy keys=[[]]
-            Get l10
-          ArrangeBy keys=[[]]
-            Project (#0)
-              Filter (#1 = 4)
-                Get l4
-    cte l10 =
-      Distinct project=[#0]
-        Project (#0)
-          Get l9
-    cte l9 =
-      Filter ((#2) IS NULL OR (#2 = false))
-        Get l8
-    cte l8 =
-      Project (#0, #1, #3)
-        Join on=(#0 = #2) type=differential
-          ArrangeBy keys=[[#0]]
-            Get l0
-          ArrangeBy keys=[[#0]]
-            Union
-              Get l7
-              Map (null)
-                Union
-                  Negate
-                    Project (#0)
-                      Get l7
-                  Get l5
-    cte l7 =
-      Union
-        Get l6
-        Map (false)
-          Union
-            Negate
-              Project (#0)
-                Get l6
-            Get l5
-    cte l6 =
-      Reduce group_by=[#0] aggregates=[any((#0 = #1))]
-        CrossJoin type=differential
-          ArrangeBy keys=[[]]
-            Get l5
-          ArrangeBy keys=[[]]
-            Project (#0)
-              Filter (#1 = 5)
-                Get l4
-    cte l5 =
-      Distinct project=[#0]
-        Get l1
-    cte l4 =
-      Project (#0, #3)
-        Map (bigint_to_integer(#2))
-          Reduce group_by=[#0, #1] aggregates=[count(*)]
-            Project (#0, #2)
-              Get l3
-    cte l3 =
-      Map (substr(#0, #1, 1))
-        CrossJoin type=differential
-          ArrangeBy keys=[[]]
-            Get l1
-          Get l2
-    cte l2 =
-      ArrangeBy keys=[[]]
-        Constant
-          - (1)
-          - (2)
-          - (3)
-          - (4)
-          - (5)
-    cte l1 =
-      Project (#0)
-        Get l0
-    cte l0 =
-      Project (#3, #4)
-        Map (regexp_split_to_array[" ", case_insensitive=false](#1), array_index(#2, 1), text_to_integer(array_index(#2, 2)))
-          FlatMap unnest_array(regexp_split_to_array["\n", case_insensitive=false](#0))
-            ReadStorage materialize.public.input
+                    Project ()
+                      Get l81
+                  Constant
+                    - ()
 
 Source materialize.public.input
 

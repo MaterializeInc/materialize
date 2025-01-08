@@ -57,6 +57,10 @@ SELECT exp(sum(ln(hi - low + 1)))::int
 FROM options;
 ----
 Explained Query:
+  With
+    cte l0 =
+      Reduce aggregates=[sum(lnf64(integer_to_double(((double_to_integer((ceilf64(((integer_to_double(#0) + sqrtf64(integer_to_double(((#0 * #0) - (4 * #1))))) / 2)) - 1)) - double_to_integer((floorf64(((integer_to_double(#0) - sqrtf64(integer_to_double(((#0 * #0) - (4 * #1))))) / 2)) + 1))) + 1))))]
+        ReadStorage materialize.public.input
   Return
     Project (#1)
       Map (double_to_integer(expf64(#0)))
@@ -69,10 +73,6 @@ Explained Query:
                   Get l0
               Constant
                 - ()
-  With
-    cte l0 =
-      Reduce aggregates=[sum(lnf64(integer_to_double(((double_to_integer((ceilf64(((integer_to_double(#0) + sqrtf64(integer_to_double(((#0 * #0) - (4 * #1))))) / 2)) - 1)) - double_to_integer((floorf64(((integer_to_double(#0) - sqrtf64(integer_to_double(((#0 * #0) - (4 * #1))))) / 2)) + 1))) + 1))))]
-        ReadStorage materialize.public.input
 
 Source materialize.public.input
 
@@ -116,6 +116,10 @@ EXPLAIN WITH MUTUALLY RECURSIVE
 SELECT * FROM part12;
 ----
 Explained Query:
+  With
+    cte l0 =
+      Reduce aggregates=[sum(log10numeric(((1 + floornumeric(double_to_numeric(((integer_to_double(#0) + sqrtf64(integer_to_double(((#0 * #0) - (4 * #1))))) / 2)))) - ceilnumeric(double_to_numeric(((integer_to_double(#0) - sqrtf64(integer_to_double(((#0 * #0) - (4 * #1))))) / 2))))))]
+        ReadStorage materialize.public.input
   Return
     Project (#1)
       Map (power_numeric(10, #0))
@@ -128,10 +132,6 @@ Explained Query:
                   Get l0
               Constant
                 - ()
-  With
-    cte l0 =
-      Reduce aggregates=[sum(log10numeric(((1 + floornumeric(double_to_numeric(((integer_to_double(#0) + sqrtf64(integer_to_double(((#0 * #0) - (4 * #1))))) / 2)))) - ceilnumeric(double_to_numeric(((integer_to_double(#0) - sqrtf64(integer_to_double(((#0 * #0) - (4 * #1))))) / 2))))))]
-        ReadStorage materialize.public.input
 
 Source materialize.public.input
 

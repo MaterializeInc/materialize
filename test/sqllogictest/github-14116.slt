@@ -31,6 +31,21 @@ query T multiline
 explain with(arity, join implementations) select a, b, ( select c from test3 where a = test3.a and b = test3.b) from test1;
 ----
 Explained Query:
+  With
+    cte l0 =
+      Project (#2) // { arity: 1 }
+        Reduce group_by=[#0, #1] aggregates=[count(*)] // { arity: 3 }
+          Filter (#0 = #0) AND (#1 = #1) // { arity: 2 }
+            ReadStorage materialize.public.test2 // { arity: 2 }
+    cte l1 =
+      Union // { arity: 1 }
+        Get l0 // { arity: 1 }
+        Map (error("more than one record produced in subquery")) // { arity: 1 }
+          Project () // { arity: 0 }
+            Filter (#0 > 1) // { arity: 1 }
+              Reduce aggregates=[count(*)] // { arity: 1 }
+                Project () // { arity: 0 }
+                  Get l0 // { arity: 1 }
   Return // { arity: 3 }
     CrossJoin type=differential // { arity: 3 }
       implementation
@@ -48,21 +63,6 @@ Explained Query:
                     Get l1 // { arity: 1 }
               Constant // { arity: 0 }
                 - ()
-  With
-    cte l1 =
-      Union // { arity: 1 }
-        Get l0 // { arity: 1 }
-        Map (error("more than one record produced in subquery")) // { arity: 1 }
-          Project () // { arity: 0 }
-            Filter (#0 > 1) // { arity: 1 }
-              Reduce aggregates=[count(*)] // { arity: 1 }
-                Project () // { arity: 0 }
-                  Get l0 // { arity: 1 }
-    cte l0 =
-      Project (#2) // { arity: 1 }
-        Reduce group_by=[#0, #1] aggregates=[count(*)] // { arity: 3 }
-          Filter (#0 = #0) AND (#1 = #1) // { arity: 2 }
-            ReadStorage materialize.public.test2 // { arity: 2 }
 
 Source materialize.public.test1
 Source materialize.public.test2

@@ -321,7 +321,66 @@ EXPLAIN WITH MUTUALLY RECURSIVE
 SELECT * FROM part1, part2;
 ----
 Explained Query:
+  With Mutually Recursive
+    cte l0 =
+      Project (#0, #2, #6..=#9)
+        Map (array_index(regexp_split_to_array[",", case_insensitive=false](#1), integer_to_bigint(#2)), substr(#3, 2, 1), ((#4 = "<") OR (#4 = ">")), case when #5 then substr(#3, 1, 1) else "x" end, case when #5 then #4 else ">" end, case when #5 then text_to_integer(array_index(regexp_split_to_array[":", case_insensitive=false](substr(#3, 3)), 1)) else 0 end, case when #5 then array_index(regexp_split_to_array[":", case_insensitive=false](substr(#3, 3)), 2) else #3 end)
+          FlatMap generate_series(1, (regexp_split_to_array[",", case_insensitive=false](#1) array_length 1), 1)
+            Project (#3, #4)
+              Filter (#3) IS NOT NULL
+                Map (regexp_split_to_array["\{", case_insensitive=false](#1), array_index(#2, 1), btrim(array_index(#2, 2), "}"))
+                  FlatMap unnest_array(regexp_split_to_array["\n", case_insensitive=false](#0))
+                    Project (#1)
+                      Map (array_index(regexp_split_to_array["\n\n", case_insensitive=false](#0), 1))
+                        ReadStorage materialize.public.input
+    cte l1 =
+      Union
+        Project (#7, #3..=#6)
+          Map (regexp_split_to_array[",", case_insensitive=false](btrim(btrim(#1, "\}"), "\{")), text_to_integer(substr(array_index(#2, 1), 3)), text_to_integer(substr(array_index(#2, 2), 3)), text_to_integer(substr(array_index(#2, 3), 3)), text_to_integer(substr(array_index(#2, 4), 3)), "in")
+            FlatMap unnest_array(regexp_split_to_array["\n", case_insensitive=false](#0))
+              Project (#1)
+                Map (array_index(regexp_split_to_array["\n\n", case_insensitive=false](#0), 2))
+                  ReadStorage materialize.public.input
+        Project (#6, #1..=#4)
+          TopK group_by=[#0..=#4] order_by=[#5 asc nulls_last] limit=1
+            Project (#0..=#4, #6, #10)
+              Filter case when (#8 = "<") then case when (#7 = "x") then (#1 < #9) else case when (#7 = "m") then (#2 < #9) else case when (#7 = "a") then (#3 < #9) else case when (#7 = "s") then (#4 < #9) else false end end end end else case when (#8 = ">") then case when (#7 = "x") then (#1 > #9) else case when (#7 = "m") then (#2 > #9) else case when (#7 = "a") then (#3 > #9) else case when (#7 = "s") then (#4 > #9) else false end end end end else false end end
+                Join on=(#0 = #5) type=differential
+                  ArrangeBy keys=[[#0]]
+                    Filter (#0) IS NOT NULL
+                      Get l1
+                  ArrangeBy keys=[[#0]]
+                    Get l0
+    cte l2 =
+      Reduce aggregates=[sum((((#0 + #1) + #2) + #3))]
+        Project (#1..=#4)
+          Filter (#0 = "A")
+            Get l1
+    cte l3 =
+      Project (#0..=#9, #12..=#15)
+        Join on=(#0 = #10 AND #1 = #11) type=differential
+          ArrangeBy keys=[[#0, #1]]
+            Filter (#0) IS NOT NULL
+              Get l4
+          ArrangeBy keys=[[#0, #1]]
+            Get l0
+    cte l4 =
+      Union
+        Project (#13, #28, #16, #18, #20, #21, #23, #24, #26, #27)
+          Map ((#10 = "x"), (#11 = ">"), case when (#14 AND #15) then greatest((#12 + 1), #2) else #2 end, (#11 = "<"), case when (#14 AND #17) then least((#12 - 1), #3) else #3 end, (#10 = "m"), case when (#15 AND #19) then greatest((#12 + 1), #4) else #4 end, case when (#17 AND #19) then least((#12 - 1), #5) else #5 end, (#10 = "a"), case when (#15 AND #22) then greatest((#12 + 1), #6) else #6 end, case when (#17 AND #22) then least((#12 - 1), #7) else #7 end, (#10 = "s"), case when (#15 AND #25) then greatest((#12 + 1), #8) else #8 end, case when (#17 AND #25) then least((#12 - 1), #9) else #9 end, 1)
+            Get l3
+        Project (#0, #14, #17, #19, #21, #22, #24, #25, #27, #28)
+          Map ((#1 + 1), (#10 = "x"), (#11 = "<"), case when (#15 AND #16) then greatest(#12, #2) else #2 end, (#11 = ">"), case when (#15 AND #18) then least(#12, #3) else #3 end, (#10 = "m"), case when (#16 AND #20) then greatest(#12, #4) else #4 end, case when (#18 AND #20) then least(#12, #5) else #5 end, (#10 = "a"), case when (#16 AND #23) then greatest(#12, #6) else #6 end, case when (#18 AND #23) then least(#12, #7) else #7 end, (#10 = "s"), case when (#16 AND #26) then greatest(#12, #8) else #8 end, case when (#18 AND #26) then least(#12, #9) else #9 end)
+            Get l3
+        Constant
+          - ("in", 1, 1, 4000, 1, 4000, 1, 4000, 1, 4000)
   Return
+    With
+      cte l5 =
+        Reduce aggregates=[sum((((integer_to_bigint(((1 + #1) - #0)) * integer_to_bigint(((1 + #3) - #2))) * integer_to_bigint(((1 + #5) - #4))) * integer_to_bigint(((1 + #7) - #6))))]
+          Project (#2..=#9)
+            Filter (#0 = "A")
+              Get l4
     Return
       CrossJoin type=differential
         ArrangeBy keys=[[]]
@@ -344,65 +403,6 @@ Explained Query:
                     Get l5
                 Constant
                   - ()
-    With
-      cte l5 =
-        Reduce aggregates=[sum((((integer_to_bigint(((1 + #1) - #0)) * integer_to_bigint(((1 + #3) - #2))) * integer_to_bigint(((1 + #5) - #4))) * integer_to_bigint(((1 + #7) - #6))))]
-          Project (#2..=#9)
-            Filter (#0 = "A")
-              Get l4
-  With Mutually Recursive
-    cte l4 =
-      Union
-        Project (#13, #28, #16, #18, #20, #21, #23, #24, #26, #27)
-          Map ((#10 = "x"), (#11 = ">"), case when (#14 AND #15) then greatest((#12 + 1), #2) else #2 end, (#11 = "<"), case when (#14 AND #17) then least((#12 - 1), #3) else #3 end, (#10 = "m"), case when (#15 AND #19) then greatest((#12 + 1), #4) else #4 end, case when (#17 AND #19) then least((#12 - 1), #5) else #5 end, (#10 = "a"), case when (#15 AND #22) then greatest((#12 + 1), #6) else #6 end, case when (#17 AND #22) then least((#12 - 1), #7) else #7 end, (#10 = "s"), case when (#15 AND #25) then greatest((#12 + 1), #8) else #8 end, case when (#17 AND #25) then least((#12 - 1), #9) else #9 end, 1)
-            Get l3
-        Project (#0, #14, #17, #19, #21, #22, #24, #25, #27, #28)
-          Map ((#1 + 1), (#10 = "x"), (#11 = "<"), case when (#15 AND #16) then greatest(#12, #2) else #2 end, (#11 = ">"), case when (#15 AND #18) then least(#12, #3) else #3 end, (#10 = "m"), case when (#16 AND #20) then greatest(#12, #4) else #4 end, case when (#18 AND #20) then least(#12, #5) else #5 end, (#10 = "a"), case when (#16 AND #23) then greatest(#12, #6) else #6 end, case when (#18 AND #23) then least(#12, #7) else #7 end, (#10 = "s"), case when (#16 AND #26) then greatest(#12, #8) else #8 end, case when (#18 AND #26) then least(#12, #9) else #9 end)
-            Get l3
-        Constant
-          - ("in", 1, 1, 4000, 1, 4000, 1, 4000, 1, 4000)
-    cte l3 =
-      Project (#0..=#9, #12..=#15)
-        Join on=(#0 = #10 AND #1 = #11) type=differential
-          ArrangeBy keys=[[#0, #1]]
-            Filter (#0) IS NOT NULL
-              Get l4
-          ArrangeBy keys=[[#0, #1]]
-            Get l0
-    cte l2 =
-      Reduce aggregates=[sum((((#0 + #1) + #2) + #3))]
-        Project (#1..=#4)
-          Filter (#0 = "A")
-            Get l1
-    cte l1 =
-      Union
-        Project (#7, #3..=#6)
-          Map (regexp_split_to_array[",", case_insensitive=false](btrim(btrim(#1, "\}"), "\{")), text_to_integer(substr(array_index(#2, 1), 3)), text_to_integer(substr(array_index(#2, 2), 3)), text_to_integer(substr(array_index(#2, 3), 3)), text_to_integer(substr(array_index(#2, 4), 3)), "in")
-            FlatMap unnest_array(regexp_split_to_array["\n", case_insensitive=false](#0))
-              Project (#1)
-                Map (array_index(regexp_split_to_array["\n\n", case_insensitive=false](#0), 2))
-                  ReadStorage materialize.public.input
-        Project (#6, #1..=#4)
-          TopK group_by=[#0..=#4] order_by=[#5 asc nulls_last] limit=1
-            Project (#0..=#4, #6, #10)
-              Filter case when (#8 = "<") then case when (#7 = "x") then (#1 < #9) else case when (#7 = "m") then (#2 < #9) else case when (#7 = "a") then (#3 < #9) else case when (#7 = "s") then (#4 < #9) else false end end end end else case when (#8 = ">") then case when (#7 = "x") then (#1 > #9) else case when (#7 = "m") then (#2 > #9) else case when (#7 = "a") then (#3 > #9) else case when (#7 = "s") then (#4 > #9) else false end end end end else false end end
-                Join on=(#0 = #5) type=differential
-                  ArrangeBy keys=[[#0]]
-                    Filter (#0) IS NOT NULL
-                      Get l1
-                  ArrangeBy keys=[[#0]]
-                    Get l0
-    cte l0 =
-      Project (#0, #2, #6..=#9)
-        Map (array_index(regexp_split_to_array[",", case_insensitive=false](#1), integer_to_bigint(#2)), substr(#3, 2, 1), ((#4 = "<") OR (#4 = ">")), case when #5 then substr(#3, 1, 1) else "x" end, case when #5 then #4 else ">" end, case when #5 then text_to_integer(array_index(regexp_split_to_array[":", case_insensitive=false](substr(#3, 3)), 1)) else 0 end, case when #5 then array_index(regexp_split_to_array[":", case_insensitive=false](substr(#3, 3)), 2) else #3 end)
-          FlatMap generate_series(1, (regexp_split_to_array[",", case_insensitive=false](#1) array_length 1), 1)
-            Project (#3, #4)
-              Filter (#3) IS NOT NULL
-                Map (regexp_split_to_array["\{", case_insensitive=false](#1), array_index(#2, 1), btrim(array_index(#2, 2), "}"))
-                  FlatMap unnest_array(regexp_split_to_array["\n", case_insensitive=false](#0))
-                    Project (#1)
-                      Map (array_index(regexp_split_to_array["\n\n", case_insensitive=false](#0), 1))
-                        ReadStorage materialize.public.input
 
 Source materialize.public.input
 

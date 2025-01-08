@@ -53,14 +53,14 @@ build format=types
 (let z (project (get y) [#1 #0 #2])
     (union [(get z) (get z)]))
 ----
-Return // { types: "(Int32?, Int64?, Int32?)", keys: "()" }
-  Union // { types: "(Int32?, Int64?, Int32?)", keys: "()" }
-    Get l0 // { types: "(Int32?, Int64?, Int32?)", keys: "()" }
-    Get l0 // { types: "(Int32?, Int64?, Int32?)", keys: "()" }
 With
   cte l0 =
     Project (#1, #0, #2) // { types: "(Int32?, Int64?, Int32?)", keys: "()" }
       Get y // { types: "(Int64?, Int32?, Int32?)", keys: "()" }
+Return // { types: "(Int32?, Int64?, Int32?)", keys: "()" }
+  Union // { types: "(Int32?, Int64?, Int32?)", keys: "()" }
+    Get l0 // { types: "(Int32?, Int64?, Int32?)", keys: "()" }
+    Get l0 // { types: "(Int32?, Int64?, Int32?)", keys: "()" }
 
 build format=types
 (join [(get x) (get y)] [])

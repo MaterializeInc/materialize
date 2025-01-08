@@ -60,8 +60,6 @@ WITH MUTUALLY RECURSIVE
 SELECT * FROM c0;
 ----
 Explained Query:
-  Return // { arity: 4 }
-    Get l0 // { arity: 4 }
   With Mutually Recursive
     cte l0 =
       Union // { arity: 4 }
@@ -78,6 +76,8 @@ Explained Query:
                 Filter (#1) IS NOT NULL // { arity: 2 }
                   ReadStorage materialize.public.y // { arity: 2 }
         Get l0 // { arity: 4 }
+  Return // { arity: 4 }
+    Get l0 // { arity: 4 }
 
 Source materialize.public.x
   filter=((#1) IS NOT NULL)

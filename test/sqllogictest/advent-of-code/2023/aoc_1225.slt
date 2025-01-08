@@ -128,65 +128,55 @@ EXPLAIN WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT 50)
 SELECT * FROM part1;
 ----
 Explained Query:
-  Return
-    Return
-      Project (#2)
-        Map ((#0 * #1))
-          CrossJoin type=differential
-            ArrangeBy keys=[[]]
-              Union
-                Get l10
-                Map (null)
-                  Union
-                    Negate
-                      Project ()
-                        Get l10
-                    Constant
-                      - ()
-            ArrangeBy keys=[[]]
-              Union
-                Get l12
-                Map (null)
-                  Union
-                    Negate
-                      Project ()
-                        Get l12
-                    Constant
-                      - ()
-    With
-      cte l12 =
-        Union
-          Get l11
-          Map (0)
-            Union
-              Negate
-                Project ()
-                  Get l11
-              Constant
-                - ()
-      cte l11 =
-        Reduce aggregates=[count(*)]
-          Project ()
-            Filter (#1 > 0)
-              Get l7
-      cte l10 =
-        Union
-          Get l9
-          Map (0)
-            Union
-              Negate
-                Project ()
-                  Get l9
-              Constant
-                - ()
-      cte l9 =
-        Reduce aggregates=[count(*)]
-          Project ()
-            Filter (#1 < 0)
-              Get l7
   With Mutually Recursive
-    cte [recursion_limit=50, return_at_limit] l8 =
-      Get l1
+    cte l0 =
+      Project (#3, #4)
+        Map (regexp_split_to_array[" ", case_insensitive=false](#0), btrim(array_index(#2, 1), ":"), btrim(array_index(#2, integer_to_bigint(#1)), ","))
+          FlatMap generate_series(2, (regexp_split_to_array[" ", case_insensitive=false](#0) array_length 1), 1)
+            Project (#2)
+              Map (array_index(regexp_split_to_array["\n", case_insensitive=false](#0), integer_to_bigint(#1)))
+                FlatMap generate_series(1, (regexp_split_to_array["\n", case_insensitive=false](#0) array_length 1), 1)
+                  ReadStorage materialize.public.input
+    cte l1 =
+      Map (case when (#0 < "n") then 1 else -1 end)
+        Union
+          Project (#0)
+            Get l0
+          Project (#1)
+            Get l0
+    cte l2 =
+      Project (#1)
+        Get l7
+    cte l3 =
+      Reduce aggregates=[sum(#0), count(#0)]
+        Get l2
+    cte l4 =
+      Project (#2)
+        Map ((#0 / bigint_to_numeric(case when (#1 = 0) then null else #1 end)))
+          Union
+            Get l3
+            Map (null, 0)
+              Union
+                Negate
+                  Project ()
+                    Get l3
+                Constant
+                  - ()
+    cte l5 =
+      Reduce aggregates=[sum((#0 * #0)), sum(#0), count(#0)]
+        Get l2
+    cte l6 =
+      Project (#3)
+        Map (sqrtnumeric(case when ((#0) IS NULL OR (#1) IS NULL OR (case when (#2 = 0) then null else #2 end) IS NULL OR (case when (0 = (#2 - 1)) then null else (#2 - 1) end) IS NULL) then null else greatest(((#0 - ((#1 * #1) / bigint_to_numeric(case when (#2 = 0) then null else #2 end))) / bigint_to_numeric(case when (0 = (#2 - 1)) then null else (#2 - 1) end)), 0) end))
+          Union
+            Get l5
+            Map (null, null, 0)
+              Union
+                Negate
+                  Project ()
+                    Get l5
+                Constant
+                  - ()
     cte [recursion_limit=50, return_at_limit] l7 =
       Union
         Threshold
@@ -227,54 +217,64 @@ Explained Query:
                           Get l6
                       Constant
                         - ()
-    cte l6 =
-      Project (#3)
-        Map (sqrtnumeric(case when ((#0) IS NULL OR (#1) IS NULL OR (case when (#2 = 0) then null else #2 end) IS NULL OR (case when (0 = (#2 - 1)) then null else (#2 - 1) end) IS NULL) then null else greatest(((#0 - ((#1 * #1) / bigint_to_numeric(case when (#2 = 0) then null else #2 end))) / bigint_to_numeric(case when (0 = (#2 - 1)) then null else (#2 - 1) end)), 0) end))
-          Union
-            Get l5
-            Map (null, null, 0)
-              Union
-                Negate
-                  Project ()
-                    Get l5
-                Constant
-                  - ()
-    cte l5 =
-      Reduce aggregates=[sum((#0 * #0)), sum(#0), count(#0)]
-        Get l2
-    cte l4 =
-      Project (#2)
-        Map ((#0 / bigint_to_numeric(case when (#1 = 0) then null else #1 end)))
-          Union
-            Get l3
-            Map (null, 0)
-              Union
-                Negate
-                  Project ()
-                    Get l3
-                Constant
-                  - ()
-    cte l3 =
-      Reduce aggregates=[sum(#0), count(#0)]
-        Get l2
-    cte l2 =
-      Project (#1)
-        Get l7
-    cte l1 =
-      Map (case when (#0 < "n") then 1 else -1 end)
+    cte [recursion_limit=50, return_at_limit] l8 =
+      Get l1
+  Return
+    With
+      cte l9 =
+        Reduce aggregates=[count(*)]
+          Project ()
+            Filter (#1 < 0)
+              Get l7
+      cte l10 =
         Union
-          Project (#0)
-            Get l0
-          Project (#1)
-            Get l0
-    cte l0 =
-      Project (#3, #4)
-        Map (regexp_split_to_array[" ", case_insensitive=false](#0), btrim(array_index(#2, 1), ":"), btrim(array_index(#2, integer_to_bigint(#1)), ","))
-          FlatMap generate_series(2, (regexp_split_to_array[" ", case_insensitive=false](#0) array_length 1), 1)
-            Project (#2)
-              Map (array_index(regexp_split_to_array["\n", case_insensitive=false](#0), integer_to_bigint(#1)))
-                FlatMap generate_series(1, (regexp_split_to_array["\n", case_insensitive=false](#0) array_length 1), 1)
-                  ReadStorage materialize.public.input
+          Get l9
+          Map (0)
+            Union
+              Negate
+                Project ()
+                  Get l9
+              Constant
+                - ()
+      cte l11 =
+        Reduce aggregates=[count(*)]
+          Project ()
+            Filter (#1 > 0)
+              Get l7
+      cte l12 =
+        Union
+          Get l11
+          Map (0)
+            Union
+              Negate
+                Project ()
+                  Get l11
+              Constant
+                - ()
+    Return
+      Project (#2)
+        Map ((#0 * #1))
+          CrossJoin type=differential
+            ArrangeBy keys=[[]]
+              Union
+                Get l10
+                Map (null)
+                  Union
+                    Negate
+                      Project ()
+                        Get l10
+                    Constant
+                      - ()
+            ArrangeBy keys=[[]]
+              Union
+                Get l12
+                Map (null)
+                  Union
+                    Negate
+                      Project ()
+                        Get l12
+                    Constant
+                      - ()
 
 Source materialize.public.input
 

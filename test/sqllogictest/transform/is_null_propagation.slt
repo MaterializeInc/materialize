@@ -53,26 +53,13 @@ query T multiline
 EXPLAIN WITH(arity, join implementations) SELECT FROM t1 WHERE f2 IN ( SELECT agg1 FROM ( SELECT COUNT ( TRUE ) agg1 FROM t2 a1 JOIN ( SELECT a2.f2 FROM t1 LEFT JOIN t1 a2 ON TRUE ) a2 ON TRUE WHERE  a2.f2 IS NOT NULL AND a2.f2 > a1.f2 ) )
 ----
 Explained Query:
-  Return // { arity: 0 }
-    Project () // { arity: 0 }
-      Join on=(#0 = #1) type=differential // { arity: 2 }
-        implementation
-          %1[#0]UKA » %0:l0[#0]K
-        ArrangeBy keys=[[#0]] // { arity: 1 }
-          Get l0 // { arity: 1 }
-        ArrangeBy keys=[[#0]] // { arity: 1 }
-          Distinct project=[#0] // { arity: 1 }
-            Union // { arity: 1 }
-              Project (#0) // { arity: 1 }
-                Filter (#0 = bigint_to_double(#1)) // { arity: 2 }
-                  Get l2 // { arity: 2 }
-              Negate // { arity: 1 }
-                Project (#0) // { arity: 1 }
-                  Filter (#0 = 0) // { arity: 2 }
-                    Get l2 // { arity: 2 }
-              Filter (#0 = 0) // { arity: 1 }
-                Get l1 // { arity: 1 }
   With
+    cte l0 =
+      Project (#1) // { arity: 1 }
+        ReadStorage materialize.public.t1 // { arity: 2 }
+    cte l1 =
+      Distinct project=[#0] // { arity: 1 }
+        Get l0 // { arity: 1 }
     cte l2 =
       Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
         Project (#0) // { arity: 1 }
@@ -93,12 +80,25 @@ Explained Query:
                   ReadStorage materialize.public.t1 // { arity: 2 }
               ArrangeBy keys=[[]] // { arity: 1 }
                 Get l0 // { arity: 1 }
-    cte l1 =
-      Distinct project=[#0] // { arity: 1 }
-        Get l0 // { arity: 1 }
-    cte l0 =
-      Project (#1) // { arity: 1 }
-        ReadStorage materialize.public.t1 // { arity: 2 }
+  Return // { arity: 0 }
+    Project () // { arity: 0 }
+      Join on=(#0 = #1) type=differential // { arity: 2 }
+        implementation
+          %1[#0]UKA » %0:l0[#0]K
+        ArrangeBy keys=[[#0]] // { arity: 1 }
+          Get l0 // { arity: 1 }
+        ArrangeBy keys=[[#0]] // { arity: 1 }
+          Distinct project=[#0] // { arity: 1 }
+            Union // { arity: 1 }
+              Project (#0) // { arity: 1 }
+                Filter (#0 = bigint_to_double(#1)) // { arity: 2 }
+                  Get l2 // { arity: 2 }
+              Negate // { arity: 1 }
+                Project (#0) // { arity: 1 }
+                  Filter (#0 = 0) // { arity: 2 }
+                    Get l2 // { arity: 2 }
+              Filter (#0 = 0) // { arity: 1 }
+                Get l1 // { arity: 1 }
 
 Source materialize.public.t1
 Source materialize.public.t2

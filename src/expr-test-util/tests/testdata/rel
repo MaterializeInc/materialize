@@ -88,13 +88,13 @@ build
    (get x))
 ----
 ----
-Return
-  Get l0
 With
   cte l0 =
     Constant
       - (1, 2, 3)
       - (4, 5, 6)
+Return
+  Get l0
 
 ----
 ----

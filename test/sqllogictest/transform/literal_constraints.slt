@@ -123,6 +123,11 @@ EXPLAIN WITH(arity, join implementations) SELECT count(*) FROM t1
 WHERE a = 2 AND b = 'l2' OR a = 1 + 1 + 1 AND b = 'l3'
 ----
 Explained Query:
+  With
+    cte l0 =
+      Reduce aggregates=[count(*)] // { arity: 1 }
+        Project () // { arity: 0 }
+          ReadIndex on=materialize.public.t1 idx_t1_a_b=[lookup values=[(2, "l2"); (3, "l3")]] // { arity: 4 }
   Return // { arity: 1 }
     Union // { arity: 1 }
       Get l0 // { arity: 1 }
@@ -133,11 +138,6 @@ Explained Query:
               Get l0 // { arity: 1 }
           Constant // { arity: 0 }
             - ()
-  With
-    cte l0 =
-      Reduce aggregates=[count(*)] // { arity: 1 }
-        Project () // { arity: 0 }
-          ReadIndex on=materialize.public.t1 idx_t1_a_b=[lookup values=[(2, "l2"); (3, "l3")]] // { arity: 4 }
 
 Used Indexes:
   - materialize.public.idx_t1_a_b (lookup)
@@ -757,6 +757,10 @@ WHERE
     t1.b IN ('l2', 'l3')
 ----
 Explained Query:
+  With
+    cte l0 =
+      ArrangeBy keys=[[#0]] // { arity: 3 }
+        ReadIndex on=t2 idx_t2_a=[delta join lookup] // { arity: 3 }
   Return // { arity: 3 }
     Project (#0, #1, #5) // { arity: 3 }
       Filter (#0) IS NOT NULL // { arity: 9 }
@@ -769,10 +773,6 @@ Explained Query:
             ReadIndex on=materialize.public.t1 idx_t1_b=[lookup values=[("l2"); ("l3")]] // { arity: 3 }
           Get l0 // { arity: 3 }
           Get l0 // { arity: 3 }
-  With
-    cte l0 =
-      ArrangeBy keys=[[#0]] // { arity: 3 }
-        ReadIndex on=t2 idx_t2_a=[delta join lookup] // { arity: 3 }
 
 Used Indexes:
   - materialize.public.idx_t2_a (delta join lookup)
@@ -1260,6 +1260,11 @@ SELECT sum(a*b*c*d) FROM t4
 WHERE (a,b,c) IN ((15, 16, 17), (25, 26, 111), (35, 36, 111));
 ----
 Explained Query:
+  With
+    cte l0 =
+      Reduce aggregates=[sum((((#0 * #1) * #2) * #3))] // { arity: 1, types: "(bigint?)", keys: "([])" }
+        Project (#0..=#3) // { arity: 4, types: "(integer, integer, integer, integer?)", keys: "([1], [2])" }
+          ReadIndex on=materialize.public.t4 idx_t4_a_b_c=[lookup values=[(15, 16, 17); (25, 26, 111); (35, 36, 111)]] // { arity: 7, types: "(integer, integer, integer, integer?, integer, integer, integer)", keys: "([1], [2])" }
   Return // { arity: 1, types: "(bigint?)", keys: "([])" }
     Union // { arity: 1, types: "(bigint?)", keys: "([])" }
       Get l0 // { arity: 1, types: "(bigint?)", keys: "([])" }
@@ -1270,11 +1275,6 @@ Explained Query:
               Get l0 // { arity: 1, types: "(bigint?)", keys: "([])" }
           Constant // { arity: 0, types: "()", keys: "([])" }
             - ()
-  With
-    cte l0 =
-      Reduce aggregates=[sum((((#0 * #1) * #2) * #3))] // { arity: 1, types: "(bigint?)", keys: "([])" }
-        Project (#0..=#3) // { arity: 4, types: "(integer, integer, integer, integer?)", keys: "([1], [2])" }
-          ReadIndex on=materialize.public.t4 idx_t4_a_b_c=[lookup values=[(15, 16, 17); (25, 26, 111); (35, 36, 111)]] // { arity: 7, types: "(integer, integer, integer, integer?, integer, integer, integer)", keys: "([1], [2])" }
 
 Used Indexes:
   - materialize.public.idx_t4_a_b_c (lookup)
@@ -1326,8 +1326,6 @@ WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT = 3)
 SELECT * FROM c0;
 ----
 Explained Query:
-  Return
-    Get l0
   With Mutually Recursive [recursion_limit=3, return_at_limit]
     cte l0 =
       Distinct project=[#0]
@@ -1341,6 +1339,8 @@ Explained Query:
                     ReadIndex on=materialize.public.t5 idx_t5_f1=[lookup values=[(0); (2); (8)]]
                 ArrangeBy keys=[[]]
                   Get l0
+  Return
+    Get l0
 
 Used Indexes:
   - materialize.public.idx_t5_f1 (*** full scan ***, lookup)

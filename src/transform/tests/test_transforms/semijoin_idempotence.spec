@@ -49,6 +49,11 @@ With
       Get t0
       Get t1
 ----
+With
+  cte l0 =
+    Join on=(#0 = #3)
+      Get t0
+      Get t1
 Return
   Union
     Map (null, null)
@@ -62,11 +67,6 @@ Return
         Get t0
     Project (#0..=#2, #0, #4)
       Get l0
-With
-  cte l0 =
-    Join on=(#0 = #3)
-      Get t0
-      Get t1
 
 
 ## LetRec cases

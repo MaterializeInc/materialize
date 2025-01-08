@@ -125,11 +125,11 @@ With
 ----
 ----
 In the MIR term:
-Return
-  Get l0
 With
   cte l0 =
     Get t0
+Return
+  Get l0
 
 
 id l0 is shadowed
@@ -180,17 +180,17 @@ With Mutually Recursive
 ----
 ----
 In the MIR term:
-Return
-  Union
-    Get l0
-    Filter (#0 > 1)
-      Get l0
 With Mutually Recursive
   cte l0 =
     Union
       Get l0
       Filter (#0 > 42)
         Get t0
+Return
+  Union
+    Get l0
+    Filter (#0 > 1)
+      Get l0
 
 
 id l0 is shadowed
@@ -211,15 +211,15 @@ With Mutually Recursive
 ----
 ----
 In the MIR term:
-Return
-  Filter #0 AND #1
-    Get l0
 With Mutually Recursive
+  cte l1 =
+    Get l1
   cte l0 =
     Constant
       - (1, 3)
-  cte l1 =
-    Get l1
+Return
+  Filter #0 AND #1
+    Get l0
 
 
 mismatched column types: couldn't compute union of column types in let rec: Can't union types: Bool and Int64
