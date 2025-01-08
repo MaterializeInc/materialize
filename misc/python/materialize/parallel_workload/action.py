@@ -36,9 +36,11 @@ from materialize.mzcompose.services.materialized import (
 )
 from materialize.mzcompose.services.minio import minio_blob_uri
 from materialize.parallel_workload.database import (
+    DATA_TYPES,
     DB,
     MAX_CLUSTER_REPLICAS,
     MAX_CLUSTERS,
+    MAX_COLUMNS,
     MAX_DBS,
     MAX_INDEXES,
     MAX_KAFKA_SINKS,
@@ -53,6 +55,7 @@ from materialize.parallel_workload.database import (
     MAX_WEBHOOK_SOURCES,
     Cluster,
     ClusterReplica,
+    Column,
     Database,
     DBObject,
     Index,
@@ -714,6 +717,37 @@ class RenameTableAction(Action):
         return True
 
 
+class AlterTableAddColumnAction(Action):
+    def run(self, exe: Executor) -> bool:
+        with exe.db.lock:
+            if not exe.db.tables:
+                return False
+            if exe.db.flags.get("enable_alter_table_add_column", "FALSE") != "TRUE":
+                return False
+            table = self.rng.choice(exe.db.tables)
+        with table.lock:
+            # Allow adding more a few more columns than the max for additional coverage.
+            if len(table.columns) >= MAX_COLUMNS + 3:
+                return False
+
+            # TODO(alter_table): Support adding non-nullable columns with a default value.
+            new_column = Column(
+                self.rng, len(table.columns), self.rng.choice(DATA_TYPES), table
+            )
+            new_column.raw_name = f"{new_column.raw_name}-altered"
+            new_column.nullable = True
+            new_column.default = None
+
+            try:
+                exe.execute(
+                    f"ALTER TABLE {str(table)} ADD COLUMN {new_column.create()}"
+                )
+            except:
+                raise
+            table.columns.append(new_column)
+        return True
+
+
 class RenameViewAction(Action):
     def run(self, exe: Executor) -> bool:
         if exe.db.scenario != Scenario.Rename:
@@ -1048,6 +1082,7 @@ class FlipFlagsAction(Action):
             BOOLEAN_FLAG_VALUES
         )
         self.flags_with_values["compute_apply_column_demands"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["enable_alter_table_add_column"] = BOOLEAN_FLAG_VALUES
 
     def run(self, exe: Executor) -> bool:
         flag_name = self.rng.choice(list(self.flags_with_values.keys()))
@@ -1065,6 +1100,7 @@ class FlipFlagsAction(Action):
         try:
             conn = self.create_system_connection(exe)
             self.flip_flag(conn, flag_name, flag_value)
+            exe.db.flags[flag_name] = flag_value
             return True
         except OperationalError:
             if conn is not None:
@@ -2258,6 +2294,8 @@ ddl_action_list = ActionList(
         (RenameSinkAction, 10),
         (SwapSchemaAction, 10),
         (FlipFlagsAction, 2),
+        # TODO: Reenable when database-issues#8813 is fixed.
+        # (AlterTableAddColumnAction, 10),
         # TODO: Reenable when database-issues#8445 is fixed
         # (AlterKafkaSinkFromAction, 8),
         # (TransactionIsolationAction, 1),
