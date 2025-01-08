@@ -18,11 +18,6 @@ ALTER SYSTEM SET persist_batch_columnar_format = 'both_v2'
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET persist_batch_columnar_format_percent = 100
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET persist_batch_structured_order = true
 ----
 COMPLETE 0

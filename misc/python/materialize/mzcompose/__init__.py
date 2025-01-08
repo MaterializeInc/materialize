@@ -124,7 +124,6 @@ def get_default_system_parameters(
             "true" if version > MzVersion.parse_mz("v0.127.0-dev") else "false"
         ),
         "persist_batch_columnar_format": "both_v2",
-        "persist_batch_columnar_format_percent": "100",
         "persist_batch_delete_enabled": "true",
         "persist_batch_structured_order": "true",
         "persist_batch_structured_key_lower_len": "256",
