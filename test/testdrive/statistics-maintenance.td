@@ -46,6 +46,9 @@ one:two
   VALUE FORMAT BYTES
   ENVELOPE UPSERT
 
+> SELECT * FROM upsert1_tbl
+one two
+
 # The `CREATE TABLE ... FROM SOURCE` commands caused a recreation of the
 # respective source dataflows, during which we might have lost the statistics
 # about committed updates from the snapshot. Ingest some more data to ensure we

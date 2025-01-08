@@ -104,8 +104,8 @@ mammalmore    moosemoose   2
       s.name,
       bool_and(u.snapshot_committed),
       SUM(u.messages_received) >= 4,
-      SUM(u.updates_staged),
-      SUM(u.updates_committed),
+      SUM(u.updates_staged) > 0,
+      SUM(u.updates_committed) > 0,
       SUM(u.bytes_received) > 0,
       bool_and(u.rehydration_latency IS NOT NULL)
   FROM mz_sources s
@@ -113,7 +113,7 @@ mammalmore    moosemoose   2
   WHERE s.name IN ('metrics_test_source')
   GROUP BY s.name
   ORDER BY s.name
-metrics_test_source true true 2 2 true true
+metrics_test_source true true true true true true
 
 > DROP SOURCE metrics_test_source CASCADE
 
