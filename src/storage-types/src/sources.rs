@@ -148,17 +148,21 @@ impl<S: Clone> IngestionDescription<S> {
         primary_source_id: &GlobalId,
     ) -> BTreeMap<GlobalId, IndexedSourceExport<S>> {
         let mut source_exports = BTreeMap::new();
-        // `self.source_exports` contains all source-exports (e.g. subsources & tables) as well as
-        // the primary source relation. It's not guaranteed that the primary source relation is
-        // the first element in the map, however it much be set to output 0 to align with
-        // assumptions in source implementations. This is the case even if the primary
-        // export will not have any data output for it, since output 0 is the convention
+        // `self.source_exports` contains all source-exports (e.g. subsources & tables) and
+        // sometimes the primary source relation. It's not guaranteed that the primary source
+        // relation is the first element in the map, however it much be set to output 0 when it
+        // exists to align with assumptions in source implementations. This is the case even if the
+        // primary export will not have any data output for it, since output 0 is the convention
         // used for errors that should halt the entire source dataflow.
         // TODO: See if we can simplify this to avoid needing to include the primary output
         // if no data will be exported to it. This requires refactoring all error output handling.
+        // TODO: We already sometimes exclude the primary source relation, so where are the errors
+        // going...?
         let mut next_output = 1;
+        let mut has_primary_source = false;
         for (id, export) in self.source_exports.iter() {
             let ingestion_output = if id == primary_source_id {
+                has_primary_source = true;
                 0
             } else {
                 let idx = next_output;
@@ -173,6 +177,14 @@ impl<S: Clone> IngestionDescription<S> {
                     export: export.clone(),
                 },
             );
+        }
+
+        // If the primary source does not exist, then we need to decrement all indexes, because we
+        // had reserved index 0 for the primary source.
+        if !has_primary_source {
+            for (_, output) in &mut source_exports {
+                output.ingestion_output -= 1;
+            }
         }
 
         source_exports
