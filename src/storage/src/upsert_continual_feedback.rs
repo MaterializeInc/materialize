@@ -739,9 +739,9 @@ where
 
         match value {
             Some(value) => {
-                let existing_value = existing_state_cell.take();
+                let existing_value = existing_state_cell.as_ref();
 
-                let old_value = if let Some(old_value) = existing_value.as_ref() {
+                let old_value = if let Some(old_value) = existing_value {
                     old_value.provisional_value_ref(&ts)
                 } else {
                     None
@@ -754,7 +754,7 @@ where
                 match &drain_style {
                     DrainStyle::AtTime { .. } => {
                         let new_value = match existing_value {
-                            Some(existing_value) => existing_value.into_provisional_value(
+                            Some(existing_value) => existing_value.clone().into_provisional_value(
                                 value.clone(),
                                 ts.clone(),
                                 Some(from_time.0.clone()),
