@@ -1260,32 +1260,23 @@ where
             return updates;
         }
 
-        let (records, ext) = match updates {
-            BlobTraceUpdates::Row(r) => (r, None),
-            BlobTraceUpdates::Both(r, e) => (r, Some(e)),
-        };
+        let mut codec = updates
+            .records()
+            .map(|r| (r.keys().clone(), r.vals().clone()));
+        let mut structured = updates.structured().cloned();
+        let mut timestamps = updates.timestamps().clone();
+        let mut diffs = updates.diffs().clone();
 
-        let records = match self.ts_rewrite.as_ref() {
-            Some(rewrite) => {
-                let timestamps = records.timestamps().clone();
-                let rewrite = |i: i64| {
-                    let mut t = T::decode(i.to_le_bytes());
-                    t.advance_by(rewrite.borrow());
-                    i64::from_le_bytes(T::encode(&t))
-                };
-                let timestamps = arrow::compute::unary_mut(timestamps, rewrite)
-                    .unwrap_or_else(|i| arrow::compute::unary(&i, rewrite));
-                ColumnarRecords::new(
-                    records.keys().clone(),
-                    records.vals().clone(),
-                    realloc_array(&timestamps, metrics),
-                    records.diffs().clone(),
-                )
-            }
-            None => records,
-        };
-        let (records, ext) = if self.needs_truncation {
-            let filter = BooleanArray::from_unary(records.timestamps(), |i| {
+        if let Some(rewrite) = self.ts_rewrite.as_ref() {
+            timestamps = arrow::compute::unary(&timestamps, |i: i64| {
+                let mut t = T::decode(i.to_le_bytes());
+                t.advance_by(rewrite.borrow());
+                i64::from_le_bytes(T::encode(&t))
+            });
+        }
+
+        let reallocated = if self.needs_truncation {
+            let filter = BooleanArray::from_unary(&timestamps, |i| {
                 let t = T::decode(i.to_le_bytes());
                 let truncate_t = {
                     !self.registered_desc.lower().less_equal(&t)
@@ -1295,29 +1286,47 @@ where
             });
             if filter.false_count() == 0 {
                 // If we're not filtering anything in practice, skip filtering and reallocating.
-                (records, ext)
+                false
             } else {
                 let filter = FilterBuilder::new(&filter).optimize().build();
                 let do_filter = |array: &dyn Array| filter.filter(array).expect("valid filter len");
-                let keys = realloc_array(do_filter(records.keys()).as_binary(), metrics);
-                let values = realloc_array(do_filter(records.vals()).as_binary(), metrics);
-                let timestamps =
-                    realloc_array(do_filter(records.timestamps()).as_primitive(), metrics);
-                let diffs = realloc_array(do_filter(records.diffs()).as_primitive(), metrics);
-                let records = ColumnarRecords::new(keys, values, timestamps, diffs);
-                let ext = ext.map(|ext| ColumnarRecordsStructuredExt {
-                    key: realloc_any(do_filter(&ext.key), metrics),
-                    val: realloc_any(do_filter(&ext.val), metrics),
-                });
-                (records, ext)
+                if let Some((keys, vals)) = codec {
+                    codec = Some((
+                        realloc_array(do_filter(&keys).as_binary(), metrics),
+                        realloc_array(do_filter(&vals).as_binary(), metrics),
+                    ));
+                }
+                if let Some(ext) = structured {
+                    structured = Some(ColumnarRecordsStructuredExt {
+                        key: realloc_any(do_filter(&*ext.key), metrics),
+                        val: realloc_any(do_filter(&*ext.val), metrics),
+                    });
+                }
+                timestamps = realloc_array(do_filter(&timestamps).as_primitive(), metrics);
+                diffs = realloc_array(do_filter(&diffs).as_primitive(), metrics);
+                true
             }
         } else {
-            (records, ext)
+            false
         };
 
-        match ext {
-            Some(ext) => BlobTraceUpdates::Both(records, ext),
-            None => BlobTraceUpdates::Row(records),
+        if self.ts_rewrite.is_some() && !reallocated {
+            timestamps = realloc_array(&timestamps, metrics);
+        }
+
+        match (codec, structured) {
+            (Some((key, value)), None) => {
+                BlobTraceUpdates::Row(ColumnarRecords::new(key, value, timestamps, diffs))
+            }
+            (Some((key, value)), Some(ext)) => {
+                BlobTraceUpdates::Both(ColumnarRecords::new(key, value, timestamps, diffs), ext)
+            }
+            (None, Some(ext)) => BlobTraceUpdates::Structured {
+                key_values: ext,
+                timestamps,
+                diffs,
+            },
+            (None, None) => unreachable!(),
         }
     }
 }
@@ -1341,7 +1350,12 @@ impl Cursor {
         &self,
         encoded: &'a EncodedPart<T>,
     ) -> Option<(&'a [u8], &'a [u8], T, [u8; 8])> {
-        let part = encoded.part.updates.records();
+        // TODO(structured): replace before allowing structured-only parts
+        let part = encoded
+            .part
+            .updates
+            .records()
+            .expect("created cursor for non-codec data");
         let ((k, v), t, d) = part.get(self.idx)?;
 
         let mut t = T::decode(t);

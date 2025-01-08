@@ -904,7 +904,7 @@ where
                 // it out to blob (or we run out of data.)
                 while total_bytes < cfg.batch.blob_target_size {
                     let fetch_start = Instant::now();
-                    let Some(chunk) = consolidator
+                    let Some(mut chunk) = consolidator
                         .next_chunk(
                             cfg.compaction_yield_after_n_updates,
                             cfg.batch.blob_target_size - total_bytes,
@@ -915,7 +915,14 @@ where
                     };
                     timings.part_fetching += fetch_start.elapsed();
                     total_bytes += chunk.goodbytes();
-                    chunks.push(chunk.records().clone());
+                    chunks.push(
+                        chunk
+                            .get_or_make_codec::<K, V>(
+                                write_schemas.key.as_ref(),
+                                write_schemas.val.as_ref(),
+                            )
+                            .clone(),
+                    );
                     tokio::task::yield_now().await;
                 }
 

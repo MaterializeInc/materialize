@@ -1249,8 +1249,8 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         let metrics_ = Arc::clone(&metrics);
         let schema_id = write_schemas.id;
 
-        let key_lower = {
-            let key_bytes = updates.updates.records().keys();
+        let key_lower = if let Some(records) = updates.updates.records() {
+            let key_bytes = records.keys();
             if key_bytes.is_empty() {
                 &[]
             } else if run_order == RunOrder::Codec {
@@ -1258,6 +1258,8 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             } else {
                 ::arrow::compute::min_binary(key_bytes).expect("min of nonempty array")
             }
+        } else {
+            &[]
         };
         let key_lower = truncate_bytes(key_lower, TRUNCATE_LEN, TruncateBound::Lower)
             .expect("lower bound always exists");
