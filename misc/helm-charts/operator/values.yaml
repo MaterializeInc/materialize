@@ -211,6 +211,12 @@ operator:
     limits:
       memory: 512Mi
 
+  # -- Which secrets controller to use for storing secrets.
+  # Valid values are 'kubernetes' and 'aws-secrets-manager'.
+  # Setting 'aws-secrets-manager' requires a configured AWS cloud provider
+  # and IAM role for the environment with Secrets Manager permissions.
+  secretsController: kubernetes
+
 environmentd:
   # -- Node selector to use for environmentd pods spawned by the operator
   nodeSelector: {}
