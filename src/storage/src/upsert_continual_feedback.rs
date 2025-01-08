@@ -33,6 +33,7 @@ use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::{Capability, CapabilitySet};
 use timely::dataflow::{Scope, Stream};
 use timely::order::{PartialOrder, TotalOrder};
+use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 
 use crate::healthcheck::HealthStatusUpdate;
@@ -122,7 +123,7 @@ pub fn upsert_inner<G: Scope, FromTime, F, Fut, US>(
     PressOnDropButton,
 )
 where
-    G::Timestamp: TotalOrder + Sync,
+    G::Timestamp: Refines<mz_repr::Timestamp> + TotalOrder + Sync,
     F: FnOnce() -> Fut + 'static,
     Fut: std::future::Future<Output = US>,
     US: UpsertStateBackend<G::Timestamp, Option<FromTime>>,
@@ -406,7 +407,10 @@ where
             // is in an inconsistent/consolidating state and accessing it would
             // panic.
             if let Some(largest_seen_persist_ts) = largest_seen_persist_ts.as_ref() {
-                if persist_upper.less_equal(largest_seen_persist_ts) {
+                let largest_seen_outer_persist_ts = largest_seen_persist_ts.clone().to_outer();
+                let outer_persist_upper = persist_upper.iter().map(|ts| ts.clone().to_outer());
+                let outer_persist_upper = Antichain::from_iter(outer_persist_upper);
+                if outer_persist_upper.less_equal(&largest_seen_outer_persist_ts) {
                     continue;
                 }
             }
