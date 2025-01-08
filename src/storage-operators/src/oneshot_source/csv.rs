@@ -60,7 +60,7 @@ impl OneshotFormat for CsvDecoder {
         Ok(vec![request])
     }
 
-    fn process_work<'a, S: OneshotSource + Sync>(
+    fn fetch_work<'a, S: OneshotSource + Sync>(
         &'a self,
         source: &'a S,
         request: Self::WorkRequest<S>,

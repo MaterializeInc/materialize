@@ -37,7 +37,7 @@
 //!           ├───< Distribute >───┤
 //!           │                    │
 //!     ┏━━━━━v━━━━┓         ┏━━━━━v━━━━┓
-//!     ┃  Process ┃   ...   ┃  Process ┃
+//!     ┃  Fetch   ┃   ...   ┃  Fetch   ┃
 //!     ┃  Work 1  ┃         ┃  Work n  ┃
 //!     ┗━━━━━┯━━━━┛         ┗━━━━━┯━━━━┛
 //!           │                    │
@@ -107,7 +107,7 @@ pub mod http_source;
 ///
 /// 1. Discover objects with a [`OneshotSource`].
 /// 2. Split objects into separate units of work based on the [`OneshotFormat`].
-/// 3. Process individual units of work (aka fetch byte blobs) with the
+/// 3. Fetch individual units of work (aka fetch byte blobs) with the
 ///    [`OneshotFormat`] and [`OneshotSource`].
 /// 4. Decode the fetched byte blobs into [`Row`]s.
 /// 5. Stage the [`Row`]s into Persist returning [`ProtoBatch`]es.
@@ -150,8 +150,8 @@ where
         source.clone(),
         format.clone(),
     );
-    // Process each unit of work, returning chunks of records.
-    let (records_stream, process_token) = render_process_work(
+    // Fetch each unit of work, returning chunks of records.
+    let (records_stream, fetch_token) = render_fetch_work(
         scope.clone(),
         collection_id,
         source.clone(),
@@ -176,7 +176,7 @@ where
     let tokens = vec![
         discover_token,
         split_token,
-        process_token,
+        fetch_token,
         decode_token,
         batch_token,
     ];
@@ -312,7 +312,7 @@ where
 /// Render an operator that given a stream [`OneshotFormat::WorkRequest`]s will fetch chunks of the
 /// remote [`OneshotSource::Object`] and return a stream of [`OneshotFormat::RecordChunk`]s that
 /// can be decoded into [`Row`]s.
-pub fn render_process_work<G, S, F>(
+pub fn render_fetch_work<G, S, F>(
     scope: G,
     collection_id: GlobalId,
     source: S,
@@ -328,7 +328,7 @@ where
     F: OneshotFormat + Sync + 'static,
 {
     let worker_id = scope.index();
-    let mut builder = AsyncOperatorBuilder::new("CopyFrom-process_work".to_string(), scope.clone());
+    let mut builder = AsyncOperatorBuilder::new("CopyFrom-fetch_work".to_string(), scope.clone());
 
     let (record_handle, record_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
     let mut work_requests_handle = builder.new_input_for(work_requests, Distribute, &record_handle);
@@ -336,7 +336,7 @@ where
     let shutdown = builder.build(move |caps| async move {
         let [_work_cap] = caps.try_into().unwrap();
 
-        info!(%collection_id, %worker_id, "CopyFrom Process Work");
+        info!(%collection_id, %worker_id, "CopyFrom Fetch Work");
 
         while let Some(event) = work_requests_handle.next().await {
             let (capability, maybe_requests) = match event {
@@ -352,9 +352,9 @@ where
                 for maybe_request in maybe_requests {
                     let request = maybe_request?;
 
-                    let mut work_stream = format.process_work(&source, request);
+                    let mut work_stream = format.fetch_work(&source, request);
                     while let Some(result) = work_stream.next().await {
-                        let record_chunk = result.context("process worker")?;
+                        let record_chunk = result.context("fetch worker")?;
                         record_chunks.push(record_chunk);
                     }
                 }
@@ -362,7 +362,7 @@ where
                 Ok::<_, StorageErrorX>(record_chunks)
             }
             .await
-            .context("process work");
+            .context("fetch work");
 
             match result {
                 Ok(record_chunks) => record_chunks
@@ -686,7 +686,7 @@ pub trait OneshotFormat: Clone {
 
     /// Given a work request, fetch data from the [`OneshotSource`] and return it in a format that
     /// can later be decoded.
-    fn process_work<'a, S: OneshotSource + Sync>(
+    fn fetch_work<'a, S: OneshotSource + Sync>(
         &'a self,
         source: &'a S,
         request: Self::WorkRequest<S>,
@@ -738,14 +738,14 @@ impl OneshotFormat for FormatKind {
         }
     }
 
-    fn process_work<'a, S: OneshotSource + Sync>(
+    fn fetch_work<'a, S: OneshotSource + Sync>(
         &'a self,
         source: &'a S,
         request: Self::WorkRequest<S>,
     ) -> BoxStream<'a, Result<Self::RecordChunk, StorageErrorX>> {
         match (self, request) {
             (FormatKind::Csv(csv), RequestKind::Csv(request)) => csv
-                .process_work(source, request)
+                .fetch_work(source, request)
                 .map_ok(RecordChunkKind::Csv)
                 .map(|result| result.context("csv"))
                 .boxed(),
