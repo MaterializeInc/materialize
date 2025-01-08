@@ -108,3 +108,7 @@ pub mod __private {
     #[cfg(feature = "tracing_")]
     pub use tracing;
 }
+
+pub fn hello_world(x: usize) -> String {
+    format!("hello world {x}")
+}
