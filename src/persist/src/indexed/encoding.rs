@@ -380,6 +380,27 @@ impl BlobTraceUpdates {
             val_structured: v_struct,
         }
     }
+
+    /// Convert these updates into the specified batch format, re-encoding or discarding key-value
+    /// data as necessary.
+    pub fn as_format<K: Codec, V: Codec>(
+        &self,
+        format: BatchColumnarFormat,
+        key_schema: &K::Schema,
+        val_schema: &V::Schema,
+    ) -> Self {
+        match format {
+            BatchColumnarFormat::Row => Self::Row(self.records().clone()),
+            BatchColumnarFormat::Both(_) => {
+                let mut this = self.clone();
+                Self::Both(
+                    this.records().clone(),
+                    this.get_or_make_structured::<K, V>(key_schema, val_schema)
+                        .clone(),
+                )
+            }
+        }
+    }
 }
 
 impl TraceBatchMeta {

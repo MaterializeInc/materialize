@@ -1085,7 +1085,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         &mut self,
         write_schemas: &Schemas<K, V>,
         desc: Description<T>,
-        mut updates: BlobTraceUpdates,
+        updates: BlobTraceUpdates,
         diffs_sum: D,
     ) {
         let batch_metrics = self.batch_metrics.clone();
@@ -1117,26 +1117,13 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             (
                 "batch::inline_part",
                 async move {
-                    let updates = match batch_format {
-                        BatchColumnarFormat::Row => {
-                            let records = updates.records().clone();
-                            BlobTraceUpdates::Row(records)
-                        }
-                        BatchColumnarFormat::Both(_) => {
-                            let records = updates.records().clone();
-                            let structured = metrics
-                                .columnar
-                                .arrow()
-                                .measure_part_build(|| {
-                                    updates.get_or_make_structured::<K, V>(
-                                        write_schemas.key.as_ref(),
-                                        write_schemas.val.as_ref(),
-                                    )
-                                })
-                                .clone();
-                            BlobTraceUpdates::Both(records, structured)
-                        }
-                    };
+                    let updates = metrics.columnar.arrow().measure_part_build(|| {
+                        updates.as_format::<K, V>(
+                            batch_format,
+                            write_schemas.key.as_ref(),
+                            write_schemas.val.as_ref(),
+                        )
+                    });
 
                     let start = Instant::now();
                     let updates = LazyInlineBatchPart::from(&ProtoInlineBatchPart {
@@ -1308,21 +1295,11 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                     };
 
                     // Ensure the updates are in the specified columnar format before encoding.
-                    updates.updates = match cfg.batch_columnar_format {
-                        BatchColumnarFormat::Row => {
-                            BlobTraceUpdates::Row(updates.updates.records().clone())
-                        }
-                        BatchColumnarFormat::Both(_) => BlobTraceUpdates::Both(
-                            updates.updates.records().clone(),
-                            updates
-                                .updates
-                                .get_or_make_structured::<K, V>(
-                                    write_schemas.key.as_ref(),
-                                    write_schemas.val.as_ref(),
-                                )
-                                .clone(),
-                        ),
-                    };
+                    updates.updates = updates.updates.as_format::<K, V>(
+                        cfg.batch_columnar_format,
+                        write_schemas.key.as_ref(),
+                        write_schemas.val.as_ref(),
+                    );
 
                     stats
                 });
