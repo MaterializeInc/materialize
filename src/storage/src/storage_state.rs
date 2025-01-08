@@ -96,7 +96,8 @@ use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::sinks::{MetadataFilled, StorageSinkDesc};
-use mz_storage_types::sources::IngestionDescription;
+use mz_storage_types::sources::envelope::{KeyEnvelope, NoneEnvelope};
+use mz_storage_types::sources::{IngestionDescription, SourceEnvelope};
 use mz_storage_types::AlterCompatible;
 use mz_timely_util::builder_async::PressOnDropButton;
 use mz_txn_wal::operator::TxnsContext;
@@ -504,6 +505,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 as_of,
                 resume_uppers,
                 source_resume_uppers,
+                ingestion_upper,
             } => {
                 // NOTE: If we want to share the load of async processing we
                 // have to change `handle_storage_command` and change this
@@ -520,6 +522,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         as_of,
                         resume_uppers,
                         source_resume_uppers,
+                        ingestion_upper,
                     },
                 );
             }
@@ -623,6 +626,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 as_of,
                 resume_uppers,
                 source_resume_uppers,
+                ingestion_upper,
             } => {
                 info!(
                     ?as_of,
@@ -632,6 +636,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     self.timely_worker.peers(),
                 );
 
+                let mut ingestion_stats_initialized = false;
                 for (export_id, export) in ingestion_description.source_exports.iter() {
                     let resume_upper = resume_uppers[export_id].clone();
                     self.storage_state.aggregated_statistics.initialize_source(
@@ -646,6 +651,33 @@ impl<'w, A: Allocate> Worker<'w, A> {
                                 &export.storage_metadata.data_shard,
                                 export.data_config.envelope.clone(),
                                 resume_upper,
+                            )
+                        },
+                    );
+                    if *export_id == ingestion_id {
+                        ingestion_stats_initialized = true;
+                    }
+                }
+                // TODO(database-issues#8620): Unconditionally create ingestion statistics once
+                // sources no longer export to primary collections and only export to explicit
+                // SourceExports (tables).
+                if !ingestion_stats_initialized {
+                    self.storage_state.aggregated_statistics.initialize_source(
+                        ingestion_id,
+                        ingestion_upper.clone(),
+                        || {
+                            SourceStatistics::new(
+                                ingestion_id,
+                                self.storage_state.timely_worker_index,
+                                &self.storage_state.metrics.source_statistics,
+                                ingestion_id,
+                                &ingestion_description.ingestion_metadata.data_shard,
+                                // TODO(jkosh44) Does this envelope make sense?
+                                SourceEnvelope::None(NoneEnvelope {
+                                    key_envelope: KeyEnvelope::None,
+                                    key_arity: 0,
+                                }),
+                                ingestion_upper,
                             )
                         },
                     );

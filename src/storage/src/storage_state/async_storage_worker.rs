@@ -72,6 +72,8 @@ pub enum AsyncStorageWorkerResponse<T: Timestamp + Lattice + Codec64> {
         /// A frontier in the source time domain with the property that all updates not beyond it
         /// have already been durably ingested.
         source_resume_uppers: BTreeMap<GlobalId, Vec<Row>>,
+        /// The upper of the ingestion collection's shard.
+        ingestion_upper: Antichain<T>,
     },
 }
 
@@ -245,7 +247,7 @@ impl<T: Timestamp + Lattice + Codec64 + Display + Sync> AsyncStorageWorker<T> {
                             )
                             .await
                             .expect("error creating persist client");
-                        let read_handle = client
+                        let ingestion_read_handle = client
                             .open_leased_reader::<SourceData, (), T, Diff>(
                                 remap_shard,
                                 Arc::new(ingestion_description.desc.connection.timestamp_desc()),
@@ -260,12 +262,33 @@ impl<T: Timestamp + Lattice + Codec64 + Display + Sync> AsyncStorageWorker<T> {
                             )
                             .await
                             .unwrap();
-                        let as_of = read_handle.since().clone();
+                        let as_of = ingestion_read_handle.since().clone();
                         mz_ore::task::spawn(move || "deferred_expire", async move {
                             tokio::time::sleep(std::time::Duration::from_secs(300)).await;
-                            read_handle.expire().await;
+                            ingestion_read_handle.expire().await;
                         });
                         let seen_remap_shard = remap_shard.clone();
+
+                        let mut ingestion_write_handle = client
+                            .open_writer::<SourceData, (), T, Diff>(
+                                ingestion_description.ingestion_metadata.data_shard,
+                                Arc::new(
+                                    ingestion_description
+                                        .ingestion_metadata
+                                        .relation_desc
+                                        .clone(),
+                                ),
+                                Arc::new(UnitSchema),
+                                Diagnostics {
+                                    shard_name: id.to_string(),
+                                    handle_purpose: format!("resumption data {}", id),
+                                },
+                            )
+                            .await
+                            .unwrap();
+                        let ingestion_upper =
+                            ingestion_write_handle.fetch_recent_upper().await.clone();
+                        ingestion_write_handle.expire().await;
 
                         for (id, export) in ingestion_description.source_exports.iter() {
                             // Explicit destructuring to force a compile error when the metadata change
@@ -385,6 +408,7 @@ impl<T: Timestamp + Lattice + Codec64 + Display + Sync> AsyncStorageWorker<T> {
                             as_of,
                             resume_uppers,
                             source_resume_uppers,
+                            ingestion_upper,
                         });
 
                         if let Err(_err) = res {
