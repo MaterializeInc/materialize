@@ -395,7 +395,6 @@ def compileFastSltConfig() -> SltRunConfig:
         "test/sqllogictest/transform/is_null_propagation.slt",
         "test/sqllogictest/transform/join_fusion.slt",
         "test/sqllogictest/transform/join_index.slt",
-        "test/sqllogictest/transform/lifting.slt",
         "test/sqllogictest/transform/literal_constraints.slt",
         "test/sqllogictest/transform/literal_lifting.slt",
         "test/sqllogictest/transform/monotonic.slt",

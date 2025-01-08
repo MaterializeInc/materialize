@@ -13,6 +13,948 @@
 
 mode cockroach
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET unsafe_enable_table_keys = true
+----
+COMPLETE 0
+
+statement ok
+create table t (
+  a int,
+  b int
+)
+
+query T multiline
+explain with(arity, join implementations)
+(select null::int, 1, 2)
+union all
+(select a, b, 2 from t)
+union all
+(select a, b, 2 from t)
+----
+Explained Query:
+  Map (2) // { arity: 3 }
+    Union // { arity: 2 }
+      ReadStorage materialize.public.t // { arity: 2 }
+      ReadStorage materialize.public.t // { arity: 2 }
+      Constant // { arity: 2 }
+        - (null, 1)
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+explain with(arity, join implementations)
+(select null::int, 1, 2, 3)
+union all
+(select a, b, 2, 3 from t)
+union all
+(select a, b, 2, 3 from t)
+----
+Explained Query:
+  Map (2, 3) // { arity: 4 }
+    Union // { arity: 2 }
+      ReadStorage materialize.public.t // { arity: 2 }
+      ReadStorage materialize.public.t // { arity: 2 }
+      Constant // { arity: 2 }
+        - (null, 1)
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+explain with(arity, join implementations)
+(select null::int, 1, 2)
+union all
+(select a, b, 2 from t)
+union all
+(select a, b, 3 from t)
+----
+Explained Query:
+  Union // { arity: 3 }
+    Map (2) // { arity: 3 }
+      ReadStorage materialize.public.t // { arity: 2 }
+    Map (3) // { arity: 3 }
+      ReadStorage materialize.public.t // { arity: 2 }
+    Constant // { arity: 3 }
+      - (null, 1, 2)
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+# Group key literal lifting
+query T multiline
+explain with(arity, join implementations)
+select a, b from t where a = 1 group by a, b
+----
+Explained Query:
+  Project (#1, #0) // { arity: 2 }
+    Map (1) // { arity: 2 }
+      Distinct project=[#0] // { arity: 1 }
+        Project (#1) // { arity: 1 }
+          Filter (#0 = 1) // { arity: 2 }
+            ReadStorage materialize.public.t // { arity: 2 }
+
+Source materialize.public.t
+  filter=((#0 = 1))
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+explain with(arity, join implementations)
+select a, b from t where b = 1 group by a, b
+----
+Explained Query:
+  Map (1) // { arity: 2 }
+    Distinct project=[#0] // { arity: 1 }
+      Project (#0) // { arity: 1 }
+        Filter (#1 = 1) // { arity: 2 }
+          ReadStorage materialize.public.t // { arity: 2 }
+
+Source materialize.public.t
+  filter=((#1 = 1))
+
+Target cluster: quickstart
+
+EOF
+
+
+# Permute literals in Map operator so they can be lifted
+query T multiline
+explain with(arity, join implementations)
+select * from (select 1, a+1 from t), t;
+----
+Explained Query:
+  Project (#3, #0..=#2) // { arity: 4 }
+    Map (1) // { arity: 4 }
+      CrossJoin type=differential // { arity: 3 }
+        implementation
+          %0:t[×] » %1:t[×]
+        ArrangeBy keys=[[]] // { arity: 1 }
+          Project (#2) // { arity: 1 }
+            Map ((#0 + 1)) // { arity: 3 }
+              ReadStorage materialize.public.t // { arity: 2 }
+        ArrangeBy keys=[[]] // { arity: 2 }
+          ReadStorage materialize.public.t // { arity: 2 }
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+explain with(arity, join implementations)
+select * from (select b+1, 2, 1, a+1 from t), t;
+----
+Explained Query:
+  Project (#0, #4, #5, #1..=#3) // { arity: 6 }
+    Map (2, 1) // { arity: 6 }
+      CrossJoin type=differential // { arity: 4 }
+        implementation
+          %0:t[×] » %1:t[×]
+        ArrangeBy keys=[[]] // { arity: 2 }
+          Project (#2, #3) // { arity: 2 }
+            Map ((#1 + 1), (#0 + 1)) // { arity: 4 }
+              ReadStorage materialize.public.t // { arity: 2 }
+        ArrangeBy keys=[[]] // { arity: 2 }
+          ReadStorage materialize.public.t // { arity: 2 }
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+explain with(arity, join implementations)
+select * from (select 3, b+1, 2, a+2, 1, a+1 from t), t;
+----
+Explained Query:
+  Project (#5, #0, #6, #1, #7, #2..=#4) // { arity: 8 }
+    Map (3, 2, 1) // { arity: 8 }
+      CrossJoin type=differential // { arity: 5 }
+        implementation
+          %0:t[×] » %1:t[×]
+        ArrangeBy keys=[[]] // { arity: 3 }
+          Project (#2..=#4) // { arity: 3 }
+            Map ((#1 + 1), (#0 + 2), (#0 + 1)) // { arity: 5 }
+              ReadStorage materialize.public.t // { arity: 2 }
+        ArrangeBy keys=[[]] // { arity: 2 }
+          ReadStorage materialize.public.t // { arity: 2 }
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+explain with(arity, join implementations)
+select a+1 from (select 1 as a, b from t);
+----
+Explained Query:
+  Project (#2) // { arity: 1 }
+    Map (2) // { arity: 3 }
+      ReadStorage materialize.public.t // { arity: 2 }
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+explain with(arity, join implementations)
+select z+1 from (select 2 as y, a, 1 as z, b from t);
+----
+Explained Query:
+  Project (#2) // { arity: 1 }
+    Map (2) // { arity: 3 }
+      ReadStorage materialize.public.t // { arity: 2 }
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+# Extract common values in all rows in Constant operator
+query T multiline
+explain with(arity, join implementations)
+select c1, c1 + a from (select 1 as c1, x as c2, 3 as c3 from generate_series(1, 3) as x union all select 1, x, 3 from generate_series(5, 8) as x), t;
+----
+Explained Query:
+  Project (#2, #1) // { arity: 2 }
+    Map ((1 + #0), 1) // { arity: 3 }
+      CrossJoin type=differential // { arity: 1 }
+        implementation
+          %0[×] » %1:t[×]
+        ArrangeBy keys=[[]] // { arity: 0 }
+          Constant // { arity: 0 }
+            - (() x 7)
+        ArrangeBy keys=[[]] // { arity: 1 }
+          Project (#0) // { arity: 1 }
+            ReadStorage materialize.public.t // { arity: 2 }
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+explain with(arity, join implementations)
+select * from (select 1 as f1, 2 as f2), generate_series(f1, f2);
+----
+Explained Query (fast path):
+  Constant
+    - (1, 2, 1)
+    - (1, 2, 2)
+
+Target cluster: quickstart
+
+EOF
+
+# ... check keys are updated properly
+query T multiline
+explain with(types)
+select c.* from (select f1, f2 from (select f2, f1 from (select 1 as f1), generate_series(2, 4) as f2) group by f2, f1) as c, t;
+----
+Explained Query:
+  Project (#1, #0) // { types: "(integer, integer)" }
+    Map (1) // { types: "(integer, integer)" }
+      CrossJoin type=differential // { types: "(integer)" }
+        ArrangeBy keys=[[]] // { types: "(integer)" }
+          Constant // { types: "(integer)" }
+            - (2)
+            - (3)
+            - (4)
+        ArrangeBy keys=[[]] // { types: "()" }
+          Project () // { types: "()" }
+            ReadStorage materialize.public.t // { types: "(integer?, integer?)" }
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+explain with(types)
+select c.* from (select f2, f1, f3 from (select f3, f2, f1 from generate_series(2, 4) as f2, generate_series(3, 5) as f3, (select 1 as f1)) group by f2, f3, f1) as c, t;
+----
+Explained Query:
+  Project (#0, #2, #1) // { types: "(integer, integer, integer)" }
+    Map (1) // { types: "(integer, integer, integer)" }
+      CrossJoin type=differential // { types: "(integer, integer)" }
+        ArrangeBy keys=[[]] // { types: "(integer, integer)" }
+          Constant // { types: "(integer, integer)" }
+            - (2, 3)
+            - (2, 4)
+            - (2, 5)
+            - (3, 3)
+            - (3, 4)
+            - (3, 5)
+            - (4, 3)
+            - (4, 4)
+            - (4, 5)
+        ArrangeBy keys=[[]] // { types: "()" }
+          Project () // { types: "()" }
+            ReadStorage materialize.public.t // { types: "(integer?, integer?)" }
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+# Permute the literals around the columns added by FlatMap
+query T multiline
+explain with(arity, join implementations) select * from (select 1 as a from t), generate_series(a+1, 4);
+----
+Explained Query:
+  Project (#1, #0) // { arity: 2 }
+    Map (1) // { arity: 2 }
+      FlatMap generate_series(2, 4, 1) // { arity: 1 }
+        Project () // { arity: 0 }
+          ReadStorage materialize.public.t // { arity: 2 }
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+# Make sure that grouping/distinct is handled correctly in the face of derived tables
+# We want the proper interleaving between Map and Distinct to be preserved
+
+# With literals only
+
+query T multiline
+explain with(arity, join implementations) select 123 from (select 234 from t);
+----
+Explained Query:
+  Project (#2) // { arity: 1 }
+    Map (123) // { arity: 3 }
+      ReadStorage materialize.public.t // { arity: 2 }
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+explain with(arity, join implementations) select 123 from (select distinct 234 from t);
+----
+Explained Query:
+  Map (123) // { arity: 1 }
+    Distinct project=[] // { arity: 0 }
+      Project () // { arity: 0 }
+        ReadStorage materialize.public.t // { arity: 2 }
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+explain with(arity, join implementations) select distinct 123 from (select 234 from t);
+----
+Explained Query:
+  Map (123) // { arity: 1 }
+    Distinct project=[] // { arity: 0 }
+      Project () // { arity: 0 }
+        ReadStorage materialize.public.t // { arity: 2 }
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+explain with(arity, join implementations) select distinct 123 from (select distinct 234 from t);
+----
+Explained Query:
+  Map (123) // { arity: 1 }
+    Distinct project=[] // { arity: 0 }
+      Project () // { arity: 0 }
+        ReadStorage materialize.public.t // { arity: 2 }
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+# With a single literal
+
+query T multiline
+explain with(arity, join implementations) select * from (select distinct 123 from t);
+----
+Explained Query:
+  Map (123) // { arity: 1 }
+    Distinct project=[] // { arity: 0 }
+      Project () // { arity: 0 }
+        ReadStorage materialize.public.t // { arity: 2 }
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+explain with(arity, join implementations) select distinct * from (select 123 from t);
+----
+Explained Query:
+  Map (123) // { arity: 1 }
+    Distinct project=[] // { arity: 0 }
+      Project () // { arity: 0 }
+        ReadStorage materialize.public.t // { arity: 2 }
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+# With a literal in the outer query and a column in the derived table
+
+query T multiline
+explain with(arity, join implementations) select 123 from (select a from t);
+----
+Explained Query:
+  Project (#2) // { arity: 1 }
+    Map (123) // { arity: 3 }
+      ReadStorage materialize.public.t // { arity: 2 }
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+explain with(arity, join implementations) select 123 from (select distinct a from t);
+----
+Explained Query:
+  Project (#1) // { arity: 1 }
+    Map (123) // { arity: 2 }
+      Distinct project=[#0] // { arity: 1 }
+        Project (#0) // { arity: 1 }
+          ReadStorage materialize.public.t // { arity: 2 }
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+explain with(arity, join implementations) select distinct 123 from (select a from t);
+----
+Explained Query:
+  Map (123) // { arity: 1 }
+    Distinct project=[] // { arity: 0 }
+      Project () // { arity: 0 }
+        ReadStorage materialize.public.t // { arity: 2 }
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+explain with(arity, join implementations) select distinct 123 from (select distinct a from t);
+----
+Explained Query:
+  Map (123) // { arity: 1 }
+    Distinct project=[] // { arity: 0 }
+      Project () // { arity: 0 }
+        ReadStorage materialize.public.t // { arity: 2 }
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+# With a literal and a column in the derived table
+
+query T multiline
+explain with(arity, join implementations) select distinct a1.a, a1.literal from (select a, 123 as literal from t) as a1;
+----
+Explained Query:
+  Map (123) // { arity: 2 }
+    Distinct project=[#0] // { arity: 1 }
+      Project (#0) // { arity: 1 }
+        ReadStorage materialize.public.t // { arity: 2 }
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+explain with(arity, join implementations) select a1.a, a1.literal from (select distinct a, 123 as literal from t) as a1;
+----
+Explained Query:
+  Map (123) // { arity: 2 }
+    Distinct project=[#0] // { arity: 1 }
+      Project (#0) // { arity: 1 }
+        ReadStorage materialize.public.t // { arity: 2 }
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+explain with(arity, join implementations) select a1.a, a1.literal from (select distinct a, 123 as literal from t) as a1;
+----
+Explained Query:
+  Map (123) // { arity: 2 }
+    Distinct project=[#0] // { arity: 1 }
+      Project (#0) // { arity: 1 }
+        ReadStorage materialize.public.t // { arity: 2 }
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+explain with(arity, join implementations) select distinct a1.a, a1.literal from (select distinct a, 123 as literal from t) as a1;
+----
+Explained Query:
+  Map (123) // { arity: 2 }
+    Distinct project=[#0] // { arity: 1 }
+      Project (#0) // { arity: 1 }
+        ReadStorage materialize.public.t // { arity: 2 }
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+# With a literal and a column in the outer query
+
+query T multiline
+explain with(arity, join implementations) select distinct a1.a, 123 from (select a from t) as a1;
+----
+Explained Query:
+  Map (123) // { arity: 2 }
+    Distinct project=[#0] // { arity: 1 }
+      Project (#0) // { arity: 1 }
+        ReadStorage materialize.public.t // { arity: 2 }
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+explain with(arity, join implementations) select distinct a1.a, 123 from (select distinct a from t) as a1;
+----
+Explained Query:
+  Map (123) // { arity: 2 }
+    Distinct project=[#0] // { arity: 1 }
+      Project (#0) // { arity: 1 }
+        ReadStorage materialize.public.t // { arity: 2 }
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+# With expressions
+query T multiline
+explain with(arity, join implementations) select distinct a1.a+2 from (select distinct a+1 as a, 123 as literal from t) as a1;
+----
+Explained Query:
+  Distinct project=[((#0 + 1) + 2)] // { arity: 1 }
+    Project (#0) // { arity: 1 }
+      ReadStorage materialize.public.t // { arity: 2 }
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+explain with(arity, join implementations) select distinct a1.a, 123 from (select distinct a+1 as a, 234 as literal from t) as a1;
+----
+Explained Query:
+  Map (123) // { arity: 2 }
+    Distinct project=[(#0 + 1)] // { arity: 1 }
+      Project (#0) // { arity: 1 }
+        ReadStorage materialize.public.t // { arity: 2 }
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+explain with(arity, join implementations) select distinct a1.a+2, a1.literal from (select distinct a+1 as a, 123 as literal from t) as a1;
+----
+Explained Query:
+  Map (123) // { arity: 2 }
+    Distinct project=[((#0 + 1) + 2)] // { arity: 1 }
+      Project (#0) // { arity: 1 }
+        ReadStorage materialize.public.t // { arity: 2 }
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+
+query T multiline
+explain with(arity, join implementations) select distinct a1.a, a1.literal + 1 from (select distinct a, 123 as literal from t) as a1;
+----
+Explained Query:
+  Map (124) // { arity: 2 }
+    Distinct project=[#0] // { arity: 1 }
+      Project (#0) // { arity: 1 }
+        ReadStorage materialize.public.t // { arity: 2 }
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+# Check that literals do not interfere with table elimination
+
+statement ok
+create table t_pk (
+  a int primary key,
+  b int
+)
+
+query T multiline
+explain with(arity, join implementations) select a1.*, 123 from t_pk as a1, t_pk as a2 WHERE a1.a = a2.a;
+----
+Explained Query:
+  Map (123) // { arity: 3 }
+    ReadStorage materialize.public.t_pk // { arity: 2 }
+
+Source materialize.public.t_pk
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+explain with(arity, join implementations) select distinct a1.*, 123 from t_pk as a1, t_pk as a2 WHERE a1.a = a2.a;
+----
+Explained Query:
+  Map (123) // { arity: 3 }
+    ReadStorage materialize.public.t_pk // { arity: 2 }
+
+Source materialize.public.t_pk
+
+Target cluster: quickstart
+
+EOF
+
+# Reduce
+query T multiline
+explain with(arity, join implementations)
+select a, b, max(2), count(*) from t where b = 1 group by a, b;
+----
+Explained Query:
+  Project (#0, #2, #3, #1) // { arity: 4 }
+    Map (1, 2) // { arity: 4 }
+      Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
+        Project (#0) // { arity: 1 }
+          Filter (#1 = 1) // { arity: 2 }
+            ReadStorage materialize.public.t // { arity: 2 }
+
+Source materialize.public.t
+  filter=((#1 = 1))
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+explain with(arity, join implementations)
+select a, b, count(*), max(2) from t where b = 1 group by a, b;
+----
+Explained Query:
+  Project (#0, #2, #1, #3) // { arity: 4 }
+    Map (1, 2) // { arity: 4 }
+      Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
+        Project (#0) // { arity: 1 }
+          Filter (#1 = 1) // { arity: 2 }
+            ReadStorage materialize.public.t // { arity: 2 }
+
+Source materialize.public.t
+  filter=((#1 = 1))
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+explain with(arity, join implementations)
+select a, b, min(2), max(3) from t where b = 1 group by a, b;
+----
+Explained Query:
+  Map (1, 2, 3) // { arity: 4 }
+    Distinct project=[#0] // { arity: 1 }
+      Project (#0) // { arity: 1 }
+        Filter (#1 = 1) // { arity: 2 }
+          ReadStorage materialize.public.t // { arity: 2 }
+
+Source materialize.public.t
+  filter=((#1 = 1))
+
+Target cluster: quickstart
+
+EOF
+
+# regression tests for database-issues#2159
+query T multiline
+explain with(arity, join implementations) select min(1/x) from (select a as y, 0 as x from t);
+----
+Explained Query:
+  Return // { arity: 1 }
+    Union // { arity: 1 }
+      Map (error("division by zero")) // { arity: 1 }
+        Get l0 // { arity: 0 }
+      Map (null) // { arity: 1 }
+        Union // { arity: 0 }
+          Negate // { arity: 0 }
+            Get l0 // { arity: 0 }
+          Constant // { arity: 0 }
+            - ()
+  With
+    cte l0 =
+      Distinct project=[] // { arity: 0 }
+        Project () // { arity: 0 }
+          ReadStorage materialize.public.t // { arity: 2 }
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+explain with(arity, join implementations) select sum(1/x) from (select a as y, 0 as x from t);
+----
+Explained Query:
+  Return // { arity: 1 }
+    Union // { arity: 1 }
+      Map (error("division by zero")) // { arity: 1 }
+        Get l0 // { arity: 0 }
+      Map (null) // { arity: 1 }
+        Union // { arity: 0 }
+          Negate // { arity: 0 }
+            Get l0 // { arity: 0 }
+          Constant // { arity: 0 }
+            - ()
+  With
+    cte l0 =
+      Distinct project=[] // { arity: 0 }
+        Project () // { arity: 0 }
+          ReadStorage materialize.public.t // { arity: 2 }
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+explain with(arity, join implementations) select min(a) from t_pk where a between 38 and 195 and a = (select a from t where a = 1308);
+----
+Explained Query:
+  Return // { arity: 1 }
+    Union // { arity: 1 }
+      Get l0 // { arity: 1 }
+      Map (null) // { arity: 1 }
+        Union // { arity: 0 }
+          Negate // { arity: 0 }
+            Project () // { arity: 0 }
+              Get l0 // { arity: 1 }
+          Constant // { arity: 0 }
+            - ()
+  With
+    cte l0 =
+      Reduce aggregates=[min(#0)] // { arity: 1 }
+        Project (#0) // { arity: 1 }
+          Join on=(#0 = #1) type=differential // { arity: 2 }
+            implementation
+              %0:t_pk[#0]UKiif » %1[#0]UKiif
+            ArrangeBy keys=[[#0]] // { arity: 1 }
+              Project (#0) // { arity: 1 }
+                Filter (#0 <= 195) AND (#0 >= 38) // { arity: 2 }
+                  ReadStorage materialize.public.t_pk // { arity: 2 }
+            ArrangeBy keys=[[#0]] // { arity: 1 }
+              Map (error("more than one record produced in subquery")) // { arity: 1 }
+                Project () // { arity: 0 }
+                  Filter (#0 > 1) // { arity: 1 }
+                    Reduce aggregates=[count(*)] // { arity: 1 }
+                      Project () // { arity: 0 }
+                        Filter (#0 = 1308) // { arity: 2 }
+                          ReadStorage materialize.public.t // { arity: 2 }
+
+Source materialize.public.t
+  filter=((#0 = 1308))
+Source materialize.public.t_pk
+  filter=((#0 <= 195) AND (#0 >= 38))
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+explain with(arity, join implementations) select min(a) from t where a between 38 and 195 and a = (select a from t where a = 1308);
+----
+Explained Query:
+  Return // { arity: 1 }
+    Union // { arity: 1 }
+      Get l0 // { arity: 1 }
+      Map (null) // { arity: 1 }
+        Union // { arity: 0 }
+          Negate // { arity: 0 }
+            Project () // { arity: 0 }
+              Get l0 // { arity: 1 }
+          Constant // { arity: 0 }
+            - ()
+  With
+    cte l0 =
+      Reduce aggregates=[min(#0)] // { arity: 1 }
+        Project (#0) // { arity: 1 }
+          Join on=(#0 = #1) type=differential // { arity: 2 }
+            implementation
+              %1[#0]UK » %0:t[#0]Kiif
+            ArrangeBy keys=[[#0]] // { arity: 1 }
+              Project (#0) // { arity: 1 }
+                Filter (#0 <= 195) AND (#0 >= 38) // { arity: 2 }
+                  ReadStorage materialize.public.t // { arity: 2 }
+            ArrangeBy keys=[[#0]] // { arity: 1 }
+              Map (error("more than one record produced in subquery")) // { arity: 1 }
+                Project () // { arity: 0 }
+                  Filter (#0 > 1) // { arity: 1 }
+                    Reduce aggregates=[count(*)] // { arity: 1 }
+                      Project () // { arity: 0 }
+                        Filter (#0 = 1308) // { arity: 2 }
+                          ReadStorage materialize.public.t // { arity: 2 }
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+statement ok
+insert into t_pk values (40);
+
+# check no error is returned, but a NULL result
+query I
+select min(a) from t_pk where a between 38 and 195 and a = (select a from t where a = 1308);
+----
+NULL
+
+statement ok
+insert into t values (1308);
+
+query I
+select min(a) from t_pk where a between 38 and 195 and a = (select a from t where a = 1308);
+----
+NULL
+
+statement ok
+insert into t_pk values (1308);
+
+query I
+select min(a) from t_pk where a between 38 and 195 and a = (select a from t where a = 1308);
+----
+NULL
+
+statement ok
+insert into t values (1308);
+
+statement error more than one record produced in subquery
+select min(a) from t_pk where a between 38 and 195 and a = (select a from t where a = 1308);
+
+# check that literal errors are not lifted beyond Joins, but also that that doesn't lead to
+# a stack overflow due to LiteralLifting and JoinImplementation fighting against each other
+statement ok
+create table t1 (f1 double precision, f2 double precision not null);
+
+query T multiline
+explain with(arity, join implementations) select * from t1 as a1 join t1 as a2 on (a2.f2 = (select 6 from t1)) where a2.f2 = 9;
+----
+Explained Query:
+  CrossJoin type=delta // { arity: 4 }
+    implementation
+      %0:t1 » %2[×]U » %1:t1[×]ef
+      %1:t1 » %2[×]U » %0:t1[×]
+      %2 » %1:t1[×]ef » %0:t1[×]
+    ArrangeBy keys=[[]] // { arity: 2 }
+      ReadStorage materialize.public.t1 // { arity: 2 }
+    ArrangeBy keys=[[]] // { arity: 2 }
+      Filter (#1 = 9) // { arity: 2 }
+        ReadStorage materialize.public.t1 // { arity: 2 }
+    ArrangeBy keys=[[]] // { arity: 0 }
+      Project () // { arity: 0 }
+        Filter error("more than one record produced in subquery") AND (#0 > 1) // { arity: 1 }
+          Reduce aggregates=[count(*)] // { arity: 1 }
+            Project () // { arity: 0 }
+              ReadStorage materialize.public.t1 // { arity: 2 }
+
+Source materialize.public.t1
+
+Target cluster: quickstart
+
+EOF
+
+# count(null) is always 0
+query T multiline
+explain with(arity, join implementations) select count(null) from t;
+----
+Explained Query (fast path):
+  Constant
+    - (0)
+
+Target cluster: quickstart
+
+EOF
+
+statement ok
+DROP TABLE t1;
+
 statement ok
 CREATE TABLE t1 (f1 INTEGER, f2 INTEGER);
 
