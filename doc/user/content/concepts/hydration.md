@@ -69,8 +69,9 @@ real-time ingestion from that offset.
 ### Snapshotting duration and status
 
 Generally, the snapshotting duration is proportional to data volume. However,
-for sources with upsert envelope, the snapshotting may take longer while the
-upsert envelope effectively dedupes your records.
+for [sources with upsert envelope](/concepts/sources/#envelopes), the
+snapshotting may take longer while the upsert envelope effectively dedupes your
+records.
 
 You can view the snapshotting status of a source in the [Materialize
 console](/console/). For a source, go to its **Overview** page in the [Database
@@ -139,9 +140,9 @@ While an object is hydrating:
 - With *serializable* isolation, a hydrating object can serve queries but with
   **stale** data.
 
-### Memory considerations for hydration
+## Memory considerations:
 
-During hydration:
+During snapshotting and hydration:
 
 - Materialized views require memory proportional to ~2x the output size (to
   recalculate the output from scratch and compare with existing output to ensure
@@ -149,3 +150,8 @@ During hydration:
 
 - Sinks require memory proportional to ~1x the output size to load an entire
   snapshot of the data in memory when they start up.
+
+- When using upsert envelope, a larger cluster size may be needed for the source
+  cluster since in addition to writing data to S3, a copy of each key consumed
+  and the latest value is maintained in memory. Materialize will automatically
+  spill the workload to disk if key spaces are larger than memory.
