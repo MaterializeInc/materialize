@@ -531,9 +531,9 @@ If you have not read about [attributing computation time](#attributing-computati
 
 [Worker skew](/transform-data/dataflow-troubleshooting/#is-work-distributed-equally-across-workers) occurs when your data do not end up getting evenly
 partitioned between workers.  Worker skew can only happen when your
-cluster has more than one worker. (You can query
+cluster has more than one worker. You can query
 [`mz_catalog.mz_cluster_replica_sizes`](/sql/system-catalog/mz_catalog/#mz_cluster_replica_sizes)
-to determine how many workers a given cluster size has.)
+to determine how many workers a given cluster size has; in our example, there are 4 workers.
 
 You can identify worker skew by comparing a worker's time spent to the
 overall time spent across all workers:
