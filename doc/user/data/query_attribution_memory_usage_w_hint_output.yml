@@ -16,7 +16,7 @@ rows:
       TopK::Basic 5
       ```
     size: "`11 MB`"
-  
+
   - name: "`winning_bids`"
     global_id: "`u148`"
     lir_id: "`5`"
@@ -26,7 +26,7 @@ rows:
         Join::Differential 2 » 4
       ```
     size: "`null`"
-  
+
   - name: "`winning_bids`"
     global_id: "`u148`"
     lir_id: "`4`"
@@ -36,7 +36,7 @@ rows:
           Arrange 3
       ```
     size: "`1996 kB`"
-  
+
   - name: "`winning_bids`"
     global_id: "`u148`"
     lir_id: "`3`"
@@ -46,7 +46,7 @@ rows:
             Get::PassArrangements u145
       ```
     size: "`null`"
-  
+
   - name: "`winning_bids`"
     global_id: "`u148`"
     lir_id: "`2`"
@@ -56,7 +56,7 @@ rows:
           Arrange 1
       ```
     size: "`575 kB`"
-  
+
   - name: "`winning_bids`"
     global_id: "`u148`"
     lir_id: "`1`"
@@ -66,7 +66,7 @@ rows:
             Get::Collection u144
       ```
     size: "`null`"
-  
+
   - name: "`wins_by_item`"
     global_id: "`u149`"
     lir_id: "`8`"
@@ -76,7 +76,7 @@ rows:
       Arrange 7
       ```
     size: "`402 kB`"
-  
+
   - name: "`wins_by_item`"
     global_id: "`u149`"
     lir_id: "`7`"

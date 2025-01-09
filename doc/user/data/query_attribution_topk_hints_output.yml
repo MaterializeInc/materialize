@@ -8,7 +8,7 @@ columns:
   - column: to_cut
   - column: hint
   - column: pg_size_pretty
- 
+
 
 rows:
   - name: "`winning_bids`"
@@ -23,7 +23,7 @@ rows:
     to_cut: "`6`"
     pg_size_pretty: "`27 MB`"
     hint: "`255.0`"
-  
+
   - name: "`winning_bids`"
     global_id: "`u148`"
     lir_id: "`5`"
@@ -36,7 +36,7 @@ rows:
     to_cut: "`null`"
     pg_size_pretty: "`null`"
     hint: "`null`"
-  
+
   - name: "`winning_bids`"
     global_id: "`u148`"
     lir_id: "`4`"
@@ -49,7 +49,7 @@ rows:
     to_cut: "`null`"
     pg_size_pretty: "`null`"
     hint: "`null`"
-  
+
   - name: "`winning_bids`"
     global_id: "`u148`"
     lir_id: "`3`"
@@ -62,7 +62,7 @@ rows:
     to_cut: "`null`"
     pg_size_pretty: "`null`"
     hint: "`null`"
-  
+
   - name: "`winning_bids`"
     global_id: "`u148`"
     lir_id: "`2`"
@@ -75,7 +75,7 @@ rows:
     to_cut: "`null`"
     pg_size_pretty: "`null`"
     hint: "`null`"
-  
+
   - name: "`winning_bids`"
     global_id: "`u148`"
     lir_id: "`1`"
@@ -88,7 +88,7 @@ rows:
     to_cut: "`null`"
     pg_size_pretty: "`null`"
     hint: "`null`"
-  
+
   - name: "`wins_by_item`"
     global_id: "`u149`"
     lir_id: "`8`"
@@ -101,7 +101,7 @@ rows:
     to_cut: "`null`"
     pg_size_pretty: "`null`"
     hint: "`null`"
-  
+
   - name: "`wins_by_item`"
     global_id: "`u149`"
     lir_id: "`7`"

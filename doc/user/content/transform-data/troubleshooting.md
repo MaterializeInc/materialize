@@ -284,7 +284,7 @@ A larger size cluster will provision more memory and CPU resources.
 You can [`EXPLAIN`](/sql/explain-plan/) a query to see how it will be run as a
 dataflow. In particular, `EXPLAIN PHYSICAL PLAN` will show the concrete, fully
 optimized plan that Materialize will run. That plan is written in our "low-level
-intermediate representation" (LIR). 
+intermediate representation" (LIR).
 
 For [indexes](/concepts/indexes) and [materialized
 views](/concepts/views#materialized-views), you can use
@@ -328,7 +328,7 @@ CREATE INDEX wins_by_item ON winning_bids (item);
 ```
 
 We attribute four different kinds of performance data to parts of the
-`wins_by_item` query: 
+`wins_by_item` query:
 
 - [computation time](#attributing-computation-time)
 - [memory usage](#attributing-memory-usage)
@@ -344,7 +344,7 @@ reports the time spent in each _dataflow operator_ in
 By joining it with
 [`mz_introspection.mz_lir_mapping`](/sql/system-catalog/mz_introspection/#mz_lir_mapping),
 we can attribute the time spent in each operator to the higher-level, more
-intelligible LIR operators. 
+intelligible LIR operators.
 
 For example, to find out how much time is spent in each operator for the `wins_by_item` index and the `winning_bids` view, run the following query:
 
@@ -367,10 +367,10 @@ vary):
 {{< yaml-table data="query_attribution_computation_time_output" >}}
 
 - The `duration` column shows that the `TopK` operator is where we spend the
-  bulk of the query's computation time. 
+  bulk of the query's computation time.
 
 - Creating an index on a view executes the underlying view query. As such, the
-  index installs _two_ `global_id`s: 
+  index installs _two_ `global_id`s:
   - `u148` is the dataflow for the `winning_bids` view itself, and
   - `u149` is the dataflow for the `wins_by_item` index on `winning_bids`.
 
@@ -387,7 +387,7 @@ To examine the query in more detail:
 - The query works by finding every dataflow operator in the range
   (`mz_lir_mapping.operator_id_start` inclusive to
 `mz_lir_mapping.operator_id_end` exclusive) and summing up the time spent
-(`SUM(duration_ns)`). 
+(`SUM(duration_ns)`).
 
 - The query joins with
   [`mz_catalog.mz_objects`](/sql/system-catalog/mz_catalog/#mz_objects) to find
@@ -546,7 +546,7 @@ ORDER BY global_id, lir_id DESC;
 {{< yaml-table data="query_attribution_worker_skew_output" >}}
 
 The `ratio` column tells you whether a worker is particularly over- or
-under-loaded: 
+under-loaded:
 
 - a `ratio` below 1 indicates a worker doing a below average amount of work.
 
@@ -565,24 +565,24 @@ By combining information from
 you can better understand your dataflows' behavior. Using the above queries as a
 starting point, you can build your own attribution queries. When building your own, keep the following in mind:
 
-- `mz_lir_mapping.operator` is not stable and **should not be parsed**. 
-     
-  - If you want to traverse the LIR tree, use `mz_lir_mapping. parent_lir_id`. 
-     
+- `mz_lir_mapping.operator` is not stable and **should not be parsed**.
+
+  - If you want to traverse the LIR tree, use `mz_lir_mapping. parent_lir_id`.
+
   - To request additional metadata that would be useful for us to provide,
     please [contact our team](https://materialize.com/contact/).
-     
+
 - Include `GROUP BY global_id` to avoid mixing `lir_ids` from different
   `global_id`s. Mixing `lir_id`s from different `global_id`s will produce
   nonsense. `global_id`s will produce nonsense.
-  
+
 - Use `REPEAT(' ', 2 * nesting) || operator` and `ORDER BY lir_id DESC` to
   correctly render the LIR tree.
-  
+
 - `mz_lir_mapping.operator_id_start` is inclusive;
   `mz_lir_mapping.operator_id_end` is exclusive. If they are equal to each
-  other, that LIR operator does not correspond to any dataflow operators. 
-  
+  other, that LIR operator does not correspond to any dataflow operators.
+
 - To only see output for views, materialized views, and indexes you're
   interested in, join with `mz_catalog.mz_objects` and restrict based on
   `mz_objects.name`. Otherwise, you will see information on everything installed
