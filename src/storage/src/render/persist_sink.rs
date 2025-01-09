@@ -1010,6 +1010,15 @@ where
         let mut batch_description_frontier = Antichain::from_elem(Timestamp::minimum());
         let mut batches_frontier = Antichain::from_elem(Timestamp::minimum());
 
+        // Pause the source to prevent committing the snapshot,
+        // if the failpoint is configured
+        let mut pg_snapshot_pause = false;
+        (|| {
+            fail::fail_point!("pg_snapshot_pause", |_| {
+                pg_snapshot_pause = true;
+            });
+        })();
+
         loop {
             tokio::select! {
                 Some(event) = descriptions_input.next() => {
@@ -1142,6 +1151,18 @@ where
                 let batch_metrics = batch_set.batch_metrics;
 
                 let mut to_append = batches.iter_mut().map(|b| &mut b.batch).collect::<Vec<_>>();
+
+                // We evaluate this above to avoid checking an environment variable
+                // in a hot loop. Note that we only pause before we emit
+                // non-empty batches, because we do want to bump the upper
+                // with empty ones before we start ingesting the snapshot.
+                //
+                // This is a fairly complex failure case we need to check
+                // see `test/cluster/pg-snapshot-partial-failure` for more
+                // information.
+                if pg_snapshot_pause && !to_append.is_empty() && !batch_metrics.is_empty() {
+                    futures::future::pending().await
+                }
 
                 let result = {
                     let maybe_err = if *read_only_rx.borrow() {
