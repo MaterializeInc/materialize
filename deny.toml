@@ -48,10 +48,8 @@ skip = [
     { name = "windows-sys", version = "0.52.0" },
     # Newer versions of crates like `tempfile` are held back by crates like `atty`.
     # This is very Unfortunate as we don't actually use these platforms.
-    { name = "hermit-abi", version = "0.1.6" },
     { name = "hermit-abi", version = "0.2.6" },
     { name = "redox_syscall", version = "0.2.10" },
-    { name = "linux-raw-sys", version = "0.3.4" },
     { name = "rustix", version = "0.38.21" },
 
     # Will require updating many crates
@@ -118,6 +116,9 @@ skip = [
     { name = "sync_wrapper", version = "0.1.2" },
 
     { name = "memmap2", version = "0.5.4" },
+
+    { name = "wasi", version = "0.9.0+wasi-snapshot-preview1" },
+    { name = "wasi", version = "0.11.0+wasi-snapshot-preview1" },
 ]
 
 # Use `tracing` instead.
@@ -187,7 +188,6 @@ wrappers = [
   "bindgen",
   "bstr",
   "console",
-  "criterion",
   "dynfmt",
   "findshlibs",
   "insta",
@@ -227,14 +227,10 @@ version = 2
 ignore = [
     # Consider switching `yaml-rust` to the actively maintained `yaml-rust2` fork of the original project
     "RUSTSEC-2024-0320",
-    # Consider `std::io::IsTerminal` or `is-terminal` instead of `atty` (unmaintained)
-    "RUSTSEC-2021-0145",
     # Consider `encoding_rs` instead of `encoding` (unmaintained)
     "RUSTSEC-2021-0153",
     # proc-macro-error is unmaintained, possible alternative: proc-macro-error2
     "RUSTSEC-2024-0370",
-    # Use standard library's IsTerminal trait instead of `atty` (unmaintained)
-    "RUSTSEC-2024-0375",
     # `derivative` is unmaintained; consider using an alternative (unmaintained)
     "RUSTSEC-2024-0388",
     # `instant` is unmaintained, and the author recommends using the maintained [`web-time`] crate instead.
