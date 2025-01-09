@@ -1915,19 +1915,28 @@ impl<'a> Parser<'a> {
             let index = self.index;
 
             // go over optional modifiers
-            let _ = self.parse_keywords(&[OR, REPLACE]);
-            let _ = self.parse_one_of_keywords(&[TEMP, TEMPORARY]);
+            let parsed_or_replace = self.parse_keywords(&[OR, REPLACE]);
+            let parsed_temporary = self.parse_one_of_keywords(&[TEMP, TEMPORARY]).is_some();
 
             if self.parse_keyword(VIEW) {
                 self.index = index;
                 self.parse_create_view()
                     .map_parser_err(StatementKind::CreateView)
             } else {
-                self.expected(
-                    self.peek_pos(),
-                    "DATABASE, SCHEMA, ROLE, TYPE, INDEX, SINK, SOURCE, TABLE, SECRET, [OR REPLACE] [TEMPORARY] VIEW, or [OR REPLACE] MATERIALIZED VIEW after CREATE",
-                    self.peek_token(),
-                ).map_no_statement_parser_err()
+                let expected_msg = match (parsed_or_replace, parsed_temporary) {
+                    (true, true) => "VIEW after CREATE OR REPLACE TEMPORARY",
+                    (true, false) => {
+                        "[TEMPORARY] VIEW, or MATERIALIZED VIEW after CREATE OR REPLACE"
+                    }
+                    (false, true) => "TABLE, or VIEW after CREATE TEMPORARY",
+                    (false, false) => {
+                        "DATABASE, SCHEMA, ROLE, TYPE, INDEX, SINK, SOURCE, [TEMPORARY] TABLE, \
+                        SECRET, [OR REPLACE] [TEMPORARY] VIEW, or [OR REPLACE] MATERIALIZED VIEW \
+                        after CREATE"
+                    }
+                };
+                self.expected(self.peek_pos(), expected_msg, self.peek_token())
+                    .map_no_statement_parser_err()
             }
         }
     }
