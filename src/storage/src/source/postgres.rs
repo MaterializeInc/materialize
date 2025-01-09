@@ -330,6 +330,8 @@ pub enum DefiniteError {
     InvalidUTF8(Vec<u8>),
     #[error("failed to cast raw column: {0}")]
     CastError(#[source] EvalError),
+    #[error("unexpected binary data in replication stream")]
+    UnexpectedBinaryData,
 }
 
 impl From<DefiniteError> for DataflowError {
@@ -350,6 +352,7 @@ impl From<DefiniteError> for DataflowError {
                 DefiniteError::IncompatibleSchema(_) => SourceErrorDetails::Other(m),
                 DefiniteError::InvalidUTF8(_) => SourceErrorDetails::Other(m),
                 DefiniteError::CastError(_) => SourceErrorDetails::Other(m),
+                DefiniteError::UnexpectedBinaryData => SourceErrorDetails::Other(m),
             },
         }))
     }
