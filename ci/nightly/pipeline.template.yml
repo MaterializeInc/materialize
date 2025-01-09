@@ -1698,6 +1698,16 @@ steps:
     agents:
       queue: hetzner-aarch64-8cpu-16gb
 
+  - id: emulator
+    label: Materialize Emulator
+    depends_on: build-aarch64
+    timeout_in_minutes: 20
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: emulator
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
+
   - id: sqllogictest
     label: ":bulb: SQL logic tests"
     depends_on: build-aarch64
