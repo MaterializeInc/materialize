@@ -17,6 +17,11 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use crate::collection_mgmt::{
+    AppendOnlyIntrospectionConfig, CollectionManagerKind, DifferentialIntrospectionConfig,
+};
+use crate::instance::{Instance, ReplicaConfig};
+use crate::statistics::StatsState;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
@@ -76,9 +81,10 @@ use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::read_holds::{ReadHold, ReadHoldError};
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sinks::{StorageSinkConnection, StorageSinkDesc};
+use mz_storage_types::sources::envelope::{KeyEnvelope, NoneEnvelope};
 use mz_storage_types::sources::{
     GenericSourceConnection, IngestionDescription, SourceConnection, SourceData, SourceDesc,
-    SourceExport, SourceExportDataConfig,
+    SourceEnvelope, SourceExport, SourceExportDataConfig, SourceExportDetails,
 };
 use mz_storage_types::AlterCompatible;
 use mz_txn_wal::metrics::Metrics as TxnMetrics;
@@ -93,12 +99,6 @@ use tokio::sync::watch::{channel, Sender};
 use tokio::time::error::Elapsed;
 use tokio::time::MissedTickBehavior;
 use tracing::{debug, info, warn};
-
-use crate::collection_mgmt::{
-    AppendOnlyIntrospectionConfig, CollectionManagerKind, DifferentialIntrospectionConfig,
-};
-use crate::instance::{Instance, ReplicaConfig};
-use crate::statistics::StatsState;
 
 mod collection_mgmt;
 mod history;
@@ -726,6 +726,19 @@ where
             // to primary collections and only export to explicit SourceExports (tables).
             if let DataSource::Ingestion(ingestion) = &mut data_source {
                 if let Some(export) = ingestion.desc.primary_source_export() {
+                    ingestion.source_exports.insert(id, export);
+                } else {
+                    let export = SourceExport {
+                        storage_metadata: (),
+                        details: SourceExportDetails::None,
+                        data_config: SourceExportDataConfig {
+                            encoding: None,
+                            envelope: SourceEnvelope::None(NoneEnvelope {
+                                key_envelope: KeyEnvelope::None,
+                                key_arity: 0,
+                            }),
+                        },
+                    };
                     ingestion.source_exports.insert(id, export);
                 }
             }

@@ -46,9 +46,10 @@ use mz_storage_types::dyncfgs::STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION;
 use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::read_holds::{ReadHold, ReadHoldError};
 use mz_storage_types::read_policy::ReadPolicy;
+use mz_storage_types::sources::envelope::{KeyEnvelope, NoneEnvelope};
 use mz_storage_types::sources::{
     GenericSourceConnection, IngestionDescription, SourceData, SourceDesc, SourceEnvelope,
-    SourceExport, SourceExportDataConfig, Timeline,
+    SourceExport, SourceExportDataConfig, SourceExportDetails, Timeline,
 };
 use mz_storage_types::time_dependence::{TimeDependence, TimeDependenceError};
 use mz_txn_wal::metrics::Metrics as TxnMetrics;
@@ -1548,6 +1549,19 @@ where
             // to primary collections and only export to explicit SourceExports (tables).
             if let DataSource::Ingestion(ingestion) = &mut description.data_source {
                 if let Some(export) = ingestion.desc.primary_source_export() {
+                    ingestion.source_exports.insert(id, export);
+                } else {
+                    let export = SourceExport {
+                        storage_metadata: (),
+                        details: SourceExportDetails::None,
+                        data_config: SourceExportDataConfig {
+                            encoding: None,
+                            envelope: SourceEnvelope::None(NoneEnvelope {
+                                key_envelope: KeyEnvelope::None,
+                                key_arity: 0,
+                            }),
+                        },
+                    };
                     ingestion.source_exports.insert(id, export);
                 }
             }
