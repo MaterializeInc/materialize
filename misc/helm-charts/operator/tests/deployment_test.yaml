@@ -64,10 +64,10 @@ tests:
     storage.storageClass.name: ""
   asserts:
   - matchRegex:
-      path: spec.template.spec.containers[0].args[11]      # Index of the environmentd-cluster-replica-sizes argument
+      path: spec.template.spec.containers[0].args[12]      # Index of the environmentd-cluster-replica-sizes argument
       pattern: disk_limit":"0"
   - matchRegex:
-      path: spec.template.spec.containers[0].args[11]
+      path: spec.template.spec.containers[0].args[12]
       pattern: is_cc":true
 
 - it: should have a cluster with disk limit to 1552MiB when storage class is configured
@@ -75,10 +75,10 @@ tests:
     storage.storageClass.name: "my-storage-class"
   asserts:
   - matchRegex:
-      path: spec.template.spec.containers[0].args[11]
+      path: spec.template.spec.containers[0].args[12]
       pattern: disk_limit":"1552MiB"
   - matchRegex:
-      path: spec.template.spec.containers[0].args[11]
+      path: spec.template.spec.containers[0].args[12]
       pattern: is_cc":true
 
 - it: should configure for AWS provider correctly
@@ -161,3 +161,20 @@ tests:
   - contains:
       path: spec.template.spec.containers[0].args
       content: "--console-image-tag-map=v0.126.0=25.2.0"
+
+- it: should configure secrets controller kubernetes by default
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: "--secrets-controller=kubernetes"
+
+- it: should configure secrets controller if overridden
+  set:
+    operator.secretsController: aws-secrets-manager
+  asserts:
+  - notContains:
+      path: spec.template.spec.containers[0].args
+      content: "--secrets-controller=kubernetes"
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: "--secrets-controller=aws-secrets-manager"

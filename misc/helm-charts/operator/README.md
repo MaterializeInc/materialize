@@ -141,6 +141,7 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.nodeSelector` |  | ``{}`` |
 | `operator.resources.limits` | Resource limits for the operator's CPU and memory | ``{"memory":"512Mi"}`` |
 | `operator.resources.requests` | Resources requested by the operator for CPU and memory | ``{"cpu":"100m","memory":"512Mi"}`` |
+| `operator.secretsController` | Which secrets controller to use for storing secrets. Valid values are 'kubernetes' and 'aws-secrets-manager'. Setting 'aws-secrets-manager' requires a configured AWS cloud provider and IAM role for the environment with Secrets Manager permissions. | ``"kubernetes"`` |
 | `rbac.create` | Whether to create necessary RBAC roles and bindings | ``true`` |
 | `serviceAccount.create` | Whether to create a new service account for the operator | ``true`` |
 | `serviceAccount.name` | The name of the service account to be created | ``"orchestratord"`` |
