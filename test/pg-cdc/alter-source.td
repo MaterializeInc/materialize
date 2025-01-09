@@ -63,8 +63,11 @@ CREATE TABLE table_a (pk INTEGER PRIMARY KEY, f2 TEXT);
 ALTER TABLE table_a REPLICA IDENTITY FULL;
 INSERT INTO table_a VALUES (9, 'nine');
 
-! SELECT * FROM table_a;
-contains:table was dropped
+# Current table_a is not new table_a. Note that this only works right now
+# because we are bad at detecting dropped tables.
+> SELECT * FROM table_a;
+1 one
+2 two
 
 # We are not aware that the new table_a is different
 ! CREATE TABLE table_a FROM SOURCE mz_source (REFERENCE table_a);
@@ -282,6 +285,7 @@ tb                 ""
 # If your schema change breaks the subsource, you can fix it.
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE table_a DROP COLUMN f2;
+INSERT INTO table_a VALUES (3);
 
 ! SELECT * FROM table_a;
 contains:incompatible schema change
@@ -299,16 +303,18 @@ true
 > SELECT * FROM table_a;
 1
 2
+3
 
 # If you add columns you can re-ingest them
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE table_a ADD COLUMN f2 text;
-INSERT INTO table_a VALUES (3, 'three');
+INSERT INTO table_a VALUES (4, 'four');
 
 > SELECT * FROM table_a;
 1
 2
 3
+4
 
 > DROP TABLE table_a;
 > CREATE TABLE table_a FROM SOURCE mz_source (REFERENCE table_a);
@@ -316,12 +322,13 @@ INSERT INTO table_a VALUES (3, 'three');
 > SELECT * FROM table_a;
 1 <null>
 2 <null>
-3 three
+3 <null>
+4 four
 
 # If you add a NOT NULL constraint, you can propagate it.
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE table_a ADD COLUMN f3 int DEFAULT 1 NOT NULL;
-INSERT INTO table_a VALUES (4, 'four', 4);
+INSERT INTO table_a VALUES (5, 'five', 5);
 
 > DROP TABLE table_a;
 > CREATE TABLE table_a FROM SOURCE mz_source (REFERENCE table_a);
@@ -329,8 +336,9 @@ INSERT INTO table_a VALUES (4, 'four', 4);
 > SELECT * FROM table_a;
 1 <null> 1
 2 <null> 1
-3 three 1
-4 four 4
+3 <null> 1
+4 four 1
+5 five 5
 
 ? EXPLAIN SELECT * FROM table_a WHERE f3 IS NULL;
 Explained Query (fast path):

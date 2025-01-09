@@ -288,16 +288,18 @@ true
 > SELECT * FROM table_a;
 1
 2
+3
 
 # If you add columns you can re-ingest them
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE table_a ADD COLUMN f2 text;
-INSERT INTO table_a VALUES (3, 'three');
+INSERT INTO table_a VALUES (4, 'four');
 
 > SELECT * FROM table_a;
 1
 2
 3
+4
 
 > DROP SOURCE table_a;
 > ALTER SOURCE mz_source ADD SUBSOURCE table_a;
@@ -305,12 +307,13 @@ INSERT INTO table_a VALUES (3, 'three');
 > SELECT * FROM table_a;
 1 <null>
 2 <null>
-3 three
+3 <null>
+4 four
 
 # If you add a NOT NULL constraint, you can propagate it.
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE table_a ADD COLUMN f3 int DEFAULT 1 NOT NULL;
-INSERT INTO table_a VALUES (4, 'four', 4);
+INSERT INTO table_a VALUES (5, 'five', 5);
 
 > DROP SOURCE table_a;
 > ALTER SOURCE mz_source ADD SUBSOURCE table_a;
@@ -318,8 +321,9 @@ INSERT INTO table_a VALUES (4, 'four', 4);
 > SELECT * FROM table_a;
 1 <null> 1
 2 <null> 1
-3 three 1
-4 four 4
+3 <null> 1
+4 four 1
+5 five 5
 
 ? EXPLAIN SELECT * FROM table_a WHERE f3 IS NULL;
 Explained Query (fast path):
