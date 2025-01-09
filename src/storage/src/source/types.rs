@@ -12,7 +12,6 @@
 // https://github.com/tokio-rs/prost/issues/237
 // #![allow(missing_docs)]
 
-use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::fmt::Debug;
 use std::future::Future;
@@ -21,7 +20,7 @@ use std::sync::Arc;
 use std::task::{ready, Context, Poll};
 
 use differential_dataflow::Collection;
-use mz_repr::{Diff, GlobalId, Row};
+use mz_repr::{Diff, Row};
 use mz_storage_types::errors::{DataflowError, DecodeError};
 use mz_storage_types::sources::SourceTimestamp;
 use mz_timely_util::builder_async::PressOnDropButton;
@@ -94,7 +93,7 @@ pub trait SourceRender {
         resume_uppers: impl futures::Stream<Item = Antichain<Self::Time>> + 'static,
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
-        BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
+        StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
         Option<Stream<G, Infallible>>,
         Stream<G, HealthStatusMessage>,
         Stream<G, ProgressStatisticsUpdate>,
