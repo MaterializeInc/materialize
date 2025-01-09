@@ -647,6 +647,29 @@ where
 
             eligible
         })
+        .filter(|(ts, _, _, _)| {
+            let persist_upper = match &drain_style {
+                DrainStyle::ToUpper {
+                    input_upper: _,
+                    persist_upper,
+                } => persist_upper,
+                DrainStyle::AtTime {
+                    time: _,
+                    persist_upper,
+                } => persist_upper,
+            };
+
+            // Any update that is "in the past" of the persist upper is not
+            // relevant anymore. We _can_ emit changes for it, but the
+            // downstream persist_sink would filter these updates out because
+            // the shard upper is already further ahead.
+            //
+            // Plus, our upsert state is up-to-date to the persist_upper, so we
+            // wouldn't be able to emit correct retractions for incoming
+            // commands whose `ts` is in the past of that.
+            let relevant = persist_upper.less_equal(ts);
+            relevant
+        })
         .collect_vec();
 
     tracing::debug!(
