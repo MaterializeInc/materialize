@@ -7,7 +7,7 @@ columns:
   - column: levels
   - column: to_cut
   - column: hint
-  - column: pg_size_pretty
+  - column: savings
 
 
 rows:
@@ -21,7 +21,7 @@ rows:
       ```
     levels: "`8`"
     to_cut: "`6`"
-    pg_size_pretty: "`27 MB`"
+    savings: "`27 MB`"
     hint: "`255.0`"
 
   - name: "`winning_bids`"
@@ -34,7 +34,7 @@ rows:
       ```
     levels: "`null`"
     to_cut: "`null`"
-    pg_size_pretty: "`null`"
+    savings: "`null`"
     hint: "`null`"
 
   - name: "`winning_bids`"
@@ -47,7 +47,7 @@ rows:
       ```
     levels: "`null`"
     to_cut: "`null`"
-    pg_size_pretty: "`null`"
+    savings: "`null`"
     hint: "`null`"
 
   - name: "`winning_bids`"
@@ -60,7 +60,7 @@ rows:
       ```
     levels: "`null`"
     to_cut: "`null`"
-    pg_size_pretty: "`null`"
+    savings: "`null`"
     hint: "`null`"
 
   - name: "`winning_bids`"
@@ -73,7 +73,7 @@ rows:
       ```
     levels: "`null`"
     to_cut: "`null`"
-    pg_size_pretty: "`null`"
+    savings: "`null`"
     hint: "`null`"
 
   - name: "`winning_bids`"
@@ -86,7 +86,7 @@ rows:
       ```
     levels: "`null`"
     to_cut: "`null`"
-    pg_size_pretty: "`null`"
+    savings: "`null`"
     hint: "`null`"
 
   - name: "`wins_by_item`"
@@ -99,7 +99,7 @@ rows:
       ```
     levels: "`null`"
     to_cut: "`null`"
-    pg_size_pretty: "`null`"
+    savings: "`null`"
     hint: "`null`"
 
   - name: "`wins_by_item`"
@@ -112,5 +112,5 @@ rows:
       ```
     levels: "`null`"
     to_cut: "`null`"
-    pg_size_pretty: "`null`"
+    savings: "`null`"
     hint: "`null`"

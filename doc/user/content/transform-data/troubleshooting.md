@@ -306,8 +306,9 @@ or consuming excessive memory (e.g., [`mz_introspection.mz_arrangement_sizes`](/
 To show how you can use
 [`mz_introspection.mz_lir_mapping`](/sql/system-catalog/mz_introspection/#mz_lir_mapping)
 to attribute performance characteristics, the attribution examples in this
-section reference the `wins_by_item` index and the `winning_bids` view from the
-[quickstart guide](/get-started/quickstart/#step-2-create-the-source):
+section reference the `wins_by_item` index (and the underlying `winning_bids`
+view) from the [quickstart
+guide](/get-started/quickstart/#step-2-create-the-source):
 
 ```sql
 CREATE SOURCE auction_house
@@ -346,7 +347,7 @@ By joining it with
 we can attribute the time spent in each operator to the higher-level, more
 intelligible LIR operators.
 
-For example, to find out how much time is spent in each operator for the `wins_by_item` index and the `winning_bids` view, run the following query:
+For example, to find out how much time is spent in each operator for the `wins_by_item` index (and the underlying `winning_bids` view), run the following query:
 
 ```sql
 SELECT mo.name AS name, global_id, lir_id, parent_lir_id, REPEAT(' ', nesting * 2) || operator AS operator,
@@ -369,10 +370,12 @@ vary):
 - The `duration` column shows that the `TopK` operator is where we spend the
   bulk of the query's computation time.
 
-- Creating an index on a view executes the underlying view query. As such, the
-  index installs _two_ `global_id`s:
-  - `u148` is the dataflow for the `winning_bids` view itself, and
-  - `u149` is the dataflow for the `wins_by_item` index on `winning_bids`.
+- Creating an index on a view starts _two_ dataflows as denoted by the two
+  `global_ids`:
+  - `u148` is the dataflow for the `winning_bids` view (executed when the index
+    is created), and
+  - `u149` is the dataflow for the `wins_by_item` index on `winning_bids` (which
+    arranges the results of the `winning_bids` view by the index key).
 
 The LIR operators reported in `mz_lir_mapping.operator` are terser than those in
 `EXPLAIN PHYSICAL PLAN`. Each operator is restricted to a single line of the
@@ -457,7 +460,7 @@ can attribute this to particular parts of our query using
 
 ```sql
   SELECT mo.name AS name, mlm.global_id AS global_id, lir_id, parent_lir_id, REPEAT(' ', nesting * 2) || operator AS operator,
-         levels, to_cut, hint, pg_size_pretty(savings)
+         levels, to_cut, hint, pg_size_pretty(savings) AS savings
     FROM           mz_introspection.mz_lir_mapping mlm
               JOIN mz_introspection.mz_dataflow_global_ids mdgi
                 ON (mlm.global_id = mdgi.global_id)
