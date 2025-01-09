@@ -1058,6 +1058,7 @@ where
             TupleData::Text(bytes) => Some(bytes.clone()),
             TupleData::Null => None,
             TupleData::UnchangedToast => return Err(DefiniteError::MissingToast),
+            TupleData::Binary(_) => return Err(DefiniteError::UnexpectedBinaryData),
         };
         row.push(datum);
     }
