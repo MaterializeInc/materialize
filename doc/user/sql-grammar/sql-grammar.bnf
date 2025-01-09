@@ -466,56 +466,8 @@ set_stmt ::=
   'SET' ( 'SESSION' | 'LOCAL' )? name ( 'TO' | '=' ) ( value | 'DEFAULT' )
 set_transaction_isolation ::=
   'SET' 'TRANSACTION_ISOLATION' ( 'TO' | '=' ) isolation_level
-show_columns ::=
-  'SHOW' 'COLUMNS' 'FROM' item_ref ('LIKE' 'pattern' | 'WHERE' expr)
-show_connections ::=
-  'SHOW' 'CONNECTIONS'
-  ('FROM' schema_name)?
-  ('LIKE' 'pattern' | 'WHERE' expr)?
-show_clusters ::=
-  'SHOW' 'CLUSTERS'
-  ('LIKE' 'pattern' | 'WHERE' expr)?
-show_cluster_replicas ::=
-  'SHOW' 'CLUSTER' 'REPLICAS'
-  ('LIKE' 'pattern' | 'WHERE' expr)?
-show_create_connection ::=
-  'SHOW' 'CREATE' 'CONNECTION' connection_name
-show_create_cluster ::=
-  'SHOW' 'CREATE' 'CLUSTER' cluster_name
-show_create_index ::=
-  'SHOW' 'CREATE' 'INDEX' index_name
-show_create_materialized_view ::=
-  'SHOW' 'CREATE' 'MATERIALIZED VIEW' view_name
-show_create_sink ::=
-  'SHOW' 'CREATE' 'SINK' sink_name
-show_create_source ::=
-  'SHOW' 'CREATE' 'SOURCE' source_name
-show_create_table ::=
-  'SHOW' 'CREATE' 'TABLE' table_name
-show_create_view ::=
-  'SHOW' 'CREATE' 'VIEW' view_name
-show_databases ::=
-    'SHOW' 'DATABASES' ('LIKE' 'pattern' | 'WHERE' expr)?
-show_indexes ::=
-    'SHOW' 'INDEXES'
-    ('FROM' schema_name | 'ON' on_name)?
-    ('IN CLUSTER' cluster_name)?
-    ('LIKE' 'pattern' | 'WHERE' expr)
-show_stmt ::=
-  'SHOW' ( name | 'ALL' )
-show_default_privileges ::=
-  'SHOW' 'DEFAULT' 'PRIVILEGES' ('ON' ('TABLES' | 'TYPES' | 'SECRETS' | 'CONNECTIONS' | 'DATABASES' | 'SCHEMAS' | 'CLUSTERS'))? ('FOR' role_name)?
 string_agg ::=
   'string_agg' '(' value ',' delimiter    ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? ( ',' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? )* )? ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
-subscribe_stmt ::=
-    'SUBSCRIBE' 'TO'?
-    ( object_name | '(' select_stmt ')' )
-    ('ENVELOPE' 'UPSERT' '(' 'KEY' '(' col_ref ( ',' col_ref )* ')' ')' )?
-    ('ENVELOPE' 'DEBEZIUM' '(' 'KEY' '(' col_ref ( ',' col_ref )* ')' ')' )?
-    ('WITHIN' 'TIMESTAMP' 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? ( ',' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? )*)?
-    ( 'WITH'? '(' (option_name ('=' option_value)?) ( ',' (option_name ('=' option_value)?) )* ')' )?
-    ('AS' 'OF' ( 'AT' 'LEAST' )? timestamp_expression)?
-    ( 'UP' 'TO' timestamp_expression )?
 table_ref ::=
   (
     table_name

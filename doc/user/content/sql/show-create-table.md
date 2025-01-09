@@ -10,11 +10,11 @@ menu:
 
 ## Syntax
 
-{{< diagram "show-create-table.svg" >}}
+```sql
+SHOW CREATE TABLE <table_name>
+```
 
-Field | Use
-------|-----
-_table&lowbar;name_ | The table you want use. You can find available table names through [`SHOW TABLES`](../show-tables).
+For available table names, see [`SHOW TABLES`](/sql/show-tables).
 
 ## Examples
 
