@@ -372,7 +372,7 @@ vary):
 
 - Creating an index on a view starts _two_ dataflows as denoted by the two
   `global_ids`:
-  - `u148` is the dataflow for the `winning_bids` view (executed when the index
+  - `u148` is the dataflow for the `winning_bids` view (installed when the index
     is created), and
   - `u149` is the dataflow for the `wins_by_item` index on `winning_bids` (which
     arranges the results of the `winning_bids` view by the index key).
