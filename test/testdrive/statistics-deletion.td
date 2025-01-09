@@ -66,6 +66,12 @@ one:two
   VALUE FORMAT BYTES
   ENVELOPE UPSERT
 
+> SELECT * FROM upsert_size_tbl
+one two
+
+> SELECT * FROM upsert_cluster_tbl
+one two
+
 > CREATE SCHEMA subsources_size;
 > CREATE SCHEMA subsources_cluster;
 > CREATE CLUSTER subsource_size_s_cluster SIZE '2';
