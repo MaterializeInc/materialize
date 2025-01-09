@@ -357,17 +357,7 @@ ORDER BY global_id, lir_id DESC;
 
 Running this query on an auction generator will produce results that look something like the following (though the specific numbers will vary, of course):
 
-
-| name         | global_id | lir_id | parent_lir_id | operator                         | duration        | count  |
-| ------------ | --------- | ------ | ------------- | -------------------------------- | --------------- | ------ |
-| winning_bids | u148      | 6      | null          | TopK::Basic 5                    | 00:00:00.74516  | 108650 |
-| winning_bids | u148      | 5      | 6             |   Join::Differential 2 » 4       | 00:00:00.017005 | 19099  |
-| winning_bids | u148      | 4      | 5             |     Arrange 3                    | 00:00:00.058835 | 11506  |
-| winning_bids | u148      | 3      | 4             |       Get::PassArrangements u145 | null            | null   |
-| winning_bids | u148      | 2      | 5             |     Arrange 1                    | 00:00:00.013885 | 7413   |
-| winning_bids | u148      | 1      | 2             |       Get::Collection u144       | null            | null   |
-| wins_by_item | u149      | 8      | null          | Arrange 7                        | 00:00:00.013887 | 9347   |
-| wins_by_item | u149      | 7      | 8             |   Get::PassArrangements u148     | null            | null   |
+{{< yaml-table data="query_attribution_computation_time_output" >}}
 
 The `duration` column shows that the `TopK` operator is where we
 spend the bulk of the query's computation time.  Notice that creating
@@ -375,13 +365,20 @@ our index installs _two_ `global_id`s: `u148` is the dataflow for the
 `winning_bids` view uitself, while `u149` is the dataflow for the
 `wins_by_item` index on `winning_bids`.
 
+The LIR operators reported in `mz_lir_mapping.operator` are terser
+than those in `EXPLAIN PHYSICAL PLAN`. Each operator is restricted to
+a single line, of the form `OPERATOR [INPUT_LIR_ID ...]`. That is,
+`lir_id` 4 is the operator `Arrange 3`, the operator that will arrange
+in memory the results of reading dataflow `u145` (here, the `bids`
+table from the source).
+
 The query works by finding every dataflow operator in the range
 (`mz_lir_mapping.operator_id_start` inclusive to
 `mz_lir_mapping.operator_id_end` exclusive) and summing up the time
 spent (`SUM(duration_ns)`). The query joins with
 [`mz_catalog.mz_objects`](/sql/system-catalog/mz_catalog/#mz_objects)
 to find the actual name corresponding to the `global_id`.  The `WHERE
-mo.name IN ...`  clause of the query ensures we only see information
+mo.name IN ...` clause of the query ensures we only see information
 about this index and view. If you leave this `WHERE` clause out, you
 will see information on _every_ view, materialized view, and index on
 your current cluster.
@@ -390,13 +387,6 @@ The `operator` is indented using [`REPEAT`](/sql/functions/#repeat) and
 `mz_lir_mapping.nesting`. The indenting, combined with ordering by
 `mz_lir_mapping.lir_id` descending, gives us a tree-shaped view of the
 LIR plan.
-
-The LIR operators reported in `mz_lir_mapping.operator` are terser
-than those in `EXPLAIN PHYSICAL PLAN`. Each operator is restricted to
-a single line, of the form `OPERATOR [INPUT_LIR_ID ...]`. That is,
-`lir_id` 4 is the operator `Arrange 3`, the operator that will arrange
-in memory the results of reading dataflow `u145` (here, the `bids`
-table from the source).
 
 ### Attributing memory usage
 
@@ -424,16 +414,7 @@ GROUP BY mo.name, global_id, lir_id, operator, parent_lir_id, nesting
 ORDER BY global_id, lir_id DESC;
 ```
 
-| name         | global_id | lir_id | parent_lir_id | operator                         | size    |
-| ------------ | --------- | ------ | ------------- | -------------------------------- | ------- |
-| winning_bids | u148      | 6      | null          | TopK::Basic 5                    | 38 MB   |
-| winning_bids | u148      | 5      | 6             |   Join::Differential 2 » 4       | null    |
-| winning_bids | u148      | 4      | 5             |     Arrange 3                    | 2008 kB |
-| winning_bids | u148      | 3      | 4             |       Get::PassArrangements u145 | null    |
-| winning_bids | u148      | 2      | 5             |     Arrange 1                    | 900 kB  |
-| winning_bids | u148      | 1      | 2             |       Get::Collection u144       | null    |
-| wins_by_item | u149      | 8      | null          | Arrange 7                        | 707 kB  |
-| wins_by_item | u149      | 7      | 8             |   Get::PassArrangements u148     | null    |
+{{< yaml-table data="query_attribution_memory_usage_output" >}}
 
 The `TopK` is overwhelmingly responsible for memory usage: arranging
 the `bids` table (`lir_id` 4) and `auctions` table (`lir_id` 2) are
@@ -456,7 +437,7 @@ can attribute this to particular parts of our query using
 
 ```sql
   SELECT mo.name AS name, mlm.global_id AS global_id, lir_id, parent_lir_id, REPEAT(' ', nesting * 2) || operator AS operator,
-         levels, to_cut, pg_size_pretty(savings) AS savings, hint
+         levels, to_cut, hint, pg_size_pretty(savings)
     FROM           mz_introspection.mz_lir_mapping mlm
               JOIN mz_introspection.mz_dataflow_global_ids mdgi
                 ON (mlm.global_id = mdgi.global_id)
@@ -471,16 +452,7 @@ ORDER BY mlm.global_id, lir_id DESC;
 
 Each `TopK` operator will have associated hints:
 
-| name         | global_id | lir_id | parent_lir_id | operator                         | levels | to_cut | savings | hint  |
-| ------------ | --------- | ------ | ------------- | -------------------------------- | ------ | ------ | ------- | ----- |
-| winning_bids | u148      | 6      | null          | TopK::Basic 5                    | 8      | 6      | 27 MB   | 255.0 |
-| winning_bids | u148      | 5      | 6             |   Join::Differential 2 » 4       | null   | null   | null    | null  |
-| winning_bids | u148      | 4      | 5             |     Arrange 3                    | null   | null   | null    | null  |
-| winning_bids | u148      | 3      | 4             |       Get::PassArrangements u145 | null   | null   | null    | null  |
-| winning_bids | u148      | 2      | 5             |     Arrange 1                    | null   | null   | null    | null  |
-| winning_bids | u148      | 1      | 2             |       Get::Collection u144       | null   | null   | null    | null  |
-| wins_by_item | u149      | 8      | null          | Arrange 7                        | null   | null   | null    | null  |
-| wins_by_item | u149      | 7      | 8             |   Get::PassArrangements u148     | null   | null   | null    | null  |
+{{< yaml-table data="query_attribution_topk_hints_output" >}}
 
 Here, the hinted `DISTINCT ON INPUT GROUP SIZE` is `255.0`. We can re-create our view and index using the hint as follows:
 
@@ -509,16 +481,7 @@ re-run our [query for attributing memory
 usage](#attributing-memory-usage), we can see that our `TopK` operator
 uses a third of the memory it was using before:
 
-| name         | global_id | lir_id | parent_lir_id | operator                         | size    |
-| ------------ | --------- | ------ | ------------- | -------------------------------- | ------- |
-| winning_bids | u150      | 6      | null          | TopK::Basic 5                    | 11 MB   |
-| winning_bids | u150      | 5      | 6             |   Join::Differential 2 » 4       | null    |
-| winning_bids | u150      | 4      | 5             |     Arrange 3                    | 1996 kB |
-| winning_bids | u150      | 3      | 4             |       Get::PassArrangements u145 | null    |
-| winning_bids | u150      | 2      | 5             |     Arrange 1                    | 575 kB  |
-| winning_bids | u150      | 1      | 2             |       Get::Collection u144       | null    |
-| wins_by_item | u151      | 8      | null          | Arrange 7                        | 402 kB  |
-| wins_by_item | u151      | 7      | 8             |   Get::PassArrangements u150     | null    |
+{{< yaml-table data="query_attribution_memory_usage_w_hint_output" >}}
 
 ### Localizing worker skew
 
@@ -560,28 +523,7 @@ GROUP BY mo.name, global_id, lir_id, nesting, operator, worker_id
 ORDER BY global_id, lir_id DESC;
 ```
 
-| name         | global_id | lir_id | operator                   | worker_id | ratio | elapsed_ns      | avg_ns          |
-| ------------ | --------- | ------ | -------------------------- | --------- | ----- | --------------- | --------------- |
-| winning_bids | u186      | 6      | TopK::Basic 5              | 0         | 1     | 00:00:03.172611 | 00:00:03.177245 |
-| winning_bids | u186      | 6      | TopK::Basic 5              | 1         | 1     | 00:00:03.175515 | 00:00:03.177245 |
-| winning_bids | u186      | 6      | TopK::Basic 5              | 2         | 1     | 00:00:03.174291 | 00:00:03.177245 |
-| winning_bids | u186      | 6      | TopK::Basic 5              | 3         | 1     | 00:00:03.186564 | 00:00:03.177245 |
-| winning_bids | u186      | 5      |   Join::Differential 2 » 4 | 0         | 0.97  | 00:00:00.157787 | 00:00:00.162148 |
-| winning_bids | u186      | 5      |   Join::Differential 2 » 4 | 1         | 1.05  | 00:00:00.170231 | 00:00:00.162148 |
-| winning_bids | u186      | 5      |   Join::Differential 2 » 4 | 2         | 1     | 00:00:00.162352 | 00:00:00.162148 |
-| winning_bids | u186      | 5      |   Join::Differential 2 » 4 | 3         | 0.98  | 00:00:00.158224 | 00:00:00.162148 |
-| winning_bids | u186      | 4      |     Arrange 3              | 0         | 0.67  | 00:00:00.059754 | 00:00:00.088972 |
-| winning_bids | u186      | 4      |     Arrange 3              | 1         | 0.64  | 00:00:00.057283 | 00:00:00.088972 |
-| winning_bids | u186      | 4      |     Arrange 3              | 2         | 2.02  | 00:00:00.179739 | 00:00:00.088972 |
-| winning_bids | u186      | 4      |     Arrange 3              | 3         | 0.66  | 00:00:00.059112 | 00:00:00.088972 |
-| winning_bids | u186      | 2      |     Arrange 1              | 0         | 0.82  | 00:00:00.023081 | 00:00:00.028271 |
-| winning_bids | u186      | 2      |     Arrange 1              | 1         | 1.61  | 00:00:00.045394 | 00:00:00.028271 |
-| winning_bids | u186      | 2      |     Arrange 1              | 2         | 0.77  | 00:00:00.021894 | 00:00:00.028271 |
-| winning_bids | u186      | 2      |     Arrange 1              | 3         | 0.8   | 00:00:00.022717 | 00:00:00.028271 |
-| wins_by_item | u187      | 8      | Arrange 7                  | 0         | 0.85  | 00:00:00.02085  | 00:00:00.024526 |
-| wins_by_item | u187      | 8      | Arrange 7                  | 1         | 1.27  | 00:00:00.031028 | 00:00:00.024526 |
-| wins_by_item | u187      | 8      | Arrange 7                  | 2         | 1.44  | 00:00:00.035279 | 00:00:00.024526 |
-| wins_by_item | u187      | 8      | Arrange 7                  | 3         | 0.45  | 00:00:00.010946 | 00:00:00.024526 |
+{{< yaml-table data="query_attribution_worker_skew_output" >}}
 
 The `ratio` column tells you whether a worker is particularly over- or
 under-loaded: a `ratio` below 1 indicates a worker doing a below

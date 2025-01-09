@@ -1,0 +1,250 @@
+columns:
+  - column: name
+  - column: global_id
+  - column: lir_id
+  - column: operator
+  - column: worker_id
+  - column: ratio
+  - column: elapsed_ns
+  - column: avg_ns
+
+rows:
+  - name: "`winning_bids`"
+    global_id: "`u186`"
+    lir_id: "`6`"
+    operator: |
+      ```mzsql
+      TopK::Basic 5
+      ```
+    worker_id: "`0`"
+    ratio: "`1`"
+    elapsed_ns: "`00:00:03.172611`"
+    avg_ns: "`00:00:03.177245`"
+
+  - name: "`winning_bids`"
+    global_id: "`u186`"
+    lir_id: "`6`"
+    operator: |
+      ```mzsql
+      TopK::Basic 5
+      ```
+    worker_id: "`1`"
+    ratio: "`1`"
+    elapsed_ns: "`00:00:03.175515`"
+    avg_ns: "`00:00:03.177245`"
+
+  - name: "`winning_bids`"
+    global_id: "`u186`"
+    lir_id: "`6`"
+    operator: |
+      ```mzsql
+      TopK::Basic 5
+      ```
+    worker_id: "`2`"
+    ratio: "`1`"
+    elapsed_ns: "`00:00:03.174291`"
+    avg_ns: "`00:00:03.177245`"
+
+  - name: "`winning_bids`"
+    global_id: "`u186`"
+    lir_id: "`6`"
+    operator: |
+      ```mzsql
+      TopK::Basic 5
+      ```
+    worker_id: "`3`"
+    ratio: "`1`"
+    elapsed_ns: "`00:00:03.186564`"
+    avg_ns: "`00:00:03.177245`"
+
+  - name: "`winning_bids`"
+    global_id: "`u186`"
+    lir_id: "`5`"
+    operator: |
+      ```mzsql
+        Join::Differential 2 » 4
+      ```
+    worker_id: "`0`"
+    ratio: "`0.97`"
+    elapsed_ns: "`00:00:00.157787`"
+    avg_ns: "`00:00:00.162148`"
+
+  - name: "`winning_bids`"
+    global_id: "`u186`"
+    lir_id: "`5`"
+    operator: |
+      ```mzsql
+        Join::Differential 2 » 4
+      ```
+    worker_id: "`1`"
+    ratio: "`1.05`"
+    elapsed_ns: "`00:00:00.170231`"
+    avg_ns: "`00:00:00.162148`"
+
+  - name: "`winning_bids`"
+    global_id: "`u186`"
+    lir_id: "`5`"
+    operator: |
+      ```mzsql
+        Join::Differential 2 » 4
+      ```
+    worker_id: "`2`"
+    ratio: "`1`"
+    elapsed_ns: "`00:00:00.162352`"
+    avg_ns: "`00:00:00.162148`"
+
+  - name: "`winning_bids`"
+    global_id: "`u186`"
+    lir_id: "`5`"
+    operator: |
+      ```mzsql
+        Join::Differential 2 » 4
+      ```
+    worker_id: "`3`"
+    ratio: "`0.98`"
+    elapsed_ns: "`00:00:00.158224`"
+    avg_ns: "`00:00:00.162148`"
+
+  - name: "`winning_bids`"
+    global_id: "`u186`"
+    lir_id: "`4`"
+    operator: |
+      ```mzsql
+          Arrange 3
+      ```
+    worker_id: "`0`"
+    ratio: "`0.67`"
+    elapsed_ns: "`00:00:00.059754`"
+    avg_ns: "`00:00:00.088972`"
+
+  - name: "`winning_bids`"
+    global_id: "`u186`"
+    lir_id: "`4`"
+    operator: |
+      ```mzsql
+          Arrange 3
+      ```
+    worker_id: "`1`"
+    ratio: "`0.64`"
+    elapsed_ns: "`00:00:00.057283`"
+    avg_ns: "`00:00:00.088972`"
+
+  - name: "`winning_bids`"
+    global_id: "`u186`"
+    lir_id: "`4`"
+    operator: |
+      ```mzsql
+          Arrange 3
+      ```
+    worker_id: "`2`"
+    ratio: "`2.02`"
+    elapsed_ns: "`00:00:00.179739`"
+    avg_ns: "`00:00:00.088972`"
+
+  - name: "`winning_bids`"
+    global_id: "`u186`"
+    lir_id: "`4`"
+    operator: |
+      ```mzsql
+          Arrange 3
+      ```
+    worker_id: "`3`"
+    ratio: "`0.66`"
+    elapsed_ns: "`00:00:00.059112`"
+    avg_ns: "`00:00:00.088972`"
+
+  - name: "`winning_bids`"
+    global_id: "`u186`"
+    lir_id: "`2`"
+    operator: |
+      ```mzsql
+          Arrange 1
+      ```
+    worker_id: "`0`"
+    ratio: "`0.82`"
+    elapsed_ns: "`00:00:00.023081`"
+    avg_ns: "`00:00:00.028271`"
+
+  - name: "`winning_bids`"
+    global_id: "`u186`"
+    lir_id: "`2`"
+    operator: |
+      ```mzsql
+          Arrange 1
+      ```
+    worker_id: "`1`"
+    ratio: "`1.61`"
+    elapsed_ns: "`00:00:00.045394`"
+    avg_ns: "`00:00:00.028271`"
+
+  - name: "`winning_bids`"
+    global_id: "`u186`"
+    lir_id: "`2`"
+    operator: |
+      ```mzsql
+          Arrange 1
+      ```
+    worker_id: "`2`"
+    ratio: "`0.77`"
+    elapsed_ns: "`00:00:00.021894`"
+    avg_ns: "`00:00:00.028271`"
+
+  - name: "`winning_bids`"
+    global_id: "`u186`"
+    lir_id: "`2`"
+    operator: |
+      ```mzsql
+          Arrange 1
+      ```
+    worker_id: "`3`"
+    ratio: "`0.8`"
+    elapsed_ns: "`00:00:00.022717`"
+    avg_ns: "`00:00:00.028271`"
+
+  - name: "`wins_by_item`"
+    global_id: "`u187`"
+    lir_id: "`8`"
+    operator: |
+      ```mzsql
+      Arrange 7
+      ```
+    worker_id: "`0`"
+    ratio: "`0.85`"
+    elapsed_ns: "`00:00:00.02085`"
+    avg_ns: "`00:00:00.024526`"
+
+  - name: "`wins_by_item`"
+    global_id: "`u187`"
+    lir_id: "`8`"
+    operator: |
+      ```mzsql
+      Arrange 7
+      ```
+    worker_id: "`1`"
+    ratio: "`1.27`"
+    elapsed_ns: "`00:00:00.031028`"
+    avg_ns: "`00:00:00.024526`"
+
+  - name: "`wins_by_item`"
+    global_id: "`u187`"
+    lir_id: "`8`"
+    operator: |
+      ```mzsql
+      Arrange 7
+      ```
+    worker_id: "`2`"
+    ratio: "`1.44`"
+    elapsed_ns: "`00:00:00.035279`"
+    avg_ns: "`00:00:00.024526`"
+
+  - name: "`wins_by_item`"
+    global_id: "`u187`"
+    lir_id: "`8`"
+    operator: |
+      ```mzsql
+      Arrange 7
+      ```
+    worker_id: "`3`"
+    ratio: "`0.45`"
+    elapsed_ns: "`00:00:00.010946`"
+    avg_ns: "`00:00:00.024526`"

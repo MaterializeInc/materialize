@@ -1,0 +1,5 @@
+{{ $dataFile := .Get "data" }}
+{{ $data :=  index $.Site.Data $dataFile }}
+
+{{ partial "yaml-tables/generic-table.html" (dict "rows" $data.rows "columns"
+$data.columns) }}
