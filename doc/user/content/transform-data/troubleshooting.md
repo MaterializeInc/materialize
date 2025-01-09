@@ -283,9 +283,9 @@ A larger size cluster will provision more memory and CPU resources.
 
 You can [`EXPLAIN`](/sql/explain-plan/) a query to see how it will be
 run as a dataflow. In particular, `EXPLAIN PHYSICAL PLAN` will show
-the concrete, fully optimized plan that Materialize will run.  (That
+the concrete, fully optimized plan that Materialize will run.  That
 plan is written in our "low-level intermediate representation", which
-we call _LIR_.)  If you have [created an index](/concepts/indexes) or
+we call _LIR_.  If you have [created an index](/concepts/indexes) or
 [materialized view](/concepts/views#materialized-views), you can use
 [`mz_introspection.mz_lir_mapping`](/sql/system-catalog/mz_introspection/#mz_lir_mapping)
 to attribute various performance characteristics to the operators
@@ -300,7 +300,7 @@ information from
 and other internal views to discover which parts of your query are
 computationally expensive (e.g.,
 [`mz_introspection.mz_compute_operator_durations_histogram`](/sql/system-catalog/mz_introspection/#mz_compute_operator_durations_histogram), [`mz_introspection.mz_scheduling_elapsed`](/sql/system-catalog/mz_introspection/#mz_scheduling_elapsed))
-or consuming excessive memory (e.g., ).
+or consuming excessive memory (e.g., [`mz_introspection.mz_arrangement_sizes`](/sql/system-catalog/mz_introspection/#mz_arrangement_sizes)).
 
 We show how to use
 [`mz_introspection.mz_lir_mapping`](/sql/system-catalog/mz_introspection/#mz_lir_mapping)
@@ -332,9 +332,10 @@ skew.
 
 ### Attributing computation time
 
-One way to understand which parts of your query are 'expensive' is to
-look at the overall time spent computing in each part. Materialize
-reports the time spent in each _dataflow operator_ in
+When optimizing a query, it helps to be able to attribute 'cost' to
+its parts: we begin by inspecting how much time is spent computing in
+each part overall. Materialize reports the time spent in each
+_dataflow operator_ in
 [`mz_introspection.mz_compute_operator_durations_histogram`](/sql/system-catalog/mz_introspection/#mz_compute_operator_durations_histogram). By
 joining it with
 [`mz_introspection.mz_lir_mapping`](/sql/system-catalog/mz_introspection/#mz_lir_mapping),
