@@ -115,7 +115,7 @@ pub trait Schema2<T>: Debug + Send + Sync {
     /// Type that is able to decode values of `T` from [`Self::ArrowColumn`].
     type Decoder: ColumnDecoder<T> + Debug + Send + Sync;
     /// Type that is able to encoder values of `T`.
-    type Encoder: ColumnEncoder<T, FinishedColumn = Self::ArrowColumn> + Debug;
+    type Encoder: ColumnEncoder<T, FinishedColumn = Self::ArrowColumn> + Debug + Send + Sync;
 
     /// Returns a type that is able to decode instances of `T` from the provider column.
     fn decoder(&self, col: Self::ArrowColumn) -> Result<Self::Decoder, anyhow::Error>;

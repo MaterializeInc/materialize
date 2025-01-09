@@ -9,6 +9,7 @@
 
 //! A columnar representation of one blob's worth of data
 
+use std::mem;
 use std::sync::Arc;
 
 use arrow::array::{Array, Int64Array};
@@ -29,6 +30,7 @@ pub struct Part2 {
 }
 
 /// A builder for [`Part2`].
+#[derive(Debug)]
 pub struct PartBuilder2<K, KS: Schema2<K>, V, VS: Schema2<V>> {
     key: KS::Encoder,
     val: VS::Encoder,
@@ -85,6 +87,12 @@ impl<K, KS: Schema2<K>, V, VS: Schema2<V>> PartBuilder2<K, KS, V, VS> {
             time,
             diff,
         }
+    }
+
+    /// Finish the builder and replace it with an empty one.
+    pub fn finish_and_replace(&mut self, key_schema: &KS, val_schema: &VS) -> Part2 {
+        let builder = mem::replace(self, PartBuilder2::new(key_schema, val_schema));
+        builder.finish()
     }
 }
 

@@ -9,7 +9,6 @@
 
 //! A handle to a batch of updates
 
-use arrow::array::{Array, Int64Array};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
@@ -19,21 +18,24 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
 
+use arrow::array::{Array, Int64Array};
 use bytes::Bytes;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures_util::stream::StreamExt;
 use futures_util::{stream, FutureExt};
+use itertools::Either;
 use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
 use mz_ore::instrument;
-use mz_persist::indexed::columnar::ColumnarRecordsBuilder;
+use mz_persist::indexed::columnar::{ColumnarRecordsBuilder, ColumnarRecordsStructuredExt};
 use mz_persist::indexed::encoding::{BatchColumnarFormat, BlobTraceBatchPart, BlobTraceUpdates};
 use mz_persist::location::Blob;
 use mz_persist_types::arrow::{ArrayBound, ArrayOrd};
 use mz_persist_types::columnar::{ColumnDecoder, Schema2};
 use mz_persist_types::parquet::{CompressionFormat, EncodingConfig};
+use mz_persist_types::part::{Part2, PartBuilder2};
 use mz_persist_types::schema::SchemaId;
 use mz_persist_types::stats::{
     trim_to_budget, truncate_bytes, PartStats, TruncateBound, TRUNCATE_LEN,
@@ -554,7 +556,7 @@ where
     pub(crate) key_buf: Vec<u8>,
     pub(crate) val_buf: Vec<u8>,
 
-    records_builder: ColumnarRecordsBuilder,
+    records_builder: Either<ColumnarRecordsBuilder, PartBuilder2<K, K::Schema, V, V::Schema>>,
     pub(crate) builder: BatchBuilderInternal<K, V, T, D>,
 }
 
@@ -570,13 +572,21 @@ where
         inline_desc: Description<T>,
         metrics: Arc<Metrics>,
     ) -> Self {
+        let records_builder = if builder.parts.cfg.preferred_order == RunOrder::Structured {
+            Either::Right(PartBuilder2::new(
+                builder.write_schemas.key.as_ref(),
+                builder.write_schemas.val.as_ref(),
+            ))
+        } else {
+            Either::Left(ColumnarRecordsBuilder::default())
+        };
         Self {
             metrics,
             inline_desc,
             inclusive_upper: Antichain::new(),
             key_buf: vec![],
             val_buf: vec![],
-            records_builder: ColumnarRecordsBuilder::default(),
+            records_builder,
             builder,
         }
     }
@@ -611,9 +621,24 @@ where
             }
         }
 
-        let records = self.records_builder.finish(&self.metrics.columnar);
+        let updates = match self.records_builder {
+            Either::Left(builder) => BlobTraceUpdates::Row(builder.finish(&self.metrics.columnar)),
+            Either::Right(builder) => {
+                let Part2 {
+                    key,
+                    val,
+                    time,
+                    diff,
+                } = builder.finish();
+                BlobTraceUpdates::Structured {
+                    key_values: ColumnarRecordsStructuredExt { key, val },
+                    timestamps: time,
+                    diffs: diff,
+                }
+            }
+        };
         self.builder
-            .flush_part(self.inline_desc.clone(), BlobTraceUpdates::Row(records))
+            .flush_part(self.inline_desc.clone(), updates)
             .await;
 
         self.builder
@@ -636,22 +661,6 @@ where
         ts: &T,
         diff: &D,
     ) -> Result<Added, InvalidUsage<T>> {
-        self.metrics
-            .codecs
-            .key
-            .encode(|| K::encode(key, &mut self.key_buf));
-        self.metrics
-            .codecs
-            .val
-            .encode(|| V::encode(val, &mut self.val_buf));
-        validate_schema(
-            &self.builder.write_schemas,
-            &self.key_buf,
-            &self.val_buf,
-            Some(key),
-            Some(val),
-        );
-
         if !self.inline_desc.lower().less_equal(ts) {
             return Err(InvalidUsage::UpdateNotBeyondLower {
                 ts: ts.clone(),
@@ -660,26 +669,62 @@ where
         }
         self.inclusive_upper.insert(Reverse(ts.clone()));
 
-        let update = (
-            (self.key_buf.as_slice(), self.val_buf.as_slice()),
-            ts.encode(),
-            diff.encode(),
-        );
-        assert!(
-            self.records_builder.push(update),
-            "single update overflowed an i32"
-        );
+        let added = match &mut self.records_builder {
+            Either::Left(builder) => {
+                self.metrics
+                    .codecs
+                    .key
+                    .encode(|| K::encode(key, &mut self.key_buf));
+                self.metrics
+                    .codecs
+                    .val
+                    .encode(|| V::encode(val, &mut self.val_buf));
+                validate_schema(
+                    &self.builder.write_schemas,
+                    &self.key_buf,
+                    &self.val_buf,
+                    Some(key),
+                    Some(val),
+                );
 
-        // if we've filled up a batch part, flush out to blob to keep our memory usage capped.
-        let added = if self.records_builder.total_bytes() >= self.builder.parts.cfg.blob_target_size
-        {
-            // TODO: we're in a position to do a very good estimate here, instead of using the default.
-            let builder = mem::take(&mut self.records_builder);
-            let records = builder.finish(&self.metrics.columnar);
-            assert_eq!(self.records_builder.len(), 0);
-            Some(BlobTraceUpdates::Row(records))
-        } else {
-            None
+                let update = (
+                    (self.key_buf.as_slice(), self.val_buf.as_slice()),
+                    ts.encode(),
+                    diff.encode(),
+                );
+                assert!(builder.push(update), "single update overflowed an i32");
+
+                // if we've filled up a batch part, flush out to blob to keep our memory usage capped.
+                if builder.total_bytes() >= self.builder.parts.cfg.blob_target_size {
+                    // TODO: we're in a position to do a very good estimate here, instead of using the default.
+                    let records = mem::take(builder).finish(&self.metrics.columnar);
+                    assert_eq!(builder.len(), 0);
+                    Some(BlobTraceUpdates::Row(records))
+                } else {
+                    None
+                }
+            }
+            Either::Right(builder) => {
+                builder.push(key, val, ts.clone(), diff.clone());
+                if builder.goodbytes() >= self.builder.parts.cfg.blob_target_size {
+                    let Part2 {
+                        key,
+                        val,
+                        time,
+                        diff,
+                    } = builder.finish_and_replace(
+                        self.builder.write_schemas.key.as_ref(),
+                        self.builder.write_schemas.val.as_ref(),
+                    );
+                    Some(BlobTraceUpdates::Structured {
+                        key_values: ColumnarRecordsStructuredExt { key, val },
+                        timestamps: time,
+                        diffs: diff,
+                    })
+                } else {
+                    None
+                }
+            }
         };
 
         let added = if let Some(full_batch) = added {
@@ -1223,22 +1268,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         let metrics_ = Arc::clone(&metrics);
         let schema_id = write_schemas.id;
 
-        let key_lower = if let Some(records) = updates.updates.records() {
-            let key_bytes = records.keys();
-            if key_bytes.is_empty() {
-                &[]
-            } else if run_order == RunOrder::Codec {
-                key_bytes.value(0)
-            } else {
-                ::arrow::compute::min_binary(key_bytes).expect("min of nonempty array")
-            }
-        } else {
-            &[]
-        };
-        let key_lower = truncate_bytes(key_lower, TRUNCATE_LEN, TruncateBound::Lower)
-            .expect("lower bound always exists");
-
-        let (stats, structured_key_lower, (buf, encode_time)) = isolated_runtime
+        let (stats, key_lower, structured_key_lower, (buf, encode_time)) = isolated_runtime
             .spawn_named(|| "batch::encode_part", async move {
                 // Measure the expensive steps of the part build - re-encoding and stats collection.
                 let stats = metrics_.columnar.arrow().measure_part_build(|| {
@@ -1280,6 +1310,21 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                     stats
                 });
 
+                let key_lower = if let Some(records) = updates.updates.records() {
+                    let key_bytes = records.keys();
+                    if key_bytes.is_empty() {
+                        &[]
+                    } else if run_order == RunOrder::Codec {
+                        key_bytes.value(0)
+                    } else {
+                        ::arrow::compute::min_binary(key_bytes).expect("min of nonempty array")
+                    }
+                } else {
+                    &[]
+                };
+                let key_lower = truncate_bytes(key_lower, TRUNCATE_LEN, TruncateBound::Lower)
+                    .expect("lower bound always exists");
+
                 let structured_key_lower = if cfg.structured_key_lower_len > 0 {
                     updates.updates.structured().and_then(|ext| {
                         let min_key = if run_order == RunOrder::Structured {
@@ -1309,6 +1354,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                 drop(updates);
                 (
                     stats,
+                    key_lower,
                     structured_key_lower,
                     (Bytes::from(buf), encode_start.elapsed()),
                 )
@@ -1561,13 +1607,12 @@ mod tests {
     use mz_dyncfg::ConfigUpdates;
     use timely::order::Product;
 
+    use super::*;
     use crate::cache::PersistClientCache;
     use crate::cfg::BATCH_BUILDER_MAX_OUTSTANDING_PARTS;
     use crate::internal::paths::{BlobKey, PartialBlobKey};
     use crate::tests::{all_ok, new_test_client};
     use crate::PersistLocation;
-
-    use super::*;
 
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
