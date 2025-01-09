@@ -761,6 +761,12 @@ CREATE INDEX u_d_idx ON U(d);
 statement ok
 CREATE INDEX v_e_idx ON V(e);
 
+# Temporarily switch off enable_eager_delta_joins
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_eager_delta_joins = false
+----
+COMPLETE 0
+
 # Test a differential join.
 query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
@@ -770,20 +776,19 @@ WHERE a = c and d = e and b = f
 ----
 Explained Query:
   Project (#0{a}, #1{b}, #0{a}, #3{d}, #3{d}, #1{b})
-    Join on=(#0{a} = #2{c} AND #1{b} = #5{f} AND #3{d} = #4{e}) type=delta
-      ArrangeBy keys=[[#0{a}], [#0{a}, #1{b}]]
-        Filter (#0{a}) IS NOT NULL AND (#1{b}) IS NOT NULL
-          ReadIndex on=t t_a_idx=[*** full scan ***]
-      ArrangeBy keys=[[#0{c}], [#1{d}]]
-        ReadIndex on=u u_c_idx=[delta join lookup] u_d_idx=[delta join lookup]
-      ArrangeBy keys=[[#0{e}, #1{f}]]
-        Filter (#0{e}) IS NOT NULL AND (#1{f}) IS NOT NULL
-          ReadIndex on=v v_e_idx=[*** full scan ***]
+    Filter (#0{a}) IS NOT NULL
+      Join on=(#0{a} = #2{c} AND #1{b} = #5{f} AND #3{d} = #4{e}) type=differential
+        ArrangeBy keys=[[#0{a}]]
+          ReadIndex on=t t_a_idx=[differential join]
+        ArrangeBy keys=[[#0{c}]]
+          ReadIndex on=u u_c_idx=[differential join]
+        ArrangeBy keys=[[#0{e}, #1{f}]]
+          Filter (#0{e}) IS NOT NULL AND (#1{f}) IS NOT NULL
+            ReadIndex on=v v_e_idx=[*** full scan ***]
 
 Used Indexes:
-  - materialize.public.t_a_idx (*** full scan ***)
-  - materialize.public.u_c_idx (delta join lookup)
-  - materialize.public.u_d_idx (delta join lookup)
+  - materialize.public.t_a_idx (differential join)
+  - materialize.public.u_c_idx (differential join)
   - materialize.public.v_e_idx (*** full scan ***)
 
 Target cluster: quickstart
@@ -799,29 +804,31 @@ WHERE a = c and d = e and b = f
 ----
 Explained Query:
   Project (#0{a}, #1{b}, #0{a}, #3{d}, #3{d}, #1{b})
-    Join on=(#0{a} = #2{c} AND #1{b} = #5{f} AND #3{d} = #4{e}) type=delta
-      implementation
-        %0:t » %1:u[#0]KA » %2:v[#0, #1]KK
-        %1:u » %0:t[#0]KA » %2:v[#0, #1]KK
-        %2:v » %1:u[#1]KA » %0:t[#0, #1]KK
-      ArrangeBy keys=[[#0{a}], [#0{a}, #1{b}]]
-        Filter (#0{a}) IS NOT NULL AND (#1{b}) IS NOT NULL
-          ReadIndex on=t t_a_idx=[*** full scan ***]
-      ArrangeBy keys=[[#0{c}], [#1{d}]]
-        ReadIndex on=u u_c_idx=[delta join lookup] u_d_idx=[delta join lookup]
-      ArrangeBy keys=[[#0{e}, #1{f}]]
-        Filter (#0{e}) IS NOT NULL AND (#1{f}) IS NOT NULL
-          ReadIndex on=v v_e_idx=[*** full scan ***]
+    Filter (#0{a}) IS NOT NULL
+      Join on=(#0{a} = #2{c} AND #1{b} = #5{f} AND #3{d} = #4{e}) type=differential
+        implementation
+          %0:t[#0]KA » %1:u[#0]KA » %2:v[#0, #1]KK
+        ArrangeBy keys=[[#0{a}]]
+          ReadIndex on=t t_a_idx=[differential join]
+        ArrangeBy keys=[[#0{c}]]
+          ReadIndex on=u u_c_idx=[differential join]
+        ArrangeBy keys=[[#0{e}, #1{f}]]
+          Filter (#0{e}) IS NOT NULL AND (#1{f}) IS NOT NULL
+            ReadIndex on=v v_e_idx=[*** full scan ***]
 
 Used Indexes:
-  - materialize.public.t_a_idx (*** full scan ***)
-  - materialize.public.u_c_idx (delta join lookup)
-  - materialize.public.u_d_idx (delta join lookup)
+  - materialize.public.t_a_idx (differential join)
+  - materialize.public.u_c_idx (differential join)
   - materialize.public.v_e_idx (*** full scan ***)
 
 Target cluster: quickstart
 
 EOF
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_eager_delta_joins = true
+----
+COMPLETE 0
 
 # Create indexes required for delta join tests
 

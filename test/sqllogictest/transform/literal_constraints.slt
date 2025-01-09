@@ -750,24 +750,32 @@ EOF
 #   arrangements on the join inputs.
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT t1.a, t1.b, t2.c FROM t1, t2
+EXPLAIN WITH(arity, join implementations) SELECT t1.a, t1.b, t2.c FROM t1, t2, t2 as t2p
 WHERE
     t1.a = t2.a AND
+    t2.a = t2p.a AND
     t1.b IN ('l2', 'l3')
 ----
 Explained Query:
-  Project (#0, #1, #5) // { arity: 3 }
-    Filter (#0) IS NOT NULL // { arity: 6 }
-      Join on=(#0 = #3) type=differential // { arity: 6 }
-        implementation
-          %0:t1[#0]KAe » %1:t2[#0]KAe
-        ArrangeBy keys=[[#0]] // { arity: 3 }
-          ReadIndex on=materialize.public.t1 idx_t1_b=[lookup values=[("l2"); ("l3")]] // { arity: 3 }
-        ArrangeBy keys=[[#0]] // { arity: 3 }
-          ReadIndex on=t2 idx_t2_a=[differential join] // { arity: 3 }
+  Return // { arity: 3 }
+    Project (#0, #1, #5) // { arity: 3 }
+      Filter (#0) IS NOT NULL // { arity: 9 }
+        Join on=(#0 = #3 = #6) type=delta // { arity: 9 }
+          implementation
+            %0:t1 » %1:l0[#0]KA » %2:l0[#0]KA
+            %1:l0 » %0:t1[#0]KAe » %2:l0[#0]KA
+            %2:l0 » %0:t1[#0]KAe » %1:l0[#0]KA
+          ArrangeBy keys=[[#0]] // { arity: 3 }
+            ReadIndex on=materialize.public.t1 idx_t1_b=[lookup values=[("l2"); ("l3")]] // { arity: 3 }
+          Get l0 // { arity: 3 }
+          Get l0 // { arity: 3 }
+  With
+    cte l0 =
+      ArrangeBy keys=[[#0]] // { arity: 3 }
+        ReadIndex on=t2 idx_t2_a=[delta join lookup] // { arity: 3 }
 
 Used Indexes:
-  - materialize.public.idx_t2_a (differential join)
+  - materialize.public.idx_t2_a (delta join lookup)
   - materialize.public.idx_t1_b (lookup)
 
 Target cluster: quickstart
