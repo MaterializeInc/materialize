@@ -159,22 +159,6 @@ impl AddAssign<&BatchMetrics> for BatchMetrics {
     }
 }
 
-impl BatchMetrics {
-    fn is_empty(&self) -> bool {
-        let BatchMetrics {
-            inserts: self_inserts,
-            retractions: self_retractions,
-            error_inserts: self_error_inserts,
-            error_retractions: self_error_retractions,
-        } = self;
-
-        *self_inserts == 0
-            && *self_retractions == 0
-            && *self_error_inserts == 0
-            && *self_error_retractions == 0
-    }
-}
-
 /// Manages batches and metrics.
 struct BatchBuilderAndMetadata<K, V, T, D>
 where
@@ -297,7 +281,6 @@ pub(crate) fn render<G>(
     desired_collection: Collection<G, Result<Row, DataflowError>, Diff>,
     storage_state: &StorageState,
     metrics: SourcePersistSinkMetrics,
-    output_index: usize,
     busy_signal: Arc<Semaphore>,
 ) -> (
     Stream<G, ()>,
@@ -341,7 +324,6 @@ where
         &written_batches,
         persist_clients,
         storage_state,
-        output_index,
         metrics,
         Arc::clone(&busy_signal),
     );
@@ -898,7 +880,6 @@ fn append_batches<G>(
     batches: &Stream<G, HollowBatchAndMetadata<mz_repr::Timestamp>>,
     persist_clients: Arc<PersistClientCache>,
     storage_state: &StorageState,
-    output_index: usize,
     metrics: SourcePersistSinkMetrics,
     busy_signal: Arc<Semaphore>,
 ) -> (
@@ -1028,18 +1009,6 @@ where
         // The current input frontiers.
         let mut batch_description_frontier = Antichain::from_elem(Timestamp::minimum());
         let mut batches_frontier = Antichain::from_elem(Timestamp::minimum());
-
-        // Pause the source to prevent committing the snapshot,
-        // if the failpoint is configured
-        let mut pg_snapshot_pause = false;
-        (|| {
-            fail::fail_point!("pg_snapshot_pause", |val| {
-                pg_snapshot_pause = val.map_or(false, |index| {
-                    let index: usize = index.parse().unwrap();
-                    index == output_index
-                });
-            });
-        })();
 
         loop {
             tokio::select! {
@@ -1173,18 +1142,6 @@ where
                 let batch_metrics = batch_set.batch_metrics;
 
                 let mut to_append = batches.iter_mut().map(|b| &mut b.batch).collect::<Vec<_>>();
-
-                // We evaluate this above to avoid checking an environment variable
-                // in a hot loop. Note that we only pause before we emit
-                // non-empty batches, because we do want to bump the upper
-                // with empty ones before we start ingesting the snapshot.
-                //
-                // This is a fairly complex failure case we need to check
-                // see `test/cluster/pg-snapshot-partial-failure` for more
-                // information.
-                if pg_snapshot_pause && !to_append.is_empty() && !batch_metrics.is_empty() {
-                    futures::future::pending().await
-                }
 
                 let result = {
                     let maybe_err = if *read_only_rx.borrow() {

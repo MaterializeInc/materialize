@@ -22,7 +22,7 @@ use differential_dataflow::{AsCollection, Collection};
 use indexmap::map::Entry;
 use itertools::Itertools;
 use mz_ore::vec::VecExt;
-use mz_repr::{Diff, Row};
+use mz_repr::{Diff, GlobalId, Row};
 use mz_storage_types::errors::{DataflowError, EnvelopeError, UpsertError};
 use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
@@ -37,7 +37,6 @@ use timely::progress::{Antichain, Timestamp};
 
 use crate::healthcheck::HealthStatusUpdate;
 use crate::metrics::upsert::UpsertMetrics;
-use crate::render::sources::OutputIndex;
 use crate::upsert::types::UpsertValueAndSize;
 use crate::upsert::types::{self as upsert_types, ValueMetadata};
 use crate::upsert::types::{StateValue, UpsertState, UpsertStateBackend};
@@ -117,7 +116,7 @@ pub fn upsert_inner<G: Scope, FromTime, F, Fut, US>(
     snapshot_buffering_max: Option<usize>,
 ) -> (
     Collection<G, Result<Row, DataflowError>, Diff>,
-    Stream<G, (OutputIndex, HealthStatusUpdate)>,
+    Stream<G, (Option<GlobalId>, HealthStatusUpdate)>,
     Stream<G, Infallible>,
     PressOnDropButton,
 )
