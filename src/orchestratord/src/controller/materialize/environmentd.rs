@@ -1198,6 +1198,22 @@ fn create_environmentd_statefulset_object(
         );
         pod_template_annotations.insert("prometheus.io/path".to_owned(), "/metrics".to_string());
         pod_template_annotations.insert("prometheus.io/scheme".to_owned(), "http".to_string());
+        pod_template_annotations.insert(
+            "materialize.prometheus.io/mz_usage_path".to_owned(),
+            "/metrics/mz_usage".to_string(),
+        );
+        pod_template_annotations.insert(
+            "materialize.prometheus.io/mz_frontier_path".to_owned(),
+            "/metrics/mz_frontier".to_string(),
+        );
+        pod_template_annotations.insert(
+            "materialize.prometheus.io/mz_compute_path".to_owned(),
+            "/metrics/mz_compute".to_string(),
+        );
+        pod_template_annotations.insert(
+            "materialize.prometheus.io/mz_storage_path".to_owned(),
+            "/metrics/mz_storage".to_string(),
+        );
     }
 
     let tolerations = Some(vec![
