@@ -147,6 +147,13 @@ pub const PG_OFFSET_KNOWN_INTERVAL: Config<Duration> = Config::new(
     "Interval to fetch `offset_known`, from `pg_current_wal_lsn`",
 );
 
+/// Interval to re-validate the schemas of ingested tables.
+pub const PG_SCHEMA_VALIDATION_INTERVAL: Config<Duration> = Config::new(
+    "pg_schema_validation_interval",
+    Duration::from_secs(15),
+    "Interval to re-validate the schemas of ingested tables.",
+);
+
 // Networking
 
 /// Whether or not to enforce that external connection addresses are global
@@ -245,6 +252,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&MYSQL_OFFSET_KNOWN_INTERVAL)
         .add(&PG_FETCH_SLOT_RESUME_LSN_INTERVAL)
         .add(&PG_OFFSET_KNOWN_INTERVAL)
+        .add(&PG_SCHEMA_VALIDATION_INTERVAL)
         .add(&ENFORCE_EXTERNAL_ADDRESSES)
         .add(&STORAGE_UPSERT_PREVENT_SNAPSHOT_BUFFERING)
         .add(&STORAGE_ROCKSDB_USE_MERGE_OPERATOR)
