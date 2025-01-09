@@ -230,6 +230,10 @@ fn attempt_join_simplification(
                         // TODO: Discover the transform that would not require this code.
                         let mut is_not_nulls = Vec::new();
                         for (col0, col1) in ltr.iter() {
+                            // We are using the pre-computed types; recomputing the types here
+                            // might alter nullability. As of 2025-01-09, Gábor has not found that
+                            // happening. But for the future, notice that this could be a source of
+                            // inaccurate or inconsistent nullability information.
                             if !typ1.column_types[*col1].nullable
                                 && typ0.column_types[*col0].nullable
                             {
