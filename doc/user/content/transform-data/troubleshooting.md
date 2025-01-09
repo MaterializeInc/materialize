@@ -455,7 +455,7 @@ can attribute this to particular parts of our query using
 
 ```sql
   SELECT mo.name AS name, mlm.global_id AS global_id, lir_id, parent_lir_id, REPEAT(' ', nesting * 2) || operator AS operator,
-         levels, to_cut, pg_size_pretty(savings), hint
+         levels, to_cut, pg_size_pretty(savings) AS savings, hint
     FROM           mz_introspection.mz_lir_mapping mlm
               JOIN mz_introspection.mz_dataflow_global_ids mdgi
                 ON (mlm.global_id = mdgi.global_id)
@@ -470,16 +470,16 @@ ORDER BY mlm.global_id, lir_id DESC;
 
 Each `TopK` operator will have associated hints:
 
-| name         | global_id | lir_id | parent_lir_id | operator                         | levels | to_cut | pg_size_pretty | hint  |
-| ------------ | --------- | ------ | ------------- | -------------------------------- | ------ | ------ | -------------- | ----- |
-| winning_bids | u148      | 6      | null          | TopK::Basic 5                    | 8      | 6      | 27 MB          | 255.0 |
-| winning_bids | u148      | 5      | 6             |   Join::Differential 2 » 4       | null   | null   | null           | null  |
-| winning_bids | u148      | 4      | 5             |     Arrange 3                    | null   | null   | null           | null  |
-| winning_bids | u148      | 3      | 4             |       Get::PassArrangements u145 | null   | null   | null           | null  |
-| winning_bids | u148      | 2      | 5             |     Arrange 1                    | null   | null   | null           | null  |
-| winning_bids | u148      | 1      | 2             |       Get::Collection u144       | null   | null   | null           | null  |
-| wins_by_item | u149      | 8      | null          | Arrange 7                        | null   | null   | null           | null  |
-| wins_by_item | u149      | 7      | 8             |   Get::PassArrangements u148     | null   | null   | null           | null  |
+| name         | global_id | lir_id | parent_lir_id | operator                         | levels | to_cut | savings | hint  |
+| ------------ | --------- | ------ | ------------- | -------------------------------- | ------ | ------ | ------- | ----- |
+| winning_bids | u148      | 6      | null          | TopK::Basic 5                    | 8      | 6      | 27 MB   | 255.0 |
+| winning_bids | u148      | 5      | 6             |   Join::Differential 2 » 4       | null   | null   | null    | null  |
+| winning_bids | u148      | 4      | 5             |     Arrange 3                    | null   | null   | null    | null  |
+| winning_bids | u148      | 3      | 4             |       Get::PassArrangements u145 | null   | null   | null    | null  |
+| winning_bids | u148      | 2      | 5             |     Arrange 1                    | null   | null   | null    | null  |
+| winning_bids | u148      | 1      | 2             |       Get::Collection u144       | null   | null   | null    | null  |
+| wins_by_item | u149      | 8      | null          | Arrange 7                        | null   | null   | null    | null  |
+| wins_by_item | u149      | 7      | 8             |   Get::PassArrangements u148     | null   | null   | null    | null  |
 
 Here, the hinted `DISTINCT ON INPUT GROUP SIZE` is `255.0`. We can re-create our view and index using the hint as follows:
 
@@ -487,17 +487,17 @@ Here, the hinted `DISTINCT ON INPUT GROUP SIZE` is `255.0`. We can re-create our
 DROP VIEW winning_bids CASCADE;
 
 CREATE VIEW winning_bids AS
-SELECT DISTINCT ON (a.id) b.*, a.item, a.seller
- FROM auctions AS a
- JOIN bids AS b
-   ON a.id = b.auction_id
-WHERE b.bid_time < a.end_time
-  AND mz_now() >= a.end_time
-OPTIONS (DISTINCT ON INPUT GROUP SIZE = 255) -- use hint!
-ORDER BY a.id,
-  b.amount DESC,
-  b.bid_time,
-  b.buyer;
+    SELECT DISTINCT ON (a.id) b.*, a.item, a.seller
+      FROM auctions AS a
+      JOIN bids AS b
+        ON a.id = b.auction_id
+     WHERE b.bid_time < a.end_time
+       AND mz_now() >= a.end_time
+   OPTIONS (DISTINCT ON INPUT GROUP SIZE = 255) -- use hint!
+  ORDER BY a.id,
+    b.amount DESC,
+    b.bid_time,
+    b.buyer;
 
 CREATE INDEX wins_by_item ON winning_bids (item);
 ```
@@ -538,18 +538,17 @@ You can identify worker skew by comparing a worker's time spent to the
 overall time spent across all workers:
 
 ```sql
- SELECT mo.name AS name, global_id, lir_id, REPEAT(' ', 2 * nesting) || operator as operator,
-                     worker_id,
-                     ROUND(SUM(elapsed_ns) / SUM(aebi.total_ns), 2) as ratio,
-                     SUM(elapsed_ns) / 1000 * '1 microsecond'::INTERVAL AS elapsed_ns,
-                     SUM(aebi.total_ns) / 1000 * '1 microsecond'::INTERVAL  as avg_ns
-
+ SELECT mo.name AS name, global_id, lir_id, REPEAT(' ', 2 * nesting) || operator AS operator,
+        worker_id,
+        ROUND(SUM(elapsed_ns) / SUM(aebi.total_ns), 2) AS ratio,
+        SUM(epw.elapsed_ns) / 1000 * '1 microsecond'::INTERVAL AS elapsed_ns,
+        SUM(aebi.total_ns) / 1000 * '1 microsecond'::INTERVAL AS avg_ns
    FROM                    mz_introspection.mz_lir_mapping mlm
         CROSS JOIN LATERAL (  SELECT SUM(elapsed_ns) AS total_ns
                                 FROM mz_introspection.mz_scheduling_elapsed_per_worker mse
                                WHERE mlm.operator_id_start <= id AND id < mlm.operator_id_end
                             GROUP BY worker_id) aebi
-        CROSS JOIN LATERAL (  SELECT worker_id, SUM(elapsed_ns) as elapsed_ns
+        CROSS JOIN LATERAL (  SELECT worker_id, SUM(elapsed_ns) AS elapsed_ns
                                 FROM mz_introspection.mz_scheduling_elapsed_per_worker mse
                                WHERE mlm.operator_id_start <= id AND id < mlm.operator_id_end
                             GROUP BY worker_id) epw
