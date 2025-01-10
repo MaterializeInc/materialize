@@ -354,6 +354,7 @@ pub struct BatchBuilderConfig {
     pub(crate) write_diffs_sum: bool,
     pub(crate) encoding_config: EncodingConfig,
     pub(crate) preferred_order: RunOrder,
+    pub(crate) structured_encoding: bool,
     pub(crate) record_schema_id: bool,
     pub(crate) structured_key_lower_len: usize,
     pub(crate) run_length_limit: usize,
@@ -431,6 +432,13 @@ pub(crate) const MAX_RUNS: Config<usize> = Config::new(
     The minimum value is 2; below this, compaction is disabled.",
 );
 
+pub(crate) const BUILDER_STRUCTURED: Config<bool> = Config::new(
+    "persist_batch_builder_structured",
+    false,
+    "In the incremental batch builder, should we use the new structured-data builder \
+    instead of the old codec encoding?",
+);
+
 /// A target maximum size of blob payloads in bytes. If a logical "batch" is
 /// bigger than this, it will be broken up into smaller, independent pieces.
 /// This is best-effort, not a guarantee (though as of 2022-06-09, we happen to
@@ -491,6 +499,7 @@ impl BatchBuilderConfig {
                 compression: CompressionFormat::from_str(&ENCODING_COMPRESSION_FORMAT.get(value)),
             },
             preferred_order,
+            structured_encoding: BUILDER_STRUCTURED.get(value),
             record_schema_id,
             structured_key_lower_len: STRUCTURED_KEY_LOWER_LEN.get(value),
             run_length_limit: MAX_RUN_LEN.get(value).clamp(2, usize::MAX),
@@ -572,7 +581,7 @@ where
         inline_desc: Description<T>,
         metrics: Arc<Metrics>,
     ) -> Self {
-        let records_builder = if builder.parts.cfg.preferred_order == RunOrder::Structured {
+        let records_builder = if builder.parts.cfg.structured_encoding {
             Either::Right(PartBuilder2::new(
                 builder.write_schemas.key.as_ref(),
                 builder.write_schemas.val.as_ref(),

@@ -310,6 +310,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::batch::BATCH_DELETE_ENABLED)
         .add(&crate::batch::BATCH_COLUMNAR_FORMAT)
         .add(&crate::batch::BLOB_TARGET_SIZE)
+        .add(&crate::batch::BUILDER_STRUCTURED)
         .add(&crate::batch::INLINE_WRITES_TOTAL_MAX_BYTES)
         .add(&crate::batch::INLINE_WRITES_SINGLE_MAX_BYTES)
         .add(&crate::batch::ENCODING_ENABLE_DICTIONARY)

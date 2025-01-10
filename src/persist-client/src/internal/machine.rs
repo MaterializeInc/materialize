@@ -1419,7 +1419,7 @@ pub mod datadriven {
 
     use crate::batch::{
         validate_truncate_batch, Batch, BatchBuilder, BatchBuilderConfig, BatchBuilderInternal,
-        BatchParts, BLOB_TARGET_SIZE, STRUCTURED_ORDER,
+        BatchParts, BLOB_TARGET_SIZE, BUILDER_STRUCTURED, STRUCTURED_ORDER,
     };
     use crate::cfg::COMPACTION_MEMORY_BOUND_BYTES;
     use crate::fetch::{Cursor, EncodedPart};
@@ -1466,6 +1466,7 @@ pub mod datadriven {
             client
                 .cfg
                 .set_config(&STRUCTURED_ORDER, *STRUCTURED_ORDER.default());
+            client.cfg.set_config(&BUILDER_STRUCTURED, true);
             let state_versions = Arc::new(StateVersions::new(
                 client.cfg.clone(),
                 Arc::clone(&client.consensus),
