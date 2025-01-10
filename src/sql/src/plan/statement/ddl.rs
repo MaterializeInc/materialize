@@ -505,10 +505,9 @@ pub fn plan_create_webhook_source(
         body_format,
         include_headers,
         validate_using,
+        is_table,
         // We resolved `in_cluster` above, so we want to ignore it here.
         in_cluster: _,
-        // Whether or not we created a webhook as a source or table is irrelevant here.
-        is_table: _,
     } = stmt;
 
     let validate_using = validate_using
@@ -630,22 +629,51 @@ pub fn plan_create_webhook_source(
     // such, we always use a default of EpochMilliseconds.
     let timeline = Timeline::EpochMilliseconds;
 
-    Ok(Plan::CreateSource(CreateSourcePlan {
-        name,
-        source: Source {
-            create_sql,
-            data_source: DataSourceDesc::Webhook {
-                validate_using,
-                body_format,
-                headers,
+    let plan = if is_table {
+        let data_source = DataSourceDesc::Webhook {
+            validate_using,
+            body_format,
+            headers,
+            cluster_id: Some(in_cluster),
+        };
+        let data_source = TableDataSource::DataSource {
+            desc: data_source,
+            timeline,
+        };
+        Plan::CreateTable(CreateTablePlan {
+            name,
+            if_not_exists,
+            table: Table {
+                create_sql,
+                desc,
+                temporary: false,
+                compaction_window: None,
+                data_source,
             },
-            desc,
-            compaction_window: None,
-        },
-        if_not_exists,
-        timeline,
-        in_cluster: Some(in_cluster),
-    }))
+        })
+    } else {
+        let data_source = DataSourceDesc::Webhook {
+            validate_using,
+            body_format,
+            headers,
+            // Important: The cluster is set at the `Source` level.
+            cluster_id: None,
+        };
+        Plan::CreateSource(CreateSourcePlan {
+            name,
+            source: Source {
+                create_sql,
+                data_source,
+                desc,
+                compaction_window: None,
+            },
+            if_not_exists,
+            timeline,
+            in_cluster: Some(in_cluster),
+        })
+    };
+
+    Ok(plan)
 }
 
 pub fn plan_create_source(

@@ -1558,7 +1558,7 @@ where
             .into_iter()
             .partition(|id| match self.collections[id].data_source {
                 DataSource::Table => true,
-                DataSource::IngestionExport { .. } => false,
+                DataSource::IngestionExport { .. } | DataSource::Webhook => false,
                 _ => panic!("identifier is not a table: {}", id),
             });
 

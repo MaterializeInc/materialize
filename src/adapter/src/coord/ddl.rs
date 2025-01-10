@@ -226,7 +226,8 @@ impl Coordinator {
                             catalog::DropObjectInfo::Item(id) => {
                                 match self.catalog().get_entry(id).item() {
                                     CatalogItem::Table(table) => {
-                                        table_gids_to_drop.extend(table.global_ids());
+                                        table_gids_to_drop
+                                            .extend(table.global_ids().map(|gid| (*id, gid)));
                                     }
                                     CatalogItem::Source(source) => {
                                         sources_to_drop.push((*id, source.global_id()));
@@ -390,7 +391,7 @@ impl Coordinator {
         let collections_to_drop: BTreeSet<GlobalId> = sources_to_drop
             .iter()
             .map(|(_, gid)| *gid)
-            .chain(table_gids_to_drop.iter().copied())
+            .chain(table_gids_to_drop.iter().map(|(_, gid)| *gid))
             .chain(storage_sink_gids_to_drop.iter().copied())
             .chain(indexes_to_drop.iter().map(|(_, gid)| *gid))
             .chain(materialized_views_to_drop.iter().map(|(_, gid)| *gid))
@@ -456,7 +457,7 @@ impl Coordinator {
             .iter()
             .map(|(_, gid)| *gid)
             .chain(storage_sink_gids_to_drop.iter().copied())
-            .chain(table_gids_to_drop.iter().copied())
+            .chain(table_gids_to_drop.iter().map(|(_, gid)| *gid))
             .chain(materialized_views_to_drop.iter().map(|(_, gid)| *gid))
             .chain(continual_tasks_to_drop.iter().map(|(_, _, gid)| *gid));
         let compute_ids_to_drop = indexes_to_drop
@@ -866,8 +867,12 @@ impl Coordinator {
             .unwrap_or_terminate("cannot fail to drop sources");
     }
 
-    fn drop_tables(&mut self, table_gids: Vec<GlobalId>, ts: Timestamp) {
+    fn drop_tables(&mut self, tables: Vec<(CatalogItemId, GlobalId)>, ts: Timestamp) {
+        for (item_id, _gid) in &tables {
+            self.active_webhooks.remove(item_id);
+        }
         let storage_metadata = self.catalog.state().storage_metadata();
+        let table_gids = tables.into_iter().map(|(_id, gid)| gid).collect();
         self.controller
             .storage
             .drop_tables(storage_metadata, table_gids, ts)
