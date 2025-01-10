@@ -770,11 +770,11 @@
       description: |
         Computes the MD5 hash of the given bytea `data`.
         For PostgreSQL compatibility, returns a hex-encoded value of type `text` rather than `bytea`.
-    - signature: 'seahash(data: bytea) -> bigint'
+    - signature: 'seahash(data: bytea) -> u64'
       description: |
         Computes the [SeaHash](https://docs.rs/seahash) hash of the given bytea `data`.
       version-added: v0.114
-    - signature: 'seahash(data: text) -> bigint'
+    - signature: 'seahash(data: text) -> u64'
       description: |
         Computes the [SeaHash](https://docs.rs/seahash) hash of the given text `data`.
       version-added: v0.114
