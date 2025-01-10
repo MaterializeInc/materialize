@@ -33,6 +33,7 @@ use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::{Capability, CapabilitySet};
 use timely::dataflow::{Scope, Stream};
 use timely::order::{PartialOrder, TotalOrder};
+use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 
 use crate::healthcheck::HealthStatusUpdate;
@@ -121,7 +122,7 @@ pub fn upsert_inner<G: Scope, FromTime, F, Fut, US>(
     PressOnDropButton,
 )
 where
-    G::Timestamp: TotalOrder + Sync,
+    G::Timestamp: Refines<mz_repr::Timestamp> + TotalOrder + Sync,
     F: FnOnce() -> Fut + 'static,
     Fut: std::future::Future<Output = US>,
     US: UpsertStateBackend<G::Timestamp, Option<FromTime>>,
@@ -266,6 +267,7 @@ where
                         worker_id = %source_config.worker_id,
                         source_id = %source_config.id,
                         persist_stash = %persist_stash.len(),
+                        %hydrating,
                         %last_rehydration_chunk,
                         ?resume_upper,
                         ?persist_upper,
@@ -404,7 +406,10 @@ where
             // is in an inconsistent/consolidating state and accessing it would
             // panic.
             if let Some(largest_seen_persist_ts) = largest_seen_persist_ts.as_ref() {
-                if persist_upper.less_equal(largest_seen_persist_ts) {
+                let largest_seen_outer_persist_ts = largest_seen_persist_ts.clone().to_outer();
+                let outer_persist_upper = persist_upper.iter().map(|ts| ts.clone().to_outer());
+                let outer_persist_upper = Antichain::from_iter(outer_persist_upper);
+                if outer_persist_upper.less_equal(&largest_seen_outer_persist_ts) {
                     continue;
                 }
             }
@@ -641,6 +646,29 @@ where
 
             eligible
         })
+        .filter(|(ts, _, _, _)| {
+            let persist_upper = match &drain_style {
+                DrainStyle::ToUpper {
+                    input_upper: _,
+                    persist_upper,
+                } => persist_upper,
+                DrainStyle::AtTime {
+                    time: _,
+                    persist_upper,
+                } => persist_upper,
+            };
+
+            // Any update that is "in the past" of the persist upper is not
+            // relevant anymore. We _can_ emit changes for it, but the
+            // downstream persist_sink would filter these updates out because
+            // the shard upper is already further ahead.
+            //
+            // Plus, our upsert state is up-to-date to the persist_upper, so we
+            // wouldn't be able to emit correct retractions for incoming
+            // commands whose `ts` is in the past of that.
+            let relevant = persist_upper.less_equal(ts);
+            relevant
+        })
         .collect_vec();
 
     tracing::debug!(
@@ -733,22 +761,18 @@ where
 
         match value {
             Some(value) => {
-                let existing_value = existing_state_cell.take();
-
-                let old_value = if let Some(old_value) = existing_value.as_ref() {
-                    old_value.provisional_value_ref(&ts)
-                } else {
-                    None
-                };
-
-                if let Some(old_value) = old_value {
-                    output_updates.push((old_value.clone(), ts.clone(), -1));
+                if let Some(old_value) = existing_state_cell.as_ref() {
+                    if let Some(old_value) = old_value.provisional_value_ref(&ts) {
+                        output_updates.push((old_value.clone(), ts.clone(), -1));
+                    }
                 }
 
                 match &drain_style {
                     DrainStyle::AtTime { .. } => {
+                        let existing_value = existing_state_cell.take();
+
                         let new_value = match existing_value {
-                            Some(existing_value) => existing_value.into_provisional_value(
+                            Some(existing_value) => existing_value.clone().into_provisional_value(
                                 value.clone(),
                                 ts.clone(),
                                 Some(from_time.0.clone()),
@@ -759,6 +783,7 @@ where
                                 Some(from_time.0.clone()),
                             ),
                         };
+
                         existing_state_cell.replace(new_value);
                     }
                     DrainStyle::ToUpper { .. } => {
@@ -769,19 +794,16 @@ where
                 output_updates.push((value, ts, 1));
             }
             None => {
-                let existing_value = existing_state_cell.take();
-
-                let old_value = if let Some(old_value) = existing_value.as_ref() {
-                    old_value.provisional_value_ref(&ts)
-                } else {
-                    None
-                };
-                if let Some(old_value) = old_value {
-                    output_updates.push((old_value.clone(), ts.clone(), -1));
+                if let Some(old_value) = existing_state_cell.as_ref() {
+                    if let Some(old_value) = old_value.provisional_value_ref(&ts) {
+                        output_updates.push((old_value.clone(), ts.clone(), -1));
+                    }
                 }
 
                 match &drain_style {
                     DrainStyle::AtTime { .. } => {
+                        let existing_value = existing_state_cell.take();
+
                         let new_value = match existing_value {
                             Some(existing_value) => existing_value
                                 .into_provisional_tombstone(ts.clone(), Some(from_time.0.clone())),
@@ -790,6 +812,7 @@ where
                                 Some(from_time.0.clone()),
                             ),
                         };
+
                         existing_state_cell.replace(new_value);
                     }
                     DrainStyle::ToUpper { .. } => {
