@@ -80,7 +80,6 @@ use mz_ore::retry::Retry;
 use mz_ore::soft_panic_or_log;
 use mz_ore::task::AbortOnDropHandle;
 use mz_ore::vec::VecExt;
-use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::read::ReadHandle;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_types::Codec64;
@@ -103,7 +102,6 @@ use mz_storage_types::parameters::{
     StorageParameters, STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT,
 };
 use mz_storage_types::sources::SourceData;
-use mz_txn_wal::txn_read::TxnsRead;
 use timely::progress::{Antichain, Timestamp};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::{Duration, Instant};
@@ -111,8 +109,8 @@ use tracing::{debug, error, info};
 
 use crate::{
     collection_mgmt, privatelink_status_history_desc, replica_status_history_desc,
-    sink_status_history_desc, snapshot, snapshot_statistics, source_status_history_desc,
-    statistics, StatusHistoryDesc, StatusHistoryRetentionPolicy, StorageError,
+    sink_status_history_desc, snapshot_statistics, source_status_history_desc, statistics,
+    StatusHistoryDesc, StatusHistoryRetentionPolicy, StorageError,
 };
 
 // Default rate at which we advance the uppers of managed collections.
@@ -453,8 +451,6 @@ where
     pub(crate) recent_upper: Antichain<T>,
     pub(crate) introspection_type: IntrospectionType,
     pub(crate) storage_collections: Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
-    pub(crate) txns_read: TxnsRead<T>,
-    pub(crate) persist: Arc<PersistClientCache>,
     pub(crate) collection_manager: collection_mgmt::CollectionManager<T>,
     pub(crate) source_statistics: Arc<Mutex<statistics::SourceStatistics>>,
     pub(crate) sink_statistics:
@@ -610,8 +606,6 @@ where
                     self.id,
                     introspection_config.recent_upper,
                     &introspection_config.storage_collections,
-                    &introspection_config.txns_read,
-                    &introspection_config.persist,
                 )
                 .await;
 
@@ -648,8 +642,6 @@ where
                     self.id,
                     introspection_config.recent_upper,
                     &introspection_config.storage_collections,
-                    &introspection_config.txns_read,
-                    &introspection_config.persist,
                 )
                 .await;
 
@@ -1028,8 +1020,6 @@ where
     pub(crate) config_set: Arc<ConfigSet>,
     pub(crate) parameters: StorageParameters,
     pub(crate) storage_collections: Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
-    pub(crate) txns_read: TxnsRead<T>,
-    pub(crate) persist: Arc<PersistClientCache>,
 }
 
 /// A task that writes to an append only collection and continuously bumps the upper for the specified
@@ -1146,8 +1136,6 @@ where
             config_set,
             parameters,
             storage_collections,
-            txns_read,
-            persist,
         }) = introspection_config
         else {
             return;
@@ -1161,8 +1149,6 @@ where
                     config_set,
                     self.now.clone(),
                     storage_collections,
-                    txns_read,
-                    persist,
                 )
                 .await;
                 if let Err(error) = result {
@@ -1181,8 +1167,6 @@ where
                     privatelink_status_history_desc(&parameters),
                     self.now.clone(),
                     &storage_collections,
-                    &txns_read,
-                    &persist,
                 )
                 .await;
                 Vec::new()
@@ -1195,8 +1179,6 @@ where
                     replica_status_history_desc(&parameters),
                     self.now.clone(),
                     &storage_collections,
-                    &txns_read,
-                    &persist,
                 )
                 .await;
                 Vec::new()
@@ -1224,8 +1206,6 @@ where
                     source_status_history_desc(&parameters),
                     self.now.clone(),
                     &storage_collections,
-                    &txns_read,
-                    &persist,
                 )
                 .await;
 
@@ -1258,8 +1238,6 @@ where
                     sink_status_history_desc(&parameters),
                     self.now.clone(),
                     &storage_collections,
-                    &txns_read,
-                    &persist,
                 )
                 .await;
 
@@ -1475,8 +1453,6 @@ async fn partially_truncate_metrics_history<T>(
     config_set: Arc<ConfigSet>,
     now: NowFn,
     storage_collections: Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
-    txns_read: TxnsRead<T>,
-    persist: Arc<PersistClientCache>,
 ) -> Result<(), anyhow::Error>
 where
     T: Codec64 + From<EpochMillis> + TimestampManipulation,
@@ -1507,7 +1483,8 @@ where
         return Ok(()); // nothing to truncate
     };
 
-    let mut rows = snapshot(id, as_of_ts, &storage_collections, &txns_read, &persist)
+    let mut rows = storage_collections
+        .snapshot(id, as_of_ts)
         .await
         .map_err(|e| anyhow!("reading snapshot: {e:?}"))?;
 
@@ -1568,8 +1545,6 @@ pub(crate) async fn partially_truncate_status_history<T, K>(
     status_history_desc: StatusHistoryDesc<K>,
     now: NowFn,
     storage_collections: &Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
-    txns_read: &TxnsRead<T>,
-    persist: &Arc<PersistClientCache>,
 ) -> BTreeMap<K, Row>
 where
     T: Codec64 + From<EpochMillis> + TimestampManipulation,
@@ -1581,7 +1556,8 @@ where
         Some(f) if f > &T::minimum() => {
             let as_of = f.step_back().unwrap();
 
-            snapshot(id, as_of, storage_collections, txns_read, persist)
+            storage_collections
+                .snapshot(id, as_of)
                 .await
                 .expect("snapshot succeeds")
         }

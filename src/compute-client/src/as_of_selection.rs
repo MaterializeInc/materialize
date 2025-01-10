@@ -766,6 +766,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     use async_trait::async_trait;
+    use differential_dataflow::lattice::Lattice;
     use futures::future::BoxFuture;
     use mz_compute_types::dataflows::{IndexDesc, IndexImport};
     use mz_compute_types::sinks::ComputeSinkConnection;
@@ -774,11 +775,12 @@ mod tests {
     use mz_compute_types::sources::SourceInstanceArguments;
     use mz_compute_types::sources::SourceInstanceDesc;
     use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
-    use mz_repr::RelationDesc;
-    use mz_repr::RelationType;
+    use mz_persist_types::Codec64;
     use mz_repr::Timestamp;
+    use mz_repr::{Diff, RelationType};
+    use mz_repr::{RelationDesc, Row};
     use mz_storage_client::controller::{CollectionDescription, StorageMetadata, StorageTxn};
-    use mz_storage_client::storage_collections::CollectionFrontiers;
+    use mz_storage_client::storage_collections::{CollectionFrontiers, SnapshotCursor};
     use mz_storage_types::connections::inline::InlinedConnection;
     use mz_storage_types::controller::{CollectionMetadata, StorageError};
     use mz_storage_types::parameters::StorageParameters;
@@ -786,6 +788,7 @@ mod tests {
     use mz_storage_types::sources::SourceExportDataConfig;
     use mz_storage_types::sources::{GenericSourceConnection, SourceDesc};
     use mz_storage_types::time_dependence::{TimeDependence, TimeDependenceError};
+    use timely::progress::Timestamp as TimelyTimestamp;
 
     use super::*;
 
@@ -869,6 +872,32 @@ mod tests {
             _id: GlobalId,
             _as_of: Antichain<Self::Timestamp>,
         ) -> BoxFuture<'static, Result<SnapshotPartsStats, StorageError<Self::Timestamp>>> {
+            unimplemented!()
+        }
+
+        fn snapshot(
+            &self,
+            _id: GlobalId,
+            _as_of: Self::Timestamp,
+        ) -> BoxFuture<'static, Result<Vec<(Row, Diff)>, StorageError<Self::Timestamp>>> {
+            unimplemented!()
+        }
+
+        async fn snapshot_latest(
+            &self,
+            _id: GlobalId,
+        ) -> Result<Vec<Row>, StorageError<Self::Timestamp>> {
+            unimplemented!()
+        }
+
+        async fn snapshot_cursor(
+            &mut self,
+            _id: GlobalId,
+            _as_of: Self::Timestamp,
+        ) -> Result<SnapshotCursor<Self::Timestamp>, StorageError<Self::Timestamp>>
+        where
+            Self::Timestamp: TimelyTimestamp + Lattice + Codec64,
+        {
             unimplemented!()
         }
 

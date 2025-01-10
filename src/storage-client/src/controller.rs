@@ -27,11 +27,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use differential_dataflow::lattice::Lattice;
 use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_cluster_client::metrics::WallclockLagMetrics;
 use mz_cluster_client::ReplicaId;
-use mz_persist_client::read::{Cursor, ReadHandle};
 use mz_persist_types::schema::SchemaId;
 use mz_persist_types::{Codec64, Opaque, ShardId};
 use mz_repr::{Diff, GlobalId, RelationDesc, Row};
@@ -44,7 +42,7 @@ use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sinks::{MetadataUnfilled, StorageSinkConnection, StorageSinkDesc};
 use mz_storage_types::sources::{
-    GenericSourceConnection, IngestionDescription, SourceData, SourceDesc, SourceExportDataConfig,
+    GenericSourceConnection, IngestionDescription, SourceDesc, SourceExportDataConfig,
     SourceExportDetails, Timeline,
 };
 use serde::{Deserialize, Serialize};
@@ -156,25 +154,6 @@ pub struct ExportDescription<T = mz_repr::Timestamp> {
     pub sink: StorageSinkDesc<MetadataUnfilled, T>,
     /// The ID of the instance in which to install the export.
     pub instance_id: StorageInstanceId,
-}
-
-/// A cursor over a snapshot, allowing us to read just part of a snapshot in its
-/// consolidated form.
-pub struct SnapshotCursor<T: Codec64 + Timestamp + Lattice> {
-    // We allocate a temporary read handle for each snapshot, and that handle needs to live at
-    // least as long as the cursor itself, which holds part leases. Bundling them together!
-    pub _read_handle: ReadHandle<SourceData, (), T, Diff>,
-    pub cursor: Cursor<SourceData, (), T, Diff>,
-}
-
-impl<T: Codec64 + Timestamp + Lattice + Sync> SnapshotCursor<T> {
-    pub async fn next(
-        &mut self,
-    ) -> Option<
-        impl Iterator<Item = ((Result<SourceData, String>, Result<(), String>), T, Diff)> + Sized + '_,
-    > {
-        self.cursor.next().await
-    }
 }
 
 #[derive(Debug)]
@@ -604,29 +583,6 @@ pub trait StorageController: Debug {
         &self,
         id: GlobalId,
     ) -> Result<Arc<WebhookStatistics>, StorageError<Self::Timestamp>>;
-
-    /// Returns the snapshot of the contents of the local input named `id` at `as_of`.
-    fn snapshot(
-        &self,
-        id: GlobalId,
-        as_of: Self::Timestamp,
-    ) -> BoxFuture<Result<Vec<(Row, Diff)>, StorageError<Self::Timestamp>>>;
-
-    /// Returns the snapshot of the contents of the local input named `id` at
-    /// the largest readable `as_of`.
-    async fn snapshot_latest(
-        &self,
-        id: GlobalId,
-    ) -> Result<Vec<Row>, StorageError<Self::Timestamp>>;
-
-    /// Returns the snapshot of the contents of the local input named `id` at `as_of`.
-    async fn snapshot_cursor(
-        &mut self,
-        id: GlobalId,
-        as_of: Self::Timestamp,
-    ) -> Result<SnapshotCursor<Self::Timestamp>, StorageError<Self::Timestamp>>
-    where
-        Self::Timestamp: Codec64 + Timestamp + Lattice;
 
     /// Waits until the controller is ready to process a response.
     ///

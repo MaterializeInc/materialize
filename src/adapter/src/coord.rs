@@ -2479,7 +2479,7 @@ impl Coordinator {
             // Fetch the current contents of the table for retraction.
             let current_contents_fut = self
                 .controller
-                .storage
+                .storage_collections
                 .snapshot(system_table.table.global_id_writes(), read_ts);
             // Fetch a snapshot of the current tables concurrently.
             let task = spawn(|| format!("snapshot-{table_id}"), async move {
@@ -2555,7 +2555,7 @@ impl Coordinator {
         debug!("coordinator init: reconciling audit log: {full_name} ({table_id})");
         let current_contents_fut = self
             .controller
-            .storage
+            .storage_collections
             .snapshot(table.global_id_writes(), read_ts);
         spawn(|| format!("snapshot-audit-log-{table_id}"), async move {
             let current_contents = current_contents_fut
@@ -3692,7 +3692,10 @@ impl Coordinator {
             .resolve_builtin_table(&MZ_STORAGE_USAGE_BY_SHARD);
         let global_id = self.catalog.get_entry(&item_id).latest_global_id();
         let read_ts = self.get_local_read_ts().await;
-        let current_contents_fut = self.controller.storage.snapshot(global_id, read_ts);
+        let current_contents_fut = self
+            .controller
+            .storage_collections
+            .snapshot(global_id, read_ts);
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         spawn(|| "storage_usage_prune", async move {
             let mut current_contents = current_contents_fut
