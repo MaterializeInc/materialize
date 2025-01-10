@@ -176,7 +176,7 @@ impl Demand {
                 ),
                 MirRelationExpr::Map { input, scalars } => {
                     let relation_type = relation_type.as_ref().unwrap();
-                    let arity = input.arity();
+                    let arity = relation_type.arity() - scalars.len();
                     // contains columns whose supports have yet to be explored
                     let mut new_columns = columns.clone();
                     new_columns.retain(|c| *c >= arity);
@@ -219,7 +219,8 @@ impl Demand {
                     for expr in exprs {
                         expr.support_into(&mut columns);
                     }
-                    columns.retain(|c| *c < input.arity());
+                    let arity = input.arity();
+                    columns.retain(|c| *c < arity);
                     self.action(input, columns, gets)
                 }
                 MirRelationExpr::Filter { input, predicates } => {
