@@ -23,7 +23,7 @@ use prometheus::Counter;
 use timely::progress::Timestamp;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::{mpsc, oneshot, Semaphore};
-use tracing::{debug, debug_span, error, warn, Instrument, Span};
+use tracing::{debug, debug_span, warn, Instrument, Span};
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::batch::PartDeletes;
@@ -31,6 +31,7 @@ use crate::cfg::GC_BLOB_DELETE_CONCURRENCY_LIMIT;
 
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashSet;
+use mz_ore::soft_assert_or_log;
 use mz_persist::location::{Blob, SeqNo};
 use mz_persist_types::{Codec, Codec64};
 
@@ -360,25 +361,18 @@ where
             .rollups
             .contains_key(&initial_seqno);
 
-        debug_assert!(
+        // this should never be true in the steady-state, but may be true the
+        // first time GC runs after fixing any correctness bugs related to our
+        // state version invariants. we'll make it an error so we can track
+        // any violations in Sentry, but opt not to panic because the root
+        // cause of the violation cannot be from this GC run (in fact, this
+        // GC run, assuming it's correct, should have fixed the violation!)
+        soft_assert_or_log!(
             valid_pre_gc_state,
-            "rollups = {:?}, state seqno = {}",
+            "earliest state fetched during GC did not have corresponding rollup: rollups = {:?}, state seqno = {}",
             states.state().collections.rollups,
             initial_seqno
         );
-
-        if !valid_pre_gc_state {
-            // this should never be true in the steady-state, but may be true the
-            // first time GC runs after fixing any correctness bugs related to our
-            // state version invariants. we'll make it an error so we can track
-            // any violations in Sentry, but opt not to panic because the root
-            // cause of the violation cannot be from this GC run (in fact, this
-            // GC run, assuming it's correct, should have fixed the violation!)
-            error!("earliest state fetched during GC did not have corresponding rollup: rollups = {:?}, state seqno = {}",
-                states.state().collections.rollups,
-                initial_seqno
-            );
-        }
 
         report_step_timing(
             &machine
@@ -426,7 +420,7 @@ where
             // By our invariant, `states` should always begin on a rollup.
             assert!(
                 gc_rollups.contains_seqno(&states.state().seqno),
-                "rollups = {:?}, state seqno = {}",
+                "must start with a present rollup before searching for blobs: rollups = {:#?}, state seqno = {}",
                 gc_rollups,
                 states.state().seqno
             );
@@ -458,7 +452,7 @@ where
             // to maintain our invariant.
             assert!(
                 gc_rollups.contains_seqno(&states.state().seqno),
-                "rollups = {:?}, state seqno = {}",
+                "must start with a present rollup after searching for blobs: rollups = {:#?}, state seqno = {}",
                 gc_rollups,
                 states.state().seqno
             );
