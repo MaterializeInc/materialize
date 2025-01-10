@@ -39,7 +39,6 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
 use mz_persist_client::read::ReadHandle;
 use mz_persist_client::schema::CaESchema;
-use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, PersistLocation, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
@@ -73,7 +72,7 @@ use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::{AlterError, CollectionMetadata, StorageError, TxnsCodecRow};
 use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::parameters::StorageParameters;
-use mz_storage_types::read_holds::{ReadHold, ReadHoldError};
+use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sinks::{StorageSinkConnection, StorageSinkDesc};
 use mz_storage_types::sources::{
@@ -1881,36 +1880,6 @@ where
         };
 
         Ok(cursor)
-    }
-
-    async fn snapshot_stats(
-        &self,
-        id: GlobalId,
-        as_of: Antichain<Self::Timestamp>,
-    ) -> Result<SnapshotStats, StorageError<Self::Timestamp>> {
-        self.storage_collections.snapshot_stats(id, as_of).await
-    }
-
-    async fn snapshot_parts_stats(
-        &self,
-        id: GlobalId,
-        as_of: Antichain<Self::Timestamp>,
-    ) -> BoxFuture<Result<SnapshotPartsStats, StorageError<Self::Timestamp>>> {
-        self.storage_collections
-            .snapshot_parts_stats(id, as_of)
-            .await
-    }
-
-    #[instrument(level = "debug")]
-    fn set_read_policy(&mut self, policies: Vec<(GlobalId, ReadPolicy<Self::Timestamp>)>) {
-        self.storage_collections.set_read_policies(policies);
-    }
-
-    fn acquire_read_holds(
-        &self,
-        desired_holds: Vec<GlobalId>,
-    ) -> Result<Vec<ReadHold<Self::Timestamp>>, ReadHoldError> {
-        self.storage_collections.acquire_read_holds(desired_holds)
     }
 
     async fn ready(&mut self) {

@@ -31,9 +31,7 @@ use differential_dataflow::lattice::Lattice;
 use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_cluster_client::metrics::WallclockLagMetrics;
 use mz_cluster_client::ReplicaId;
-use mz_ore::collections::CollectionExt;
 use mz_persist_client::read::{Cursor, ReadHandle};
-use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
 use mz_persist_types::schema::SchemaId;
 use mz_persist_types::{Codec64, Opaque, ShardId};
 use mz_repr::{Diff, GlobalId, RelationDesc, Row};
@@ -42,7 +40,7 @@ use mz_storage_types::connections::inline::InlinedConnection;
 use mz_storage_types::controller::{CollectionMetadata, StorageError};
 use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::parameters::StorageParameters;
-use mz_storage_types::read_holds::{ReadHold, ReadHoldError};
+use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sinks::{MetadataUnfilled, StorageSinkConnection, StorageSinkDesc};
 use mz_storage_types::sources::{
@@ -629,57 +627,6 @@ pub trait StorageController: Debug {
     ) -> Result<SnapshotCursor<Self::Timestamp>, StorageError<Self::Timestamp>>
     where
         Self::Timestamp: Codec64 + Timestamp + Lattice;
-
-    /// Returns aggregate statistics about the contents of the local input named
-    /// `id` at `as_of`.
-    async fn snapshot_stats(
-        &self,
-        id: GlobalId,
-        as_of: Antichain<Self::Timestamp>,
-    ) -> Result<SnapshotStats, StorageError<Self::Timestamp>>;
-
-    /// Returns aggregate statistics about the contents of the local input named
-    /// `id` at `as_of`.
-    ///
-    /// Note that this async function itself returns a future. We may
-    /// need to block on the stats being available, but don't want to hold a reference
-    /// to the controller for too long... so the outer future holds a reference to the
-    /// controller but returns quickly, and the inner future is slow but does not
-    /// reference the controller.
-    async fn snapshot_parts_stats(
-        &self,
-        id: GlobalId,
-        as_of: Antichain<Self::Timestamp>,
-    ) -> BoxFuture<Result<SnapshotPartsStats, StorageError<Self::Timestamp>>>;
-
-    /// Assigns a read policy to specific identifiers.
-    ///
-    /// The policies are assigned in the order presented, and repeated identifiers should
-    /// conclude with the last policy. Changing a policy will immediately downgrade the read
-    /// capability if appropriate, but it will not "recover" the read capability if the prior
-    /// capability is already ahead of it.
-    ///
-    /// The `StorageController` may include its own overrides on these policies.
-    ///
-    /// Identifiers not present in `policies` retain their existing read policies.
-    fn set_read_policy(&mut self, policies: Vec<(GlobalId, ReadPolicy<Self::Timestamp>)>);
-
-    /// Acquires and returns the desired read holds, advancing them to the since
-    /// frontier when necessary.
-    fn acquire_read_holds(
-        &self,
-        desired_holds: Vec<GlobalId>,
-    ) -> Result<Vec<ReadHold<Self::Timestamp>>, ReadHoldError>;
-
-    /// Acquires and returns the earliest legal read hold.
-    fn acquire_read_hold(
-        &mut self,
-        id: GlobalId,
-    ) -> Result<ReadHold<Self::Timestamp>, ReadHoldError> {
-        let hold = self.acquire_read_holds(vec![id])?.into_element();
-
-        Ok(hold)
-    }
 
     /// Waits until the controller is ready to process a response.
     ///

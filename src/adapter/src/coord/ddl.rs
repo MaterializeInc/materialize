@@ -1216,7 +1216,7 @@ impl Coordinator {
         }
     }
 
-    fn update_metrics_retention(&mut self) {
+    fn update_metrics_retention(&self) {
         let duration = self.catalog().system_config().metrics_retention();
         let policy = ReadPolicy::lag_writes_by(
             Timestamp::new(u64::try_from(duration.as_millis()).unwrap_or_else(|_e| {
