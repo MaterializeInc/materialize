@@ -19,7 +19,7 @@ Kubernetes environment. For self-managed Materialize, Materialize offers:
 
 The self-managed Materialize requires the following:
 
-{{% self-managed/requirements-list %}}
+{{% self-managed/materialize-components-list %}}
 
 See the [Installation guide](/self-managed/installation/) for more information.
 

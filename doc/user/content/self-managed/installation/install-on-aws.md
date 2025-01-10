@@ -6,7 +6,7 @@ robots: "noindex, nofollow"
 
 Self-managed Materialize requires:
 
-{{% self-managed/requirements-list %}}
+{{% self-managed/materialize-components-list %}}
 
 The tutorial deploys Materialize to AWS Elastic Kubernetes Service (EKS) with a
 PostgreSQL RDS database as the metadata database and AWS S3 for blob storage.
@@ -41,7 +41,7 @@ documentation](https://helm.sh/docs/intro/install/).
 
 ### AWS Kubernetes environment
 
-{{% self-managed/requirements-list %}}
+{{% self-managed/materialize-components-list %}}
 
 When operating in AWS, we recommend:
 
