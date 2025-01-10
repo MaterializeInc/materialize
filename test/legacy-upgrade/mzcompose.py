@@ -15,6 +15,7 @@ operational after an upgrade. See also the newer platform-checks' upgrade scenar
 import random
 
 from materialize import buildkite
+from materialize.docker import image_of_release_version_exists
 from materialize.mz_version import MzVersion
 from materialize.mzcompose import get_default_system_parameters
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
@@ -78,6 +79,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         choices=["docs", "git"],
         help="from what source to fetch the versions",
     )
+    parser.add_argument("--ignore-missing-version", action="store_true")
     args = parser.parse_args()
 
     parallelism_index = buildkite.get_parallelism_index()
@@ -98,6 +100,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     for version in tested_versions:
+        # Building the latest release might have failed, don't block PRs on
+        # test pipeline for this.
+        if args.ignore_missing_version and not image_of_release_version_exists(version):
+            print(f"Unknown version {version}, skipping")
+            continue
+
         priors = [
             v for v in all_versions if v <= version and v >= min_upgradable_version
         ]
