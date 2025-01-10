@@ -8,7 +8,7 @@ columns:
 
 rows:
   - name: "`winning_bids`"
-    global_id: "`u148`"
+    global_id: "`u186`"
     lir_id: "`6`"
     parent_lir_id: "`null`"
     operator: |
@@ -18,7 +18,7 @@ rows:
     size: "`11 MB`"
 
   - name: "`winning_bids`"
-    global_id: "`u148`"
+    global_id: "`u186`"
     lir_id: "`5`"
     parent_lir_id: "`6`"
     operator: |
@@ -28,7 +28,7 @@ rows:
     size: "`null`"
 
   - name: "`winning_bids`"
-    global_id: "`u148`"
+    global_id: "`u186`"
     lir_id: "`4`"
     parent_lir_id: "`5`"
     operator: |
@@ -38,7 +38,7 @@ rows:
     size: "`1996 kB`"
 
   - name: "`winning_bids`"
-    global_id: "`u148`"
+    global_id: "`u186`"
     lir_id: "`3`"
     parent_lir_id: "`4`"
     operator: |
@@ -48,7 +48,7 @@ rows:
     size: "`null`"
 
   - name: "`winning_bids`"
-    global_id: "`u148`"
+    global_id: "`u186`"
     lir_id: "`2`"
     parent_lir_id: "`5`"
     operator: |
@@ -58,7 +58,7 @@ rows:
     size: "`575 kB`"
 
   - name: "`winning_bids`"
-    global_id: "`u148`"
+    global_id: "`u186`"
     lir_id: "`1`"
     parent_lir_id: "`2`"
     operator: |
@@ -68,7 +68,7 @@ rows:
     size: "`null`"
 
   - name: "`wins_by_item`"
-    global_id: "`u149`"
+    global_id: "`u187`"
     lir_id: "`8`"
     parent_lir_id: "`null`"
     operator: |
@@ -78,11 +78,11 @@ rows:
     size: "`402 kB`"
 
   - name: "`wins_by_item`"
-    global_id: "`u149`"
+    global_id: "`u187`"
     lir_id: "`7`"
     parent_lir_id: "`8`"
     operator: |
       ```mzsql
-        Get::PassArrangements u148
+        Get::PassArrangements u186
       ```
     size: "`null`"
