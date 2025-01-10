@@ -1564,31 +1564,16 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: balancerd
 
-  - group: Legacy upgrade tests
-    key: legacy-upgrade
-    steps:
-      - id: legacy-upgrade-git
-        label: Legacy upgrade tests (last version from git)
-        depends_on: build-aarch64
-        timeout_in_minutes: 60
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: legacy-upgrade
-              args: ["--versions-source=git"]
-        agents:
-          queue: hetzner-aarch64-4cpu-8gb
-
-      - id: legacy-upgrade-docs
-        label: "Legacy upgrade tests (last version from docs)"
-        parallelism: 2
-        depends_on: build-aarch64
-        timeout_in_minutes: 60
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: legacy-upgrade
-              args: ["--versions-source=docs"]
-        agents:
-          queue: hetzner-aarch64-4cpu-8gb
+  - id: legacy-upgrade
+    label: Legacy upgrade tests (last version from git)
+    depends_on: build-aarch64
+    timeout_in_minutes: 60
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: legacy-upgrade
+          args: ["--versions-source=git"]
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
 
   - group: Cloud tests
     key: cloudtests
