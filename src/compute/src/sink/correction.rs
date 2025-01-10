@@ -200,11 +200,6 @@ impl<D: Data> Correction<D> {
         count
     }
 
-    /// Return the current since frontier.
-    pub fn since(&self) -> &Antichain<Timestamp> {
-        &self.since
-    }
-
     /// Advance the since frontier.
     ///
     /// # Panics
