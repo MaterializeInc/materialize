@@ -59,7 +59,7 @@ use mz_sql::rbac;
 use mz_sql::session::user::{MZ_SYSTEM_ROLE_ID, SYSTEM_USER};
 use mz_sql::session::vars::{SessionVars, SystemVars, VarError, VarInput};
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_storage_client::controller::StorageController;
+use mz_storage_client::storage_collections::StorageCollections;
 use timely::Container;
 use tracing::{error, info, warn, Instrument};
 use uuid::Uuid;
@@ -652,15 +652,17 @@ impl Catalog {
         .boxed()
     }
 
-    /// Initializes the `storage_controller` to understand all shards that
-    /// `self` expects to exist.
+    /// Initializes STORAGE to understand all shards that `self` expects to
+    /// exist.
     ///
     /// Note that this must be done before creating/rendering collections
     /// because the storage controller might not be aware of new system
     /// collections created between versions.
-    async fn initialize_storage_controller_state(
+    async fn initialize_storage_state(
         &mut self,
-        storage_controller: &mut dyn StorageController<Timestamp = mz_repr::Timestamp>,
+        storage_collections: &Arc<
+            dyn StorageCollections<Timestamp = mz_repr::Timestamp> + Send + Sync,
+        >,
         storage_collections_to_drop: BTreeSet<GlobalId>,
     ) -> Result<(), mz_catalog::durable::CatalogError> {
         let collections = self
@@ -676,7 +678,7 @@ impl Catalog {
         let mut storage = self.storage().await;
         let mut txn = storage.transaction().await?;
 
-        storage_controller
+        storage_collections
             .initialize_state(&mut txn, collections, storage_collections_to_drop)
             .await
             .map_err(mz_catalog::durable::DurableCatalogError::from)?;
@@ -706,7 +708,7 @@ impl Catalog {
         let controller_start = Instant::now();
         info!("startup: controller init: beginning");
 
-        let mut controller = {
+        let controller = {
             let mut storage = self.storage().await;
             let mut tx = storage.transaction().await?;
             mz_controller::prepare_initialization(&mut tx)
@@ -724,11 +726,8 @@ impl Catalog {
             mz_controller::Controller::new(config, envd_epoch, read_only, &read_only_tx).await
         };
 
-        self.initialize_storage_controller_state(
-            &mut *controller.storage,
-            storage_collections_to_drop,
-        )
-        .await?;
+        self.initialize_storage_state(&controller.storage_collections, storage_collections_to_drop)
+            .await?;
 
         info!(
             "startup: controller init: complete in {:?}",

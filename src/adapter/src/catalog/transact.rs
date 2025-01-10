@@ -10,6 +10,7 @@
 //! Logic related to executing catalog transactions.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 use std::time::Duration;
 
 use itertools::Itertools;
@@ -54,7 +55,7 @@ use mz_sql::session::vars::OwnedVarInput;
 use mz_sql::session::vars::{Value as VarValue, VarInput};
 use mz_sql::{rbac, DEFAULT_SCHEMA};
 use mz_sql_parser::ast::{QualifiedReplica, Value};
-use mz_storage_client::controller::StorageController;
+use mz_storage_client::storage_collections::StorageCollections;
 use tracing::{info, trace};
 
 use crate::catalog::{
@@ -362,7 +363,9 @@ impl Catalog {
         &mut self,
         // n.b. this is an option to prevent us from needing to build out a
         // dummy impl of `StorageController` for tests.
-        storage_controller: Option<&mut dyn StorageController<Timestamp = mz_repr::Timestamp>>,
+        storage_collections: Option<
+            &mut Arc<dyn StorageCollections<Timestamp = mz_repr::Timestamp> + Send + Sync>,
+        >,
         oracle_write_ts: mz_repr::Timestamp,
         session: Option<&ConnMeta>,
         ops: Vec<Op>,
@@ -416,7 +419,7 @@ impl Catalog {
         let mut state = self.state.clone();
 
         Self::transact_inner(
-            storage_controller,
+            storage_collections,
             oracle_write_ts,
             session,
             ops,
@@ -467,7 +470,9 @@ impl Catalog {
     /// - If the only element of `ops` is [`Op::TransactionDryRun`].
     #[instrument(name = "catalog::transact_inner")]
     async fn transact_inner(
-        storage_controller: Option<&mut dyn StorageController<Timestamp = mz_repr::Timestamp>>,
+        storage_collections: Option<
+            &mut Arc<dyn StorageCollections<Timestamp = mz_repr::Timestamp> + Send + Sync>,
+        >,
         oracle_write_ts: mz_repr::Timestamp,
         session: Option<&ConnMeta>,
         mut ops: Vec<Op>,
@@ -540,8 +545,8 @@ impl Catalog {
         }
 
         if dry_run_ops.is_empty() {
-            // `storage_controller` should only be `None` for tests.
-            if let Some(c) = storage_controller {
+            // `storage_collections` should only be `None` for tests.
+            if let Some(c) = storage_collections {
                 c.prepare_state(
                     tx,
                     storage_collections_to_create,

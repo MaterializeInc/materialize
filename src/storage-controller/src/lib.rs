@@ -2134,28 +2134,6 @@ where
         self.collection_manager.differential_write(id, op);
     }
 
-    async fn initialize_state(
-        &mut self,
-        txn: &mut (dyn StorageTxn<T> + Send),
-        init_ids: BTreeSet<GlobalId>,
-        drop_ids: BTreeSet<GlobalId>,
-    ) -> Result<(), StorageError<T>> {
-        self.storage_collections
-            .initialize_state(txn, init_ids, drop_ids)
-            .await
-    }
-
-    async fn prepare_state(
-        &self,
-        txn: &mut (dyn StorageTxn<T> + Send),
-        ids_to_add: BTreeSet<GlobalId>,
-        ids_to_drop: BTreeSet<GlobalId>,
-    ) -> Result<(), StorageError<T>> {
-        self.storage_collections
-            .prepare_state(txn, ids_to_add, ids_to_drop)
-            .await
-    }
-
     async fn real_time_recent_timestamp(
         &self,
         timestamp_objects: BTreeSet<GlobalId>,

@@ -521,7 +521,12 @@ impl Coordinator {
             mut builtin_table_updates,
             audit_events,
         } = catalog
-            .transact(Some(&mut *controller.storage), oracle_write_ts, conn, ops)
+            .transact(
+                Some(&mut controller.storage_collections),
+                oracle_write_ts,
+                conn,
+                ops,
+            )
             .await?;
 
         // Update in-memory cluster replica statuses.

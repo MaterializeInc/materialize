@@ -633,26 +633,6 @@ pub trait StorageController: Debug {
     /// introspection type, as readers rely on this and might panic otherwise.
     fn update_introspection_collection(&mut self, type_: IntrospectionType, op: StorageWriteOp);
 
-    /// On boot, seed the controller's metadata/state.
-    async fn initialize_state(
-        &mut self,
-        txn: &mut (dyn StorageTxn<Self::Timestamp> + Send),
-        init_ids: BTreeSet<GlobalId>,
-        drop_ids: BTreeSet<GlobalId>,
-    ) -> Result<(), StorageError<Self::Timestamp>>;
-
-    /// Update the implementor of [`StorageTxn`] with the appropriate metadata
-    /// given the IDs to add and drop.
-    ///
-    /// The data modified in the `StorageTxn` must be made available in all
-    /// subsequent calls that require [`StorageMetadata`] as a parameter.
-    async fn prepare_state(
-        &self,
-        txn: &mut (dyn StorageTxn<Self::Timestamp> + Send),
-        ids_to_add: BTreeSet<GlobalId>,
-        ids_to_drop: BTreeSet<GlobalId>,
-    ) -> Result<(), StorageError<Self::Timestamp>>;
-
     async fn real_time_recent_timestamp(
         &self,
         source_ids: BTreeSet<GlobalId>,
