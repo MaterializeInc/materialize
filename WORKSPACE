@@ -478,8 +478,10 @@ crates_repository(
             deps = [":librdkafka"],
         )],
         "libz-sys": [crate.annotation(
+            additive_build_file = "@//misc/bazel/c_deps:rust-sys/BUILD.libz.bazel",
             gen_build_script = False,
-            deps = ["@zlib"],
+            # Note: This is a target we add from the additive build file above.
+            deps = [":zlib"],
         )],
         "openssl-sys": [crate.annotation(
             build_script_data = [
