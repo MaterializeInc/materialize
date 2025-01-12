@@ -214,10 +214,10 @@ http_archive(
 # Version of clang/llvm we use.
 #
 # We build our own clang toolchain, see the <https://github.com/MaterializeInc/toolchains> repository.
-LLVM_VERSION = "18.1.8"
+LLVM_VERSION = "19.1.6"
 
 # We have a few variants of our clang toolchain, either improving how it's built or adding new tools.
-LLVM_VERSION_SUFFIX = "5"
+LLVM_VERSION_SUFFIX = "1"
 
 # Version of the "toolchains_llvm" rule set, _not_ the version of clang/llvm.
 #
@@ -244,10 +244,10 @@ llvm_toolchain(
     name = "llvm_toolchain",
     llvm_version = LLVM_VERSION,
     sha256 = {
-        "darwin-aarch64": "d28437d58615ccae434c289bcf5e0d10f031c732d7b60a5090541dbbbd381a01",
-        "darwin-x86_64": "f0c103bc2a19ffee7b55df2798188f085756e5668adc7c18d05c7f6705871828",
-        "linux-aarch64": "e9695cb9a8d068236b1c902af877be396eb0110d87525db49c68911b571f6976",
-        "linux-x86_64": "4d0bbec4acd23006d1353d0cd255144df8c910981f5474f3030bfde3dc75ccfa",
+        "darwin-aarch64": "94ed965925dbdc25b29e6fcfa9a84b28d915d5c9da7c71405fc20bbcf8396bd1",
+        "darwin-x86_64": "9395b07fd5018816bcaee84522d9c9386fdbefe62fdf8afff89b57e1b7095463",
+        "linux-aarch64": "24fd3405f65ccbc39f0d14a5126ee2edb5904d7a9525ae483f34a510a1bdce3e",
+        "linux-x86_64": "bad3d776c222c99056eba8b64c085a1e08edd783cb102e1b6eba43b78ce2fe2b",
     },
     sysroot = {
         "darwin-aarch64": "@sysroot_darwin_universal//:sysroot",
@@ -426,10 +426,10 @@ rust_bindgen_dependencies()
 bindgen_toolchains(
     "{0}-{1}".format(LLVM_VERSION, LLVM_VERSION_SUFFIX),
     {
-        "darwin_aarch64": "sha256-YHP+DGnW3QmbKi93KYVOEq7oym0cbJga0MOgarWksds=",
-        "darwin_x86_64": "sha256-fA4eCuliHPYf3DBqsSVIQ53TyCfIUJJ3LaM5U3ZxxRc=",
-        "linux_aarch64": "sha256-GIB3n6vX/jpyFn2e7hI/pRzlP0fPeVhkVu2YDQUDS3A=",
-        "linux_x86_64": "sha256-a8BzSw50LoMYtEZretLgqizUFcpGpBGYa18rT9EnFgI=",
+        "darwin_aarch64": "sha256-wni7a1Wu6qGeNVOZOjc6ks1ACXf+RBoXu6YcSVkleos=",
+        "darwin_x86_64": "sha256-MKjPkNE2g2nw75SkOvjnieKnTtubUKyE3/o7olQm8j0=",
+        "linux_aarch64": "sha256-BvzsXMuiObNStcP86QwgBRDcTVBRsWUYio1iRCMhgxo=",
+        "linux_x86_64": "sha256-9PgulfHhsOd03ZhEO7ljp2EuDafIbME1oCJ/Rj/R7pU=",
     },
 )
 
