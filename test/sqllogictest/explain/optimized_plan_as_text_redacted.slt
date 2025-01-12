@@ -257,21 +257,22 @@ Explained Query:
   With
     cte l0 =
       Project (#0{a}, #1{b})
-        Join on=(#0{a} = #2{a}) type=differential
-          ArrangeBy keys=[[#0{a}]]
-            ReadIndex on=t t_a_idx=[differential join]
-          ArrangeBy keys=[[#0{a}]]
-            Distinct project=[#0{a}]
-              Project (#0{a})
-                Filter (#0{a} < #1{a})
-                  CrossJoin type=differential
-                    ArrangeBy keys=[[]]
-                      Distinct project=[#0{a}]
+        Filter (#1{b}) IS NOT NULL
+          Join on=(#0{a} = #2{a}) type=differential
+            ArrangeBy keys=[[#0{a}]]
+              ReadIndex on=t t_a_idx=[differential join]
+            ArrangeBy keys=[[#0{a}]]
+              Distinct project=[#0{a}]
+                Project (#0{a})
+                  Filter (#0{a} < #1{a})
+                    CrossJoin type=differential
+                      ArrangeBy keys=[[]]
+                        Distinct project=[#0{a}]
+                          Project (#0{a})
+                            ReadIndex on=t t_a_idx=[*** full scan ***]
+                      ArrangeBy keys=[[]]
                         Project (#0{a})
-                          ReadIndex on=t t_a_idx=[*** full scan ***]
-                    ArrangeBy keys=[[]]
-                      Project (#0{a})
-                        ReadStorage materialize.public.mv
+                          ReadStorage materialize.public.mv
 
 Source materialize.public.mv
 

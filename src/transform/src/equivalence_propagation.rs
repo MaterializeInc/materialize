@@ -302,6 +302,34 @@ impl EquivalencePropagation {
                     .last_child()
                     .value::<Equivalences>()
                     .expect("Equivalences required");
+
+                // Take the opportunity to introduce predicates offered by `outer_equivalences`.
+                // This is optional, but (short of introducing errors) seems generally healthy.
+                for class in outer_equivalences.classes.iter() {
+                    let mut iter = class.iter().filter(|e| !e.could_error());
+                    // If the class contains the literal true, all terms must be true.
+                    if class.contains(&MirScalarExpr::literal_true()) {
+                        predicates.extend(iter.cloned());
+                    }
+                    // If the class contains the literal false, each negated term must be true.
+                    else if class.contains(&MirScalarExpr::literal_false()) {
+                        predicates.extend(iter.cloned().map(|e| e.not()));
+                    }
+                    // Otherwise, for each pair of terms `(e0 = e1) OR (e0 IS NULL and e1 IS NULL)`.
+                    else if let Some(root) = iter.next() {
+                        for expr in iter {
+                            predicates.push(
+                                root.clone()
+                                    .call_binary(expr.clone(), mz_expr::BinaryFunc::Eq)
+                                    .or(root
+                                        .clone()
+                                        .call_is_null()
+                                        .and(expr.clone().call_is_null())),
+                            );
+                        }
+                    }
+                }
+
                 if let Some(input_equivalences) = input_equivalences {
                     let input_types = derived
                         .last_child()
