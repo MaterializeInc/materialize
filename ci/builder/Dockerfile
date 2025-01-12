@@ -7,10 +7,112 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Build a cross-compiling toolchain that targets the oldest version of Linux
-# that we support.
+# Stage 1: Build a minimum CI Builder image that we can use for the initial
+# steps like `mkpipeline` and `Build`, as well as any tests that are self
+# contained and use other Docker images.
+FROM ubuntu:noble-20241015 AS ci-builder-min
 
+WORKDIR /workdir
+
+ARG ARCH_GCC
+ARG ARCH_GO
+
+# Environment variables that should be set for the entire build container.
+
+# Ensure any Rust binaries that crash print a backtrace.
+ENV RUST_BACKTRACE=1
+# Ensure that all python output is unbuffered, otherwise it is not
+# logged properly in Buildkite.
+ENV PYTHONUNBUFFERED=1
+# Set a environment variable that tools can check to see if they're in the
+# builder or not.
+ENV MZ_DEV_CI_BUILDER=1
+
+# Faster uncompression
+ARG XZ_OPT=-T0
+
+# Absolute minimum set of dependencies needed for a CI job.
+#
+# Please take care with what gets added here. The goal of this initial layer is to be as small as
+# possible since it's used for the `mkpipeline` and `Build` CI jobs, which block __all other__
+# jobs.
+RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    docker.io \
+    gdb \
+    git \
+    gnupg2 \
+    libxml2 \
+    python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies. These are necessary to run some of our base tooling.
+COPY requirements.txt /workdir/
+RUN curl -LsSf https://astral.sh/uv/0.4.25/install.sh | UV_INSTALL_DIR=/usr/local UV_UNMANAGED_INSTALL=1 sh \
+    && uv pip install --system --break-system-packages -r /workdir/requirements.txt && rm /workdir/requirements*.txt
+
+# Install extra tools not available in apt repositories.
+
+COPY rust.asc .
+RUN gpg --import rust.asc \
+    && rm rust.asc \
+    && echo "trusted-key 85AB96E6FA1BE5FE" >> ~/.gnupg/gpg.conf
+
+ARG BAZEL_VERSION
+ARG RUST_DATE
+ARG RUST_VERSION
+
+RUN \
+    # 1. autouseradd
+    #
+    # Ensures that the UID used when running the container has a proper entry in
+    # `/etc/passwd`, and writable home directory.
+    curl -fsSL https://github.com/benesch/autouseradd/releases/download/1.3.0/autouseradd-1.3.0-$ARCH_GO.tar.gz \
+    | tar xz -C / --strip-components 1 \
+    # 2. Bazel
+    #
+    # We primarily build Materialize via Bazel in CI, and Bazel pulls in its own dependencies.
+    && arch_bazel=$(echo "$ARCH_GCC" | sed -e "s/aarch64/arm64/" -e "s/amd64/x86_64/") bazel_version=$(echo "$BAZEL_VERSION") \
+    && curl -fsSL -o /usr/local/bin/bazel https://github.com/bazelbuild/bazel/releases/download/$bazel_version/bazel-$bazel_version-linux-$arch_bazel \
+    && if [ "$arch_bazel" = arm64 ]; then echo 'fac4b954e0501c2be8b9653a550b443eb85284e568d08b102977e2bf587b09d7 /usr/local/bin/bazel' | sha256sum --check; fi \
+    && if [ "$arch_bazel" = x86_64 ]; then echo '48ea0ff9d397a48add6369c261c5a4431fe6d5d5348cfb81411782fb80c388d3 /usr/local/bin/bazel' | sha256sum --check; fi \
+    && chmod +x /usr/local/bin/bazel \
+    # 3. Docker
+    #
+    # If you upgrade Docker (Compose) version here, also update it in misc/python/cli/mzcompose.py.
+    && mkdir -p /usr/local/lib/docker/cli-plugins \
+    && curl -fsSL https://github.com/docker/compose/releases/download/v2.15.1/docker-compose-linux-$ARCH_GCC > /usr/local/lib/docker/cli-plugins/docker-compose \
+    && chmod +x /usr/local/lib/docker/cli-plugins/docker-compose \
+    && curl -fsSL https://github.com/christian-korneck/docker-pushrm/releases/download/v1.9.0/docker-pushrm_linux_$ARCH_GO > /usr/local/lib/docker/cli-plugins/docker-pushrm \
+    && chmod +x /usr/local/lib/docker/cli-plugins/docker-pushrm \
+    # 4. Cargo
+    #
+    # Some parts of our stack use 'cargo' to read metadata, so we install just that. Importantly we
+    # do not install 'rustc' or any of the other tools, this keeps the Docker image small.
+    && mkdir rust \
+    && curl -fsSL https://static.rust-lang.org/dist$RUST_DATE/rust-$RUST_VERSION-$ARCH_GCC-unknown-linux-gnu.tar.gz > rust.tar.gz \
+    && curl -fsSL https://static.rust-lang.org/dist$RUST_DATE/rust-$RUST_VERSION-$ARCH_GCC-unknown-linux-gnu.tar.gz.asc > rust.asc \
+    && gpg --verify rust.asc rust.tar.gz \
+    && tar -xzf rust.tar.gz -C rust --strip-components=1 \
+    && rust/install.sh --components=cargo \
+    && rm -rf rust.asc rust.tar.gz rust
+
+# Make the image as small as possible.
+RUN find /workdir /root -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+
+# Remove Ubuntu user causing UID collisions.
+# https://bugs.launchpad.net/cloud-images/+bug/2005129
+RUN userdel -r ubuntu
+
+ENTRYPOINT ["autouseradd", "--user", "materialize"]
+
+# Stage 2. Build a cross-compiling toolchain that targets the oldest version of
+# Linux that we support.
+#
+# TODO(parkmycar): This shouldn't be necessary anymore with Bazel.
 FROM ubuntu:noble-20241015 as crosstool
+
 ARG ARCH_GCC
 ARG ARCH_GO
 
@@ -68,10 +170,10 @@ RUN DEFCONFIG=crosstool-$ARCH_GCC.defconfig ct-ng defconfig \
     && rm crosstool-$ARCH_GCC.defconfig \
     && ct-ng build
 
-# Import the cross-compiling toolchain into a fresh image, omitting the
-# dependencies that we needed to actually build the toolchain.
+# Stage 3: Build a full CI Builder image that imports the cross-compiling
+# toolchain and can be used for any CI job.
+FROM ci-builder-min as ci-builder-full
 
-FROM ubuntu:noble-20241015
 ARG ARCH_GCC
 ARG ARCH_GO
 
@@ -135,9 +237,7 @@ RUN gpg --dearmor < nodesource.asc > /etc/apt/keyrings/nodesource.gpg \
     && apt-get update \
     && apt-get install -y --no-install-recommends nodejs
 
-RUN curl -fsSL https://github.com/benesch/autouseradd/releases/download/1.3.0/autouseradd-1.3.0-$ARCH_GO.tar.gz \
-    | tar xz -C / --strip-components 1 \
-    && curl -fsSL https://github.com/koalaman/shellcheck/releases/download/v0.8.0/shellcheck-v0.8.0.linux.$ARCH_GCC.tar.xz > shellcheck.tar.xz \
+RUN curl -fsSL https://github.com/koalaman/shellcheck/releases/download/v0.8.0/shellcheck-v0.8.0.linux.$ARCH_GCC.tar.xz > shellcheck.tar.xz \
     && tar -xJf shellcheck.tar.xz -C /usr/local/bin --strip-components 1 shellcheck-v0.8.0/shellcheck \
     && rm shellcheck.tar.xz \
     && curl -fsSL https://github.com/bufbuild/buf/releases/download/v1.18.0/buf-Linux-$ARCH_GCC.tar.gz > buf.tar.gz \
@@ -148,12 +248,6 @@ RUN curl -fsSL https://github.com/benesch/autouseradd/releases/download/1.3.0/au
     && tar -xf kail.tar.gz -C /usr/local/bin kail \
     && rm kail.tar.gz \
     && chmod +x /usr/local/bin/kail \
-    && mkdir -p /usr/local/lib/docker/cli-plugins \
-    # If you upgrade Docker (Compose) version here, also update it in misc/python/cli/mzcompose.py \
-    && curl -fsSL https://github.com/docker/compose/releases/download/v2.15.1/docker-compose-linux-$ARCH_GCC > /usr/local/lib/docker/cli-plugins/docker-compose \
-    && chmod +x /usr/local/lib/docker/cli-plugins/docker-compose \
-    && curl -fsSL https://github.com/christian-korneck/docker-pushrm/releases/download/v1.9.0/docker-pushrm_linux_$ARCH_GO > /usr/local/lib/docker/cli-plugins/docker-pushrm \
-    && chmod +x /usr/local/lib/docker/cli-plugins/docker-pushrm \
     && curl -fsSL https://github.com/parca-dev/parca-debuginfo/releases/download/v0.11.0/parca-debuginfo_0.11.0_Linux_$(echo "$ARCH_GCC" | sed "s/aarch64/arm64/").tar.gz \
     | tar xz -C /usr/local/bin parca-debuginfo
 
@@ -212,8 +306,6 @@ RUN mkdir rust \
 RUN ln -s /usr/bin/lld /opt/x-tools/$ARCH_GCC-unknown-linux-gnu/bin/$ARCH_GCC-unknown-linux-gnu-ld.lld \
     && ln -s /usr/bin/lld /opt/x-tools/$ARCH_GCC-unknown-linux-gnu/bin/$ARCH_GCC-unknown-linux-gnu-lld
 
-RUN curl -LsSf https://astral.sh/uv/0.4.25/install.sh | UV_INSTALL_DIR=/usr/local UV_UNMANAGED_INSTALL=1 sh
-
 # Shims for sanitizers
 COPY sanshim/$ARCH_GCC /sanshim
 
@@ -222,13 +314,6 @@ COPY sanshim/$ARCH_GCC /sanshim
 # right place
 COPY pyright-version.sh /workdir/
 RUN npx pyright@$(sh /workdir/pyright-version.sh) --help
-
-# Install Python dependencies. These are so quick to install and change
-# frequently enough that it makes sense to install them last.
-
-COPY requirements.txt /workdir/
-
-RUN uv pip install --system --break-system-packages -r /workdir/requirements.txt && rm /workdir/requirements*.txt
 
 # Install APT repo generator.
 
@@ -258,21 +343,7 @@ RUN if [ $ARCH_GCC = x86_64 ]; then \
     && rm hugo.tar.gz; \
     fi
 
-# Install Bazel.
-#
-# TODO(parkmycar): Run Bazel in a Docker image that does not have access to clang/gcc or any other tools.
-
-ARG BAZEL_VERSION
-
-# Download the bazel binary from the official GitHub releases since the apt repositories do not
-# contain arm64 releases.
-RUN arch_bazel=$(echo "$ARCH_GCC" | sed -e "s/aarch64/arm64/" -e "s/amd64/x86_64/") bazel_version=$(echo "$BAZEL_VERSION") \
-    && curl -fsSL -o /usr/local/bin/bazel https://github.com/bazelbuild/bazel/releases/download/$bazel_version/bazel-$bazel_version-linux-$arch_bazel \
-    && if [ "$arch_bazel" = arm64 ]; then echo 'fac4b954e0501c2be8b9653a550b443eb85284e568d08b102977e2bf587b09d7 /usr/local/bin/bazel' | sha256sum --check; fi \
-    && if [ "$arch_bazel" = x86_64 ]; then echo '48ea0ff9d397a48add6369c261c5a4431fe6d5d5348cfb81411782fb80c388d3 /usr/local/bin/bazel' | sha256sum --check; fi \
-    && chmod +x /usr/local/bin/bazel
-
-# Install KinD, kubectl, helm, helm-docs & terraform
+# Install KinD, kubectl, helm & helm-docs
 
 RUN curl -fsSL https://kind.sigs.k8s.io/dl/v0.14.0/kind-linux-$ARCH_GO > /usr/local/bin/kind \
     && chmod +x /usr/local/bin/kind \
@@ -340,28 +411,11 @@ ENV CARGO_TARGET_DIR=/mnt/build
 ENV CARGO_INCREMENTAL=0
 ENV HELM_PLUGINS=/usr/local/share/helm/plugins
 
-# Set a environment variable that tools can check to see if they're in the
-# builder or not.
-
-ENV MZ_DEV_CI_BUILDER=1
-
 # Set up for a persistent volume to hold Cargo metadata, so that crate metadata
 # does not need to be refetched on every compile.
-
 ENV CARGO_HOME=/cargo
 RUN mkdir /cargo && chmod 777 /cargo
 VOLUME /cargo
 
-# Ensure any Rust binaries that crash print a backtrace.
-ENV RUST_BACKTRACE=1
-
 # Make the image as small as possible.
 RUN find /workdir /root -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-
-# remove Ubuntu user causing UID collisions
-# https://bugs.launchpad.net/cloud-images/+bug/2005129
-RUN userdel -r ubuntu
-
-# Ensure that all python output is unbuffered, otherwise it is not
-# logged properly in Buildkite
-ENV PYTHONUNBUFFERED=1
