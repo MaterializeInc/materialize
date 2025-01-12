@@ -98,47 +98,6 @@ impl ReductionPushdown {
             expected_group_size,
         } = relation
         {
-            // Map expressions can be absorbed into the Reduce at no cost.
-            if let MirRelationExpr::Map {
-                input: inner,
-                scalars,
-            } = &mut **input
-            {
-                let arity = inner.arity();
-
-                // Normalize the scalars to not be self-referential.
-                let mut scalars = scalars.clone();
-                for index in 0..scalars.len() {
-                    let (lower, upper) = scalars.split_at_mut(index);
-                    upper[0].visit_mut_post(&mut |e| {
-                        if let mz_expr::MirScalarExpr::Column(c) = e {
-                            if *c >= arity {
-                                *e = lower[*c - arity].clone();
-                            }
-                        }
-                    })?;
-                }
-                for key in group_key.iter_mut() {
-                    key.visit_mut_post(&mut |e| {
-                        if let mz_expr::MirScalarExpr::Column(c) = e {
-                            if *c >= arity {
-                                *e = scalars[*c - arity].clone();
-                            }
-                        }
-                    })?;
-                }
-                for agg in aggregates.iter_mut() {
-                    agg.expr.visit_mut_post(&mut |e| {
-                        if let mz_expr::MirScalarExpr::Column(c) = e {
-                            if *c >= arity {
-                                *e = scalars[*c - arity].clone();
-                            }
-                        }
-                    })?;
-                }
-
-                **input = inner.take_dangerous()
-            }
             if let MirRelationExpr::Join {
                 inputs,
                 equivalences,
