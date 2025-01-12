@@ -1600,12 +1600,14 @@ class KillAction(Action):
         self,
         rng: random.Random,
         composition: Composition | None,
+        azurite: bool,
         sanity_restart: bool,
         system_param_fn: Callable[[dict[str, str]], dict[str, str]] = lambda x: x,
     ):
         super().__init__(rng, composition)
         self.system_param_fn = system_param_fn
         self.system_parameters = {}
+        self.azurite = azurite
         self.sanity_restart = sanity_restart
 
     def run(self, exe: Executor) -> bool:
@@ -1615,7 +1617,9 @@ class KillAction(Action):
         with self.composition.override(
             Materialized(
                 restart="on-failure",
-                external_minio="toxiproxy",
+                # TODO: Retry with toxiproxy on azurite
+                external_blob_store=True,
+                blob_store_is_azure=self.azurite,
                 external_metadata_store="toxiproxy",
                 ports=["6975:6875", "6976:6876", "6977:6877"],
                 sanity_restart=self.sanity_restart,
@@ -1633,9 +1637,11 @@ class ZeroDowntimeDeployAction(Action):
         self,
         rng: random.Random,
         composition: Composition | None,
+        azurite: bool,
         sanity_restart: bool,
     ):
         super().__init__(rng, composition)
+        self.azurite = azurite
         self.sanity_restart = sanity_restart
         self.deploy_generation = 0
 
@@ -1656,7 +1662,9 @@ class ZeroDowntimeDeployAction(Action):
         with self.composition.override(
             Materialized(
                 name=mz_service,
-                external_minio="toxiproxy",
+                # TODO: Retry with toxiproxy on azurite
+                external_blob_store=True,
+                blob_store_is_azure=self.azurite,
                 external_metadata_store="toxiproxy",
                 ports=ports,
                 sanity_restart=self.sanity_restart,

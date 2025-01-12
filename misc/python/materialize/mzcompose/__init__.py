@@ -151,7 +151,7 @@ def get_default_system_parameters(
         "storage_statistics_interval": "2000",
         "storage_use_continual_feedback_upsert": "true",
         "storage_use_reclock_v2": "true",
-        "with_0dt_deployment_max_wait": "900s",
+        "with_0dt_deployment_max_wait": "1800s",
         # End of list (ordered by name)
     }
 

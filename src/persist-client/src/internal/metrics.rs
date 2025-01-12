@@ -32,7 +32,7 @@ use mz_ore::stats::histogram_seconds_buckets;
 use mz_persist::location::{
     Blob, BlobMetadata, CaSResult, Consensus, ExternalError, ResultStream, SeqNo, VersionedData,
 };
-use mz_persist::metrics::{ColumnarMetrics, S3BlobMetrics};
+use mz_persist::metrics::{ABSBlobMetrics, ColumnarMetrics, S3BlobMetrics};
 use mz_persist::retry::RetryStream;
 use mz_persist_types::Codec64;
 use mz_postgres_client::metrics::PostgresClientMetrics;
@@ -110,6 +110,8 @@ pub struct Metrics {
 
     /// Metrics for S3-backed blob implementation
     pub s3_blob: S3BlobMetrics,
+    /// Metrics for Azure-backed blob implementation
+    // pub azure_blob: ABSBlobMetrics,
     /// Metrics for Postgres-backed consensus implementation
     pub postgres_consensus: PostgresClientMetrics,
 
