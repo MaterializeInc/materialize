@@ -1696,7 +1696,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: 0dt
     agents:
-      queue: hetzner-aarch64-8cpu-16gb
+      queue: hetzner-aarch64-16cpu-32gb
 
   - id: emulator
     label: Materialize Emulator
