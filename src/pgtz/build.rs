@@ -18,8 +18,7 @@ use std::{env, fs};
 
 use anyhow::{bail, Context, Result};
 use chrono_tz::TZ_VARIANTS;
-use mz_ore::codegen::CodegenBuf;
-use mz_ore::str::StrExt;
+use mz_ore_build::codegen::CodegenBuf;
 use uncased::UncasedStr;
 
 const DEFAULT_TZNAMES: &str = "tznames/Default";
@@ -82,7 +81,7 @@ fn main() -> Result<()> {
             rust_buf.write_block(
                 format!("pub const {abbrev}: TimezoneAbbrev = TimezoneAbbrev"),
                 |rust_buf| {
-                    rust_buf.writeln(format!("abbrev: {},", abbrev.quoted()));
+                    rust_buf.writeln(format!("abbrev: \"{abbrev}\","));
                     match &spec {
                         TimezoneAbbrevSpec::FixedOffset {
                             utc_offset_secs,

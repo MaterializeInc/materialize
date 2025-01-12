@@ -610,6 +610,7 @@ crates_repository(
         "//:src/orchestrator-tracing/Cargo.toml",
         "//:src/orchestratord/Cargo.toml",
         "//:src/orchestrator/Cargo.toml",
+        "//:src/ore-build/Cargo.toml",
         "//:src/ore-proc/Cargo.toml",
         "//:src/ore/Cargo.toml",
         "//:src/persist-cli/Cargo.toml",
