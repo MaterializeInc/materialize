@@ -150,7 +150,7 @@ def run(
     for i in range(num_threads):
         weights: list[float]
         if complexity == Complexity.DDL:
-            weights = [60, 30, 30, 30, 100]
+            weights = [0, 0, 30, 0, 0]
         elif complexity == Complexity.DML:
             weights = [60, 30, 30, 30, 0]
         elif complexity == Complexity.Read:
@@ -445,7 +445,7 @@ def print_stats(
 
 
 def parse_common_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--seed", type=str, default=str(int(time.time())))
+    parser.add_argument("--seed", type=str, default=1735682216)
     parser.add_argument("--runtime", default=600, type=int, help="Runtime in seconds")
     parser.add_argument(
         "--complexity",

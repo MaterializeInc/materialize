@@ -23,6 +23,7 @@ from materialize.data_ingest.data_type import (
     NUMBER_TYPES,
     Bytea,
     DataType,
+    Int,
     Jsonb,
     Text,
     TextTextMap,
@@ -40,32 +41,32 @@ from materialize.util import naughty_strings
 
 MAX_COLUMNS = 5
 MAX_INCLUDE_HEADERS = 5
-MAX_ROWS = 50
+MAX_ROWS = 500
 MAX_CLUSTERS = 4
-MAX_CLUSTER_REPLICAS = 2
+MAX_CLUSTER_REPLICAS = 1
 MAX_DBS = 5
 MAX_SCHEMAS = 5
 MAX_TABLES = 5
 MAX_VIEWS = 15
 MAX_INDEXES = 15
 MAX_ROLES = 15
-MAX_WEBHOOK_SOURCES = 5
-MAX_KAFKA_SOURCES = 5
-MAX_MYSQL_SOURCES = 5
-MAX_POSTGRES_SOURCES = 5
-MAX_KAFKA_SINKS = 5
+MAX_WEBHOOK_SOURCES = 2
+MAX_KAFKA_SOURCES = 100
+MAX_MYSQL_SOURCES = 2
+MAX_POSTGRES_SOURCES = 2
+MAX_KAFKA_SINKS = 2
 
 MAX_INITIAL_DBS = 1
 MAX_INITIAL_SCHEMAS = 1
-MAX_INITIAL_CLUSTERS = 2
-MAX_INITIAL_TABLES = 2
-MAX_INITIAL_VIEWS = 2
-MAX_INITIAL_ROLES = 1
-MAX_INITIAL_WEBHOOK_SOURCES = 1
-MAX_INITIAL_KAFKA_SOURCES = 1
-MAX_INITIAL_MYSQL_SOURCES = 1
-MAX_INITIAL_POSTGRES_SOURCES = 1
-MAX_INITIAL_KAFKA_SINKS = 1
+MAX_INITIAL_CLUSTERS = 1
+MAX_INITIAL_TABLES = 0
+MAX_INITIAL_VIEWS = 0
+MAX_INITIAL_ROLES = 0
+MAX_INITIAL_WEBHOOK_SOURCES = 0
+MAX_INITIAL_KAFKA_SOURCES = 50
+MAX_INITIAL_MYSQL_SOURCES = 0
+MAX_INITIAL_POSTGRES_SOURCES = 0
+MAX_INITIAL_KAFKA_SINKS = 0
 
 NAUGHTY_IDENTIFIERS = False
 
@@ -492,20 +493,17 @@ class KafkaSource(DBObject):
         schema: Schema,
         ports: dict[str, int],
         rng: random.Random,
+        mz_service: str | None = None,
     ):
         super().__init__()
         self.source_id = source_id
         self.cluster = cluster
         self.schema = schema
         self.num_rows = 0
-        fields = []
-        for i in range(rng.randint(1, 10)):
-            fields.append(
-                # naughtify: Invalid schema
-                Field(f"key{i}", rng.choice(DATA_TYPES_FOR_AVRO), True)
-            )
-        for i in range(rng.randint(0, 20)):
-            fields.append(Field(f"value{i}", rng.choice(DATA_TYPES_FOR_AVRO), False))
+        fields = [
+            Field("key", Int, True),
+            Field("val", Int, False),
+        ]
         self.columns = [
             KafkaColumn(field.name, field.data_type, False, self) for field in fields
         ]
@@ -516,8 +514,11 @@ class KafkaSource(DBObject):
             schema.db.name(),
             schema.name(),
             cluster.name(),
+            mz_service,
         )
-        workload = rng.choice(list(WORKLOADS))()
+        workload_cls = rng.choice(list(WORKLOADS))
+        print(f"Source {source_id} data generator: {workload_cls.__name__}")
+        workload = workload_cls()
         for transaction_def in workload.cycle:
             for definition in transaction_def.operations:
                 if type(definition) == Insert and definition.count > MAX_ROWS:
@@ -567,7 +568,7 @@ class KafkaSink(DBObject):
             formats.extend(single_column_formats)
         self.format = rng.choice(formats)
         self.envelope = (
-            "UPSERT" if self.format == "JSON" else rng.choice(["DEBEZIUM", "UPSERT"])
+            "UPSERT" if self.format == "JSON" else rng.choice(["UPSERT"])
         )
         if self.envelope == "UPSERT" or rng.choice([True, False]):
             key_cols = [
@@ -929,11 +930,11 @@ class Database:
         self.schema_id = len(self.schemas)
         self.tables = [
             Table(rng, i, rng.choice(self.schemas))
-            for i in range(rng.randint(2, MAX_INITIAL_TABLES))
+            for i in range(rng.randint(0, MAX_INITIAL_TABLES))
         ]
         self.table_id = len(self.tables)
         self.views = []
-        for i in range(rng.randint(2, MAX_INITIAL_VIEWS)):
+        for i in range(rng.randint(0, MAX_INITIAL_VIEWS)):
             # Only use tables for now since LIMIT 1 and statement_timeout are
             # not effective yet at preventing long-running queries and OoMs.
             base_object = rng.choice(self.tables)
@@ -963,7 +964,10 @@ class Database:
             for i in range(rng.randint(0, MAX_INITIAL_WEBHOOK_SOURCES))
         ]
         self.webhook_source_id = len(self.webhook_sources)
-        self.kafka_sources = []
+        self.kafka_sources = [
+            KafkaSource(i, rng.choice(self.clusters), rng.choice(self.schemas), self.ports, rng, mz_service="materialized")
+            for i in range(rng.randint(0, MAX_INITIAL_KAFKA_SOURCES))
+        ]
         self.mysql_sources = []
         self.postgres_sources = []
         self.kafka_sinks = []

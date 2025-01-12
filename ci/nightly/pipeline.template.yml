@@ -1537,6 +1537,7 @@ steps:
         timeout_in_minutes: 90
         agents:
           queue: hetzner-x86-64-dedi-16cpu-64gb
+        parallelism: 20
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload

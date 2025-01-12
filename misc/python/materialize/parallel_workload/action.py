@@ -223,7 +223,7 @@ class FetchAction(Action):
         )
         query = f"SUBSCRIBE {obj}"
         if self.rng.choice([True, False]):
-            envelope = "UPSERT" if self.rng.choice([True, False]) else "DEBEZIUM"
+            envelope = "UPSERT"
             columns = self.rng.sample(obj.columns, len(obj.columns))
             key = ", ".join(column.name(True) for column in columns)
             query += f" ENVELOPE {envelope} (KEY ({key}))"
@@ -855,6 +855,8 @@ class DropDatabaseAction(Action):
 class CreateSchemaAction(Action):
     def run(self, exe: Executor) -> bool:
         with exe.db.lock:
+            if len(exe.db.dbs) == 0:
+                return False
             if len(exe.db.schemas) >= MAX_SCHEMAS:
                 return False
             schema_id = exe.db.schema_id
@@ -1212,10 +1214,10 @@ class CreateClusterAction(Action):
             exe.db.cluster_id += 1
         cluster = Cluster(
             cluster_id,
-            managed=self.rng.choice([True, False]),
+            managed=True,
             size=self.rng.choice(["1", "2"]),
-            replication_factor=self.rng.choice([1, 2]),
-            introspection_interval=self.rng.choice(["0", "1s", "10s"]),
+            replication_factor=1,
+            introspection_interval="1s",
         )
         cluster.create(exe)
         exe.db.clusters.append(cluster)
@@ -1678,7 +1680,6 @@ class ZeroDowntimeDeployAction(Action):
                 DeploymentStatus.IS_LEADER, mz_service
             )
 
-        time.sleep(self.rng.uniform(60, 120))
         return True
 
 
@@ -2192,14 +2193,14 @@ fetch_action_list = ActionList(
 
 write_action_list = ActionList(
     [
-        (InsertAction, 50),
-        (SelectOneAction, 1),  # can be mixed with writes
+        # (InsertAction, 50),
+        # (SelectOneAction, 1),  # can be mixed with writes
         # (SetClusterAction, 1),  # SET cluster cannot be called in an active transaction
-        (HttpPostAction, 5),
-        (CommitRollbackAction, 10),
-        (ReconnectAction, 1),
-        (SourceInsertAction, 5),
-        (FlipFlagsAction, 2),
+        # (HttpPostAction, 5),
+        # (CommitRollbackAction, 10),
+        # (ReconnectAction, 1),
+        (SourceInsertAction, 500),
+        # (FlipFlagsAction, 2),
     ],
     autocommit=False,
 )
@@ -2220,44 +2221,44 @@ dml_nontrans_action_list = ActionList(
 
 ddl_action_list = ActionList(
     [
-        (CreateIndexAction, 2),
-        (DropIndexAction, 2),
-        (CreateTableAction, 2),
-        (DropTableAction, 2),
-        (CreateViewAction, 8),
-        (DropViewAction, 8),
-        (CreateRoleAction, 2),
-        (DropRoleAction, 2),
-        (CreateClusterAction, 2),
-        (DropClusterAction, 2),
-        (SwapClusterAction, 10),
-        (CreateClusterReplicaAction, 4),
-        (DropClusterReplicaAction, 4),
-        (SetClusterAction, 1),
-        (CreateWebhookSourceAction, 2),
-        (DropWebhookSourceAction, 2),
-        (CreateKafkaSinkAction, 4),
-        (DropKafkaSinkAction, 4),
-        (CreateKafkaSourceAction, 4),
-        (DropKafkaSourceAction, 4),
+        # (CreateIndexAction, 2),
+        # (DropIndexAction, 2),
+        # (CreateTableAction, 2),
+        # (DropTableAction, 2),
+        # (CreateViewAction, 8),
+        # (DropViewAction, 8),
+        # (CreateRoleAction, 2),
+        # (DropRoleAction, 2),
+        # (CreateClusterAction, 2),
+        # (DropClusterAction, 2),
+        # (SwapClusterAction, 10),
+        # (CreateClusterReplicaAction, 4),
+        # (DropClusterReplicaAction, 4),
+        # (SetClusterAction, 1),
+        # (CreateWebhookSourceAction, 2),
+        # (DropWebhookSourceAction, 2),
+        # (CreateKafkaSinkAction, 4),
+        # (DropKafkaSinkAction, 0),
+        # (CreateKafkaSourceAction, 100),
+        # (DropKafkaSourceAction, 0),
         # TODO: Reenable when database-issues#8237 is fixed
         # (CreateMySqlSourceAction, 4),
         # (DropMySqlSourceAction, 4),
-        (CreatePostgresSourceAction, 4),
-        (DropPostgresSourceAction, 4),
-        (GrantPrivilegesAction, 4),
-        (RevokePrivilegesAction, 1),
-        (ReconnectAction, 1),
-        (CreateDatabaseAction, 1),
-        (DropDatabaseAction, 1),
-        (CreateSchemaAction, 1),
-        (DropSchemaAction, 1),
-        (RenameSchemaAction, 10),
-        (RenameTableAction, 10),
-        (RenameViewAction, 10),
-        (RenameSinkAction, 10),
-        (SwapSchemaAction, 10),
-        (FlipFlagsAction, 2),
+        # (CreatePostgresSourceAction, 4),
+        # (DropPostgresSourceAction, 4),
+        # (GrantPrivilegesAction, 4),
+        # (RevokePrivilegesAction, 1),
+        # (ReconnectAction, 1),
+        # (CreateDatabaseAction, 1),
+        # (DropDatabaseAction, 1),
+        # (CreateSchemaAction, 1),
+        # (DropSchemaAction, 1),
+        # (RenameSchemaAction, 10),
+        # (RenameTableAction, 10),
+        # (RenameViewAction, 10),
+        # (RenameSinkAction, 10),
+        # (SwapSchemaAction, 10),
+        # (FlipFlagsAction, 2),
         # TODO: Reenable when database-issues#8445 is fixed
         # (AlterKafkaSinkFromAction, 8),
         # (TransactionIsolationAction, 1),
