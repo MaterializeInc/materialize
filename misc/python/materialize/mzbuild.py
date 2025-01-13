@@ -511,7 +511,7 @@ class CargoBuild(CargoPreImage):
             bazel_tars.update(build.bazel_tars)
         assert rd
 
-        ui.section(f"Common cargo build for: {', '.join(bins | examples)}")
+        ui.section(f"Common build for: {', '.join(bins | examples)}")
 
         if rd.bazel:
             cargo_build = cls.generate_bazel_build_command(
