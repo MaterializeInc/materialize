@@ -10,7 +10,7 @@
 //! Code for iterating through one or more parts, including streaming consolidation.
 
 use anyhow::anyhow;
-use arrow::array::{Array, AsArray};
+use arrow::array::{Array, AsArray, Int64Array};
 use std::cmp::{Ordering, Reverse};
 use std::collections::binary_heap::PeekMut;
 use std::collections::{BinaryHeap, VecDeque};
@@ -25,7 +25,6 @@ use differential_dataflow::trace::Description;
 use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
 use itertools::Itertools;
-use mz_ore::iter::IteratorExt;
 use mz_ore::task::JoinHandle;
 use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsStructuredExt};
 use mz_persist::indexed::encoding::BlobTraceUpdates;
@@ -89,8 +88,7 @@ fn interleave_updates<T: Codec64, D: Codec64>(
     updates: &[&BlobTraceUpdates],
     elements: impl IntoIterator<Item = (Indices, T, D)>,
 ) -> BlobTraceUpdates {
-    let mut arrays: Vec<&dyn Array> = Vec::with_capacity(updates.len());
-    let (indices, timestamps, diffs) = elements
+    let (indices, timestamps, diffs): (Vec<_>, Vec<_>, Vec<_>) = elements
         .into_iter()
         .map(|(idx, t, d)| {
             (
@@ -99,34 +97,43 @@ fn interleave_updates<T: Codec64, D: Codec64>(
                 i64::from_le_bytes(D::encode(&d)),
             )
         })
-        .multiunzip::<(Vec<_>, Vec<_>, Vec<_>)>();
-    let mut interleave = |get_array: fn(&BlobTraceUpdates) -> &dyn Array| {
+        .multiunzip();
+
+    let mut arrays: Vec<&dyn Array> = Vec::with_capacity(updates.len());
+    let mut interleave = |get_array: fn(&BlobTraceUpdates) -> Option<&dyn Array>| {
         for part in updates {
-            arrays.push(get_array(part));
+            arrays.push(get_array(part)?);
         }
-        let out =
-            ::arrow::compute::interleave(arrays.as_slice(), &indices).expect("valid references");
+        let out = ::arrow::compute::interleave(arrays.as_slice(), &indices).ok();
         arrays.clear();
         out
     };
-    let keys = interleave(|u| u.records().keys()).as_binary().clone();
-    let vals = interleave(|u| u.records().vals()).as_binary().clone();
-    let records = ColumnarRecords::new(keys, vals, timestamps.into(), diffs.into());
-    let has_ext = updates.iter().all(|e| e.structured().is_some());
-    // The structured impl will migrate structured data using the write schemas, but we don't have
-    // those available here. Instead, drop the structured data on the floor; if we need it, it will
-    // be re-created from our codec data later in the pipeline.
-    let types_match = updates
-        .iter()
-        .flat_map(|e| e.structured())
-        .map(|e| (e.key.data_type(), e.val.data_type()))
-        .all_equal();
-    if has_ext && types_match {
-        let key = interleave(|u| &u.structured().unwrap().key);
-        let val = interleave(|u| &u.structured().unwrap().val);
-        BlobTraceUpdates::Both(records, ColumnarRecordsStructuredExt { key, val })
-    } else {
-        BlobTraceUpdates::Row(records)
+
+    let codec_keys =
+        interleave(|u| Some(u.records()?.keys())).and_then(|k| k.as_binary_opt().cloned());
+    let codec_vals =
+        interleave(|u| Some(u.records()?.vals())).and_then(|v| v.as_binary_opt().cloned());
+    let structured_keys = interleave(|u| Some(u.structured()?.key.as_ref()));
+    let structured_vals = interleave(|u| Some(u.structured()?.val.as_ref()));
+    let timestamps = Int64Array::from(timestamps);
+    let diffs = Int64Array::from(diffs);
+
+    match (codec_keys, codec_vals, structured_keys, structured_vals) {
+        (Some(c_k), Some(c_v), Some(s_k), Some(s_v)) => BlobTraceUpdates::Both(
+            ColumnarRecords::new(c_k, c_v, timestamps, diffs),
+            ColumnarRecordsStructuredExt { key: s_k, val: s_v },
+        ),
+        (Some(c_k), Some(c_v), _, _) => {
+            BlobTraceUpdates::Row(ColumnarRecords::new(c_k, c_v, timestamps, diffs))
+        }
+        (_, _, Some(s_k), Some(s_v)) => BlobTraceUpdates::Structured {
+            key_values: ColumnarRecordsStructuredExt { key: s_k, val: s_v },
+            timestamps,
+            diffs,
+        },
+        _ => {
+            panic!("unable to generate either codec or structured data for updates; invalid types?")
+        }
     }
 }
 
@@ -173,7 +180,7 @@ impl<T: Codec64, D: Codec64> RowSort<T, D> for CodecSort<T, D> {
     }
 
     fn len(updates: &Self::Updates) -> usize {
-        updates.records().len()
+        updates.len()
     }
 
     fn kv_size((key, value): Self::KV<'_>) -> usize {
@@ -182,7 +189,12 @@ impl<T: Codec64, D: Codec64> RowSort<T, D> for CodecSort<T, D> {
     }
 
     fn get(updates: &Self::Updates, index: usize) -> Option<(Self::KV<'_>, T, D)> {
-        let ((k, v), t, d) = updates.records().get(index)?;
+        // TODO(structured): replace before allowing structured-only parts
+        // (pass in schemas and get_or_make_codec?)
+        let ((k, v), t, d) = updates
+            .records()
+            .expect("codec data is present")
+            .get(index)?;
         Some(((k, v), T::decode(t), D::decode(d)))
     }
 
@@ -253,7 +265,7 @@ impl<K: Codec, V: Codec, T: Codec64, D: Codec64> RowSort<T, D> for StructuredSor
     }
 
     fn len(updates: &Self::Updates) -> usize {
-        updates.data.records().len()
+        updates.data.len()
     }
 
     fn kv_size((key, value): Self::KV<'_>) -> usize {
@@ -261,7 +273,8 @@ impl<K: Codec, V: Codec, T: Codec64, D: Codec64> RowSort<T, D> for StructuredSor
     }
 
     fn get(updates: &Self::Updates, index: usize) -> Option<(Self::KV<'_>, T, D)> {
-        let (_, t, d) = updates.data.records().get(index)?;
+        let t = updates.data.timestamps().values().get(index)?.to_le_bytes();
+        let d = updates.data.diffs().values().get(index)?.to_le_bytes();
         Some((
             (updates.key_ord.at(index), Some(updates.val_ord.at(index))),
             T::decode(t),

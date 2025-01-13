@@ -829,7 +829,8 @@ mod tests {
         let part =
             BlobTraceBatchPart::decode(&value, &metrics.columnar).expect("failed to decode part");
         let mut updates = Vec::new();
-        for ((k, v), t, d) in part.updates.records().iter() {
+        // TODO(bkirwi): switch to structured data in tests
+        for ((k, v), t, d) in part.updates.records().expect("codec data").iter() {
             updates.push((
                 (
                     K::decode(k, &read_schemas.key),

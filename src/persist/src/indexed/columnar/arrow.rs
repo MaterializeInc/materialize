@@ -243,7 +243,7 @@ pub fn decode_arrow_batch_kvtd(
         timestamps: realloc_array(time, metrics),
         diffs: realloc_array(diff, metrics),
     };
-    ret.borrow().validate()?;
+    ret.validate()?;
 
     Ok(ret)
 }

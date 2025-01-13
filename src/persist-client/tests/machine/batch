@@ -57,7 +57,7 @@ fetch-batch input=b0 stats=lower
 <empty>
 
 # write a batch that doesn't cleanly divide into target part size (each update is 25 bytes)
-write-batch output=b0 lower=0 upper=2 target_size=50
+write-batch output=b0 lower=0 upper=2 target_size=30
 a 0 1
 b 0 1
 d 0 1
@@ -78,7 +78,7 @@ part 0
 part 1
 
 # write a batch that exactly divides into target part size (each update is 25 bytes)
-write-batch output=b0 lower=0 upper=2 target_size=50
+write-batch output=b0 lower=0 upper=2 target_size=30
 a 0 1
 b 0 1
 c 0 1
@@ -101,7 +101,7 @@ part 0
 part 1
 
 # write an empty batch. should contain no parts.
-write-batch output=b0 lower=0 upper=2 target_size=50
+write-batch output=b0 lower=0 upper=2 target_size=30
 ----
 parts=0 len=0
 
@@ -142,7 +142,7 @@ c 0 1
 part 0
 
 # unsorted batches record each part in their own run
-write-batch output=b0 lower=0 upper=2 consolidate=false target_size=50
+write-batch output=b0 lower=0 upper=2 consolidate=false target_size=30
 y 0 1
 z 0 1
 n 0 1
