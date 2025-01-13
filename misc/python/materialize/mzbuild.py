@@ -1104,22 +1104,38 @@ class DependencySet:
 
         # Push all Docker images in parallel to minimize build time.
         ui.section("Pushing images")
-        pushes: list[subprocess.Popen] = []
-        for image in images_to_push:
-            # Piping through `cat` disables terminal control codes, and so the
-            # interleaved progress output from multiple pushes is less hectic.
-            # We don't use `docker push --quiet`, as that disables progress
-            # output entirely.
-            push = subprocess.Popen(
-                f"docker push {shlex.quote(image)} | cat",
-                shell=True,
-            )
-            pushes.append(push)
+        # Attempt to upload images a maximum of 3 times before giving up.
+        for attempts_remaining in reversed(range(3)):
+            pushes: list[subprocess.Popen] = []
+            for image in images_to_push:
+                # Piping through `cat` disables terminal control codes, and so the
+                # interleaved progress output from multiple pushes is less hectic.
+                # We don't use `docker push --quiet`, as that disables progress
+                # output entirely. Use `set -o pipefail` so the return code of
+                # `docker push` is passed through.
+                push = subprocess.Popen(
+                    [
+                        "/bin/bash",
+                        "-c",
+                        f"set -o pipefail; docker push {shlex.quote(image)} | cat",
+                    ]
+                )
+                pushes.append(push)
 
-        for push in pushes:
-            returncode = push.wait()
-            if returncode:
-                raise subprocess.CalledProcessError(returncode, push.args)
+            for i, push in reversed(list(enumerate(pushes))):
+                returncode = push.wait()
+                if returncode:
+                    if attempts_remaining == 0:
+                        # Last attempt, fail
+                        raise subprocess.CalledProcessError(returncode, push.args)
+                    else:
+                        print(f"docker push {push.args} failed: {returncode}")
+                else:
+                    del images_to_push[i]
+
+            if images_to_push:
+                time.sleep(10)
+                print("Retrying in 10 seconds")
 
     def check(self) -> bool:
         """Check all publishable images in this dependency set exist on Docker
