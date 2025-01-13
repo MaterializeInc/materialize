@@ -142,7 +142,7 @@ def get_default_system_parameters(
         "persist_use_critical_since_catalog": "true",
         "persist_use_critical_since_snapshot": "false" if zero_downtime else "true",
         "persist_use_critical_since_source": "false" if zero_downtime else "true",
-        "persist_part_decode_format": "row_with_validate",
+        "persist_part_decode_format": "arrow",
         "statement_logging_default_sample_rate": "0.01",
         "statement_logging_max_sample_rate": "0.01",
         "storage_source_decode_fuel": "100000",
