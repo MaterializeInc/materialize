@@ -163,7 +163,7 @@ Explained Query (fast path):
 
 ### Reading decorrelated and optimized plans
 
-Materialize plans are directed acyclic graphs of operators. Each operator in the graph
+Materialize plans are directed, potentially cyclic, graphs of operators. Each operator in the graph
 receives inputs from zero or more other operators and produces a single output.
 Sub-graphs where each output is consumed only once are rendered as tree-shaped fragments.
 Sub-graphs consumed more than once are represented as common table expressions (CTEs).
