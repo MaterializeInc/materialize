@@ -204,7 +204,7 @@ pub fn build_compute_dataflow<A: Allocate>(
         .map(|(sink_id, sink)| (*sink_id, dataflow.depends_on(sink.from), sink.clone()))
         .collect::<Vec<_>>();
 
-    let worker_logging = timely_worker.log_register().get("timely");
+    let worker_logging = timely_worker.log_register().get("timely").map(Into::into);
     let apply_demands = COMPUTE_APPLY_COLUMN_DEMANDS.get(&compute_state.worker_config);
 
     let name = format!("Dataflow: {}", &dataflow.debug_name);

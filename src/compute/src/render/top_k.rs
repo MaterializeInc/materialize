@@ -847,7 +847,7 @@ pub mod monoids {
     use timely::container::columnation::{Columnation, Region};
 
     /// A monoid containing a row and an ordering.
-    #[derive(Eq, PartialEq, Debug, Clone, Serialize, Deserialize, Hash)]
+    #[derive(Eq, PartialEq, Debug, Clone, Serialize, Deserialize, Hash, Default)]
     pub struct Top1Monoid {
         pub row: Row,
         pub order_key: Vec<ColumnOrder>,
