@@ -256,6 +256,8 @@ so it is executed.""",
 
     set_default_agents_queue(pipeline)
 
+    set_parallelism_name(pipeline)
+
     if test_selection := os.getenv("CI_TEST_SELECTION"):
         trim_test_selection(pipeline, set(test_selection.split(",")))
 
