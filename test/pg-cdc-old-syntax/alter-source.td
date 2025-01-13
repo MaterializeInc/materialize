@@ -270,7 +270,6 @@ tb                 subsource
 # If your schema change breaks the subsource, you can fix it.
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE table_a DROP COLUMN f2;
-INSERT INTO table_a VALUES (3);
 
 ! SELECT * FROM table_a;
 contains:incompatible schema change
