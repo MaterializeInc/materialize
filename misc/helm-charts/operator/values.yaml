@@ -230,6 +230,9 @@ rbac:
   # -- Whether to create necessary RBAC roles and bindings
   create: true
 
+# -- Optionally use a non-default kubernetes scheduler.
+schedulerName: null
+
 # Service account settings
 serviceAccount:
   # -- Whether to create a new service account for the operator
