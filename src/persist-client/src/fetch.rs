@@ -645,15 +645,6 @@ pub struct ShardSourcePart<K: Codec, V: Codec, T, D> {
     fetch_permit: Option<Arc<MetricsPermits>>,
 }
 
-impl<K: Codec, V: Codec, T: Clone, D> Clone for ShardSourcePart<K, V, T, D> {
-    fn clone(&self) -> Self {
-        Self {
-            part: self.part.clone(),
-            fetch_permit: self.fetch_permit.clone(),
-        }
-    }
-}
-
 impl<K, V, T: Debug, D: Debug> Debug for ShardSourcePart<K, V, T, D>
 where
     K: Codec + Debug,
@@ -735,8 +726,8 @@ pub struct FetchedPart<K: Codec, V: Codec, T, D> {
     // If migration is Either, then the columnar one will have already been
     // applied here.
     structured_part: (
-        Option<Arc<<K::Schema as Schema2<K>>::Decoder>>,
-        Option<Arc<<V::Schema as Schema2<V>>::Decoder>>,
+        Option<<K::Schema as Schema2<K>>::Decoder>,
+        Option<<V::Schema as Schema2<V>>::Decoder>,
     ),
     part_decode_format: PartDecodeFormat,
     migration: PartMigration<K, V>,
@@ -746,24 +737,6 @@ pub struct FetchedPart<K: Codec, V: Codec, T, D> {
     val_storage: Option<V::Storage>,
 
     _phantom: PhantomData<fn() -> D>,
-}
-
-impl<K: Codec, V: Codec, T: Clone, D> Clone for FetchedPart<K, V, T, D> {
-    fn clone(&self) -> Self {
-        Self {
-            metrics: Arc::clone(&self.metrics),
-            ts_filter: self.ts_filter.clone(),
-            part: self.part.clone(),
-            structured_part: self.structured_part.clone(),
-            part_decode_format: self.part_decode_format,
-            migration: self.migration.clone(),
-            filter_pushdown_audit: self.filter_pushdown_audit.clone(),
-            part_cursor: self.part_cursor.clone(),
-            key_storage: None,
-            val_storage: None,
-            _phantom: self._phantom.clone(),
-        }
-    }
 }
 
 impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, T, D> {
@@ -829,9 +802,9 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
                     name: &str,
                     schema: &C::Schema,
                     array: &Arc<dyn Array>,
-                ) -> Option<Arc<<C::Schema as Schema2<C>>::Decoder>> {
+                ) -> Option<<C::Schema as Schema2<C>>::Decoder> {
                     match Schema2::decoder_any(schema, array) {
-                        Ok(x) => Some(Arc::new(x)),
+                        Ok(x) => Some(x),
                         Err(err) => {
                             tracing::error!(?err, "failed to create {} decoder", name);
                             None
@@ -916,11 +889,11 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
 
 /// A [Blob] object that has been fetched, but has no associated decoding
 /// logic.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) struct EncodedPart<T> {
     metrics: ReadMetrics,
     registered_desc: Description<T>,
-    part: Arc<BlobTraceBatchPart<T>>,
+    part: BlobTraceBatchPart<T>,
     needs_truncation: bool,
     ts_rewrite: Option<Antichain<T>>,
 }
@@ -1241,7 +1214,7 @@ where
         EncodedPart {
             metrics,
             registered_desc,
-            part: Arc::new(parsed),
+            part: parsed,
             needs_truncation,
             ts_rewrite: ts_rewrite.cloned(),
         }
