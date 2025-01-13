@@ -109,7 +109,12 @@ pub(super) fn spawn_statistics_scraper<StatsWrapper, Stats, T>(
 where
     StatsWrapper: AsStats<Stats> + Debug + Send + 'static,
     Stats: PackableStats + Clone + Debug + Send + 'static,
-    T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation,
+    T: Timestamp
+        + Lattice
+        + Codec64
+        + From<EpochMillis>
+        + TimestampManipulation
+        + Into<mz_repr::Timestamp>,
 {
     let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
 
