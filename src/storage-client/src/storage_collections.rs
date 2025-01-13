@@ -2154,12 +2154,7 @@ where
         new_desc: RelationDesc,
         expected_version: RelationVersion,
     ) -> Result<(), StorageError<Self::Timestamp>> {
-        let (
-            data_shard,
-            existing_write_frontier,
-            existing_read_policy,
-            mut existing_read_capabilities,
-        ) = {
+        let (data_shard, existing_write_frontier, existing_read_capabilities) = {
             let self_collections = self.collections.lock().expect("lock poisoned");
             let existing = self_collections
                 .get(&existing_collection)
@@ -2173,7 +2168,6 @@ where
             (
                 existing.collection_metadata.data_shard,
                 existing.write_frontier.clone(),
-                existing.read_policy.clone(),
                 existing.read_capabilities.clone(),
             )
         };
@@ -2296,24 +2290,17 @@ where
             // capability of the existing collection. This would cause runtime panics because it
             // would eventually result in negative read capabilities.
             let mut changes = ChangeBatch::new();
-            for (time, diff) in existing_read_capabilities.updates() {
-                changes.update(time.clone(), *diff);
-            }
+            changes.extend(
+                existing_read_capabilities
+                    .frontier()
+                    .iter()
+                    .map(|t| (t.clone(), 1)),
+            );
             let mut updates = BTreeMap::from([(new_collection, changes)]);
             StorageCollectionsImpl::update_read_capabilities_inner(
                 &self.cmd_tx,
                 &mut *self_collections,
                 &mut updates,
-            );
-
-            // Note: The Coordinator will also set the ReadPolicy, but start by
-            // initializing it to the same policy as the existing collection to
-            // prevent some other action, e.g. the write frontier of the
-            // txn_wal shard advancing, from getting interleaved between this
-            // call and the Coordinator's call to set the ReadPolicy.
-            self.set_read_policies_inner(
-                &mut *self_collections,
-                vec![(new_collection, existing_read_policy)],
             );
         };
 

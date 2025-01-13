@@ -4843,6 +4843,15 @@ impl Coordinator {
             };
             let table = table.clone();
 
+            // Acquire a read hold on the original table for the duration of
+            // the alter to prevent the since of the original table from
+            // getting advanced, while the ALTER is running.
+            let existing_table = crate::CollectionIdBundle {
+                storage_ids: btreeset![existing_global_id],
+                compute_ids: BTreeMap::new(),
+            };
+            let _existing_table_read_hold = coord.acquire_read_holds(&existing_table);
+
             let new_version = table.desc.latest_version();
             let new_desc = table
                 .desc
@@ -4862,7 +4871,6 @@ impl Coordinator {
                 )
                 .await
                 .expect("failed to alter desc of table");
-            coord.apply_local_write(register_ts).await;
 
             // Initialize the ReadPolicy which ensures we have the correct read holds.
             let compaction_window = table
@@ -4877,6 +4885,7 @@ impl Coordinator {
                     compaction_window,
                 )
                 .await;
+            coord.apply_local_write(register_ts).await;
         })
         .await?;
 
