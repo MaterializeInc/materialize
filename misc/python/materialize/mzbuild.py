@@ -1109,10 +1109,14 @@ class DependencySet:
             # Piping through `cat` disables terminal control codes, and so the
             # interleaved progress output from multiple pushes is less hectic.
             # We don't use `docker push --quiet`, as that disables progress
-            # output entirely.
+            # output entirely. Use `set -o pipefail` so the return code of
+            # `docker push` is passed through.
             push = subprocess.Popen(
-                f"docker push {shlex.quote(image)} | cat",
-                shell=True,
+                [
+                    "/bin/bash",
+                    "-c",
+                    f"set -o pipefail; docker push {shlex.quote(image)} | cat",
+                ]
             )
             pushes.append(push)
 
