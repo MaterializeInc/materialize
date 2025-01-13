@@ -455,7 +455,6 @@ impl Listeners {
                 sentry: None,
                 build_version: crate::BUILD_INFO.version,
                 build_sha: crate::BUILD_INFO.sha,
-                build_time: crate::BUILD_INFO.time,
                 registry: metrics_registry.clone(),
                 capture: config.capture,
             };

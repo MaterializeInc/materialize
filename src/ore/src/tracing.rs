@@ -95,8 +95,6 @@ pub struct TracingConfig<F> {
     pub build_version: &'static str,
     /// The commit SHA of this build of the service.
     pub build_sha: &'static str,
-    /// The time of this build of the service.
-    pub build_time: &'static str,
     /// Registry for prometheus metrics.
     pub registry: MetricsRegistry,
 }
@@ -543,7 +541,6 @@ where
             sentry::configure_scope(|scope| {
                 scope.set_tag("service_name", config.service_name);
                 scope.set_tag("build_sha", config.build_sha.to_string());
-                scope.set_tag("build_time", config.build_time.to_string());
                 for (k, v) in sentry_config.tags {
                     scope.set_tag(&k, v);
                 }

@@ -57,15 +57,15 @@ cc_library(
     }),
     includes = ["src/zlib"],
     local_defines = [
-       "Z_SOLO",
-       "STDC",
-       "_LARGEFILE64_SOURCE",
-       "_POSIX_SOURCE",
+        "Z_SOLO",
+        "STDC",
+        "_LARGEFILE64_SOURCE",
+        "_POSIX_SOURCE",
     ] + select({
-       "@platforms//os:macos": [
-           "_C99_SOURCE",
-       ],
-       "//conditions:default": [],
+        "@platforms//os:macos": [
+            "_C99_SOURCE",
+        ],
+        "//conditions:default": [],
     }),
     visibility = ["//visibility:public"],
 )
