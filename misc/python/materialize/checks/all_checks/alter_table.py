@@ -16,7 +16,7 @@ from materialize.mz_version import MzVersion
 
 class AlterTableAddColumn(Check):
     def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion.parse_mz("v0.129.0-dev")
+        return self.base_version >= MzVersion.parse_mz("v0.130.0-dev")
 
     def initialize(self) -> Testdrive:
         return Testdrive(

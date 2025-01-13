@@ -1019,7 +1019,7 @@ where
             let mut update = updates.remove(&id).unwrap();
 
             if id.is_user() {
-                trace!(id = ?id, update = ?update, "update_read_capabilities");
+                info!(id = ?id, update = ?update, "update_read_capabilities");
             }
 
             let collection = if let Some(c) = collections.get_mut(&id) {
@@ -1064,7 +1064,7 @@ where
             update.extend(changes);
 
             if id.is_user() {
-                trace!(
+                info!(
                 %id,
                 ?collection.storage_dependencies,
                 ?update,
@@ -1866,12 +1866,7 @@ where
         new_desc: RelationDesc,
         expected_version: RelationVersion,
     ) -> Result<(), StorageError<Self::Timestamp>> {
-        let (
-            data_shard,
-            existing_write_frontier,
-            existing_read_policy,
-            mut existing_read_capabilities,
-        ) = {
+        let (data_shard, existing_write_frontier, existing_read_policy, existing_read_capabilities) = {
             let self_collections = self.collections.lock().expect("lock poisoned");
             let existing = self_collections
                 .get(&existing_collection)
@@ -2001,31 +1996,67 @@ where
             };
             existing.storage_dependencies.push(new_collection);
 
+            // Note: The Coordinator will also set the ReadPolicy, but start by
+            // initializing it to the same policy as the existing collection to
+            // prevent some other action, e.g. the write frontier of the
+            // txn_wal shard advancing, from getting interleaved between this
+            // call and the Coordinator's call to set the ReadPolicy.
+            // self.set_read_policies_inner(
+            //     &mut *self_collections,
+            //     vec![(new_collection, existing_read_policy)],
+            // );
+
             // Install the relevant read capabilities on the new collection.
             //
             // Note(parkmycar): Originally we used `install_collection_dependency_read_holds_inner`
             // here, but that only installed a ReadHold on the new collection for the implied
             // capability of the existing collection. This would cause runtime panics because it
             // would eventually result in negative read capabilities.
+
+            // Attempt 1
+            // self.install_collection_dependency_read_holds_inner(
+            //     &mut self_collections,
+            //     existing_collection,
+            // )
+            // .expect("failed to install read holds");
+
+            // Attempt 2
+            // for id in desired_holds.iter() {
+            //     let collection = collections
+            //         .get(id)
+            //         .ok_or(ReadHoldError::CollectionMissing(*id))?;
+            //     let since = collection.read_capabilities.frontier().to_owned();
+            //     advanced_holds.push((*id, since));
+            // }
+
+            // let mut updates = advanced_holds
+            //     .iter()
+            //     .map(|(id, hold)| {
+            //         let mut changes = ChangeBatch::new();
+            //         changes.extend(hold.iter().map(|time| (time.clone(), 1)));
+            //         (*id, changes)
+            //     })
+            //     .collect::<BTreeMap<_, _>>();
+
+            // StorageCollectionsImpl::update_read_capabilities_inner(
+            //     &self.cmd_tx,
+            //     &mut collections,
+            //     &mut updates,
+            // );
+
+            // Attempt 3
             let mut changes = ChangeBatch::new();
-            for (time, diff) in existing_read_capabilities.updates() {
-                changes.update(time.clone(), *diff);
-            }
+            changes.extend(
+                existing_read_capabilities
+                    .frontier()
+                    .iter()
+                    .map(|t| (t.clone(), 1)),
+            );
             let mut updates = BTreeMap::from([(new_collection, changes)]);
             StorageCollectionsImpl::update_read_capabilities_inner(
                 &self.cmd_tx,
                 &mut *self_collections,
                 &mut updates,
-            );
-
-            // Note: The Coordinator will also set the ReadPolicy, but start by
-            // initializing it to the same policy as the existing collection to
-            // prevent some other action, e.g. the write frontier of the
-            // txn_wal shard advancing, from getting interleaved between this
-            // call and the Coordinator's call to set the ReadPolicy.
-            self.set_read_policies_inner(
-                &mut *self_collections,
-                vec![(new_collection, existing_read_policy)],
             );
         };
 
