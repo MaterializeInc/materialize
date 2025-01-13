@@ -65,15 +65,11 @@ where
         }
     }
 
-    /// Flushes the contents of the builder through the current time and sends
-    /// appropriate progress statements.
-    fn flush_through(&mut self, time: &Duration) {
+    /// Indicate progress up to a specific `time`.
+    fn report_progress(&mut self, time: &Duration) {
         let time_ms = ((time.as_millis() / self.interval_ms) + 1) * self.interval_ms;
         let new_time_ms: Timestamp = time_ms.try_into().expect("must fit");
         if self.time_ms < new_time_ms {
-            // In principle we can buffer up until this point, if that is appealing to us.
-            // We could buffer more aggressively if the logging interval were exposed
-            // here, as the forward ticks would be that much less frequent.
             self.event_pusher
                 .push(Event::Progress(vec![(new_time_ms, 1), (self.time_ms, -1)]));
             self.time_ms = new_time_ms;
@@ -88,7 +84,7 @@ where
     /// Publishes a batch of logged events and advances the capability.
     fn publish_batch(&mut self, time: &Duration, data: C) {
         self.event_pusher.push(Event::Messages(self.time_ms, data));
-        self.flush_through(time);
+        self.report_progress(time);
     }
 }
 

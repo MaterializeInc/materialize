@@ -221,7 +221,7 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
                     }
                 }
                 logger.publish_batch(time, container);
-                logger.flush_through(time);
+                logger.report_progress(time);
                 event_queue.activator.activate();
             },
         )
