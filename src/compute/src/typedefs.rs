@@ -14,8 +14,7 @@
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::trace::implementations::chunker::ColumnationChunker;
-use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
-use differential_dataflow::trace::implementations::merge_batcher_col::ColumnationMerger;
+use differential_dataflow::trace::implementations::merge_batcher::{ColMerger, MergeBatcher};
 use differential_dataflow::trace::implementations::ord_neu::{
     FlatValBatcher, FlatValBuilder, FlatValSpine, OrdValBatch,
 };
@@ -193,11 +192,8 @@ pub type RowErrBuilder<T, R> = RowValBuilder<DataflowError, T, R>;
 
 // Batchers for consolidation
 pub type KeyBatcher<K, T, D> = KeyValBatcher<K, (), T, D>;
-pub type KeyValBatcher<K, V, T, D> = MergeBatcher<
-    Vec<((K, V), T, D)>,
-    ColumnationChunker<((K, V), T, D)>,
-    ColumnationMerger<((K, V), T, D)>,
->;
+pub type KeyValBatcher<K, V, T, D> =
+    MergeBatcher<Vec<((K, V), T, D)>, ColumnationChunker<((K, V), T, D)>, ColMerger<(K, V), T, D>>;
 
 pub type FlatKeyValBatch<K, V, T, R> = OrdValBatch<MzFlatLayout<K, V, T, R>>;
 pub type FlatKeyValSpine<K, V, T, R> = FlatValSpine<MzFlatLayout<K, V, T, R>>;

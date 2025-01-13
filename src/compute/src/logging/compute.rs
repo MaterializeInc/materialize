@@ -44,7 +44,8 @@ use crate::row_spine::{RowRowBatcher, RowRowBuilder};
 use crate::typedefs::RowRowSpine;
 
 /// Type alias for a logger of compute events.
-pub type Logger = timely::logging_core::Logger<ComputeEvent>;
+pub type Logger = timely::logging_core::Logger<ComputeEventBuilder>;
+pub type ComputeEventBuilder = CapacityContainerBuilder<Vec<(Duration, ComputeEvent)>>;
 
 /// A logged compute event.
 #[derive(Debug, Clone, PartialOrd, PartialEq)]

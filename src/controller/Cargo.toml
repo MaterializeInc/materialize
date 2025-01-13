@@ -12,7 +12,7 @@ workspace = true
 [dependencies]
 anyhow = "1.0.66"
 chrono = { version = "0.4.35", default-features = false, features = ["std"] }
-differential-dataflow = "0.13.2"
+differential-dataflow = "0.13.3"
 futures = "0.3.25"
 mz-build-info = { path = "../build-info" }
 mz-cluster-client = { path = "../cluster-client" }
@@ -33,7 +33,7 @@ mz-txn-wal = { path = "../txn-wal" }
 regex = "1.7.0"
 serde = { version = "1.0.152", features = ["derive"] }
 serde_json = "1.0.125"
-timely = "0.15.1"
+timely = "0.16.0"
 tokio = "1.38.0"
 tokio-stream = "0.1.11"
 tracing = "0.1.37"

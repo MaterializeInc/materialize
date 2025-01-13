@@ -15,16 +15,16 @@ mod initialize;
 mod reachability;
 mod timely;
 
-use ::timely::container::{CapacityContainerBuilder, ContainerBuilder, PushInto, SizableContainer};
-use ::timely::Container;
 use std::any::Any;
 use std::collections::BTreeMap;
+use std::marker::PhantomData;
 use std::rc::Rc;
 use std::time::Duration;
 
 use ::timely::dataflow::operators::capture::{Event, EventLink, EventPusher};
 use ::timely::progress::Timestamp as TimelyTimestamp;
 use ::timely::scheduling::Activator;
+use ::timely::Container;
 use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, TimelyLog};
 use mz_expr::{permutation_for_arrangement, MirScalarExpr};
 use mz_repr::{Datum, Diff, Row, RowPacker, SharedRow, Timestamp};
@@ -36,10 +36,9 @@ use crate::typedefs::RowRowAgent;
 pub use crate::logging::initialize::initialize;
 
 /// Logs events as a timely stream, with progress statements.
-struct BatchLogger<CB, P>
+struct BatchLogger<C, P>
 where
-    CB: ContainerBuilder,
-    P: EventPusher<Timestamp, CB::Container>,
+    P: EventPusher<Timestamp, C>,
 {
     /// Time in milliseconds of the current expressed capability.
     time_ms: Timestamp,
@@ -49,14 +48,12 @@ where
     /// This means we should be able to perform the same action on timestamp capabilities, and only
     /// flush buffers when this timestamp advances.
     interval_ms: u128,
-    /// A stash for data that does not yet need to be sent.
-    builder: CB,
+    _marker: PhantomData<C>,
 }
 
-impl<CB, P> BatchLogger<CB, P>
+impl<C, P> BatchLogger<C, P>
 where
-    CB: ContainerBuilder,
-    P: EventPusher<Timestamp, CB::Container>,
+    P: EventPusher<Timestamp, C>,
 {
     /// Creates a new batch logger.
     fn new(event_pusher: P, interval_ms: u128) -> Self {
@@ -64,7 +61,7 @@ where
             time_ms: Timestamp::minimum(),
             event_pusher,
             interval_ms,
-            builder: CB::default(),
+            _marker: PhantomData,
         }
     }
 
@@ -74,12 +71,6 @@ where
         let time_ms = ((time.as_millis() / self.interval_ms) + 1) * self.interval_ms;
         let new_time_ms: Timestamp = time_ms.try_into().expect("must fit");
         if self.time_ms < new_time_ms {
-            while let Some(finished) = self.builder.finish() {
-                let finished = std::mem::take(finished);
-                self.event_pusher
-                    .push(Event::Messages(self.time_ms, finished));
-            }
-
             // In principle we can buffer up until this point, if that is appealing to us.
             // We could buffer more aggressively if the logging interval were exposed
             // here, as the forward ticks would be that much less frequent.
@@ -88,44 +79,22 @@ where
             self.time_ms = new_time_ms;
         }
     }
-
-    /// Extracts and sends all messages that are ready to be sent.
-    fn extract_and_send(&mut self) {
-        while let Some(extracted) = self.builder.extract() {
-            let extracted = std::mem::take(extracted);
-            self.event_pusher
-                .push(Event::Messages(self.time_ms, extracted));
-        }
-    }
 }
 
-impl<CB, P, D> PushInto<D> for BatchLogger<CB, P>
+impl<C, P> BatchLogger<C, P>
 where
-    CB: ContainerBuilder + PushInto<D>,
-    P: EventPusher<Timestamp, CB::Container>,
-{
-    fn push_into(&mut self, item: D) {
-        self.builder.push_into(item);
-    }
-}
-
-impl<C, P> BatchLogger<CapacityContainerBuilder<C>, P>
-where
-    C: SizableContainer + Clone + 'static,
     P: EventPusher<Timestamp, C>,
 {
     /// Publishes a batch of logged events and advances the capability.
-    fn publish_batch(&mut self, time: &Duration, data: &mut C) {
-        self.builder.push_container(data);
-        self.extract_and_send();
+    fn publish_batch(&mut self, time: &Duration, data: C) {
+        self.event_pusher.push(Event::Messages(self.time_ms, data));
         self.flush_through(time);
     }
 }
 
-impl<CB, P> Drop for BatchLogger<CB, P>
+impl<C, P> Drop for BatchLogger<C, P>
 where
-    CB: ContainerBuilder,
-    P: EventPusher<Timestamp, CB::Container>,
+    P: EventPusher<Timestamp, C>,
 {
     fn drop(&mut self) {
         self.event_pusher

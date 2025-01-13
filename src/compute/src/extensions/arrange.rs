@@ -22,7 +22,7 @@ use timely::dataflow::{Scope, ScopeParent, StreamCore};
 use timely::progress::Timestamp;
 use timely::Container;
 
-use crate::logging::compute::ComputeEvent;
+use crate::logging::compute::{ComputeEvent, ComputeEventBuilder};
 use crate::typedefs::{KeyAgent, KeyValAgent, RowAgent, RowRowAgent, RowValAgent};
 
 /// Extension trait to arrange data.
@@ -247,7 +247,7 @@ where
     let scope = arranged.stream.scope();
     let Some(logger) = scope
         .log_register()
-        .get::<ComputeEvent>("materialize/compute")
+        .get::<ComputeEventBuilder>("materialize/compute")
     else {
         return arranged;
     };
