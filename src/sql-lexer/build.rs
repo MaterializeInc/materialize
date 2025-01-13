@@ -17,7 +17,7 @@ use std::path::PathBuf;
 use std::{env, fs};
 
 use anyhow::{bail, Context, Result};
-use mz_ore::codegen::CodegenBuf;
+use mz_ore_build::codegen::CodegenBuf;
 use uncased::UncasedStr;
 
 const KEYWORDS_LIST: &str = "src/keywords.txt";

@@ -28,7 +28,7 @@ rust_library(
     rustc_env = {},
     rustc_flags = [],
     version = "0.0.0",
-    deps = ["//src/ore:mz_ore"] + all_crate_deps(normal = True),
+    deps = ["//src/ore-build:mz_ore_build"] + all_crate_deps(normal = True),
 )
 
 rust_test(
@@ -52,7 +52,10 @@ rust_test(
     rustc_env = {},
     rustc_flags = [],
     version = "0.0.0",
-    deps = ["//src/ore:mz_ore"] + all_crate_deps(
+    deps = [
+        "//src/ore:mz_ore",
+        "//src/ore-build:mz_ore_build",
+    ] + all_crate_deps(
         normal = True,
         normal_dev = True,
     ),
@@ -61,7 +64,10 @@ rust_test(
 rust_doc_test(
     name = "mz_walkabout_doc_test",
     crate = ":mz_walkabout",
-    deps = ["//src/ore:mz_ore"] + all_crate_deps(
+    deps = [
+        "//src/ore:mz_ore",
+        "//src/ore-build:mz_ore_build",
+    ] + all_crate_deps(
         normal = True,
         normal_dev = True,
     ),
@@ -92,6 +98,7 @@ rust_test(
     deps = [
         ":mz_walkabout",
         "//src/ore:mz_ore",
+        "//src/ore-build:mz_ore_build",
     ] + all_crate_deps(
         normal = True,
         normal_dev = True,

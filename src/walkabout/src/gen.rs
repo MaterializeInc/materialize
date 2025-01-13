@@ -15,7 +15,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use itertools::Itertools;
-use mz_ore::codegen::CodegenBuf;
+use mz_ore_build::codegen::CodegenBuf;
 
 use crate::ir::{Ir, Item, Type};
 

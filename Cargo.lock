@@ -5842,6 +5842,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-ore-build"
+version = "0.1.0"
+dependencies = [
+ "workspace-hack",
+]
+
+[[package]]
 name = "mz-ore-proc"
 version = "0.1.0"
 dependencies = [
@@ -6061,6 +6068,7 @@ dependencies = [
  "mz-build-tools",
  "mz-lowertest",
  "mz-ore",
+ "mz-ore-build",
  "mz-proto",
  "phf",
  "phf_codegen",
@@ -6568,6 +6576,7 @@ dependencies = [
  "anyhow",
  "datadriven",
  "mz-ore",
+ "mz-ore-build",
  "phf",
  "phf_codegen",
  "serde",
@@ -6585,6 +6594,7 @@ dependencies = [
  "enum-kinds",
  "itertools 0.12.1",
  "mz-ore",
+ "mz-ore-build",
  "mz-sql-lexer",
  "mz-sql-parser",
  "mz-walkabout",
@@ -7212,6 +7222,7 @@ dependencies = [
  "datadriven",
  "itertools 0.12.1",
  "mz-ore",
+ "mz-ore-build",
  "quote",
  "syn 1.0.107",
  "tempfile",

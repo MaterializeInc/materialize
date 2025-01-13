@@ -221,16 +221,10 @@ cargo_build_script(
     build_script_env = {},
     compile_data = [],
     data = ["src/environmentd/sys.c"],
-    proc_macro_deps = [] + all_crate_deps(
-        build_proc_macro = True,
-        proc_macro = True,
-    ),
+    proc_macro_deps = [] + all_crate_deps(build_proc_macro = True),
     rustc_env = {},
     rustc_flags = [],
-    deps = ["//src/npm:mz_npm"] + all_crate_deps(
-        build = True,
-        normal = True,
-    ),
+    deps = ["//src/npm:mz_npm"] + all_crate_deps(build = True),
 )
 
 rust_test(
