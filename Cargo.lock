@@ -5844,6 +5844,9 @@ dependencies = [
 [[package]]
 name = "mz-ore-build"
 version = "0.1.0"
+dependencies = [
+ "workspace-hack",
+]
 
 [[package]]
 name = "mz-ore-proc"

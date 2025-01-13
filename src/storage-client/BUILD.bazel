@@ -143,14 +143,8 @@ cargo_build_script(
     build_script_env = {},
     compile_data = [],
     data = [":all_protos"],
-    proc_macro_deps = [] + all_crate_deps(
-        build_proc_macro = True,
-        proc_macro = True,
-    ),
+    proc_macro_deps = [] + all_crate_deps(build_proc_macro = True),
     rustc_env = {},
     rustc_flags = [],
-    deps = ["//src/build-tools:mz_build_tools"] + all_crate_deps(
-        build = True,
-        normal = True,
-    ),
+    deps = ["//src/build-tools:mz_build_tools"] + all_crate_deps(build = True),
 )

@@ -101,19 +101,13 @@ cargo_build_script(
     build_script_env = {},
     compile_data = [],
     data = ["src/ast/defs.rs"] + glob(["src/ast/defs/*.rs"]),
-    proc_macro_deps = [] + all_crate_deps(
-        build_proc_macro = True,
-        proc_macro = True,
-    ),
+    proc_macro_deps = [] + all_crate_deps(build_proc_macro = True),
     rustc_env = {},
     rustc_flags = [],
     deps = [
-        "//src/ore:mz_ore",
+        "//src/ore-build:mz_ore_build",
         "//src/walkabout:mz_walkabout",
-    ] + all_crate_deps(
-        build = True,
-        normal = True,
-    ),
+    ] + all_crate_deps(build = True),
 )
 
 rust_test(
