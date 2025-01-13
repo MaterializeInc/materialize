@@ -39,14 +39,34 @@
 1. #### Create an AWS PrivateLink Connection
      In Materialize, create an [AWS PrivateLink connection](/sql/create-connection/#aws-privatelink) that references the endpoint service that you created in the previous step.
 
-     ```mzsql
-    CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
-        SERVICE NAME 'com.amazonaws.vpce.<region_id>.vpce-svc-<endpoint_service_id>',
-        AVAILABILITY ZONES ('use1-az1', 'use1-az2', 'use1-az3')
-    );
-    ```
+    **Availability Zone Selection**:
 
-    Update the list of the availability zones to match the ones that you are using in your AWS account.
+    * For in-region connections, the AZs **must match** between the NLB and the connection definition in Materialize.
+    * For cross-region connections, AZ alignment is not required. You can choose any AZs from the region where your Materialize instance is running.
+
+    For cross-region connections, avoid using `use1-az3` in `us-east-1` due to known resource constraints. For details, refer to [this article](https://wolfman.dev/posts/exclude-use1-az3/).
+
+    * **In region connection example**:
+
+        ```mzsql
+        CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
+            SERVICE NAME 'com.amazonaws.vpce.<region_id>.vpce-svc-<endpoint_service_id>',
+            AVAILABILITY ZONES ('use1-az1', 'use1-az2', 'use1-az4')
+        );
+        ```
+
+        Update the list of the availability zones to match the ones in your AWS account.
+
+    * **Cross-region connection example**:
+
+        ```mzsql
+        CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
+            SERVICE NAME 'com.amazonaws.vpce.us-west-2.vpce-svc-<endpoint_service_id>',
+            AVAILABILITY ZONES ('use1-az1', 'use1-az2')
+        );
+        ```
+
+        Note that the service name region refers to where the endpoint service was created, while the availability zones correspond to your Materialize region. This setup allows you to connect to the endpoint service from a different region than the one where your Materialize instance is running.
 
 ## Configure the AWS PrivateLink service
 

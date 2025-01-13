@@ -331,7 +331,7 @@ start by selecting the relevant option.
     ```mzsql
     CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
       SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0356210a8a432d9e9',
-      AVAILABILITY ZONES ('use1-az1', 'use1-az2', 'use1-az3')
+      AVAILABILITY ZONES ('use1-az1', 'use1-az2', 'use1-az4')
     );
     ```
 
