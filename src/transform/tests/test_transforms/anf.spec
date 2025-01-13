@@ -108,32 +108,15 @@ Return
 
 # Recursive queries.
 apply pipeline=anf
-Return
-  Get l3
 With
+  cte l0 =
+    Union
+      Project (#0, #1)
+        Get t0
+      Project (#0, #1)
+        Get t0
   cte l3 =
-    Return
-      Union
-        Filter #1 > 7
-          Get t0
-        Filter #1 > 7
-          Get l2
-        Filter #1 > 7
-          Get l1
     With Mutually Recursive
-      cte l2 = // { types: "(bigint, bigint?)" }
-        Distinct project=[#0, #1]
-          Union
-            Filter #1 > 7
-              Get l0
-            Filter #1 > 7
-              Get l1
-            Filter #1 > 7
-              Get l1
-            Filter #1 > 7
-              Get l2
-            Filter #1 > 7
-              Get l2
       cte l1 = // { types: "(bigint, bigint?)" }
         Distinct project=[#0, #1]
           Union
@@ -147,12 +130,29 @@ With
               Get l2
             Filter #1 > 7
               Get l2
-  cte l0 =
-    Union
-      Project (#0, #1)
-        Get t0
-      Project (#0, #1)
-        Get t0
+      cte l2 = // { types: "(bigint, bigint?)" }
+        Distinct project=[#0, #1]
+          Union
+            Filter #1 > 7
+              Get l0
+            Filter #1 > 7
+              Get l1
+            Filter #1 > 7
+              Get l1
+            Filter #1 > 7
+              Get l2
+            Filter #1 > 7
+              Get l2
+    Return
+      Union
+        Filter #1 > 7
+          Get t0
+        Filter #1 > 7
+          Get l2
+        Filter #1 > 7
+          Get l1
+Return
+  Get l3
 ----
 With
   cte l0 =

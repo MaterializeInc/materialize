@@ -201,25 +201,25 @@ id l0 is shadowed
 typecheck
 Return
   Filter #0 AND #1
-    Get l0
+    Get l1
 With Mutually Recursive
-  cte l0 = // { types: "(boolean?, boolean)" }
+  cte l1 = // { types: "(boolean?, boolean)" }
     Constant // { types: "(bigint, bigint)" }
       - (1, 3)
-  cte l1 = // { types: "(boolean, boolean?)" }
-    Get l1
+  cte l0 = // { types: "(boolean, boolean?)" }
+    Get l0
 ----
 ----
 In the MIR term:
 With Mutually Recursive
-  cte l1 =
-    Get l1
   cte l0 =
+    Get l0
+  cte l1 =
     Constant
       - (1, 3)
 Return
   Filter #0 AND #1
-    Get l0
+    Get l1
 
 
 mismatched column types: couldn't compute union of column types in let rec: Can't union types: Bool and Int64
