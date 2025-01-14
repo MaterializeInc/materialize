@@ -2204,16 +2204,26 @@ where
 
         match schema_result {
             CaESchema::Ok(id) => id,
-            // TODO(alter_table): Better handling of these errors.
-            CaESchema::ExpectedMismatch { .. } => {
+            // TODO(alter_table): If we get an expected mismatch we should retry.
+            CaESchema::ExpectedMismatch {
+                schema_id,
+                key,
+                val,
+            } => {
+                mz_ore::soft_panic_or_log!(
+                    "schema expectation mismatch {schema_id:?}, {key:?}, {val:?}"
+                );
                 return Err(StorageError::Generic(anyhow::anyhow!(
                     "schema expected mismatch, {existing_collection:?}",
-                )))
+                )));
             }
             CaESchema::Incompatible => {
+                mz_ore::soft_panic_or_log!(
+                    "incompatible schema! {existing_collection} {new_desc:?}"
+                );
                 return Err(StorageError::Generic(anyhow::anyhow!(
                     "schema incompatible, {existing_collection:?}"
-                )))
+                )));
             }
         };
 
@@ -2232,12 +2242,15 @@ where
         // new version was registered with txn-wal?
 
         // Because this is a Table, we know it's managed by txn_wal, and thus it's logical write
-        // frontier is possibly in advance of the write_handle's upper. So we fast forward the
+        // frontier is probably in advance of the write_handle's upper. So we fast forward the
         // write frontier to match that of the existing collection.
         let write_frontier =
             if PartialOrder::less_than(write_handle.upper(), &existing_write_frontier) {
                 existing_write_frontier
             } else {
+                mz_ore::soft_panic_or_log!(
+                    "WriteHandle frontier in advance of logical write frontier"
+                );
                 write_handle.upper().clone()
             };
 

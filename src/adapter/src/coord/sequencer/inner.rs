@@ -4850,7 +4850,7 @@ impl Coordinator {
                 storage_ids: btreeset![existing_global_id],
                 compute_ids: BTreeMap::new(),
             };
-            let _existing_table_read_hold = coord.acquire_read_holds(&existing_table);
+            let existing_table_read_hold = coord.acquire_read_holds(&existing_table);
 
             let new_version = table.desc.latest_version();
             let new_desc = table
@@ -4886,6 +4886,9 @@ impl Coordinator {
                 )
                 .await;
             coord.apply_local_write(register_ts).await;
+
+            // Alter is complete! We can drop our read hold.
+            drop(existing_table_read_hold);
         })
         .await?;
 

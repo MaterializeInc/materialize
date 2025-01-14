@@ -763,7 +763,12 @@ where
 
             // Assert some invariants.
             //
-            // TODO(parkmycar): Include Tables (is_in_txns) in this check.
+            // TODO(alter_table): Include Tables (is_in_txns) in this check. After
+            // supporting ALTER TABLE, it's now possible for a table to have a dependency
+            // and thus run this check. But tables are managed by txn-wal and thus the
+            // upper of the shard's `write_handle` generally isn't the logical upper of
+            // the shard. Instead we need to thread through the upper of the `txn` shard
+            // here so we can check this invariant.
             if !dependency_read_holds.is_empty() && !is_in_txns(id, &metadata) {
                 // The dependency since cannot be beyond the dependent (our)
                 // upper unless the collection is new. In practice, the
