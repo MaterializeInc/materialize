@@ -12,7 +12,7 @@ provider "aws" {
 }
 
 module "materialize_infrastructure" {
-  source = "git::https://github.com/MaterializeInc/terraform-aws-materialize.git?ref=v0.1.3"
+  source = "git::https://github.com/MaterializeInc/terraform-aws-materialize.git?ref=v0.1.4"
 
   # Basic settings
   environment  = "dev"
