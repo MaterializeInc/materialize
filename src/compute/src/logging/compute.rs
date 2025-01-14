@@ -838,7 +838,7 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
             .exports
             .insert(export_id, ExportState::new(dataflow_index));
         if existing.is_some() {
-            error!(export = %export_id, "export already registered");
+            error!(%export_id, "export already registered");
         }
 
         *self
@@ -857,7 +857,7 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
 
     fn handle_export_dropped(&mut self, ExportDropped { export_id }: ExportDropped) {
         let Some(export) = self.state.exports.remove(&export_id) else {
-            error!(export = %export_id, "missing exports entry at time of export drop");
+            error!(%export_id, "missing exports entry at time of export drop");
             return;
         };
 
@@ -873,8 +873,8 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
         match self.state.dataflow_export_counts.get_mut(&dataflow_index) {
             entry @ Some(0) | entry @ None => {
                 error!(
-                    export = %export_id,
-                    dataflow = %dataflow_index,
+                    %export_id,
+                    %dataflow_index,
                     "invalid dataflow_export_counts entry at time of export drop: {entry:?}",
                 );
             }
@@ -912,7 +912,7 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
                 .dataflow_drop_times
                 .insert(dataflow_index, self.time);
             if existing.is_some() {
-                error!(dataflow = %dataflow_index, "dataflow already dropped");
+                error!(%dataflow_index, "dataflow already dropped");
             }
         }
     }
@@ -929,7 +929,7 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
             // Dataflow has not yet been dropped.
             let was_new = self.state.shutdown_dataflows.insert(dataflow_index);
             if !was_new {
-                error!(dataflow = %dataflow_index, "dataflow already shutdown");
+                error!(%dataflow_index, "dataflow already shutdown");
             }
         }
 
@@ -1004,7 +1004,7 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
         let ts = self.ts();
 
         let Some(export) = self.state.exports.get_mut(&export_id) else {
-            error!(export = %export_id, "hydration event for unknown export");
+            error!(%export_id, "hydration event for unknown export");
             return;
         };
         if export.hydration_time_ns.is_some() {
@@ -1046,10 +1046,7 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
 
         let existing = self.state.peek_stash.insert(uuid, self.time);
         if existing.is_some() {
-            error!(
-                uuid = %uuid,
-                "peek already registered",
-            );
+            error!(%uuid, "peek already registered");
         }
     }
 
@@ -1074,10 +1071,7 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
                 .peek_duration
                 .give((PeekDurationDatum { peek_type, bucket }, ts, 1));
         } else {
-            error!(
-                uuid = %uuid,
-                "peek not yet registered",
-            );
+            error!(%uuid, "peek not yet registered");
         }
     }
 
