@@ -213,6 +213,11 @@ Target cluster: quickstart
 
 ? EXPLAIN WITH(no notices) SELECT COUNT(DISTINCT key1) FROM t1_tbl;
 Explained Query:
+  With
+    cte l0 =
+      Reduce aggregates=[count(distinct #0)]
+        Project (#0)
+          ReadIndex on=t1_tbl t1_tbl_primary_idx=[*** full scan ***]
   Return
     Union
       Get l0
@@ -223,11 +228,6 @@ Explained Query:
               Get l0
           Constant
             - ()
-  With
-    cte l0 =
-      Reduce aggregates=[count(distinct #0)]
-        Project (#0)
-          ReadIndex on=t1_tbl t1_tbl_primary_idx=[*** full scan ***]
 
 Used Indexes:
   - t1_tbl_primary_idx (*** full scan ***)

@@ -256,6 +256,28 @@ ORDER BY s.state, c.name;
 ----
 Explained Query:
   Finish order_by=[#0{state} asc nulls_last, #1{name} asc nulls_last] output=[#0, #1]
+    With
+      cte l0 =
+        Distinct project=[#0{state}] // { arity: 1 }
+          Project (#1) // { arity: 1 }
+            ReadStorage materialize.public.cities // { arity: 3 }
+      cte l1 =
+        Project (#0{state}, #2) // { arity: 2 }
+          Join on=(#1{sl} = substr(#0{state}, 1, 1)) type=differential // { arity: 3 }
+            ArrangeBy keys=[[substr(#0{state}, 1, 1)]] // { arity: 1 }
+              Get l0 // { arity: 1 }
+            ArrangeBy keys=[[#0{sl}]] // { arity: 2 }
+              Filter (#0{sl}) IS NOT NULL // { arity: 2 }
+                ReadStorage materialize.public.limits // { arity: 2 }
+      cte l2 =
+        Union // { arity: 2 }
+          Get l1 // { arity: 2 }
+          Map (error("more than one record produced in subquery")) // { arity: 2 }
+            Project (#0{state}) // { arity: 1 }
+              Filter (#1{count} > 1) // { arity: 2 }
+                Reduce group_by=[#0{state}] aggregates=[count(*)] // { arity: 2 }
+                  Project (#0{state}) // { arity: 1 }
+                    Get l1 // { arity: 2 }
     Return // { arity: 2 }
       Project (#1{name}, #0{state}) // { arity: 2 }
         TopK group_by=[#1{state}, #2{l}] order_by=[#0{name} asc nulls_last] limit=integer_to_bigint(#2{l}) // { arity: 3 }
@@ -274,28 +296,6 @@ Explained Query:
                           Project (#0{state}) // { arity: 1 }
                             Get l2 // { arity: 2 }
                       Get l0 // { arity: 1 }
-    With
-      cte l2 =
-        Union // { arity: 2 }
-          Get l1 // { arity: 2 }
-          Map (error("more than one record produced in subquery")) // { arity: 2 }
-            Project (#0{state}) // { arity: 1 }
-              Filter (#1{count} > 1) // { arity: 2 }
-                Reduce group_by=[#0{state}] aggregates=[count(*)] // { arity: 2 }
-                  Project (#0{state}) // { arity: 1 }
-                    Get l1 // { arity: 2 }
-      cte l1 =
-        Project (#0{state}, #2) // { arity: 2 }
-          Join on=(#1{sl} = substr(#0{state}, 1, 1)) type=differential // { arity: 3 }
-            ArrangeBy keys=[[substr(#0{state}, 1, 1)]] // { arity: 1 }
-              Get l0 // { arity: 1 }
-            ArrangeBy keys=[[#0{sl}]] // { arity: 2 }
-              Filter (#0{sl}) IS NOT NULL // { arity: 2 }
-                ReadStorage materialize.public.limits // { arity: 2 }
-      cte l0 =
-        Distinct project=[#0{state}] // { arity: 1 }
-          Project (#1) // { arity: 1 }
-            ReadStorage materialize.public.cities // { arity: 3 }
 
 Source materialize.public.cities
 Source materialize.public.limits
@@ -378,6 +378,13 @@ SELECT s.state, c1.name, c2.name FROM
     LATERAL (SELECT name FROM cities c WHERE state = s.state LIMIT mod(length(s.state), 4)) c2;
 ----
 Explained Query:
+  With
+    cte l0 =
+      Project (#0{name}, #1{state}) // { arity: 2 }
+        ReadStorage materialize.public.cities // { arity: 3 }
+    cte l1 =
+      TopK group_by=[#1{state}] limit=integer_to_bigint((char_length(#1{state}) % 3)) // { arity: 2 }
+        Get l0 // { arity: 2 }
   Return // { arity: 3 }
     Project (#1{name}, #0{state}, #3) // { arity: 3 }
       Join on=(#1{state} = #2{state}) type=differential // { arity: 4 }
@@ -393,13 +400,6 @@ Explained Query:
                       Get l1 // { arity: 2 }
                 ArrangeBy keys=[[#1{state}]] // { arity: 2 }
                   Get l0 // { arity: 2 }
-  With
-    cte l1 =
-      TopK group_by=[#1{state}] limit=integer_to_bigint((char_length(#1{state}) % 3)) // { arity: 2 }
-        Get l0 // { arity: 2 }
-    cte l0 =
-      Project (#0{name}, #1{state}) // { arity: 2 }
-        ReadStorage materialize.public.cities // { arity: 3 }
 
 Source materialize.public.cities
 

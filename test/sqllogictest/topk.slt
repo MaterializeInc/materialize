@@ -102,6 +102,11 @@ EXPLAIN WITH(arity, join implementations) SELECT state, name FROM
     LEFT JOIN LATERAL (SELECT name, pop FROM cities  where cities.state = grp.state ORDER BY pop DESC LIMIT 3) ON true
 ----
 Explained Query:
+  With
+    cte l0 =
+      Project (#0, #1) // { arity: 2 }
+        TopK group_by=[#1] order_by=[#2 desc nulls_first] limit=3 // { arity: 3 }
+          ReadStorage materialize.public.cities // { arity: 3 }
   Return // { arity: 2 }
     Union // { arity: 2 }
       Project (#1, #0) // { arity: 2 }
@@ -115,11 +120,6 @@ Explained Query:
           Distinct project=[#0] // { arity: 1 }
             Project (#1) // { arity: 1 }
               ReadStorage materialize.public.cities // { arity: 3 }
-  With
-    cte l0 =
-      Project (#0, #1) // { arity: 2 }
-        TopK group_by=[#1] order_by=[#2 desc nulls_first] limit=3 // { arity: 3 }
-          ReadStorage materialize.public.cities // { arity: 3 }
 
 Source materialize.public.cities
 

@@ -746,6 +746,11 @@ query T multiline
 explain with(arity, join implementations) select min(1/x) from (select a as y, 0 as x from t);
 ----
 Explained Query:
+  With
+    cte l0 =
+      Distinct project=[] // { arity: 0 }
+        Project () // { arity: 0 }
+          ReadStorage materialize.public.t // { arity: 2 }
   Return // { arity: 1 }
     Union // { arity: 1 }
       Map (error("division by zero")) // { arity: 1 }
@@ -756,11 +761,6 @@ Explained Query:
             Get l0 // { arity: 0 }
           Constant // { arity: 0 }
             - ()
-  With
-    cte l0 =
-      Distinct project=[] // { arity: 0 }
-        Project () // { arity: 0 }
-          ReadStorage materialize.public.t // { arity: 2 }
 
 Source materialize.public.t
 
@@ -772,6 +772,11 @@ query T multiline
 explain with(arity, join implementations) select sum(1/x) from (select a as y, 0 as x from t);
 ----
 Explained Query:
+  With
+    cte l0 =
+      Distinct project=[] // { arity: 0 }
+        Project () // { arity: 0 }
+          ReadStorage materialize.public.t // { arity: 2 }
   Return // { arity: 1 }
     Union // { arity: 1 }
       Map (error("division by zero")) // { arity: 1 }
@@ -782,11 +787,6 @@ Explained Query:
             Get l0 // { arity: 0 }
           Constant // { arity: 0 }
             - ()
-  With
-    cte l0 =
-      Distinct project=[] // { arity: 0 }
-        Project () // { arity: 0 }
-          ReadStorage materialize.public.t // { arity: 2 }
 
 Source materialize.public.t
 
@@ -798,16 +798,6 @@ query T multiline
 explain with(arity, join implementations) select min(a) from t_pk where a between 38 and 195 and a = (select a from t where a = 1308);
 ----
 Explained Query:
-  Return // { arity: 1 }
-    Union // { arity: 1 }
-      Get l0 // { arity: 1 }
-      Map (null) // { arity: 1 }
-        Union // { arity: 0 }
-          Negate // { arity: 0 }
-            Project () // { arity: 0 }
-              Get l0 // { arity: 1 }
-          Constant // { arity: 0 }
-            - ()
   With
     cte l0 =
       Reduce aggregates=[min(#0)] // { arity: 1 }
@@ -827,6 +817,16 @@ Explained Query:
                       Project () // { arity: 0 }
                         Filter (#0 = 1308) // { arity: 2 }
                           ReadStorage materialize.public.t // { arity: 2 }
+  Return // { arity: 1 }
+    Union // { arity: 1 }
+      Get l0 // { arity: 1 }
+      Map (null) // { arity: 1 }
+        Union // { arity: 0 }
+          Negate // { arity: 0 }
+            Project () // { arity: 0 }
+              Get l0 // { arity: 1 }
+          Constant // { arity: 0 }
+            - ()
 
 Source materialize.public.t
   filter=((#0 = 1308))
@@ -841,16 +841,6 @@ query T multiline
 explain with(arity, join implementations) select min(a) from t where a between 38 and 195 and a = (select a from t where a = 1308);
 ----
 Explained Query:
-  Return // { arity: 1 }
-    Union // { arity: 1 }
-      Get l0 // { arity: 1 }
-      Map (null) // { arity: 1 }
-        Union // { arity: 0 }
-          Negate // { arity: 0 }
-            Project () // { arity: 0 }
-              Get l0 // { arity: 1 }
-          Constant // { arity: 0 }
-            - ()
   With
     cte l0 =
       Reduce aggregates=[min(#0)] // { arity: 1 }
@@ -870,6 +860,16 @@ Explained Query:
                       Project () // { arity: 0 }
                         Filter (#0 = 1308) // { arity: 2 }
                           ReadStorage materialize.public.t // { arity: 2 }
+  Return // { arity: 1 }
+    Union // { arity: 1 }
+      Get l0 // { arity: 1 }
+      Map (null) // { arity: 1 }
+        Union // { arity: 0 }
+          Negate // { arity: 0 }
+            Project () // { arity: 0 }
+              Get l0 // { arity: 1 }
+          Constant // { arity: 0 }
+            - ()
 
 Source materialize.public.t
 
@@ -975,8 +975,6 @@ WITH MUTUALLY RECURSIVE
 SELECT * FROM c0
 ----
 Explained Query:
-  Return // { arity: 2 }
-    Get l0 // { arity: 2 }
   With Mutually Recursive
     cte l0 =
       Map (42) // { arity: 2 }
@@ -988,6 +986,8 @@ Explained Query:
               ReadStorage materialize.public.t1 // { arity: 2 }
             Project (#1) // { arity: 1 }
               ReadStorage materialize.public.t1 // { arity: 2 }
+  Return // { arity: 2 }
+    Get l0 // { arity: 2 }
 
 Source materialize.public.t1
 
@@ -1012,19 +1012,7 @@ WITH MUTUALLY RECURSIVE
 SELECT * FROM c0 UNION ALL SELECT * FROM c1
 ----
 Explained Query:
-  Return // { arity: 2 }
-    Union // { arity: 2 }
-      Map (42) // { arity: 2 }
-        Get l0 // { arity: 1 }
-      Get l1 // { arity: 2 }
   With Mutually Recursive
-    cte l1 =
-      Map (42) // { arity: 2 }
-        Distinct project=[#0] // { arity: 1 }
-          Union // { arity: 1 }
-            Get l0 // { arity: 1 }
-            Project (#0) // { arity: 1 }
-              Get l1 // { arity: 2 }
     cte l0 =
       Distinct project=[#0] // { arity: 1 }
         Union // { arity: 1 }
@@ -1032,6 +1020,18 @@ Explained Query:
             ReadStorage materialize.public.t1 // { arity: 2 }
           Project (#1) // { arity: 1 }
             ReadStorage materialize.public.t1 // { arity: 2 }
+    cte l1 =
+      Map (42) // { arity: 2 }
+        Distinct project=[#0] // { arity: 1 }
+          Union // { arity: 1 }
+            Get l0 // { arity: 1 }
+            Project (#0) // { arity: 1 }
+              Get l1 // { arity: 2 }
+  Return // { arity: 2 }
+    Union // { arity: 2 }
+      Map (42) // { arity: 2 }
+        Get l0 // { arity: 1 }
+      Get l1 // { arity: 2 }
 
 Source materialize.public.t1
 

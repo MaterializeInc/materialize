@@ -60,16 +60,16 @@ With
             Filter #0 = 1 AND #1 = 2
               Get t0
 ----
-Return
-  FlatMap generate_series(2, 7, 1)
-    Project (#2, #0)
-      Get l0
 With
   cte l0 =
     Filter false
       Reduce group_by=[2] aggregates=[sum(3), max(4)]
         Filter true AND false
           Constant <empty>
+Return
+  FlatMap generate_series(2, 7, 1)
+    Project (#2, #0)
+      Get l0
 
 
 # Infer and apply nullability knowledge.
@@ -88,16 +88,16 @@ With
         Filter (#0) IS NULL AND (#1) IS NULL
           Get t0
 ----
-Return
-  Filter false
-    Project (#2)
-      Get l0
 With
   cte l0 =
     Reduce group_by=[false, false] aggregates=[count(false)]
       Map (false, false)
         Filter false AND (#1) IS NULL
           Constant <empty>
+Return
+  Filter false
+    Project (#2)
+      Get l0
 
 
 # Infer and apply constant value knowledge.
@@ -118,18 +118,18 @@ With
       Filter (#0 = 1) AND (#1 = 2)
         Get t0
 ----
-Return
-  Filter true AND false
-    Constant <empty>
 With
-  cte l1 =
-    Project (#0, #0, #1)
-      Filter (#0 = 2) AND (#1 = 3)
-        Get t0
   cte l0 =
     Project (#0, #1, #1)
       Filter (#0 = 1) AND (#1 = 2)
         Get t0
+  cte l1 =
+    Project (#0, #0, #1)
+      Filter (#0 = 2) AND (#1 = 3)
+        Get t0
+Return
+  Filter true AND false
+    Constant <empty>
 
 
 # Infer and apply constant value knowledge.
@@ -145,14 +145,14 @@ With
     Filter ((#0 = 1) AND (#1 = 2))
       Get t0
 ----
+With
+  cte l0 =
+    Filter (#0 = 1) AND (#1 = 2)
+      Get t0
 Return
   Map (6, (3 * #3))
     Join on=(3 = #2)
       Get l0
-      Get t0
-With
-  cte l0 =
-    Filter (#0 = 1) AND (#1 = 2)
       Get t0
 
 
@@ -196,6 +196,13 @@ With
       Filter (#0) IS NOT NULL
         Get t3
 ----
+With
+  cte l0 =
+    Join on=(#0 = #2)
+      Filter (#0) IS NOT NULL
+        Get t2
+      Filter (#0) IS NOT NULL
+        Get t3
 Return
   Project (#0, #1, #3..=#6)
     Map ((#0) IS NULL, #4, (#2) IS NULL)
@@ -210,13 +217,6 @@ Return
                     Get l0
             Get t2
         Get l0
-With
-  cte l0 =
-    Join on=(#0 = #2)
-      Filter (#0) IS NOT NULL
-        Get t2
-      Filter (#0) IS NOT NULL
-        Get t3
 
 
 ## LetRec cases
@@ -235,8 +235,6 @@ With Mutually Recursive
         Filter (#0 = 1)
           Get l0
 ----
-Return
-  Get l0
 With Mutually Recursive
   cte l0 =
     Distinct project=[1]
@@ -245,6 +243,8 @@ With Mutually Recursive
           - (1)
         Filter true
           Get l0
+Return
+  Get l0
 
 
 # Single binding, value knowledge
@@ -260,9 +260,6 @@ With Mutually Recursive
           Get t0
           Get l0
 ----
-Return
-  Map (8)
-    Get l0
 With Mutually Recursive
   cte l0 =
     Filter (#0 = 3) AND (#1 = 5)
@@ -270,6 +267,9 @@ With Mutually Recursive
         Union
           Get t0
           Get l0
+Return
+  Map (8)
+    Get l0
 
 
 # Single binding, NOT NULL knowledge
@@ -285,9 +285,6 @@ With Mutually Recursive
           Get t0
           Get l0
 ----
-Return
-  Map (true)
-    Get l0
 With Mutually Recursive
   cte l0 =
     Filter (#1) IS NOT NULL
@@ -295,6 +292,9 @@ With Mutually Recursive
         Union
           Get t0
           Get l0
+Return
+  Map (true)
+    Get l0
 
 
 # Multiple bindings, value knowledge
@@ -319,9 +319,14 @@ With Mutually Recursive
         Filter (#0 = 1)
           Get l0
 ----
-Return
-  Get l1
 With Mutually Recursive
+  cte l0 =
+    Distinct project=[1]
+      Union
+        Constant
+          - (1)
+        Filter true
+          Get l0
   cte l1 =
     Distinct project=[2, #1, #2]
       Union
@@ -331,13 +336,8 @@ With Mutually Recursive
               Get l0
               Get t0
         Get l1
-  cte l0 =
-    Distinct project=[1]
-      Union
-        Constant
-          - (1)
-        Filter true
-          Get l0
+Return
+  Get l1
 
 
 
@@ -366,9 +366,14 @@ With Mutually Recursive
         Filter (#0 IS NOT NULL)
           Get l0
 ----
-Return
-  Get l1
 With Mutually Recursive
+  cte l0 =
+    Distinct project=[1]
+      Union
+        Constant
+          - (1)
+        Filter true
+          Get l0
   cte l1 =
     Distinct project=[false, #1, #2]
       Union
@@ -378,13 +383,8 @@ With Mutually Recursive
               Get l0
               Get t0
         Get l1
-  cte l0 =
-    Distinct project=[1]
-      Union
-        Constant
-          - (1)
-        Filter true
-          Get l0
+Return
+  Get l1
 
 
 

@@ -35,17 +35,17 @@ EXPLAIN with mutually recursive
 select * from c;
 ----
 Explained Query:
+  With Mutually Recursive
+    cte l0 =
+      Get l1
+    cte l1 =
+      ReadStorage materialize.public.foo
   Return
     Threshold
       Union
         ReadStorage materialize.public.foo
         Negate
           Get l0
-  With Mutually Recursive
-    cte l1 =
-      ReadStorage materialize.public.foo
-    cte l0 =
-      Get l1
 
 Source materialize.public.foo
 

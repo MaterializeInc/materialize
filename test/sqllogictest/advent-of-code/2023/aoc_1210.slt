@@ -370,181 +370,21 @@ EXPLAIN WITH MUTUALLY RECURSIVE
 SELECT * FROM part1, part2;
 ----
 Explained Query:
-  Return
-    Return
-      CrossJoin type=differential
-        ArrangeBy keys=[[]]
-          Project (#1)
-            Map ((#0 / 2))
-              Union
-                Get l7
-                Map (0)
-                  Union
-                    Negate
-                      Project ()
-                        Get l7
-                    Constant
-                      - ()
-        ArrangeBy keys=[[]]
-          Union
-            Get l19
-            Map (0)
-              Union
-                Negate
-                  Project ()
-                    Get l19
-                Constant
-                  - ()
-    With
-      cte l19 =
-        Reduce aggregates=[count(*)]
-          Union
-            Negate
-              Project ()
-                Join on=(#0 = #2 AND #1 = #3) type=differential
-                  ArrangeBy keys=[[#0, #1]]
-                    Project (#0, #1)
-                      Get l18
-                  ArrangeBy keys=[[#0, #1]]
-                    Distinct project=[#0, #1]
-                      Project (#0, #1)
-                        Get l8
-            Project ()
-              Get l18
-      cte l18 =
-        Filter (#2 = true)
-          Get l17
   With Mutually Recursive
-    cte l17 =
-      Distinct project=[#0..=#2]
-        Union
-          Project (#0, #1, #3)
-            Filter ((#0 = 1) OR (#1 = 1))
-              Map (false)
-                Get l0
-          Project (#2, #3, #6)
-            Map (case when #5 then NOT(#0) else #0 end)
-              Join on=(#1 = #4) type=differential
-                ArrangeBy keys=[[#1]]
-                  Get l11
-                ArrangeBy keys=[[#0]]
-                  Union
-                    Get l16
-                    Project (#0, #2)
-                      Map (null)
-                        Join on=(#0 = #1) type=differential
-                          ArrangeBy keys=[[#0]]
-                            Union
-                              Negate
-                                Distinct project=[#0]
-                                  Project (#0)
-                                    Get l16
-                              Get l12
-                          Get l14
-    cte l16 =
-      Union
-        Get l15
-        Map (error("more than one record produced in subquery"))
-          Project (#0)
-            Filter (#1 > 1)
-              Reduce group_by=[#0] aggregates=[count(*)]
-                Project (#0)
-                  Get l15
-    cte l15 =
-      Union
-        Get l13
-        Project (#0, #2)
-          Map (false)
-            Join on=(#0 = #1) type=differential
-              ArrangeBy keys=[[#0]]
-                Union
-                  Negate
-                    Project (#0)
-                      Get l13
-                  Get l12
-              Get l14
-    cte l14 =
-      ArrangeBy keys=[[#0]]
-        Get l12
-    cte l13 =
-      Reduce group_by=[#0] aggregates=[any((#0 = #1))]
-        FlatMap wrap1("J", "-", "|", "F")
-          Get l12
-    cte l12 =
-      Distinct project=[#0]
-        Project (#1)
-          Get l11
-    cte l11 =
-      Project (#2, #3, #6, #7)
-        Map ((#0 + 1), (#1 + 1))
-          Join on=(#0 = #4 AND #1 = #5) type=differential
-            ArrangeBy keys=[[#0, #1]]
-              Union
-                Map (null)
-                  Union
-                    Negate
-                      Project (#0..=#2)
-                        Join on=(#0 = #3 AND #1 = #4) type=differential
-                          Get l9
-                          ArrangeBy keys=[[#0, #1]]
-                            Distinct project=[#0, #1]
-                              Project (#0, #1)
-                                Get l10
-                    Get l17
-                Get l10
-            ArrangeBy keys=[[#0, #1]]
-              Project (#0, #1)
-                Get l0
-    cte l10 =
-      Project (#0..=#2, #5)
-        Join on=(#0 = #3 AND #1 = #4) type=differential
-          Get l9
-          ArrangeBy keys=[[#0, #1]]
-            Get l8
-    cte l9 =
-      ArrangeBy keys=[[#0, #1]]
-        Get l17
-    cte l8 =
-      Distinct project=[#0..=#2]
-        Union
-          Project (#0, #1, #4)
-            Join on=(#0 = #2 AND #1 = #3) type=differential
-              ArrangeBy keys=[[#0, #1]]
-                Filter (#0) IS NOT NULL AND (#1) IS NOT NULL
-                  Get l6
-              ArrangeBy keys=[[#0, #1]]
-                Filter (#2 != "S")
-                  Get l0
-          Project (#0, #1, #8)
-            Map (case when ((#0 = #0) AND (#0 = (#6 + 1)) AND (#1 = #7) AND (#1 = (#1 + 1))) then "J" else case when ((#0 = #0) AND (#0 = #6) AND (#1 = (#1 + 1)) AND (#1 = (#7 - 1))) then "-" else case when ((#0 = #0) AND (#0 = (#6 - 1)) AND (#1 = #7) AND (#1 = (#1 + 1))) then "7" else case when ((#0 = #6) AND (#0 = (#0 + 1)) AND (#1 = #1) AND (#1 = (#7 - 1))) then "L" else case when ((#0 = (#0 + 1)) AND (#0 = (#6 - 1)) AND (#1 = #1) AND (#1 = #7)) then "|" else case when ((#0 = #0) AND (#0 = #6) AND (#1 = (#1 - 1)) AND (#1 = (#7 - 1))) then "F" else "???" end end end end end end)
-              Join on=(#0 = #2 = #4 AND #1 = #3 = #5) type=delta
-                ArrangeBy keys=[[#0, #1]]
-                  Get l4
-                ArrangeBy keys=[[#0, #1]]
-                  Project (#0, #1)
-                    Get l3
-                Get l5
-    cte l7 =
-      Reduce aggregates=[count(*)]
-        Project ()
-          Get l6
-    cte l6 =
-      Distinct project=[#0, #1]
-        Union
-          Get l4
-          Project (#4, #5)
-            Join on=(#0 = #2 AND #1 = #3) type=differential
-              ArrangeBy keys=[[#0, #1]]
-                Filter (#0) IS NOT NULL AND (#1) IS NOT NULL
-                  Get l6
-              Get l5
-    cte l5 =
-      ArrangeBy keys=[[#0, #1]]
-        Get l3
-    cte l4 =
-      Project (#0, #1)
-        Filter (#2 = "S")
-          Get l0
+    cte l0 =
+      Project (#0, #2, #3)
+        Map (substr(#1, #2, 1))
+          FlatMap generate_series(1, char_length(#1), 1)
+            Project (#1, #2)
+              Map (array_index(regexp_split_to_array["\n", case_insensitive=false](#0), integer_to_bigint(#1)))
+                FlatMap generate_series(1, (regexp_split_to_array["\n", case_insensitive=false](#0) array_length 1), 1)
+                  ReadStorage materialize.public.input
+    cte l1 =
+      Map ((#2 = "-"), case when #3 then #0 else case when (#2 = "|") then (#0 - 1) else case when (#2 = "F") then (#0 + 1) else case when (#2 = "L") then (#0 - 1) else case when (#2 = "J") then #0 else case when (#2 = "7") then #0 else null end end end end end end, case when #3 then (#1 - 1) else case when (#2 = "|") then #1 else case when (#2 = "F") then #1 else case when (#2 = "L") then #1 else case when (#2 = "J") then (#1 - 1) else case when (#2 = "7") then (#1 - 1) else null end end end end end end)
+        Get l0
+    cte l2 =
+      Map ((#2 = "-"), case when #3 then #0 else case when (#2 = "|") then (#0 + 1) else case when (#2 = "F") then #0 else case when (#2 = "L") then #0 else case when (#2 = "J") then (#0 - 1) else case when (#2 = "7") then (#0 + 1) else null end end end end end end, case when #3 then (#1 + 1) else case when (#2 = "|") then #1 else case when (#2 = "F") then (#1 + 1) else case when (#2 = "L") then (#1 + 1) else case when (#2 = "J") then #1 else case when (#2 = "7") then #1 else null end end end end end end)
+        Get l0
     cte l3 =
       Project (#0..=#3)
         Filter (#4 = 2)
@@ -578,20 +418,180 @@ Explained Query:
                 Filter (#2 = "S")
                   Map ((#1 - 1))
                     Get l0
-    cte l2 =
-      Map ((#2 = "-"), case when #3 then #0 else case when (#2 = "|") then (#0 + 1) else case when (#2 = "F") then #0 else case when (#2 = "L") then #0 else case when (#2 = "J") then (#0 - 1) else case when (#2 = "7") then (#0 + 1) else null end end end end end end, case when #3 then (#1 + 1) else case when (#2 = "|") then #1 else case when (#2 = "F") then (#1 + 1) else case when (#2 = "L") then (#1 + 1) else case when (#2 = "J") then #1 else case when (#2 = "7") then #1 else null end end end end end end)
-        Get l0
-    cte l1 =
-      Map ((#2 = "-"), case when #3 then #0 else case when (#2 = "|") then (#0 - 1) else case when (#2 = "F") then (#0 + 1) else case when (#2 = "L") then (#0 - 1) else case when (#2 = "J") then #0 else case when (#2 = "7") then #0 else null end end end end end end, case when #3 then (#1 - 1) else case when (#2 = "|") then #1 else case when (#2 = "F") then #1 else case when (#2 = "L") then #1 else case when (#2 = "J") then (#1 - 1) else case when (#2 = "7") then (#1 - 1) else null end end end end end end)
-        Get l0
-    cte l0 =
-      Project (#0, #2, #3)
-        Map (substr(#1, #2, 1))
-          FlatMap generate_series(1, char_length(#1), 1)
-            Project (#1, #2)
-              Map (array_index(regexp_split_to_array["\n", case_insensitive=false](#0), integer_to_bigint(#1)))
-                FlatMap generate_series(1, (regexp_split_to_array["\n", case_insensitive=false](#0) array_length 1), 1)
-                  ReadStorage materialize.public.input
+    cte l4 =
+      Project (#0, #1)
+        Filter (#2 = "S")
+          Get l0
+    cte l5 =
+      ArrangeBy keys=[[#0, #1]]
+        Get l3
+    cte l6 =
+      Distinct project=[#0, #1]
+        Union
+          Get l4
+          Project (#4, #5)
+            Join on=(#0 = #2 AND #1 = #3) type=differential
+              ArrangeBy keys=[[#0, #1]]
+                Filter (#0) IS NOT NULL AND (#1) IS NOT NULL
+                  Get l6
+              Get l5
+    cte l7 =
+      Reduce aggregates=[count(*)]
+        Project ()
+          Get l6
+    cte l8 =
+      Distinct project=[#0..=#2]
+        Union
+          Project (#0, #1, #4)
+            Join on=(#0 = #2 AND #1 = #3) type=differential
+              ArrangeBy keys=[[#0, #1]]
+                Filter (#0) IS NOT NULL AND (#1) IS NOT NULL
+                  Get l6
+              ArrangeBy keys=[[#0, #1]]
+                Filter (#2 != "S")
+                  Get l0
+          Project (#0, #1, #8)
+            Map (case when ((#0 = #0) AND (#0 = (#6 + 1)) AND (#1 = #7) AND (#1 = (#1 + 1))) then "J" else case when ((#0 = #0) AND (#0 = #6) AND (#1 = (#1 + 1)) AND (#1 = (#7 - 1))) then "-" else case when ((#0 = #0) AND (#0 = (#6 - 1)) AND (#1 = #7) AND (#1 = (#1 + 1))) then "7" else case when ((#0 = #6) AND (#0 = (#0 + 1)) AND (#1 = #1) AND (#1 = (#7 - 1))) then "L" else case when ((#0 = (#0 + 1)) AND (#0 = (#6 - 1)) AND (#1 = #1) AND (#1 = #7)) then "|" else case when ((#0 = #0) AND (#0 = #6) AND (#1 = (#1 - 1)) AND (#1 = (#7 - 1))) then "F" else "???" end end end end end end)
+              Join on=(#0 = #2 = #4 AND #1 = #3 = #5) type=delta
+                ArrangeBy keys=[[#0, #1]]
+                  Get l4
+                ArrangeBy keys=[[#0, #1]]
+                  Project (#0, #1)
+                    Get l3
+                Get l5
+    cte l9 =
+      ArrangeBy keys=[[#0, #1]]
+        Get l17
+    cte l10 =
+      Project (#0..=#2, #5)
+        Join on=(#0 = #3 AND #1 = #4) type=differential
+          Get l9
+          ArrangeBy keys=[[#0, #1]]
+            Get l8
+    cte l11 =
+      Project (#2, #3, #6, #7)
+        Map ((#0 + 1), (#1 + 1))
+          Join on=(#0 = #4 AND #1 = #5) type=differential
+            ArrangeBy keys=[[#0, #1]]
+              Union
+                Map (null)
+                  Union
+                    Negate
+                      Project (#0..=#2)
+                        Join on=(#0 = #3 AND #1 = #4) type=differential
+                          Get l9
+                          ArrangeBy keys=[[#0, #1]]
+                            Distinct project=[#0, #1]
+                              Project (#0, #1)
+                                Get l10
+                    Get l17
+                Get l10
+            ArrangeBy keys=[[#0, #1]]
+              Project (#0, #1)
+                Get l0
+    cte l12 =
+      Distinct project=[#0]
+        Project (#1)
+          Get l11
+    cte l13 =
+      Reduce group_by=[#0] aggregates=[any((#0 = #1))]
+        FlatMap wrap1("J", "-", "|", "F")
+          Get l12
+    cte l14 =
+      ArrangeBy keys=[[#0]]
+        Get l12
+    cte l15 =
+      Union
+        Get l13
+        Project (#0, #2)
+          Map (false)
+            Join on=(#0 = #1) type=differential
+              ArrangeBy keys=[[#0]]
+                Union
+                  Negate
+                    Project (#0)
+                      Get l13
+                  Get l12
+              Get l14
+    cte l16 =
+      Union
+        Get l15
+        Map (error("more than one record produced in subquery"))
+          Project (#0)
+            Filter (#1 > 1)
+              Reduce group_by=[#0] aggregates=[count(*)]
+                Project (#0)
+                  Get l15
+    cte l17 =
+      Distinct project=[#0..=#2]
+        Union
+          Project (#0, #1, #3)
+            Filter ((#0 = 1) OR (#1 = 1))
+              Map (false)
+                Get l0
+          Project (#2, #3, #6)
+            Map (case when #5 then NOT(#0) else #0 end)
+              Join on=(#1 = #4) type=differential
+                ArrangeBy keys=[[#1]]
+                  Get l11
+                ArrangeBy keys=[[#0]]
+                  Union
+                    Get l16
+                    Project (#0, #2)
+                      Map (null)
+                        Join on=(#0 = #1) type=differential
+                          ArrangeBy keys=[[#0]]
+                            Union
+                              Negate
+                                Distinct project=[#0]
+                                  Project (#0)
+                                    Get l16
+                              Get l12
+                          Get l14
+  Return
+    With
+      cte l18 =
+        Filter (#2 = true)
+          Get l17
+      cte l19 =
+        Reduce aggregates=[count(*)]
+          Union
+            Negate
+              Project ()
+                Join on=(#0 = #2 AND #1 = #3) type=differential
+                  ArrangeBy keys=[[#0, #1]]
+                    Project (#0, #1)
+                      Get l18
+                  ArrangeBy keys=[[#0, #1]]
+                    Distinct project=[#0, #1]
+                      Project (#0, #1)
+                        Get l8
+            Project ()
+              Get l18
+    Return
+      CrossJoin type=differential
+        ArrangeBy keys=[[]]
+          Project (#1)
+            Map ((#0 / 2))
+              Union
+                Get l7
+                Map (0)
+                  Union
+                    Negate
+                      Project ()
+                        Get l7
+                    Constant
+                      - ()
+        ArrangeBy keys=[[]]
+          Union
+            Get l19
+            Map (0)
+              Union
+                Negate
+                  Project ()
+                    Get l19
+                Constant
+                  - ()
 
 Source materialize.public.input
 

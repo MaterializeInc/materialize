@@ -93,23 +93,7 @@ WITH MUTUALLY RECURSIVE
 SELECT x, MAX(y) FROM (SELECT * FROM c1 UNION SELECT * FROM c2) GROUP BY x
 ----
 Explained Query:
-  Return
-    Reduce group_by=[#0] aggregates=[max(#1)] monotonic
-      Distinct project=[#0, #1] monotonic
-        Union
-          Get l0
-          Get l1
   With Mutually Recursive
-    cte l1 =
-      Union
-        Distinct project=[#0, (#0 + 1)] monotonic
-          Project (#0)
-            Filter (#0 >= 1)
-              Get l0
-        Constant
-          - (1, 2)
-          - (3, 4)
-          - (5, 6)
     cte l0 =
       Union
         Distinct project=[#0, (#0 - 1)] monotonic
@@ -120,6 +104,22 @@ Explained Query:
           - (1, 2)
           - (3, 4)
           - (5, 6)
+    cte l1 =
+      Union
+        Distinct project=[#0, (#0 + 1)] monotonic
+          Project (#0)
+            Filter (#0 >= 1)
+              Get l0
+        Constant
+          - (1, 2)
+          - (3, 4)
+          - (5, 6)
+  Return
+    Reduce group_by=[#0] aggregates=[max(#1)] monotonic
+      Distinct project=[#0, #1] monotonic
+        Union
+          Get l0
+          Get l1
 
 Target cluster: quickstart
 
@@ -146,13 +146,17 @@ WITH MUTUALLY RECURSIVE
 SELECT x, MAX(y) FROM (SELECT * FROM c1 UNION SELECT * FROM c2) GROUP BY x
 ----
 Explained Query:
-  Return
-    Reduce group_by=[#0] aggregates=[max(#1)]
-      Distinct project=[#0, #1]
-        Union
-          Get l0
-          Get l1
   With Mutually Recursive
+    cte l0 =
+      Union
+        Distinct project=[#0, (#0 - 1)]
+          Project (#1)
+            Filter (#0 < 1)
+              Get l1
+        Constant
+          - (1, 2)
+          - (3, 4)
+          - (5, 6)
     cte l1 =
       TopK limit=2
         Union
@@ -164,16 +168,12 @@ Explained Query:
             - (1, 2)
             - (3, 4)
             - (5, 6)
-    cte l0 =
-      Union
-        Distinct project=[#0, (#0 - 1)]
-          Project (#1)
-            Filter (#0 < 1)
-              Get l1
-        Constant
-          - (1, 2)
-          - (3, 4)
-          - (5, 6)
+  Return
+    Reduce group_by=[#0] aggregates=[max(#1)]
+      Distinct project=[#0, #1]
+        Union
+          Get l0
+          Get l1
 
 Target cluster: quickstart
 

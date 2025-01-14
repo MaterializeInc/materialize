@@ -171,15 +171,15 @@ In the example below, the CTE `l0` represents a linear sub-plan (a chain of `Get
 `Filter`, and `Project` operators) which is used in both inputs of a self-join.
 
 ```text
-Return
-  Join on=(#1 = #2)
-    Get l0
-    Get l0
 With
   cte l0 =
     Project (#0, #1)
       Filter (#0 > #2)
         ReadStorage materialize.public.t
+Return
+  Join on=(#1 = #2)
+    Get l0
+    Get l0
 ```
 
 <a name="explain-plan-columns"></a>

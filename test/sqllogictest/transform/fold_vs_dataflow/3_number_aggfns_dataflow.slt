@@ -53,6 +53,18 @@ SELECT
 FROM t_using_dataflow_rendering;
 ----
 Explained Query:
+  With
+    cte l0 =
+      Project (#0..=#2)
+        ReadStorage materialize.public.t_using_dataflow_rendering
+    cte l1 =
+      CrossJoin type=differential
+        ArrangeBy keys=[[]]
+          Reduce aggregates=[min(#0), min(#1), min(#2), min((#0 + #0)), min((#1 + #1)), min((#2 + #2)), max(#0), max(#1), max(#2), max((#0 + #0)), max((#1 + #1)), max((#2 + #2))]
+            Get l0
+        ArrangeBy keys=[[]]
+          Reduce aggregates=[sum(#0), sum(#1), sum(#2), sum((#0 + #0)), sum((#1 + #1)), sum((#2 + #2)), count(#0), count(#1), count(#2), count((#0 + #0)), count((#1 + #1)), count((#2 + #2))]
+            Get l0
   Return
     Project (#0..=#17, #24..=#29)
       Map ((#0 / bigint_to_real(case when (#18 = 0) then null else #18 end)), (#1 / bigint_to_double(case when (#19 = 0) then null else #19 end)), (#2 / bigint_to_numeric(case when (#20 = 0) then null else #20 end)), (#3 / bigint_to_real(case when (#21 = 0) then null else #21 end)), (#4 / bigint_to_double(case when (#22 = 0) then null else #22 end)), (#5 / bigint_to_numeric(case when (#23 = 0) then null else #23 end)))
@@ -66,18 +78,6 @@ Explained Query:
                   Get l1
               Constant
                 - ()
-  With
-    cte l1 =
-      CrossJoin type=differential
-        ArrangeBy keys=[[]]
-          Reduce aggregates=[min(#0), min(#1), min(#2), min((#0 + #0)), min((#1 + #1)), min((#2 + #2)), max(#0), max(#1), max(#2), max((#0 + #0)), max((#1 + #1)), max((#2 + #2))]
-            Get l0
-        ArrangeBy keys=[[]]
-          Reduce aggregates=[sum(#0), sum(#1), sum(#2), sum((#0 + #0)), sum((#1 + #1)), sum((#2 + #2)), count(#0), count(#1), count(#2), count((#0 + #0)), count((#1 + #1)), count((#2 + #2))]
-            Get l0
-    cte l0 =
-      Project (#0..=#2)
-        ReadStorage materialize.public.t_using_dataflow_rendering
 
 Source materialize.public.t_using_dataflow_rendering
 
@@ -97,6 +97,11 @@ SELECT
 FROM t_using_dataflow_rendering;
 ----
 Explained Query:
+  With
+    cte l0 =
+      Reduce aggregates=[sum((#0 * #0)), sum(#0), count(#0)]
+        Project (#0)
+          ReadStorage materialize.public.t_using_dataflow_rendering
   Return
     Project (#3)
       Map (sqrtf64(real_to_double(case when ((#0) IS NULL OR (#1) IS NULL OR (case when (#2 = 0) then null else #2 end) IS NULL OR (case when (0 = (#2 - 1)) then null else (#2 - 1) end) IS NULL) then null else greatest(((#0 - ((#1 * #1) / bigint_to_real(case when (#2 = 0) then null else #2 end))) / bigint_to_real(case when (0 = (#2 - 1)) then null else (#2 - 1) end)), 0) end)))
@@ -109,11 +114,6 @@ Explained Query:
                   Get l0
               Constant
                 - ()
-  With
-    cte l0 =
-      Reduce aggregates=[sum((#0 * #0)), sum(#0), count(#0)]
-        Project (#0)
-          ReadStorage materialize.public.t_using_dataflow_rendering
 
 Source materialize.public.t_using_dataflow_rendering
 

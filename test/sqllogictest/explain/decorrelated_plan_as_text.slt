@@ -177,6 +177,13 @@ query T multiline
 EXPLAIN DECORRELATED PLAN AS TEXT FOR
 SELECT abs(min(a) - max(a)) FROM t
 ----
+With
+  cte l0 =
+    Reduce aggregates=[min(#0), max(#0)]
+      CrossJoin
+        Constant
+          - ()
+        Get materialize.public.t
 Return
   Project (#2)
     Map (abs((#0 - #1)))
@@ -196,13 +203,6 @@ Return
                 - ()
           Constant
             - (null, null)
-With
-  cte l0 =
-    Reduce aggregates=[min(#0), max(#0)]
-      CrossJoin
-        Constant
-          - ()
-        Get materialize.public.t
 
 Target cluster: quickstart
 
@@ -232,37 +232,23 @@ query T multiline
 EXPLAIN DECORRELATED PLAN AS TEXT FOR
 SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELECT * FROM mv WHERE t.b > mv.b)
 ----
-Return
-  Project (#0, #1)
-    Filter #2
-      Project (#0, #1, #3)
-        Join on=(#1 = #2)
-          Get l3
-          Union
-            Get l5
-            CrossJoin
-              Project (#0)
-                Join on=(#0 = #1)
-                  Union
-                    Negate
-                      Distinct project=[#0]
-                        Get l5
-                    Distinct project=[#0]
-                      Get l4
-                  Get l4
-              Constant
-                - (false)
 With
-  cte l5 =
+  cte l0 =
+    Filter (true AND true)
+      CrossJoin
+        Constant
+          - ()
+        Get materialize.public.t
+  cte l1 =
+    Distinct project=[#0]
+      Get l0
+  cte l2 =
     Map (true)
       Distinct project=[#0]
-        Filter (#0 > #2)
+        Filter (#0 < #1)
           CrossJoin
-            Get l4
+            Get l1
             Get materialize.public.mv
-  cte l4 =
-    Distinct project=[#1]
-      Get l3
   cte l3 =
     Project (#0, #1)
       Filter #2
@@ -283,22 +269,36 @@ With
                     Get l1
                 Constant
                   - (false)
-  cte l2 =
+  cte l4 =
+    Distinct project=[#1]
+      Get l3
+  cte l5 =
     Map (true)
       Distinct project=[#0]
-        Filter (#0 < #1)
+        Filter (#0 > #2)
           CrossJoin
-            Get l1
+            Get l4
             Get materialize.public.mv
-  cte l1 =
-    Distinct project=[#0]
-      Get l0
-  cte l0 =
-    Filter (true AND true)
-      CrossJoin
-        Constant
-          - ()
-        Get materialize.public.t
+Return
+  Project (#0, #1)
+    Filter #2
+      Project (#0, #1, #3)
+        Join on=(#1 = #2)
+          Get l3
+          Union
+            Get l5
+            CrossJoin
+              Project (#0)
+                Join on=(#0 = #1)
+                  Union
+                    Negate
+                      Distinct project=[#0]
+                        Get l5
+                    Distinct project=[#0]
+                      Get l4
+                  Get l4
+              Constant
+                - (false)
 
 Target cluster: quickstart
 
@@ -309,6 +309,54 @@ query T multiline
 EXPLAIN DECORRELATED PLAN AS TEXT FOR
 SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE mv.b = t.b LIMIT 1) FROM t
 ----
+With
+  cte l0 =
+    CrossJoin
+      Constant
+        - ()
+      Get materialize.public.t
+  cte l1 =
+    Distinct project=[#0, #1]
+      Get l0
+  cte l2 =
+    Distinct project=[#1]
+      Get l1
+  cte l3 =
+    Project (#0, #1)
+      TopK group_by=[#0] limit=1
+        Filter (#2 = #0)
+          CrossJoin
+            Get l2
+            Get materialize.public.v
+  cte l4 =
+    Union
+      Get l3
+      Map (error("more than one record produced in subquery"))
+        Project (#0)
+          Filter (#1 > 1)
+            Reduce group_by=[#0] aggregates=[count(*)]
+              Get l3
+  cte l5 =
+    Distinct project=[#0, #1]
+      Get l0
+  cte l6 =
+    Distinct project=[#1]
+      Get l5
+  cte l7 =
+    Project (#0, #1)
+      TopK group_by=[#0] limit=1
+        Filter (#2 = #0)
+          CrossJoin
+            Get l6
+            Get materialize.public.mv
+  cte l8 =
+    Union
+      Get l7
+      Map (error("more than one record produced in subquery"))
+        Project (#0)
+          Filter (#1 > 1)
+            Reduce group_by=[#0] aggregates=[count(*)]
+              Get l7
 Return
   Project (#8, #9)
     Map (#4, #7)
@@ -348,54 +396,6 @@ Return
                     Get l6
                 Constant
                   - (null)
-With
-  cte l8 =
-    Union
-      Get l7
-      Map (error("more than one record produced in subquery"))
-        Project (#0)
-          Filter (#1 > 1)
-            Reduce group_by=[#0] aggregates=[count(*)]
-              Get l7
-  cte l7 =
-    Project (#0, #1)
-      TopK group_by=[#0] limit=1
-        Filter (#2 = #0)
-          CrossJoin
-            Get l6
-            Get materialize.public.mv
-  cte l6 =
-    Distinct project=[#1]
-      Get l5
-  cte l5 =
-    Distinct project=[#0, #1]
-      Get l0
-  cte l4 =
-    Union
-      Get l3
-      Map (error("more than one record produced in subquery"))
-        Project (#0)
-          Filter (#1 > 1)
-            Reduce group_by=[#0] aggregates=[count(*)]
-              Get l3
-  cte l3 =
-    Project (#0, #1)
-      TopK group_by=[#0] limit=1
-        Filter (#2 = #0)
-          CrossJoin
-            Get l2
-            Get materialize.public.v
-  cte l2 =
-    Distinct project=[#1]
-      Get l1
-  cte l1 =
-    Distinct project=[#0, #1]
-      Get l0
-  cte l0 =
-    CrossJoin
-      Constant
-        - ()
-      Get materialize.public.t
 
 Target cluster: quickstart
 
@@ -516,23 +516,26 @@ FROM t as t1
 LEFT JOIN t as t2 ON t1.b = t2.b
 RIGHT JOIN t as t3 ON t2.b = t3.b
 ----
-Return
-  Project (#0, #2)
-    Union
-      Project (#2..=#5, #0, #1)
-        Map (null, null, null, null)
-          Union
-            Negate
-              Project (#0, #1)
-                Join on=(#1 = #2)
-                  Filter (#1) IS NOT NULL
-                    Get l2
-                  Distinct project=[#0]
-                    Project (#3)
-                      Get l3
-            Get l2
-      Get l3
 With
+  cte l0 =
+    CrossJoin
+      Constant
+        - ()
+      Get materialize.public.t
+  cte l1 =
+    Filter (#1 = #3)
+      Project (#0..=#3)
+        CrossJoin
+          Get l0
+          CrossJoin
+            Constant
+              - ()
+            Get materialize.public.t
+  cte l2 =
+    CrossJoin
+      Constant
+        - ()
+      Get materialize.public.t
   cte l3 =
     Filter (#3 = #5)
       Project (#0..=#5)
@@ -551,25 +554,22 @@ With
                 Get l0
             Get l1
           Get l2
-  cte l2 =
-    CrossJoin
-      Constant
-        - ()
-      Get materialize.public.t
-  cte l1 =
-    Filter (#1 = #3)
-      Project (#0..=#3)
-        CrossJoin
-          Get l0
-          CrossJoin
-            Constant
-              - ()
-            Get materialize.public.t
-  cte l0 =
-    CrossJoin
-      Constant
-        - ()
-      Get materialize.public.t
+Return
+  Project (#0, #2)
+    Union
+      Project (#2..=#5, #0, #1)
+        Map (null, null, null, null)
+          Union
+            Negate
+              Project (#0, #1)
+                Join on=(#1 = #2)
+                  Filter (#1) IS NOT NULL
+                    Get l2
+                  Distinct project=[#0]
+                    Project (#3)
+                      Get l3
+            Get l2
+      Get l3
 
 Target cluster: quickstart
 
@@ -580,14 +580,6 @@ query T multiline
 EXPLAIN DECORRELATED PLAN AS TEXT FOR
 WITH x AS (SELECT t.a * t.b as v from t) SELECT a.v + b.v FROM x as a, x as b
 ----
-Return
-  Project (#2)
-    Project (#0..=#2)
-      Map ((#0 + #1))
-        Project (#0, #1)
-          CrossJoin
-            Get l0
-            Get l0
 With
   cte l0 =
     Project (#2)
@@ -596,6 +588,14 @@ With
           Constant
             - ()
           Get materialize.public.t
+Return
+  Project (#2)
+    Project (#0..=#2)
+      Map ((#0 + #1))
+        Project (#0, #1)
+          CrossJoin
+            Get l0
+            Get l0
 
 Target cluster: quickstart
 
@@ -624,34 +624,20 @@ FROM
     SELECT * FROM r4 WHERE r4.m != r1.a OR (r4.m IS NOT NULL AND r1.a IS NULL)
   ) as r5;
 ----
-Return
-  Project (#0..=#2, #4)
-    Join on=(#0 = #3)
-      Get l3
-      Filter ((#1 != #0) OR ((#1) IS NOT NULL AND (#0) IS NULL))
-        Union
-          Get l5
-          CrossJoin
-            Project (#0)
-              Join on=(#0 = #1)
-                Union
-                  Negate
-                    Distinct project=[#0]
-                      Get l5
-                  Distinct project=[#0]
-                    Get l4
-                Get l4
-            Constant
-              - (null)
 With
-  cte l5 =
+  cte l0 =
+    CrossJoin
+      Constant
+        - ()
+      Get materialize.public.t
+  cte l1 =
+    Distinct project=[#0]
+      Get l0
+  cte l2 =
     Reduce group_by=[#0] aggregates=[max((#0 * #1))]
       CrossJoin
-        Get l4
+        Get l1
         Get materialize.public.t
-  cte l4 =
-    Distinct project=[#0]
-      Get l3
   cte l3 =
     Project (#0, #1, #3)
       Join on=(#0 = #2)
@@ -671,19 +657,33 @@ With
                   Get l1
               Constant
                 - (null)
-  cte l2 =
+  cte l4 =
+    Distinct project=[#0]
+      Get l3
+  cte l5 =
     Reduce group_by=[#0] aggregates=[max((#0 * #1))]
       CrossJoin
-        Get l1
+        Get l4
         Get materialize.public.t
-  cte l1 =
-    Distinct project=[#0]
-      Get l0
-  cte l0 =
-    CrossJoin
-      Constant
-        - ()
-      Get materialize.public.t
+Return
+  Project (#0..=#2, #4)
+    Join on=(#0 = #3)
+      Get l3
+      Filter ((#1 != #0) OR ((#1) IS NOT NULL AND (#0) IS NULL))
+        Union
+          Get l5
+          CrossJoin
+            Project (#0)
+              Join on=(#0 = #1)
+                Union
+                  Negate
+                    Distinct project=[#0]
+                      Get l5
+                  Distinct project=[#0]
+                    Get l4
+                Get l4
+            Constant
+              - (null)
 
 Target cluster: quickstart
 
@@ -716,6 +716,43 @@ FROM
     WHERE a != r1.a
   ) as r5;
 ----
+With
+  cte l0 =
+    CrossJoin
+      Constant
+        - ()
+      Get materialize.public.t
+  cte l1 =
+    Distinct project=[#0]
+      Get l0
+  cte l2 =
+    Reduce group_by=[#0] aggregates=[max((#0 * #1))]
+      CrossJoin
+        Get l1
+        Get materialize.public.t
+  cte l3 =
+    Union
+      Get l2
+      CrossJoin
+        Project (#0)
+          Join on=(#0 = #1)
+            Union
+              Negate
+                Distinct project=[#0]
+                  Get l2
+              Distinct project=[#0]
+                Get l1
+            Get l1
+        Constant
+          - (null)
+  cte l4 =
+    Distinct project=[#1, #0]
+      Get l3
+  cte l5 =
+    Reduce group_by=[#0, #1] aggregates=[max((#1 * #2))]
+      CrossJoin
+        Get l4
+        Get materialize.public.t
 Return
   Project (#0, #1, #3, #4)
     Join on=(#0 = #2)
@@ -739,43 +776,6 @@ Return
                       Get l4
                   Constant
                     - (null)
-With
-  cte l5 =
-    Reduce group_by=[#0, #1] aggregates=[max((#1 * #2))]
-      CrossJoin
-        Get l4
-        Get materialize.public.t
-  cte l4 =
-    Distinct project=[#1, #0]
-      Get l3
-  cte l3 =
-    Union
-      Get l2
-      CrossJoin
-        Project (#0)
-          Join on=(#0 = #1)
-            Union
-              Negate
-                Distinct project=[#0]
-                  Get l2
-              Distinct project=[#0]
-                Get l1
-            Get l1
-        Constant
-          - (null)
-  cte l2 =
-    Reduce group_by=[#0] aggregates=[max((#0 * #1))]
-      CrossJoin
-        Get l1
-        Get materialize.public.t
-  cte l1 =
-    Distinct project=[#0]
-      Get l0
-  cte l0 =
-    CrossJoin
-      Constant
-        - ()
-      Get materialize.public.t
 
 Target cluster: quickstart
 
@@ -784,6 +784,11 @@ EOF
 query T multiline
 EXPLAIN DECORRELATED PLAN AS TEXT FOR SELECT COUNT(*);
 ----
+With
+  cte l0 =
+    Reduce aggregates=[count(*)]
+      Constant
+        - ()
 Return
   Union
     Get l0
@@ -801,11 +806,6 @@ Return
             - ()
       Constant
         - (0)
-With
-  cte l0 =
-    Reduce aggregates=[count(*)]
-      Constant
-        - ()
 
 Target cluster: quickstart
 
@@ -834,16 +834,16 @@ WHERE
   r0.f16=r1.f16;
 ----
 Explained Query:
-  Return
-    Project (#0..=#16, #0, #18, #2..=#4, #22, #6, #24, #8, #9, #27, #11..=#13, #31, #15, #16)
-      Join on=(#0 = #17 AND #2 = #19 AND #3 = #20 AND #4 = #21 AND #6 = #23 AND #8 = #25 AND #9 = #26 AND #11 = #28 AND #12 = #29 AND #13 = #30 AND #15 = #32 AND #16 = #33) type=differential
-        Get l0
-        Get l0
   With
     cte l0 =
       ArrangeBy keys=[[#0, #2..=#4, #6, #8, #9, #11..=#13, #15, #16]]
         Filter (#0) IS NOT NULL AND (#2) IS NOT NULL AND (#3) IS NOT NULL AND (#4) IS NOT NULL AND (#6) IS NOT NULL AND (#8) IS NOT NULL AND (#9) IS NOT NULL AND (#11) IS NOT NULL AND (#12) IS NOT NULL AND (#13) IS NOT NULL AND (#15) IS NOT NULL AND (#16) IS NOT NULL
           ReadStorage materialize.public.r
+  Return
+    Project (#0..=#16, #0, #18, #2..=#4, #22, #6, #24, #8, #9, #27, #11..=#13, #31, #15, #16)
+      Join on=(#0 = #17 AND #2 = #19 AND #3 = #20 AND #4 = #21 AND #6 = #23 AND #8 = #25 AND #9 = #26 AND #11 = #28 AND #12 = #29 AND #13 = #30 AND #15 = #32 AND #16 = #33) type=differential
+        Get l0
+        Get l0
 
 Source materialize.public.r
   filter=((#0) IS NOT NULL AND (#2) IS NOT NULL AND (#3) IS NOT NULL AND (#4) IS NOT NULL AND (#6) IS NOT NULL AND (#8) IS NOT NULL AND (#9) IS NOT NULL AND (#11) IS NOT NULL AND (#12) IS NOT NULL AND (#13) IS NOT NULL AND (#15) IS NOT NULL AND (#16) IS NOT NULL)

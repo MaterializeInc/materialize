@@ -105,14 +105,14 @@ With
     Map (3)
       Get x
 ----
-Return
-  Map (#1, (#2 > #1))
-    Project (#2, #1, #0)
-      Get l0
 With
   cte l0 =
     Map (3)
       Get x
+Return
+  Map (#1, (#2 > #1))
+    Project (#2, #1, #0)
+      Get l0
 
 
 
@@ -142,15 +142,15 @@ With
     Distinct project=[#0]
       Get x
 ----
+With
+  cte l0 =
+    Distinct project=[#0]
+      Get x
 Return
   Project (#0..=#2)
     Map (#0)
       CrossJoin
         Get x
-With
-  cte l0 =
-    Distinct project=[#0]
-      Get x
 
 
 # Distinct handling.
@@ -193,8 +193,6 @@ With Mutually Recursive
             Project (#0)
               Get x
 ----
-Return
-  Get l0
 With Mutually Recursive
   cte l0 =
     Distinct project=[#0..=#2]
@@ -204,6 +202,8 @@ With Mutually Recursive
           Map ((#0 % 2))
             CrossJoin
               Get x
+Return
+  Get l0
 
 
 # Ensure that we're not double-counting in `remove_uses`.
@@ -224,18 +224,18 @@ With Mutually Recursive
           Get l1
           Get l0
 ----
-Return
-  Get l1
 With Mutually Recursive
   cte l1 =
+    With Mutually Recursive
+      cte l0 =
+        Union
+          Get l1
+          Get l0
     Return
       Threshold
         Union
           Get l1
           Negate
             Get l0
-    With Mutually Recursive
-      cte l0 =
-        Union
-          Get l1
-          Get l0
+Return
+  Get l1

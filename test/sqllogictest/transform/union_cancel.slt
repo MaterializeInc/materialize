@@ -302,23 +302,23 @@ WITH MUTUALLY RECURSIVE
 SELECT * FROM c2;
 ----
 Explained Query:
-  Return
-    Get l2
   With Mutually Recursive
-    cte l2 =
-      Union
-        Get l0
-        Get l1
-        Get l1
-    cte l1 =
-      Project (#1)
-        Map ((#0 + #0))
-          Get l0
     cte l0 =
       Union
         Project (#0)
           ReadStorage materialize.public.init
         Get l2
+    cte l1 =
+      Project (#1)
+        Map ((#0 + #0))
+          Get l0
+    cte l2 =
+      Union
+        Get l0
+        Get l1
+        Get l1
+  Return
+    Get l2
 
 Source materialize.public.init
 

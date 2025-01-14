@@ -47,6 +47,32 @@ FROM
     FROM t2
   ) AS sq1
 ----
+With
+  cte l0 =
+    CrossJoin // { arity: 3 }
+      Constant // { arity: 0 }
+        - ()
+      Get materialize.public.t1 // { arity: 3 }
+  cte l1 =
+    CrossJoin // { arity: 3 }
+      Distinct project=[#1] // { arity: 1 }
+        Get l0 // { arity: 3 }
+      Get materialize.public.t2 // { arity: 2 }
+  cte l2 =
+    Distinct project=[#0..=#2] // { arity: 3 }
+      Get l1 // { arity: 3 }
+  cte l3 =
+    Project (#0..=#3) // { arity: 4 }
+      Map (3) // { arity: 4 }
+        Get l2 // { arity: 3 }
+  cte l4 =
+    Union // { arity: 4 }
+      Get l3 // { arity: 4 }
+      Map (error("more than one record produced in subquery")) // { arity: 4 }
+        Project (#0..=#2) // { arity: 3 }
+          Filter (#3 > 1) // { arity: 4 }
+            Reduce group_by=[#0..=#2] aggregates=[count(*)] // { arity: 4 }
+              Get l3 // { arity: 4 }
 Return // { arity: 3 }
   Project (#3..=#5) // { arity: 3 }
     Project (#0..=#2, #4..=#6) // { arity: 6 }
@@ -72,32 +98,6 @@ Return // { arity: 3 }
                           Get l2 // { arity: 3 }
                       Constant // { arity: 1 }
                         - (null)
-With
-  cte l4 =
-    Union // { arity: 4 }
-      Get l3 // { arity: 4 }
-      Map (error("more than one record produced in subquery")) // { arity: 4 }
-        Project (#0..=#2) // { arity: 3 }
-          Filter (#3 > 1) // { arity: 4 }
-            Reduce group_by=[#0..=#2] aggregates=[count(*)] // { arity: 4 }
-              Get l3 // { arity: 4 }
-  cte l3 =
-    Project (#0..=#3) // { arity: 4 }
-      Map (3) // { arity: 4 }
-        Get l2 // { arity: 3 }
-  cte l2 =
-    Distinct project=[#0..=#2] // { arity: 3 }
-      Get l1 // { arity: 3 }
-  cte l1 =
-    CrossJoin // { arity: 3 }
-      Distinct project=[#1] // { arity: 1 }
-        Get l0 // { arity: 3 }
-      Get materialize.public.t2 // { arity: 2 }
-  cte l0 =
-    CrossJoin // { arity: 3 }
-      Constant // { arity: 0 }
-        - ()
-      Get materialize.public.t1 // { arity: 3 }
 
 Target cluster: quickstart
 

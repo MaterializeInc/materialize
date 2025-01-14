@@ -292,16 +292,16 @@ opt
      (map (get y) [1])
      [#2 #1])])
 ----
+With
+  cte l0 =
+    Map (1)
+      Get y
 Return
   Union
     Project (#2, #0)
       Get l0
     Project (#2, #1)
       Get l0
-With
-  cte l0 =
-    Map (1)
-      Get y
 
 build format=types apply=LiteralLifting
 (constant [[1 2 3] [1 4 3]] ([int64 int64 int64] [[1 2]]))

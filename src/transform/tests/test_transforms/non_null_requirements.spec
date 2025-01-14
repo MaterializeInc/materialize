@@ -91,16 +91,16 @@ With
     Map (null::bigint)
       Get t0
 ----
-Return
-  Filter (#2 > 0)
-    Get l1
 With
+  cte l0 =
+    Constant <empty>
   cte l1 =
     ArrangeBy keys=[[#0]]
       Threshold
         Get l0
-  cte l0 =
-    Constant <empty>
+Return
+  Filter (#2 > 0)
+    Get l1
 
 
 # Regression test for database-issues#1700
@@ -146,21 +146,21 @@ With Mutually Recursive
     Map (null::bigint)
       Get t0
 ----
-Return
-  Filter (#0 < 7) AND (#2 > 0)
-    Union
-      Get l2
-      Get l1
 With Mutually Recursive
-  cte l2 =
-    ArrangeBy keys=[[#0]]
-      Threshold
-        Get l0
+  cte l0 =
+    Constant <empty>
   cte l1 =
     Distinct project=[#0..=#2]
       Union
         Get l1
         Filter (#2 > 0)
           Get l0
-  cte l0 =
-    Constant <empty>
+  cte l2 =
+    ArrangeBy keys=[[#0]]
+      Threshold
+        Get l0
+Return
+  Filter (#0 < 7) AND (#2 > 0)
+    Union
+      Get l2
+      Get l1

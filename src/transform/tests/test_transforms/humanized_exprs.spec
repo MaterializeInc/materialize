@@ -42,11 +42,11 @@ With
   cte l0 =
     Get t0
 ----
-Return
-  Get l0
 With
   cte l0 =
     Get t0
+Return
+  Get l0
 
 # Local Get in a LetRec block
 explain with=humanized_exprs
@@ -56,11 +56,11 @@ With Mutually Recursive
   cte l0 = // { types: "(bigint, bigint)" }
     Get t0
 ----
-Return
-  Get l0
 With Mutually Recursive
   cte l0 =
     Get t0
+Return
+  Get l0
 
 # Project
 explain with=humanized_exprs

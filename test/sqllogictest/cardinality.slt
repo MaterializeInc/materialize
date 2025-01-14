@@ -63,6 +63,10 @@ query T multiline
 EXPLAIN WITH(join implementations) SELECT * FROM t as l, t as r WHERE l.x = r.x;
 ----
 Explained Query:
+  With
+    cte l0 =
+      ArrangeBy keys=[[#0]]
+        ReadIndex on=t t_x=[differential join]
   Return
     Project (#0, #1, #0, #3)
       Join on=(#0 = #2) type=differential
@@ -70,10 +74,6 @@ Explained Query:
           %0:l0[#0]KA|4| » %1:l0[#0]KA|4|
         Get l0
         Get l0
-  With
-    cte l0 =
-      ArrangeBy keys=[[#0]]
-        ReadIndex on=t t_x=[differential join]
 
 Used Indexes:
   - materialize.public.t_x (differential join)
@@ -159,9 +159,32 @@ EXPLAIN WITH MUTUALLY RECURSIVE
 SELECT * FROM pexists;
 ----
 Explained Query:
-  Return
-    Get l3
   With Mutually Recursive
+    cte l0 =
+      Project (#1, #3)
+        Join on=(#0 = #2) type=differential
+          ArrangeBy keys=[[#0]]
+            Get l3
+          ArrangeBy keys=[[#0]]
+            Project (#1, #2)
+              ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[*** full scan ***]
+    cte l1 =
+      Union
+        Project (#1, #0)
+          Get l0
+        Get l3
+    cte l2 =
+      Distinct project=[]
+        Project ()
+          Join on=(#0 = #1) type=differential
+            ArrangeBy keys=[[#0]]
+              Project (#0)
+                Filter #1
+                  Get l1
+            ArrangeBy keys=[[#0]]
+              Project (#0)
+                Filter NOT(#1)
+                  Get l1
     cte l3 =
       Distinct project=[#0, #1]
         Union
@@ -181,31 +204,8 @@ Explained Query:
           Constant
             - (1, true)
             - (2, false)
-    cte l2 =
-      Distinct project=[]
-        Project ()
-          Join on=(#0 = #1) type=differential
-            ArrangeBy keys=[[#0]]
-              Project (#0)
-                Filter #1
-                  Get l1
-            ArrangeBy keys=[[#0]]
-              Project (#0)
-                Filter NOT(#1)
-                  Get l1
-    cte l1 =
-      Union
-        Project (#1, #0)
-          Get l0
-        Get l3
-    cte l0 =
-      Project (#1, #3)
-        Join on=(#0 = #2) type=differential
-          ArrangeBy keys=[[#0]]
-            Get l3
-          ArrangeBy keys=[[#0]]
-            Project (#1, #2)
-              ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[*** full scan ***]
+  Return
+    Get l3
 
 Used Indexes:
   - materialize.public.person_knows_person_person1id_person2id (*** full scan ***)
@@ -257,9 +257,32 @@ EXPLAIN WITH MUTUALLY RECURSIVE
 SELECT * FROM pexists;
 ----
 Explained Query:
-  Return
-    Get l3
   With Mutually Recursive
+    cte l0 =
+      Project (#1, #3)
+        Join on=(#0 = #2) type=differential
+          ArrangeBy keys=[[#0]]
+            Get l3
+          ArrangeBy keys=[[#0]]
+            Project (#1, #2)
+              ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[*** full scan ***]
+    cte l1 =
+      Union
+        Project (#1, #0)
+          Get l0
+        Get l3
+    cte l2 =
+      Distinct project=[]
+        Project ()
+          Join on=(#0 = #1) type=differential
+            ArrangeBy keys=[[#0]]
+              Project (#0)
+                Filter #1
+                  Get l1
+            ArrangeBy keys=[[#0]]
+              Project (#0)
+                Filter NOT(#1)
+                  Get l1
     cte l3 =
       Distinct project=[#0, #1]
         Union
@@ -279,31 +302,8 @@ Explained Query:
           Constant
             - (1, true)
             - (2, false)
-    cte l2 =
-      Distinct project=[]
-        Project ()
-          Join on=(#0 = #1) type=differential
-            ArrangeBy keys=[[#0]]
-              Project (#0)
-                Filter #1
-                  Get l1
-            ArrangeBy keys=[[#0]]
-              Project (#0)
-                Filter NOT(#1)
-                  Get l1
-    cte l1 =
-      Union
-        Project (#1, #0)
-          Get l0
-        Get l3
-    cte l0 =
-      Project (#1, #3)
-        Join on=(#0 = #2) type=differential
-          ArrangeBy keys=[[#0]]
-            Get l3
-          ArrangeBy keys=[[#0]]
-            Project (#1, #2)
-              ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[*** full scan ***]
+  Return
+    Get l3
 
 Used Indexes:
   - materialize.public.person_knows_person_person1id_person2id (*** full scan ***)
@@ -493,19 +493,19 @@ with mutually recursive
 (select * from t);
 ----
 Explained Query:
-  Return // { cardinality: "<UNKNOWN>" }
-    Get l0 // { cardinality: "<UNKNOWN>" }
   With Mutually Recursive
-    cte l1 =
-      Project (#1) // { cardinality: "<UNKNOWN>" }
-        Filter (#0 < 7) // { cardinality: "<UNKNOWN>" }
-          Map ((#0 + 1)) // { cardinality: "<UNKNOWN>" }
-            Get l0 // { cardinality: "<UNKNOWN>" }
     cte l0 =
       Union // { cardinality: "<UNKNOWN>" }
         Get l1 // { cardinality: "<UNKNOWN>" }
         Constant // { cardinality: "1" }
           - (1)
+    cte l1 =
+      Project (#1) // { cardinality: "<UNKNOWN>" }
+        Filter (#0 < 7) // { cardinality: "<UNKNOWN>" }
+          Map ((#0 + 1)) // { cardinality: "<UNKNOWN>" }
+            Get l0 // { cardinality: "<UNKNOWN>" }
+  Return // { cardinality: "<UNKNOWN>" }
+    Get l0 // { cardinality: "<UNKNOWN>" }
 
 Target cluster: mz_catalog_server
 

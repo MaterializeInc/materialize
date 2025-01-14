@@ -67,8 +67,6 @@ WITH MUTUALLY RECURSIVE
 SELECT * FROM c0;
 ----
 Explained Query:
-  Return // { arity: 3 }
-    Get l0 // { arity: 3 }
   With Mutually Recursive
     cte l0 =
       Distinct project=[#0..=#2] // { arity: 3 }
@@ -76,6 +74,8 @@ Explained Query:
           Get l0 // { arity: 3 }
           Map ((#0 % 2)) // { arity: 3 }
             ReadStorage materialize.public.t2 // { arity: 2 }
+  Return // { arity: 3 }
+    Get l0 // { arity: 3 }
 
 Source materialize.public.t2
 
@@ -98,8 +98,6 @@ WITH MUTUALLY RECURSIVE
 SELECT * FROM c0;
 ----
 Explained Query:
-  Return // { arity: 3 }
-    Get l0 // { arity: 3 }
   With Mutually Recursive
     cte l0 =
       Distinct project=[#0..=#2] // { arity: 3 }
@@ -108,6 +106,8 @@ Explained Query:
           Filter (#0) IS NOT NULL // { arity: 3 }
             Map ((#0 % 2)) // { arity: 3 }
               ReadStorage materialize.public.t1 // { arity: 2 }
+  Return // { arity: 3 }
+    Get l0 // { arity: 3 }
 
 Source materialize.public.t1
   filter=((#0) IS NOT NULL)
@@ -140,14 +140,11 @@ SELECT * FROM (
 );
 ----
 Explained Query:
-  Return // { arity: 1 }
-    Union // { arity: 1 }
-      Project (#2) // { arity: 1 }
-        Get l1 // { arity: 3 }
-      Project (#1) // { arity: 1 }
-        Map (42) // { arity: 2 }
-          Get l0 // { arity: 1 }
   With Mutually Recursive
+    cte l0 =
+      Distinct project=[(#0 % 2)] // { arity: 1 }
+        Project (#0) // { arity: 1 }
+          ReadStorage materialize.public.t2 // { arity: 2 }
     cte l1 =
       Distinct project=[#0..=#2] // { arity: 3 }
         Union // { arity: 3 }
@@ -161,10 +158,13 @@ Explained Query:
               ReadStorage materialize.public.t2 // { arity: 2 }
             ArrangeBy keys=[[#0]] // { arity: 1 }
               Get l0 // { arity: 1 }
-    cte l0 =
-      Distinct project=[(#0 % 2)] // { arity: 1 }
-        Project (#0) // { arity: 1 }
-          ReadStorage materialize.public.t2 // { arity: 2 }
+  Return // { arity: 1 }
+    Union // { arity: 1 }
+      Project (#2) // { arity: 1 }
+        Get l1 // { arity: 3 }
+      Project (#1) // { arity: 1 }
+        Map (42) // { arity: 2 }
+          Get l0 // { arity: 1 }
 
 Source materialize.public.t2
 

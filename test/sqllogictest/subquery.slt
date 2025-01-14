@@ -474,6 +474,20 @@ query T multiline
 EXPLAIN WITH(arity, join implementations) SELECT b IN (SELECT a FROM x) FROM y
 ----
 Explained Query:
+  With
+    cte l0 =
+      Distinct project=[#0] // { arity: 1 }
+        ReadStorage materialize.public.y // { arity: 1 }
+    cte l1 =
+      Project (#0) // { arity: 1 }
+        Join on=(#0 = #1) type=differential // { arity: 2 }
+          implementation
+            %0:l0[#0]UKA » %1[#0]UKA
+          ArrangeBy keys=[[#0]] // { arity: 1 }
+            Get l0 // { arity: 1 }
+          ArrangeBy keys=[[#0]] // { arity: 1 }
+            Distinct project=[#0] // { arity: 1 }
+              ReadStorage materialize.public.x // { arity: 1 }
   Return // { arity: 1 }
     Project (#2) // { arity: 1 }
       Join on=(#0 = #1) type=differential // { arity: 3 }
@@ -490,20 +504,6 @@ Explained Query:
                 Negate // { arity: 1 }
                   Get l1 // { arity: 1 }
                 Get l0 // { arity: 1 }
-  With
-    cte l1 =
-      Project (#0) // { arity: 1 }
-        Join on=(#0 = #1) type=differential // { arity: 2 }
-          implementation
-            %0:l0[#0]UKA » %1[#0]UKA
-          ArrangeBy keys=[[#0]] // { arity: 1 }
-            Get l0 // { arity: 1 }
-          ArrangeBy keys=[[#0]] // { arity: 1 }
-            Distinct project=[#0] // { arity: 1 }
-              ReadStorage materialize.public.x // { arity: 1 }
-    cte l0 =
-      Distinct project=[#0] // { arity: 1 }
-        ReadStorage materialize.public.y // { arity: 1 }
 
 Source materialize.public.x
 Source materialize.public.y
@@ -516,6 +516,20 @@ query T multiline
 EXPLAIN WITH(arity, join implementations) SELECT b != ALL(SELECT a FROM x) FROM y
 ----
 Explained Query:
+  With
+    cte l0 =
+      Distinct project=[#0] // { arity: 1 }
+        ReadStorage materialize.public.y // { arity: 1 }
+    cte l1 =
+      Project (#0) // { arity: 1 }
+        Join on=(#0 = #1) type=differential // { arity: 2 }
+          implementation
+            %0:l0[#0]UKA » %1[#0]UKA
+          ArrangeBy keys=[[#0]] // { arity: 1 }
+            Get l0 // { arity: 1 }
+          ArrangeBy keys=[[#0]] // { arity: 1 }
+            Distinct project=[#0] // { arity: 1 }
+              ReadStorage materialize.public.x // { arity: 1 }
   Return // { arity: 1 }
     Project (#3) // { arity: 1 }
       Map (NOT(#2)) // { arity: 4 }
@@ -533,20 +547,6 @@ Explained Query:
                   Negate // { arity: 1 }
                     Get l1 // { arity: 1 }
                   Get l0 // { arity: 1 }
-  With
-    cte l1 =
-      Project (#0) // { arity: 1 }
-        Join on=(#0 = #1) type=differential // { arity: 2 }
-          implementation
-            %0:l0[#0]UKA » %1[#0]UKA
-          ArrangeBy keys=[[#0]] // { arity: 1 }
-            Get l0 // { arity: 1 }
-          ArrangeBy keys=[[#0]] // { arity: 1 }
-            Distinct project=[#0] // { arity: 1 }
-              ReadStorage materialize.public.x // { arity: 1 }
-    cte l0 =
-      Distinct project=[#0] // { arity: 1 }
-        ReadStorage materialize.public.y // { arity: 1 }
 
 Source materialize.public.x
 Source materialize.public.y
@@ -560,6 +560,21 @@ query T multiline
 EXPLAIN WITH(arity, join implementations) SELECT b > ALL(SELECT a FROM x) FROM y
 ----
 Explained Query:
+  With
+    cte l0 =
+      Distinct project=[#0] // { arity: 1 }
+        ReadStorage materialize.public.y // { arity: 1 }
+    cte l1 =
+      Distinct project=[#0] // { arity: 1 }
+        Project (#0) // { arity: 1 }
+          Filter (#0 <= #1) // { arity: 2 }
+            CrossJoin type=differential // { arity: 2 }
+              implementation
+                %0:l0[×] » %1:x[×]
+              ArrangeBy keys=[[]] // { arity: 1 }
+                Get l0 // { arity: 1 }
+              ArrangeBy keys=[[]] // { arity: 1 }
+                ReadStorage materialize.public.x // { arity: 1 }
   Return // { arity: 1 }
     Project (#3) // { arity: 1 }
       Map (NOT(#2)) // { arity: 4 }
@@ -577,21 +592,6 @@ Explained Query:
                   Negate // { arity: 1 }
                     Get l1 // { arity: 1 }
                   Get l0 // { arity: 1 }
-  With
-    cte l1 =
-      Distinct project=[#0] // { arity: 1 }
-        Project (#0) // { arity: 1 }
-          Filter (#0 <= #1) // { arity: 2 }
-            CrossJoin type=differential // { arity: 2 }
-              implementation
-                %0:l0[×] » %1:x[×]
-              ArrangeBy keys=[[]] // { arity: 1 }
-                Get l0 // { arity: 1 }
-              ArrangeBy keys=[[]] // { arity: 1 }
-                ReadStorage materialize.public.x // { arity: 1 }
-    cte l0 =
-      Distinct project=[#0] // { arity: 1 }
-        ReadStorage materialize.public.y // { arity: 1 }
 
 Source materialize.public.x
 Source materialize.public.y

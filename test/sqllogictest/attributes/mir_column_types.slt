@@ -99,6 +99,18 @@ EXPLAIN OPTIMIZED PLAN WITH(types) AS TEXT FOR
 SELECT t.* FROM u LEFT OUTER JOIN t on t.a = u.d
 ----
 Explained Query:
+  With
+    cte l0 =
+      ArrangeBy keys=[[#0]] // { types: "(integer)" }
+        Filter (#0) IS NOT NULL // { types: "(integer)" }
+          ReadStorage materialize.public.u // { types: "(integer?)" }
+    cte l1 =
+      Project (#0, #2, #3) // { types: "(integer, text?, date?)" }
+        Join on=(#0 = #1) type=differential // { types: "(integer, integer, text?, date?)" }
+          Get l0 // { types: "(integer)" }
+          ArrangeBy keys=[[#0]] // { types: "(integer, text?, date?)" }
+            Filter (#0) IS NOT NULL // { types: "(integer, text?, date?)" }
+              ReadStorage materialize.public.t // { types: "(integer?, text?, date?)" }
   Return // { types: "(integer?, text?, date?)" }
     Union // { types: "(integer?, text?, date?)" }
       Map (null, null, null) // { types: "(integer?, text?, date?)" }
@@ -114,18 +126,6 @@ Explained Query:
           Project () // { types: "()" }
             ReadStorage materialize.public.u // { types: "(integer?)" }
       Get l1 // { types: "(integer, text?, date?)" }
-  With
-    cte l1 =
-      Project (#0, #2, #3) // { types: "(integer, text?, date?)" }
-        Join on=(#0 = #1) type=differential // { types: "(integer, integer, text?, date?)" }
-          Get l0 // { types: "(integer)" }
-          ArrangeBy keys=[[#0]] // { types: "(integer, text?, date?)" }
-            Filter (#0) IS NOT NULL // { types: "(integer, text?, date?)" }
-              ReadStorage materialize.public.t // { types: "(integer?, text?, date?)" }
-    cte l0 =
-      ArrangeBy keys=[[#0]] // { types: "(integer)" }
-        Filter (#0) IS NOT NULL // { types: "(integer)" }
-          ReadStorage materialize.public.u // { types: "(integer?)" }
 
 Source materialize.public.t
   filter=((#0) IS NOT NULL)
@@ -140,22 +140,6 @@ EXPLAIN OPTIMIZED PLAN WITH(types) AS TEXT FOR
 (SELECT null::boolean as f1, 10 as f2) EXCEPT (SELECT min(f), count(*) FROM v WHERE (select d::double FROM u) = v.e GROUP BY e LIMIT 1)
 ----
 Explained Query:
-  Return // { types: "(boolean?, bigint)" }
-    Threshold // { types: "(boolean?, bigint)" }
-      Union // { types: "(boolean?, bigint)" }
-        Negate // { types: "(boolean?, bigint)" }
-          TopK limit=1 // { types: "(boolean?, bigint)" }
-            Project (#1, #3) // { types: "(boolean?, bigint)" }
-              Join on=(#0 = #2) type=differential // { types: "(double precision, boolean?, double precision, bigint)" }
-                ArrangeBy keys=[[#0]] // { types: "(double precision, boolean?)" }
-                  Reduce group_by=[#0] aggregates=[min(#1)] // { types: "(double precision, boolean?)" }
-                    Get l0 // { types: "(double precision, boolean?)" }
-                ArrangeBy keys=[[#0]] // { types: "(double precision, bigint)" }
-                  Reduce group_by=[#0] aggregates=[count(*)] // { types: "(double precision, bigint)" }
-                    Project (#0) // { types: "(double precision)" }
-                      Get l0 // { types: "(double precision, boolean?)" }
-        Constant // { types: "(boolean?, bigint)" }
-          - (null, 10)
   With
     cte l0 =
       Project (#0, #1) // { types: "(double precision, boolean?)" }
@@ -175,6 +159,22 @@ Explained Query:
                     Reduce aggregates=[count(*)] // { types: "(bigint)" }
                       Project () // { types: "()" }
                         ReadStorage materialize.public.u // { types: "(integer?)" }
+  Return // { types: "(boolean?, bigint)" }
+    Threshold // { types: "(boolean?, bigint)" }
+      Union // { types: "(boolean?, bigint)" }
+        Negate // { types: "(boolean?, bigint)" }
+          TopK limit=1 // { types: "(boolean?, bigint)" }
+            Project (#1, #3) // { types: "(boolean?, bigint)" }
+              Join on=(#0 = #2) type=differential // { types: "(double precision, boolean?, double precision, bigint)" }
+                ArrangeBy keys=[[#0]] // { types: "(double precision, boolean?)" }
+                  Reduce group_by=[#0] aggregates=[min(#1)] // { types: "(double precision, boolean?)" }
+                    Get l0 // { types: "(double precision, boolean?)" }
+                ArrangeBy keys=[[#0]] // { types: "(double precision, bigint)" }
+                  Reduce group_by=[#0] aggregates=[count(*)] // { types: "(double precision, bigint)" }
+                    Project (#0) // { types: "(double precision)" }
+                      Get l0 // { types: "(double precision, boolean?)" }
+        Constant // { types: "(boolean?, bigint)" }
+          - (null, 10)
 
 Source materialize.public.u
 Source materialize.public.v

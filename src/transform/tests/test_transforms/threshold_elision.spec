@@ -138,12 +138,6 @@ With
           Filter #0 < 7
             Get x
 ----
-Return
-  Union
-    Get l0
-    Negate
-      Filter (#0 > 9)
-        Get l0
 With
   cte l0 =
     Union
@@ -151,3 +145,9 @@ With
       Negate
         Filter (#0 < 7)
           Get x
+Return
+  Union
+    Get l0
+    Negate
+      Filter (#0 > 9)
+        Get l0

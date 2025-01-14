@@ -70,6 +70,13 @@ EXPLAIN WITH game_cnt AS (
         SELECT SUM(game_id) FROM game_cnt WHERE total_set_cnt = possible_set_cnt;
 ----
 Explained Query:
+  With
+    cte l0 =
+      Reduce aggregates=[sum(text_to_integer(split_string(#0, " ", 2)))]
+        Project (#0)
+          Filter (#1 = #2)
+            Reduce group_by=[#0] aggregates=[count(#1), count(case when ((#2 <= 13) AND (#3 <= 12) AND (#4 <= 14)) then #1 else null end)]
+              ReadStorage materialize.public.aoc_1202
   Return
     Union
       Get l0
@@ -80,13 +87,6 @@ Explained Query:
               Get l0
           Constant
             - ()
-  With
-    cte l0 =
-      Reduce aggregates=[sum(text_to_integer(split_string(#0, " ", 2)))]
-        Project (#0)
-          Filter (#1 = #2)
-            Reduce group_by=[#0] aggregates=[count(#1), count(case when ((#2 <= 13) AND (#3 <= 12) AND (#4 <= 14)) then #1 else null end)]
-              ReadStorage materialize.public.aoc_1202
 
 Source materialize.public.aoc_1202
 
@@ -119,6 +119,13 @@ GROUP BY split_part(game_id,' ', 2)::int
 SELECT SUM(green_min*red_min*blue_min) FROM game_min;
 ----
 Explained Query:
+  With
+    cte l0 =
+      Reduce aggregates=[sum(((#0 * #1) * #2))]
+        Project (#1..=#3)
+          Reduce group_by=[text_to_integer(split_string(#0, " ", 2))] aggregates=[max(#1), max(#2), max(#3)]
+            Project (#0, #2..=#4)
+              ReadStorage materialize.public.aoc_1202
   Return
     Union
       Get l0
@@ -129,13 +136,6 @@ Explained Query:
               Get l0
           Constant
             - ()
-  With
-    cte l0 =
-      Reduce aggregates=[sum(((#0 * #1) * #2))]
-        Project (#1..=#3)
-          Reduce group_by=[text_to_integer(split_string(#0, " ", 2))] aggregates=[max(#1), max(#2), max(#3)]
-            Project (#0, #2..=#4)
-              ReadStorage materialize.public.aoc_1202
 
 Source materialize.public.aoc_1202
 
@@ -212,58 +212,24 @@ EXPLAIN with mutually recursive
 select * from part1, part2;
 ----
 Explained Query:
-  Return
-    CrossJoin type=differential
-      ArrangeBy keys=[[]]
-        Union
-          Get l3
-          Map (null)
-            Union
-              Negate
-                Project ()
-                  Get l3
-              Constant
-                - ()
-      ArrangeBy keys=[[]]
-        Project (#1)
-          Map (numeric_to_bigint(#0))
-            Union
-              Get l5
-              Map (null)
-                Union
-                  Negate
-                    Project ()
-                      Get l5
-                  Constant
-                    - ()
   With
-    cte l5 =
-      Reduce aggregates=[sum(#0)]
-        Project (#1)
-          Reduce group_by=[#0] aggregates=[count(*)]
-            Project (#0)
-              Join on=(#0 = #1 = #2) type=delta
-                ArrangeBy keys=[[#0]]
-                  Project (#0)
-                    FlatMap generate_series(1, #1, 1)
-                      Project (#0, #2)
-                        Filter (#1 = "red")
-                          Get l4
-                ArrangeBy keys=[[#0]]
-                  Project (#0)
-                    FlatMap generate_series(1, #1, 1)
-                      Project (#0, #2)
-                        Filter (#1 = "blue")
-                          Get l4
-                ArrangeBy keys=[[#0]]
-                  Project (#0)
-                    FlatMap generate_series(1, #1, 1)
-                      Project (#0, #2)
-                        Filter (#1 = "green")
-                          Get l4
-    cte l4 =
-      Reduce group_by=[#0, #1] aggregates=[max(#2)]
-        Get l1
+    cte l0 =
+      Project (#3, #5, #6)
+        Map (text_to_integer(substr(#0, 5)), regexp_split_to_array[" ", case_insensitive=false](#2), array_index(#4, 3), text_to_integer(array_index(#4, 2)))
+          FlatMap unnest_array(regexp_split_to_array[",", case_insensitive=false](#1))
+            Project (#0, #2)
+              FlatMap unnest_array(regexp_split_to_array[";", case_insensitive=false](#1))
+                Project (#3, #4)
+                  Map (regexp_split_to_array[":", case_insensitive=false](#1), array_index(#2, 1), array_index(#2, 2))
+                    FlatMap unnest_array(regexp_split_to_array["\n", case_insensitive=false](#0))
+                      ReadStorage materialize.public.input
+    cte l1 =
+      Filter (#0) IS NOT NULL
+        Get l0
+    cte l2 =
+      ArrangeBy keys=[[#0]]
+        Project (#0)
+          Get l1
     cte l3 =
       Reduce aggregates=[sum(#0)]
         Distinct project=[#0]
@@ -288,23 +254,57 @@ Explained Query:
                                 - ("green", 13)
             Project (#0)
               Get l0
-    cte l2 =
-      ArrangeBy keys=[[#0]]
-        Project (#0)
-          Get l1
-    cte l1 =
-      Filter (#0) IS NOT NULL
-        Get l0
-    cte l0 =
-      Project (#3, #5, #6)
-        Map (text_to_integer(substr(#0, 5)), regexp_split_to_array[" ", case_insensitive=false](#2), array_index(#4, 3), text_to_integer(array_index(#4, 2)))
-          FlatMap unnest_array(regexp_split_to_array[",", case_insensitive=false](#1))
-            Project (#0, #2)
-              FlatMap unnest_array(regexp_split_to_array[";", case_insensitive=false](#1))
-                Project (#3, #4)
-                  Map (regexp_split_to_array[":", case_insensitive=false](#1), array_index(#2, 1), array_index(#2, 2))
-                    FlatMap unnest_array(regexp_split_to_array["\n", case_insensitive=false](#0))
-                      ReadStorage materialize.public.input
+    cte l4 =
+      Reduce group_by=[#0, #1] aggregates=[max(#2)]
+        Get l1
+    cte l5 =
+      Reduce aggregates=[sum(#0)]
+        Project (#1)
+          Reduce group_by=[#0] aggregates=[count(*)]
+            Project (#0)
+              Join on=(#0 = #1 = #2) type=delta
+                ArrangeBy keys=[[#0]]
+                  Project (#0)
+                    FlatMap generate_series(1, #1, 1)
+                      Project (#0, #2)
+                        Filter (#1 = "red")
+                          Get l4
+                ArrangeBy keys=[[#0]]
+                  Project (#0)
+                    FlatMap generate_series(1, #1, 1)
+                      Project (#0, #2)
+                        Filter (#1 = "blue")
+                          Get l4
+                ArrangeBy keys=[[#0]]
+                  Project (#0)
+                    FlatMap generate_series(1, #1, 1)
+                      Project (#0, #2)
+                        Filter (#1 = "green")
+                          Get l4
+  Return
+    CrossJoin type=differential
+      ArrangeBy keys=[[]]
+        Union
+          Get l3
+          Map (null)
+            Union
+              Negate
+                Project ()
+                  Get l3
+              Constant
+                - ()
+      ArrangeBy keys=[[]]
+        Project (#1)
+          Map (numeric_to_bigint(#0))
+            Union
+              Get l5
+              Map (null)
+                Union
+                  Negate
+                    Project ()
+                      Get l5
+                  Constant
+                    - ()
 
 Source materialize.public.input
 

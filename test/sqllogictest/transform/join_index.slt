@@ -739,6 +739,9 @@ UNION ALL
 (SELECT * FROM t);
 ----
 Explained Query:
+  With
+    cte l0 =
+      ReadIndex on=materialize.public.big big_idx_a=[lookup value=(5)] // { arity: 15 }
   Return // { arity: 1 }
     Union // { arity: 1 }
       CrossJoin type=delta // { arity: 1 }
@@ -757,9 +760,6 @@ Explained Query:
             Get l0 // { arity: 15 }
       Project (#0) // { arity: 1 }
         Get l0 // { arity: 15 }
-  With
-    cte l0 =
-      ReadIndex on=materialize.public.big big_idx_a=[lookup value=(5)] // { arity: 15 }
 
 Used Indexes:
   - materialize.public.big_idx_a (*** full scan ***, lookup)
