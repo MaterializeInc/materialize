@@ -311,6 +311,7 @@ class KafkaSourcesSameTopic(Generator):
 
 class KafkaPartitions(Generator):
     COUNT = min(Generator.COUNT, 100)  # It takes 5+min to process 1K partitions
+    MAX_COUNT = 3200  # Too long-running with 6400 partitions
 
     @classmethod
     def body(cls) -> None:
