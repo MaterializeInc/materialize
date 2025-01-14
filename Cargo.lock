@@ -6199,6 +6199,7 @@ dependencies = [
  "bytes",
  "cfg-if",
  "chrono",
+ "columnar",
  "columnation",
  "compact_bytes",
  "criterion",
