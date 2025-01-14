@@ -123,6 +123,11 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
     UpdateConfiguration(StorageParameters),
     /// Run the enumerated sources, each associated with its identifier.
     RunIngestions(Vec<RunIngestionCommand>),
+    /// Run a dataflow which will ingest data from an external source and only __stage__ it in
+    /// Persist.
+    ///
+    /// Unlike regular ingestions/sources, some other component (e.g. `environmentd`) is
+    /// responsible for linking the staged data into a shard.
     RunOneshotIngestion(RunOneshotIngestionCommand),
     /// Enable compaction in storage-managed collections.
     ///
