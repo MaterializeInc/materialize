@@ -120,6 +120,8 @@ def get_default_system_parameters(
         "unsafe_enable_table_keys": "true",
         "enable_variadic_left_join_lowering": "true",
         "enable_worker_core_affinity": "true",
+        "kafka_default_metadata_fetch_interval": "1s",
+        "mysql_offset_known_interval": "1s",
         "persist_record_schema_id": (
             "true" if version > MzVersion.parse_mz("v0.127.0-dev") else "false"
         ),
@@ -143,6 +145,7 @@ def get_default_system_parameters(
         "persist_use_critical_since_snapshot": "false" if zero_downtime else "true",
         "persist_use_critical_since_source": "false" if zero_downtime else "true",
         "persist_part_decode_format": "row_with_validate",
+        "pg_offset_known_interval": "1s",
         "statement_logging_default_sample_rate": "0.01",
         "statement_logging_max_sample_rate": "0.01",
         "storage_source_decode_fuel": "100000",
@@ -150,6 +153,7 @@ def get_default_system_parameters(
         "storage_statistics_interval": "2000",
         "storage_use_continual_feedback_upsert": "true",
         "storage_use_reclock_v2": "true",
+        "storage_reclock_to_latest": "true",
         "with_0dt_deployment_max_wait": "900s",
         # End of list (ordered by name)
     }
