@@ -40,6 +40,7 @@ def main() -> None:
                 ["twine", "upload", *dist_files],
                 env={
                     **os.environ,
+                    "RELEASE_BUILD": "1",
                     "TWINE_USERNAME": "__token__",
                     "TWINE_PASSWORD": os.environ["PYPI_TOKEN"],
                 },
