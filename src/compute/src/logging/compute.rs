@@ -47,6 +47,7 @@ use crate::typedefs::RowRowSpine;
 pub type Logger = timely::logging_core::Logger<ComputeEventBuilder>;
 pub type ComputeEventBuilder = CapacityContainerBuilder<Vec<(Duration, ComputeEvent)>>;
 
+/// A dataflow exports a global ID.
 #[derive(Debug, Clone, PartialOrd, PartialEq)]
 pub struct Export {
     /// Identifier of the export.
@@ -55,12 +56,14 @@ pub struct Export {
     pub dataflow_index: usize,
 }
 
+/// The export for a global id was dropped.
 #[derive(Debug, Clone, PartialOrd, PartialEq)]
 pub struct ExportDropped {
     /// Identifier of the export.
     pub id: GlobalId,
 }
 
+/// A peek event with a [`Peek`], a [`PeekType`], and an installation status.
 #[derive(Debug, Clone, PartialOrd, PartialEq)]
 pub struct PeekEvent {
     /// The data for the peek itself.
@@ -72,6 +75,7 @@ pub struct PeekEvent {
     pub installed: bool,
 }
 
+/// Frontier change event.
 #[derive(Debug, Clone, PartialOrd, PartialEq)]
 pub struct Frontier {
     pub id: GlobalId,
@@ -79,6 +83,7 @@ pub struct Frontier {
     pub diff: i8,
 }
 
+/// An import frontier change.
 #[derive(Debug, Clone, PartialOrd, PartialEq)]
 pub struct ImportFrontier {
     pub import_id: GlobalId,
@@ -87,6 +92,7 @@ pub struct ImportFrontier {
     pub diff: i8,
 }
 
+/// A change in an arrangement's heap size.
 #[derive(Debug, Clone, PartialOrd, PartialEq)]
 pub struct ArrangementHeapSize {
     /// Operator index
@@ -95,6 +101,7 @@ pub struct ArrangementHeapSize {
     pub delta_size: isize,
 }
 
+/// A change in an arrangement's heap capacity.
 #[derive(Debug, Clone, PartialOrd, PartialEq)]
 pub struct ArrangementHeapCapacity {
     /// Operator index
@@ -103,6 +110,7 @@ pub struct ArrangementHeapCapacity {
     pub delta_capacity: isize,
 }
 
+/// A change in an arrangement's heap allocation count.
 #[derive(Debug, Clone, PartialOrd, PartialEq)]
 pub struct ArrangementHeapAllocations {
     /// Operator index
@@ -111,6 +119,7 @@ pub struct ArrangementHeapAllocations {
     pub delta_allocations: isize,
 }
 
+/// Announcing an operator that manages an arrangement.
 #[derive(Debug, Clone, PartialOrd, PartialEq)]
 pub struct ArrangementHeapSizeOperator {
     /// Operator index
@@ -119,18 +128,21 @@ pub struct ArrangementHeapSizeOperator {
     pub address: Rc<[usize]>,
 }
 
+/// Drop event for an operator managing an arrangement.
 #[derive(Debug, Clone, PartialOrd, PartialEq)]
 pub struct ArrangementHeapSizeOperatorDrop {
     /// Operator index
     pub operator: usize,
 }
 
+/// Dataflow shutdown event.
 #[derive(Debug, Clone, PartialOrd, PartialEq)]
 pub struct DataflowShutdown {
     /// Timely worker index of the dataflow.
     pub dataflow_index: usize,
 }
 
+/// Error count update event.
 #[derive(Debug, Clone, PartialOrd, PartialEq)]
 pub struct ErrorCount {
     /// Identifier of the export.
@@ -139,11 +151,13 @@ pub struct ErrorCount {
     pub diff: i64,
 }
 
+/// An export is hydrated.
 #[derive(Debug, Clone, PartialOrd, PartialEq)]
 pub struct Hydration {
     pub export_id: GlobalId,
 }
 
+/// Announce a mapping of an LIR operator to a dataflow operator for a global ID.
 #[derive(Debug, Clone, PartialOrd, PartialEq)]
 pub struct LirMapping {
     /// The `GlobalId` in which the LIR operator is rendered.
@@ -158,6 +172,7 @@ pub struct LirMapping {
     pub mapping: Box<[(LirId, LirMetadata)]>,
 }
 
+/// Announce that a dataflow supports a specific global ID.
 #[derive(Debug, Clone, PartialOrd, PartialEq)]
 pub struct DataflowGlobal {
     /// The identifier of the dataflow.
@@ -202,13 +217,17 @@ pub enum ComputeEvent {
     DataflowGlobal(DataflowGlobal),
 }
 
+/// A peek type distinguishing between index and persist peeks.
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Debug)]
 pub enum PeekType {
+    /// A peek against an index.
     Index,
+    /// A peek against persist.
     Persist,
 }
 
 impl PeekType {
+    /// A human-readable name for a peek type.
     fn name(self) -> &'static str {
         match self {
             PeekType::Index => "index",
@@ -252,6 +271,7 @@ pub struct LirMetadata {
 }
 
 impl LirMetadata {
+    /// Construct a new LIR metadata object.
     pub fn new(
         operator: Box<str>,
         parent_lir_id: Option<LirId>,
@@ -641,8 +661,11 @@ struct ArrangementSizeState {
     count: isize,
 }
 
+/// An update of value `D` at a time and with a diff.
 type Update<D> = (D, Timestamp, Diff);
+/// A pusher for updates of value `D` for vector-based containers.
 type Pusher<D> = Counter<Timestamp, Vec<Update<D>>, Tee<Timestamp, Vec<Update<D>>>>;
+/// An output session for vector-based containers of updates `D`, using a capacity container builder.
 type OutputSession<'a, D> =
     Session<'a, Timestamp, CapacityContainerBuilder<Vec<Update<D>>>, Pusher<D>>;
 
