@@ -14,12 +14,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 from distutils.core import setup
 from pathlib import Path
 
 from setuptools import find_packages
 
 README = Path(__file__).parent / "README.md"
+
+extras_require = {}
+if not os.environ.get("RELEASE_BUILD"):
+    extras_require["dev"] = [
+        "dbt-tests-adapter @ git+https://github.com/dbt-labs/dbt-adapters.git#egg=dbt-tests-adapter&subdirectory=dbt-tests-adapter"
+    ]
 
 setup(
     name="dbt-materialize",
@@ -48,9 +55,5 @@ setup(
         "dbt-core>=1.8.0",
         "dbt-postgres>=1.8,<1.10",
     ],
-    extras_require={
-        "dev": [
-            "dbt-tests-adapter @ git+https://github.com/dbt-labs/dbt-adapters.git#egg=dbt-tests-adapter&subdirectory=dbt-tests-adapter"
-        ],
-    },
+    extras_require=extras_require,
 )
