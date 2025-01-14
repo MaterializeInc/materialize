@@ -522,7 +522,12 @@ impl Coordinator {
             mut builtin_table_updates,
             audit_events,
         } = catalog
-            .transact(Some(&mut *controller.storage), oracle_write_ts, conn, ops)
+            .transact(
+                Some(&mut controller.storage_collections),
+                oracle_write_ts,
+                conn,
+                ops,
+            )
             .await?;
 
         // Update in-memory cluster replica statuses.
@@ -1221,7 +1226,7 @@ impl Coordinator {
         }
     }
 
-    fn update_metrics_retention(&mut self) {
+    fn update_metrics_retention(&self) {
         let duration = self.catalog().system_config().metrics_retention();
         let policy = ReadPolicy::lag_writes_by(
             Timestamp::new(u64::try_from(duration.as_millis()).unwrap_or_else(|_e| {

@@ -274,7 +274,9 @@ impl crate::coord::Coordinator {
             .iter()
             .map(|id| (*id, read_policy.clone()))
             .collect();
-        self.controller.storage.set_read_policy(storage_policies);
+        self.controller
+            .storage_collections
+            .set_read_policies(storage_policies);
 
         for (instance_id, collection_ids) in &id_bundle.compute_ids {
             let compute_policies = collection_ids
@@ -289,7 +291,7 @@ impl crate::coord::Coordinator {
     }
 
     pub(crate) fn update_storage_read_policies(
-        &mut self,
+        &self,
         policies: Vec<(CatalogItemId, ReadPolicy<Timestamp>)>,
     ) {
         let policies = policies
@@ -303,7 +305,9 @@ impl crate::coord::Coordinator {
             })
             .flatten()
             .collect();
-        self.controller.storage.set_read_policy(policies);
+        self.controller
+            .storage_collections
+            .set_read_policies(policies);
     }
 
     pub(crate) fn update_compute_read_policies(
@@ -356,7 +360,7 @@ impl crate::coord::Coordinator {
         let desired_storage_holds = id_bundle.storage_ids.iter().map(|id| *id).collect_vec();
         let storage_read_holds = self
             .controller
-            .storage
+            .storage_collections
             .acquire_read_holds(desired_storage_holds)
             .expect("missing storage collections");
         read_holds.storage_holds = storage_read_holds

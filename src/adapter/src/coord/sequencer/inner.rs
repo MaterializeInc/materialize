@@ -2580,7 +2580,7 @@ impl Coordinator {
                 .into_owned();
             let stats_future = self
                 .controller
-                .storage
+                .storage_collections
                 .snapshot_parts_stats(id, as_of.clone())
                 .await;
 
@@ -4805,12 +4805,14 @@ impl CachedStatisticsOracle {
     pub async fn new<T: TimelyTimestamp>(
         ids: &BTreeSet<GlobalId>,
         as_of: &Antichain<T>,
-        storage: &dyn mz_storage_client::controller::StorageController<Timestamp = T>,
+        storage_collections: &dyn mz_storage_client::storage_collections::StorageCollections<
+            Timestamp = T,
+        >,
     ) -> Result<Self, StorageError<T>> {
         let mut cache = BTreeMap::new();
 
         for id in ids {
-            let stats = storage.snapshot_stats(*id, as_of.clone()).await;
+            let stats = storage_collections.snapshot_stats(*id, as_of.clone()).await;
 
             match stats {
                 Ok(stats) => {
@@ -4860,7 +4862,11 @@ impl Coordinator {
 
         let cached_stats = mz_ore::future::timeout(
             timeout,
-            CachedStatisticsOracle::new(source_ids, query_as_of, self.controller.storage.as_ref()),
+            CachedStatisticsOracle::new(
+                source_ids,
+                query_as_of,
+                self.controller.storage_collections.as_ref(),
+            ),
         )
         .await;
 
