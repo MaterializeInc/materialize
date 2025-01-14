@@ -31,7 +31,6 @@ rust_library(
     deps = [
         "//src/build-info:mz_build_info",
         "//src/catalog:mz_catalog",
-        "//src/cloud-resources:mz_cloud_resources",
         "//src/controller:mz_controller",
         "//src/dyncfgs:mz_dyncfgs",
         "//src/environmentd:mz_environmentd",
@@ -76,7 +75,6 @@ rust_test(
     deps = [
         "//src/build-info:mz_build_info",
         "//src/catalog:mz_catalog",
-        "//src/cloud-resources:mz_cloud_resources",
         "//src/controller:mz_controller",
         "//src/dyncfgs:mz_dyncfgs",
         "//src/environmentd:mz_environmentd",
@@ -106,7 +104,6 @@ rust_doc_test(
     deps = [
         "//src/build-info:mz_build_info",
         "//src/catalog:mz_catalog",
-        "//src/cloud-resources:mz_cloud_resources",
         "//src/controller:mz_controller",
         "//src/dyncfgs:mz_dyncfgs",
         "//src/environmentd:mz_environmentd",
@@ -156,7 +153,6 @@ rust_test(
         ":mz_sqllogictest",
         "//src/build-info:mz_build_info",
         "//src/catalog:mz_catalog",
-        "//src/cloud-resources:mz_cloud_resources",
         "//src/controller:mz_controller",
         "//src/dyncfgs:mz_dyncfgs",
         "//src/environmentd:mz_environmentd",
@@ -200,7 +196,6 @@ rust_binary(
         ":mz_sqllogictest",
         "//src/build-info:mz_build_info",
         "//src/catalog:mz_catalog",
-        "//src/cloud-resources:mz_cloud_resources",
         "//src/controller:mz_controller",
         "//src/dyncfgs:mz_dyncfgs",
         "//src/environmentd:mz_environmentd",

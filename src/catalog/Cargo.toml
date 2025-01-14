@@ -19,7 +19,6 @@ chrono = { version = "0.4.35", default-features = false, features = ["std"] }
 clap = { version = "4.5.23", features = ["derive"] }
 derivative = "2.2.0"
 differential-dataflow = "0.13.3"
-fail = { version = "0.5.1", features = ["failpoints"] }
 futures = "0.3.25"
 ipnet = "2.5.0"
 itertools = "0.12.1"
@@ -43,11 +42,9 @@ mz-pgrepr = { path = "../pgrepr" }
 mz-pgtz = { path = "../pgtz" }
 mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr", features = ["tracing_"] }
-mz-secrets = { path = "../secrets" }
 mz-sql = { path = "../sql" }
 mz-sql-parser = { path = "../sql-parser" }
 mz-storage-client = { path = "../storage-client" }
-mz-storage-controller = { path = "../storage-controller" }
 mz-storage-types = { path = "../storage-types" }
 mz-transform = { path = "../transform" }
 paste = "1.0.11"
@@ -55,13 +52,11 @@ prometheus = { version = "0.13.3", default-features = false }
 proptest = { version = "1.6.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
 prost = "0.13.2"
-postgres-openssl = { version = "0.5.0" }
 rand = "0.8.5"
 semver = { version = "1.0.16" }
 serde = "1.0.152"
 serde_json = "1.0.125"
 serde_plain = "1.0.1"
-smallvec = { version = "1.10.0", features = ["union"] }
 static_assertions = "1.1"
 sha2 = "0.10.6"
 thiserror = "1.0.37"
@@ -75,8 +70,6 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = tru
 base64 = "0.13.1"
 insta = "1.32"
 mz-build-tools = { path = "../build-tools", default-features = false }
-mz-postgres-util = { path = "../postgres-util" }
-tokio-postgres = { version = "0.7.8" }
 
 [features]
 default = ["mz-build-tools/default", "workspace-hack"]
