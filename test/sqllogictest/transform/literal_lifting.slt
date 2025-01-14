@@ -1013,18 +1013,20 @@ SELECT * FROM c0 UNION ALL SELECT * FROM c1
 ----
 Explained Query:
   Return // { arity: 2 }
-    Union // { arity: 2 }
-      Map (42) // { arity: 2 }
-        Get l0 // { arity: 1 }
-      Get l1 // { arity: 2 }
-  With Mutually Recursive
-    cte l1 =
-      Map (42) // { arity: 2 }
-        Distinct project=[#0] // { arity: 1 }
-          Union // { arity: 1 }
-            Get l0 // { arity: 1 }
-            Project (#0) // { arity: 1 }
-              Get l1 // { arity: 2 }
+    Return // { arity: 2 }
+      Union // { arity: 2 }
+        Map (42) // { arity: 2 }
+          Get l0 // { arity: 1 }
+        Get l1 // { arity: 2 }
+    With Mutually Recursive
+      cte l1 =
+        Map (42) // { arity: 2 }
+          Distinct project=[#0] // { arity: 1 }
+            Union // { arity: 1 }
+              Get l0 // { arity: 1 }
+              Project (#0) // { arity: 1 }
+                Get l1 // { arity: 2 }
+  With
     cte l0 =
       Distinct project=[#0] // { arity: 1 }
         Union // { arity: 1 }

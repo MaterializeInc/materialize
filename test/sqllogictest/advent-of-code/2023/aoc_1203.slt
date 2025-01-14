@@ -243,16 +243,16 @@ Explained Query:
                   - ()
         ArrangeBy keys=[[]]
           Union
-            Get l19
+            Get l18
             Map (null)
               Union
                 Negate
                   Project ()
-                    Get l19
+                    Get l18
                 Constant
                   - ()
-    With
-      cte l19 =
+    With Mutually Recursive
+      cte l18 =
         Reduce aggregates=[sum(#0)]
           Project (#2)
             Distinct project=[#0, #1, (#2 * #3)]
@@ -262,13 +262,13 @@ Explained Query:
                     ArrangeBy keys=[[#0, #1]]
                       Reduce group_by=[#0, #1] aggregates=[count(*)]
                         Project (#0, #1)
-                          Get l17
-                    Get l18
-                    Get l18
-      cte l18 =
-        ArrangeBy keys=[[#0, #1]]
-          Get l17
+                          Get l16
+                    Get l17
+                    Get l17
       cte l17 =
+        ArrangeBy keys=[[#0, #1]]
+          Get l16
+      cte l16 =
         Distinct project=[#0, #1, #4, #2, #3]
           Project (#0, #1, #3, #4, #6)
             Filter (#7 = (#1 + #2))
@@ -279,16 +279,10 @@ Explained Query:
                       Project (#0, #1)
                         Filter (#2 = "*")
                           Get l6
-                    Get l16
-                    Get l16
+                    Get l7
+                    Get l7
                     ArrangeBy keys=[[#0]]
                       Get l14
-      cte l16 =
-        ArrangeBy keys=[[]]
-          Constant
-            - (0)
-            - (-1)
-            - (1)
       cte l15 =
         Reduce aggregates=[sum(#0)]
           Project (#3)
@@ -307,7 +301,7 @@ Explained Query:
                         Join on=(#0 = #3 AND #4 = (#1 + #2)) type=differential
                           ArrangeBy keys=[[#0, (#1 + #2)]]
                             Get l13
-                          Get l11
+                          Get l9
                   Get l13
       cte l13 =
         Distinct project=[#0..=#2]
@@ -317,7 +311,7 @@ Explained Query:
         Project (#0..=#3)
           Join on=(#1 = #4 AND #2 = #5) type=differential
             ArrangeBy keys=[[#1, #2]]
-              Get l9
+              Get l10
             ArrangeBy keys=[[#0, #1]]
               Union
                 Negate
@@ -325,45 +319,45 @@ Explained Query:
                     Project (#0, #1)
                       Join on=(#0 = #2 AND #3 = (#1 - 1)) type=differential
                         ArrangeBy keys=[[#0, (#1 - 1)]]
-                          Get l10
-                        Get l11
-                Get l10
+                          Get l11
+                        Get l9
+                Get l11
       cte l11 =
-        ArrangeBy keys=[[#0, #1]]
-          Project (#0, #1)
-            Get l5
-      cte l10 =
         Distinct project=[#0, #1]
           Project (#1, #2)
-            Get l9
-  With Mutually Recursive
+            Get l10
+      cte l10 =
+        Distinct project=[#0..=#3]
+          Union
+            Distinct project=[#0..=#3]
+              Union
+                Project (#2, #0, #1, #7)
+                  Map (1)
+                    Join on=(#0 = (#3 + #5) AND #1 = (#4 + #6)) type=delta
+                      ArrangeBy keys=[[]]
+                        Get l5
+                      ArrangeBy keys=[[]]
+                        Project (#0, #1)
+                          Get l6
+                      Get l7
+                      Get l7
+                Project (#7, #0, #1, #8)
+                  Map ((#2 || #3), (#6 + 1))
+                    Join on=(#0 = #4 AND #1 = (#5 - 1)) type=differential
+                      Get l8
+                      ArrangeBy keys=[[#1, (#2 - 1)]]
+                        Get l10
+            Project (#7, #0, #5, #8)
+              Map ((#3 || #2), (#6 + 1))
+                Join on=(#0 = #4 AND #1 = (#5 + #6)) type=differential
+                  Get l8
+                  ArrangeBy keys=[[#1, (#2 + #3)]]
+                    Get l10
+  With
     cte l9 =
-      Distinct project=[#0..=#3]
-        Union
-          Distinct project=[#0..=#3]
-            Union
-              Project (#2, #0, #1, #7)
-                Map (1)
-                  Join on=(#0 = (#3 + #5) AND #1 = (#4 + #6)) type=delta
-                    ArrangeBy keys=[[]]
-                      Get l5
-                    ArrangeBy keys=[[]]
-                      Project (#0, #1)
-                        Get l6
-                    Get l7
-                    Get l7
-              Project (#7, #0, #1, #8)
-                Map ((#2 || #3), (#6 + 1))
-                  Join on=(#0 = #4 AND #1 = (#5 - 1)) type=differential
-                    Get l8
-                    ArrangeBy keys=[[#1, (#2 - 1)]]
-                      Get l9
-          Project (#7, #0, #5, #8)
-            Map ((#3 || #2), (#6 + 1))
-              Join on=(#0 = #4 AND #1 = (#5 + #6)) type=differential
-                Get l8
-                ArrangeBy keys=[[#1, (#2 + #3)]]
-                  Get l9
+      ArrangeBy keys=[[#0, #1]]
+        Project (#0, #1)
+          Get l5
     cte l8 =
       ArrangeBy keys=[[#0, #1]]
         Get l5
