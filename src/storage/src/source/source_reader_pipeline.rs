@@ -368,10 +368,16 @@ where
         .set(mz_persist_client::metrics::encode_ts_metric(&resume_upper));
 
     builder.build(move |mut caps| {
-        let health_cap = caps.remove(1);
-        move |_frontiers| {
+        let mut health_cap = Some(caps.remove(1));
+        move |frontiers| {
             let mut statuses_by_idx = BTreeMap::new();
             let mut health_output = health_output.activate();
+
+            if frontiers.iter().all(|f| f.is_empty()) {
+                health_cap = None;
+                return;
+            }
+            let health_cap = health_cap.as_mut().unwrap();
 
             for (id, input, output) in export_handles.iter_mut() {
                 while let Some((cap, data)) = input.next() {
