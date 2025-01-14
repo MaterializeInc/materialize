@@ -13,10 +13,9 @@ use std::sync::Arc;
 
 use differential_dataflow::AsCollection;
 use futures::stream::StreamExt;
-use itertools::Itertools;
 use mz_ore::cast::CastFrom;
 use mz_ore::iter::IteratorExt;
-use mz_repr::{Datum, Diff, GlobalId, Row};
+use mz_repr::{Datum, Diff, Row};
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::load_generator::{KeyValueLoadGenerator, LoadGeneratorOutput};
 use mz_storage_types::sources::{MzOffset, SourceTimestamp};
@@ -25,7 +24,6 @@ use mz_timely_util::containers::stack::AccountedStackBuilder;
 use rand::rngs::StdRng;
 use rand::{RngCore, SeedableRng};
 use timely::container::CapacityContainerBuilder;
-use timely::dataflow::operators::core::Partition;
 use timely::dataflow::operators::{Concat, ToStream};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
@@ -43,7 +41,7 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
     start_signal: impl std::future::Future<Output = ()> + 'static,
     output_map: BTreeMap<LoadGeneratorOutput, Vec<usize>>,
 ) -> (
-    BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
+    StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
     Option<Stream<G, Infallible>>,
     Stream<G, HealthStatusMessage>,
     Stream<G, ProgressStatisticsUpdate>,
@@ -55,23 +53,6 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
     let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
 
     let (data_output, stream) = builder.new_output::<AccountedStackBuilder<_>>();
-    let partition_count = u64::cast_from(config.source_exports.len());
-    let data_streams: Vec<_> = stream.partition::<CapacityContainerBuilder<_>, _, _>(
-        partition_count,
-        |((output, data), time, diff): &(
-            (usize, Result<SourceMessage, DataflowError>),
-            MzOffset,
-            Diff,
-        )| {
-            let output = u64::cast_from(*output);
-            (output, (data.clone(), time.clone(), diff.clone()))
-        },
-    );
-    let mut data_collections = BTreeMap::new();
-    for (id, data_stream) in config.source_exports.keys().zip_eq(data_streams) {
-        data_collections.insert(*id, data_stream.as_collection());
-    }
-
     let (_progress_output, progress_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
     let (stats_output, stats_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
 
@@ -226,7 +207,7 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
     });
 
     let status = [HealthStatusMessage {
-        id: None,
+        index: 0,
         namespace: StatusNamespace::Generator,
         update: HealthStatusUpdate::running(),
     }]
@@ -234,7 +215,7 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
     let stats_stream = stats_stream.concat(&steady_state_stats_stream);
 
     (
-        data_collections,
+        stream.as_collection(),
         Some(progress_stream),
         status,
         stats_stream,

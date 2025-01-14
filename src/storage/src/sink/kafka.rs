@@ -190,7 +190,7 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for KafkaSinkConnection {
         );
 
         let running_status = Some(HealthStatusMessage {
-            id: None,
+            index: 0,
             update: HealthStatusUpdate::Running,
             namespace: StatusNamespace::Kafka,
         })
@@ -802,7 +802,7 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
         };
 
         HealthStatusMessage {
-            id: None,
+            index: 0,
             update: HealthStatusUpdate::halting(format!("{}", error.display_with_causes()), hint),
             namespace: if matches!(*error, ContextCreationError::Ssh(_)) {
                 StatusNamespace::Ssh
@@ -1435,7 +1435,7 @@ fn encode_collection<G: Scope>(
     });
 
     let statuses = errors.map(|error| HealthStatusMessage {
-        id: None,
+        index: 0,
         update: HealthStatusUpdate::halting(format!("{}", error.display_with_causes()), None),
         namespace: StatusNamespace::Kafka,
     });

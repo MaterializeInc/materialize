@@ -50,24 +50,19 @@
 //! The error streams from both of those operators are published to the source status and also
 //! trigger a restart of the dataflow.
 
-use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::fmt;
 use std::io;
 use std::rc::Rc;
 
-use differential_dataflow::AsCollection;
-use itertools::Itertools;
-use mz_ore::cast::CastFrom;
 use mz_repr::Diff;
-use mz_repr::GlobalId;
 use mz_storage_types::errors::{DataflowError, SourceError};
+use mz_storage_types::sources::IndexedSourceExport;
 use mz_storage_types::sources::SourceExport;
 use mz_timely_util::containers::stack::{AccountedStackBuilder, StackWrapper};
 use serde::{Deserialize, Serialize};
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pushers::Tee;
-use timely::dataflow::operators::core::Partition;
 use timely::dataflow::operators::{CapabilitySet, Concat, Map, ToStream};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
@@ -108,7 +103,7 @@ impl SourceRender for MySqlSourceConnection {
         resume_uppers: impl futures::Stream<Item = Antichain<GtidPartition>> + 'static,
         _start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
-        BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
+        StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
         Option<Stream<G, Infallible>>,
         Stream<G, HealthStatusMessage>,
         Stream<G, ProgressStatisticsUpdate>,
@@ -117,12 +112,19 @@ impl SourceRender for MySqlSourceConnection {
     ) {
         // Collect the source outputs that we will be exporting.
         let mut source_outputs = Vec::new();
-        for (idx, (id, export)) in config.source_exports.iter().enumerate() {
-            let SourceExport {
-                details,
-                storage_metadata: _,
-                data_config: _,
-            } = export;
+        for (
+            id,
+            IndexedSourceExport {
+                ingestion_output,
+                export:
+                    SourceExport {
+                        details,
+                        storage_metadata: _,
+                        data_config: _,
+                    },
+            },
+        ) in &config.source_exports
+        {
             let details = match details {
                 SourceExportDetails::MySql(details) => details,
                 // This is an export that doesn't need any data output to it.
@@ -142,8 +144,8 @@ impl SourceRender for MySqlSourceConnection {
             );
             let name = MySqlTableName::new(&desc.schema_name, &desc.name);
             source_outputs.push(SourceOutputInfo {
-                output_index: idx,
                 table_name: name.clone(),
+                output_index: *ingestion_output,
                 desc,
                 text_columns: details.text_columns.clone(),
                 exclude_columns: details.exclude_columns.clone(),
@@ -173,32 +175,14 @@ impl SourceRender for MySqlSourceConnection {
         );
 
         let (stats_stream, stats_err, probe_stream, stats_token) =
-            statistics::render(scope.clone(), config.clone(), self, resume_uppers);
+            statistics::render(scope.clone(), config, self, resume_uppers);
 
         let stats_stream = stats_stream.concat(&snapshot_stats);
 
         let updates = snapshot_updates.concat(&repl_updates);
-        let partition_count = u64::cast_from(config.source_exports.len());
-        let data_streams: Vec<_> = updates
-            .inner
-            .partition::<CapacityContainerBuilder<_>, _, _>(
-                partition_count,
-                |((output, data), time, diff): &(
-                    (usize, Result<SourceMessage, DataflowError>),
-                    _,
-                    Diff,
-                )| {
-                    let output = u64::cast_from(*output);
-                    (output, (data.clone(), time.clone(), diff.clone()))
-                },
-            );
-        let mut data_collections = BTreeMap::new();
-        for (id, data_stream) in config.source_exports.keys().zip_eq(data_streams) {
-            data_collections.insert(*id, data_stream.as_collection());
-        }
 
         let health_init = std::iter::once(HealthStatusMessage {
-            id: None,
+            index: 0,
             namespace: Self::STATUS_NAMESPACE,
             update: HealthStatusUpdate::Running,
         })
@@ -222,7 +206,7 @@ impl SourceRender for MySqlSourceConnection {
                 };
 
                 HealthStatusMessage {
-                    id: None,
+                    index: 0,
                     namespace: namespace.clone(),
                     update,
                 }
@@ -230,7 +214,7 @@ impl SourceRender for MySqlSourceConnection {
         let health = health_init.concat(&health_errs);
 
         (
-            data_collections,
+            updates,
             Some(uppers),
             health,
             stats_stream,
