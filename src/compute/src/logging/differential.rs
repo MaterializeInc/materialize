@@ -33,7 +33,7 @@ use timely::dataflow::operators::Filter;
 use timely::dataflow::Stream;
 
 use crate::extensions::arrange::MzArrange;
-use crate::logging::compute::ComputeEvent;
+use crate::logging::compute::{ArrangementHeapSizeOperatorDrop, ComputeEvent};
 use crate::logging::{
     DifferentialLog, EventQueue, LogCollection, LogVariant, PermutedRowPacker, SharedLoggingState,
 };
@@ -249,77 +249,81 @@ impl DemuxHandler<'_, '_> {
 
     fn handle_batch(&mut self, event: BatchEvent) {
         let ts = self.ts();
-        let op = event.operator;
-        self.output.batches.give(((op, ()), ts, 1));
+        let operator_id = event.operator;
+        self.output.batches.give(((operator_id, ()), ts, 1));
 
         let diff = Diff::try_from(event.length).expect("must fit");
-        self.output.records.give(((op, ()), ts, diff));
-        self.notify_arrangement_size(op);
+        self.output.records.give(((operator_id, ()), ts, diff));
+        self.notify_arrangement_size(operator_id);
     }
 
     fn handle_merge(&mut self, event: MergeEvent) {
         let Some(done) = event.complete else { return };
 
         let ts = self.ts();
-        let op = event.operator;
-        self.output.batches.give(((op, ()), ts, -1));
+        let operator_id = event.operator;
+        self.output.batches.give(((operator_id, ()), ts, -1));
 
         let diff = Diff::try_from(done).expect("must fit")
             - Diff::try_from(event.length1 + event.length2).expect("must fit");
         if diff != 0 {
-            self.output.records.give(((op, ()), ts, diff));
+            self.output.records.give(((operator_id, ()), ts, diff));
         }
-        self.notify_arrangement_size(op);
+        self.notify_arrangement_size(operator_id);
     }
 
     fn handle_drop(&mut self, event: DropEvent) {
         let ts = self.ts();
-        let op = event.operator;
-        self.output.batches.give(((op, ()), ts, -1));
+        let operator_id = event.operator;
+        self.output.batches.give(((operator_id, ()), ts, -1));
 
         let diff = -Diff::try_from(event.length).expect("must fit");
         if diff != 0 {
-            self.output.records.give(((op, ()), ts, diff));
+            self.output.records.give(((operator_id, ()), ts, diff));
         }
-        self.notify_arrangement_size(op);
+        self.notify_arrangement_size(operator_id);
     }
 
     fn handle_trace_share(&mut self, event: TraceShare) {
         let ts = self.ts();
-        let op = event.operator;
+        let operator_id = event.operator;
         let diff = Diff::cast_from(event.diff);
         debug_assert_ne!(diff, 0);
-        self.output.sharing.give(((op, ()), ts, diff));
+        self.output.sharing.give(((operator_id, ()), ts, diff));
 
         if let Some(logger) = &mut self.shared_state.compute_logger {
-            let sharing = self.state.sharing.entry(op).or_default();
+            let sharing = self.state.sharing.entry(operator_id).or_default();
             *sharing = (i64::try_from(*sharing).expect("must fit") + diff)
                 .try_into()
                 .expect("under/overflow");
             if *sharing == 0 {
-                self.state.sharing.remove(&op);
-                logger.log(ComputeEvent::ArrangementHeapSizeOperatorDrop { operator: op });
+                self.state.sharing.remove(&operator_id);
+                logger.log(ComputeEvent::ArrangementHeapSizeOperatorDrop(
+                    ArrangementHeapSizeOperatorDrop { operator_id },
+                ));
             }
         }
     }
 
     fn handle_batcher_event(&mut self, event: BatcherEvent) {
         let ts = self.ts();
-        let op = event.operator;
+        let operator_id = event.operator;
         let records_diff = Diff::cast_from(event.records_diff);
         let size_diff = Diff::cast_from(event.size_diff);
         let capacity_diff = Diff::cast_from(event.capacity_diff);
         let allocations_diff = Diff::cast_from(event.allocations_diff);
         self.output
             .batcher_records
-            .give(((op, ()), ts, records_diff));
-        self.output.batcher_size.give(((op, ()), ts, size_diff));
+            .give(((operator_id, ()), ts, records_diff));
+        self.output
+            .batcher_size
+            .give(((operator_id, ()), ts, size_diff));
         self.output
             .batcher_capacity
-            .give(((op, ()), ts, capacity_diff));
+            .give(((operator_id, ()), ts, capacity_diff));
         self.output
             .batcher_allocations
-            .give(((op, ()), ts, allocations_diff));
+            .give(((operator_id, ()), ts, allocations_diff));
     }
 
     fn notify_arrangement_size(&self, operator: usize) {
