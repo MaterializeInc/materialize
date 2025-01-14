@@ -372,7 +372,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                     let halt_status =
                         HealthStatusUpdate::halting(err.display_with_causes().to_string(), None);
                     HealthStatusMessage {
-                        id: Some(export_id),
+                        id: None,
                         namespace: StatusNamespace::Internal,
                         update: halt_status,
                     }
