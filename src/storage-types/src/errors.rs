@@ -417,7 +417,9 @@ mod boxed_str {
         #[inline(always)]
         unsafe fn copy(&mut self, item: &Box<str>) -> Box<str> {
             let bytes = self.region.copy_slice(item.as_bytes());
-            Box::from(std::str::from_utf8_unchecked(bytes))
+            // SAFETY: The bytes are copied from the region, and the region is stable.
+            // We never drop the box.
+            std::str::from_boxed_utf8_unchecked(Box::from_raw(bytes))
         }
         #[inline(always)]
         fn reserve_items<'a, I>(&mut self, items: I)
