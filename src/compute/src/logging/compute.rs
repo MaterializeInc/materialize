@@ -1483,6 +1483,6 @@ mod tests {
     #[mz_ore::test]
     fn test_compute_event_size() {
         // This could be a static assertion, but we don't use those yet in this crate.
-        assert_eq!(48, std::mem::size_of::<ComputeEvent>())
+        assert_eq!(56, std::mem::size_of::<ComputeEvent>())
     }
 }
