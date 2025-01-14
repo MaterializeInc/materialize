@@ -1,7 +1,11 @@
 ---
 title: "Install locally on minikube"
 description: ""
-robots: "noindex, nofollow"
+aliases:
+  - /self-hosted/install-on-local-minikube/
+menu:
+  main:
+    parent: "installation"
 ---
 
 The following tutorial deploys Materialize onto a local
@@ -116,7 +120,7 @@ Check out the {{< self-managed/latest_version >}} tag.
       ```
 
       If you run into an error during deployment, refer to the
-      [Troubleshooting](/self-hosted/troubleshooting) guide.
+      [Troubleshooting](/installation/troubleshooting) guide.
 
 1. Install PostgreSQL and minIO.
 
@@ -237,9 +241,8 @@ Check out the {{< self-managed/latest_version >}} tag.
 
 ## See also
 
-- [Materialize Kubernetes Operator Helm Chart](/self-hosted/)
-- [Materialize Operator Configuration](/self-hosted/configuration/)
-- [Troubleshooting](/self-managed/troubleshooting/)
-- [Operational guidelines](/self-managed/operational-guidelines/)
-- [Installation](/self-managed/installation/)
-- [Upgrading](/self-managed/upgrading/)
+- [Materialize Operator Configuration](/installation/configuration/)
+- [Troubleshooting](/installation/troubleshooting/)
+- [Operational guidelines](/installation/operational-guidelines/)
+- [Installation](/installation/)
+- [Upgrading](/installation/upgrading/)

@@ -1,7 +1,11 @@
 ---
 title: "Operational guidelines"
 description: ""
-robots: "noindex, nofollow"
+aliases:
+  - /self-hosted/operational-guidelines/
+menu:
+  main:
+    parent: "installation"
 ---
 
 ## Recommended instance types
@@ -136,8 +140,7 @@ Enabling network policies ...
 
 ## See also
 
-- [Materialize Kubernetes Operator Helm Chart](/self-managed/)
-- [Configuration](/self-managed/configuration/)
-- [Installation](/self-managed/installation/)
-- [Troubleshooting](/self-managed/troubleshooting/)
-- [Upgrading](/self-managed/upgrading/)
+- [Configuration](/installation/configuration/)
+- [Installation](/installation/)
+- [Troubleshooting](/installation/troubleshooting/)
+- [Upgrading](/installation/upgrading/)

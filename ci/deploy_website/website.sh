@@ -37,7 +37,7 @@ declare -A shortlinks=(
 )
 
 cd doc/user
-hugo --gc --baseURL /docs --destination public/docs
+hugo --gc --baseURL /docs/self-managed/v25.1 --destination public/docs/self-managed/v25.1
 hugo deploy --maxDeletes -1
 
 touch empty

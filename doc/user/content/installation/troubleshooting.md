@@ -3,7 +3,9 @@ title: "Troubleshooting"
 description: ""
 aliases:
   - /self-hosted/troubleshooting/
-robots: "noindex, nofollow"
+menu:
+  main:
+    parent: "installation"
 ---
 
 If you encounter issues with the Materialize operator, check the operator logs:
@@ -22,8 +24,7 @@ For additional `kubectl` commands, see [kubectl Quick reference](https://kuberne
 
 ## See also
 
-- [Materialize Kubernetes Operator Helm Chart](/self-managed/)
-- [Configuration](/self-managed/configuration/)
-- [Operational guidelines](/self-managed/operational-guidelines/)
-- [Installation](/self-managed/installation/)
-- [Upgrading](/self-managed/upgrading/)
+- [Configuration](/installation/configuration/)
+- [Operational guidelines](/installation/operational-guidelines/)
+- [Installation](/installation/)
+- [Upgrading](/installation/upgrading/)

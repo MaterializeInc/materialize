@@ -1,7 +1,11 @@
 ---
 title: "Install on GCP"
 description: ""
-robots: "noindex, nofollow"
+aliases:
+  - /self-hosted/install-on-gcp/
+menu:
+  main:
+    parent: "installation"
 ---
 
 Self-managed Materialize requires:
@@ -517,9 +521,8 @@ When prompted to proceed, type `yes` to confirm the deletion.
 
 ## See also
 
-- [Materialize Kubernetes Operator Helm Chart](/self-managed/)
-- [Materialize Operator Configuration](/self-managed/configuration/)
-- [Troubleshooting](/self-managed/troubleshooting/)
-- [Operational guidelines](/self-managed/operational-guidelines/)
-- [Installation](/self-managed/installation/)
-- [Upgrading](/self-managed/upgrading/)
+- [Materialize Operator Configuration](/installation/configuration/)
+- [Troubleshooting](/installation/troubleshooting/)
+- [Operational guidelines](/installation/operational-guidelines/)
+- [Installation](/installation/)
+- [Upgrading](/installation/upgrading/)

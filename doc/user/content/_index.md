@@ -1,72 +1,54 @@
 ---
-title: "Materialize Docs"
-htmltitle: "Home"
-disable_toc: true
-disable_list: true
-disable_h1: true
-weight: 1
+title: "Self-managed Materialize"
+description: ""
+aliases:
+  - /self-hosted/
+robots: "noindex, nofollow"
 ---
 
-# Materialize documentation
+With self-managed Materialize, you can deploy and operate Materialize in your
+Kubernetes environment. For self-managed Materialize, Materialize offers:
 
-Materialize is the Cloud Operational Data Store that lets you use SQL to
-transform, deliver, and act on fast-changing data.
+- A Kubernetes Operator that manages your Materialize running in your Kubernetes
+  environment.
 
-{{< callout >}}
+- Materialize packaged as a containerized application that can be deployed in a
+  Kubernetes cluster.
 
-## What's new!
+## Requirements
 
-- [Materialize Emulator](/get-started/install-materialize-emulator/). The
-Materialize Emulator is an all-in-one Docker image available on Docker Hub,
-offering the fastest way to get hands-on experience with Materialize in a local
-environment. For more information, see [Materialize
-Emulator](/get-started/install-materialize-emulator/).
+The self-managed Materialize requires the following:
 
-- [Changelog](https://materialize.com/changelog/)
+{{% self-managed/requirements-list %}}
 
-{{</ callout >}}
+See the [Installation guide](/installation/) for more information.
 
-{{< callout
-primary_url="https://materialize.com/register/?utm_campaign=General&utm_source=documentation"
-primary_text="Get Started">}}
+## Recommended instance types
 
-## Ready to get started? 🚀
+Materialize has been tested to work on instances with the following properties:
 
-1. Sign up for a [free trial
-   account](https://materialize.com/register/?utm_campaign=General&utm_source=documentation)
-   or [download the Materialize Emulator Docker image](/get-started/install-materialize-emulator/).
-2. Follow the quickstart guide to learn the basics.
-3. Connect your own data sources and start building.
+- ARM-based CPU
+- 1:8 ratio of vCPU to GiB memory
+- 1:16 ratio of vCPU to GiB local instance storage (if enabling spill-to-disk)
 
-{{</ callout >}}
+For specific cloud provider recommendations, see the [Installation guide for the
+cloud provider](/installation/) as well as the [operational guidelines](/installation/operational-guidelines/).
 
-{{< multilinkbox >}}
-{{< linkbox title="Key Concepts" >}}
+## Installation
 
--   [Materialize overview](/overview/what-is-materialize/)
--   [Clusters](/concepts/clusters/)
--   [Sources](/concepts/sources/)
--   [Views](/concepts/views/)
--   [Indexes](/concepts/indexes/)
--   [Sinks](/concepts/sinks/)
+For instructions on installing Materialize on your Kubernetes cluster, see:
 
-    {{</ linkbox >}}
-    {{< linkbox title="Guides" >}}
--   [Materialize &amp; Postgres CDC](/integrations/cdc-postgres/)
--   [dbt &amp; Materialize](/integrations/dbt/)
--   [Materialize &amp; Node.js](/integrations/node-js/)
+- [Install locally on kind](/installation/install-on-local-kind/)
 
--   [Time-windowed computation](/sql/patterns/temporal-filters/)
-    {{</ linkbox >}}
-    {{< linkbox title="Reference" >}}
--   [`CREATE VIEW`](/sql/create-view/)
--   [`CREATE INDEX`](/sql/create-index/)
--   [`CREATE SOURCE`](/sql/create-source/)
--   [`SQL data types`](/sql/types/)
--   [`SQL functions`](/sql/functions/)
-    {{</ linkbox >}}
-    {{</ multilinkbox >}}
+- [Install locally on
+  minikube](/installation/install-on-local-minikube/)
 
-## Learn more
+- [Install on AWS](/installation/install-on-aws/)
+- [Install on GCP](/installation/install-on-gcp/)
 
--   Check out the [**Materialize blog**](https://www.materialize.com/blog/) for the latest updates and Materialize deep-dives.
+## Related pages
+
+<!-- Temporary:
+Hugo will add links to the pages in the same folder.
+Since we're hiding this section from the left-hand nav, adding the links here.
+-->

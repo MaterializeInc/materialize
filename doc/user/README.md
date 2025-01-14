@@ -1,7 +1,8 @@
 # User docs
 
-This is the root directory of the Materialize user documentation, which is
-rendered by [Hugo] locally and published by CI to <https://materialize.com/docs>.
+This is the root directory of the Materialize Self-Managed v25.1 documentation,
+which is rendered by [Hugo] locally and published by CI to
+<https://materialize.com/docs/self-managed/v25.1/>.
 
 For help contributing to the docs, see [`CONTRIBUTING.md`](./CONTRIBUTING.md).
 
@@ -9,8 +10,14 @@ For help contributing to the docs, see [`CONTRIBUTING.md`](./CONTRIBUTING.md).
 
 - `archetypes`: Metadata templates for new docs.
 - `assets`: Content used dynamically, i.e. JavaScript and SCSS.
-- `content`: All of the docs content, though this is mostly content symlinked to
-  `/doc/user`.
+- `content`: All of the self-managed/v25.1 docs content, though this is mostly
+  content symlinked to `/doc/user`.
+
+  The content is **not** under self-managed/v25.1/ folder in the content
+  diretory as much of the content is ported from the main cloud docs. Instead,
+  we use the `baseURL` parameter to specify the base URL that includes
+  /self-managed/v25.1/ path.
+
 - `data`: Any JSON or YAML files you would want to use as a datastore.
 - `layouts`: All of the HTML templates for the site.
     - `partials`: Many HTML components, as well as our SQL diagrams.
@@ -24,8 +31,12 @@ For help contributing to the docs, see [`CONTRIBUTING.md`](./CONTRIBUTING.md).
 Shipping changes to the user-facing documentation is designed to be as
 lightweight and painless as possible to encourage contributions.
 
-Merging to the `main` branch will immediately deploy the updated documentation
-to https://materialize.com/docs.
+Merging to the `self-managed/v25.1` branch will immediately deploy the updated documentation
+to https://materialize.com/docs/self-managed/v25.1/.
+
+When running `hugo server` locally, specify the `--baseURL
+http://localhost:1313/self-managed/v25.1/` to test the changes locally.
+Otherwise, the `hugo server` uses base URL http://localhost:1313/.
 
 ### Adjusting documentation for existing features
 
@@ -106,13 +117,6 @@ block while developing the docs locally, toggle the `released` parameter in
 No CSS is shared with the marketing website to keep the docs CSS maintainable.
 If the marketing website changes, we will need to update the docs CSS to
 visually match.
-
-### General stylesheet updates
-
-You can see how commonly rendered elements look by going to
-[`localhost:1313/stylesheet`](http://localhost:1313/stylesheet).
-
-You can use this as a scratch area by editing [content/stylesheet.md](content/stylesheet.md).
 
 ### Railroad diagrams for SQL grammar
 

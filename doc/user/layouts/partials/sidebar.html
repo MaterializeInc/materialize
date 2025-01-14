@@ -6,6 +6,15 @@
         <input type="button" value="Search the Docs/Ask AI" class="btn-ghost docs-search-button"
         title="cmd+K (⌘+K/⊞+K)" />
       </div>
+      <div class="docs-switcher">
+        <select id="docs-switcher" onchange="switchDocs(this.value)">
+          <option value="/" {{ if not (strings.HasPrefix .RelPermalink
+          "/self-managed/") }}selected{{ end }}>Cloud</option>
+          <option value="/self-managed/v25.1/" {{ if strings.HasPrefix .RelPermalink
+          "/self-managed/v25.1/" }}selected{{ end }}>Self-Managed v25.01</option>
+        </select>
+      </div>
+
       {{ range .Site.Menus.main.ByWeight }}
       <li class="level-1 {{if .HasChildren }}has-children{{ else }}no-children{{ end }}">
           <a {{with .URL}}href="{{.}}"{{end}} class="{{if $currentPage.IsMenuCurrent "main" .}}active{{end}}">
@@ -64,3 +73,16 @@
     <svg xmlns="http://www.w3.org/2000/svg" class="ionicon" viewBox="0 0 512 512"><title>Close</title><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="32" d="M368 368L144 144M368 144L144 368"/></svg>
   </button>
 </div>
+
+<script>
+  function switchDocs(selectedValue) {
+    console.log("switchDocs", selectedValue);
+    const currentUrl = new URL(window.location.href);
+
+    // Switch between cloud and self-managed docs homepages
+    // since self-managed and cloud docs are not 1:1 (e.g., installation
+    // section doesn't exist in cloud docs, etc.).
+    const newUrl = new URL( selectedValue, currentUrl);
+    window.location.href = newUrl.toString();
+  }
+</script>

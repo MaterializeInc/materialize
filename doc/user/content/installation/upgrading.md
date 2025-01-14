@@ -1,7 +1,11 @@
 ---
 title: "Upgrading"
 description: "Upgrading Helm chart and Materialize."
-robots: "noindex, nofollow"
+aliases:
+  - /self-hosted/upgrading/
+menu:
+  main:
+    parent: "installation"
 ---
 
 The following provides steps for upgrading the Materialize operator and
@@ -161,8 +165,7 @@ kubectl logs -l app.kubernetes.io/name=materialize-operator -n materialize
 
 ## See also
 
-- [Materialize Kubernetes Operator Helm Chart](/self-managed/)
-- [Configuration](/self-managed/configuration/)
-- [Installation](/self-managed/installation/)
-- [Troubleshooting](/self-managed/troubleshooting/)
-- [Operational guidelines](/self-managed/operational-guidelines/)
+- [Configuration](/installation/configuration/)
+- [Installation](/installation/)
+- [Troubleshooting](/installation/troubleshooting/)
+- [Operational guidelines](/installation/operational-guidelines/)

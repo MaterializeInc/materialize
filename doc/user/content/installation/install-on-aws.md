@@ -1,7 +1,11 @@
 ---
 title: "Install on AWS"
 description: ""
-robots: "noindex, nofollow"
+aliases:
+  - /self-hosted/install-on-aws/
+menu:
+  main:
+    parent: "installation"
 ---
 
 Self-managed Materialize requires:
@@ -48,7 +52,7 @@ When operating in AWS, we recommend:
 - Using the `r8g`, `r7g`, and `r6g` families when running without local disk.
 
 - Using the `r7gd` and `r6gd` families of instances (and `r8gd` once available)
-  when running with local disk (Recommended for production.  See [Operational guidelines](/self-managed/operational-guidelines/#locally-attached-nvme-storage-openebs) for more information.)
+  when running with local disk (Recommended for production.  See [Operational guidelines](/installation/operational-guidelines/#locally-attached-nvme-storage-openebs) for more information.)
 
 See [A. Set up AWS Kubernetes environment](#a-set-up-aws-kubernetes-environment)
 for a sample setup.
@@ -236,10 +240,10 @@ for evaluation purposes only. The module deploys a sample infrastructure on AWS
 
       ```
 
-   For production, if you have [opted for locally-attached storage](/self-managed/operational-guidelines/#locally-attached-nvme-storage-openebs),
+   For production, if you have [opted for locally-attached storage](/installation/operational-guidelines/#locally-attached-nvme-storage-openebs),
    include the storage configuration in your configuration file.  See the
    [Locally-attached NVMe storage
-   (OpenEBS)](/self-managed/operational-guidelines/#locally-attached-nvme-storage-openebs)
+   (OpenEBS)](/installation/operational-guidelines/#locally-attached-nvme-storage-openebs)
    for details.
 
 1. Install the Materialize operator `materialize-operator`, specifying the path
@@ -271,7 +275,7 @@ for evaluation purposes only. The module deploys a sample infrastructure on AWS
     ```
 
     If you run into an error during deployment, refer to the
-    [Troubleshooting](/self-hosted/troubleshooting) guide.
+    [Troubleshooting](/installation/troubleshooting) guide.
 
 ## C. Install Materialize
 
@@ -479,9 +483,8 @@ S3 bucket first and rerun the `terraform destroy` command.
 
 ## See also
 
-- [Materialize Kubernetes Operator Helm Chart](/self-managed/)
-- [Materialize Operator Configuration](/self-managed/configuration/)
-- [Troubleshooting](/self-managed/troubleshooting/)
-- [Operational guidelines](/self-managed/operational-guidelines/)
-- [Installation](/self-managed/installation/)
-- [Upgrading](/self-managed/upgrading/)
+- [Materialize Operator Configuration](/installation/configuration/)
+- [Troubleshooting](/installation/troubleshooting/)
+- [Operational guidelines](/installation/operational-guidelines/)
+- [Installation](/installation/)
+- [Upgrading](/installation/upgrading/)
