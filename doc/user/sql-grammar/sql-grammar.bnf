@@ -403,8 +403,6 @@ func_length ::=
   'length' '(' str (',' encoding_name)? ')'
 func_map_agg ::=
   'map_agg' '(' keys ',' values ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? ( ',' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? )* )? ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
-func_substring ::=
-  'substring' '(' str ',' start_pos (',' len)? ')'
 func_timezone ::=
     'TIMEZONE' '(' zone'::'type ',' ( 'timestamp' | 'timestamptz' ) ')'
 func_justify_days ::=
