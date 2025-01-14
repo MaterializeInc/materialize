@@ -47,112 +47,159 @@ use crate::typedefs::RowRowSpine;
 pub type Logger = timely::logging_core::Logger<ComputeEventBuilder>;
 pub type ComputeEventBuilder = CapacityContainerBuilder<Vec<(Duration, ComputeEvent)>>;
 
+#[derive(Debug, Clone, PartialOrd, PartialEq)]
+pub struct Export {
+    /// Identifier of the export.
+    pub id: GlobalId,
+    /// Timely worker index of the exporting dataflow.
+    pub dataflow_index: usize,
+}
+
+#[derive(Debug, Clone, PartialOrd, PartialEq)]
+pub struct ExportDropped {
+    /// Identifier of the export.
+    pub id: GlobalId,
+}
+
+#[derive(Debug, Clone, PartialOrd, PartialEq)]
+pub struct PeekEvent {
+    /// The data for the peek itself.
+    pub peek: Peek,
+    /// The relevant _type_ of peek: index or persist.
+    // Note that this is not stored on the Peek event for data-packing reasons only.
+    pub peek_type: PeekType,
+    /// True if the peek is being installed; false if it's being removed.
+    pub installed: bool,
+}
+
+#[derive(Debug, Clone, PartialOrd, PartialEq)]
+pub struct Frontier {
+    pub id: GlobalId,
+    pub time: Timestamp,
+    pub diff: i8,
+}
+
+#[derive(Debug, Clone, PartialOrd, PartialEq)]
+pub struct ImportFrontier {
+    pub import_id: GlobalId,
+    pub export_id: GlobalId,
+    pub time: Timestamp,
+    pub diff: i8,
+}
+
+#[derive(Debug, Clone, PartialOrd, PartialEq)]
+pub struct ArrangementHeapSize {
+    /// Operator index
+    pub operator: usize,
+    /// Delta of the heap size in bytes of the arrangement.
+    pub delta_size: isize,
+}
+
+#[derive(Debug, Clone, PartialOrd, PartialEq)]
+pub struct ArrangementHeapCapacity {
+    /// Operator index
+    pub operator: usize,
+    /// Delta of the heap capacity in bytes of the arrangement.
+    pub delta_capacity: isize,
+}
+
+#[derive(Debug, Clone, PartialOrd, PartialEq)]
+pub struct ArrangementHeapAllocations {
+    /// Operator index
+    pub operator: usize,
+    /// Delta of distinct heap allocations backing the arrangement.
+    pub delta_allocations: isize,
+}
+
+#[derive(Debug, Clone, PartialOrd, PartialEq)]
+pub struct ArrangementHeapSizeOperator {
+    /// Operator index
+    pub operator: usize,
+    /// The address of the operator.
+    pub address: Rc<[usize]>,
+}
+
+#[derive(Debug, Clone, PartialOrd, PartialEq)]
+pub struct ArrangementHeapSizeOperatorDrop {
+    /// Operator index
+    pub operator: usize,
+}
+
+#[derive(Debug, Clone, PartialOrd, PartialEq)]
+pub struct DataflowShutdown {
+    /// Timely worker index of the dataflow.
+    pub dataflow_index: usize,
+}
+
+#[derive(Debug, Clone, PartialOrd, PartialEq)]
+pub struct ErrorCount {
+    /// Identifier of the export.
+    pub export_id: GlobalId,
+    /// The change in error count.
+    pub diff: i64,
+}
+
+#[derive(Debug, Clone, PartialOrd, PartialEq)]
+pub struct Hydration {
+    pub export_id: GlobalId,
+}
+
+#[derive(Debug, Clone, PartialOrd, PartialEq)]
+pub struct LirMapping {
+    /// The `GlobalId` in which the LIR operator is rendered.
+    ///
+    /// NB a single a dataflow may have many `GlobalId`s inside it.
+    /// A separate mapping (using `ComputeEvent::DataflowGlobal`)
+    /// tracks the many-to-one relationship between `GlobalId`s and
+    /// dataflows.
+    pub global_id: GlobalId,
+    /// The actual mapping.
+    /// Represented this way to reduce the size of `ComputeEvent`.
+    pub mapping: Box<[(LirId, LirMetadata)]>,
+}
+
+#[derive(Debug, Clone, PartialOrd, PartialEq)]
+pub struct DataflowGlobal {
+    /// The identifier of the dataflow.
+    pub id: usize,
+    /// A `GlobalId` that is rendered as part of this dataflow.
+    pub global_id: GlobalId,
+}
+
 /// A logged compute event.
 #[derive(Debug, Clone, PartialOrd, PartialEq)]
 pub enum ComputeEvent {
     /// A dataflow export was created.
-    Export {
-        /// Identifier of the export.
-        id: GlobalId,
-        /// Timely worker index of the exporting dataflow.
-        dataflow_index: usize,
-    },
+    Export(Export),
     /// A dataflow export was dropped.
-    ExportDropped {
-        /// Identifier of the export.
-        id: GlobalId,
-    },
+    ExportDropped(ExportDropped),
     /// Peek command.
-    Peek {
-        /// The data for the peek itself.
-        peek: Peek,
-        /// The relevant _type_ of peek: index or persist.
-        // Note that this is not stored on the Peek event for data-packing reasons only.
-        peek_type: PeekType,
-        /// True if the peek is being installed; false if it's being removed.
-        installed: bool,
-    },
+    Peek(PeekEvent),
     /// Available frontier information for dataflow exports.
-    Frontier {
-        id: GlobalId,
-        time: Timestamp,
-        diff: i8,
-    },
+    Frontier(Frontier),
     /// Available frontier information for dataflow imports.
-    ImportFrontier {
-        import_id: GlobalId,
-        export_id: GlobalId,
-        time: Timestamp,
-        diff: i8,
-    },
+    ImportFrontier(ImportFrontier),
     /// Arrangement heap size update
-    ArrangementHeapSize {
-        /// Operator index
-        operator: usize,
-        /// Delta of the heap size in bytes of the arrangement.
-        delta_size: isize,
-    },
+    ArrangementHeapSize(ArrangementHeapSize),
     /// Arrangement heap size update
-    ArrangementHeapCapacity {
-        /// Operator index
-        operator: usize,
-        /// Delta of the heap capacity in bytes of the arrangement.
-        delta_capacity: isize,
-    },
+    ArrangementHeapCapacity(ArrangementHeapCapacity),
     /// Arrangement heap size update
-    ArrangementHeapAllocations {
-        /// Operator index
-        operator: usize,
-        /// Delta of distinct heap allocations backing the arrangement.
-        delta_allocations: isize,
-    },
+    ArrangementHeapAllocations(ArrangementHeapAllocations),
     /// Arrangement size operator address
-    ArrangementHeapSizeOperator {
-        /// Operator index
-        operator: usize,
-        /// The address of the operator.
-        address: Rc<[usize]>,
-    },
+    ArrangementHeapSizeOperator(ArrangementHeapSizeOperator),
     /// Arrangement size operator dropped
-    ArrangementHeapSizeOperatorDrop {
-        /// Operator index
-        operator: usize,
-    },
+    ArrangementHeapSizeOperatorDrop(ArrangementHeapSizeOperatorDrop),
     /// All operators of a dataflow have shut down.
-    DataflowShutdown {
-        /// Timely worker index of the dataflow.
-        dataflow_index: usize,
-    },
+    DataflowShutdown(DataflowShutdown),
     /// The number of errors in a dataflow export has changed.
-    ErrorCount {
-        /// Identifier of the export.
-        export_id: GlobalId,
-        /// The change in error count.
-        diff: i64,
-    },
+    ErrorCount(ErrorCount),
     /// A dataflow export was hydrated.
-    Hydration { export_id: GlobalId },
+    Hydration(Hydration),
     /// An LIR operator was mapped to some particular dataflow operator.
     ///
     /// Cf. `ComputeLog::LirMaping`
-    LirMapping {
-        /// The `GlobalId` in which the LIR operator is rendered.
-        ///
-        /// NB a single a dataflow may have many `GlobalId`s inside it.
-        /// A separate mapping (using `ComputeEvent::DataflowGlobal`)
-        /// tracks the many-to-one relationship between `GlobalId`s and
-        /// dataflows.
-        global_id: GlobalId,
-        /// The actual mapping.
-        /// Represented this way to reduce the size of `ComputeEvent`.
-        mapping: Box<[(LirId, LirMetadata)]>,
-    },
-    DataflowGlobal {
-        /// The identifier of the dataflow.
-        id: usize,
-        /// A `GlobalId` that is rendered as part of this dataflow.
-        global_id: GlobalId,
-    },
+    LirMapping(LirMapping),
+    DataflowGlobal(DataflowGlobal),
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Debug)]
@@ -709,51 +756,62 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
 
     /// Handle the given compute event.
     fn handle(&mut self, event: ComputeEvent) {
-        use ComputeEvent::*;
-
         match event {
-            Export { id, dataflow_index } => self.handle_export(id, dataflow_index),
-            ExportDropped { id } => self.handle_export_dropped(id),
-            Peek {
+            ComputeEvent::Export(Export { id, dataflow_index }) => {
+                self.handle_export(id, dataflow_index)
+            }
+            ComputeEvent::ExportDropped(ExportDropped { id }) => self.handle_export_dropped(id),
+            ComputeEvent::Peek(PeekEvent {
                 peek,
                 peek_type,
                 installed: true,
-            } => self.handle_peek_install(peek, peek_type),
-            Peek {
+            }) => self.handle_peek_install(peek, peek_type),
+            ComputeEvent::Peek(PeekEvent {
                 peek,
                 peek_type,
                 installed: false,
-            } => self.handle_peek_retire(peek, peek_type),
-            Frontier { id, time, diff } => self.handle_frontier(id, time, diff),
-            ImportFrontier {
+            }) => self.handle_peek_retire(peek, peek_type),
+            ComputeEvent::Frontier(Frontier { id, time, diff }) => {
+                self.handle_frontier(id, time, diff)
+            }
+            ComputeEvent::ImportFrontier(ImportFrontier {
                 import_id,
                 export_id,
                 time,
                 diff,
-            } => self.handle_import_frontier(import_id, export_id, time, diff),
-            ArrangementHeapSize {
+            }) => self.handle_import_frontier(import_id, export_id, time, diff),
+            ComputeEvent::ArrangementHeapSize(ArrangementHeapSize {
                 operator,
                 delta_size: size,
-            } => self.handle_arrangement_heap_size(operator, size),
-            ArrangementHeapCapacity {
+            }) => self.handle_arrangement_heap_size(operator, size),
+            ComputeEvent::ArrangementHeapCapacity(ArrangementHeapCapacity {
                 operator,
                 delta_capacity: capacity,
-            } => self.handle_arrangement_heap_capacity(operator, capacity),
-            ArrangementHeapAllocations {
+            }) => self.handle_arrangement_heap_capacity(operator, capacity),
+            ComputeEvent::ArrangementHeapAllocations(ArrangementHeapAllocations {
                 operator,
                 delta_allocations: allocations,
-            } => self.handle_arrangement_heap_allocations(operator, allocations),
-            ArrangementHeapSizeOperator { operator, address } => {
-                self.handle_arrangement_heap_size_operator(operator, address)
+            }) => self.handle_arrangement_heap_allocations(operator, allocations),
+            ComputeEvent::ArrangementHeapSizeOperator(ArrangementHeapSizeOperator {
+                operator,
+                address,
+            }) => self.handle_arrangement_heap_size_operator(operator, address),
+            ComputeEvent::ArrangementHeapSizeOperatorDrop(ArrangementHeapSizeOperatorDrop {
+                operator,
+            }) => self.handle_arrangement_heap_size_operator_dropped(operator),
+            ComputeEvent::DataflowShutdown(DataflowShutdown { dataflow_index }) => {
+                self.handle_dataflow_shutdown(dataflow_index)
             }
-            ArrangementHeapSizeOperatorDrop { operator } => {
-                self.handle_arrangement_heap_size_operator_dropped(operator)
+            ComputeEvent::ErrorCount(ErrorCount { export_id, diff }) => {
+                self.handle_error_count(export_id, diff)
             }
-            DataflowShutdown { dataflow_index } => self.handle_dataflow_shutdown(dataflow_index),
-            ErrorCount { export_id, diff } => self.handle_error_count(export_id, diff),
-            Hydration { export_id } => self.handle_hydration(export_id),
-            LirMapping { global_id, mapping } => self.handle_lir_mapping(global_id, mapping),
-            DataflowGlobal { id, global_id } => self.handle_dataflow_global(id, global_id),
+            ComputeEvent::Hydration(Hydration { export_id }) => self.handle_hydration(export_id),
+            ComputeEvent::LirMapping(LirMapping { global_id, mapping }) => {
+                self.handle_lir_mapping(global_id, mapping)
+            }
+            ComputeEvent::DataflowGlobal(DataflowGlobal { id, global_id }) => {
+                self.handle_dataflow_global(id, global_id)
+            }
         }
     }
 
@@ -1171,7 +1229,7 @@ impl CollectionLogging {
         dataflow_index: usize,
         import_ids: impl Iterator<Item = GlobalId>,
     ) -> Self {
-        logger.log(ComputeEvent::Export { id, dataflow_index });
+        logger.log(ComputeEvent::Export(Export { id, dataflow_index }));
 
         let mut self_ = Self {
             id,
@@ -1195,8 +1253,10 @@ impl CollectionLogging {
 
         if old_time != new_time {
             let id = self.id;
-            let retraction = old_time.map(|time| ComputeEvent::Frontier { id, time, diff: -1 });
-            let insertion = new_time.map(|time| ComputeEvent::Frontier { id, time, diff: 1 });
+            let retraction =
+                old_time.map(|time| ComputeEvent::Frontier(Frontier { id, time, diff: -1 }));
+            let insertion =
+                new_time.map(|time| ComputeEvent::Frontier(Frontier { id, time, diff: 1 }));
             let events = retraction.into_iter().chain(insertion);
             self.logger.log_many(events);
         }
@@ -1212,17 +1272,21 @@ impl CollectionLogging {
 
         if old_time != new_time {
             let export_id = self.id;
-            let retraction = old_time.map(|time| ComputeEvent::ImportFrontier {
-                import_id,
-                export_id,
-                time,
-                diff: -1,
+            let retraction = old_time.map(|time| {
+                ComputeEvent::ImportFrontier(ImportFrontier {
+                    import_id,
+                    export_id,
+                    time,
+                    diff: -1,
+                })
             });
-            let insertion = new_time.map(|time| ComputeEvent::ImportFrontier {
-                import_id,
-                export_id,
-                time,
-                diff: 1,
+            let insertion = new_time.map(|time| {
+                ComputeEvent::ImportFrontier(ImportFrontier {
+                    import_id,
+                    export_id,
+                    time,
+                    diff: 1,
+                })
             });
             let events = retraction.into_iter().chain(insertion);
             self.logger.log_many(events);
@@ -1232,7 +1296,7 @@ impl CollectionLogging {
     /// Set the collection as hydrated.
     pub fn set_hydrated(&self) {
         self.logger
-            .log(ComputeEvent::Hydration { export_id: self.id });
+            .log(ComputeEvent::Hydration(Hydration { export_id: self.id }));
     }
 }
 
@@ -1246,7 +1310,8 @@ impl Drop for CollectionLogging {
             self.set_import_frontier(id, None);
         }
 
-        self.logger.log(ComputeEvent::ExportDropped { id: self.id });
+        self.logger
+            .log(ComputeEvent::ExportDropped(ExportDropped { id: self.id }));
     }
 }
 
@@ -1267,7 +1332,7 @@ where
                 move |input, output| {
                     input.for_each(|cap, data| {
                         let diff = data.iter().map(|(_d, _t, r)| r).sum();
-                        logger.log(ComputeEvent::ErrorCount { export_id, diff });
+                        logger.log(ComputeEvent::ErrorCount(ErrorCount { export_id, diff }));
 
                         output.session(&cap).give_container(data);
                     });
@@ -1287,7 +1352,7 @@ where
             move |input, output| {
                 input.for_each(|cap, data| {
                     let diff = data.iter().map(sum_batch_diffs).sum();
-                    logger.log(ComputeEvent::ErrorCount { export_id, diff });
+                    logger.log(ComputeEvent::ErrorCount(ErrorCount { export_id, diff }));
 
                     output.session(&cap).give_container(data);
                 });

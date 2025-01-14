@@ -150,7 +150,9 @@ use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
 use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
-use crate::logging::compute::{ComputeEvent, LirMetadata, LogDataflowErrors};
+use crate::logging::compute::{
+    ComputeEvent, DataflowGlobal, LirMapping, LirMetadata, LogDataflowErrors,
+};
 use crate::render::context::{
     ArrangementFlavor, Context, MzArrangement, MzArrangementImport, ShutdownToken,
 };
@@ -1184,13 +1186,16 @@ where
 
     fn log_dataflow_global_id(&self, id: usize, global_id: GlobalId) {
         if let Some(logger) = &self.compute_logger {
-            logger.log(ComputeEvent::DataflowGlobal { id, global_id });
+            logger.log(ComputeEvent::DataflowGlobal(DataflowGlobal {
+                id,
+                global_id,
+            }));
         }
     }
 
     fn log_lir_mapping(&self, global_id: GlobalId, mapping: Box<[(LirId, LirMetadata)]>) {
         if let Some(logger) = &self.compute_logger {
-            logger.log(ComputeEvent::LirMapping { global_id, mapping });
+            logger.log(ComputeEvent::LirMapping(LirMapping { global_id, mapping }));
         }
     }
 

@@ -33,7 +33,7 @@ use timely::dataflow::operators::Filter;
 use timely::dataflow::Stream;
 
 use crate::extensions::arrange::MzArrange;
-use crate::logging::compute::ComputeEvent;
+use crate::logging::compute::{ArrangementHeapSizeOperatorDrop, ComputeEvent};
 use crate::logging::{
     DifferentialLog, EventQueue, LogCollection, LogVariant, PermutedRowPacker, SharedLoggingState,
 };
@@ -298,7 +298,9 @@ impl DemuxHandler<'_, '_> {
                 .expect("under/overflow");
             if *sharing == 0 {
                 self.state.sharing.remove(&op);
-                logger.log(ComputeEvent::ArrangementHeapSizeOperatorDrop { operator: op });
+                logger.log(ComputeEvent::ArrangementHeapSizeOperatorDrop(
+                    ArrangementHeapSizeOperatorDrop { operator: op },
+                ));
             }
         }
     }

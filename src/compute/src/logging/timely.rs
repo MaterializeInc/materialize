@@ -37,7 +37,7 @@ use timely::logging::{
 use tracing::error;
 
 use crate::extensions::arrange::MzArrange;
-use crate::logging::compute::ComputeEvent;
+use crate::logging::compute::{ComputeEvent, DataflowShutdown};
 use crate::logging::{EventQueue, LogVariant, SharedLoggingState, TimelyLog};
 use crate::logging::{LogCollection, PermutedRowPacker};
 use crate::row_spine::{RowRowBatcher, RowRowBuilder};
@@ -566,7 +566,9 @@ impl DemuxHandler<'_, '_> {
     fn handle_dataflow_shutdown(&mut self, dataflow_index: usize) {
         // Notify compute logging about the shutdown.
         if let Some(logger) = &self.shared_state.compute_logger {
-            logger.log(ComputeEvent::DataflowShutdown { dataflow_index });
+            logger.log(ComputeEvent::DataflowShutdown(DataflowShutdown {
+                dataflow_index,
+            }));
         }
 
         // When a dataflow shuts down, we need to retract all its channels.

@@ -64,7 +64,7 @@ use uuid::Uuid;
 
 use crate::arrangement::manager::{SpecializedTraceHandle, TraceBundle, TraceManager};
 use crate::logging;
-use crate::logging::compute::{CollectionLogging, ComputeEvent};
+use crate::logging::compute::{CollectionLogging, ComputeEvent, PeekEvent};
 use crate::metrics::ComputeMetrics;
 use crate::metrics::WorkerMetrics;
 use crate::render::{LinearJoinSpec, StartSignal};
@@ -1026,11 +1026,11 @@ impl PendingPeek {
             PeekTarget::Index { id } => (id, logging::compute::PeekType::Index),
             PeekTarget::Persist { id, .. } => (id, logging::compute::PeekType::Persist),
         };
-        ComputeEvent::Peek {
+        ComputeEvent::Peek(PeekEvent {
             peek: logging::compute::Peek::new(*id, peek.timestamp, peek.uuid),
             peek_type,
             installed,
-        }
+        })
     }
 
     fn index(peek: Peek, mut trace_bundle: TraceBundle) -> Self {

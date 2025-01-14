@@ -22,7 +22,10 @@ use timely::dataflow::{Scope, ScopeParent, StreamCore};
 use timely::progress::Timestamp;
 use timely::Container;
 
-use crate::logging::compute::{ComputeEvent, ComputeEventBuilder};
+use crate::logging::compute::{
+    ArrangementHeapAllocations, ArrangementHeapCapacity, ArrangementHeapSize,
+    ArrangementHeapSizeOperator, ComputeEvent, ComputeEventBuilder,
+};
 use crate::typedefs::{KeyAgent, KeyValAgent, RowAgent, RowRowAgent, RowValAgent};
 
 /// Extension trait to arrange data.
@@ -260,7 +263,9 @@ where
         .stream
         .unary(Pipeline, "ArrangementSize", |_cap, info| {
             let address = info.address;
-            logger.log(ComputeEvent::ArrangementHeapSizeOperator { operator, address });
+            logger.log(ComputeEvent::ArrangementHeapSizeOperator(
+                ArrangementHeapSizeOperator { operator, address },
+            ));
             move |input, output| {
                 while let Some((time, data)) = input.next() {
                     output.session(&time).give_container(data);
@@ -273,26 +278,30 @@ where
 
                 let size = size.try_into().expect("must fit");
                 if size != old_size {
-                    logger.log(ComputeEvent::ArrangementHeapSize {
+                    logger.log(ComputeEvent::ArrangementHeapSize(ArrangementHeapSize {
                         operator,
                         delta_size: size - old_size,
-                    });
+                    }));
                 }
 
                 let capacity = capacity.try_into().expect("must fit");
                 if capacity != old_capacity {
-                    logger.log(ComputeEvent::ArrangementHeapCapacity {
-                        operator,
-                        delta_capacity: capacity - old_capacity,
-                    });
+                    logger.log(ComputeEvent::ArrangementHeapCapacity(
+                        ArrangementHeapCapacity {
+                            operator,
+                            delta_capacity: capacity - old_capacity,
+                        },
+                    ));
                 }
 
                 let allocations = allocations.try_into().expect("must fit");
                 if allocations != old_allocations {
-                    logger.log(ComputeEvent::ArrangementHeapAllocations {
-                        operator,
-                        delta_allocations: allocations - old_allocations,
-                    });
+                    logger.log(ComputeEvent::ArrangementHeapAllocations(
+                        ArrangementHeapAllocations {
+                            operator,
+                            delta_allocations: allocations - old_allocations,
+                        },
+                    ));
                 }
 
                 old_size = size;
