@@ -142,6 +142,9 @@ impl<T> StorageCommand<T> {
             | AllowWrites
             | UpdateConfiguration(_)
             | AllowCompaction(_) => false,
+            // TODO(cf2): multi-replica oneshot ingestions. At the moment returning
+            // true here means we can't run `COPY FROM` on multi-replica clusters, this
+            // should be easy enough to support though.
             RunIngestions(_) | RunSinks(_) | RunOneshotIngestion(_) => true,
         }
     }
@@ -963,6 +966,8 @@ pub struct Update<T = mz_repr::Timestamp> {
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 /// A batch of updates to be fed to a local input; however, the input must
 /// determine the most appropriate timestamps to use.
+///
+/// TODO(cf2): Can we remove this and use only on [`TableData`].
 pub struct TimestamplessUpdate {
     pub row: Row,
     pub diff: Diff,

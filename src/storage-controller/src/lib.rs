@@ -160,7 +160,7 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// Channel for receiving table handle drops.
     #[derivative(Debug = "ignore")]
     pending_table_handle_drops_rx: mpsc::UnboundedReceiver<GlobalId>,
-    /// Closues that can be used to send responses from oneshot ingestions.
+    /// Closures that can be used to send responses from oneshot ingestions.
     #[derivative(Debug = "ignore")]
     pending_oneshot_ingestions: BTreeMap<GlobalId, OneshotResultCallback<ProtoBatch>>,
 
@@ -1418,9 +1418,10 @@ where
                 .pending_oneshot_ingestions
                 .insert(ingestion_id, result_tx);
             assert!(novel.is_none());
+            Ok(())
+        } else {
+            Err(StorageError::ReadOnly)
         }
-
-        Ok(())
     }
 
     async fn alter_export(
@@ -2018,11 +2019,12 @@ where
             }
             Some(StorageResponse::StagedBatches(batches)) => {
                 for (collection_id, batches) in batches {
-                    let sender = self
-                        .pending_oneshot_ingestions
-                        .remove(&collection_id)
-                        .expect("TODO");
-                    (sender)(batches);
+                    match self.pending_oneshot_ingestions.remove(&collection_id) {
+                        Some(sender) => (sender)(batches),
+                        // TODO(cf2): When we support running COPY FROM on multiple
+                        // replicas we can probably just ignore the case of `None`.
+                        None => mz_ore::soft_panic_or_log!("no sender for {collection_id}!"),
+                    }
                 }
             }
         }

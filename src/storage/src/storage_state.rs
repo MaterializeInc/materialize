@@ -277,7 +277,7 @@ pub struct StorageState {
     pub ingestions: BTreeMap<GlobalId, IngestionDescription<CollectionMetadata>>,
     /// Descriptions of each installed export.
     pub exports: BTreeMap<GlobalId, StorageSinkDesc<MetadataFilled, mz_repr::Timestamp>>,
-    /// Descriptions of oneshot ingestsions that are currently running.
+    /// Descriptions of oneshot ingestions that are currently running.
     pub oneshot_ingestions: BTreeMap<GlobalId, OneshotIngestionDescription<ProtoBatch>>,
     /// Undocumented
     pub now: NowFn,
@@ -956,7 +956,9 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 }
                 StorageCommand::RunOneshotIngestion(oneshot) => {
                     info!(%worker_id, ?oneshot, "reconcile: received RunOneshotIngestion command");
-                    // nothing to do?
+                    // TODO(cf1): Handle CancelOneshotIngestion, clean out stale oneshot
+                    // ingestions from our state. Possibly here we respond to the client
+                    // with a cancelation to make sure the client doesn't wait forever.
                 }
                 StorageCommand::RunSinks(exports) => {
                     info!(%worker_id, ?exports, "reconcile: received RunSinks command");

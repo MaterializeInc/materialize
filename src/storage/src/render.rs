@@ -483,9 +483,10 @@ pub(crate) fn build_oneshot_ingestion_dataflow<A: Allocate>(
 ) {
     let (results_tx, results_rx) = tokio::sync::mpsc::unbounded_channel();
     let callback = move |result| {
-        // TODO(parkmycar) Do we care if the receiver has gone away?
-        // How do we handle ProtoBatch cleanup if one is sitting in the channel
-        // but the receiver has gone away?
+        // TODO(cf3): Do we care if the receiver has gone away?
+        //
+        // Persist is working on cleaning up leaked blobs, we could also use `OneshotReceiverExt`
+        // here, but that might run into the infamous async-Drop problem.
         let _ = results_tx.send(result);
     };
 

@@ -500,7 +500,8 @@ impl Coordinator {
             appends.entry(table.id()).or_default();
         }
 
-        // Consolidate all Rows for a given table.
+        // Consolidate all Rows for a given table. We do not consolidate the
+        // staged batches, that's up to whoever staged them.
         let mut all_appends = Vec::with_capacity(appends.len());
         for (item_id, table_data) in appends.into_iter() {
             let mut all_rows = Vec::new();
