@@ -19,12 +19,12 @@ if [[ "$BUILDKITE_PULL_REQUEST" = false ]]; then
 fi
 
 cd doc/user
-hugo --gc --baseURL "/materialize/$BUILDKITE_PULL_REQUEST"
+hugo --gc --baseURL "/materialize/$BUILDKITE_PULL_REQUEST/self-managed/v25.1"
 
 cat > config.deployment.toml <<EOF
 [[deployment.targets]]
 name = "preview"
-url = "s3://materialize-website-previews?region=us-east-1&prefix=materialize/$BUILDKITE_PULL_REQUEST/"
+url = "s3://materialize-website-previews?region=us-east-1&prefix=materialize/$BUILDKITE_PULL_REQUEST/self-managed/v25.1/"
 EOF
 hugo deploy --config config.toml,config.deployment.toml --force
 
@@ -35,6 +35,6 @@ curl -fsSL \
     --data "{\
         \"state\": \"success\",\
         \"description\": \"Deploy preview ready.\",\
-        \"target_url\": \"https://preview.materialize.com/materialize/$BUILDKITE_PULL_REQUEST/\",\
+        \"target_url\": \"https://preview.materialize.com/materialize/$BUILDKITE_PULL_REQUEST/self-managed/v25.1/\",\
         \"context\": \"preview-docs\"\
     }"

@@ -5,7 +5,7 @@ disable_list: true
 disable_toc: true
 menus:
   main:
-    weight: 5
+    weight: 8
     identifier: 'console'
 ---
 
