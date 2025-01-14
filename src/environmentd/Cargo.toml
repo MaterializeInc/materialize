@@ -48,7 +48,6 @@ mz-catalog = { path = "../catalog" }
 mz-cloud-resources = { path = "../cloud-resources" }
 mz-controller = { path = "../controller" }
 mz-dyncfgs = { path = "../dyncfgs" }
-mz-expr = { path = "../expr" }
 mz-frontegg-auth = { path = "../frontegg-auth" }
 mz-frontegg-mock = { path = "../frontegg-mock", optional = true }
 mz-http-util = { path = "../http-util" }
@@ -71,9 +70,7 @@ mz-segment = { path = "../segment" }
 mz-server-core = { path = "../server-core" }
 mz-service = { path = "../service" }
 mz-sql = { path = "../sql" }
-mz-storage-client = { path = "../storage-client" }
 mz-storage-types = { path = "../storage-types" }
-mz-tls-util = { path = "../tls-util" }
 mz-tracing = { path = "../tracing", optional = true }
 nix = "0.26.1"
 num_cpus = "1.14.0"
@@ -106,13 +103,11 @@ sysctl = "0.5.4"
 tempfile = "3.14.0"
 thiserror = "1.0.37"
 tokio = { version = "1.38.0", features = ["sync"] }
-tokio-openssl = "0.6.3"
 tokio-postgres = { version = "0.7.8" }
 tokio-stream = { version = "0.1.11", features = ["net"] }
 tower = { version = "0.4.13", features = ["buffer", "limit", "load-shed"] }
 tower-http = { version = "0.5.2", features = ["cors"] }
 tracing = "0.1.37"
-tracing-core = "0.1.30"
 tracing-capture = { version = "0.1.0", optional = true }
 tracing-opentelemetry = { version = "0.25.0" }
 tracing-subscriber = "0.3.16"

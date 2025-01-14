@@ -43,6 +43,5 @@ rust_binary(
         "//src/service:mz_service",
         "//src/sql:mz_sql",
         "//src/storage-types:mz_storage_types",
-        "//src/tls-util:mz_tls_util",
     ] + all_crate_deps(normal = True),
 )

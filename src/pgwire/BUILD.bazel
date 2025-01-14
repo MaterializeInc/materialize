@@ -31,7 +31,6 @@ rust_library(
     deps = [
         "//src/adapter:mz_adapter",
         "//src/adapter-types:mz_adapter_types",
-        "//src/expr:mz_expr",
         "//src/frontegg-auth:mz_frontegg_auth",
         "//src/ore:mz_ore",
         "//src/pgcopy:mz_pgcopy",
@@ -72,7 +71,6 @@ rust_test(
     deps = [
         "//src/adapter:mz_adapter",
         "//src/adapter-types:mz_adapter_types",
-        "//src/expr:mz_expr",
         "//src/frontegg-auth:mz_frontegg_auth",
         "//src/ore:mz_ore",
         "//src/pgcopy:mz_pgcopy",
@@ -93,7 +91,6 @@ rust_doc_test(
     deps = [
         "//src/adapter:mz_adapter",
         "//src/adapter-types:mz_adapter_types",
-        "//src/expr:mz_expr",
         "//src/frontegg-auth:mz_frontegg_auth",
         "//src/ore:mz_ore",
         "//src/pgcopy:mz_pgcopy",
