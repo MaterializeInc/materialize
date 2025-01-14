@@ -34,13 +34,16 @@ def main() -> None:
             continue
         else:
             print(f"Releasing {name} {version}")
-            spawn.runv([sys.executable, "setup.py", "build", "sdist"], cwd=path)
+            spawn.runv(
+                [sys.executable, "setup.py", "build", "sdist"],
+                cwd=path,
+                env={**os.environ, "RELEASE_BUILD": "1"},
+            )
             dist_files = (path / "dist").iterdir()
             spawn.runv(
                 ["twine", "upload", *dist_files],
                 env={
                     **os.environ,
-                    "RELEASE_BUILD": "1",
                     "TWINE_USERNAME": "__token__",
                     "TWINE_PASSWORD": os.environ["PYPI_TOKEN"],
                 },
