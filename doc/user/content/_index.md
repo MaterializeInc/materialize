@@ -1,82 +1,54 @@
 ---
-title: "Materialize Docs"
-htmltitle: "Home"
-disable_toc: true
-disable_list: true
-disable_h1: true
-weight: 1
+title: "Self-managed Materialize"
+description: ""
+aliases:
+  - /self-hosted/
+robots: "noindex, nofollow"
 ---
 
-# Materialize documentation
+With self-managed Materialize, you can deploy and operate Materialize in your
+Kubernetes environment. For self-managed Materialize, Materialize offers:
 
-Materialize is a real-time data integration platform that enables you to use SQL
-to transform, deliver, and act on fast changing data.
+- A Kubernetes Operator that manages your Materialize running in your Kubernetes
+  environment.
 
-{{< callout >}}
+- Materialize packaged as a containerized application that can be deployed in a
+  Kubernetes cluster.
 
-## What's new!
+## Requirements
 
-- [Self-managed Materialize](/self-managed/). With Self-managed Materialize, you
-  can deploy and operate Materialize in your Kubernetes environment.
-  Self-managed Materialize is available in both Enterprise and Community
-  editions. For more information, see the [Self-managed
-  Materialize](/self-managed/) documentation.
+The self-managed Materialize requires the following:
 
-- [Materialize MCP Server](https://materialize.com/blog/materialize-turns-views-into-tools-for-agents/).
-  The Materialize MCP Server bridges SQL and AI by transforming indexed views into well-typed tools
-  that agents can call directly. It lets you expose your freshest, most complex logic as operational
-  data products automatically and reliably. For more information, see the
-  [Materialize MCP Server](/integrations/llm/) documentation.
+{{% self-managed/requirements-list %}}
 
-{{</ callout >}}
+See the [Installation guide](/installation/) for more information.
 
-{{< callout
-primary_url="https://materialize.com/register/?utm_campaign=General&utm_source=documentation"
-primary_text="Get Started">}}
+## Recommended instance types
 
-## Ready to get started? 🚀
+Materialize has been tested to work on instances with the following properties:
 
-1. Sign up for a [free trial
-   account](https://materialize.com/register/?utm_campaign=General&utm_source=documentation)
-   on Materialize Cloud. Alternatively, both the [Materialize Emulator Docker
-   image](/get-started/install-materialize-emulator/) and the [Self-managed
-   Materialize](/self-managed/) are also available.
-2. Follow the quickstart guide to learn the basics.
-3. Connect your own data sources and start building.
+- ARM-based CPU
+- 1:8 ratio of vCPU to GiB memory
+- 1:16 ratio of vCPU to GiB local instance storage (if enabling spill-to-disk)
 
-{{</ callout >}}
+For specific cloud provider recommendations, see the [Installation guide for the
+cloud provider](/installation/) as well as the [operational guidelines](/installation/operational-guidelines/).
 
-{{< multilinkbox >}}
-{{< linkbox title="Key Concepts" >}}
+## Installation
 
--   [Materialize overview](/overview/what-is-materialize/)
--   [Clusters](/concepts/clusters/)
--   [Sources](/concepts/sources/)
--   [Views](/concepts/views/)
--   [Indexes](/concepts/indexes/)
--   [Sinks](/concepts/sinks/)
+For instructions on installing Materialize on your Kubernetes cluster, see:
 
-    {{</ linkbox >}}
-    {{< linkbox title="Guides" >}}
--   [Materialize &amp; Postgres CDC](/integrations/cdc-postgres/)
--   [dbt &amp; Materialize](/integrations/dbt/)
--   [Materialize &amp; Node.js](/integrations/node-js/)
+- [Install locally on kind](/installation/install-on-local-kind/)
 
--   [Time-windowed computation](/sql/patterns/temporal-filters/)
-    {{</ linkbox >}}
-    {{< linkbox title="Reference" >}}
--   [`CREATE VIEW`](/sql/create-view/)
--   [`CREATE INDEX`](/sql/create-index/)
--   [`CREATE SOURCE`](/sql/create-source/)
--   [`SQL data types`](/sql/types/)
--   [`SQL functions`](/sql/functions/)
-    {{</ linkbox >}}
-    {{</ multilinkbox >}}
+- [Install locally on
+  minikube](/installation/install-on-local-minikube/)
 
-## Learn more
+- [Install on AWS](/installation/install-on-aws/)
+- [Install on GCP](/installation/install-on-gcp/)
 
-- To find out about new features and improvements, see also the
-  [Changelog](https://materialize.com/changelog/).
+## Related pages
 
-- Check out the [**Materialize blog**](https://www.materialize.com/blog/) for
-  the latest updates and Materialize deep-dives.
+<!-- Temporary:
+Hugo will add links to the pages in the same folder.
+Since we're hiding this section from the left-hand nav, adding the links here.
+-->
