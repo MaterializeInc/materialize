@@ -1048,6 +1048,20 @@ impl Coordinator {
                     },
                     timeline,
                 },
+                plan::DataSourceDesc::Webhook {
+                    validate_using,
+                    body_format,
+                    headers,
+                    cluster_id,
+                } => TableDataSource::DataSource {
+                    desc: DataSourceDesc::Webhook {
+                        validate_using,
+                        body_format,
+                        headers,
+                        cluster_id: cluster_id.expect("Webhook Tables must have cluster_id set"),
+                    },
+                    timeline,
+                },
                 o => {
                     unreachable!("CREATE TABLE data source got {:?}", o)
                 }
@@ -1075,7 +1089,7 @@ impl Coordinator {
                 // The table data_source determines whether this table will be written to
                 // by environmentd (e.g. with INSERT INTO statements) or by the storage layer
                 // (e.g. a source-fed table).
-                match table.data_source {
+                let (collections, register_ts, read_policies) = match table.data_source {
                     TableDataSource::TableWrites { defaults: _ } => {
                         // Determine the initial validity for the table.
                         let register_ts = coord.get_local_write_ts().await.timestamp;
@@ -1097,27 +1111,15 @@ impl Coordinator {
                         }
 
                         let collection_desc = CollectionDescription::for_table(table.desc.clone());
-                        let storage_metadata = coord.catalog.state().storage_metadata();
-                        coord
-                            .controller
-                            .storage
-                            .create_collections(
-                                storage_metadata,
-                                Some(register_ts),
-                                vec![(global_id, collection_desc)],
-                            )
-                            .await
-                            .unwrap_or_terminate("cannot fail to create collections");
-                        coord.apply_local_write(register_ts).await;
+                        let collections = vec![(global_id, collection_desc)];
 
-                        coord
-                            .initialize_storage_read_policies(
-                                btreeset![table_id],
-                                table
-                                    .custom_logical_compaction_window
-                                    .unwrap_or(CompactionWindow::Default),
-                            )
-                            .await;
+                        let compaction_window = table
+                            .custom_logical_compaction_window
+                            .unwrap_or(CompactionWindow::Default);
+                        let read_policies =
+                            BTreeMap::from([(compaction_window, btreeset! { table_id })]);
+
+                        (collections, Some(register_ts), read_policies)
                     }
                     TableDataSource::DataSource {
                         desc: data_source,
@@ -1159,34 +1161,62 @@ impl Coordinator {
                                     status_collection_id,
                                     timeline: Some(timeline.clone()),
                                 };
-                                let storage_metadata = coord.catalog.state().storage_metadata();
-                                coord
-                                    .controller
-                                    .storage
-                                    .create_collections(
-                                        storage_metadata,
-                                        None,
-                                        vec![(global_id, collection_desc)],
-                                    )
-                                    .await
-                                    .unwrap_or_terminate("cannot fail to create collections");
 
+                                let collections = vec![(global_id, collection_desc)];
                                 let read_policies = coord
                                     .catalog()
                                     .state()
                                     .source_compaction_windows(vec![table_id]);
-                                for (compaction_window, storage_policies) in read_policies {
-                                    coord
-                                        .initialize_storage_read_policies(
-                                            storage_policies,
-                                            compaction_window,
-                                        )
-                                        .await;
+
+                                (collections, None, read_policies)
+                            }
+                            DataSourceDesc::Webhook { .. } => {
+                                if let Some(url) =
+                                    coord.catalog().state().try_get_webhook_url(&table_id)
+                                {
+                                    ctx.session()
+                                        .add_notice(AdapterNotice::WebhookSourceCreated { url })
                                 }
+
+                                let collection_desc = CollectionDescription {
+                                    desc: table.desc.clone(),
+                                    data_source: DataSource::Webhook,
+                                    since: None,
+                                    status_collection_id: None,
+                                    timeline: Some(timeline.clone()),
+                                };
+                                let collections = vec![(global_id, collection_desc)];
+                                let read_policies = coord
+                                    .catalog()
+                                    .state()
+                                    .source_compaction_windows(vec![table_id]);
+
+                                (collections, None, read_policies)
                             }
                             _ => unreachable!("CREATE TABLE data source got {:?}", data_source),
                         }
                     }
+                };
+
+                // Create the collections.
+                let storage_metadata = coord.catalog.state().storage_metadata();
+                coord
+                    .controller
+                    .storage
+                    .create_collections(storage_metadata, register_ts, collections)
+                    .await
+                    .unwrap_or_terminate("cannot fail to create collections");
+
+                // Mark the register timestamp as completed.
+                if let Some(register_ts) = register_ts {
+                    coord.apply_local_write(register_ts).await;
+                }
+
+                // Initialize the Read Policies.
+                for (compaction_window, storage_policies) in read_policies {
+                    coord
+                        .initialize_storage_read_policies(storage_policies, compaction_window)
+                        .await;
                 }
             })
             .await;

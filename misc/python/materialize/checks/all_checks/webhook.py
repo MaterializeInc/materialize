@@ -125,7 +125,7 @@ class Webhook(Check):
 
 class WebhookTable(Check):
     def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion.parse_mz("v0.128.0-dev")
+        return self.base_version >= MzVersion.parse_mz("v0.130.0-dev")
 
     def initialize(self) -> Testdrive:
         return Testdrive(
@@ -164,7 +164,7 @@ class WebhookTable(Check):
                 anotha_one!
                 threeeeeee
 
-                > SHOW CREATE SOURCE webhook_table_text
+                > SHOW CREATE TABLE webhook_table_text
                 materialize.public.webhook_table_text "CREATE TABLE \\"materialize\\".\\"public\\".\\"webhook_table_text\\" FROM WEBHOOK BODY FORMAT TEXT"
            """
             )

@@ -61,6 +61,7 @@ use mz_storage_types::connections::{
     AwsPrivatelinkConnection, CsrConnection, KafkaConnection, MySqlConnection, PostgresConnection,
     SshConnection,
 };
+use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::sinks::{
     S3SinkFormat, SinkEnvelope, SinkPartitionStrategy, StorageSinkConnection,
 };
@@ -272,9 +273,10 @@ impl Plan {
             StatementKind::CreateSchema => &[PlanKind::CreateSchema],
             StatementKind::CreateSecret => &[PlanKind::CreateSecret],
             StatementKind::CreateSink => &[PlanKind::CreateSink],
-            StatementKind::CreateSource
-            | StatementKind::CreateSubsource
-            | StatementKind::CreateWebhookSource => &[PlanKind::CreateSource],
+            StatementKind::CreateSource | StatementKind::CreateSubsource => {
+                &[PlanKind::CreateSource]
+            }
+            StatementKind::CreateWebhookSource => &[PlanKind::CreateSource, PlanKind::CreateTable],
             StatementKind::CreateTable => &[PlanKind::CreateTable],
             StatementKind::CreateTableFromSource => &[PlanKind::CreateTable],
             StatementKind::CreateType => &[PlanKind::CreateType],
@@ -1440,6 +1442,8 @@ pub enum DataSourceDesc {
         validate_using: Option<WebhookValidation>,
         body_format: WebhookBodyFormat,
         headers: WebhookHeaders,
+        /// Only `Some` when created via `CREATE TABLE ... FROM WEBHOOK`.
+        cluster_id: Option<StorageInstanceId>,
     },
 }
 
