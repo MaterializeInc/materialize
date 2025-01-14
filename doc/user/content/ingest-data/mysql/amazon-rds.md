@@ -118,13 +118,12 @@ to connect:
     configure your database's security group to allow connections from a set of
     static Materialize IP addresses.
 
-- **Use an SSH tunnel:** If your database is running in a private network, you
-    can use an SSH tunnel to connect Materialize to the database.
-
 - **Use AWS PrivateLink**: If your database is running in a private network, you
     can use [AWS PrivateLink](/ingest-data/network-security/privatelink/) to
-    connect Materialize to the database. For details, see [AWS
-    PrivateLink](/ingest-data/network-security/privatelink/).
+    connect Materialize to the database. For details, see [AWS PrivateLink](/ingest-data/network-security/privatelink/).
+
+- **Use an SSH tunnel:** If your database is running in a private network, you
+    can use an SSH tunnel to connect Materialize to the database.
 
 {{< tabs >}}
 
@@ -184,7 +183,7 @@ see the [Terraform module repository](https://github.com/MaterializeInc/terrafor
 
     - Choose the **IP addresses** type.
 
-    - Set the protocol and port to **TCP** and **5432**.
+    - Set the protocol and port to **TCP** and **3306**.
 
     - Choose the same VPC as your RDS instance.
 
@@ -207,7 +206,7 @@ see the [Terraform module repository](https://github.com/MaterializeInc/terrafor
       in.
 
     - For **Listeners and routing**, set the protocol and port to **TCP**
-      and **5432** and select the target group you created in the previous
+      and **3306** and select the target group you created in the previous
       step.
 
 1. In the security group of your RDS instance, [allow traffic from the network load balancer](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/target-group-register-targets.html).
@@ -325,6 +324,10 @@ start by selecting the relevant option.
 
 {{< tab "Allow Materialize IPs">}}
 {{% mysql-direct/ingesting-data/allow-materialize-ips %}}
+{{< /tab >}}
+
+{{< tab "Use AWS PrivateLink">}}
+{{% mysql-direct/ingesting-data/use-aws-privatelink %}}
 {{< /tab >}}
 
 {{< tab "Use an SSH tunnel">}}
