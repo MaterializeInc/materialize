@@ -1184,10 +1184,10 @@ where
         }
     }
 
-    fn log_dataflow_global_id(&self, id: usize, global_id: GlobalId) {
+    fn log_dataflow_global_id(&self, dataflow_index: usize, global_id: GlobalId) {
         if let Some(logger) = &self.compute_logger {
             logger.log(ComputeEvent::DataflowGlobal(DataflowGlobal {
-                id,
+                dataflow_index,
                 global_id,
             }));
         }

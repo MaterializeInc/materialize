@@ -51,7 +51,7 @@ pub type ComputeEventBuilder = CapacityContainerBuilder<Vec<(Duration, ComputeEv
 #[derive(Debug, Clone, PartialOrd, PartialEq)]
 pub struct Export {
     /// Identifier of the export.
-    pub id: GlobalId,
+    pub export_id: GlobalId,
     /// Timely worker index of the exporting dataflow.
     pub dataflow_index: usize,
 }
@@ -60,7 +60,7 @@ pub struct Export {
 #[derive(Debug, Clone, PartialOrd, PartialEq)]
 pub struct ExportDropped {
     /// Identifier of the export.
-    pub id: GlobalId,
+    pub export_id: GlobalId,
 }
 
 /// A peek event with a [`Peek`], a [`PeekType`], and an installation status.
@@ -78,7 +78,7 @@ pub struct PeekEvent {
 /// Frontier change event.
 #[derive(Debug, Clone, PartialOrd, PartialEq)]
 pub struct Frontier {
-    pub id: GlobalId,
+    pub export_id: GlobalId,
     pub time: Timestamp,
     pub diff: i8,
 }
@@ -96,7 +96,7 @@ pub struct ImportFrontier {
 #[derive(Debug, Clone, PartialOrd, PartialEq)]
 pub struct ArrangementHeapSize {
     /// Operator index
-    pub operator: usize,
+    pub operator_id: usize,
     /// Delta of the heap size in bytes of the arrangement.
     pub delta_size: isize,
 }
@@ -105,7 +105,7 @@ pub struct ArrangementHeapSize {
 #[derive(Debug, Clone, PartialOrd, PartialEq)]
 pub struct ArrangementHeapCapacity {
     /// Operator index
-    pub operator: usize,
+    pub operator_id: usize,
     /// Delta of the heap capacity in bytes of the arrangement.
     pub delta_capacity: isize,
 }
@@ -114,7 +114,7 @@ pub struct ArrangementHeapCapacity {
 #[derive(Debug, Clone, PartialOrd, PartialEq)]
 pub struct ArrangementHeapAllocations {
     /// Operator index
-    pub operator: usize,
+    pub operator_id: usize,
     /// Delta of distinct heap allocations backing the arrangement.
     pub delta_allocations: isize,
 }
@@ -123,7 +123,7 @@ pub struct ArrangementHeapAllocations {
 #[derive(Debug, Clone, PartialOrd, PartialEq)]
 pub struct ArrangementHeapSizeOperator {
     /// Operator index
-    pub operator: usize,
+    pub operator_id: usize,
     /// The address of the operator.
     pub address: Rc<[usize]>,
 }
@@ -132,7 +132,7 @@ pub struct ArrangementHeapSizeOperator {
 #[derive(Debug, Clone, PartialOrd, PartialEq)]
 pub struct ArrangementHeapSizeOperatorDrop {
     /// Operator index
-    pub operator: usize,
+    pub operator_id: usize,
 }
 
 /// Dataflow shutdown event.
@@ -176,7 +176,7 @@ pub struct LirMapping {
 #[derive(Debug, Clone, PartialOrd, PartialEq)]
 pub struct DataflowGlobal {
     /// The identifier of the dataflow.
-    pub id: usize,
+    pub dataflow_index: usize,
     /// A `GlobalId` that is rendered as part of this dataflow.
     pub global_id: GlobalId,
 }
@@ -393,9 +393,9 @@ pub(super) fn construct<A: Allocate + 'static>(
             let mut scratch = String::new();
             move |datum| {
                 packer.pack_slice(&[
-                    make_string_datum(datum.id, &mut scratch),
+                    make_string_datum(datum.export_id, &mut scratch),
                     Datum::UInt64(u64::cast_from(worker_id)),
-                    Datum::UInt64(u64::cast_from(datum.dataflow_id)),
+                    Datum::UInt64(u64::cast_from(datum.dataflow_index)),
                 ])
             }
         });
@@ -406,7 +406,7 @@ pub(super) fn construct<A: Allocate + 'static>(
                 packer.pack_slice(&[
                     make_string_datum(datum.export_id, &mut scratch),
                     Datum::UInt64(u64::cast_from(worker_id)),
-                    Datum::MzTimestamp(datum.frontier),
+                    Datum::MzTimestamp(datum.time),
                 ])
             }
         });
@@ -419,7 +419,7 @@ pub(super) fn construct<A: Allocate + 'static>(
                     make_string_datum(datum.export_id, &mut scratch1),
                     make_string_datum(datum.import_id, &mut scratch2),
                     Datum::UInt64(u64::cast_from(worker_id)),
-                    Datum::MzTimestamp(datum.frontier),
+                    Datum::MzTimestamp(datum.time),
                 ])
             }
         });
@@ -528,7 +528,7 @@ pub(super) fn construct<A: Allocate + 'static>(
             let mut scratch = String::new();
             move |datum| {
                 packer.pack_slice(&[
-                    Datum::UInt64(u64::cast_from(datum.id)),
+                    Datum::UInt64(u64::cast_from(datum.dataflow_index)),
                     Datum::UInt64(u64::cast_from(worker_id)),
                     make_string_datum(datum.global_id, &mut scratch),
                 ])
@@ -630,7 +630,7 @@ impl<A: Allocate> DemuxState<A> {
 /// State tracked for each dataflow export.
 struct ExportState {
     /// The ID of the dataflow maintaining this export.
-    dataflow_id: usize,
+    dataflow_index: usize,
     /// Number of errors in this export.
     ///
     /// This must be a signed integer, since per-worker error counts can be negative, only the
@@ -643,9 +643,9 @@ struct ExportState {
 }
 
 impl ExportState {
-    fn new(dataflow_id: usize) -> Self {
+    fn new(dataflow_index: usize) -> Self {
         Self {
-            dataflow_id,
+            dataflow_index,
             error_count: 0,
             created_at: Instant::now(),
             hydration_time_ns: None,
@@ -688,21 +688,21 @@ struct DemuxOutput<'a> {
 
 #[derive(Clone)]
 struct ExportDatum {
-    id: GlobalId,
-    dataflow_id: usize,
+    export_id: GlobalId,
+    dataflow_index: usize,
 }
 
 #[derive(Clone)]
 struct FrontierDatum {
     export_id: GlobalId,
-    frontier: Timestamp,
+    time: Timestamp,
 }
 
 #[derive(Clone)]
 struct ImportFrontierDatum {
     export_id: GlobalId,
     import_id: GlobalId,
-    frontier: Timestamp,
+    time: Timestamp,
 }
 
 #[derive(Clone)]
@@ -749,7 +749,7 @@ struct LirMappingDatum {
 
 #[derive(Clone)]
 struct DataflowGlobalDatum {
-    id: usize,
+    dataflow_index: usize,
     global_id: GlobalId,
 }
 
@@ -780,116 +780,112 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
     /// Handle the given compute event.
     fn handle(&mut self, event: ComputeEvent) {
         match event {
-            ComputeEvent::Export(Export { id, dataflow_index }) => {
-                self.handle_export(id, dataflow_index)
+            ComputeEvent::Export(export) => self.handle_export(export),
+            ComputeEvent::ExportDropped(export_dropped) => {
+                self.handle_export_dropped(export_dropped)
             }
-            ComputeEvent::ExportDropped(ExportDropped { id }) => self.handle_export_dropped(id),
-            ComputeEvent::Peek(PeekEvent {
-                peek,
-                peek_type,
-                installed: true,
-            }) => self.handle_peek_install(peek, peek_type),
-            ComputeEvent::Peek(PeekEvent {
-                peek,
-                peek_type,
-                installed: false,
-            }) => self.handle_peek_retire(peek, peek_type),
-            ComputeEvent::Frontier(Frontier { id, time, diff }) => {
-                self.handle_frontier(id, time, diff)
+            ComputeEvent::Peek(
+                peek @ PeekEvent {
+                    installed: true, ..
+                },
+            ) => self.handle_peek_install(peek),
+            ComputeEvent::Peek(
+                peek @ PeekEvent {
+                    installed: false, ..
+                },
+            ) => self.handle_peek_retire(peek),
+            ComputeEvent::Frontier(frontier) => self.handle_frontier(frontier),
+            ComputeEvent::ImportFrontier(import_frontier) => {
+                self.handle_import_frontier(import_frontier)
             }
-            ComputeEvent::ImportFrontier(ImportFrontier {
-                import_id,
-                export_id,
-                time,
-                diff,
-            }) => self.handle_import_frontier(import_id, export_id, time, diff),
-            ComputeEvent::ArrangementHeapSize(ArrangementHeapSize {
-                operator,
-                delta_size: size,
-            }) => self.handle_arrangement_heap_size(operator, size),
-            ComputeEvent::ArrangementHeapCapacity(ArrangementHeapCapacity {
-                operator,
-                delta_capacity: capacity,
-            }) => self.handle_arrangement_heap_capacity(operator, capacity),
-            ComputeEvent::ArrangementHeapAllocations(ArrangementHeapAllocations {
-                operator,
-                delta_allocations: allocations,
-            }) => self.handle_arrangement_heap_allocations(operator, allocations),
-            ComputeEvent::ArrangementHeapSizeOperator(ArrangementHeapSizeOperator {
-                operator,
-                address,
-            }) => self.handle_arrangement_heap_size_operator(operator, address),
-            ComputeEvent::ArrangementHeapSizeOperatorDrop(ArrangementHeapSizeOperatorDrop {
-                operator,
-            }) => self.handle_arrangement_heap_size_operator_dropped(operator),
-            ComputeEvent::DataflowShutdown(DataflowShutdown { dataflow_index }) => {
-                self.handle_dataflow_shutdown(dataflow_index)
+            ComputeEvent::ArrangementHeapSize(inner) => self.handle_arrangement_heap_size(inner),
+            ComputeEvent::ArrangementHeapCapacity(inner) => {
+                self.handle_arrangement_heap_capacity(inner)
             }
-            ComputeEvent::ErrorCount(ErrorCount { export_id, diff }) => {
-                self.handle_error_count(export_id, diff)
+            ComputeEvent::ArrangementHeapAllocations(inner) => {
+                self.handle_arrangement_heap_allocations(inner)
             }
-            ComputeEvent::Hydration(Hydration { export_id }) => self.handle_hydration(export_id),
-            ComputeEvent::LirMapping(LirMapping { global_id, mapping }) => {
-                self.handle_lir_mapping(global_id, mapping)
+            ComputeEvent::ArrangementHeapSizeOperator(inner) => {
+                self.handle_arrangement_heap_size_operator(inner)
             }
-            ComputeEvent::DataflowGlobal(DataflowGlobal { id, global_id }) => {
-                self.handle_dataflow_global(id, global_id)
+            ComputeEvent::ArrangementHeapSizeOperatorDrop(inner) => {
+                self.handle_arrangement_heap_size_operator_dropped(inner)
             }
+            ComputeEvent::DataflowShutdown(shutdown) => self.handle_dataflow_shutdown(shutdown),
+            ComputeEvent::ErrorCount(error_count) => self.handle_error_count(error_count),
+            ComputeEvent::Hydration(hydration) => self.handle_hydration(hydration),
+            ComputeEvent::LirMapping(mapping) => self.handle_lir_mapping(mapping),
+            ComputeEvent::DataflowGlobal(global) => self.handle_dataflow_global(global),
         }
     }
 
-    fn handle_export(&mut self, id: GlobalId, dataflow_id: usize) {
+    fn handle_export(
+        &mut self,
+        Export {
+            export_id,
+            dataflow_index,
+        }: Export,
+    ) {
         let ts = self.ts();
-        let datum = ExportDatum { id, dataflow_id };
+        let datum = ExportDatum {
+            export_id,
+            dataflow_index,
+        };
         self.output.export.give((datum, ts, 1));
 
-        let existing = self.state.exports.insert(id, ExportState::new(dataflow_id));
+        let existing = self
+            .state
+            .exports
+            .insert(export_id, ExportState::new(dataflow_index));
         if existing.is_some() {
-            error!(export = %id, "export already registered");
+            error!(export = %export_id, "export already registered");
         }
 
         *self
             .state
             .dataflow_export_counts
-            .entry(dataflow_id)
+            .entry(dataflow_index)
             .or_default() += 1;
 
         // Insert hydration time logging for this export.
         let datum = HydrationTimeDatum {
-            export_id: id,
+            export_id,
             time_ns: None,
         };
         self.output.hydration_time.give((datum, ts, 1));
     }
 
-    fn handle_export_dropped(&mut self, id: GlobalId) {
-        let Some(export) = self.state.exports.remove(&id) else {
-            error!(export = %id, "missing exports entry at time of export drop");
+    fn handle_export_dropped(&mut self, ExportDropped { export_id }: ExportDropped) {
+        let Some(export) = self.state.exports.remove(&export_id) else {
+            error!(export = %export_id, "missing exports entry at time of export drop");
             return;
         };
 
         let ts = self.ts();
-        let dataflow_id = export.dataflow_id;
+        let dataflow_index = export.dataflow_index;
 
-        let datum = ExportDatum { id, dataflow_id };
+        let datum = ExportDatum {
+            export_id,
+            dataflow_index,
+        };
         self.output.export.give((datum, ts, -1));
 
-        match self.state.dataflow_export_counts.get_mut(&dataflow_id) {
+        match self.state.dataflow_export_counts.get_mut(&dataflow_index) {
             entry @ Some(0) | entry @ None => {
                 error!(
-                    export = %id,
-                    dataflow = %dataflow_id,
+                    export = %export_id,
+                    dataflow = %dataflow_index,
                     "invalid dataflow_export_counts entry at time of export drop: {entry:?}",
                 );
             }
-            Some(1) => self.handle_dataflow_dropped(dataflow_id),
+            Some(1) => self.handle_dataflow_dropped(dataflow_index),
             Some(count) => *count -= 1,
         }
 
         // Remove error count logging for this export.
         if export.error_count != 0 {
             let datum = ErrorCountDatum {
-                export_id: id,
+                export_id,
                 count: export.error_count,
             };
             self.output.error_count.give((datum, ts, -1));
@@ -897,48 +893,54 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
 
         // Remove hydration time logging for this export.
         let datum = HydrationTimeDatum {
-            export_id: id,
+            export_id,
             time_ns: export.hydration_time_ns,
         };
         self.output.hydration_time.give((datum, ts, -1));
     }
 
-    fn handle_dataflow_dropped(&mut self, id: usize) {
-        self.state.dataflow_export_counts.remove(&id);
+    fn handle_dataflow_dropped(&mut self, dataflow_index: usize) {
+        self.state.dataflow_export_counts.remove(&dataflow_index);
 
-        if self.state.shutdown_dataflows.remove(&id) {
+        if self.state.shutdown_dataflows.remove(&dataflow_index) {
             // Dataflow has already shut down before it was dropped.
             self.output.shutdown_duration.give((0, self.ts(), 1));
         } else {
             // Dataflow has not yet shut down.
-            let existing = self.state.dataflow_drop_times.insert(id, self.time);
+            let existing = self
+                .state
+                .dataflow_drop_times
+                .insert(dataflow_index, self.time);
             if existing.is_some() {
-                error!(dataflow = %id, "dataflow already dropped");
+                error!(dataflow = %dataflow_index, "dataflow already dropped");
             }
         }
     }
 
-    fn handle_dataflow_shutdown(&mut self, id: usize) {
+    fn handle_dataflow_shutdown(&mut self, DataflowShutdown { dataflow_index }: DataflowShutdown) {
         let ts = self.ts();
 
-        if let Some(start) = self.state.dataflow_drop_times.remove(&id) {
+        if let Some(start) = self.state.dataflow_drop_times.remove(&dataflow_index) {
             // Dataflow has already been dropped.
             let elapsed_ns = self.time.saturating_sub(start).as_nanos();
             let elapsed_pow = elapsed_ns.next_power_of_two();
             self.output.shutdown_duration.give((elapsed_pow, ts, 1));
         } else {
             // Dataflow has not yet been dropped.
-            let was_new = self.state.shutdown_dataflows.insert(id);
+            let was_new = self.state.shutdown_dataflows.insert(dataflow_index);
             if !was_new {
-                error!(dataflow = %id, "dataflow already shutdown");
+                error!(dataflow = %dataflow_index, "dataflow already shutdown");
             }
         }
 
         // We deal with any `GlobalId` based mappings in this event.
-        if let Some(global_ids) = self.state.dataflow_global_ids.remove(&id) {
+        if let Some(global_ids) = self.state.dataflow_global_ids.remove(&dataflow_index) {
             for global_id in global_ids {
                 // Remove dataflow/`GlobalID` mapping.
-                let datum = DataflowGlobalDatum { id, global_id };
+                let datum = DataflowGlobalDatum {
+                    dataflow_index,
+                    global_id,
+                };
                 self.output.dataflow_global_ids.give((datum, ts, -1));
 
                 // Remove LIR mapping.
@@ -968,7 +970,7 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
         }
     }
 
-    fn handle_error_count(&mut self, export_id: GlobalId, diff: i64) {
+    fn handle_error_count(&mut self, ErrorCount { export_id, diff }: ErrorCount) {
         let ts = self.ts();
 
         let Some(export) = self.state.exports.get_mut(&export_id) else {
@@ -998,7 +1000,7 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
         export.error_count = new_count;
     }
 
-    fn handle_hydration(&mut self, export_id: GlobalId) {
+    fn handle_hydration(&mut self, Hydration { export_id }: Hydration) {
         let ts = self.ts();
 
         let Some(export) = self.state.exports.get_mut(&export_id) else {
@@ -1028,7 +1030,14 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
         export.hydration_time_ns = Some(nanos);
     }
 
-    fn handle_peek_install(&mut self, peek: Peek, peek_type: PeekType) {
+    fn handle_peek_install(
+        &mut self,
+        PeekEvent {
+            peek,
+            peek_type,
+            installed: _,
+        }: PeekEvent,
+    ) {
         let uuid = peek.uuid;
         let ts = self.ts();
         self.output
@@ -1044,7 +1053,14 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
         }
     }
 
-    fn handle_peek_retire(&mut self, peek: Peek, peek_type: PeekType) {
+    fn handle_peek_retire(
+        &mut self,
+        PeekEvent {
+            peek,
+            peek_type,
+            installed: _,
+        }: PeekEvent,
+    ) {
         let uuid = peek.uuid;
         let ts = self.ts();
         self.output
@@ -1065,34 +1081,46 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
         }
     }
 
-    fn handle_frontier(&mut self, export_id: GlobalId, frontier: Timestamp, diff: i8) {
+    fn handle_frontier(
+        &mut self,
+        Frontier {
+            export_id,
+            time,
+            diff,
+        }: Frontier,
+    ) {
         let diff = i64::from(diff);
         let ts = self.ts();
-        let datum = FrontierDatum {
-            export_id,
-            frontier,
-        };
+        let datum = FrontierDatum { export_id, time };
         self.output.frontier.give((datum, ts, diff));
     }
 
     fn handle_import_frontier(
         &mut self,
-        import_id: GlobalId,
-        export_id: GlobalId,
-        frontier: Timestamp,
-        diff: i8,
+        ImportFrontier {
+            import_id,
+            export_id,
+            time,
+            diff,
+        }: ImportFrontier,
     ) {
         let ts = self.ts();
         let datum = ImportFrontierDatum {
             export_id,
             import_id,
-            frontier,
+            time,
         };
         self.output.import_frontier.give((datum, ts, diff.into()));
     }
 
     /// Update the allocation size for an arrangement.
-    fn handle_arrangement_heap_size(&mut self, operator_id: usize, size: isize) {
+    fn handle_arrangement_heap_size(
+        &mut self,
+        ArrangementHeapSize {
+            operator_id,
+            delta_size,
+        }: ArrangementHeapSize,
+    ) {
         let ts = self.ts();
         let Some(state) = self.state.arrangement_size.get_mut(&operator_id) else {
             return;
@@ -1101,13 +1129,19 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
         let datum = ArrangementHeapDatum { operator_id };
         self.output
             .arrangement_heap_size
-            .give((datum, ts, Diff::cast_from(size)));
+            .give((datum, ts, Diff::cast_from(delta_size)));
 
-        state.size += size;
+        state.size += delta_size;
     }
 
     /// Update the allocation capacity for an arrangement.
-    fn handle_arrangement_heap_capacity(&mut self, operator_id: usize, capacity: isize) {
+    fn handle_arrangement_heap_capacity(
+        &mut self,
+        ArrangementHeapCapacity {
+            operator_id,
+            delta_capacity,
+        }: ArrangementHeapCapacity,
+    ) {
         let ts = self.ts();
         let Some(state) = self.state.arrangement_size.get_mut(&operator_id) else {
             return;
@@ -1116,28 +1150,41 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
         let datum = ArrangementHeapDatum { operator_id };
         self.output
             .arrangement_heap_capacity
-            .give((datum, ts, Diff::cast_from(capacity)));
+            .give((datum, ts, Diff::cast_from(delta_capacity)));
 
-        state.capacity += capacity;
+        state.capacity += delta_capacity;
     }
 
     /// Update the allocation count for an arrangement.
-    fn handle_arrangement_heap_allocations(&mut self, operator_id: usize, count: isize) {
+    fn handle_arrangement_heap_allocations(
+        &mut self,
+        ArrangementHeapAllocations {
+            operator_id,
+            delta_allocations,
+        }: ArrangementHeapAllocations,
+    ) {
         let ts = self.ts();
         let Some(state) = self.state.arrangement_size.get_mut(&operator_id) else {
             return;
         };
 
         let datum = ArrangementHeapDatum { operator_id };
+        let diff = Diff::cast_from(delta_allocations);
         self.output
             .arrangement_heap_allocations
-            .give((datum, ts, Diff::cast_from(count)));
+            .give((datum, ts, diff));
 
-        state.count += count;
+        state.count += delta_allocations;
     }
 
     /// Indicate that a new arrangement exists, start maintaining the heap size state.
-    fn handle_arrangement_heap_size_operator(&mut self, operator_id: usize, address: Rc<[usize]>) {
+    fn handle_arrangement_heap_size_operator(
+        &mut self,
+        ArrangementHeapSizeOperator {
+            operator_id,
+            address,
+        }: ArrangementHeapSizeOperator,
+    ) {
         let activator = self.state.worker.activator_for(address);
         let existing = self
             .state
@@ -1156,25 +1203,28 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
     }
 
     /// Indicate that an arrangement has been dropped and we can cleanup the heap size state.
-    fn handle_arrangement_heap_size_operator_dropped(&mut self, operator_id: usize) {
+    fn handle_arrangement_heap_size_operator_dropped(
+        &mut self,
+        ArrangementHeapSizeOperatorDrop { operator_id }: ArrangementHeapSizeOperatorDrop,
+    ) {
         if let Some(state) = self.state.arrangement_size.remove(&operator_id) {
             let ts = self.ts();
             let datum = ArrangementHeapDatum { operator_id };
-            self.output.arrangement_heap_size.give((
-                datum.clone(),
-                ts,
-                -Diff::cast_from(state.size),
-            ));
-            self.output.arrangement_heap_capacity.give((
-                datum.clone(),
-                ts,
-                -Diff::cast_from(state.capacity),
-            ));
-            self.output.arrangement_heap_allocations.give((
-                datum,
-                ts,
-                -Diff::cast_from(state.count),
-            ));
+
+            let diff = -Diff::cast_from(state.size);
+            self.output
+                .arrangement_heap_size
+                .give((datum.clone(), ts, diff));
+
+            let diff = -Diff::cast_from(state.capacity);
+            self.output
+                .arrangement_heap_capacity
+                .give((datum.clone(), ts, diff));
+
+            let diff = -Diff::cast_from(state.count);
+            self.output
+                .arrangement_heap_allocations
+                .give((datum, ts, diff));
         }
         self.shared_state
             .arrangement_size_activators
@@ -1182,7 +1232,7 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
     }
 
     /// Indicate that a new LIR operator exists; record the dataflow address it maps to.
-    fn handle_lir_mapping(&mut self, global_id: GlobalId, mapping: Box<[(LirId, LirMetadata)]>) {
+    fn handle_lir_mapping(&mut self, LirMapping { global_id, mapping }: LirMapping) {
         // record the state (for the later drop)
         self.state
             .lir_mapping
@@ -1214,20 +1264,29 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
         }
     }
 
-    fn handle_dataflow_global(&mut self, id: usize, global_id: GlobalId) {
+    fn handle_dataflow_global(
+        &mut self,
+        DataflowGlobal {
+            dataflow_index,
+            global_id,
+        }: DataflowGlobal,
+    ) {
         self.state
             .dataflow_global_ids
-            .entry(id)
+            .entry(dataflow_index)
             .and_modify(|globals| {
                 // NB BTreeSet::insert() returns `false` when the element was already in the set
                 if !globals.insert(global_id.clone()) {
-                    error!(%id, %global_id, "dataflow mapping already knew about this GlobalId");
+                    error!(%dataflow_index, %global_id, "dataflow mapping already knew about this GlobalId");
                 }
             })
             .or_insert_with(|| BTreeSet::from([global_id.clone()]));
 
         let ts = self.ts();
-        let datum = DataflowGlobalDatum { id, global_id };
+        let datum = DataflowGlobalDatum {
+            dataflow_index,
+            global_id,
+        };
         self.output.dataflow_global_ids.give((datum, ts, 1));
     }
 }
@@ -1237,7 +1296,7 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
 /// This type is used to produce appropriate log events in response to changes of logged collection
 /// state, e.g. frontiers, and to produce cleanup events when a collection is dropped.
 pub struct CollectionLogging {
-    id: GlobalId,
+    export_id: GlobalId,
     logger: Logger,
 
     logged_frontier: Option<Timestamp>,
@@ -1247,15 +1306,18 @@ pub struct CollectionLogging {
 impl CollectionLogging {
     /// Create new logging state for the identified collection and emit initial logging events.
     pub fn new(
-        id: GlobalId,
+        export_id: GlobalId,
         logger: Logger,
         dataflow_index: usize,
         import_ids: impl Iterator<Item = GlobalId>,
     ) -> Self {
-        logger.log(ComputeEvent::Export(Export { id, dataflow_index }));
+        logger.log(ComputeEvent::Export(Export {
+            export_id,
+            dataflow_index,
+        }));
 
         let mut self_ = Self {
-            id,
+            export_id,
             logger,
             logged_frontier: None,
             logged_import_frontiers: Default::default(),
@@ -1275,11 +1337,21 @@ impl CollectionLogging {
         self.logged_frontier = new_time;
 
         if old_time != new_time {
-            let id = self.id;
-            let retraction =
-                old_time.map(|time| ComputeEvent::Frontier(Frontier { id, time, diff: -1 }));
-            let insertion =
-                new_time.map(|time| ComputeEvent::Frontier(Frontier { id, time, diff: 1 }));
+            let export_id = self.export_id;
+            let retraction = old_time.map(|time| {
+                ComputeEvent::Frontier(Frontier {
+                    export_id,
+                    time,
+                    diff: -1,
+                })
+            });
+            let insertion = new_time.map(|time| {
+                ComputeEvent::Frontier(Frontier {
+                    export_id,
+                    time,
+                    diff: 1,
+                })
+            });
             let events = retraction.into_iter().chain(insertion);
             self.logger.log_many(events);
         }
@@ -1294,7 +1366,7 @@ impl CollectionLogging {
         }
 
         if old_time != new_time {
-            let export_id = self.id;
+            let export_id = self.export_id;
             let retraction = old_time.map(|time| {
                 ComputeEvent::ImportFrontier(ImportFrontier {
                     import_id,
@@ -1318,8 +1390,9 @@ impl CollectionLogging {
 
     /// Set the collection as hydrated.
     pub fn set_hydrated(&self) {
-        self.logger
-            .log(ComputeEvent::Hydration(Hydration { export_id: self.id }));
+        self.logger.log(ComputeEvent::Hydration(Hydration {
+            export_id: self.export_id,
+        }));
     }
 }
 
@@ -1329,12 +1402,13 @@ impl Drop for CollectionLogging {
         self.set_frontier(None);
 
         let import_ids: Vec<_> = self.logged_import_frontiers.keys().copied().collect();
-        for id in import_ids {
-            self.set_import_frontier(id, None);
+        for import_id in import_ids {
+            self.set_import_frontier(import_id, None);
         }
 
-        self.logger
-            .log(ComputeEvent::ExportDropped(ExportDropped { id: self.id }));
+        self.logger.log(ComputeEvent::ExportDropped(ExportDropped {
+            export_id: self.export_id,
+        }));
     }
 }
 
