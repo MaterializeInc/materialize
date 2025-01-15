@@ -125,11 +125,11 @@ With
 ----
 ----
 In the MIR term:
-Return
-  Get l0
 With
   cte l0 =
     Get t0
+Return
+  Get l0
 
 
 id l0 is shadowed
@@ -180,17 +180,17 @@ With Mutually Recursive
 ----
 ----
 In the MIR term:
-Return
-  Union
-    Get l0
-    Filter (#0 > 1)
-      Get l0
 With Mutually Recursive
   cte l0 =
     Union
       Get l0
       Filter (#0 > 42)
         Get t0
+Return
+  Union
+    Get l0
+    Filter (#0 > 1)
+      Get l0
 
 
 id l0 is shadowed
@@ -201,24 +201,24 @@ id l0 is shadowed
 typecheck
 Return
   Filter #0 AND #1
-    Get l0
+    Get l1
 With Mutually Recursive
-  cte l0 = // { types: "(boolean?, boolean)" }
+  cte l1 = // { types: "(boolean?, boolean)" }
     Constant // { types: "(bigint, bigint)" }
       - (1, 3)
-  cte l1 = // { types: "(boolean, boolean?)" }
-    Get l1
+  cte l0 = // { types: "(boolean, boolean?)" }
+    Get l0
 ----
 ----
 In the MIR term:
-Return
-  Filter #0 AND #1
-    Get l0
 With Mutually Recursive
   cte l0 =
+    Get l0
+  cte l1 =
     Constant
       - (1, 3)
-  cte l1 =
+Return
+  Filter #0 AND #1
     Get l1
 
 

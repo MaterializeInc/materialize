@@ -13,105 +13,36 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-load("@aspect_bazel_lib//lib:copy_file.bzl", "copy_file")
+"""Additive BUILD file for the librocksdb-sys Rust crate."""
+
 load("@aspect_bazel_lib//lib:copy_to_directory.bzl", "copy_to_directory")
 load("@bazel_skylib//rules:select_file.bzl", "select_file")
 load("@rules_foreign_cc//foreign_cc:defs.bzl", "cmake")
+load("@rules_rust//bindgen:defs.bzl", "rust_bindgen")
 
-"""Additive BUILD file for the librocksdb-sys Rust crate."""
-
-# Copied from https://github.com/tensorflow/tensorflow/blob/bdd8bf316e4ab7d699127d192d30eb614a158462/third_party/snappy.BUILD
+# Derived from <https://github.com/rust-rocksdb/rust-rocksdb/blob/7f9cba4a819e76d8022733b4c82509aec6056938/librocksdb-sys/build.rs>
 
 cc_library(
     name = "snappy",
     srcs = [
         "snappy/snappy.cc",
-        "snappy/snappy.h",
-        "snappy/snappy-internal.h",
+        "snappy/snappy-c.cc",
         "snappy/snappy-sinksource.cc",
-        "snappy/snappy-sinksource.h",
-        "snappy/snappy-stubs-internal.cc",
-        "snappy/snappy-stubs-internal.h",
-        ":config_h",
-        ":snappy_stubs_public_h",
     ],
     hdrs = [
+        "snappy-stubs-public.h",
         "snappy/snappy.h",
+        "snappy/snappy-c.h",
+        "snappy/snappy-internal.h",
+        "snappy/snappy-sinksource.h",
+        "snappy/snappy-stubs-internal.h",
     ],
-    copts = [
-        "-DHAVE_CONFIG_H",
-        "-fno-exceptions",
-        "-Wno-sign-compare",
-        "-Wno-shift-negative-value",
-        "-Wno-implicit-function-declaration",
+    copts = ["-std=c++11"],
+    includes = [
+        "",
+        "snappy",
     ],
-    defines = ["HAVE_SYS_UIO_H"],
-    includes = ["snappy/."],
-)
-
-genrule(
-    name = "config_h",
-    outs = ["snappy/config.h"],
-    cmd = "\n".join([
-        "cat <<'EOF' >$@",
-        "#define HAVE_STDDEF_H 1",
-        "#define HAVE_STDINT_H 1",
-        "",
-        "#ifdef __has_builtin",
-        "#  if !defined(HAVE_BUILTIN_EXPECT) && __has_builtin(__builtin_expect)",
-        "#    define HAVE_BUILTIN_EXPECT 1",
-        "#  endif",
-        "#  if !defined(HAVE_BUILTIN_CTZ) && __has_builtin(__builtin_ctzll)",
-        "#    define HAVE_BUILTIN_CTZ 1",
-        "#  endif",
-        "#elif defined(__GNUC__) && (__GNUC__ > 3 || __GNUC__ == 3 && __GNUC_MINOR__ >= 4)",
-        "#  ifndef HAVE_BUILTIN_EXPECT",
-        "#    define HAVE_BUILTIN_EXPECT 1",
-        "#  endif",
-        "#  ifndef HAVE_BUILTIN_CTZ",
-        "#    define HAVE_BUILTIN_CTZ 1",
-        "#  endif",
-        "#endif",
-        "",
-        "#ifdef __has_include",
-        "#  if !defined(HAVE_BYTESWAP_H) && __has_include(<byteswap.h>)",
-        "#    define HAVE_BYTESWAP_H 1",
-        "#  endif",
-        "#  if !defined(HAVE_UNISTD_H) && __has_include(<unistd.h>)",
-        "#    define HAVE_UNISTD_H 1",
-        "#  endif",
-        "#  if !defined(HAVE_SYS_ENDIAN_H) && __has_include(<sys/endian.h>)",
-        "#    define HAVE_SYS_ENDIAN_H 1",
-        "#  endif",
-        "#  if !defined(HAVE_SYS_MMAN_H) && __has_include(<sys/mman.h>)",
-        "#    define HAVE_SYS_MMAN_H 1",
-        "#  endif",
-        "#  if !defined(HAVE_SYS_UIO_H) && __has_include(<sys/uio.h>)",
-        "#    define HAVE_SYS_UIO_H 1",
-        "#  endif",
-        "#endif",
-        "",
-        "#ifndef SNAPPY_IS_BIG_ENDIAN",
-        "#  ifdef __s390x__",
-        "#    define SNAPPY_IS_BIG_ENDIAN 1",
-        "#  elif defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__",
-        "#    define SNAPPY_IS_BIG_ENDIAN 1",
-        "#  endif",
-        "#endif",
-        "EOF",
-    ]),
-)
-
-genrule(
-    name = "snappy_stubs_public_h",
-    srcs = ["snappy/snappy-stubs-public.h.in"],
-    outs = ["snappy/snappy-stubs-public.h"],
-    cmd = ("sed " +
-           "-e 's/$${\\(.*\\)_01}/\\1/g' " +
-           "-e 's/$${SNAPPY_MAJOR}/1/g' " +
-           "-e 's/$${SNAPPY_MINOR}/1/g' " +
-           "-e 's/$${SNAPPY_PATCHLEVEL}/4/g' " +
-           "$< >$@"),
+    local_defines = ["NDEBUG=1"],
 )
 
 filegroup(
@@ -174,6 +105,7 @@ cmake(
         },
         no_match_error = "Building rocksdb for the specified CPU is not supported.",
     ),
+    includes = ["include/rocksdb/c.h"],
     lib_source = ":rocksdb_srcs",
     out_static_libs = ["librocksdb.a"],
     targets = ["rocksdb"],
@@ -186,52 +118,44 @@ cmake(
     ],
 )
 
-filegroup(
-    name = "out_dir",
-    srcs = [":rocksdb"],
-    visibility = ["//visibility:public"],
-)
-
 select_file(
-    name = "librocksdb",
-    srcs = ":out_dir",
+    name = "librocksdb_a",
+    srcs = ":rocksdb",
     subpath = "librocksdb.a",
 )
 
-copy_file(
-    name = "librocksdb_copy",
-    src = ":librocksdb",
-    out = "librocksdb.a",
-    allow_symlink = False,
-)
-
-copy_to_directory(
-    name = "rocksdb_lib",
-    srcs = [":librocksdb_copy"],
-    visibility = ["//visibility:public"],
-)
-
-# Copy the include folder so we can specify `ROCKSDB_INCLUDE_DIR`
-#
-# Note: We used to use `select_file` here but it generated symlinks that
-# overlapped with others and spammed the logs with WARNINGs.
-copy_to_directory(
+filegroup(
     name = "rocksdb_include",
-    srcs = [":out_dir"],
-    out = "include",
-    root_paths = ["rocksdb/include"],
-    visibility = ["//visibility:public"],
+    srcs = glob(
+        include = ["rocksdb/include/rocksdb/**/*.h"],
+    ),
 )
 
-select_file(
-    name = "libsnappy",
-    srcs = ":snappy",
-    subpath = "libsnappy.a",
+# We need to expose the header files with the rocksdb static lib. The `cmake`
+# rules doesn't give us a way to do that, so we manually piece it together.
+cc_import(
+    name = "librocksdb",
+    hdrs = [":rocksdb_include"],
+    static_library = ":librocksdb_a",
 )
 
+rust_bindgen(
+    name = "bindings",
+    bindgen_flags = [
+        "--no-derive-debug",
+        "--blocklist-type=max_align_t",
+        "--ctypes-prefix=libc",
+    ],
+    cc_lib = ":librocksdb",
+    header = "rocksdb/include/rocksdb/c.h",
+)
+
+# Place the generated artifacts into an OUT_DIR.
+#
+# TODO(parkmycar): <https://github.com/bazelbuild/rules_rust/issues/3184>
 copy_to_directory(
-    name = "snappy_lib",
-    srcs = [":libsnappy"],
+    name = "out_dir",
+    srcs = [":bindings"],
     visibility = ["//visibility:public"],
 )
 

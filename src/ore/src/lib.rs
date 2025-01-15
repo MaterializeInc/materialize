@@ -36,7 +36,6 @@ pub mod channel;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "cli")))]
 #[cfg(feature = "cli")]
 pub mod cli;
-pub mod codegen;
 pub mod collections;
 pub mod env;
 pub mod error;

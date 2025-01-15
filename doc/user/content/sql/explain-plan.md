@@ -163,7 +163,7 @@ Explained Query (fast path):
 
 ### Reading decorrelated and optimized plans
 
-Materialize plans are directed acyclic graphs of operators. Each operator in the graph
+Materialize plans are directed, potentially cyclic, graphs of operators. Each operator in the graph
 receives inputs from zero or more other operators and produces a single output.
 Sub-graphs where each output is consumed only once are rendered as tree-shaped fragments.
 Sub-graphs consumed more than once are represented as common table expressions (CTEs).
@@ -171,15 +171,15 @@ In the example below, the CTE `l0` represents a linear sub-plan (a chain of `Get
 `Filter`, and `Project` operators) which is used in both inputs of a self-join.
 
 ```text
-Return
-  Join on=(#1 = #2)
-    Get l0
-    Get l0
 With
   cte l0 =
     Project (#0, #1)
       Filter (#0 > #2)
         ReadStorage materialize.public.t
+Return
+  Join on=(#1 = #2)
+    Get l0
+    Get l0
 ```
 
 <a name="explain-plan-columns"></a>

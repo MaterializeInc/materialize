@@ -1,7 +1,7 @@
 [package]
 name = "mz-persist-client"
 description = "Client for Materialize pTVC durability system"
-version = "0.129.0-dev.0"
+version = "0.130.0-dev.0"
 edition.workspace = true
 rust-version.workspace = true
 publish = false
@@ -35,7 +35,7 @@ async-stream = "0.3.3"
 async-trait = "0.1.83"
 bytes = { version = "1.3.0", features = ["serde"] }
 clap = { version = "4.5.23", features = ["derive"] }
-differential-dataflow = "0.13.2"
+differential-dataflow = "0.13.3"
 futures = "0.3.25"
 futures-util = "0.3"
 h2 = "0.3.13"
@@ -59,7 +59,7 @@ sentry-tracing = "0.29.1"
 semver = { version = "1.0.16", features = ["serde"] }
 serde = { version = "1.0.152", features = ["derive", "rc"] }
 serde_json = "1.0.125"
-timely = "0.15.1"
+timely = "0.16.0"
 thiserror = "1.0.37"
 tokio = { version = "1.38.0", default-features = false, features = ["macros", "sync", "rt", "rt-multi-thread", "time"] }
 tokio-metrics = "0.3.0"

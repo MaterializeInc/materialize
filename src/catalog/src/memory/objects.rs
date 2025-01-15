@@ -1082,14 +1082,21 @@ impl Source {
                     validate_using,
                     body_format,
                     headers,
-                } => DataSourceDesc::Webhook {
-                    validate_using,
-                    body_format,
-                    headers,
-                    cluster_id: plan
-                        .in_cluster
-                        .expect("webhook sources must be given a cluster ID"),
-                },
+                    cluster_id,
+                } => {
+                    mz_ore::soft_assert_or_log!(
+                        cluster_id.is_none(),
+                        "cluster_id set at Source level for Webhooks"
+                    );
+                    DataSourceDesc::Webhook {
+                        validate_using,
+                        body_format,
+                        headers,
+                        cluster_id: plan
+                            .in_cluster
+                            .expect("webhook sources must be given a cluster ID"),
+                    }
+                }
             },
             desc: plan.source.desc,
             global_id,

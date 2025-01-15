@@ -19,7 +19,6 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use mz_ore::cast::CastInto;
 use mz_ore::{assert_none, halt};
-use mz_persist::indexed::columnar::ColumnarRecords;
 use mz_persist::indexed::encoding::{BatchColumnarFormat, BlobTraceBatchPart, BlobTraceUpdates};
 use mz_persist::location::{SeqNo, VersionedData};
 use mz_persist::metrics::ColumnarMetrics;
@@ -1608,11 +1607,7 @@ impl ProtoInlineBatchPart {
         let updates = proto
             .updates
             .ok_or_else(|| TryFromProtoError::missing_field("ProtoInlineBatchPart::updates"))?;
-        let (updates, ext) = ColumnarRecords::from_proto(lgbytes, updates)?;
-        let updates = match ext {
-            None => BlobTraceUpdates::Row(updates),
-            Some(ext) => BlobTraceUpdates::Both(updates, ext),
-        };
+        let updates = BlobTraceUpdates::from_proto(lgbytes, updates)?;
 
         Ok(BlobTraceBatchPart {
             desc: proto.desc.into_rust_if_some("ProtoInlineBatchPart::desc")?,

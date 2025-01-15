@@ -11,7 +11,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use differential_dataflow::dynamic::pointstamp::PointStamp;
-use differential_dataflow::logging::DifferentialEvent;
+use differential_dataflow::logging::{DifferentialEvent, DifferentialEventBuilder};
 use differential_dataflow::Collection;
 use mz_compute_client::logging::{LogVariant, LoggingConfig};
 use mz_ore::flatcontainer::{MzRegionPreference, OwnedRegionOpinion};
@@ -21,14 +21,15 @@ use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
 use timely::communication::Allocate;
 use timely::container::flatcontainer::FlatStack;
-use timely::container::{CapacityContainerBuilder, PushInto};
-use timely::logging::{Logger, ProgressEventTimestamp, TimelyEvent};
+use timely::container::ContainerBuilder;
+use timely::logging::{ProgressEventTimestamp, TimelyEvent, TimelyEventBuilder};
+use timely::logging_core::Logger;
 use timely::order::Product;
-use timely::progress::reachability::logging::TrackerEvent;
+use timely::progress::reachability::logging::{TrackerEvent, TrackerEventBuilder};
 
 use crate::arrangement::manager::TraceBundle;
 use crate::extensions::arrange::{KeyCollection, MzArrange};
-use crate::logging::compute::ComputeEvent;
+use crate::logging::compute::{ComputeEvent, ComputeEventBuilder};
 use crate::logging::{BatchLogger, EventQueue, SharedLoggingState};
 use crate::typedefs::{ErrBatcher, ErrBuilder};
 
@@ -154,10 +155,10 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
     }
 
     fn register_loggers(&self) {
-        let t_logger = self.simple_logger(self.t_event_queue.clone());
+        let t_logger = self.simple_logger::<TimelyEventBuilder>(self.t_event_queue.clone());
         let r_logger = self.reachability_logger();
-        let d_logger = self.simple_logger(self.d_event_queue.clone());
-        let c_logger = self.simple_logger(self.c_event_queue.clone());
+        let d_logger = self.simple_logger::<DifferentialEventBuilder>(self.d_event_queue.clone());
+        let c_logger = self.simple_logger::<ComputeEventBuilder>(self.c_event_queue.clone());
 
         let mut register = self.worker.log_register();
         register.insert_logger("timely", t_logger);
@@ -168,55 +169,62 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
         self.shared_state.borrow_mut().compute_logger = Some(c_logger);
     }
 
-    fn simple_logger<E: Clone + 'static>(
+    fn simple_logger<CB: ContainerBuilder>(
         &self,
-        event_queue: EventQueue<Vec<(Duration, E)>>,
-    ) -> Logger<E> {
-        let mut logger =
-            BatchLogger::<CapacityContainerBuilder<_>, _>::new(event_queue.link, self.interval_ms);
+        event_queue: EventQueue<CB::Container>,
+    ) -> Logger<CB> {
+        let mut logger = BatchLogger::new(event_queue.link, self.interval_ms);
         Logger::new(self.now, self.start_offset, move |time, data| {
-            logger.publish_batch(time, data);
+            logger.publish_batch(time, std::mem::take(data));
             event_queue.activator.activate();
         })
     }
 
-    fn reachability_logger(&self) -> Logger<TrackerEvent> {
+    fn reachability_logger(&self) -> Logger<TrackerEventBuilder> {
         let event_queue = self.r_event_queue.clone();
-        let mut logger = BatchLogger::<
-            CapacityContainerBuilder<FlatStack<ReachabilityEventRegion>>,
-            _,
-        >::new(event_queue.link, self.interval_ms);
-        Logger::new(self.now, self.start_offset, move |time, data| {
-            let mut massaged = Vec::new();
-            for (time, event) in data.drain(..) {
-                match event {
-                    TrackerEvent::SourceUpdate(update) => {
-                        massaged.extend(update.updates.iter().map(|(node, port, time, diff)| {
-                            let ts = try_downcast_timestamp(time);
-                            let is_source = true;
-                            (*node, *port, is_source, ts, *diff)
-                        }));
+        let mut logger = BatchLogger::<FlatStack<ReachabilityEventRegion>, _>::new(
+            event_queue.link,
+            self.interval_ms,
+        );
+        Logger::new(
+            self.now,
+            self.start_offset,
+            move |time, data: &mut Vec<_>| {
+                let mut massaged = Vec::new();
+                let mut container = FlatStack::default();
+                for (time, event) in data.drain(..) {
+                    match event {
+                        TrackerEvent::SourceUpdate(update) => {
+                            massaged.extend(update.updates.iter().map(
+                                |(node, port, time, diff)| {
+                                    let ts = try_downcast_timestamp(time);
+                                    let is_source = true;
+                                    (*node, *port, is_source, ts, *diff)
+                                },
+                            ));
 
-                        logger.push_into((time, (update.tracker_id, &massaged)));
-                        logger.extract_and_send();
-                        massaged.clear();
-                    }
-                    TrackerEvent::TargetUpdate(update) => {
-                        massaged.extend(update.updates.iter().map(|(node, port, time, diff)| {
-                            let ts = try_downcast_timestamp(time);
-                            let is_source = false;
-                            (*node, *port, is_source, ts, *diff)
-                        }));
+                            container.copy((time, (update.tracker_id, &massaged)));
+                            massaged.clear();
+                        }
+                        TrackerEvent::TargetUpdate(update) => {
+                            massaged.extend(update.updates.iter().map(
+                                |(node, port, time, diff)| {
+                                    let ts = try_downcast_timestamp(time);
+                                    let is_source = false;
+                                    (*node, *port, is_source, ts, *diff)
+                                },
+                            ));
 
-                        logger.push_into((time, (update.tracker_id, &massaged)));
-                        logger.extract_and_send();
-                        massaged.clear();
+                            container.copy((time, (update.tracker_id, &massaged)));
+                            massaged.clear();
+                        }
                     }
                 }
-            }
-            logger.flush_through(time);
-            event_queue.activator.activate();
-        })
+                logger.publish_batch(time, container);
+                logger.report_progress(time);
+                event_queue.activator.activate();
+            },
+        )
     }
 }
 

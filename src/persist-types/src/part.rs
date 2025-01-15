@@ -9,10 +9,10 @@
 
 //! A columnar representation of one blob's worth of data
 
+use std::mem;
 use std::sync::Arc;
 
-use arrow::array::Array;
-use arrow::buffer::ScalarBuffer;
+use arrow::array::{Array, Int64Array};
 
 use crate::columnar::{ColumnEncoder, Schema2};
 use crate::Codec64;
@@ -24,12 +24,13 @@ pub struct Part2 {
     /// The 'v' values from a Part, generally `()`.
     pub val: Arc<dyn Array>,
     /// The `ts` values from a Part.
-    pub time: ScalarBuffer<i64>,
+    pub time: Int64Array,
     /// The `diff` values from a Part.
-    pub diff: ScalarBuffer<i64>,
+    pub diff: Int64Array,
 }
 
 /// A builder for [`Part2`].
+#[derive(Debug)]
 pub struct PartBuilder2<K, KS: Schema2<K>, V, VS: Schema2<V>> {
     key: KS::Encoder,
     val: VS::Encoder,
@@ -77,8 +78,8 @@ impl<K, KS: Schema2<K>, V, VS: Schema2<V>> PartBuilder2<K, KS, V, VS> {
 
         let key_col = key.finish();
         let val_col = val.finish();
-        let time = ScalarBuffer::from(time.0);
-        let diff = ScalarBuffer::from(diff.0);
+        let time = Int64Array::from(time.0);
+        let diff = Int64Array::from(diff.0);
 
         Part2 {
             key: Arc::new(key_col),
@@ -86,6 +87,12 @@ impl<K, KS: Schema2<K>, V, VS: Schema2<V>> PartBuilder2<K, KS, V, VS> {
             time,
             diff,
         }
+    }
+
+    /// Finish the builder and replace it with an empty one.
+    pub fn finish_and_replace(&mut self, key_schema: &KS, val_schema: &VS) -> Part2 {
+        let builder = mem::replace(self, PartBuilder2::new(key_schema, val_schema));
+        builder.finish()
     }
 }
 

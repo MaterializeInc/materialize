@@ -103,17 +103,11 @@ cargo_build_script(
         "tznames/Default",
         ":all_protos",
     ],
-    proc_macro_deps = [] + all_crate_deps(
-        build_proc_macro = True,
-        proc_macro = True,
-    ),
+    proc_macro_deps = [] + all_crate_deps(build_proc_macro = True),
     rustc_env = {},
     rustc_flags = [],
     deps = [
         "//src/build-tools:mz_build_tools",
-        "//src/ore:mz_ore",
-    ] + all_crate_deps(
-        build = True,
-        normal = True,
-    ),
+        "//src/ore-build:mz_ore_build",
+    ] + all_crate_deps(build = True),
 )

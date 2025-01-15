@@ -325,7 +325,6 @@ impl TracingCliArgs {
             }),
             build_version: build_info.version,
             build_sha: build_info.sha,
-            build_time: build_info.time,
             registry,
             #[cfg(feature = "capture")]
             capture: self.capture.clone(),

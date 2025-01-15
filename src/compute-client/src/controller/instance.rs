@@ -2035,21 +2035,14 @@ where
                 continue;
             }
 
-            let compute_frontiers = collection.compute_dependency_ids().flat_map(|dep_id| {
+            let compute_frontiers = collection.compute_dependency_ids().filter_map(|dep_id| {
                 let collection = self.collections.get(&dep_id);
                 collection.map(|c| c.write_frontier())
             });
-
-            let existing_storage_dependencies = collection
-                .storage_dependency_ids()
-                .filter(|id| self.storage_collections.check_exists(*id).is_ok())
-                .collect::<Vec<_>>();
-            let storage_frontiers = self
-                .storage_collections
-                .collections_frontiers(existing_storage_dependencies)
-                .expect("missing storage collections")
-                .into_iter()
-                .map(|f| f.write_frontier);
+            let storage_frontiers = collection.storage_dependency_ids().filter_map(|dep_id| {
+                let frontiers = self.storage_collections.collection_frontiers(dep_id).ok();
+                frontiers.map(|f| f.write_frontier)
+            });
 
             let mut new_capability = Antichain::new();
             for frontier in compute_frontiers.chain(storage_frontiers) {

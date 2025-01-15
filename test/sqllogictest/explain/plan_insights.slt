@@ -175,7 +175,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t t1, t t2
     },
     "optimized": {
       "global": {
-        "text": "Explained Query:\n  Return\n    CrossJoin type=differential\n      Get l0\n      Get l0\n  With\n    cte l0 =\n      ArrangeBy keys=[[]]\n        ReadStorage materialize.public.t\n\nSource materialize.public.t\n\nTarget cluster: quickstart\n",
+        "text": "Explained Query:\n  With\n    cte l0 =\n      ArrangeBy keys=[[]]\n        ReadStorage materialize.public.t\n  Return\n    CrossJoin type=differential\n      Get l0\n      Get l0\n\nSource materialize.public.t\n\nTarget cluster: quickstart\n",
         "json": {
           "plans": [
             {
@@ -529,7 +529,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t t1, t t2
     },
     "optimized": {
       "global": {
-        "text": "Explained Query:\n  Return\n    CrossJoin type=differential\n      Get l0\n      Get l0\n  With\n    cte l0 =\n      ArrangeBy keys=[[]]\n        ReadIndex on=t t_primary_idx=[*** full scan ***]\n\nUsed Indexes:\n  - materialize.public.t_primary_idx (*** full scan ***)\n\nTarget cluster: quickstart\n",
+        "text": "Explained Query:\n  With\n    cte l0 =\n      ArrangeBy keys=[[]]\n        ReadIndex on=t t_primary_idx=[*** full scan ***]\n  Return\n    CrossJoin type=differential\n      Get l0\n      Get l0\n\nUsed Indexes:\n  - materialize.public.t_primary_idx (*** full scan ***)\n\nTarget cluster: quickstart\n",
         "json": {
           "plans": [
             {
@@ -862,7 +862,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT count(*) FROM t
     },
     "optimized": {
       "global": {
-        "text": "Explained Query:\n  Return\n    Union\n      Get l0\n      Map (0)\n        Union\n          Negate\n            Project ()\n              Get l0\n          Constant\n            - ()\n  With\n    cte l0 =\n      Reduce aggregates=[count(*)]\n        Project ()\n          ReadStorage materialize.public.t\n\nSource materialize.public.t\n\nTarget cluster: other\n",
+        "text": "Explained Query:\n  With\n    cte l0 =\n      Reduce aggregates=[count(*)]\n        Project ()\n          ReadStorage materialize.public.t\n  Return\n    Union\n      Get l0\n      Map (0)\n        Union\n          Negate\n            Project ()\n              Get l0\n          Constant\n            - ()\n\nSource materialize.public.t\n\nTarget cluster: other\n",
         "json": {
           "plans": [
             {
@@ -1248,9 +1248,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT 'abc'
                         "nullable": false
                       }
                     ],
-                    "keys": [
-                      []
-                    ]
+                    "keys": []
                   }
                 ]
               }

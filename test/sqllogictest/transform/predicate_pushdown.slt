@@ -486,6 +486,10 @@ EXPLAIN OPTIMIZED PLAN AS TEXT FOR
 SELECT a FROM y as y, LATERAL(SELECT u FROM x WHERE y.a = x.a LIMIT 5) WHERE a IN (41, 42);
 ----
 Explained Query:
+  With
+    cte l0 =
+      Filter ((#0 = 41) OR (#0 = 42))
+        ReadStorage materialize.public.y
   Return
     Project (#0)
       Join on=(#0 = #1) type=differential
@@ -502,10 +506,6 @@ Explained Query:
                   Project (#0)
                     Filter ((#0 = 41) OR (#0 = 42))
                       ReadStorage materialize.public.x
-  With
-    cte l0 =
-      Filter ((#0 = 41) OR (#0 = 42))
-        ReadStorage materialize.public.y
 
 Source materialize.public.x
   filter=(((#0 = 41) OR (#0 = 42)))
@@ -596,18 +596,7 @@ WITH MUTUALLY RECURSIVE
 SELECT * FROM c2;
 ----
 Explained Query:
-  Return
-    Get l2
   With Mutually Recursive
-    cte l2 =
-      Union
-        Get l0
-        Get l1
-        Get l1
-    cte l1 =
-      Project (#1)
-        Map ((#0 + #0))
-          Get l0
     cte l0 =
       Union
         Project (#0)
@@ -615,6 +604,17 @@ Explained Query:
             ReadStorage materialize.public.init
         Filter (#0 < 5)
           Get l2
+    cte l1 =
+      Project (#1)
+        Map ((#0 + #0))
+          Get l0
+    cte l2 =
+      Union
+        Get l0
+        Get l1
+        Get l1
+  Return
+    Get l2
 
 Source materialize.public.init
   filter=((#0 < 5))
@@ -646,24 +646,24 @@ WITH MUTUALLY RECURSIVE
 SELECT * FROM c2;
 ----
 Explained Query:
-  Return
-    Get l2
   With Mutually Recursive
-    cte l2 =
-      Union
-        Get l0
-        Get l1
-        Get l1
-    cte l1 =
-      Project (#1)
-        Filter (#0 < 5)
-          Map ((#0 + #0))
-            Get l0
     cte l0 =
       Union
         Project (#0)
           ReadStorage materialize.public.init
         Get l2
+    cte l1 =
+      Project (#1)
+        Filter (#0 < 5)
+          Map ((#0 + #0))
+            Get l0
+    cte l2 =
+      Union
+        Get l0
+        Get l1
+        Get l1
+  Return
+    Get l2
 
 Source materialize.public.init
 
@@ -693,24 +693,24 @@ WITH MUTUALLY RECURSIVE
 SELECT * FROM c2;
 ----
 Explained Query:
-  Return
-    Get l2
   With Mutually Recursive
+    cte l0 =
+      Union
+        Project (#0)
+          ReadStorage materialize.public.init
+        Get l2
+    cte l1 =
+      Project (#1)
+        Map ((#0 + #0))
+          Get l0
     cte l2 =
       Union
         Filter (#0 < 5)
           Get l0
         Get l1
         Get l1
-    cte l1 =
-      Project (#1)
-        Map ((#0 + #0))
-          Get l0
-    cte l0 =
-      Union
-        Project (#0)
-          ReadStorage materialize.public.init
-        Get l2
+  Return
+    Get l2
 
 Source materialize.public.init
 
@@ -743,28 +743,28 @@ WITH MUTUALLY RECURSIVE
 SELECT * FROM ((SELECT * FROM c2) UNION (SELECT * FROM c0));
 ----
 Explained Query:
-  Return
-    Distinct project=[#0]
-      Union
-        Get l2
-        Get l0
   With Mutually Recursive
+    cte l0 =
+      Union
+        Project (#0)
+          ReadStorage materialize.public.init
+        Get l2
+    cte l1 =
+      Project (#1)
+        Filter (#0 < 5)
+          Map ((#0 + #0))
+            Get l0
     cte l2 =
       Union
         Filter (#0 < 5)
           Get l0
         Get l1
         Get l1
-    cte l1 =
-      Project (#1)
-        Filter (#0 < 5)
-          Map ((#0 + #0))
-            Get l0
-    cte l0 =
+  Return
+    Distinct project=[#0]
       Union
-        Project (#0)
-          ReadStorage materialize.public.init
         Get l2
+        Get l0
 
 Source materialize.public.init
 
@@ -796,25 +796,25 @@ WITH MUTUALLY RECURSIVE
 SELECT * FROM c2 WHERE n>7;
 ----
 Explained Query:
-  Return
-    Filter (#0 > 7)
-      Get l2
   With Mutually Recursive
-    cte l2 =
-      Union
-        Get l0
-        Get l1
-        Get l1
-    cte l1 =
-      Project (#1)
-        Map ((#0 + #0))
-          Get l0
     cte l0 =
       Union
         Project (#0)
           ReadStorage materialize.public.init
         Filter (#0 > 7)
           Get l2
+    cte l1 =
+      Project (#1)
+        Map ((#0 + #0))
+          Get l0
+    cte l2 =
+      Union
+        Get l0
+        Get l1
+        Get l1
+  Return
+    Filter (#0 > 7)
+      Get l2
 
 Source materialize.public.init
 
@@ -846,27 +846,27 @@ WITH MUTUALLY RECURSIVE
 SELECT * FROM c1 WHERE n>7;
 ----
 Explained Query:
-  Return
-    Project (#1)
-      Filter (#1 > 7)
-        Map ((#0 + #0))
-          Get l0
   With Mutually Recursive
-    cte l2 =
-      Union
-        Get l0
-        Get l1
-        Get l1
-    cte l1 =
-      Project (#1)
-        Filter (#1 > 7)
-          Map ((#0 + #0))
-            Get l0
     cte l0 =
       Union
         Project (#0)
           ReadStorage materialize.public.init
         Get l2
+    cte l1 =
+      Project (#1)
+        Filter (#1 > 7)
+          Map ((#0 + #0))
+            Get l0
+    cte l2 =
+      Union
+        Get l0
+        Get l1
+        Get l1
+  Return
+    Project (#1)
+      Filter (#1 > 7)
+        Map ((#0 + #0))
+          Get l0
 
 Source materialize.public.init
 
@@ -898,26 +898,26 @@ WITH MUTUALLY RECURSIVE
 SELECT * FROM c1;
 ----
 Explained Query:
-  Return
-    Project (#1)
-      Map ((#0 + #0))
-        Get l0
   With Mutually Recursive
-    cte l2 =
-      Union
-        Get l0
-        Get l1
-        Get l1
-    cte l1 =
-      Project (#1)
-        Map ((#0 + #0))
-          Get l0
     cte l0 =
       Union
         Project (#0)
           ReadStorage materialize.public.init
         Filter (#0 < 3)
           Get l2
+    cte l1 =
+      Project (#1)
+        Map ((#0 + #0))
+          Get l0
+    cte l2 =
+      Union
+        Get l0
+        Get l1
+        Get l1
+  Return
+    Project (#1)
+      Map ((#0 + #0))
+        Get l0
 
 Source materialize.public.init
 

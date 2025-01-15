@@ -150,5 +150,8 @@ spec:
         {{- end }}
         {{- end }}
         - "--enable-security-context"
+        {{- if .Values.schedulerName }}
+        - "--scheduler-name={{ .Values.schedulerName }}"
+        {{- end }}
         resources:
           {{- toYaml .Values.operator.resources | nindent 10 }}

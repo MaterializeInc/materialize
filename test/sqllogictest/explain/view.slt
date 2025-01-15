@@ -50,6 +50,16 @@ query T multiline
 EXPLAIN LOCALLY OPTIMIZED PLAN FOR
 VIEW v;
 ----
+With
+  cte l0 =
+    Join on=(#2 = integer_to_bigint(#0))
+      Filter (#1 = 100) AND (#0) IS NOT NULL
+        Get materialize.public.accounts
+      Filter (#0) IS NOT NULL
+        Get materialize.public.account_details
+  cte l1 =
+    Filter (#1 = 100)
+      Get materialize.public.accounts
 Return
   Project (#0, #1, #3)
     Union
@@ -64,16 +74,6 @@ Return
               Distinct project=[#0]
                 Get l1
             Get l1
-With
-  cte l1 =
-    Filter (#1 = 100)
-      Get materialize.public.accounts
-  cte l0 =
-    Join on=(#2 = integer_to_bigint(#0))
-      Filter (#1 = 100) AND (#0) IS NOT NULL
-        Get materialize.public.accounts
-      Filter (#0) IS NOT NULL
-        Get materialize.public.account_details
 
 EOF
 
@@ -82,6 +82,16 @@ query T multiline
 EXPLAIN LOCALLY OPTIMIZED PLAN FOR
 REPLAN VIEW v;
 ----
+With
+  cte l0 =
+    Join on=(#2 = integer_to_bigint(#0))
+      Filter (#1 = 100) AND (#0) IS NOT NULL
+        Get materialize.public.accounts
+      Filter (#0) IS NOT NULL
+        Get materialize.public.account_details
+  cte l1 =
+    Filter (#1 = 100)
+      Get materialize.public.accounts
 Return
   Project (#0, #1, #3)
     Union
@@ -96,16 +106,6 @@ Return
               Distinct project=[#0]
                 Get l1
             Get l1
-With
-  cte l1 =
-    Filter (#1 = 100)
-      Get materialize.public.accounts
-  cte l0 =
-    Join on=(#2 = integer_to_bigint(#0))
-      Filter (#1 = 100) AND (#0) IS NOT NULL
-        Get materialize.public.accounts
-      Filter (#0) IS NOT NULL
-        Get materialize.public.account_details
 
 EOF
 
@@ -115,6 +115,13 @@ query T multiline
 EXPLAIN LOCALLY OPTIMIZED PLAN WITH(ENABLE NEW OUTER JOIN LOWERING = TRUE) FOR
 REPLAN VIEW v;
 ----
+With
+  cte l0 =
+    Join on=(#2 = integer_to_bigint(#0))
+      Filter (#0) IS NOT NULL
+        Get materialize.public.accounts
+      Filter (#0) IS NOT NULL
+        Get materialize.public.account_details
 Return
   Project (#0, #1, #3)
     Union
@@ -131,13 +138,6 @@ Return
             Get materialize.public.accounts
       Filter (#1 = 100)
         Get l0
-With
-  cte l0 =
-    Join on=(#2 = integer_to_bigint(#0))
-      Filter (#0) IS NOT NULL
-        Get materialize.public.accounts
-      Filter (#0) IS NOT NULL
-        Get materialize.public.account_details
 
 EOF
 
@@ -163,6 +163,13 @@ query T multiline
 EXPLAIN LOCALLY OPTIMIZED PLAN FOR
 VIEW v;
 ----
+With
+  cte l0 =
+    Join on=(#2 = integer_to_bigint(#0))
+      Filter (#0) IS NOT NULL
+        Get materialize.public.accounts
+      Filter (#0) IS NOT NULL
+        Get materialize.public.account_details
 Return
   Project (#0, #1, #3)
     Union
@@ -179,13 +186,6 @@ Return
             Get materialize.public.accounts
       Filter (#1 = 100)
         Get l0
-With
-  cte l0 =
-    Join on=(#2 = integer_to_bigint(#0))
-      Filter (#0) IS NOT NULL
-        Get materialize.public.accounts
-      Filter (#0) IS NOT NULL
-        Get materialize.public.account_details
 
 EOF
 
@@ -194,6 +194,16 @@ query T multiline
 EXPLAIN LOCALLY OPTIMIZED PLAN WITH(ENABLE NEW OUTER JOIN LOWERING = FALSE) FOR
 REPLAN VIEW v;
 ----
+With
+  cte l0 =
+    Join on=(#2 = integer_to_bigint(#0))
+      Filter (#1 = 100) AND (#0) IS NOT NULL
+        Get materialize.public.accounts
+      Filter (#0) IS NOT NULL
+        Get materialize.public.account_details
+  cte l1 =
+    Filter (#1 = 100)
+      Get materialize.public.accounts
 Return
   Project (#0, #1, #3)
     Union
@@ -208,15 +218,5 @@ Return
               Distinct project=[#0]
                 Get l1
             Get l1
-With
-  cte l1 =
-    Filter (#1 = 100)
-      Get materialize.public.accounts
-  cte l0 =
-    Join on=(#2 = integer_to_bigint(#0))
-      Filter (#1 = 100) AND (#0) IS NOT NULL
-        Get materialize.public.accounts
-      Filter (#0) IS NOT NULL
-        Get materialize.public.account_details
 
 EOF

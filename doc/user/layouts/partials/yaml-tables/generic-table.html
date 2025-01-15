@@ -1,0 +1,24 @@
+{{ $fields := slice }}
+<table>
+<thead>
+<tr>
+{{ range .columns }}
+<th>{{ .column }}</th>
+{{ $fields = $fields | append (dict "field" .column) }}
+{{ end }}
+</tr>
+</thead>
+<tbody>
+{{ range .rows }}
+{{ $row := . }}
+<tr>
+{{ range $fields }}
+{{ $field := .field }}
+<td>
+{{ index $row $field | markdownify }}
+</td>
+{{ end }}
+</tr>
+{{ end }}
+</tbody>
+</table>

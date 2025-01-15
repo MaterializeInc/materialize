@@ -836,15 +836,15 @@ impl CargoBuildScript {
             all_deps.iter(DependencyKind::Development, true);
 
         let mut deps: List<QuotedString> =
-            List::new(deps).concat_other(AllCrateDeps::default().normal().build());
+            List::new(deps).concat_other(AllCrateDeps::default().build());
         // Add extra platform deps if there are any.
         if !extra_deps.is_empty() {
             let select: Select<List<QuotedString>> = Select::new(extra_deps, vec![]);
             deps = deps.concat_other(select);
         }
 
-        let mut proc_macro_deps: List<QuotedString> = List::new(proc_macro_deps)
-            .concat_other(AllCrateDeps::default().proc_macro().build_proc_macro());
+        let mut proc_macro_deps: List<QuotedString> =
+            List::new(proc_macro_deps).concat_other(AllCrateDeps::default().build_proc_macro());
         // Add extra platform deps if there are any.
         if !extra_proc_macro_deps.is_empty() {
             let select: Select<List<QuotedString>> = Select::new(extra_proc_macro_deps, vec![]);

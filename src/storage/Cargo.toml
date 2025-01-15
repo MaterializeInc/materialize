@@ -26,26 +26,19 @@ columnation = "0.1.0"
 crossbeam-channel = "0.5.8"
 csv-core = { version = "0.1.10" }
 dec = "0.4.8"
-differential-dataflow = "0.13.2"
-either = { version = "1.8.0", features = ["serde"] }
+differential-dataflow = "0.13.3"
 fail = { version = "0.5.1", features = ["failpoints"] }
 futures = "0.3.25"
-globset = { version = "0.4.14", features = ["serde1"] }
-http = "1.1.0"
 indexmap = { version = "2.0.0", default-features = false, features = ["std"] }
 itertools = { version = "0.12.1" }
 maplit = "1.0.2"
 mysql_async = { version = "0.34.1", default-features = false, features = ["minimal", "binlog"] }
 mysql_common = { version = "0.32.4", default-features = false, features = ["chrono"] }
-mz-avro = { path = "../avro", features = ["snappy"] }
-mz-aws-util = { path = "../aws-util", features = ["s3"] }
 mz-build-info = { path = "../build-info" }
 mz-ccsr = { path = "../ccsr" }
-mz-cloud-resources = { path = "../cloud-resources" }
 mz-dyncfgs = { path = "../dyncfgs" }
 mz-expr = { path = "../expr" }
 mz-cluster = { path = "../cluster" }
-mz-dyncfg = { path = "../dyncfg" }
 mz-interchange = { path = "../interchange" }
 mz-kafka-util = { path = "../kafka-util" }
 mz-mysql-util = { path = "../mysql-util" }
@@ -57,7 +50,6 @@ mz-pgcopy = { path = "../pgcopy" }
 mz-postgres-util = { path = "../postgres-util" }
 mz-repr = { path = "../repr" }
 mz-rocksdb = { path = "../rocksdb" }
-mz-secrets = { path = "../secrets" }
 mz-service = { path = "../service" }
 mz-sql-parser = { path = "../sql-parser" }
 mz-ssh-util = { path = "../ssh-util" }
@@ -67,7 +59,6 @@ mz-storage-types = { path = "../storage-types" }
 mz-timely-util = { path = "../timely-util" }
 mz-txn-wal = { path = "../txn-wal" }
 pin-project = "1.0.12"
-postgres-protocol = { version = "0.6.5" }
 postgres-replication = { version = "0.6.7" }
 prometheus = { version = "0.13.3", default-features = false }
 prost = { version = "0.13.2", features = ["no-recursion-limit"] }
@@ -85,32 +76,27 @@ serde = { version = "1.0.152", features = ["derive"] }
 serde_json = { version = "1.0.125" }
 serde_bytes = { version = "0.11.14" }
 sha2 = "0.10.6"
-timely = "0.15.1"
+timely = "0.16.0"
 tokio = { version = "1.38.0", features = ["fs", "rt", "sync", "test-util"] }
 tokio-postgres = { version = "0.7.8", features = ["serde"] }
 tokio-stream = "0.1.11"
 tokio-util = { version = "0.7.4", features = ["io"] }
 tracing = "0.1.37"
-tracing-subscriber = "0.3.16"
 thiserror = { version = "1.0.37" }
-url = { version = "2.3.1", features = ["serde"] }
 uuid = { version = "1.7.0", features = ["serde", "v4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false }
-tonic-build = "0.12.1"
 
 [dev-dependencies]
 async-trait = "0.1.83"
 axum = "0.7.5"
 clap = { version = "4.5.23", features = ["derive", "env"] }
-datadriven = { version = "0.8.0", features = ["async"] }
 humantime = "2.1.0"
 mz-http-util = { path = "../http-util" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
 itertools = "0.12.1"
-num_cpus = "1.14.0"
 tempfile = "3.14.0"
 tokio = { version = "1.38.0", features = ["test-util"] }
 

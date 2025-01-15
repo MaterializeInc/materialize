@@ -30,7 +30,6 @@ rust_library(
     version = "0.0.0",
     deps = [
         "//src/ore:mz_ore",
-        "//src/proto:mz_proto",
         "//src/rocksdb-types:mz_rocksdb_types",
     ] + all_crate_deps(normal = True),
 )
@@ -63,7 +62,6 @@ rust_test(
     version = "0.0.0",
     deps = [
         "//src/ore:mz_ore",
-        "//src/proto:mz_proto",
         "//src/rocksdb-types:mz_rocksdb_types",
     ] + all_crate_deps(
         normal = True,
@@ -76,7 +74,6 @@ rust_doc_test(
     crate = ":mz_rocksdb",
     deps = [
         "//src/ore:mz_ore",
-        "//src/proto:mz_proto",
         "//src/rocksdb-types:mz_rocksdb_types",
     ] + all_crate_deps(
         normal = True,
@@ -109,7 +106,6 @@ rust_test(
     deps = [
         ":mz_rocksdb",
         "//src/ore:mz_ore",
-        "//src/proto:mz_proto",
         "//src/rocksdb-types:mz_rocksdb_types",
     ] + all_crate_deps(
         normal = True,

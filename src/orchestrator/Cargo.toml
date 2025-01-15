@@ -17,13 +17,11 @@ chrono = { version = "0.4.35", default-features = false, features = ["serde"] }
 derivative = "2.2.0"
 futures-core = "0.3.21"
 mz-ore = { path = "../ore", default-features = false }
-prost = { version = "0.13.2", features = ["no-recursion-limit"] }
 serde = "1.0"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false }
-tonic-build = "0.12.1"
 
 [features]
 default = ["mz-build-tools/default", "workspace-hack"]

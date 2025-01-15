@@ -45,6 +45,10 @@ EXPLAIN SELECT SUM(data)
 FROM mv_using_dataflow_rendering;
 ----
 Explained Query:
+  With
+    cte l0 =
+      Reduce aggregates=[sum(#0)]
+        ReadStorage materialize.public.mv_using_dataflow_rendering
   Return
     Union
       Get l0
@@ -55,10 +59,6 @@ Explained Query:
               Get l0
           Constant
             - ()
-  With
-    cte l0 =
-      Reduce aggregates=[sum(#0)]
-        ReadStorage materialize.public.mv_using_dataflow_rendering
 
 Source materialize.public.mv_using_dataflow_rendering
 

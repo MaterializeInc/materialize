@@ -23,6 +23,12 @@ name   nullable  type  comment
 ------------------------------
 body   false     text  ""
 
+> SHOW CREATE SOURCE webhook_text;
+materialize.public.webhook_text "CREATE SOURCE \"materialize\".\"public\".\"webhook_text\" IN CLUSTER \"webhook_cluster\" FROM WEBHOOK BODY FORMAT TEXT"
+
+> SELECT name, type FROM mz_objects WHERE name = 'webhook_text';
+webhook_text source
+
 $ webhook-append database=materialize schema=public name=webhook_text
 a
 
@@ -548,3 +554,28 @@ aaa_1
 
 > SELECT * FROM webhook_as_table;
 aaa_1
+
+> SHOW CREATE TABLE webhook_as_table;
+materialize.public.webhook_as_table "CREATE TABLE \"materialize\".\"public\".\"webhook_as_table\" FROM WEBHOOK BODY FORMAT TEXT"
+
+> SHOW COLUMNS FROM webhook_as_table;
+name   nullable  type  comment
+------------------------------
+body   false     text  ""
+
+> SHOW TABLES
+not_a_webhook ""
+webhook_as_table ""
+
+> SELECT name, type FROM mz_objects WHERE name = 'webhook_as_table';
+webhook_as_table table
+
+$ set-from-sql var=webhook-table-id
+SELECT id FROM mz_tables WHERE name = 'webhook_as_table';
+
+$ set-from-sql var=webhook-table-shard-id
+SELECT shard_id FROM mz_internal.mz_storage_shards WHERE object_id = '${webhook-table-id}';
+
+> DROP TABLE webhook_as_table;
+
+$ check-shard-tombstone shard-id=${webhook-table-shard-id}

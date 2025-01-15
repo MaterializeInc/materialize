@@ -150,7 +150,9 @@ use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
 use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
-use crate::logging::compute::{ComputeEvent, LirMetadata, LogDataflowErrors};
+use crate::logging::compute::{
+    ComputeEvent, DataflowGlobal, LirMapping, LirMetadata, LogDataflowErrors,
+};
 use crate::render::context::{
     ArrangementFlavor, Context, MzArrangement, MzArrangementImport, ShutdownToken,
 };
@@ -204,7 +206,7 @@ pub fn build_compute_dataflow<A: Allocate>(
         .map(|(sink_id, sink)| (*sink_id, dataflow.depends_on(sink.from), sink.clone()))
         .collect::<Vec<_>>();
 
-    let worker_logging = timely_worker.log_register().get("timely");
+    let worker_logging = timely_worker.log_register().get("timely").map(Into::into);
     let apply_demands = COMPUTE_APPLY_COLUMN_DEMANDS.get(&compute_state.worker_config);
 
     let name = format!("Dataflow: {}", &dataflow.debug_name);
@@ -1182,15 +1184,18 @@ where
         }
     }
 
-    fn log_dataflow_global_id(&self, id: usize, global_id: GlobalId) {
+    fn log_dataflow_global_id(&self, dataflow_index: usize, global_id: GlobalId) {
         if let Some(logger) = &self.compute_logger {
-            logger.log(ComputeEvent::DataflowGlobal { id, global_id });
+            logger.log(ComputeEvent::DataflowGlobal(DataflowGlobal {
+                dataflow_index,
+                global_id,
+            }));
         }
     }
 
     fn log_lir_mapping(&self, global_id: GlobalId, mapping: Box<[(LirId, LirMetadata)]>) {
         if let Some(logger) = &self.compute_logger {
-            logger.log(ComputeEvent::LirMapping { global_id, mapping });
+            logger.log(ComputeEvent::LirMapping(LirMapping { global_id, mapping }));
         }
     }
 

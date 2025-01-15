@@ -17,6 +17,7 @@ use std::rc::Weak;
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::difference::{Multiply, Semigroup};
 use differential_dataflow::lattice::Lattice;
+use differential_dataflow::logging::DifferentialEventBuilder;
 use differential_dataflow::trace::{Batcher, Builder, Description};
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use timely::container::columnation::{Columnation, TimelyStack};
@@ -792,7 +793,8 @@ where
             let scope = stream.scope();
             let register = scope.log_register();
             register
-                .get::<differential_dataflow::logging::DifferentialEvent>("differential/arrange")
+                .get::<DifferentialEventBuilder>("differential/arrange")
+                .map(Into::into)
         };
 
         let mut batcher = B::new(logger, info.global_id);

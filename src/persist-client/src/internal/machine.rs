@@ -1419,7 +1419,7 @@ pub mod datadriven {
 
     use crate::batch::{
         validate_truncate_batch, Batch, BatchBuilder, BatchBuilderConfig, BatchBuilderInternal,
-        BatchParts, BLOB_TARGET_SIZE, STRUCTURED_ORDER,
+        BatchParts, BLOB_TARGET_SIZE, BUILDER_STRUCTURED, STRUCTURED_ORDER,
     };
     use crate::cfg::COMPACTION_MEMORY_BOUND_BYTES;
     use crate::fetch::{Cursor, EncodedPart};
@@ -1466,6 +1466,7 @@ pub mod datadriven {
             client
                 .cfg
                 .set_config(&STRUCTURED_ORDER, *STRUCTURED_ORDER.default());
+            client.cfg.set_config(&BUILDER_STRUCTURED, true);
             let state_versions = Arc::new(StateVersions::new(
                 client.cfg.clone(),
                 Arc::clone(&client.consensus),
@@ -2633,8 +2634,7 @@ pub mod tests {
         ];
 
         write1.expect_compare_and_append(&data[..1], 0, 2).await;
-        // quick check: each handle should have its own copy of state
-        assert!(write1.machine.seqno() > write2.machine.seqno());
+
         // this handle's upper now lags behind. if compare_and_append fails to update
         // state after an upper mismatch then this call would (incorrectly) fail
         write2.expect_compare_and_append(&data[1..2], 2, 3).await;

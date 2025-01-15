@@ -794,12 +794,15 @@ mod write {
         /// The frontiers of the `desired` inputs.
         desired_frontiers: OkErr<Antichain<Timestamp>, Antichain<Timestamp>>,
         /// The frontiers of the `persist` inputs.
+        ///
+        /// Note that this is _not_ the same as the write frontier of the output persist shard! It
+        /// usually is, but during snapshot processing, these frontiers will start at the shard's
+        /// read frontier, so they can be beyond its write frontier. This is important as it means
+        /// we must not discard batch descriptions based on these persist frontiers: A batch
+        /// description might still be valid even if its `lower` is before the persist frontiers we
+        /// observe.
         persist_frontiers: OkErr<Antichain<Timestamp>, Antichain<Timestamp>>,
         /// The current valid batch description and associated output capability, if any.
-        ///
-        /// Note that "valid" here implies that if a batch description is set, it must be true that
-        /// its `lower` is >= the `persist_frontier`. Otherwise the described batch couldn't be
-        /// appended anymore, rendering the batch description invalid.
         batch_description: Option<(BatchDescription, Capability<Timestamp>)>,
         /// A request to force a consolidation of `corrections` once both `desired_frontiers` and
         /// `persist_frontiers` become greater than the given frontier.
@@ -894,15 +897,6 @@ mod write {
             self.corrections.ok.advance_since(frontier.clone());
             self.corrections.err.advance_since(frontier.clone());
 
-            // If the `persist` frontier is greater than the `lower` of the current batch
-            // description, we won't be able to append the batch, so the batch description is not
-            // valid anymore.
-            if let Some((desc, _)) = &self.batch_description {
-                if PartialOrder::less_than(&desc.lower, frontier) {
-                    self.batch_description = None;
-                }
-            }
-
             self.maybe_force_consolidation();
         }
 
@@ -927,16 +921,18 @@ mod write {
         }
 
         fn absorb_batch_description(&mut self, desc: BatchDescription, cap: Capability<Timestamp>) {
-            // The incoming batch description is outdated if either:
-            // * we already have a batch description with a greater `lower`, or
-            // * its `lower` is less than the persist frontier
-            let validity_frontier = match &self.batch_description {
-                Some((prev, _)) => &prev.lower,
-                None => self.persist_frontiers.frontier(),
-            };
-            if PartialOrder::less_than(&desc.lower, validity_frontier) {
-                self.trace(format!("skipping outdated batch description: {desc:?}"));
-                return;
+            // The incoming batch description is outdated if we already have a batch description
+            // with a greater `lower`.
+            //
+            // Note that we cannot assume a description is outdated based on the comparison of its
+            // `lower` with the `persist_frontier`. The persist frontier observed by the `write`
+            // operator is initialized with the shard's read frontier, so it can be greater than
+            // the shard's write frontier.
+            if let Some((prev, _)) = &self.batch_description {
+                if PartialOrder::less_than(&desc.lower, &prev.lower) {
+                    self.trace(format!("skipping outdated batch description: {desc:?}"));
+                    return;
+                }
             }
 
             self.batch_description = Some((desc, cap));
@@ -948,7 +944,8 @@ mod write {
 
             // We can write a new batch if we have seen all `persist` updates before `lower` and
             // all `desired` updates up to `upper`.
-            let persist_complete = desc.lower == *self.persist_frontiers.frontier();
+            let persist_complete =
+                PartialOrder::less_equal(&desc.lower, self.persist_frontiers.frontier());
             let desired_complete =
                 PartialOrder::less_equal(&desc.upper, self.desired_frontiers.frontier());
             if !persist_complete || !desired_complete {
@@ -956,9 +953,6 @@ mod write {
             }
 
             let (desc, cap) = self.batch_description.take()?;
-
-            assert_eq!(desc.lower, *self.corrections.ok.since());
-            assert_eq!(desc.lower, *self.corrections.err.since());
 
             let ok_updates = self.corrections.ok.updates_before(&desc.upper);
             let err_updates = self.corrections.err.updates_before(&desc.upper);

@@ -185,13 +185,8 @@ class KafkaDisruption:
                 $ kafka-ingest topic=source-topic format=bytes
                 ABC
 
-                # Specify a faster metadata refresh interval so errors are detected every second
-                # instead of every minute
                 > CREATE SOURCE source1
-                  FROM KAFKA CONNECTION kafka_conn (
-                    TOPIC 'testdrive-source-topic-${testdrive.seed}',
-                    TOPIC METADATA REFRESH INTERVAL '1s'
-                  )
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-source-topic-${testdrive.seed}')
 
                 > CREATE TABLE source1_tbl FROM SOURCE source1 (REFERENCE "testdrive-source-topic-${testdrive.seed}")
                   FORMAT BYTES

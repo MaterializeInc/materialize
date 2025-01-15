@@ -18,7 +18,6 @@ use crate::BUILD_INFO;
 #[template(path = "home.html")]
 struct HomeTemplate<'a> {
     version: &'a str,
-    build_time: &'a str,
     build_sha: &'static str,
     profiling: bool,
 }
@@ -26,7 +25,6 @@ struct HomeTemplate<'a> {
 pub async fn handle_home(profiling: bool) -> impl IntoResponse {
     mz_http_util::template_response(HomeTemplate {
         version: BUILD_INFO.version,
-        build_time: BUILD_INFO.time,
         build_sha: BUILD_INFO.sha,
         profiling,
     })

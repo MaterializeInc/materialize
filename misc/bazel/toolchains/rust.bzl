@@ -13,6 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+load("@bazel_tools//tools/build_defs/repo:utils.bzl", "maybe")
 load("@rules_rust//rust:repositories.bzl", "DEFAULT_TOOLCHAIN_TRIPLES", "rust_repository_set")
 
 def rust_toolchains(versions, targets):
@@ -84,3 +86,52 @@ def _integrity_key(version, target, component):
         return "{0}/{1}-{2}-{3}".format(date, component, channel, target)
     else:
         return "{0}-{1}-{2}".format(component, version, target)
+
+_BINDGEN_TOOLCHAIN_BUILD_FILE = """
+package(default_visibility = ["//visibility:public"])
+
+sh_binary(
+    name = "clang",
+    srcs = ["bin/clang"],
+)
+
+cc_import(
+    name = "libclang",
+    shared_library = "lib/libclang.{SHARED_EXTENSION}",
+)
+
+cc_import(
+    name = "libc++",
+    shared_library = "lib/{STDCXX}"
+)
+"""
+
+def bindgen_toolchains(clang_release, targets):
+    """
+    Macro that registers [Rust bindgen] toolchains for the provided targets.
+
+    [Rust bindgen](https://github.com/rust-lang/rust-bindgen)
+
+    Args:
+        clang_release (string): Name of the clang dependency we'll fetch.
+        targets (dict[string, string]): Map of platform to the integrity for
+            the libclang toolchain we fetch.
+    """
+
+    for (platform, integrity) in targets.items():
+        if platform.startswith("darwin"):
+            shared_extension = "dylib"
+            stdcxx = "libc++.1.0.dylib"
+        else:
+            shared_extension = "so"
+            stdcxx = "libc++.so.1.0"
+
+        maybe(
+            http_archive,
+            name = "rust_bindgen__{0}".format(platform),
+            build_file_content = _BINDGEN_TOOLCHAIN_BUILD_FILE.format(SHARED_EXTENSION = shared_extension, STDCXX = stdcxx),
+            integrity = integrity,
+            url = "https://github.com/MaterializeInc/toolchains/releases/download/clang-{0}/{1}_libclang.tar.zst".format(clang_release, platform),
+        )
+
+        native.register_toolchains("@//misc/bazel/toolchains:rust_bindgen_toolchain__{0}".format(platform))

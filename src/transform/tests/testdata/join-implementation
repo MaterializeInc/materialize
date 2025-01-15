@@ -15,6 +15,10 @@ ok
 opt
 (join [(get x) (get x)] [[#0 #3]])
 ----
+With
+  cte l0 =
+    ArrangeBy keys=[[#0]]
+      Get x
 Return
   Project (#0..=#2, #0, #4, #5)
     Join on=(#0 = #3) type=differential
@@ -22,10 +26,6 @@ Return
         %0:l0[#0]K » %1:l0[#0]K
       Get l0
       Get l0
-With
-  cte l0 =
-    ArrangeBy keys=[[#0]]
-      Get x
 
 # tests single-input predicates properly get pushed out of join equivalences
 # using different combinations of literals and non-literals with different multiplicities
@@ -61,17 +61,17 @@ Filter (#0 = 5) AND (#1 = 5)
 opt
 (join [(get x) (get x)] [[5 #0 5 #3]])
 ----
+With
+  cte l0 =
+    ArrangeBy keys=[[]]
+      Filter (#0 = 5)
+        Get x
 Return
   CrossJoin type=differential
     implementation
       %0:l0[×]ef » %1:l0[×]ef
     Get l0
     Get l0
-With
-  cte l0 =
-    ArrangeBy keys=[[]]
-      Filter (#0 = 5)
-        Get x
 
 opt
 (join [(get x) (get x)] [[5 9 #0 #3]])

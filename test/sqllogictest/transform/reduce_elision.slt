@@ -74,8 +74,6 @@ WITH MUTUALLY RECURSIVE
 SELECT * FROM c0;
 ----
 Explained Query:
-  Return // { arity: 4, keys: "()" }
-    Get l0 // { arity: 4, keys: "()" }
   With Mutually Recursive
     cte l0 =
       Union // { arity: 4, keys: "()" }
@@ -90,6 +88,8 @@ Explained Query:
             ArrangeBy keys=[[#1]] // { arity: 2, keys: "([1])" }
               ReadStorage materialize.public.y // { arity: 2, keys: "([1])" }
         Get l0 // { arity: 4, keys: "()" }
+  Return // { arity: 4, keys: "()" }
+    Get l0 // { arity: 4, keys: "()" }
 
 Source materialize.public.x
   filter=((#1) IS NOT NULL)
@@ -117,8 +117,6 @@ WITH MUTUALLY RECURSIVE
 SELECT * FROM c0;
 ----
 Explained Query:
-  Return // { arity: 4, keys: "([0, 1, 2, 3])" }
-    Get l0 // { arity: 4, keys: "([0, 1, 2, 3])" }
   With Mutually Recursive
     cte l0 =
       Distinct project=[#0..=#3] // { arity: 4, keys: "([0, 1, 2, 3])" }
@@ -133,6 +131,8 @@ Explained Query:
               ArrangeBy keys=[[#1]] // { arity: 2, keys: "([1])" }
                 ReadStorage materialize.public.y // { arity: 2, keys: "([1])" }
           Get l0 // { arity: 4, keys: "([0, 1, 2, 3])" }
+  Return // { arity: 4, keys: "([0, 1, 2, 3])" }
+    Get l0 // { arity: 4, keys: "([0, 1, 2, 3])" }
 
 Source materialize.public.x
   filter=((#1) IS NOT NULL)

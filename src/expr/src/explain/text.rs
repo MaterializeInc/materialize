@@ -345,17 +345,17 @@ impl MirRelationExpr {
                     self.fmt_analyses(f, ctx)?;
                     ctx.indented(|ctx| head.fmt_text(f, ctx))?;
                 } else {
-                    write!(f, "{}Return", ctx.indent)?;
-                    self.fmt_analyses(f, ctx)?;
-                    ctx.indented(|ctx| head.fmt_text(f, ctx))?;
                     writeln!(f, "{}With", ctx.indent)?;
                     ctx.indented(|ctx| {
-                        for (id, value) in bindings.iter().rev() {
+                        for (id, value) in bindings.iter() {
                             writeln!(f, "{}cte {} =", ctx.indent, *id)?;
                             ctx.indented(|ctx| value.fmt_text(f, ctx))?;
                         }
                         Ok(())
                     })?;
+                    write!(f, "{}Return", ctx.indent)?;
+                    self.fmt_analyses(f, ctx)?;
+                    ctx.indented(|ctx| head.fmt_text(f, ctx))?;
                 }
             }
             LetRec {
@@ -382,16 +382,13 @@ impl MirRelationExpr {
                 if ctx.config.linear_chains {
                     unreachable!(); // We exclude this case in `as_explain_single_plan`.
                 } else {
-                    write!(f, "{}Return", ctx.indent)?;
-                    self.fmt_analyses(f, ctx)?;
-                    ctx.indented(|ctx| head.fmt_text(f, ctx))?;
                     write!(f, "{}With Mutually Recursive", ctx.indent)?;
                     if let Some(limit) = all_limits_same {
                         write!(f, " {}", limit)?;
                     }
                     writeln!(f)?;
                     ctx.indented(|ctx| {
-                        for (id, value, limit) in bindings.iter().rev() {
+                        for (id, value, limit) in bindings.iter() {
                             write!(f, "{}cte", ctx.indent)?;
                             if all_limits_same.is_none() {
                                 if let Some(limit) = limit {
@@ -403,6 +400,9 @@ impl MirRelationExpr {
                         }
                         Ok(())
                     })?;
+                    write!(f, "{}Return", ctx.indent)?;
+                    self.fmt_analyses(f, ctx)?;
+                    ctx.indented(|ctx| head.fmt_text(f, ctx))?;
                 }
             }
             Get {

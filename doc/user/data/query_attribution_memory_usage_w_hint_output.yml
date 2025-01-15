@@ -1,0 +1,88 @@
+columns:
+  - column: name
+  - column: global_id
+  - column: lir_id
+  - column: parent_lir_id
+  - column: operator
+  - column: size
+
+rows:
+  - name: "`winning_bids`"
+    global_id: "`u186`"
+    lir_id: "`6`"
+    parent_lir_id: "`null`"
+    operator: |
+      ```mzsql
+      TopK::Basic 5
+      ```
+    size: "`11 MB`"
+
+  - name: "`winning_bids`"
+    global_id: "`u186`"
+    lir_id: "`5`"
+    parent_lir_id: "`6`"
+    operator: |
+      ```mzsql
+        Join::Differential 2 » 4
+      ```
+    size: "`null`"
+
+  - name: "`winning_bids`"
+    global_id: "`u186`"
+    lir_id: "`4`"
+    parent_lir_id: "`5`"
+    operator: |
+      ```mzsql
+          Arrange 3
+      ```
+    size: "`1996 kB`"
+
+  - name: "`winning_bids`"
+    global_id: "`u186`"
+    lir_id: "`3`"
+    parent_lir_id: "`4`"
+    operator: |
+      ```mzsql
+            Get::PassArrangements u145
+      ```
+    size: "`null`"
+
+  - name: "`winning_bids`"
+    global_id: "`u186`"
+    lir_id: "`2`"
+    parent_lir_id: "`5`"
+    operator: |
+      ```mzsql
+          Arrange 1
+      ```
+    size: "`575 kB`"
+
+  - name: "`winning_bids`"
+    global_id: "`u186`"
+    lir_id: "`1`"
+    parent_lir_id: "`2`"
+    operator: |
+      ```mzsql
+            Get::Collection u144
+      ```
+    size: "`null`"
+
+  - name: "`wins_by_item`"
+    global_id: "`u187`"
+    lir_id: "`8`"
+    parent_lir_id: "`null`"
+    operator: |
+      ```mzsql
+      Arrange 7
+      ```
+    size: "`402 kB`"
+
+  - name: "`wins_by_item`"
+    global_id: "`u187`"
+    lir_id: "`7`"
+    parent_lir_id: "`8`"
+    operator: |
+      ```mzsql
+        Get::PassArrangements u186
+      ```
+    size: "`null`"

@@ -19,11 +19,7 @@ Kubernetes environment. For self-managed Materialize, Materialize offers:
 
 The self-managed Materialize requires the following:
 
-- Kubernetes (v1.19+) environment.
-
-- PostgreSQL or CockroachDB as a metadata database.
-
-- Blob storage.
+{{% self-managed/requirements-list %}}
 
 See the [Installation guide](/self-managed/installation/) for more information.
 

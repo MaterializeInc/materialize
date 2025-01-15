@@ -17,7 +17,7 @@ tests:
       of: Deployment
   - equal:
       path: spec.template.spec.containers[0].image
-      value: materialize/orchestratord:v0.129.0-dev.0
+      value: materialize/orchestratord:v0.130.0-dev.0
   - equal:
       path: spec.template.spec.containers[0].imagePullPolicy
       value: IfNotPresent
@@ -178,3 +178,17 @@ tests:
   - contains:
       path: spec.template.spec.containers[0].args
       content: "--secrets-controller=aws-secrets-manager"
+
+- it: should not pass the scheduler when not configured
+  asserts:
+  - notContains:
+      path: spec.template.spec.containers[0].args
+      content: "--scheduler-name"
+
+- it: should pass the scheduler when configured
+  set:
+    schedulerName: my-scheduler
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: "--scheduler-name=my-scheduler"

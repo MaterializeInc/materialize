@@ -25,6 +25,11 @@ query T multiline
 EXPLAIN WITH(arity, join implementations) SELECT count(*) FROM billion;
 ----
 Explained Query:
+  With
+    cte l0 =
+      Reduce aggregates=[count(*)] monotonic // { arity: 1 }
+        Constant // { arity: 0 }
+          - (() x 1000000000)
   Return // { arity: 1 }
     Union // { arity: 1 }
       Get l0 // { arity: 1 }
@@ -35,11 +40,6 @@ Explained Query:
               Get l0 // { arity: 1 }
           Constant // { arity: 0 }
             - ()
-  With
-    cte l0 =
-      Reduce aggregates=[count(*)] monotonic // { arity: 1 }
-        Constant // { arity: 0 }
-          - (() x 1000000000)
 
 Target cluster: quickstart
 
@@ -94,8 +94,6 @@ WITH MUTUALLY RECURSIVE
 SELECT * FROM c0
 ----
 Explained Query:
-  Return // { arity: 2 }
-    Get l0 // { arity: 2 }
   With Mutually Recursive
     cte l0 =
       Distinct project=[#0, #1] monotonic // { arity: 2 }
@@ -108,6 +106,8 @@ Explained Query:
             - (52, 54)
             - (62, 64)
             - (66, 68)
+  Return // { arity: 2 }
+    Get l0 // { arity: 2 }
 
 Target cluster: quickstart
 
@@ -130,8 +130,6 @@ WITH MUTUALLY RECURSIVE
 SELECT * FROM c0
 ----
 Explained Query:
-  Return // { arity: 1 }
-    Get l0 // { arity: 1 }
   With Mutually Recursive
     cte l0 =
       Distinct project=[#0] // { arity: 1 }
@@ -139,6 +137,8 @@ Explained Query:
           Project (#1) // { arity: 1 }
             ReadStorage materialize.public.edges // { arity: 2 }
           Get l0 // { arity: 1 }
+  Return // { arity: 1 }
+    Get l0 // { arity: 1 }
 
 Source materialize.public.edges
 

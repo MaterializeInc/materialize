@@ -29,7 +29,7 @@ rust_binary(
     proc_macro_deps = [] + all_crate_deps(proc_macro = True),
     rustc_env = {},
     rustc_flags = [],
-    version = "0.129.0-dev.0",
+    version = "0.130.0-dev.0",
     deps = [
         "//src/adapter:mz_adapter",
         "//src/build-info:mz_build_info",
@@ -43,6 +43,5 @@ rust_binary(
         "//src/service:mz_service",
         "//src/sql:mz_sql",
         "//src/storage-types:mz_storage_types",
-        "//src/tls-util:mz_tls_util",
     ] + all_crate_deps(normal = True),
 )

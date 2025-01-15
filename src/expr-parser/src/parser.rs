@@ -73,6 +73,8 @@ mod relation {
     use mz_expr::{AccessStrategy, Id, JoinImplementation, LocalId, MirRelationExpr};
     use mz_repr::{Diff, RelationType, Row, ScalarType};
 
+    use crate::parser::analyses::Analyses;
+
     use super::*;
 
     type Result = syn::Result<MirRelationExpr>;
@@ -84,7 +86,9 @@ mod relation {
         } else if lookahead.peek(kw::Get) {
             parse_get(ctx, input)
         } else if lookahead.peek(kw::Return) {
-            parse_let(ctx, input)
+            parse_let_or_letrec_old(ctx, input)
+        } else if lookahead.peek(kw::With) {
+            parse_let_or_letrec(ctx, input)
         } else if lookahead.peek(kw::Project) {
             parse_project(ctx, input)
         } else if lookahead.peek(kw::Map) {
@@ -183,24 +187,64 @@ mod relation {
         }
     }
 
-    fn parse_let(ctx: CtxRef, input: ParseStream) -> Result {
+    /// Parses a Let or a LetRec with the old order: Return first, and then CTEs in descending order.
+    fn parse_let_or_letrec_old(ctx: CtxRef, input: ParseStream) -> Result {
         let return_ = input.parse::<kw::Return>()?;
         let parse_body = ParseChildren::new(input, return_.span().start());
-        let mut body = parse_body.parse_one(ctx, parse_expr)?;
+        let body = parse_body.parse_one(ctx, parse_expr)?;
 
         let with = input.parse::<kw::With>()?;
         let recursive = input.eat2(kw::Mutually, kw::Recursive);
         let parse_ctes = ParseChildren::new(input, with.span().start());
+        let mut ctes = parse_ctes.parse_many(ctx, parse_cte)?;
+
+        if ctes.is_empty() {
+            let msg = "At least one Let/LetRec cte binding expected";
+            Err(Error::new(input.span(), msg))?
+        }
+
+        ctes.reverse();
+        let cte_ids = ctes.iter().map(|(id, _, _)| id);
+        if !cte_ids.clone().is_sorted() {
+            let msg = format!("Error parsing Let/LetRec: seen Return before With, but cte ids are not ordered descending: {:?}", cte_ids.collect::<Vec<_>>());
+            Err(Error::new(input.span(), msg))?
+        }
+        build_let_or_let_rec(ctes, body, recursive, with)
+    }
+
+    /// Parses a Let or a LetRec with the new order: CTEs first in ascending order, and then Return.
+    fn parse_let_or_letrec(ctx: CtxRef, input: ParseStream) -> Result {
+        let with = input.parse::<kw::With>()?;
+        let recursive = input.eat2(kw::Mutually, kw::Recursive);
+        let parse_ctes = ParseChildren::new(input, with.span().start());
         let ctes = parse_ctes.parse_many(ctx, parse_cte)?;
+
+        let return_ = input.parse::<kw::Return>()?;
+        let parse_body = ParseChildren::new(input, return_.span().start());
+        let body = parse_body.parse_one(ctx, parse_expr)?;
 
         if ctes.is_empty() {
             let msg = "At least one `let cte` binding expected";
             Err(Error::new(input.span(), msg))?
         }
 
+        let cte_ids = ctes.iter().map(|(id, _, _)| id);
+        if !cte_ids.clone().is_sorted() {
+            let msg = format!("Error parsing Let/LetRec: seen With before Return, but cte ids are not ordered ascending: {:?}", cte_ids.collect::<Vec<_>>());
+            Err(Error::new(input.span(), msg))?
+        }
+        build_let_or_let_rec(ctes, body, recursive, with)
+    }
+
+    fn build_let_or_let_rec(
+        ctes: Vec<(LocalId, Analyses, MirRelationExpr)>,
+        body: MirRelationExpr,
+        recursive: bool,
+        with: kw::With,
+    ) -> Result {
         if recursive {
             let (mut ids, mut values, mut limits) = (vec![], vec![], vec![]);
-            for (id, analyses, value) in ctes.into_iter().rev() {
+            for (id, analyses, value) in ctes.into_iter() {
                 let typ = {
                     let Some(column_types) = analyses.types else {
                         let msg = format!("`let {}` needs a `types` analyses", id);
@@ -237,7 +281,8 @@ mod relation {
                 body: Box::new(body),
             })
         } else {
-            for (id, _, value) in ctes.into_iter() {
+            let mut body = body;
+            for (id, _, value) in ctes.into_iter().rev() {
                 body = MirRelationExpr::Let {
                     id,
                     value: Box::new(value),

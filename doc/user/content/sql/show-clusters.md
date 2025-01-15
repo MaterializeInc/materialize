@@ -11,7 +11,15 @@ menu:
 
 ## Syntax
 
-{{< diagram "show-clusters.svg" >}}
+```sql
+SHOW CLUSTERS
+[LIKE <pattern> | WHERE <condition(s)>]
+```
+
+Option                        | Description
+------------------------------|------------
+**LIKE** \<pattern\>          | If specified, only show clusters that match the pattern.
+**WHERE** <condition(s)>      | If specified, only show clusters that match the condition(s).
 
 ## Pre-installed clusters
 

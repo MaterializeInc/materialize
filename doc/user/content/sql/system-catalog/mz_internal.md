@@ -423,13 +423,13 @@ The suggestions are based on the graph of dependencies between objects and do
 not take into account other important factors, like the actual usage patterns
 and execution plans. This means that following the advice in this view **might
 not always lead to resource usage optimizations**. In some cases, the provided
-advice might even lead to suboptimal execution plans or even increased resource
+advice might lead to suboptimal execution plans or even increased resource
 usage. For example:
 
 - If a materialized view or an index has been created for direct querying, the
   dependency graph will not reflect this nuance and `mz_index_advice` might
-  recommend using and unindexed view instead. In this case, you should refer to
-  the the reference documentation for [query optimization](/transform-data/optimization/#indexes)
+  recommend using an unindexed view instead. In this case, you should refer to
+  the reference documentation for [query optimization](/transform-data/optimization/#indexes)
   instead.
 - If a view is depended on by multiple objects that use very selective filters,
   or multiple projections that can be pushed into or even beyond the view,

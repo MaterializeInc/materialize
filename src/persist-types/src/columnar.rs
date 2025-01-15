@@ -115,7 +115,7 @@ pub trait Schema2<T>: Debug + Send + Sync {
     /// Type that is able to decode values of `T` from [`Self::ArrowColumn`].
     type Decoder: ColumnDecoder<T> + Debug + Send + Sync;
     /// Type that is able to encoder values of `T`.
-    type Encoder: ColumnEncoder<T, FinishedColumn = Self::ArrowColumn> + Debug;
+    type Encoder: ColumnEncoder<T, FinishedColumn = Self::ArrowColumn> + Debug + Send + Sync;
 
     /// Returns a type that is able to decode instances of `T` from the provider column.
     fn decoder(&self, col: Self::ArrowColumn) -> Result<Self::Decoder, anyhow::Error>;
@@ -189,14 +189,12 @@ pub fn schema2_to_codec<A: Codec + Default>(
     let mut buffer = vec![];
 
     for i in 0..len {
-        if decoder.is_null(i) {
-            builder.append_null();
-        } else {
-            decoder.decode(i, &mut value);
-            Codec::encode(&value, &mut buffer);
-            builder.append_value(&buffer);
-            buffer.clear()
-        }
+        // The binary encoding of key/value types can never be null.
+        // Defer to the implementation-defined behaviour for null entries in that case.
+        decoder.decode(i, &mut value);
+        Codec::encode(&value, &mut buffer);
+        builder.append_value(&buffer);
+        buffer.clear()
     }
 
     Ok(BinaryBuilder::finish(&mut builder))

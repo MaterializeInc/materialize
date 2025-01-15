@@ -155,11 +155,6 @@ rules_foreign_cc_dependencies(make_version = "4.2")
 # All of the clang related tools are provided under the `@llvm_toolchain_llvm`
 # repo. To see what's available run `bazel query @llvm_toolchain_llvm//...`.
 
-# Version of the "toolchains_llvm" rule set, _not_ the version of clang/llvm.
-TOOLCHAINS_LLVM_VERSION = "1.0.0"
-
-TOOLCHAINS_LLVM_INTEGRITY = "sha256-6RxDYfmQEaVIFOGvvlxDbg0ymHEUajzVjCOitK+1Bzc="
-
 # System roots that we use, this is where clang will search for things like libc.
 
 _SYSROOT_DARWIN_BUILD_FILE = """
@@ -219,18 +214,24 @@ http_archive(
 # Version of clang/llvm we use.
 #
 # We build our own clang toolchain, see the <https://github.com/MaterializeInc/toolchains> repository.
-LLVM_VERSION = "18.1.8"
+LLVM_VERSION = "19.1.6"
 
 # We have a few variants of our clang toolchain, either improving how it's built or adding new tools.
-LLVM_VERSION_SUFFIX = "4"
+LLVM_VERSION_SUFFIX = "1"
+
+# Version of the "toolchains_llvm" rule set, _not_ the version of clang/llvm.
+#
+# We depend on a commit that includes <https://github.com/bazel-contrib/toolchains_llvm/pull/438>.
+TOOLCHAINS_LLVM_VERSION = "9f0a7cb0f752ffd430a5c80d749a2e84cb348876"
+
+TOOLCHAINS_LLVM_INTEGRITY = "sha256-9SY8+RwP3KPfaLtjQGzJmknOcxEpTkmu/h1ntaljYdw="
 
 maybe(
     http_archive,
     name = "toolchains_llvm",
-    canonical_id = "{0}".format(TOOLCHAINS_LLVM_VERSION),
     integrity = TOOLCHAINS_LLVM_INTEGRITY,
     strip_prefix = "toolchains_llvm-{0}".format(TOOLCHAINS_LLVM_VERSION),
-    url = "https://github.com/bazel-contrib/toolchains_llvm/releases/download/{0}/toolchains_llvm-{0}.tar.gz".format(TOOLCHAINS_LLVM_VERSION),
+    url = "https://github.com/bazel-contrib/toolchains_llvm/archive/{0}.tar.gz".format(TOOLCHAINS_LLVM_VERSION),
 )
 
 load("@toolchains_llvm//toolchain:deps.bzl", "bazel_toolchain_dependencies")
@@ -243,10 +244,10 @@ llvm_toolchain(
     name = "llvm_toolchain",
     llvm_version = LLVM_VERSION,
     sha256 = {
-        "darwin-aarch64": "41d8dea52d18c4e8b90c4fcd31965f9f297df9f40a38a33d60748dbe7f8330b8",
-        "darwin-x86_64": "291b8dd844aa896b98393c5d3beaee57f294768039eacdf9ef5e96ed9d3f62d7",
-        "linux-aarch64": "fe8f9e283ab43e963daf9ffb18742e134ad239b56078d61ef9a289ff642784ed",
-        "linux-x86_64": "8b725ec14e48bc1cb3698309506e29cd94ff3b823976ebb306e9c3ef84480c16",
+        "darwin-aarch64": "94ed965925dbdc25b29e6fcfa9a84b28d915d5c9da7c71405fc20bbcf8396bd1",
+        "darwin-x86_64": "9395b07fd5018816bcaee84522d9c9386fdbefe62fdf8afff89b57e1b7095463",
+        "linux-aarch64": "24fd3405f65ccbc39f0d14a5126ee2edb5904d7a9525ae483f34a510a1bdce3e",
+        "linux-x86_64": "bad3d776c222c99056eba8b64c085a1e08edd783cb102e1b6eba43b78ce2fe2b",
     },
     sysroot = {
         "darwin-aarch64": "@sysroot_darwin_universal//:sysroot",
@@ -338,7 +339,7 @@ RUST_VERSION = "1.83.0"
 
 RUST_NIGHTLY_VERSION = "nightly/2024-12-02"
 
-load("//misc/bazel/toolchains:rust.bzl", "rust_toolchains")
+load("//misc/bazel/toolchains:rust.bzl", "bindgen_toolchains", "rust_toolchains")
 
 rust_toolchains(
     [
@@ -413,6 +414,25 @@ rust_toolchains(
     },
 )
 
+# Rust `bindgen`
+#
+# Rules and Toolchains for running [`bindgen`](https://github.com/rust-lang/rust-bindgen)
+# a tool for generating Rust FFI bindings to C.
+
+load("@rules_rust//bindgen:repositories.bzl", "rust_bindgen_dependencies")
+
+rust_bindgen_dependencies()
+
+bindgen_toolchains(
+    "{0}-{1}".format(LLVM_VERSION, LLVM_VERSION_SUFFIX),
+    {
+        "darwin_aarch64": "sha256-wni7a1Wu6qGeNVOZOjc6ks1ACXf+RBoXu6YcSVkleos=",
+        "darwin_x86_64": "sha256-MKjPkNE2g2nw75SkOvjnieKnTtubUKyE3/o7olQm8j0=",
+        "linux_aarch64": "sha256-BvzsXMuiObNStcP86QwgBRDcTVBRsWUYio1iRCMhgxo=",
+        "linux_x86_64": "sha256-9PgulfHhsOd03ZhEO7ljp2EuDafIbME1oCJ/Rj/R7pU=",
+    },
+)
+
 # Load all dependencies for crate_universe.
 load("@rules_rust//crate_universe:repositories.bzl", "crate_universe_dependencies")
 
@@ -438,33 +458,16 @@ crates_repository(
             deps = [":decnumber"],
         )],
         "librocksdb-sys": [crate.annotation(
-            additive_build_file = "@//misc/bazel/c_deps:rust-sys/BUILD.rocksdb.bazel",
             # Note: The below targets are from the additive build file.
-            #
-            # HACK(parkmycar): The `librocksdb-sys` build script runs bindgen for us, and to
-            # support cross compiling we need to provide the sysroot to the build script so
-            # bindgen can find it. Providing the sysroot and relying on the raw paths is quite
-            # fragile, the fix is to use `@rules_rust//bindgen/...` rules with our Clang toolchain.
-            build_script_data = [
-                ":rocksdb_lib",
-                ":rocksdb_include",
-                ":snappy_lib",
-                "@linux_sysroot-aarch64//:sysroot",
-                "@linux_sysroot-x86_64//:sysroot",
-            ],
-            build_script_env = {
-                "ROCKSDB_STATIC": "true",
-                "ROCKSDB_LIB_DIR": "$(execpath :rocksdb_lib)",
-                "ROCKSDB_INCLUDE_DIR": "$(execpath :rocksdb_include)",
-                "SNAPPY_STATIC": "true",
-                "SNAPPY_LIB_DIR": "$(execpath :snappy_lib)",
-                "BINDGEN_EXTRA_CLANG_ARGS_aarch64-unknown-linux-gnu": "--sysroot=external/linux_sysroot-aarch64",
-                "BINDGEN_EXTRA_CLANG_ARGS_x86_64-unknown-linux-gnu": "--sysroot=external/linux_sysroot-x86_64",
+            additive_build_file = "@//misc/bazel/c_deps:rust-sys/BUILD.rocksdb.bazel",
+            compile_data = [":out_dir"],
+            gen_build_script = False,
+            rustc_env = {
+                "OUT_DIR": "$(execpath :out_dir)",
             },
-            compile_data = [
-                ":rocksdb_lib",
-                ":rocksdb_include",
-                ":snappy_lib",
+            deps = [
+                ":bindings",
+                ":rocksdb",
             ],
         )],
         "tikv-jemalloc-sys": [crate.annotation(
@@ -478,8 +481,10 @@ crates_repository(
             deps = [":librdkafka"],
         )],
         "libz-sys": [crate.annotation(
+            additive_build_file = "@//misc/bazel/c_deps:rust-sys/BUILD.libz.bazel",
             gen_build_script = False,
-            deps = ["@zlib"],
+            # Note: This is a target we add from the additive build file above.
+            deps = [":zlib"],
         )],
         "openssl-sys": [crate.annotation(
             build_script_data = [
@@ -605,6 +610,7 @@ crates_repository(
         "//:src/orchestrator-tracing/Cargo.toml",
         "//:src/orchestratord/Cargo.toml",
         "//:src/orchestrator/Cargo.toml",
+        "//:src/ore-build/Cargo.toml",
         "//:src/ore-proc/Cargo.toml",
         "//:src/ore/Cargo.toml",
         "//:src/persist-cli/Cargo.toml",

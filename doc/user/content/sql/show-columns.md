@@ -13,11 +13,15 @@ subsource, materialized view, view, or table.
 
 ## Syntax
 
-{{< diagram "show-columns.svg" >}}
+```sql
+SHOW COLUMNS FROM <object_name>
+[LIKE <pattern> | WHERE <condition(s)>]
+```
 
-Field | Use
-------|-----
-_item&lowbar;ref_ | The name of the object whose columns you want to view. This can be a source, subsource, materialized view, view, or table.
+Option                        | Description
+------------------------------|------------
+**LIKE** \<pattern\>          | If specified, only show columns that match the pattern.
+**WHERE** <condition(s)>      | If specified, only show columns that match the condition(s).
 
 ## Details
 

@@ -55,6 +55,10 @@
 # Check that index is actually used
 ? EXPLAIN SELECT min(counter) FROM mv;
 Explained Query:
+  With
+    cte l0 =
+      Reduce aggregates=[min(#0)]
+        ReadIndex on=mv mv_counter_idx=[*** full scan ***]
   Return
     Union
       Get l0
@@ -65,10 +69,6 @@ Explained Query:
               Get l0
           Constant
             - ()
-  With
-    cte l0 =
-      Reduce aggregates=[min(#0)]
-        ReadIndex on=mv mv_counter_idx=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.mv_counter_idx (*** full scan ***)

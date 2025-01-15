@@ -26,7 +26,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
-use futures::stream::{BoxStream, FuturesUnordered};
+use futures::stream::FuturesUnordered;
 use futures::FutureExt;
 use futures::StreamExt;
 use itertools::Itertools;
@@ -44,7 +44,6 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
 use mz_persist_client::read::ReadHandle;
 use mz_persist_client::schema::CaESchema;
-use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, PersistLocation, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
@@ -60,8 +59,8 @@ use mz_storage_client::client::{
 };
 use mz_storage_client::controller::{
     BoxFuture, CollectionDescription, DataSource, ExportDescription, ExportState,
-    IntrospectionType, MonotonicAppender, PersistEpoch, Response, SnapshotCursor,
-    StorageController, StorageMetadata, StorageTxn, StorageWriteOp,
+    IntrospectionType, MonotonicAppender, PersistEpoch, Response, StorageController,
+    StorageMetadata, StorageTxn, StorageWriteOp,
 };
 use mz_storage_client::healthcheck::{
     MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC, MZ_SINK_STATUS_HISTORY_DESC,
@@ -78,7 +77,7 @@ use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::{AlterError, CollectionMetadata, StorageError, TxnsCodecRow};
 use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::parameters::StorageParameters;
-use mz_storage_types::read_holds::{ReadHold, ReadHoldError};
+use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sinks::{StorageSinkConnection, StorageSinkDesc};
 use mz_storage_types::sources::envelope::{KeyEnvelope, NoneEnvelope};
@@ -1571,7 +1570,7 @@ where
             .into_iter()
             .partition(|id| match self.collections[id].data_source {
                 DataSource::Table => true,
-                DataSource::IngestionExport { .. } => false,
+                DataSource::IngestionExport { .. } | DataSource::Webhook => false,
                 _ => panic!("identifier is not a table: {}", id),
             });
 
@@ -1795,135 +1794,6 @@ where
             .get(&id)
             .cloned()
             .ok_or(StorageError::IdentifierMissing(id))
-    }
-
-    // TODO(petrosagg): This signature is not very useful in the context of partially ordered times
-    // where the as_of frontier might have multiple elements. In the current form the mutually
-    // incomparable updates will be accumulated together to a state of the collection that never
-    // actually existed. We should include the original time in the updates advanced by the as_of
-    // frontier in the result and let the caller decide what to do with the information.
-    fn snapshot(
-        &self,
-        id: GlobalId,
-        as_of: Self::Timestamp,
-    ) -> BoxFuture<Result<Vec<(Row, Diff)>, StorageError<Self::Timestamp>>> {
-        snapshot(
-            id,
-            as_of,
-            &self.storage_collections,
-            &self.txns_read,
-            &self.persist,
-        )
-    }
-
-    async fn snapshot_latest(
-        &self,
-        id: GlobalId,
-    ) -> Result<Vec<Row>, StorageError<Self::Timestamp>> {
-        let upper = self.recent_upper(id).await?;
-        let res = match upper.as_option() {
-            Some(f) if f > &T::minimum() => {
-                let as_of = f.step_back().unwrap();
-
-                let snapshot = self.snapshot(id, as_of).await.unwrap();
-                snapshot
-                    .into_iter()
-                    .map(|(row, diff)| {
-                        assert!(diff == 1, "snapshot doesn't accumulate to set");
-                        row
-                    })
-                    .collect()
-            }
-            Some(_min) => {
-                // The collection must be empty!
-                Vec::new()
-            }
-            // The collection is closed, we cannot determine a latest read
-            // timestamp based on the upper.
-            _ => {
-                return Err(StorageError::InvalidUsage(
-                    "collection closed, cannot determine a read timestamp based on the upper"
-                        .to_string(),
-                ));
-            }
-        };
-
-        Ok(res)
-    }
-
-    async fn snapshot_cursor(
-        &mut self,
-        id: GlobalId,
-        as_of: Self::Timestamp,
-    ) -> Result<SnapshotCursor<Self::Timestamp>, StorageError<Self::Timestamp>>
-    where
-        Self::Timestamp: Timestamp + Lattice + Codec64,
-    {
-        let metadata = &self.storage_collections.collection_metadata(id)?;
-
-        // See the comments in Self::snapshot for what's going on here.
-        let cursor = match metadata.txns_shard.as_ref() {
-            None => {
-                let mut handle = self.read_handle_for_snapshot(id).await?;
-                let cursor = handle
-                    .snapshot_cursor(Antichain::from_elem(as_of), |_| true)
-                    .await
-                    .map_err(|_| StorageError::ReadBeforeSince(id))?;
-                SnapshotCursor {
-                    _read_handle: handle,
-                    cursor,
-                }
-            }
-            Some(txns_id) => {
-                assert_eq!(txns_id, self.txns_read.txns_id());
-                self.txns_read.update_gt(as_of.clone()).await;
-                let data_snapshot = self
-                    .txns_read
-                    .data_snapshot(metadata.data_shard, as_of.clone())
-                    .await;
-                let mut handle = self.read_handle_for_snapshot(id).await?;
-                let cursor = data_snapshot
-                    .snapshot_cursor(&mut handle, |_| true)
-                    .await
-                    .map_err(|_| StorageError::ReadBeforeSince(id))?;
-                SnapshotCursor {
-                    _read_handle: handle,
-                    cursor,
-                }
-            }
-        };
-
-        Ok(cursor)
-    }
-
-    async fn snapshot_stats(
-        &self,
-        id: GlobalId,
-        as_of: Antichain<Self::Timestamp>,
-    ) -> Result<SnapshotStats, StorageError<Self::Timestamp>> {
-        self.storage_collections.snapshot_stats(id, as_of).await
-    }
-
-    async fn snapshot_parts_stats(
-        &self,
-        id: GlobalId,
-        as_of: Antichain<Self::Timestamp>,
-    ) -> BoxFuture<Result<SnapshotPartsStats, StorageError<Self::Timestamp>>> {
-        self.storage_collections
-            .snapshot_parts_stats(id, as_of)
-            .await
-    }
-
-    #[instrument(level = "debug")]
-    fn set_read_policy(&mut self, policies: Vec<(GlobalId, ReadPolicy<Self::Timestamp>)>) {
-        self.storage_collections.set_read_policies(policies);
-    }
-
-    fn acquire_read_holds(
-        &self,
-        desired_holds: Vec<GlobalId>,
-    ) -> Result<Vec<ReadHold<Self::Timestamp>>, ReadHoldError> {
-        self.storage_collections.acquire_read_holds(desired_holds)
     }
 
     async fn ready(&mut self) {
@@ -2275,28 +2145,6 @@ where
     fn update_introspection_collection(&mut self, type_: IntrospectionType, op: StorageWriteOp) {
         let id = self.introspection_ids[&type_];
         self.collection_manager.differential_write(id, op);
-    }
-
-    async fn initialize_state(
-        &mut self,
-        txn: &mut (dyn StorageTxn<T> + Send),
-        init_ids: BTreeSet<GlobalId>,
-        drop_ids: BTreeSet<GlobalId>,
-    ) -> Result<(), StorageError<T>> {
-        self.storage_collections
-            .initialize_state(txn, init_ids, drop_ids)
-            .await
-    }
-
-    async fn prepare_state(
-        &self,
-        txn: &mut (dyn StorageTxn<T> + Send),
-        ids_to_add: BTreeSet<GlobalId>,
-        ids_to_drop: BTreeSet<GlobalId>,
-    ) -> Result<(), StorageError<T>> {
-        self.storage_collections
-            .prepare_state(txn, ids_to_add, ids_to_drop)
-            .await
     }
 
     async fn real_time_recent_timestamp(
@@ -2873,33 +2721,6 @@ where
             .map(|(id, e)| (*id, e))
     }
 
-    async fn recent_upper(&self, id: GlobalId) -> Result<Antichain<T>, StorageError<T>> {
-        let metadata = &self.storage_collections.collection_metadata(id)?;
-        let persist_client = self
-            .persist
-            .open(metadata.persist_location.clone())
-            .await
-            .unwrap();
-        // Duplicate part of open_data_handles here because we don't need the
-        // fetch_recent_upper call. The pubsub-updated shared_upper is enough.
-        let diagnostics = Diagnostics {
-            shard_name: id.to_string(),
-            handle_purpose: format!("controller data for {}", id),
-        };
-        // NB: Opening a WriteHandle is cheap if it's never used in a
-        // compare_and_append operation.
-        let write = persist_client
-            .open_writer::<SourceData, (), T, Diff>(
-                metadata.data_shard,
-                Arc::new(metadata.relation_desc.clone()),
-                Arc::new(UnitSchema),
-                diagnostics.clone(),
-            )
-            .await
-            .expect("invalid persist usage");
-        Ok(write.shared_upper())
-    }
-
     /// Opens a write and critical since handles for the given `shard`.
     ///
     /// `since` is an optional `since` that the read handle will be forwarded to if it is less than
@@ -3009,8 +2830,6 @@ where
                     recent_upper,
                     introspection_type,
                     storage_collections: Arc::clone(&self.storage_collections),
-                    txns_read: self.txns_read.clone(),
-                    persist: Arc::clone(&self.persist),
                     collection_manager: self.collection_manager.clone(),
                     source_statistics: Arc::clone(&self.source_statistics),
                     sink_statistics: Arc::clone(&self.sink_statistics),
@@ -3040,8 +2859,6 @@ where
                     config_set: Arc::clone(self.config.config_set()),
                     parameters: self.config.parameters.clone(),
                     storage_collections: Arc::clone(&self.storage_collections),
-                    txns_read: self.txns_read.clone(),
-                    persist: Arc::clone(&self.persist),
                 };
                 self.collection_manager.register_append_only_collection(
                     id,
@@ -3160,58 +2977,6 @@ where
     ) -> Result<ReadHandle<SourceData, (), T, Diff>, StorageError<T>> {
         let metadata = self.storage_collections.collection_metadata(id)?;
         read_handle_for_snapshot(&self.persist, id, &metadata).await
-    }
-
-    // TODO: This appears to have become unused at some point. Figure out if the
-    // caller is coming back or if we should delete it.
-    #[allow(dead_code)]
-    async fn snapshot_and_stream(
-        &self,
-        id: GlobalId,
-        as_of: T,
-    ) -> Result<BoxStream<(SourceData, T, Diff)>, StorageError<T>> {
-        use futures::stream::StreamExt;
-
-        let metadata = &self.storage_collections.collection_metadata(id)?;
-
-        // See the comments in Self::snapshot for what's going on here.
-        match metadata.txns_shard.as_ref() {
-            None => {
-                let as_of = Antichain::from_elem(as_of);
-                let mut read_handle = self.read_handle_for_snapshot(id).await?;
-                let contents = read_handle.snapshot_and_stream(as_of).await;
-                match contents {
-                    Ok(contents) => {
-                        Ok(Box::pin(contents.map(|((result_k, result_v), t, diff)| {
-                            let () = result_v.expect("invalid empty value");
-                            let data = result_k.expect("invalid key data");
-                            (data, t, diff)
-                        })))
-                    }
-                    Err(_) => Err(StorageError::ReadBeforeSince(id)),
-                }
-            }
-            Some(txns_id) => {
-                assert_eq!(txns_id, self.txns_read.txns_id());
-                self.txns_read.update_gt(as_of.clone()).await;
-                let data_snapshot = self
-                    .txns_read
-                    .data_snapshot(metadata.data_shard, as_of.clone())
-                    .await;
-                let mut handle = self.read_handle_for_snapshot(id).await?;
-                let contents = data_snapshot.snapshot_and_stream(&mut handle).await;
-                match contents {
-                    Ok(contents) => {
-                        Ok(Box::pin(contents.map(|((result_k, result_v), t, diff)| {
-                            let () = result_v.expect("invalid empty value");
-                            let data = result_k.expect("invalid key data");
-                            (data, t, diff)
-                        })))
-                    }
-                    Err(_) => Err(StorageError::ReadBeforeSince(id)),
-                }
-            }
-        }
     }
 
     /// Handles writing of status updates for sources/sinks to the appropriate
@@ -3599,8 +3364,6 @@ async fn snapshot_statistics<T>(
     id: GlobalId,
     upper: Antichain<T>,
     storage_collections: &Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
-    txns_read: &TxnsRead<T>,
-    persist: &Arc<PersistClientCache>,
 ) -> Vec<Row>
 where
     T: Codec64 + From<EpochMillis> + TimestampManipulation,
@@ -3609,9 +3372,7 @@ where
         Some(f) if f > &T::minimum() => {
             let as_of = f.step_back().unwrap();
 
-            let snapshot = snapshot(id, as_of, storage_collections, txns_read, persist)
-                .await
-                .unwrap();
+            let snapshot = storage_collections.snapshot(id, as_of).await.unwrap();
             snapshot
                 .into_iter()
                 .map(|(row, diff)| {
@@ -3624,77 +3385,6 @@ where
         // or don't need to truncate (respectively).
         _ => Vec::new(),
     }
-}
-
-// TODO(petrosagg): This signature is not very useful in the context of partially ordered times
-// where the as_of frontier might have multiple elements. In the current form the mutually
-// incomparable updates will be accumulated together to a state of the collection that never
-// actually existed. We should include the original time in the updates advanced by the as_of
-// frontier in the result and let the caller decide what to do with the information.
-pub(crate) fn snapshot<T>(
-    id: GlobalId,
-    as_of: T,
-    storage_collections: &Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
-    txns_read: &TxnsRead<T>,
-    persist: &Arc<PersistClientCache>,
-) -> BoxFuture<Result<Vec<(Row, Diff)>, StorageError<T>>>
-where
-    T: Codec64 + From<EpochMillis> + TimestampManipulation,
-{
-    let metadata = match storage_collections.collection_metadata(id) {
-        Ok(metadata) => metadata,
-        Err(e) => return async { Err(e) }.boxed(),
-    };
-    let txns_read = metadata.txns_shard.as_ref().map(|txns_id| {
-        assert_eq!(txns_id, txns_read.txns_id());
-        txns_read.clone()
-    });
-    let persist = Arc::clone(persist);
-    async move {
-        let mut read_handle = read_handle_for_snapshot(&persist, id, &metadata).await?;
-        let contents = match txns_read {
-            None => {
-                // We're not using txn-wal for tables, so we can take a snapshot directly.
-                read_handle
-                    .snapshot_and_fetch(Antichain::from_elem(as_of))
-                    .await
-            }
-            Some(txns_read) => {
-                // We _are_ using txn-wal for tables. It advances the physical upper of the
-                // shard lazily, so we need to ask it for the snapshot to ensure the read is
-                // unblocked.
-                //
-                // Consider the following scenario:
-                // - Table A is written to via txns at time 5
-                // - Tables other than A are written to via txns consuming timestamps up to 10
-                // - We'd like to read A at 7
-                // - The application process of A's txn has advanced the upper to 5+1, but we need
-                //   it to be past 7, but the txns shard knows that (5,10) is empty of writes to A
-                // - This branch allows it to handle that advancing the physical upper of Table A to
-                //   10 (NB but only once we see it get past the write at 5!)
-                // - Then we can read it normally.
-                txns_read.update_gt(as_of.clone()).await;
-                let data_snapshot = txns_read
-                    .data_snapshot(metadata.data_shard, as_of.clone())
-                    .await;
-                data_snapshot.snapshot_and_fetch(&mut read_handle).await
-            }
-        };
-        match contents {
-            Ok(contents) => {
-                let mut snapshot = Vec::with_capacity(contents.len());
-                for ((data, _), _, diff) in contents {
-                    // TODO(petrosagg): We should accumulate the errors too and let the user
-                    // interprret the result
-                    let row = data.expect("invalid protobuf data").0?;
-                    snapshot.push((row, diff));
-                }
-                Ok(snapshot)
-            }
-            Err(_) => Err(StorageError::ReadBeforeSince(id)),
-        }
-    }
-    .boxed()
 }
 
 async fn read_handle_for_snapshot<T>(

@@ -20,7 +20,7 @@ use std::sync::Arc;
 use futures::future::LocalBoxFuture;
 use futures::FutureExt;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
-use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Source};
+use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Source, Table, TableDataSource};
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
@@ -1317,50 +1317,65 @@ impl Coordinator {
                 return Err(name);
             };
 
-            let (body_format, header_tys, validator, global_id) = match entry.item() {
+            // Webhooks can be created with `CREATE SOURCE` or `CREATE TABLE`.
+            let (data_source, desc, global_id) = match entry.item() {
                 CatalogItem::Source(Source {
-                    data_source:
-                        DataSourceDesc::Webhook {
-                            validate_using,
-                            body_format,
-                            headers,
-                            ..
-                        },
+                    data_source: data_source @ DataSourceDesc::Webhook { .. },
                     desc,
                     global_id,
                     ..
-                }) => {
-                    // Assert we have one column for the body, and how ever many are required for
-                    // the headers.
-                    let num_columns = headers.num_columns() + 1;
-                    mz_ore::soft_assert_or_log!(
-                        desc.arity() <= num_columns,
-                        "expected at most {} columns, but got {}",
-                        num_columns,
-                        desc.arity()
-                    );
-
-                    // Double check that the body column of the webhook source matches the type
-                    // we're about to deserialize as.
-                    let body_column = desc
-                        .get_by_name(&"body".into())
-                        .map(|(_idx, ty)| ty.clone())
-                        .ok_or(name.clone())?;
-                    assert!(!body_column.nullable, "webhook body column is nullable!?");
-                    assert_eq!(body_column.scalar_type, ScalarType::from(*body_format));
-
-                    // Create a validator that can be called to validate a webhook request.
-                    let validator = validate_using.as_ref().map(|v| {
-                        let validation = v.clone();
-                        AppendWebhookValidator::new(
-                            validation,
-                            coord.caching_secrets_reader.clone(),
-                        )
-                    });
-                    (*body_format, headers.clone(), validator, *global_id)
-                }
+                }) => (data_source, desc, *global_id),
+                CatalogItem::Table(
+                    table @ Table {
+                        desc,
+                        data_source:
+                            TableDataSource::DataSource {
+                                desc: data_source @ DataSourceDesc::Webhook { .. },
+                                ..
+                            },
+                        ..
+                    },
+                ) => (data_source, desc, table.global_id_writes()),
                 _ => return Err(name),
             };
+
+            let DataSourceDesc::Webhook {
+                validate_using,
+                body_format,
+                headers,
+                ..
+            } = data_source
+            else {
+                mz_ore::soft_panic_or_log!("programming error! checked above for webhook");
+                return Err(name);
+            };
+            let body_format = body_format.clone();
+            let header_tys = headers.clone();
+
+            // Assert we have one column for the body, and how ever many are required for
+            // the headers.
+            let num_columns = headers.num_columns() + 1;
+            mz_ore::soft_assert_or_log!(
+                desc.arity() <= num_columns,
+                "expected at most {} columns, but got {}",
+                num_columns,
+                desc.arity()
+            );
+
+            // Double check that the body column of the webhook source matches the type
+            // we're about to deserialize as.
+            let body_column = desc
+                .get_by_name(&"body".into())
+                .map(|(_idx, ty)| ty.clone())
+                .ok_or(name.clone())?;
+            assert!(!body_column.nullable, "webhook body column is nullable!?");
+            assert_eq!(body_column.scalar_type, ScalarType::from(body_format));
+
+            // Create a validator that can be called to validate a webhook request.
+            let validator = validate_using.as_ref().map(|v| {
+                let validation = v.clone();
+                AppendWebhookValidator::new(validation, coord.caching_secrets_reader.clone())
+            });
 
             // Get a channel so we can queue updates to be written.
             let row_tx = coord

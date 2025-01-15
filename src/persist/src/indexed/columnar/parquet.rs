@@ -139,6 +139,9 @@ pub fn encode_parquet_kvtd<W: Write + Send>(
             let schema = Schema::new(fields);
             (arrays, Arc::new(schema), "k,v,t,d,k_s,v_s")
         }
+        BlobTraceUpdates::Structured { .. } => {
+            unimplemented!("codec data should exist before reaching parquet encoding")
+        }
     };
 
     let mut writer = ArrowWriter::try_new(w, Arc::clone(&schema), Some(properties))?;

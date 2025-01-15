@@ -29,7 +29,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::iter::IteratorExt;
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::vec::swap_remove_multiple;
-use mz_repr::{GlobalId, Row};
+use mz_repr::{GlobalId, RelationType, Row};
 
 use crate::canonicalize_mfp::CanonicalizeMfp;
 use crate::notice::IndexTooWideForLiteralConstraints;
@@ -70,7 +70,9 @@ impl LiteralConstraints {
         relation.try_visit_mut_children(|e| self.action(e, transform_ctx))?;
 
         if let MirRelationExpr::Get {
-            id: Id::Global(id), ..
+            id: Id::Global(id),
+            ref typ,
+            ..
         } = *relation
         {
             let orig_mfp = mfp.clone();
@@ -87,10 +89,11 @@ impl LiteralConstraints {
                 mfp: &mut MapFilterProject,
                 orig_mfp: &MapFilterProject,
                 relation: &MirRelationExpr,
+                relation_type: RelationType,
             ) {
                 // undo list_of_predicates_to_and_of_predicates, distribute_and_over_or, unary_and
                 // (It undoes the latter 2 through `MirScalarExp::reduce`.)
-                LiteralConstraints::canonicalize_predicates(mfp, relation);
+                LiteralConstraints::canonicalize_predicates(mfp, relation, relation_type);
                 // undo inline_literal_constraints
                 mfp.optimize();
                 // We can usually undo, but sometimes not (see comment on `distribute_and_over_or`),
@@ -109,6 +112,8 @@ impl LiteralConstraints {
             // todo: We might want to also call `canonicalize_equivalences`,
             // see near the end of literal_constraints.slt.
 
+            let inp_typ = typ.clone();
+
             let key_val = Self::detect_literal_constraints(&mfp, id, transform_ctx);
 
             match key_val {
@@ -116,7 +121,7 @@ impl LiteralConstraints {
                     // We didn't find a usable index, so no chance to remove literal constraints.
                     // But, we might have removed contradicting OR args.
                     if removed_contradicting_or_args {
-                        undo_preparation(&mut mfp, &orig_mfp, relation);
+                        undo_preparation(&mut mfp, &orig_mfp, relation, inp_typ);
                     } else {
                         // We didn't remove anything, so let's go with the original MFP.
                         mfp = orig_mfp;
@@ -130,7 +135,7 @@ impl LiteralConstraints {
                     {
                         // We were able to remove the literal constraints or contradicting OR args,
                         // so we would like to use this new MFP, so we try undoing the preparation.
-                        undo_preparation(&mut mfp, &orig_mfp, relation);
+                        undo_preparation(&mut mfp, &orig_mfp, relation, inp_typ.clone());
                     } else {
                         // We were not able to remove the literal constraint, so `mfp` is
                         // equivalent to `orig_mfp`, but `orig_mfp` is often simpler (or the same).
@@ -140,7 +145,6 @@ impl LiteralConstraints {
                     // We transform the Get into a semi-join with a constant collection.
 
                     let inp_id = id.clone();
-                    let inp_typ = relation.typ();
                     let filter_list = MirRelationExpr::Constant {
                         rows: Ok(possible_vals.iter().map(|val| (val.clone(), 1)).collect()),
                         typ: mz_repr::RelationType {
@@ -164,10 +168,7 @@ impl LiteralConstraints {
                     if possible_vals.is_empty() {
                         // Even better than what we were hoping for: Found contradicting
                         // literal constraints, so the whole relation is empty.
-                        *relation = MirRelationExpr::Constant {
-                            rows: Ok(Vec::new()),
-                            typ: relation.typ(),
-                        };
+                        relation.take_safely(Some(inp_typ));
                     } else {
                         // The common case: We need to build the join which is the main point of
                         // this transform.
@@ -610,9 +611,16 @@ impl LiteralConstraints {
     }
 
     /// Call [mz_expr::canonicalize::canonicalize_predicates] on each of the predicates in the MFP.
-    fn canonicalize_predicates(mfp: &mut MapFilterProject, relation: &MirRelationExpr) {
+    fn canonicalize_predicates(
+        mfp: &mut MapFilterProject,
+        relation: &MirRelationExpr,
+        relation_type: RelationType,
+    ) {
         let (map, mut predicates, project) = mfp.as_map_filter_project();
-        let typ_after_map = relation.clone().map(map.clone()).typ();
+        let typ_after_map = relation
+            .clone()
+            .map(map.clone())
+            .typ_with_input_types(&[relation_type]);
         canonicalize_predicates(&mut predicates, &typ_after_map.column_types);
         // Rebuild the MFP with the new predicates.
         *mfp = MapFilterProject::new(mfp.input_arity)

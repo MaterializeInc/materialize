@@ -1071,6 +1071,21 @@ impl CatalogState {
                                 },
                                 timeline,
                             },
+                            mz_sql::plan::DataSourceDesc::Webhook {
+                                validate_using,
+                                body_format,
+                                headers,
+                                cluster_id,
+                            } => TableDataSource::DataSource {
+                                desc: DataSourceDesc::Webhook {
+                                    validate_using,
+                                    body_format,
+                                    headers,
+                                    cluster_id: cluster_id
+                                        .expect("Webhook Tables must have a cluster_id set"),
+                                },
+                                timeline,
+                            },
                             _ => {
                                 return Err((
                                     AdapterError::Unstructured(anyhow::anyhow!(
@@ -1123,13 +1138,20 @@ impl CatalogState {
                         validate_using,
                         body_format,
                         headers,
-                    } => DataSourceDesc::Webhook {
-                        validate_using,
-                        body_format,
-                        headers,
-                        cluster_id: in_cluster
-                            .expect("webhook sources must use an existing cluster"),
-                    },
+                        cluster_id,
+                    } => {
+                        mz_ore::soft_assert_or_log!(
+                            cluster_id.is_none(),
+                            "cluster_id set at Source level for Webhooks"
+                        );
+                        DataSourceDesc::Webhook {
+                            validate_using,
+                            body_format,
+                            headers,
+                            cluster_id: in_cluster
+                                .expect("webhook sources must use an existing cluster"),
+                        }
+                    }
                 },
                 desc: source.desc,
                 global_id,

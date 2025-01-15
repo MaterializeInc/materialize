@@ -9,8 +9,6 @@
 
 //! A handle to a batch of updates
 
-use arrow::array::Array;
-use differential_dataflow::Hashable;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
@@ -19,24 +17,29 @@ use std::mem;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
-use uuid::Uuid;
 
+use arrow::array::{Array, Int64Array};
 use bytes::Bytes;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures_util::stream::StreamExt;
 use futures_util::{stream, FutureExt};
+use itertools::Either;
 use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
-use mz_ore::{instrument, soft_panic_or_log};
-use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
+use mz_ore::instrument;
+use mz_persist::indexed::columnar::{ColumnarRecordsBuilder, ColumnarRecordsStructuredExt};
 use mz_persist::indexed::encoding::{BatchColumnarFormat, BlobTraceBatchPart, BlobTraceUpdates};
 use mz_persist::location::Blob;
 use mz_persist_types::arrow::{ArrayBound, ArrayOrd};
+use mz_persist_types::columnar::{ColumnDecoder, Schema2};
 use mz_persist_types::parquet::{CompressionFormat, EncodingConfig};
+use mz_persist_types::part::{Part2, PartBuilder2};
 use mz_persist_types::schema::SchemaId;
-use mz_persist_types::stats::{trim_to_budget, truncate_bytes, TruncateBound, TRUNCATE_LEN};
+use mz_persist_types::stats::{
+    trim_to_budget, truncate_bytes, PartStats, TruncateBound, TRUNCATE_LEN,
+};
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::RustType;
 use mz_timely_util::order::Reverse;
@@ -60,9 +63,7 @@ use crate::internal::state::{
     BatchPart, HollowBatch, HollowBatchPart, HollowRun, HollowRunRef, ProtoInlineBatchPart,
     RunMeta, RunOrder, RunPart, WRITE_DIFFS_SUM,
 };
-use crate::stats::{
-    encode_updates, untrimmable_columns, STATS_BUDGET_BYTES, STATS_COLLECTION_ENABLED,
-};
+use crate::stats::{untrimmable_columns, STATS_BUDGET_BYTES, STATS_COLLECTION_ENABLED};
 use crate::{PersistConfig, ShardId};
 
 include!(concat!(env!("OUT_DIR"), "/mz_persist_client.batch.rs"));
@@ -244,7 +245,7 @@ where
                     .decode::<T>(&self.metrics.columnar)
                     .expect("valid inline part");
                 let diffs_sum =
-                    diffs_sum::<D>(updates.updates.records()).expect("inline parts are not empty");
+                    diffs_sum::<D>(updates.updates.diffs()).expect("inline parts are not empty");
                 let mut write_schemas = write_schemas.clone();
                 write_schemas.id = *schema_id;
 
@@ -255,7 +256,6 @@ where
                     || "batch::flush_to_blob",
                     BatchParts::write_hollow_part(
                         cfg.clone(),
-                        cfg.part_write_columnar_data(),
                         Arc::clone(&self.blob),
                         Arc::clone(&self.metrics),
                         Arc::clone(&self.shard_metrics),
@@ -347,7 +347,6 @@ pub struct BatchBuilderConfig {
     pub(crate) batch_delete_enabled: bool,
     pub(crate) batch_builder_max_outstanding_parts: usize,
     pub(crate) batch_columnar_format: BatchColumnarFormat,
-    pub(crate) batch_columnar_format_percent: usize,
     pub(crate) inline_writes_single_max_bytes: usize,
     pub(crate) stats_collection_enabled: bool,
     pub(crate) stats_budget: usize,
@@ -355,6 +354,7 @@ pub struct BatchBuilderConfig {
     pub(crate) write_diffs_sum: bool,
     pub(crate) encoding_config: EncodingConfig,
     pub(crate) preferred_order: RunOrder,
+    pub(crate) structured_encoding: bool,
     pub(crate) record_schema_id: bool,
     pub(crate) structured_key_lower_len: usize,
     pub(crate) run_length_limit: usize,
@@ -375,12 +375,6 @@ pub(crate) const BATCH_COLUMNAR_FORMAT: Config<&'static str> = Config::new(
     "persist_batch_columnar_format",
     BatchColumnarFormat::default().as_str(),
     "Columnar format for a batch written to Persist, either 'row', 'both', or 'both_v2' (Materialize).",
-);
-
-pub(crate) const BATCH_COLUMNAR_FORMAT_PERCENT: Config<usize> = Config::new(
-    "persist_batch_columnar_format_percent",
-    100,
-    "Percent of parts to write using 'persist_batch_columnar_format', falling back to 'row'.",
 );
 
 pub(crate) const ENCODING_ENABLE_DICTIONARY: Config<bool> = Config::new(
@@ -438,6 +432,13 @@ pub(crate) const MAX_RUNS: Config<usize> = Config::new(
     The minimum value is 2; below this, compaction is disabled.",
 );
 
+pub(crate) const BUILDER_STRUCTURED: Config<bool> = Config::new(
+    "persist_batch_builder_structured",
+    false,
+    "In the incremental batch builder, should we use the new structured-data builder \
+    instead of the old codec encoding?",
+);
+
 /// A target maximum size of blob payloads in bytes. If a logical "batch" is
 /// bigger than this, it will be broken up into smaller, independent pieces.
 /// This is best-effort, not a guarantee (though as of 2022-06-09, we happen to
@@ -471,7 +472,6 @@ impl BatchBuilderConfig {
 
         let batch_columnar_format =
             BatchColumnarFormat::from_str(&BATCH_COLUMNAR_FORMAT.get(value));
-        let batch_columnar_format_percent = BATCH_COLUMNAR_FORMAT_PERCENT.get(value);
 
         let record_schema_id = RECORD_SCHEMA_ID.get(value);
         let structured_order = STRUCTURED_ORDER.get(value) && {
@@ -489,7 +489,6 @@ impl BatchBuilderConfig {
             batch_delete_enabled: BATCH_DELETE_ENABLED.get(value),
             batch_builder_max_outstanding_parts: BATCH_BUILDER_MAX_OUTSTANDING_PARTS.get(value),
             batch_columnar_format,
-            batch_columnar_format_percent,
             inline_writes_single_max_bytes: INLINE_WRITES_SINGLE_MAX_BYTES.get(value),
             stats_collection_enabled: STATS_COLLECTION_ENABLED.get(value),
             stats_budget: STATS_BUDGET_BYTES.get(value),
@@ -500,6 +499,7 @@ impl BatchBuilderConfig {
                 compression: CompressionFormat::from_str(&ENCODING_COMPRESSION_FORMAT.get(value)),
             },
             preferred_order,
+            structured_encoding: BUILDER_STRUCTURED.get(value),
             record_schema_id,
             structured_key_lower_len: STRUCTURED_KEY_LOWER_LEN.get(value),
             run_length_limit: MAX_RUN_LEN.get(value).clamp(2, usize::MAX),
@@ -508,12 +508,6 @@ impl BatchBuilderConfig {
                 _ => None,
             },
         }
-    }
-
-    fn part_write_columnar_data(&self) -> bool {
-        // [0, 100)
-        let rand = || usize::cast_from(Uuid::new_v4().hashed()) % 100;
-        self.batch_columnar_format.is_structured() && self.batch_columnar_format_percent > rand()
     }
 }
 
@@ -571,7 +565,7 @@ where
     pub(crate) key_buf: Vec<u8>,
     pub(crate) val_buf: Vec<u8>,
 
-    buffer: BatchBuffer,
+    records_builder: Either<ColumnarRecordsBuilder, PartBuilder2<K, K::Schema, V, V::Schema>>,
     pub(crate) builder: BatchBuilderInternal<K, V, T, D>,
 }
 
@@ -587,17 +581,25 @@ where
         inline_desc: Description<T>,
         metrics: Arc<Metrics>,
     ) -> Self {
-        let buffer = BatchBuffer::new(Arc::clone(&metrics), builder.parts.cfg.blob_target_size);
+        let records_builder = if builder.parts.cfg.structured_encoding {
+            Either::Right(PartBuilder2::new(
+                builder.write_schemas.key.as_ref(),
+                builder.write_schemas.val.as_ref(),
+            ))
+        } else {
+            Either::Left(ColumnarRecordsBuilder::default())
+        };
         Self {
             metrics,
             inline_desc,
             inclusive_upper: Antichain::new(),
             key_buf: vec![],
             val_buf: vec![],
-            buffer,
+            records_builder,
             builder,
         }
     }
+
     /// Finish writing this batch and return a handle to the written batch.
     ///
     /// This fails if any of the updates in this batch are beyond the given
@@ -628,8 +630,24 @@ where
             }
         }
 
+        let updates = match self.records_builder {
+            Either::Left(builder) => BlobTraceUpdates::Row(builder.finish(&self.metrics.columnar)),
+            Either::Right(builder) => {
+                let Part2 {
+                    key,
+                    val,
+                    time,
+                    diff,
+                } = builder.finish();
+                BlobTraceUpdates::Structured {
+                    key_values: ColumnarRecordsStructuredExt { key, val },
+                    timestamps: time,
+                    diffs: diff,
+                }
+            }
+        };
         self.builder
-            .flush_part(self.inline_desc.clone(), self.buffer.drain())
+            .flush_part(self.inline_desc.clone(), updates)
             .await;
 
         self.builder
@@ -652,22 +670,6 @@ where
         ts: &T,
         diff: &D,
     ) -> Result<Added, InvalidUsage<T>> {
-        self.metrics
-            .codecs
-            .key
-            .encode(|| K::encode(key, &mut self.key_buf));
-        self.metrics
-            .codecs
-            .val
-            .encode(|| V::encode(val, &mut self.val_buf));
-        validate_schema(
-            &self.builder.write_schemas,
-            &self.key_buf,
-            &self.val_buf,
-            Some(key),
-            Some(val),
-        );
-
         if !self.inline_desc.lower().less_equal(ts) {
             return Err(InvalidUsage::UpdateNotBeyondLower {
                 ts: ts.clone(),
@@ -676,10 +678,65 @@ where
         }
         self.inclusive_upper.insert(Reverse(ts.clone()));
 
-        let added = if let Some(full_batch) =
-            self.buffer
-                .push(&self.key_buf, &self.val_buf, ts.clone(), diff.clone())
-        {
+        let added = match &mut self.records_builder {
+            Either::Left(builder) => {
+                self.metrics
+                    .codecs
+                    .key
+                    .encode(|| K::encode(key, &mut self.key_buf));
+                self.metrics
+                    .codecs
+                    .val
+                    .encode(|| V::encode(val, &mut self.val_buf));
+                validate_schema(
+                    &self.builder.write_schemas,
+                    &self.key_buf,
+                    &self.val_buf,
+                    Some(key),
+                    Some(val),
+                );
+
+                let update = (
+                    (self.key_buf.as_slice(), self.val_buf.as_slice()),
+                    ts.encode(),
+                    diff.encode(),
+                );
+                assert!(builder.push(update), "single update overflowed an i32");
+
+                // if we've filled up a batch part, flush out to blob to keep our memory usage capped.
+                if builder.total_bytes() >= self.builder.parts.cfg.blob_target_size {
+                    // TODO: we're in a position to do a very good estimate here, instead of using the default.
+                    let records = mem::take(builder).finish(&self.metrics.columnar);
+                    assert_eq!(builder.len(), 0);
+                    Some(BlobTraceUpdates::Row(records))
+                } else {
+                    None
+                }
+            }
+            Either::Right(builder) => {
+                builder.push(key, val, ts.clone(), diff.clone());
+                if builder.goodbytes() >= self.builder.parts.cfg.blob_target_size {
+                    let Part2 {
+                        key,
+                        val,
+                        time,
+                        diff,
+                    } = builder.finish_and_replace(
+                        self.builder.write_schemas.key.as_ref(),
+                        self.builder.write_schemas.val.as_ref(),
+                    );
+                    Some(BlobTraceUpdates::Structured {
+                        key_values: ColumnarRecordsStructuredExt { key, val },
+                        timestamps: time,
+                        diffs: diff,
+                    })
+                } else {
+                    None
+                }
+            }
+        };
+
+        let added = if let Some(full_batch) = added {
             self.builder
                 .flush_part(self.inline_desc.clone(), full_batch)
                 .await;
@@ -803,7 +860,7 @@ where
         if num_updates == 0 {
             return;
         }
-        let diffs_sum = diffs_sum::<D>(columnar.records()).expect("part is non empty");
+        let diffs_sum = diffs_sum::<D>(columnar.diffs()).expect("part is non empty");
 
         let start = Instant::now();
         self.parts
@@ -852,52 +909,6 @@ pub(crate) fn validate_schema<K: Codec, V: Codec>(
     };
     let () = val_valid
         .unwrap_or_else(|err| panic!("constructing batch with mismatched val schema: {}", err));
-}
-
-#[derive(Debug)]
-struct BatchBuffer {
-    metrics: Arc<Metrics>,
-    blob_target_size: usize,
-    records_builder: ColumnarRecordsBuilder,
-}
-
-impl BatchBuffer {
-    fn new(metrics: Arc<Metrics>, blob_target_size: usize) -> Self {
-        BatchBuffer {
-            metrics,
-            blob_target_size,
-            records_builder: ColumnarRecordsBuilder::default(),
-        }
-    }
-
-    fn push<T: Codec64, D: Codec64>(
-        &mut self,
-        key: &[u8],
-        val: &[u8],
-        ts: T,
-        diff: D,
-    ) -> Option<BlobTraceUpdates> {
-        let update = ((key, val), ts.encode(), diff.encode());
-        assert!(
-            self.records_builder.push(update),
-            "single update overflowed an i32"
-        );
-
-        // if we've filled up a batch part, flush out to blob to keep our memory usage capped.
-        if self.records_builder.total_bytes() >= self.blob_target_size {
-            Some(self.drain())
-        } else {
-            None
-        }
-    }
-
-    fn drain(&mut self) -> BlobTraceUpdates {
-        // TODO: we're in a position to do a very good estimate here, instead of using the default.
-        let builder = mem::take(&mut self.records_builder);
-        let records = builder.finish(&self.metrics.columnar);
-        assert_eq!(self.records_builder.len(), 0);
-        BlobTraceUpdates::Row(records)
-    }
 }
 
 #[derive(Debug)]
@@ -1102,7 +1113,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         &mut self,
         write_schemas: &Schemas<K, V>,
         desc: Description<T>,
-        mut updates: BlobTraceUpdates,
+        updates: BlobTraceUpdates,
         diffs_sum: D,
     ) {
         let batch_metrics = self.batch_metrics.clone();
@@ -1113,15 +1124,17 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
 
         // Decide this once per part and plumb it around as necessary so that we
         // use a consistent answer for things like inline threshold.
-        let part_write_columnar_data = self.cfg.part_write_columnar_data();
         let record_schema_id = self.cfg.record_schema_id;
+
+        let batch_format = self.cfg.batch_columnar_format;
 
         // If we're going to encode structured data then halve our limit since we're storing
         // it twice, once as binary encoded and once as structured.
-        let inline_threshold = if part_write_columnar_data {
-            self.cfg.inline_writes_single_max_bytes.saturating_div(2)
-        } else {
-            self.cfg.inline_writes_single_max_bytes
+        let inline_threshold = match batch_format {
+            BatchColumnarFormat::Row => self.cfg.inline_writes_single_max_bytes,
+            BatchColumnarFormat::Both(_) => {
+                self.cfg.inline_writes_single_max_bytes.saturating_div(2)
+            }
         };
 
         let (name, write_future) = if updates.goodbytes() < inline_threshold {
@@ -1132,23 +1145,13 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             (
                 "batch::inline_part",
                 async move {
-                    let updates = if part_write_columnar_data {
-                        let records = updates.records().clone();
-                        let structured = metrics
-                            .columnar
-                            .arrow()
-                            .measure_part_build(|| {
-                                updates.get_or_make_structured::<K, V>(
-                                    write_schemas.key.as_ref(),
-                                    write_schemas.val.as_ref(),
-                                )
-                            })
-                            .clone();
-                        BlobTraceUpdates::Both(records, structured)
-                    } else {
-                        let records = updates.records().clone();
-                        BlobTraceUpdates::Row(records)
-                    };
+                    let updates = metrics.columnar.arrow().measure_part_build(|| {
+                        updates.as_format::<K, V>(
+                            batch_format,
+                            write_schemas.key.as_ref(),
+                            write_schemas.val.as_ref(),
+                        )
+                    });
 
                     let start = Instant::now();
                     let updates = LazyInlineBatchPart::from(&ProtoInlineBatchPart {
@@ -1188,7 +1191,6 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                 "batch::write_part",
                 BatchParts::write_hollow_part(
                     self.cfg.clone(),
-                    part_write_columnar_data,
                     Arc::clone(&self.blob),
                     Arc::clone(&self.metrics),
                     Arc::clone(&self.shard_metrics),
@@ -1258,7 +1260,6 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
 
     async fn write_hollow_part<K: Codec, V: Codec>(
         cfg: BatchBuilderConfig,
-        part_write_columnar_data: bool,
         blob: Arc<dyn Blob>,
         metrics: Arc<Metrics>,
         shard_metrics: Arc<ShardMetrics>,
@@ -1272,68 +1273,66 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
     ) -> BatchPart<T> {
         let partial_key = PartialBatchKey::new(&cfg.writer_key, &PartId::new());
         let key = partial_key.complete(&shard_metrics.shard_id);
-        let goodbytes = updates.updates.records().goodbytes();
+        let goodbytes = updates.updates.goodbytes();
         let metrics_ = Arc::clone(&metrics);
         let schema_id = write_schemas.id;
 
-        let key_lower = {
-            let key_bytes = updates.updates.records().keys();
-            if key_bytes.is_empty() {
-                &[]
-            } else if run_order == RunOrder::Codec {
-                key_bytes.value(0)
-            } else {
-                ::arrow::compute::min_binary(key_bytes).expect("min of nonempty array")
-            }
-        };
-        let key_lower = truncate_bytes(key_lower, TRUNCATE_LEN, TruncateBound::Lower)
-            .expect("lower bound always exists");
-
-        let (stats, structured_key_lower, (buf, encode_time)) = isolated_runtime
+        let (stats, key_lower, structured_key_lower, (buf, encode_time)) = isolated_runtime
             .spawn_named(|| "batch::encode_part", async move {
-                // Only encode our updates in a structured format if required, it's expensive.
-                let stats = 'collect_stats: {
-                    if cfg.stats_collection_enabled || cfg.batch_columnar_format.is_structured() {
-                        let result = metrics_.columnar.arrow().measure_part_build(|| {
-                            encode_updates(&write_schemas, &updates.updates)
-                        });
+                // Measure the expensive steps of the part build - re-encoding and stats collection.
+                let stats = metrics_.columnar.arrow().measure_part_build(|| {
+                    let stats = if cfg.stats_collection_enabled {
+                        let ext = updates.updates.get_or_make_structured::<K, V>(
+                            write_schemas.key.as_ref(),
+                            write_schemas.val.as_ref(),
+                        );
 
-                        // We can't collect stats if we failed to encode in a columnar format.
-                        let Ok((extended_cols, stats)) = result else {
-                            soft_panic_or_log!("failed to encode in columnar format! {:?}", result);
-                            break 'collect_stats None;
-                        };
+                        let key_stats = write_schemas
+                            .key
+                            .decoder_any(ext.key.as_ref())
+                            .expect("decoding just-encoded data")
+                            .stats();
 
-                        // Write a structured batch if the dyncfg is enabled and we're the stats
-                        // override is not set.
-                        if let BlobTraceUpdates::Row(record) = &updates.updates {
-                            if let Some(record_ext) = extended_cols {
-                                if part_write_columnar_data {
-                                    updates.updates =
-                                        BlobTraceUpdates::Both(record.clone(), record_ext);
-                                }
-                            }
-                        }
+                        let part_stats = PartStats { key: key_stats };
 
                         // Collect stats about the updates, if stats collection is enabled.
-                        if cfg.stats_collection_enabled {
-                            let trimmed_start = Instant::now();
-                            let mut trimmed_bytes = 0;
-                            let trimmed_stats = LazyPartStats::encode(&stats, |s| {
-                                trimmed_bytes = trim_to_budget(s, cfg.stats_budget, |s| {
-                                    cfg.stats_untrimmable_columns.should_retain(s)
-                                })
-                            });
-                            let trimmed_duration = trimmed_start.elapsed();
-
-                            Some((trimmed_stats, trimmed_duration, trimmed_bytes))
-                        } else {
-                            None
-                        }
+                        let trimmed_start = Instant::now();
+                        let mut trimmed_bytes = 0;
+                        let trimmed_stats = LazyPartStats::encode(&part_stats, |s| {
+                            trimmed_bytes = trim_to_budget(s, cfg.stats_budget, |s| {
+                                cfg.stats_untrimmable_columns.should_retain(s)
+                            })
+                        });
+                        let trimmed_duration = trimmed_start.elapsed();
+                        Some((trimmed_stats, trimmed_duration, trimmed_bytes))
                     } else {
                         None
+                    };
+
+                    // Ensure the updates are in the specified columnar format before encoding.
+                    updates.updates = updates.updates.as_format::<K, V>(
+                        cfg.batch_columnar_format,
+                        write_schemas.key.as_ref(),
+                        write_schemas.val.as_ref(),
+                    );
+
+                    stats
+                });
+
+                let key_lower = if let Some(records) = updates.updates.records() {
+                    let key_bytes = records.keys();
+                    if key_bytes.is_empty() {
+                        &[]
+                    } else if run_order == RunOrder::Codec {
+                        key_bytes.value(0)
+                    } else {
+                        ::arrow::compute::min_binary(key_bytes).expect("min of nonempty array")
                     }
+                } else {
+                    &[]
                 };
+                let key_lower = truncate_bytes(key_lower, TRUNCATE_LEN, TruncateBound::Lower)
+                    .expect("lower bound always exists");
 
                 let structured_key_lower = if cfg.structured_key_lower_len > 0 {
                     updates.updates.structured().and_then(|ext| {
@@ -1364,6 +1363,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                 drop(updates);
                 (
                     stats,
+                    key_lower,
                     structured_key_lower,
                     (Bytes::from(buf), encode_start.elapsed()),
                 )
@@ -1598,10 +1598,10 @@ impl<T: Timestamp> PartDeletes<T> {
 }
 
 /// Returns the total sum of diffs or None if there were no updates.
-fn diffs_sum<D: Semigroup + Codec64>(updates: &ColumnarRecords) -> Option<D> {
+fn diffs_sum<D: Semigroup + Codec64>(updates: &Int64Array) -> Option<D> {
     let mut sum = None;
-    for (_kv, _t, d) in updates.iter() {
-        let d = D::decode(d);
+    for d in updates.values().iter() {
+        let d = D::decode(d.to_le_bytes());
         match &mut sum {
             None => sum = Some(d),
             Some(x) => x.plus_equals(&d),
@@ -1616,13 +1616,12 @@ mod tests {
     use mz_dyncfg::ConfigUpdates;
     use timely::order::Product;
 
+    use super::*;
     use crate::cache::PersistClientCache;
     use crate::cfg::BATCH_BUILDER_MAX_OUTSTANDING_PARTS;
     use crate::internal::paths::{BlobKey, PartialBlobKey};
     use crate::tests::{all_ok, new_test_client};
     use crate::PersistLocation;
-
-    use super::*;
 
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
@@ -1904,7 +1903,6 @@ mod tests {
         let cache = PersistClientCache::new_no_metrics();
         // Ensure structured data is calculated, and that we give some budget for a key lower.
         cache.cfg().set_config(&BATCH_COLUMNAR_FORMAT, "both_v2");
-        cache.cfg().set_config(&BATCH_COLUMNAR_FORMAT_PERCENT, 100);
         cache.cfg().set_config(&STRUCTURED_KEY_LOWER_LEN, 1024);
         // Otherwise fails: expected hollow part!
         cache.cfg().set_config(&INLINE_WRITES_SINGLE_MAX_BYTES, 0);

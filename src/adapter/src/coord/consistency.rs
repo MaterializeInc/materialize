@@ -12,7 +12,7 @@
 use super::Coordinator;
 use crate::catalog::consistency::CatalogInconsistencies;
 use mz_adapter_types::connection::ConnectionIdType;
-use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Source};
+use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Source, Table, TableDataSource};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::instrument;
 use mz_repr::{CatalogItemId, GlobalId};
@@ -117,8 +117,13 @@ impl Coordinator {
                 .try_get_entry(id)
                 .map(|entry| entry.item())
                 .and_then(|item| {
-                    let CatalogItem::Source(Source { data_source, .. }) = &item else {
-                        return None;
+                    let data_source = match &item {
+                        CatalogItem::Source(Source { data_source, .. }) => data_source,
+                        CatalogItem::Table(Table {
+                            data_source: TableDataSource::DataSource { desc, .. },
+                            ..
+                        }) => desc,
+                        _ => return None,
                     };
                     Some(matches!(data_source, DataSourceDesc::Webhook { .. }))
                 })

@@ -106,7 +106,7 @@ include!(concat!(env!("OUT_DIR"), "/mz_repr.row.rs"));
 /// Rows are dynamically sized, but up to a fixed size their data is stored in-line.
 /// It is best to re-use a `Row` across multiple `Row` creation calls, as this
 /// avoids the allocations involved in `Row::new()`.
-#[derive(Default, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Row {
     data: CompactBytes,
 }
@@ -162,7 +162,7 @@ impl Row {
     /// This method clears the existing contents of the row, but retains the
     /// allocation.
     pub fn packer(&mut self) -> RowPacker<'_> {
-        self.data.clear();
+        self.clear();
         RowPacker { row: self }
     }
 
@@ -247,6 +247,12 @@ impl Row {
     pub fn as_row_ref(&self) -> &RowRef {
         RowRef::from_slice(self.data.as_slice())
     }
+
+    /// Clear the contents of the [`Row`], leaving any allocation in place.
+    #[inline]
+    fn clear(&mut self) {
+        self.data.clear();
+    }
 }
 
 impl Borrow<RowRef> for Row {
@@ -284,6 +290,13 @@ impl Clone for Row {
 
     fn clone_from(&mut self, source: &Self) {
         self.data.clone_from(&source.data);
+    }
+}
+
+// Row's `Hash` implementation defers to `RowRef` to ensure they hash equivalently.
+impl std::hash::Hash for Row {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.as_row_ref().hash(state)
     }
 }
 
@@ -402,10 +415,143 @@ mod columnation {
     }
 }
 
+mod columnar {
+    use columnar::{
+        AsBytes, Clear, Columnar, Container, FromBytes, HeapSize, Index, IndexAs, Len, Push,
+    };
+    use mz_ore::cast::CastFrom;
+
+    use crate::{Row, RowRef};
+
+    #[derive(Copy, Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+    pub struct Rows<BC = Vec<u64>, VC = Vec<u8>> {
+        /// Bounds container; provides indexed access to offsets.
+        pub bounds: BC,
+        /// Values container; provides slice access to bytes.
+        pub values: VC,
+    }
+
+    impl Columnar for Row {
+        type Ref<'a> = &'a RowRef;
+        fn copy_from(&mut self, other: Self::Ref<'_>) {
+            self.clear();
+            self.data.extend_from_slice(other.data());
+        }
+        fn into_owned(other: Self::Ref<'_>) -> Self {
+            other.to_owned()
+        }
+        type Container = Rows;
+    }
+
+    impl<'b, BC: Container<u64>> Container<Row> for Rows<BC, &'b [u8]> {
+        type Borrowed<'a>
+            = Rows<BC::Borrowed<'a>, &'a [u8]>
+        where
+            Self: 'a;
+        fn borrow<'a>(&'a self) -> Self::Borrowed<'a> {
+            Rows {
+                bounds: self.bounds.borrow(),
+                values: self.values,
+            }
+        }
+    }
+    impl<BC: Container<u64>> Container<Row> for Rows<BC, Vec<u8>> {
+        type Borrowed<'a>
+            = Rows<BC::Borrowed<'a>, &'a [u8]>
+        where
+            BC: 'a;
+        fn borrow<'a>(&'a self) -> Self::Borrowed<'a> {
+            Rows {
+                bounds: self.bounds.borrow(),
+                values: self.values.borrow(),
+            }
+        }
+    }
+
+    impl<'a, BC: AsBytes<'a>, VC: AsBytes<'a>> AsBytes<'a> for Rows<BC, VC> {
+        fn as_bytes(&self) -> impl Iterator<Item = (u64, &'a [u8])> {
+            self.bounds.as_bytes().chain(self.values.as_bytes())
+        }
+    }
+    impl<'a, BC: FromBytes<'a>, VC: FromBytes<'a>> FromBytes<'a> for Rows<BC, VC> {
+        fn from_bytes(bytes: &mut impl Iterator<Item = &'a [u8]>) -> Self {
+            Self {
+                bounds: FromBytes::from_bytes(bytes),
+                values: FromBytes::from_bytes(bytes),
+            }
+        }
+    }
+
+    impl<BC: Len, VC> Len for Rows<BC, VC> {
+        #[inline(always)]
+        fn len(&self) -> usize {
+            self.bounds.len()
+        }
+    }
+
+    impl<'a, BC: Len + IndexAs<u64>> Index for Rows<BC, &'a [u8]> {
+        type Ref = &'a RowRef;
+        #[inline(always)]
+        fn get(&self, index: usize) -> Self::Ref {
+            let lower = if index == 0 {
+                0
+            } else {
+                self.bounds.index_as(index - 1)
+            };
+            let upper = self.bounds.index_as(index);
+            let lower = usize::cast_from(lower);
+            let upper = usize::cast_from(upper);
+            RowRef::from_slice(&self.values[lower..upper])
+        }
+    }
+    impl<'a, BC: Len + IndexAs<u64>> Index for &'a Rows<BC, Vec<u8>> {
+        type Ref = &'a RowRef;
+        #[inline(always)]
+        fn get(&self, index: usize) -> Self::Ref {
+            let lower = if index == 0 {
+                0
+            } else {
+                self.bounds.index_as(index - 1)
+            };
+            let upper = self.bounds.index_as(index);
+            let lower = usize::cast_from(lower);
+            let upper = usize::cast_from(upper);
+            RowRef::from_slice(&self.values[lower..upper])
+        }
+    }
+
+    impl<BC: Push<u64>> Push<&Row> for Rows<BC> {
+        #[inline(always)]
+        fn push(&mut self, item: &Row) {
+            self.values.extend_from_slice(item.data.as_slice());
+            self.bounds.push(u64::cast_from(self.values.len()));
+        }
+    }
+    impl<BC: Push<u64>> Push<&RowRef> for Rows<BC> {
+        fn push(&mut self, item: &RowRef) {
+            self.values.extend_from_slice(item.data());
+            self.bounds.push(u64::cast_from(self.values.len()));
+        }
+    }
+    impl<BC: Clear, VC: Clear> Clear for Rows<BC, VC> {
+        fn clear(&mut self) {
+            self.bounds.clear();
+            self.values.clear();
+        }
+    }
+    impl<BC: HeapSize, VC: HeapSize> HeapSize for Rows<BC, VC> {
+        fn heap_size(&self) -> (usize, usize) {
+            let (l0, c0) = self.bounds.heap_size();
+            let (l1, c1) = self.values.heap_size();
+            (l0 + l1, c0 + c1)
+        }
+    }
+}
+
 /// A contiguous slice of bytes that are row data.
 ///
 /// A [`RowRef`] is to [`Row`] as [`prim@str`] is to [`String`].
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct RowRef([u8]);
 

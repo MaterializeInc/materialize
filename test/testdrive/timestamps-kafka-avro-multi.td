@@ -36,10 +36,7 @@ $ kafka-create-topic topic=data2 partitions=2
 
 > CREATE SOURCE data_rt
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM KAFKA CONNECTION kafka_conn (
-    TOPIC 'testdrive-data-${testdrive.seed}',
-    TOPIC METADATA REFRESH INTERVAL = '50ms'
-  )
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
 
 > CREATE TABLE data_rt_tbl FROM SOURCE data_rt (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'

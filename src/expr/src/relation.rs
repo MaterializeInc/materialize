@@ -593,7 +593,7 @@ impl MirRelationExpr {
     /// Reports the column types of the relation given the column types of the
     /// input relations.
     ///
-    /// This method delegates to `try_col_with_input_cols`, panicing if an `Err`
+    /// This method delegates to `try_col_with_input_cols`, panicking if an `Err`
     /// variant is returned.
     pub fn col_with_input_cols<'a, I>(&self, input_types: I) -> Vec<ColumnType>
     where
@@ -1792,22 +1792,21 @@ impl MirRelationExpr {
             .unzip();
         assert_eq!(keys_and_values.arity() - self.arity(), data.len());
         self.let_in(id_gen, |_id_gen, get_keys| {
+            let get_keys_arity = get_keys.arity();
             Ok(MirRelationExpr::join(
                 vec![
                     // all the missing keys (with count 1)
                     keys_and_values
-                        .distinct_by((0..get_keys.arity()).collect())
+                        .distinct_by((0..get_keys_arity).collect())
                         .negate()
                         .union(get_keys.clone().distinct()),
                     // join with keys to get the correct counts
                     get_keys.clone(),
                 ],
-                (0..get_keys.arity())
-                    .map(|i| vec![(0, i), (1, i)])
-                    .collect(),
+                (0..get_keys_arity).map(|i| vec![(0, i), (1, i)]).collect(),
             )
             // get rid of the extra copies of columns from keys
-            .project((0..get_keys.arity()).collect())
+            .project((0..get_keys_arity).collect())
             // This join is logically equivalent to
             // `.map(<default_expr>)`, but using a join allows for
             // potential predicate pushdown and elision in the

@@ -19,8 +19,6 @@ pub struct BuildInfo {
     pub version: &'static str,
     /// The 40-character SHA-1 hash identifying the Git commit of the build.
     pub sha: &'static str,
-    /// The time of the build in UTC as an ISO 8601-compliant string.
-    pub time: &'static str,
 }
 
 /// Dummy build information.
@@ -30,7 +28,6 @@ pub struct BuildInfo {
 pub const DUMMY_BUILD_INFO: BuildInfo = BuildInfo {
     version: "0.0.0+dummy",
     sha: "0000000000000000000000000000000000000000",
-    time: "",
 };
 
 /// The target triple of the platform.
@@ -94,7 +91,6 @@ macro_rules! build_info {
         $crate::BuildInfo {
             version: env!("CARGO_PKG_VERSION"),
             sha: $crate::__git_sha_internal!(),
-            time: $crate::__build_time_internal!(),
         }
     };
 }
@@ -154,13 +150,6 @@ macro_rules! __git_sha_internal {
     }
 }
 
-#[macro_export]
-macro_rules! __build_time_internal {
-    () => {
-        $crate::private::run_command_str!("date", "-u", "+%Y-%m-%dT%H:%M:%SZ")
-    };
-}
-
 #[doc(hidden)]
 pub mod private {
     pub use compile_time_run::run_command_str;
@@ -182,6 +171,5 @@ mod test {
         let build_info = crate::build_info!();
 
         assert_eq!(build_info.sha.len(), 40);
-        assert_eq!(build_info.time.len(), 20);
     }
 }

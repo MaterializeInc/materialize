@@ -71,7 +71,7 @@ Union
     Get x
 ----
 parse error at 1:0:
-expected one of: `Constant`, `Get`, `Return`, `Project`, `Map`, `FlatMap`, `Filter`, `CrossJoin`, `Join`, `Distinct`, `Reduce`, `TopK`, `Negate`, `Threshold`, `Union`, `ArrangeBy`
+expected one of: `Constant`, `Get`, `Return`, `With`, `Project`, `Map`, `FlatMap`, `Filter`, `CrossJoin`, `Join`, `Distinct`, `Reduce`, `TopK`, `Negate`, `Threshold`, `Union`, `ArrangeBy`
 
 
 apply pipeline=union_branch_cancellation

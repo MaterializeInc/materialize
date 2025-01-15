@@ -71,7 +71,7 @@ impl Coordinator {
 
         let live_frontiers = self
             .controller
-            .storage
+            .storage_collections
             .snapshot_latest(replica_frontier_gid)
             .await
             .expect("can't read mz_cluster_replica_frontiers");

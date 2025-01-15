@@ -15,7 +15,6 @@
 dag: true
 
 env:
-  CI_BUILDER_SCCACHE: 1
   CI_BAZEL_BUILD: 1
   CI_BAZEL_REMOTE_CACHE: $BAZEL_REMOTE_CACHE
   # Note: In .cargo/config we set the default build jobs to -1 so on developer machines we keep
@@ -90,7 +89,7 @@ steps:
       - id: build-x86_64
         label: ":bazel: Build x86_64"
         env:
-        command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
+        command: bin/ci-builder run min bin/pyactivate -m ci.test.build
         inputs:
           - "*"
         artifact_paths: bazel-explain.log
@@ -102,7 +101,7 @@ steps:
       - id: build-aarch64
         label: ":bazel: Build aarch64"
         env:
-        command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
+        command: bin/ci-builder run min bin/pyactivate -m ci.test.build
         inputs:
           - "*"
         artifact_paths: bazel-explain.log
@@ -629,7 +628,7 @@ steps:
   - id: feature-benchmark-kafka-only
     label: "Feature benchmark (Kafka only)"
     depends_on: build-x86_64
-    timeout_in_minutes: 45
+    timeout_in_minutes: 60
     plugins:
       - ./ci/plugins/mzcompose:
           composition: feature-benchmark

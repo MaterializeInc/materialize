@@ -33,6 +33,12 @@ WHERE mz_now() >= insert_ms
   AND mz_now() < delete_ms;
 ----
 Explained Query:
+  With
+    cte l0 =
+      Reduce aggregates=[count(*)]
+        Project ()
+          Filter (mz_now() < numeric_to_mz_timestamp(#2{delete_ms})) AND (mz_now() >= numeric_to_mz_timestamp(#1{insert_ms}))
+            ReadStorage materialize.public.events
   Return
     Union
       Get l0
@@ -43,12 +49,6 @@ Explained Query:
               Get l0
           Constant
             - ()
-  With
-    cte l0 =
-      Reduce aggregates=[count(*)]
-        Project ()
-          Filter (mz_now() < numeric_to_mz_timestamp(#2{delete_ms})) AND (mz_now() >= numeric_to_mz_timestamp(#1{insert_ms}))
-            ReadStorage materialize.public.events
 
 Source materialize.public.events
   filter=((mz_now() >= numeric_to_mz_timestamp(#1{insert_ms})) AND (mz_now() < numeric_to_mz_timestamp(#2{delete_ms})))

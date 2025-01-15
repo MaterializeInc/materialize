@@ -343,13 +343,21 @@ pub fn describe_explain_schema(
     Ok(StatementDesc::new(Some(relation_desc)))
 }
 
+// Currently, there are two reasons for why a flag should be `Option<bool>` instead of simply
+// `bool`:
+// - When it's an override of a global feature flag, for example optimizer feature flags. In this
+//   case, we need not just false and true, but also None to say "take the value of the global
+//   flag".
+// - When it's an override of whether SOFT_ASSERTIONS are enabled. For example, when `Arity` is not
+//   explicitly given in the EXPLAIN command, then we'd like staging and prod to default to true,
+//   but otherwise we'd like to default to false.
 generate_extracted_config!(
     ExplainPlanOption,
-    (Arity, bool, Default(false)),
+    (Arity, Option<bool>, Default(None)),
     (Cardinality, bool, Default(false)),
     (ColumnNames, bool, Default(false)),
-    (FilterPushdown, bool, Default(false)),
-    (HumanizedExpressions, bool, Default(false)),
+    (FilterPushdown, Option<bool>, Default(None)),
+    (HumanizedExpressions, Option<bool>, Default(None)),
     (JoinImplementations, bool, Default(false)),
     (Keys, bool, Default(false)),
     (LinearChains, bool, Default(false)),
@@ -386,16 +394,16 @@ impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
             v.raw_syntax = true;
         }
 
-        // Certain config should always be enabled in release builds running on
+        // Certain config should default to be enabled in release builds running on
         // staging or prod (where SOFT_ASSERTIONS are turned off).
         let enable_on_prod = !SOFT_ASSERTIONS.load(Ordering::Relaxed);
 
         Ok(ExplainConfig {
-            arity: v.arity || enable_on_prod,
+            arity: v.arity.unwrap_or(enable_on_prod),
             cardinality: v.cardinality,
             column_names: v.column_names,
-            filter_pushdown: v.filter_pushdown || enable_on_prod,
-            humanized_exprs: !v.raw_plans && (v.humanized_expressions || enable_on_prod),
+            filter_pushdown: v.filter_pushdown.unwrap_or(enable_on_prod),
+            humanized_exprs: !v.raw_plans && (v.humanized_expressions.unwrap_or(enable_on_prod)),
             join_impls: v.join_implementations,
             keys: v.keys,
             linear_chains: !v.raw_plans && v.linear_chains,
@@ -561,9 +569,9 @@ pub fn plan_explain_plan(
     let config = {
         let mut with_options = ExplainPlanOptionExtracted::try_from(explain.with_options)?;
 
-        if with_options.filter_pushdown {
+        if !scx.catalog.system_vars().persist_stats_filter_enabled() {
             // If filtering is disabled, explain plans should not include pushdown info.
-            with_options.filter_pushdown = scx.catalog.system_vars().persist_stats_filter_enabled();
+            with_options.filter_pushdown = Some(false);
         }
 
         ExplainConfig::try_from(with_options)?

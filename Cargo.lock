@@ -2124,10 +2124,11 @@ dependencies = [
 
 [[package]]
 name = "differential-dataflow"
-version = "0.13.2"
+version = "0.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "26ab97d6a1f3c8556d7d412e2350b0e56990192c479ae1eb04fd4803a11933c5"
+checksum = "86f47ab549a056e3959ce2036d6b20ba369a75e2a0605ccf64256e153626b352"
 dependencies = [
+ "columnar",
  "fnv",
  "serde",
  "timely",
@@ -2135,9 +2136,9 @@ dependencies = [
 
 [[package]]
 name = "differential-dogs3"
-version = "0.1.2"
+version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "049be01c6ae86bd3f43f8d93c82e04fd375f7a6c759b045f82cdc76b5702e61b"
+checksum = "c8ece5ac3c62f1cb6e21560b53102963aa91513d3f72911d99b6620f2d3ac6b1"
 dependencies = [
  "differential-dataflow",
  "serde",
@@ -2229,9 +2230,6 @@ name = "either"
 version = "1.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "90e5c1c8368803113bf0c9584fc495a58b86dc8a29edbf8fe877d21d9507e797"
-dependencies = [
- "serde",
-]
 
 [[package]]
 name = "encode_unicode"
@@ -2786,7 +2784,6 @@ dependencies = [
  "log",
  "regex-automata 0.4.7",
  "regex-syntax 0.8.3",
- "serde",
 ]
 
 [[package]]
@@ -4266,7 +4263,6 @@ dependencies = [
  "chrono",
  "criterion",
  "datadriven",
- "deadpool-postgres",
  "dec",
  "derivative",
  "differential-dataflow",
@@ -4274,7 +4270,6 @@ dependencies = [
  "fail",
  "futures",
  "governor",
- "hex",
  "http 1.1.0",
  "ipnet",
  "itertools 0.12.1",
@@ -4284,7 +4279,6 @@ dependencies = [
  "mz-audit-log",
  "mz-build-info",
  "mz-catalog",
- "mz-ccsr",
  "mz-cloud-provider",
  "mz-cloud-resources",
  "mz-cluster-client",
@@ -4303,9 +4297,7 @@ dependencies = [
  "mz-pgcopy",
  "mz-pgrepr",
  "mz-pgwire-common",
- "mz-postgres-client",
  "mz-postgres-util",
- "mz-proto",
  "mz-repr",
  "mz-rocksdb-types",
  "mz-secrets",
@@ -4317,20 +4309,13 @@ dependencies = [
  "mz-storage-client",
  "mz-storage-types",
  "mz-timestamp-oracle",
- "mz-tls-util",
  "mz-tracing",
  "mz-transform",
  "opentelemetry",
  "prometheus",
- "proptest",
- "proptest-derive",
- "prost",
  "qcell",
  "rand",
  "rand_chacha",
- "rdkafka",
- "regex",
- "reqwest",
  "semver",
  "serde",
  "serde_json",
@@ -4342,12 +4327,10 @@ dependencies = [
  "timely",
  "tokio",
  "tokio-postgres",
- "tokio-stream",
  "tracing",
  "tracing-core",
  "tracing-opentelemetry",
  "tracing-subscriber",
- "uncased",
  "url",
  "uuid",
  "workspace-hack",
@@ -4479,7 +4462,7 @@ dependencies = [
 
 [[package]]
 name = "mz-balancerd"
-version = "0.129.0-dev.0"
+version = "0.130.0-dev.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4562,7 +4545,6 @@ dependencies = [
  "clap",
  "derivative",
  "differential-dataflow",
- "fail",
  "futures",
  "insta",
  "ipnet",
@@ -4586,18 +4568,14 @@ dependencies = [
  "mz-persist-types",
  "mz-pgrepr",
  "mz-pgtz",
- "mz-postgres-util",
  "mz-proto",
  "mz-repr",
- "mz-secrets",
  "mz-sql",
  "mz-sql-parser",
  "mz-storage-client",
- "mz-storage-controller",
  "mz-storage-types",
  "mz-transform",
  "paste",
- "postgres-openssl",
  "prometheus",
  "proptest",
  "proptest-derive",
@@ -4608,12 +4586,10 @@ dependencies = [
  "serde_json",
  "serde_plain",
  "sha2",
- "smallvec",
  "static_assertions",
  "thiserror",
  "timely",
  "tokio",
- "tokio-postgres",
  "tracing",
  "uuid",
  "workspace-hack",
@@ -4621,10 +4597,9 @@ dependencies = [
 
 [[package]]
 name = "mz-catalog-debug"
-version = "0.129.0-dev.0"
+version = "0.130.0-dev.0"
 dependencies = [
  "anyhow",
- "arrow",
  "clap",
  "futures",
  "mz-adapter",
@@ -4639,14 +4614,10 @@ dependencies = [
  "mz-service",
  "mz-sql",
  "mz-storage-types",
- "mz-tls-util",
  "serde",
  "serde_json",
  "tokio",
- "tokio-postgres",
  "tracing",
- "url",
- "uuid",
  "workspace-hack",
 ]
 
@@ -4751,31 +4722,18 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "bytesize",
- "clap",
  "crossbeam-channel",
- "dec",
  "differential-dataflow",
  "futures",
- "mz-build-info",
  "mz-cluster-client",
  "mz-ore",
  "mz-persist-client",
- "mz-persist-types",
- "mz-repr",
  "mz-service",
- "mz-timely-util",
  "mz-txn-wal",
- "prometheus",
  "regex",
- "rocksdb",
- "scopeguard",
- "serde",
- "smallvec",
  "timely",
  "tokio",
  "tracing",
- "uuid",
  "workspace-hack",
 ]
 
@@ -4784,11 +4742,7 @@ name = "mz-cluster-client"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "async-trait",
- "chrono",
- "futures",
  "http 1.1.0",
- "itertools 0.12.1",
  "mz-build-tools",
  "mz-ore",
  "mz-proto",
@@ -4797,22 +4751,16 @@ dependencies = [
  "proptest-derive",
  "prost",
  "prost-build",
- "regex",
  "serde",
- "serde_json",
- "thiserror",
- "tokio",
  "tokio-stream",
  "tonic",
  "tonic-build",
- "tracing",
- "uuid",
  "workspace-hack",
 ]
 
 [[package]]
 name = "mz-clusterd"
-version = "0.129.0-dev.0"
+version = "0.130.0-dev.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -4853,9 +4801,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-stream",
- "async-trait",
  "bytesize",
- "clap",
  "core_affinity",
  "crossbeam-channel",
  "dec",
@@ -4864,9 +4810,7 @@ dependencies = [
  "futures",
  "itertools 0.12.1",
  "lgalloc",
- "mz-build-info",
  "mz-cluster",
- "mz-cluster-client",
  "mz-compute-client",
  "mz-compute-types",
  "mz-dyncfg",
@@ -4876,7 +4820,6 @@ dependencies = [
  "mz-persist-client",
  "mz-persist-types",
  "mz-repr",
- "mz-service",
  "mz-storage-operators",
  "mz-storage-types",
  "mz-timely-util",
@@ -4897,11 +4840,8 @@ name = "mz-compute-client"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "async-stream",
  "async-trait",
- "bytes",
  "bytesize",
- "chrono",
  "crossbeam-channel",
  "derivative",
  "differential-dataflow",
@@ -4915,7 +4855,6 @@ dependencies = [
  "mz-dyncfg",
  "mz-dyncfgs",
  "mz-expr",
- "mz-orchestrator",
  "mz-ore",
  "mz-persist",
  "mz-persist-client",
@@ -4932,7 +4871,6 @@ dependencies = [
  "proptest-derive",
  "prost",
  "prost-build",
- "regex",
  "serde",
  "serde_json",
  "thiserror",
@@ -4978,7 +4916,6 @@ dependencies = [
  "anyhow",
  "bytesize",
  "chrono",
- "differential-dataflow",
  "futures",
  "mz-build-info",
  "mz-cluster-client",
@@ -5001,7 +4938,6 @@ dependencies = [
  "serde_json",
  "timely",
  "tokio",
- "tokio-stream",
  "tracing",
  "uuid",
  "workspace-hack",
@@ -5092,7 +5028,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "0.129.0-dev.0"
+version = "0.130.0-dev.0"
 dependencies = [
  "anyhow",
  "askama",
@@ -5137,7 +5073,6 @@ dependencies = [
  "mz-controller",
  "mz-dyncfgs",
  "mz-environmentd",
- "mz-expr",
  "mz-frontegg-auth",
  "mz-frontegg-mock",
  "mz-http-util",
@@ -5163,9 +5098,7 @@ dependencies = [
  "mz-service",
  "mz-sql",
  "mz-sql-parser",
- "mz-storage-client",
  "mz-storage-types",
- "mz-tls-util",
  "mz-tracing",
  "nix",
  "num_cpus",
@@ -5201,14 +5134,12 @@ dependencies = [
  "thiserror",
  "timely",
  "tokio",
- "tokio-openssl",
  "tokio-postgres",
  "tokio-stream",
  "tower",
  "tower-http",
  "tracing",
  "tracing-capture",
- "tracing-core",
  "tracing-opentelemetry",
  "tracing-subscriber",
  "tungstenite 0.21.0",
@@ -5550,7 +5481,7 @@ dependencies = [
 
 [[package]]
 name = "mz-materialized"
-version = "0.129.0-dev.0"
+version = "0.130.0-dev.0"
 dependencies = [
  "mz-clusterd",
  "mz-environmentd",
@@ -5654,9 +5585,7 @@ dependencies = [
  "futures-core",
  "mz-build-tools",
  "mz-ore",
- "prost",
  "serde",
- "tonic-build",
  "workspace-hack",
 ]
 
@@ -5742,7 +5671,7 @@ dependencies = [
 
 [[package]]
 name = "mz-orchestratord"
-version = "0.129.0-dev.0"
+version = "0.130.0-dev.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5842,6 +5771,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-ore-build"
+version = "0.1.0"
+dependencies = [
+ "workspace-hack",
+]
+
+[[package]]
 name = "mz-ore-proc"
 version = "0.1.0"
 dependencies = [
@@ -5905,7 +5841,7 @@ dependencies = [
 
 [[package]]
 name = "mz-persist-client"
-version = "0.129.0-dev.0"
+version = "0.130.0-dev.0"
 dependencies = [
  "anyhow",
  "arrayvec 0.7.4",
@@ -6061,6 +5997,7 @@ dependencies = [
  "mz-build-tools",
  "mz-lowertest",
  "mz-ore",
+ "mz-ore-build",
  "mz-proto",
  "phf",
  "phf_codegen",
@@ -6087,7 +6024,6 @@ dependencies = [
  "itertools 0.12.1",
  "mz-adapter",
  "mz-adapter-types",
- "mz-expr",
  "mz-frontegg-auth",
  "mz-ore",
  "mz-pgcopy",
@@ -6176,14 +6112,12 @@ dependencies = [
  "backtrace",
  "flate2",
  "jemalloc_pprof",
- "libc",
  "mz-build-tools",
  "mz-ore",
  "pprof",
  "pprof_util",
  "prost",
  "prost-build",
- "tempfile",
  "tikv-jemalloc-ctl",
  "tokio",
  "tracing",
@@ -6223,7 +6157,6 @@ name = "mz-proto"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "bytes",
  "chrono",
  "chrono-tz",
  "globset",
@@ -6266,7 +6199,7 @@ dependencies = [
  "bytes",
  "cfg-if",
  "chrono",
- "chrono-tz",
+ "columnar",
  "columnation",
  "compact_bytes",
  "criterion",
@@ -6335,23 +6268,16 @@ dependencies = [
  "itertools 0.12.1",
  "mz-build-tools",
  "mz-ore",
- "mz-proto",
  "mz-rocksdb-types",
  "num_cpus",
  "prometheus",
- "proptest",
- "proptest-derive",
- "prost",
- "prost-build",
  "rocksdb",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror",
  "tokio",
- "tonic-build",
  "tracing",
- "uncased",
  "workspace-hack",
 ]
 
@@ -6363,7 +6289,6 @@ dependencies = [
  "mz-build-tools",
  "mz-ore",
  "mz-proto",
- "num_cpus",
  "proptest",
  "proptest-derive",
  "prost",
@@ -6568,6 +6493,7 @@ dependencies = [
  "anyhow",
  "datadriven",
  "mz-ore",
+ "mz-ore-build",
  "phf",
  "phf_codegen",
  "serde",
@@ -6585,6 +6511,7 @@ dependencies = [
  "enum-kinds",
  "itertools 0.12.1",
  "mz-ore",
+ "mz-ore-build",
  "mz-sql-lexer",
  "mz-sql-parser",
  "mz-walkabout",
@@ -6626,7 +6553,6 @@ dependencies = [
  "md-5",
  "mz-build-info",
  "mz-catalog",
- "mz-cloud-resources",
  "mz-controller",
  "mz-dyncfgs",
  "mz-environmentd",
@@ -6702,28 +6628,20 @@ dependencies = [
  "columnation",
  "crossbeam-channel",
  "csv-core",
- "datadriven",
  "dec",
  "differential-dataflow",
- "either",
  "fail",
  "futures",
- "globset",
- "http 1.1.0",
  "humantime",
  "indexmap 2.2.6",
  "itertools 0.12.1",
  "maplit",
  "mysql_async",
  "mysql_common",
- "mz-avro",
- "mz-aws-util",
  "mz-build-info",
  "mz-build-tools",
  "mz-ccsr",
- "mz-cloud-resources",
  "mz-cluster",
- "mz-dyncfg",
  "mz-dyncfgs",
  "mz-expr",
  "mz-http-util",
@@ -6739,7 +6657,6 @@ dependencies = [
  "mz-postgres-util",
  "mz-repr",
  "mz-rocksdb",
- "mz-secrets",
  "mz-service",
  "mz-sql-parser",
  "mz-ssh-util",
@@ -6748,9 +6665,7 @@ dependencies = [
  "mz-storage-types",
  "mz-timely-util",
  "mz-txn-wal",
- "num_cpus",
  "pin-project",
- "postgres-protocol",
  "postgres-replication",
  "prometheus",
  "prost",
@@ -6770,10 +6685,7 @@ dependencies = [
  "tokio-postgres",
  "tokio-stream",
  "tokio-util",
- "tonic-build",
  "tracing",
- "tracing-subscriber",
- "url",
  "uuid",
  "workspace-hack",
 ]
@@ -6921,8 +6833,6 @@ dependencies = [
  "dec",
  "derivative",
  "differential-dataflow",
- "fail",
- "futures",
  "hex",
  "http 1.1.0",
  "insta",
@@ -6992,13 +6902,12 @@ dependencies = [
 
 [[package]]
 name = "mz-testdrive"
-version = "0.129.0-dev.0"
+version = "0.130.0-dev.0"
 dependencies = [
  "anyhow",
  "arrow",
  "async-compression",
  "async-trait",
- "aws-config",
  "aws-credential-types",
  "aws-sdk-sts",
  "aws-types",
@@ -7133,7 +7042,6 @@ dependencies = [
 name = "mz-tracing"
 version = "0.0.0"
 dependencies = [
- "anyhow",
  "mz-build-tools",
  "mz-ore",
  "mz-proto",
@@ -7164,7 +7072,6 @@ dependencies = [
  "mz-ore",
  "mz-repr",
  "mz-sql",
- "num-traits",
  "ordered-float 4.2.0",
  "paste",
  "proc-macro2",
@@ -7212,6 +7119,7 @@ dependencies = [
  "datadriven",
  "itertools 0.12.1",
  "mz-ore",
+ "mz-ore-build",
  "quote",
  "syn 1.0.107",
  "tempfile",
@@ -8870,9 +8778,9 @@ dependencies = [
 
 [[package]]
 name = "rustix"
-version = "0.38.42"
+version = "0.38.43"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f93dc38ecbab2eb790ff964bb77fa94faf256fd3e73285fd7ba0903b76bedb85"
+checksum = "a78891ee6bf2340288408954ac787aa063d8e8817e9f53abb37c695c6d834ef6"
 dependencies = [
  "bitflags 2.4.1",
  "errno",
@@ -9962,9 +9870,9 @@ dependencies = [
 
 [[package]]
 name = "timely"
-version = "0.15.1"
+version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e1fb2119e3ce8419dd56d75be1983d427a7b34746f8d62d98c635ca2d236c10c"
+checksum = "b134806db44c8452ba2a9b18e6112f3d5e0a0185c6e58524269a08ca2891149c"
 dependencies = [
  "bincode",
  "byteorder",
@@ -9981,15 +9889,15 @@ dependencies = [
 
 [[package]]
 name = "timely_bytes"
-version = "0.12.0"
+version = "0.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f8a545b35b019b8b63afb913214695f542cbbf39032c7b7349e1a15b7f2a2cf"
+checksum = "99223f9594ab7d4dd36b55b1d7eb9bd2cd205f4304b5cc5381d5cdd417ec06f2"
 
 [[package]]
 name = "timely_communication"
-version = "0.16.0"
+version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e528783a4ed45b7bbe181737a98c5e67a841364f3a70bf5535dacef5ea0dc8f"
+checksum = "f00d5c7f7bbb132a32220890240e5d951fc9582f82fb94452c011a8033c39f7a"
 dependencies = [
  "byteorder",
  "columnar",
@@ -9997,14 +9905,15 @@ dependencies = [
  "getopts",
  "serde",
  "timely_bytes",
+ "timely_container",
  "timely_logging",
 ]
 
 [[package]]
 name = "timely_container"
-version = "0.13.0"
+version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2870d67209ded32270e0cad117d9f04ec16da4be54f19280040dc7e1a7dfbc76"
+checksum = "92b763064e76ba4f650dcdb035d82bcaad09986971fab002276e0b4cb10b3aa5"
 dependencies = [
  "columnation",
  "flatcontainer",
@@ -10013,9 +9922,12 @@ dependencies = [
 
 [[package]]
 name = "timely_logging"
-version = "0.13.0"
+version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c089d7d150dc1b7466b577f39d96261093d17bdbd710bd5104a1f8f5caa6809c"
+checksum = "d8300263e23bebac4ec9fbbeee65954a25402037609b7716d20191ed35829b14"
+dependencies = [
+ "timely_container",
+]
 
 [[package]]
 name = "tiny-keccak"
@@ -11275,7 +11187,6 @@ dependencies = [
  "futures-task",
  "futures-util",
  "getrandom",
- "globset",
  "hashbrown 0.14.5",
  "hyper 0.14.27",
  "hyper 1.4.1",

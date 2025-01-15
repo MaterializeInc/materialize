@@ -237,7 +237,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
     source_resume_uppers: BTreeMap<GlobalId, Vec<Row>>,
 ) {
     let worker_id = timely_worker.index();
-    let worker_logging = timely_worker.log_register().get("timely");
+    let worker_logging = timely_worker.log_register().get("timely").map(Into::into);
     let debug_name = primary_source_id.to_string();
     let name = format!("Source dataflow: {debug_name}");
     timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, root_scope| {
@@ -372,7 +372,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                     let halt_status =
                         HealthStatusUpdate::halting(err.display_with_causes().to_string(), None);
                     HealthStatusMessage {
-                        id: Some(export_id),
+                        id: None,
                         namespace: StatusNamespace::Internal,
                         update: halt_status,
                     }
@@ -426,7 +426,7 @@ pub fn build_export_dataflow<A: Allocate>(
     id: GlobalId,
     description: StorageSinkDesc<MetadataFilled, mz_repr::Timestamp>,
 ) {
-    let worker_logging = timely_worker.log_register().get("timely");
+    let worker_logging = timely_worker.log_register().get("timely").map(Into::into);
     let debug_name = id.to_string();
     let name = format!("Source dataflow: {debug_name}");
     timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, root_scope| {

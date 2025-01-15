@@ -39,7 +39,6 @@ mz-sql = { path = "../sql" }
 mz-sql-parser = { path = "../sql-parser" }
 mz-storage-types = { path = "../storage-types" }
 mz-tracing = { path = "../tracing" }
-mz-cloud-resources = { path = "../cloud-resources" }
 postgres-protocol = { version = "0.6.5" }
 regex = "1.7.0"
 reqwest = { version = "0.11.13", features = ["json"] }

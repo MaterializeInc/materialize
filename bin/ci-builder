@@ -24,7 +24,7 @@ cd "$(dirname "$0")/.."
 
 if [[ $# -lt 2 ]]
 then
-    echo "usage: $0 <command> <stable|nightly> [<args>...]
+    echo "usage: $0 <command> <stable|nightly|min> [<args>...]
 
 Manages the ci-builder Docker image, which contains the dependencies required
 to build, test, and deploy the code in this repository.
@@ -40,17 +40,25 @@ For details, consult ci/builder/README.md."
 fi
 
 cmd=$1 && shift
-channel=$1 && shift
+flavor=$1 && shift
 
 rust_date=
-case "$channel" in
-    stable) rust_version=$(sed -n 's/rust-version = "\(.*\)"/\1/p' Cargo.toml) ;;
+case "$flavor" in
+    min)
+        docker_target=ci-builder-min
+        rust_version=$(sed -n 's/rust-version = "\(.*\)"/\1/p' Cargo.toml)
+        ;;
+    stable)
+        docker_target=ci-builder-full
+        rust_version=$(sed -n 's/rust-version = "\(.*\)"/\1/p' Cargo.toml)
+        ;;
     nightly)
+        docker_target=ci-builder-full
         rust_version=nightly
         rust_date=/$NIGHTLY_RUST_DATE
         ;;
     *)
-        printf "unknown rust channel %q\n" "$channel"
+        printf "unknown CI builder flavor %q\n" "$flavor"
         exit 1
         ;;
 esac
@@ -58,7 +66,7 @@ esac
 arch_gcc=${MZ_DEV_CI_BUILDER_ARCH:-$(arch_gcc)}
 arch_go=$(arch_go "$arch_gcc")
 
-cid_file=ci/builder/.${channel%%-*}.cidfile
+cid_file=ci/builder/.${flavor%%-*}.cidfile
 
 rust_components=rustc,cargo,rust-std-$arch_gcc-unknown-linux-gnu,llvm-tools-preview
 if [[ $rust_version = nightly ]]; then
@@ -86,6 +94,7 @@ build() {
         --build-arg "BAZEL_VERSION=$bazel_version" \
         --tag materialize/ci-builder:"$tag" \
         --tag materialize/ci-builder:"$cache_tag" \
+        --target $docker_target \
         "$@" ci/builder
 }
 
@@ -103,7 +112,7 @@ fi
 # *inside* this image. See materialize.git.expand_globs in the Python code for
 # details on this computation.
 files=$(cat \
-        <(git diff --name-only -z 4b825dc642cb6eb9a060e54bf8d69288fbee4904 ci/builder .bazelversion WORKSPACE) \
+        <(git diff --name-only -z 4b825dc642cb6eb9a060e54bf8d69288fbee4904 ci/builder .bazelversion) \
         <(git ls-files --others --exclude-standard -z ci/builder) \
     | LC_ALL=C sort -z \
     | xargs -0 "$shasum")
@@ -111,6 +120,7 @@ files+="
 rust-version:$rust_version
 rust-date:$rust_date
 arch:$arch_gcc
+flavor:$flavor
 "
 tag=$(echo "$files" | python3 -c '
 import base64
@@ -121,7 +131,7 @@ input = sys.stdin.buffer.read()
 hash = base64.b32encode(hashlib.sha1(input).digest())
 print(hash.decode())
 ')
-cache_tag=cache-$rust_version-$arch_go
+cache_tag=cache-$flavor-$rust_version-$arch_go
 
 
 case "$cmd" in

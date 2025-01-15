@@ -162,14 +162,8 @@ With Mutually Recursive
       Project (#1, #1)
         Get t1
 ----
-Return
-  Project (#1, #1, #3, #4, #6, #6)
-    Join on=(#1 = #3)
-      Get l2
-      Get l1
-      Get l0
 With Mutually Recursive
-  cte l2 =
+  cte l0 =
     Filter (#1) IS NOT NULL
       Get t1
   cte l1 =
@@ -178,6 +172,12 @@ With Mutually Recursive
         Get t0
         Project (#1, #1)
           Get l0
-  cte l0 =
+  cte l2 =
     Filter (#1) IS NOT NULL
       Get t1
+Return
+  Project (#1, #1, #3, #4, #6, #6)
+    Join on=(#1 = #3)
+      Get l2
+      Get l1
+      Get l0

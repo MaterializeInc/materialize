@@ -329,6 +329,8 @@ impl MapFilterProject {
                 let (mfp, expr) = Self::extract_from_expression(input);
                 (mfp.project(outputs.iter().cloned()), expr)
             }
+            // TODO: The recursion is quadratic in the number of Map/Filter/Project operators due to
+            // this call to `arity()`.
             x => (Self::new(x.arity()), x),
         }
     }
