@@ -6,14 +6,8 @@
         <input type="button" value="Search the Docs/Ask AI" class="btn-ghost docs-search-button"
         title="cmd+K (⌘+K/⊞+K)" />
       </div>
-      <div class="docs-switcher">
-        <select id="docs-switcher" onchange="switchDocs(this.value)">
-          <option value="/" {{ if not (strings.HasPrefix .RelPermalink
-          "/self-managed/") }}selected{{ end }}>Cloud</option>
-          <option value="/self-managed/v25.1/" {{ if strings.HasPrefix .RelPermalink
-          "/self-managed/v25.1/" }}selected{{ end }}>Self-Managed v25.01</option>
-        </select>
-      </div>
+      <select id="version-select" class="version-dropdown">
+      </select>
 
       {{ range .Site.Menus.main.ByWeight }}
       <li class="level-1 {{if .HasChildren }}has-children{{ else }}no-children{{ end }}">
@@ -75,14 +69,32 @@
 </div>
 
 <script>
-  function switchDocs(selectedValue) {
-    console.log("switchDocs", selectedValue);
-    const currentUrl = new URL(window.location.href);
+  document.addEventListener('DOMContentLoaded', function () {
+    const versionSelect = document.getElementById('version-select');
+    const currentPath = window.location.pathname;
 
-    // Switch between cloud and self-managed docs homepages
-    // since self-managed and cloud docs are not 1:1 (e.g., installation
-    // section doesn't exist in cloud docs, etc.).
-    const newUrl = new URL( selectedValue, currentUrl);
-    window.location.href = newUrl.toString();
-  }
+    fetch('/docs/versions.json')
+      .then(response => response.json())
+      .then(versions => {
+        versions.forEach(version => {
+          const option = document.createElement('option');
+          option.value = version.base_url;
+          option.textContent = version.name;
+          versionSelect.appendChild(option);
+        });
+
+        const matchingVersion = versions.find(version => currentPath.includes(version.base_url));
+        if (matchingVersion) {
+          versionSelect.value = matchingVersion.base_url;
+        }
+
+        versionSelect.addEventListener('change', function () {
+          const selectedBaseUrl = versionSelect.value;
+          if (selectedBaseUrl) {
+            window.location.href = selectedBaseUrl;
+          }
+        });
+      })
+      .catch(error => console.error('Error fetching versions:', error));
+  });
 </script>
