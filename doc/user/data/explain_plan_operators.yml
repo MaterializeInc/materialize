@@ -89,16 +89,17 @@ operators:
   - operator: MapFilterProject
     plan_types: "lir"
     description: |
+      The number after the operator is the input operator's `lir_id`.
+
       Computes new columns, filters columns, and projects away columns. Works row-by-row.
     uses_memory: False
     memory_details: ""
     expansive: True
     expansive_details: |
-      The number after the operator is the input operator's `lir_id`.
-
       Each row may have more data, from the `Map`.
       Each row may also have less data, from the `Project`.
       There may be fewer rows, from the `Filter`.
+
     example: "`MapFilterProject 5`"
 
   - operator: FlatMap
@@ -172,7 +173,7 @@ operators:
       Depends on the join order and facts about the joined collections.
     example: "`Join on=(#1 = #2) type=delta`"
 
-  - operator: Join
+  - operator: Join::~
     plan_types: "lir"
     description: |
       The input operators are listed in the order performed by the join.
@@ -213,7 +214,7 @@ operators:
     expansive: False
     example: "`Reduce group_by=[#0] aggregates=[max((#0 * #1))]`"
 
-  - operator: Reduce
+  - operator: Reduce::~
     plan_types: "lir"
     description: |
       The number after the operator is the input operator's `lir_id`.
@@ -287,7 +288,7 @@ operators:
     expansive: False
     example: "`TopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5`"
 
-  - operator: TopK
+  - operator: TopK::~
     plan_types: "lir"
     description: |
       The number after the operator is the input operator's `lir_id`.
@@ -325,7 +326,6 @@ operators:
     memory_details: ""
     expansive: False
     example: "`Negate 17`"
-
 
   - operator: Threshold
     plan_types: "optimized,raw"
