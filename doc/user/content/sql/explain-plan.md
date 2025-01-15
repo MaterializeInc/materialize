@@ -241,6 +241,10 @@ Below the plan, a "Used indexes" section indicates which indexes will be used by
 ### Reference: Plan operators
 
 {{< tabs >}}
+{{< tab "In fully optimized LIR plans" >}}
+{{< explain-plans/operator-table data="explain_plan_operators" planType="lir" >}}
+{{< /tab >}}
+
 {{< tab "In decorrelated and optimized plans" >}}
 {{< explain-plans/operator-table data="explain_plan_operators" planType="optimized" >}}
 {{< /tab >}}
