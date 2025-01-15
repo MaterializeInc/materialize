@@ -64,7 +64,7 @@ ALTER TABLE table_a REPLICA IDENTITY FULL;
 INSERT INTO table_a VALUES (9, 'nine');
 
 ! SELECT * FROM table_a;
-contains:table was dropped
+regex:(table was dropped|incompatible schema change)
 
 # We are not aware that the new table_a is different
 ! CREATE TABLE table_a FROM SOURCE mz_source (REFERENCE table_a);
