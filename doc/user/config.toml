@@ -227,5 +227,14 @@ name = "production"
 url = "s3://materialize-website?region=us-east-1"
 # Sync only the docs, to avoid deleting the marketing website.
 include = "docs/**"
-# Avoid deleting the LTS docs, which are deployed from the lts-docs branch.
-exclude = "docs/lts/**"
+
+# Per Hugo docs:
+# The pattern syntax is documented here: https://godoc.org/github.com/gobwas/glob#Glob
+# Patterns should be written with forward slashes as separator.
+#
+# include = "**.html" # would only include files with ".html" suffix
+# exclude = "**.{jpg, png}" # would exclude files with ".jpg" or ".png" suffix
+
+# Avoid deleting the LTS and self-managed docs which are deployed from the
+# lts-docs and self-managed-docs branches.
+exclude = "docs/{lts,self-managed}/**"
