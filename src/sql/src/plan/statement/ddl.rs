@@ -1063,18 +1063,33 @@ pub fn plan_create_source(
         None => scx.catalog.config().timestamp_interval,
     };
 
+    let (primary_export, primary_export_details) = if force_source_table_syntax {
+        (
+            SourceExportDataConfig {
+                encoding: None,
+                envelope: SourceEnvelope::None(NoneEnvelope {
+                    key_envelope: KeyEnvelope::None,
+                    key_arity: 0,
+                }),
+            },
+            SourceExportDetails::None,
+        )
+    } else {
+        (
+            SourceExportDataConfig {
+                encoding,
+                envelope: envelope.clone(),
+            },
+            external_connection.primary_export_details(),
+        )
+    };
     let source_desc = SourceDesc::<ReferencedConnection> {
         connection: external_connection,
         // We only define primary-export details for this source if we are still supporting
         // the legacy source syntax. Otherwise, we will not output to the primary collection.
         // TODO(database-issues#8620): Remove this field once the new syntax is enabled everywhere
-        primary_export: match force_source_table_syntax {
-            false => Some(SourceExportDataConfig {
-                encoding,
-                envelope: envelope.clone(),
-            }),
-            true => None,
-        },
+        primary_export,
+        primary_export_details,
         timestamp_interval,
     };
 

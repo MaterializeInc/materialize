@@ -789,7 +789,8 @@ pub struct SourceDesc<C: ConnectionAccess = InlinedConnection> {
     /// primary collection for this source.
     /// TODO(database-issues#8620): This will be removed once sources no longer export
     /// to primary collections and only export to explicit SourceExports (tables).
-    pub primary_export: Option<SourceExportDataConfig<C>>,
+    pub primary_export: SourceExportDataConfig<C>,
+    pub primary_export_details: SourceExportDetails,
 }
 
 impl<R: ConnectionResolver> IntoInlineConnection<SourceDesc, R>
@@ -799,12 +800,14 @@ impl<R: ConnectionResolver> IntoInlineConnection<SourceDesc, R>
         let SourceDesc {
             connection,
             primary_export,
+            primary_export_details,
             timestamp_interval,
         } = self;
 
         SourceDesc {
             connection: connection.into_inline_connection(&r),
-            primary_export: primary_export.map(|e| e.into_inline_connection(r)),
+            primary_export: primary_export.into_inline_connection(r),
+            primary_export_details,
             timestamp_interval,
         }
     }
@@ -814,7 +817,8 @@ impl RustType<ProtoSourceDesc> for SourceDesc {
     fn into_proto(&self) -> ProtoSourceDesc {
         ProtoSourceDesc {
             connection: Some(self.connection.into_proto()),
-            primary_export: self.primary_export.as_ref().map(|e| e.into_proto()),
+            primary_export: Some(self.primary_export.into_proto()),
+            primary_export_details: Some(self.primary_export_details.into_proto()),
             timestamp_interval: Some(self.timestamp_interval.into_proto()),
         }
     }
@@ -824,7 +828,12 @@ impl RustType<ProtoSourceDesc> for SourceDesc {
             connection: proto
                 .connection
                 .into_rust_if_some("ProtoSourceDesc::connection")?,
-            primary_export: proto.primary_export.into_rust()?,
+            primary_export: proto
+                .primary_export
+                .into_rust_if_some("ProtoSourceDesc::primary_export")?,
+            primary_export_details: proto
+                .primary_export_details
+                .into_rust_if_some("ProtoSourceDesc::primary_export_details")?,
             timestamp_interval: proto
                 .timestamp_interval
                 .into_rust_if_some("ProtoSourceDesc::timestamp_interval")?,
@@ -843,6 +852,7 @@ impl<C: ConnectionAccess> AlterCompatible for SourceDesc<C> {
         let Self {
             connection,
             primary_export,
+            primary_export_details,
             timestamp_interval,
         } = &self;
 
@@ -852,6 +862,10 @@ impl<C: ConnectionAccess> AlterCompatible for SourceDesc<C> {
                 "connection",
             ),
             (primary_export == &other.primary_export, "primary_export"),
+            (
+                primary_export_details == &other.primary_export_details,
+                "primary_export_details",
+            ),
             (
                 timestamp_interval == &other.timestamp_interval,
                 "timestamp_interval",
@@ -878,12 +892,12 @@ impl SourceDesc<InlinedConnection> {
     /// Returns the SourceExport details for the primary export.
     /// TODO(database-issues#8620): This will be removed once sources no longer export
     /// to primary collections and only export to explicit SourceExports (tables).
-    pub fn primary_source_export(&self) -> Option<SourceExport<(), InlinedConnection>> {
-        self.primary_export.clone().map(|data_config| SourceExport {
+    pub fn primary_source_export(&self) -> SourceExport<(), InlinedConnection> {
+        SourceExport {
             storage_metadata: (),
-            details: self.connection.primary_export_details(),
-            data_config,
-        })
+            details: self.primary_export_details.clone(),
+            data_config: self.primary_export.clone(),
+        }
     }
 }
 

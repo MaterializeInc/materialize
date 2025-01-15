@@ -223,8 +223,9 @@ mod tests {
         LoadGenerator, LoadGeneratorOutput, LoadGeneratorSourceExportDetails,
     };
     use mz_storage_types::sources::{
-        GenericSourceConnection, IngestionDescription, LoadGeneratorSourceConnection, SourceDesc,
-        SourceEnvelope, SourceExport, SourceExportDataConfig, SourceExportDetails,
+        GenericSourceConnection, IngestionDescription, LoadGeneratorSourceConnection,
+        SourceConnection, SourceDesc, SourceEnvelope, SourceExport, SourceExportDataConfig,
+        SourceExportDetails,
     };
     use timely::progress::Antichain;
 
@@ -279,18 +280,22 @@ mod tests {
             })
             .collect();
 
+        let connection = GenericSourceConnection::LoadGenerator(LoadGeneratorSourceConnection {
+            load_generator: LoadGenerator::Auction,
+            tick_micros: Default::default(),
+            as_of: Default::default(),
+            up_to: Default::default(),
+        });
+        let primary_export_details = connection.primary_export_details();
+
         IngestionDescription {
             desc: SourceDesc {
-                connection: GenericSourceConnection::LoadGenerator(LoadGeneratorSourceConnection {
-                    load_generator: LoadGenerator::Auction,
-                    tick_micros: Default::default(),
-                    as_of: Default::default(),
-                    up_to: Default::default(),
-                }),
-                primary_export: Some(SourceExportDataConfig {
+                connection,
+                primary_export: SourceExportDataConfig {
                     encoding: Default::default(),
                     envelope: SourceEnvelope::CdcV2,
-                }),
+                },
+                primary_export_details,
                 timestamp_interval: Default::default(),
             },
             ingestion_metadata: CollectionMetadata {

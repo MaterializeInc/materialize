@@ -932,13 +932,10 @@ impl DataSourceDesc {
     pub fn formats(&self) -> (Option<&str>, Option<&str>) {
         match &self {
             DataSourceDesc::Ingestion { ingestion_desc, .. } => {
-                match &ingestion_desc.desc.primary_export {
-                    Some(export) => match export.encoding.as_ref() {
-                        Some(encoding) => match &encoding.key {
-                            Some(key) => (Some(key.type_()), Some(encoding.value.type_())),
-                            None => (None, Some(encoding.value.type_())),
-                        },
-                        None => (None, None),
+                match &ingestion_desc.desc.primary_export.encoding.as_ref() {
+                    Some(encoding) => match &encoding.key {
+                        Some(key) => (Some(key.type_()), Some(encoding.value.type_())),
+                        None => (None, Some(encoding.value.type_())),
                     },
                     None => (None, None),
                 }
@@ -990,11 +987,9 @@ impl DataSourceDesc {
             // `SourceEnvelope` itself, but that one feels more like an internal
             // thing and adapter should own how we represent envelopes as a
             // string? It would not be hard to convince me otherwise, though.
-            DataSourceDesc::Ingestion { ingestion_desc, .. } => ingestion_desc
-                .desc
-                .primary_export
-                .as_ref()
-                .map(|export| envelope_string(&export.envelope)),
+            DataSourceDesc::Ingestion { ingestion_desc, .. } => Some(envelope_string(
+                &ingestion_desc.desc.primary_export.envelope,
+            )),
             DataSourceDesc::IngestionExport { data_config, .. } => {
                 Some(envelope_string(&data_config.envelope))
             }
