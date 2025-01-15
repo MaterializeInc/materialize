@@ -1016,8 +1016,11 @@ class FlipFlagsAction(Action):
             BOOLEAN_FLAG_VALUES
         )
         self.flags_with_values["enable_eager_delta_joins"] = BOOLEAN_FLAG_VALUES
-        self.flags_with_values["persist_batch_columnar_format"] = ["row", "both_v2"]
-        self.flags_with_values["persist_record_schema_id"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["persist_batch_columnar_format"] = [
+            "row",
+            "both_v2",
+            "structured",
+        ]
         self.flags_with_values["persist_batch_structured_order"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["persist_batch_builder_structured"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["persist_batch_structured_key_lower_len"] = [
