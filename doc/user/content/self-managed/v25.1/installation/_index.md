@@ -4,6 +4,7 @@ description: "Installation guides for self-managed Materialize."
 disable_list: true
 aliases:
   - /self-managed/installation/
+suppress_breadcrumb: true
 ---
 
 You can install self-managed Materialize on a Kubernetes cluster running locally

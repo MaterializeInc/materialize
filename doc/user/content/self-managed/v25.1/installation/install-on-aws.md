@@ -3,6 +3,7 @@ title: "Install on AWS"
 description: ""
 aliases:
   - /self-managed/installation/install-on-aws/
+suppress_breadcrumb: true
 ---
 
 Self-managed Materialize requires:

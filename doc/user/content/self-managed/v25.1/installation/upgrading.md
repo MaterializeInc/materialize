@@ -3,6 +3,7 @@ title: "Upgrading"
 description: "Upgrading Helm chart and Materialize."
 aliases:
   - /self-managed/upgrading/
+suppress_breadcrumb: true
 ---
 
 The following provides steps for upgrading the Materialize operator and

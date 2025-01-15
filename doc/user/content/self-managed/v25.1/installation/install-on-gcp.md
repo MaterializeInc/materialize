@@ -3,6 +3,7 @@ title: "Install on GCP"
 description: ""
 aliases:
   - /self-managed/installation/install-on-gcp/
+suppress_breadcrumb: true
 ---
 
 Self-managed Materialize requires:

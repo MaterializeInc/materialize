@@ -4,6 +4,7 @@ description: ""
 aliases:
   - /self-hosted/configuration/
   - /self-managed/configuration/
+suppress_breadcrumb: true
 ---
 
 You can configure the Materialize operator chart. For example:

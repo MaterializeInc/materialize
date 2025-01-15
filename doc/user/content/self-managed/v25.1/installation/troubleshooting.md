@@ -4,6 +4,7 @@ description: ""
 aliases:
   - /self-hosted/troubleshooting/
   - /self-managed/troubleshooting/
+suppress_breadcrumb: true
 ---
 
 If you encounter issues with the Materialize operator, check the operator logs:

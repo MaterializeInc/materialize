@@ -3,6 +3,7 @@ title: "Self-managed Materialize"
 description: ""
 aliases:
   - /self-managed/
+suppress_breadcrumb: true
 ---
 With self-managed Materialize, you can deploy and operate Materialize in your
 Kubernetes environment. For self-managed Materialize, Materialize offers:
