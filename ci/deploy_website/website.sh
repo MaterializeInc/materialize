@@ -15,27 +15,6 @@ set -euo pipefail
 
 . misc/shlib/shlib.bash
 
-# Evergreen, readable shortlinks.
-#
-# The materialize.com/s/ namespace is reserved for shortlinks. The idea is that
-# even if we change hosting providers, or switch platforms for the marketing
-# website, the /s path can always be easily reserved for shortlinks.
-#
-# This is not a general-purpose URL shortener. Only evergreen content should be
-# added here, and only when the layer of indirection is necessary. For example,
-# the "bug" shortlink allows us to embed a bug reporting URL in the
-# materialized binary that can be updated if we ever switch away from GitHub
-# or change how we want bugs to be filed.
-declare -A shortlinks=(
-    [bug]="https://github.com/MaterializeInc/materialize/issues/new?labels=C-bug&template=01-bug.yml"
-    [docs]="https://materialize.com/docs"
-    [non-materialized-error]="https://materialize.com/docs/lts/sql/create-view/#querying-non-materialized-views"
-    [sink-key-selection]="https://materialize.com/docs/sql/create-sink/kafka/#upsert-key-selection"
-    [aws-connection-role-trust-policy]="https://materialize.com/docs/sql/create-connection/#permissions"
-    [chat]="https://join.slack.com/t/materializecommunity/shared_invite/zt-2bad5ce4i-ZsiPWI5jd7Q9pRDGYj3dkw"
-    [pricing]="https://materialize.com/pdfs/pricing.pdf"
-)
-
 cd doc/user
 hugo --gc --baseURL /docs/self-managed/v25.1 --destination public/docs/self-managed/v25.1
 hugo deploy --maxDeletes -1
@@ -53,12 +32,6 @@ touch empty
         aws s3 cp ../empty "s3://materialize-website/$src" --website-redirect "$dst"
     done
 )
-
-# NOTE(benesch): this code does not delete old shortlinks. That's fine, because
-# the whole point is that the shortlinks live forever.
-for slug in "${!shortlinks[@]}"; do
-    aws s3 cp empty "s3://materialize-website/s/$slug" --website-redirect "${shortlinks[$slug]}"
-done
 
 # Hugo's CloudFront invalidation feature doesn't do anything smarter than
 # invalidating the entire distribution (and has bugs fetching AWS credentials in
