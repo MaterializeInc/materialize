@@ -39,7 +39,7 @@ def main() -> int:
             lambda docs: docs[0].update({"appVersion": args.version}),
         ),
         (
-            MZ_ROOT / "misc" / "helm-charts" / "testing" / "environmentd.yaml",
+            MZ_ROOT / "misc" / "helm-charts" / "testing" / "materialize.yaml",
             lambda docs: docs[2]["spec"].update(
                 {"environmentdImageRef": f"materialize/environmentd:{args.version}"}
             ),
