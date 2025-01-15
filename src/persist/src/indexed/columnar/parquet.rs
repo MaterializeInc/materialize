@@ -12,8 +12,6 @@
 use std::io::Write;
 use std::sync::Arc;
 
-use arrow::datatypes::Schema;
-use arrow::record_batch::RecordBatch;
 use differential_dataflow::trace::Description;
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
@@ -30,10 +28,7 @@ use tracing::warn;
 use crate::error::Error;
 use crate::gen::persist::proto_batch_part_inline::FormatMetadata as ProtoFormatMetadata;
 use crate::gen::persist::ProtoBatchFormat;
-use crate::indexed::columnar::arrow::{
-    decode_arrow_batch_kvtd, decode_arrow_batch_kvtd_ks_vs, encode_arrow_batch, realloc_any,
-};
-use crate::indexed::columnar::ColumnarRecords;
+use crate::indexed::columnar::arrow::{decode_arrow_batch, encode_arrow_batch};
 use crate::indexed::encoding::{
     decode_trace_inline_meta, encode_trace_inline_meta, BlobTraceBatchPart, BlobTraceUpdates,
 };
@@ -171,23 +166,17 @@ pub fn decode_parquet_file_kvtd(
             let mut ret = Vec::new();
             for batch in reader {
                 let batch = batch.map_err(|e| Error::String(e.to_string()))?;
-                ret.push(decode_arrow_batch_kvtd(batch.columns(), metrics)?);
+                ret.push(batch);
             }
             if ret.len() != 1 {
                 warn!("unexpected number of row groups: {}", ret.len());
             }
-            Ok(BlobTraceUpdates::Row(ColumnarRecords::concat(
-                &ret, metrics,
-            )))
+            let batch = ::arrow::compute::concat_batches(&schema, &ret)?;
+            let updates = decode_arrow_batch(&batch, metrics).map_err(|e| e.to_string())?;
+            Ok(updates)
         }
-        Some(ProtoFormatMetadata::StructuredMigration(v @ 1 | v @ 2)) => {
-            if schema.fields().len() > 6 {
-                return Err(
-                    format!("expected at most 6 columns, got {}", schema.fields().len()).into(),
-                );
-            }
-
-            let batch = reader
+        Some(ProtoFormatMetadata::StructuredMigration(v @ 1..=3)) => {
+            let mut batch = reader
                 .next()
                 .ok_or_else(|| Error::String("found empty batch".to_string()))??;
 
@@ -195,45 +184,14 @@ pub fn decode_parquet_file_kvtd(
             if reader.next().is_some() {
                 return Err(Error::String("found more than one RowGroup".to_string()));
             }
-            let columns = batch.columns();
-
-            // The first 4 columns are our primary (K, V, T, D) and optionally
-            // we also have K_S and/or V_S if we wrote structured data.
-            let primary_columns = &columns[..4];
 
             // Version 1 is a deprecated format so we just ignored the k_s and v_s columns.
-            if *v == 1 {
-                let records = decode_arrow_batch_kvtd(primary_columns, metrics)?;
-                return Ok(BlobTraceUpdates::Row(records));
+            if *v == 1 && batch.num_columns() > 4 {
+                batch = batch.project(&[0, 1, 2, 3])?;
             }
 
-            let k_s_column = schema
-                .fields()
-                .iter()
-                .position(|field| field.name() == "k_s")
-                .map(|idx| realloc_any(Arc::clone(&columns[idx]), metrics));
-            let v_s_column = schema
-                .fields()
-                .iter()
-                .position(|field| field.name() == "v_s")
-                .map(|idx| realloc_any(Arc::clone(&columns[idx]), metrics));
-
-            match (k_s_column, v_s_column) {
-                (Some(ks), Some(vs)) => {
-                    let (records, structured_ext) =
-                        decode_arrow_batch_kvtd_ks_vs(primary_columns, ks, vs, metrics)?;
-                    Ok(BlobTraceUpdates::Both(records, structured_ext))
-                }
-                (ks, vs) => {
-                    warn!(
-                        "unable to read back structured data! version={v} ks={} vs={}",
-                        ks.is_some(),
-                        vs.is_some()
-                    );
-                    let records = decode_arrow_batch_kvtd(primary_columns, metrics)?;
-                    Ok(BlobTraceUpdates::Row(records))
-                }
-            }
+            let updates = decode_arrow_batch(&batch, metrics).map_err(|e| e.to_string())?;
+            Ok(updates)
         }
         unknown => Err(format!("unkown ProtoFormatMetadata, {unknown:?}"))?,
     }
