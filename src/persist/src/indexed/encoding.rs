@@ -60,6 +60,9 @@ pub enum BatchColumnarFormat {
     /// with a schema of `(k, k_c, v, v_c, t, d)`, where `k` are the serialized bytes and `k_c` is
     /// nested columnar data.
     Both(usize),
+    /// Rows are encoded to a columnar struct. The batch is written down as Parquet
+    /// with a schema of `(t, d, k_s, v_s)`, where `k_s` is nested columnar data.
+    Structured,
 }
 
 impl BatchColumnarFormat {
@@ -75,6 +78,7 @@ impl BatchColumnarFormat {
             "row" => BatchColumnarFormat::Row,
             "both" => BatchColumnarFormat::Both(0),
             "both_v2" => BatchColumnarFormat::Both(2),
+            "structured" => BatchColumnarFormat::Structured,
             x => {
                 let default = BatchColumnarFormat::default();
                 soft_panic_or_log!("Invalid batch columnar type: {x}, falling back to {default}");
@@ -100,6 +104,7 @@ impl BatchColumnarFormat {
             // The V0 format has been deprecated and we ignore its structured columns.
             BatchColumnarFormat::Both(0 | 1) => false,
             BatchColumnarFormat::Both(_) => true,
+            BatchColumnarFormat::Structured => true,
         }
     }
 }
@@ -487,6 +492,16 @@ impl BlobTraceUpdates {
                     this.get_or_make_structured::<K, V>(key_schema, val_schema)
                         .clone(),
                 )
+            }
+            BatchColumnarFormat::Structured => {
+                let mut this = self.clone();
+                Self::Structured {
+                    key_values: this
+                        .get_or_make_structured::<K, V>(key_schema, val_schema)
+                        .clone(),
+                    timestamps: this.timestamps().clone(),
+                    diffs: this.diffs().clone(),
+                }
             }
         }
     }

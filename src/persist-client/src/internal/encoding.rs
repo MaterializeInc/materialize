@@ -1524,6 +1524,7 @@ impl RustType<proto_hollow_batch_part::Format> for BatchColumnarFormat {
             BatchColumnarFormat::Both(version) => {
                 proto_hollow_batch_part::Format::RowAndColumnar((*version).cast_into())
             }
+            BatchColumnarFormat::Structured => proto_hollow_batch_part::Format::Structured(()),
         }
     }
 
@@ -1533,6 +1534,7 @@ impl RustType<proto_hollow_batch_part::Format> for BatchColumnarFormat {
             proto_hollow_batch_part::Format::RowAndColumnar(version) => {
                 BatchColumnarFormat::Both(version.cast_into())
             }
+            proto_hollow_batch_part::Format::Structured(_) => BatchColumnarFormat::Structured,
         };
         Ok(format)
     }

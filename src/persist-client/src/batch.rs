@@ -1135,6 +1135,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             BatchColumnarFormat::Both(_) => {
                 self.cfg.inline_writes_single_max_bytes.saturating_div(2)
             }
+            BatchColumnarFormat::Structured => self.cfg.inline_writes_single_max_bytes,
         };
 
         let (name, write_future) = if updates.goodbytes() < inline_threshold {
