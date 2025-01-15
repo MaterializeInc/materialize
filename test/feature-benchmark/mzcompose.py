@@ -355,16 +355,16 @@ def start_overridden_mz_clusterd_and_cockroach(
     c: Composition, mz: Materialized, clusterd: Clusterd, instance: str
 ) -> None:
     with c.override(mz, clusterd):
-        version_request_command = c.run(
-            "materialized",
-            "-c",
-            "environmentd --version | grep environmentd",
-            entrypoint="bash",
-            rm=True,
-            capture=True,
-        )
-        version = version_request_command.stdout.strip()
-        print(f"The version of the '{instance.upper()}' Mz instance is: {version}")
+        #version_request_command = c.run(
+        #    "materialized",
+        #    "-c",
+        #    "environmentd --version | grep environmentd",
+        #    entrypoint="bash",
+        #    rm=True,
+        #    capture=True,
+        #)
+        #version = version_request_command.stdout.strip()
+        #print(f"The version of the '{instance.upper()}' Mz instance is: {version}")
 
         c.up("cockroach", "materialized", "clusterd")
 

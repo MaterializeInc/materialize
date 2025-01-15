@@ -101,6 +101,7 @@ ERROR_RE = re.compile(
     | (FAIL|TIMEOUT)\s+\[\s*\d+\.\d+s\]
     # parallel-workload
     | worker_.*\ still\ running: [\s\S]* Threads\ have\ not\ stopped\ within\ 5\ minutes,\ exiting\ hard
+    | Leak\ approximation\ summary:
     )
     .* $
     """,

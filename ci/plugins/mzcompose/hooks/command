@@ -45,6 +45,8 @@ if [ -n "${CI_COVERAGE_ENABLED:-}" ]; then
   find . -name '*.profraw' -delete # Remove remaining profraw files from coverage runs
 fi
 
+find . -name 'jeprof*.heap' -delete
+
 ci_collapsed_heading ":docker: Purging all existing docker containers and volumes, regardless of origin"
 docker ps --all --quiet | xargs --no-run-if-empty docker rm --force --volumes
 rm -f services.log
