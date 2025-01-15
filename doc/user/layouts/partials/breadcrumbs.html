@@ -5,12 +5,14 @@
     {{ if not .IsHome }}&nbsp;/&nbsp;&nbsp;{{end}}<a href="{{ .RelPermalink }}">{{ if .IsHome }}Home{{ else }}{{.Title}}{{ end }}</a>
   {{ end }}
 {{ end }}
-{{ if not .IsHome }}
-    <!-- This cannot be and'ed with the condition above because
-    `.Parent.IsHome` is nil pointer on the home page -->
-    {{if not .Parent.IsHome}}
-        <div class="breadcrumb">
-            {{ template "breadcrumb" . }}
-        </div>
-    {{ end }}
+{{ if not .Params.suppress_breadcrumb }}
+  {{ if not .IsHome }}
+      <!-- This cannot be and'ed with the condition above because
+      `.Parent.IsHome` is nil pointer on the home page -->
+      {{if not .Parent.IsHome}}
+          <div class="breadcrumb">
+              {{ template "breadcrumb" . }}
+          </div>
+      {{ end }}
+  {{ end }}
 {{ end }}
