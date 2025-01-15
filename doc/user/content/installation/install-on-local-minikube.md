@@ -11,7 +11,7 @@ menu:
 The following tutorial deploys Materialize onto a local
 [`minikube`](https://minikube.sigs.k8s.io/docs/start/) cluster. Self-managed Materialize requires:
 
-{{% self-managed/requirements-list %}}
+{{% self-managed/materialize-components-list %}}
 
 The tutorial deploys the following components onto your local `minikube`
 cluster:
@@ -26,6 +26,10 @@ cluster:
 For testing purposes only.
 
 {{< /important >}}
+
+## Resource requirements
+
+{{% self-managed/local-resource-requirements %}}
 
 ## Prerequisites
 
@@ -205,7 +209,7 @@ Check out the {{< self-managed/latest_version >}} tag.
        ```
 
        If you run into an error during deployment, refer to the
-       [Troubleshooting](/self-hosted/troubleshooting) guide.
+       [Troubleshooting](/installation/troubleshooting) guide.
 
 1. Open the Materialize console in your browser:
 
