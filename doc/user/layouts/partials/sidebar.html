@@ -6,6 +6,9 @@
         <input type="button" value="Search the Docs/Ask AI" class="btn-ghost docs-search-button"
         title="cmd+K (⌘+K/⊞+K)" />
       </div>
+      <select id="version-select" class="version-dropdown">
+      </select>
+
       {{ range .Site.Menus.main.ByWeight }}
       <li class="level-1 {{if .HasChildren }}has-children{{ else }}no-children{{ end }}">
           <a {{with .URL}}href="{{.}}"{{end}} class="{{if $currentPage.IsMenuCurrent "main" .}}active{{end}}">
@@ -64,3 +67,34 @@
     <svg xmlns="http://www.w3.org/2000/svg" class="ionicon" viewBox="0 0 512 512"><title>Close</title><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="32" d="M368 368L144 144M368 144L144 368"/></svg>
   </button>
 </div>
+
+<script>
+  document.addEventListener('DOMContentLoaded', function () {
+    const versionSelect = document.getElementById('version-select');
+    const currentPath = window.location.pathname;
+
+    fetch('/docs/versions.json')
+      .then(response => response.json())
+      .then(versions => {
+        versions.forEach(version => {
+          const option = document.createElement('option');
+          option.value = version.base_url;
+          option.textContent = version.name;
+          versionSelect.appendChild(option);
+        });
+
+        const matchingVersion = versions.find(version => currentPath.includes(version.base_url));
+        if (matchingVersion) {
+          versionSelect.value = matchingVersion.base_url;
+        }
+
+        versionSelect.addEventListener('change', function () {
+          const selectedBaseUrl = versionSelect.value;
+          if (selectedBaseUrl) {
+            window.location.href = selectedBaseUrl;
+          }
+        });
+      })
+      .catch(error => console.error('Error fetching versions:', error));
+  });
+</script>
