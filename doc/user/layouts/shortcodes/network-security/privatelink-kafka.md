@@ -68,8 +68,8 @@ and retrieve the AWS principal needed to configure the AWS PrivateLink service.
         );
         ```
 
-    * For **cross-region connections**, availability zone alignment is not
-      required. You can choose any availability zones in your consumer VPC. Due
+    * For **cross-region connections**, you can select any availability zones in your current
+      Materialize region. For more details, refer to the [AWS blog on cross-region PrivateLink](https://aws.amazon.com/blogs/networking-and-content-delivery/introducing-cross-region-connectivity-for-aws-privatelink). Due
       to resource constraints, [it is recommended](https://wolfman.dev/posts/exclude-use1-az3/)
       to avoid using `use1-az3` in `us-east-1` for cross-region connections.
 
