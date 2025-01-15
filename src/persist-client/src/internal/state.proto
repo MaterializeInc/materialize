@@ -56,6 +56,7 @@ message ProtoHollowBatchPart {
   oneof format {
     google.protobuf.Empty row = 7;
     uint64 row_and_columnar = 8;
+    google.protobuf.Empty structured = 13;
   }
   optional uint64 schema_id = 12;
 
