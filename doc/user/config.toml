@@ -237,4 +237,4 @@ include = "docs/**"
 
 # Avoid deleting the LTS and self-managed docs which are deployed from the
 # lts-docs and self-managed-docs branches.
-exclude = "docs/{lts,self-managed}/**"
+exclude = "docs/{lts,self-managed/v25.1}/**"
