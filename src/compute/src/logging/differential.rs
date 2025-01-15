@@ -298,7 +298,7 @@ impl DemuxHandler<'_, '_> {
                 .expect("under/overflow");
             if *sharing == 0 {
                 self.state.sharing.remove(&operator_id);
-                logger.log(ComputeEvent::ArrangementHeapSizeOperatorDrop(
+                logger.log(&ComputeEvent::ArrangementHeapSizeOperatorDrop(
                     ArrangementHeapSizeOperatorDrop { operator_id },
                 ));
             }

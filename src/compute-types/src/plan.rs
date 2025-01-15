@@ -14,6 +14,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU64;
 
+use columnar::Columnar;
 use mz_expr::{
     CollectionPlan, EvalError, Id, LetRecLimit, LocalId, MapFilterProject, MirScalarExpr,
     OptimizedMirRelationExpr, TableFunc,
@@ -161,14 +162,12 @@ impl AvailableCollections {
 }
 
 /// An identifier for an LIR node.
-///
-/// LirIds start at 1, not 0, which let's us get a better struct packing in `ComputeEvent::LirMapping`.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-pub struct LirId(NonZeroU64);
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize, Columnar)]
+pub struct LirId(u64);
 
 impl LirId {
     fn as_u64(&self) -> u64 {
-        self.0.into()
+        self.0
     }
 }
 
@@ -186,11 +185,11 @@ impl std::fmt::Display for LirId {
 
 impl RustType<u64> for LirId {
     fn into_proto(&self) -> u64 {
-        u64::from(self.0)
+        self.0
     }
 
     fn from_proto(proto: u64) -> Result<Self, mz_proto::TryFromProtoError> {
-        Ok(Self(proto.try_into()?))
+        Ok(Self(proto))
     }
 }
 
@@ -513,7 +512,7 @@ impl Arbitrary for LirId {
     type Parameters = ();
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        let lir_id = NonZeroU64::arbitrary();
+        let lir_id = u64::arbitrary();
         lir_id.prop_map(LirId).boxed()
     }
 }
@@ -1131,16 +1130,6 @@ mod tests {
     use mz_proto::protobuf_roundtrip;
 
     use super::*;
-
-    #[mz_ore::test]
-    fn test_option_lirid_fits_in_usize() {
-        let option_lirid_size = std::mem::size_of::<Option<LirId>>();
-        let usize_size = std::mem::size_of::<usize>();
-        assert!(
-            option_lirid_size <= usize_size,
-            "Option<LirId> (size {option_lirid_size}) should fit in usize (size {usize_size})"
-        );
-    }
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(10))]

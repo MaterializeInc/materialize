@@ -15,20 +15,23 @@ use std::fmt::{Display, Write};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use columnar::{Columnar, Index};
 use differential_dataflow::collection::AsCollection;
 use differential_dataflow::trace::{BatchReader, Cursor};
 use differential_dataflow::Collection;
 use mz_compute_types::plan::LirId;
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, GlobalId, Timestamp};
+use mz_timely_util::containers::{Column, ColumnBuilder};
 use mz_timely_util::replay::MzReplay;
 use timely::communication::Allocate;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::channels::pushers::buffer::Session;
 use timely::dataflow::channels::pushers::{Counter, Tee};
+use timely::dataflow::operators::core::Map;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::operators::{Filter, Operator};
+use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
 use timely::scheduling::Scheduler;
 use timely::worker::Worker;
@@ -45,10 +48,10 @@ use crate::typedefs::RowRowSpine;
 
 /// Type alias for a logger of compute events.
 pub type Logger = timely::logging_core::Logger<ComputeEventBuilder>;
-pub type ComputeEventBuilder = CapacityContainerBuilder<Vec<(Duration, ComputeEvent)>>;
+pub type ComputeEventBuilder = ColumnBuilder<(Duration, ComputeEvent)>;
 
 /// A dataflow exports a global ID.
-#[derive(Debug, Clone, PartialOrd, PartialEq)]
+#[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
 pub struct Export {
     /// Identifier of the export.
     pub export_id: GlobalId,
@@ -57,14 +60,14 @@ pub struct Export {
 }
 
 /// The export for a global id was dropped.
-#[derive(Debug, Clone, PartialOrd, PartialEq)]
+#[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
 pub struct ExportDropped {
     /// Identifier of the export.
     pub export_id: GlobalId,
 }
 
 /// A peek event with a [`Peek`], a [`PeekType`], and an installation status.
-#[derive(Debug, Clone, PartialOrd, PartialEq)]
+#[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
 pub struct PeekEvent {
     /// The data for the peek itself.
     pub peek: Peek,
@@ -76,7 +79,7 @@ pub struct PeekEvent {
 }
 
 /// Frontier change event.
-#[derive(Debug, Clone, PartialOrd, PartialEq)]
+#[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
 pub struct Frontier {
     pub export_id: GlobalId,
     pub time: Timestamp,
@@ -84,7 +87,7 @@ pub struct Frontier {
 }
 
 /// An import frontier change.
-#[derive(Debug, Clone, PartialOrd, PartialEq)]
+#[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
 pub struct ImportFrontier {
     pub import_id: GlobalId,
     pub export_id: GlobalId,
@@ -93,7 +96,7 @@ pub struct ImportFrontier {
 }
 
 /// A change in an arrangement's heap size.
-#[derive(Debug, Clone, PartialOrd, PartialEq)]
+#[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
 pub struct ArrangementHeapSize {
     /// Operator index
     pub operator_id: usize,
@@ -102,7 +105,7 @@ pub struct ArrangementHeapSize {
 }
 
 /// A change in an arrangement's heap capacity.
-#[derive(Debug, Clone, PartialOrd, PartialEq)]
+#[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
 pub struct ArrangementHeapCapacity {
     /// Operator index
     pub operator_id: usize,
@@ -111,7 +114,7 @@ pub struct ArrangementHeapCapacity {
 }
 
 /// A change in an arrangement's heap allocation count.
-#[derive(Debug, Clone, PartialOrd, PartialEq)]
+#[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
 pub struct ArrangementHeapAllocations {
     /// Operator index
     pub operator_id: usize,
@@ -120,30 +123,30 @@ pub struct ArrangementHeapAllocations {
 }
 
 /// Announcing an operator that manages an arrangement.
-#[derive(Debug, Clone, PartialOrd, PartialEq)]
+#[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
 pub struct ArrangementHeapSizeOperator {
     /// Operator index
     pub operator_id: usize,
     /// The address of the operator.
-    pub address: Rc<[usize]>,
+    pub address: Vec<usize>,
 }
 
 /// Drop event for an operator managing an arrangement.
-#[derive(Debug, Clone, PartialOrd, PartialEq)]
+#[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
 pub struct ArrangementHeapSizeOperatorDrop {
     /// Operator index
     pub operator_id: usize,
 }
 
 /// Dataflow shutdown event.
-#[derive(Debug, Clone, PartialOrd, PartialEq)]
+#[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
 pub struct DataflowShutdown {
     /// Timely worker index of the dataflow.
     pub dataflow_index: usize,
 }
 
 /// Error count update event.
-#[derive(Debug, Clone, PartialOrd, PartialEq)]
+#[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
 pub struct ErrorCount {
     /// Identifier of the export.
     pub export_id: GlobalId,
@@ -152,13 +155,13 @@ pub struct ErrorCount {
 }
 
 /// An export is hydrated.
-#[derive(Debug, Clone, PartialOrd, PartialEq)]
+#[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
 pub struct Hydration {
     pub export_id: GlobalId,
 }
 
 /// Announce a mapping of an LIR operator to a dataflow operator for a global ID.
-#[derive(Debug, Clone, PartialOrd, PartialEq)]
+#[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
 pub struct LirMapping {
     /// The `GlobalId` in which the LIR operator is rendered.
     ///
@@ -169,11 +172,11 @@ pub struct LirMapping {
     pub global_id: GlobalId,
     /// The actual mapping.
     /// Represented this way to reduce the size of `ComputeEvent`.
-    pub mapping: Box<[(LirId, LirMetadata)]>,
+    pub mapping: Vec<(LirId, LirMetadata)>,
 }
 
 /// Announce that a dataflow supports a specific global ID.
-#[derive(Debug, Clone, PartialOrd, PartialEq)]
+#[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
 pub struct DataflowGlobal {
     /// The identifier of the dataflow.
     pub dataflow_index: usize,
@@ -182,7 +185,7 @@ pub struct DataflowGlobal {
 }
 
 /// A logged compute event.
-#[derive(Debug, Clone, PartialOrd, PartialEq)]
+#[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
 pub enum ComputeEvent {
     /// A dataflow export was created.
     Export(Export),
@@ -218,7 +221,7 @@ pub enum ComputeEvent {
 }
 
 /// A peek type distinguishing between index and persist peeks.
-#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Debug)]
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Debug, Columnar)]
 pub enum PeekType {
     /// A peek against an index.
     Index,
@@ -237,28 +240,29 @@ impl PeekType {
 }
 
 /// A logged peek event.
-#[derive(Debug, Clone, PartialOrd, PartialEq)]
+#[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
 pub struct Peek {
     /// The identifier of the view the peek targets.
     id: GlobalId,
     /// The logical timestamp requested.
     time: Timestamp,
     /// The ID of the peek.
-    uuid: Uuid,
+    uuid: uuid::Bytes,
 }
 
 impl Peek {
     /// Create a new peek from its arguments.
     pub fn new(id: GlobalId, time: Timestamp, uuid: Uuid) -> Self {
+        let uuid = uuid.into_bytes();
         Self { id, time, uuid }
     }
 }
 
 /// Metadata for LIR operators.
-#[derive(Clone, Debug, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, PartialEq, PartialOrd, Columnar)]
 pub struct LirMetadata {
     /// The LIR operator, as a string (see `FlatPlanNode::humanize`).
-    operator: Box<str>,
+    operator: String,
     /// The LIR identifier of the parent (if any).
     /// Since `LirId`s are strictly positive, Rust can steal the low bit.
     /// (See `test_option_lirid_fits_in_usize`.)
@@ -273,7 +277,7 @@ pub struct LirMetadata {
 impl LirMetadata {
     /// Construct a new LIR metadata object.
     pub fn new(
-        operator: Box<str>,
+        operator: String,
         parent_lir_id: Option<LirId>,
         nesting: u8,
         operator_span: (usize, usize),
@@ -296,7 +300,7 @@ impl LirMetadata {
 pub(super) fn construct<A: Allocate + 'static>(
     worker: &mut timely::worker::Worker<A>,
     config: &mz_compute_client::logging::LoggingConfig,
-    event_queue: EventQueue<Vec<(Duration, ComputeEvent)>>,
+    event_queue: EventQueue<Column<(Duration, ComputeEvent)>>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
 ) -> BTreeMap<LogVariant, LogCollection> {
     let logging_interval_ms = std::cmp::max(1, config.interval.as_millis());
@@ -305,20 +309,21 @@ pub(super) fn construct<A: Allocate + 'static>(
     let dataflow_index = worker.next_dataflow_index();
 
     worker.dataflow_named("Dataflow: compute logging", move |scope| {
-        let (mut logs, token) = Some(event_queue.link)
-            .mz_replay::<_, CapacityContainerBuilder<_>, _>(
-                scope,
-                "compute logs",
-                config.interval,
-                event_queue.activator,
-                |mut session, data| session.give_iterator(data.iter()),
-            );
-
-        // If logging is disabled, we still need to install the indexes, but we can leave them
-        // empty. We do so by immediately filtering all logs events.
-        if !config.enable_logging {
-            logs = logs.filter(|_| false);
-        }
+        let enable_logging = config.enable_logging;
+        let (logs, token) = Some(event_queue.link).mz_replay::<_, ColumnBuilder<_>, _>(
+            scope,
+            "compute logs",
+            config.interval,
+            event_queue.activator,
+            move |mut session, data| {
+                // If logging is disabled, we still need to install the indexes, but we can leave them
+                // empty. We do so by immediately filtering all logs events.
+                if enable_logging {
+                    session.give_iterator(data.iter())
+                }
+            },
+        );
+        let logs = logs.container::<Column<(Duration, ComputeEvent)>>();
 
         // Build a demux operator that splits the replayed event stream up into the separate
         // logging streams.
@@ -369,14 +374,15 @@ pub(super) fn construct<A: Allocate + 'static>(
                         arrangement_heap_allocations: arrangement_heap_allocations.session(&cap),
                         error_count: error_count.session(&cap),
                         hydration_time: hydration_time.session(&cap),
-                        lir_mapping: lir_mapping.session(&cap),
+                        lir_mapping: lir_mapping.session_with_builder(&cap),
                         dataflow_global_ids: dataflow_global_ids.session(&cap),
                     };
 
-                    for (time, event) in data.drain(..) {
+                    let shared_state = &mut shared_state.borrow_mut();
+                    for (time, event) in data.drain() {
                         DemuxHandler {
                             state: &mut demux_state,
-                            shared_state: &mut shared_state.borrow_mut(),
+                            shared_state,
                             output: &mut output_sessions,
                             logging_interval_ms,
                             time,
@@ -428,7 +434,7 @@ pub(super) fn construct<A: Allocate + 'static>(
             let mut scratch = String::new();
             move |PeekDatum { peek, peek_type }| {
                 packer.pack_slice(&[
-                    Datum::Uuid(peek.uuid),
+                    Datum::Uuid(Uuid::from_bytes(peek.uuid)),
                     Datum::UInt64(u64::cast_from(worker_id)),
                     make_string_datum(peek.id, &mut scratch),
                     Datum::String(peek_type.name()),
@@ -503,25 +509,28 @@ pub(super) fn construct<A: Allocate + 'static>(
         });
 
         let packer = PermutedRowPacker::new(ComputeLog::LirMapping);
-        let lir_mapping = lir_mapping.as_collection().map({
-            let mut scratch1 = String::new();
-            let mut scratch2 = String::new();
-            move |datum| {
-                packer.pack_slice(&[
-                    make_string_datum(datum.global_id, &mut scratch1),
-                    Datum::UInt64(datum.lir_id.into()),
-                    Datum::UInt64(u64::cast_from(worker_id)),
-                    make_string_datum(&datum.operator, &mut scratch2),
-                    datum
-                        .parent_lir_id
-                        .map(|lir_id| Datum::UInt64(lir_id.into()))
-                        .unwrap_or_else(|| Datum::Null),
-                    Datum::UInt16(u16::cast_from(datum.nesting)),
-                    Datum::UInt64(u64::cast_from(datum.operator_span.0)),
-                    Datum::UInt64(u64::cast_from(datum.operator_span.1)),
-                ])
-            }
-        });
+        let lir_mapping = lir_mapping
+            .map({
+                let mut scratch1 = String::new();
+                let mut scratch2 = String::new();
+                move |(datum, time, diff)| {
+                    let row = packer.pack_slice(&[
+                        make_string_datum(GlobalId::into_owned(datum.global_id), &mut scratch1),
+                        Datum::UInt64(<LirId as Columnar>::into_owned(datum.lir_id).into()),
+                        Datum::UInt64(u64::cast_from(worker_id)),
+                        make_string_datum(datum.operator, &mut scratch2),
+                        datum
+                            .parent_lir_id
+                            .map(|lir_id| Datum::UInt64(LirId::into_owned(lir_id).into()))
+                            .unwrap_or_else(|| Datum::Null),
+                        Datum::UInt16(u16::cast_from(*datum.nesting)),
+                        Datum::UInt64(u64::cast_from(datum.operator_span.0)),
+                        Datum::UInt64(u64::cast_from(datum.operator_span.1)),
+                    ]);
+                    (row, Timestamp::into_owned(time), *diff)
+                }
+            })
+            .as_collection();
 
         let packer = PermutedRowPacker::new(ComputeLog::DataflowGlobal);
         let dataflow_global_ids = dataflow_global_ids.as_collection().map({
@@ -665,9 +674,14 @@ struct ArrangementSizeState {
 type Update<D> = (D, Timestamp, Diff);
 /// A pusher for updates of value `D` for vector-based containers.
 type Pusher<D> = Counter<Timestamp, Vec<Update<D>>, Tee<Timestamp, Vec<Update<D>>>>;
+/// A pusher for updates of value `D` for columnar containers.
+type PusherColumnar<D> = Counter<Timestamp, Column<Update<D>>, Tee<Timestamp, Column<Update<D>>>>;
 /// An output session for vector-based containers of updates `D`, using a capacity container builder.
 type OutputSession<'a, D> =
     Session<'a, Timestamp, CapacityContainerBuilder<Vec<Update<D>>>, Pusher<D>>;
+/// An output session for columnar containers of updates `D`, using a column builder.
+type OutputSessionColumnar<'a, D> =
+    Session<'a, Timestamp, ColumnBuilder<Update<D>>, PusherColumnar<D>>;
 
 /// Bundled output sessions used by the demux operator.
 struct DemuxOutput<'a> {
@@ -682,7 +696,7 @@ struct DemuxOutput<'a> {
     arrangement_heap_allocations: OutputSession<'a, ArrangementHeapDatum>,
     hydration_time: OutputSession<'a, HydrationTimeDatum>,
     error_count: OutputSession<'a, ErrorCountDatum>,
-    lir_mapping: OutputSession<'a, LirMappingDatum>,
+    lir_mapping: OutputSessionColumnar<'a, LirMappingDatum>,
     dataflow_global_ids: OutputSession<'a, DataflowGlobalDatum>,
 }
 
@@ -722,7 +736,7 @@ struct ArrangementHeapDatum {
     operator_id: usize,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Columnar)]
 struct HydrationTimeDatum {
     export_id: GlobalId,
     time_ns: Option<u64>,
@@ -737,11 +751,11 @@ struct ErrorCountDatum {
     count: i64,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Columnar)]
 struct LirMappingDatum {
     global_id: GlobalId,
     lir_id: LirId,
-    operator: Box<str>,
+    operator: String,
     parent_lir_id: Option<LirId>,
     nesting: u8,
     operator_span: (usize, usize),
@@ -778,54 +792,59 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
     }
 
     /// Handle the given compute event.
-    fn handle(&mut self, event: ComputeEvent) {
+    fn handle(&mut self, event: <ComputeEvent as Columnar>::Ref<'_>) {
         match event {
-            ComputeEvent::Export(export) => self.handle_export(export),
-            ComputeEvent::ExportDropped(export_dropped) => {
+            ComputeEventReference::Export(export) => self.handle_export(export),
+            ComputeEventReference::ExportDropped(export_dropped) => {
                 self.handle_export_dropped(export_dropped)
             }
-            ComputeEvent::Peek(
-                peek @ PeekEvent {
+            ComputeEventReference::Peek(
+                peek @ PeekEventReference {
                     installed: true, ..
                 },
             ) => self.handle_peek_install(peek),
-            ComputeEvent::Peek(
-                peek @ PeekEvent {
+            ComputeEventReference::Peek(
+                peek @ PeekEventReference {
                     installed: false, ..
                 },
             ) => self.handle_peek_retire(peek),
-            ComputeEvent::Frontier(frontier) => self.handle_frontier(frontier),
-            ComputeEvent::ImportFrontier(import_frontier) => {
+            ComputeEventReference::Frontier(frontier) => self.handle_frontier(frontier),
+            ComputeEventReference::ImportFrontier(import_frontier) => {
                 self.handle_import_frontier(import_frontier)
             }
-            ComputeEvent::ArrangementHeapSize(inner) => self.handle_arrangement_heap_size(inner),
-            ComputeEvent::ArrangementHeapCapacity(inner) => {
+            ComputeEventReference::ArrangementHeapSize(inner) => {
+                self.handle_arrangement_heap_size(inner)
+            }
+            ComputeEventReference::ArrangementHeapCapacity(inner) => {
                 self.handle_arrangement_heap_capacity(inner)
             }
-            ComputeEvent::ArrangementHeapAllocations(inner) => {
+            ComputeEventReference::ArrangementHeapAllocations(inner) => {
                 self.handle_arrangement_heap_allocations(inner)
             }
-            ComputeEvent::ArrangementHeapSizeOperator(inner) => {
+            ComputeEventReference::ArrangementHeapSizeOperator(inner) => {
                 self.handle_arrangement_heap_size_operator(inner)
             }
-            ComputeEvent::ArrangementHeapSizeOperatorDrop(inner) => {
+            ComputeEventReference::ArrangementHeapSizeOperatorDrop(inner) => {
                 self.handle_arrangement_heap_size_operator_dropped(inner)
             }
-            ComputeEvent::DataflowShutdown(shutdown) => self.handle_dataflow_shutdown(shutdown),
-            ComputeEvent::ErrorCount(error_count) => self.handle_error_count(error_count),
-            ComputeEvent::Hydration(hydration) => self.handle_hydration(hydration),
-            ComputeEvent::LirMapping(mapping) => self.handle_lir_mapping(mapping),
-            ComputeEvent::DataflowGlobal(global) => self.handle_dataflow_global(global),
+            ComputeEventReference::DataflowShutdown(shutdown) => {
+                self.handle_dataflow_shutdown(shutdown)
+            }
+            ComputeEventReference::ErrorCount(error_count) => self.handle_error_count(error_count),
+            ComputeEventReference::Hydration(hydration) => self.handle_hydration(hydration),
+            ComputeEventReference::LirMapping(mapping) => self.handle_lir_mapping(mapping),
+            ComputeEventReference::DataflowGlobal(global) => self.handle_dataflow_global(global),
         }
     }
 
     fn handle_export(
         &mut self,
-        Export {
+        ExportReference {
             export_id,
             dataflow_index,
-        }: Export,
+        }: <Export as Columnar>::Ref<'_>,
     ) {
+        let export_id = Columnar::into_owned(export_id);
         let ts = self.ts();
         let datum = ExportDatum {
             export_id,
@@ -855,7 +874,11 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
         self.output.hydration_time.give((datum, ts, 1));
     }
 
-    fn handle_export_dropped(&mut self, ExportDropped { export_id }: ExportDropped) {
+    fn handle_export_dropped(
+        &mut self,
+        ExportDroppedReference { export_id }: <ExportDropped as Columnar>::Ref<'_>,
+    ) {
+        let export_id = Columnar::into_owned(export_id);
         let Some(export) = self.state.exports.remove(&export_id) else {
             error!(%export_id, "missing exports entry at time of export drop");
             return;
@@ -917,7 +940,10 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
         }
     }
 
-    fn handle_dataflow_shutdown(&mut self, DataflowShutdown { dataflow_index }: DataflowShutdown) {
+    fn handle_dataflow_shutdown(
+        &mut self,
+        DataflowShutdownReference { dataflow_index }: <DataflowShutdown as Columnar>::Ref<'_>,
+    ) {
         let ts = self.ts();
 
         if let Some(start) = self.state.dataflow_drop_times.remove(&dataflow_index) {
@@ -963,15 +989,19 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
                             nesting,
                             operator_span,
                         };
-                        self.output.lir_mapping.give((datum, ts, -1));
+                        self.output.lir_mapping.give(&(datum, ts, -1));
                     }
                 }
             }
         }
     }
 
-    fn handle_error_count(&mut self, ErrorCount { export_id, diff }: ErrorCount) {
+    fn handle_error_count(
+        &mut self,
+        ErrorCountReference { export_id, diff }: <ErrorCount as Columnar>::Ref<'_>,
+    ) {
         let ts = self.ts();
+        let export_id = Columnar::into_owned(export_id);
 
         let Some(export) = self.state.exports.get_mut(&export_id) else {
             // The export might have already been dropped, in which case we are no longer
@@ -1000,8 +1030,12 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
         export.error_count = new_count;
     }
 
-    fn handle_hydration(&mut self, Hydration { export_id }: Hydration) {
+    fn handle_hydration(
+        &mut self,
+        HydrationReference { export_id }: <Hydration as Columnar>::Ref<'_>,
+    ) {
         let ts = self.ts();
+        let export_id = Columnar::into_owned(export_id);
 
         let Some(export) = self.state.exports.get_mut(&export_id) else {
             error!(%export_id, "hydration event for unknown export");
@@ -1032,13 +1066,14 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
 
     fn handle_peek_install(
         &mut self,
-        PeekEvent {
+        PeekEventReference {
             peek,
             peek_type,
             installed: _,
-        }: PeekEvent,
+        }: <PeekEvent as Columnar>::Ref<'_>,
     ) {
-        let uuid = peek.uuid;
+        let peek = Peek::into_owned(peek);
+        let uuid = Uuid::from_bytes(peek.uuid);
         let ts = self.ts();
         self.output
             .peek
@@ -1052,13 +1087,14 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
 
     fn handle_peek_retire(
         &mut self,
-        PeekEvent {
+        PeekEventReference {
             peek,
             peek_type,
             installed: _,
-        }: PeekEvent,
+        }: <PeekEvent as Columnar>::Ref<'_>,
     ) {
-        let uuid = peek.uuid;
+        let peek = Peek::into_owned(peek);
+        let uuid = Uuid::from_bytes(peek.uuid);
         let ts = self.ts();
         self.output
             .peek
@@ -1077,43 +1113,50 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
 
     fn handle_frontier(
         &mut self,
-        Frontier {
+        FrontierReference {
             export_id,
             time,
             diff,
-        }: Frontier,
+        }: <Frontier as Columnar>::Ref<'_>,
     ) {
-        let diff = i64::from(diff);
+        let export_id = Columnar::into_owned(export_id);
+        let diff = i64::from(*diff);
         let ts = self.ts();
+        let time = Columnar::into_owned(time);
         let datum = FrontierDatum { export_id, time };
         self.output.frontier.give((datum, ts, diff));
     }
 
     fn handle_import_frontier(
         &mut self,
-        ImportFrontier {
+        ImportFrontierReference {
             import_id,
             export_id,
             time,
             diff,
-        }: ImportFrontier,
+        }: <ImportFrontier as Columnar>::Ref<'_>,
     ) {
+        let import_id = Columnar::into_owned(import_id);
+        let export_id = Columnar::into_owned(export_id);
         let ts = self.ts();
+        let time = Columnar::into_owned(time);
         let datum = ImportFrontierDatum {
             export_id,
             import_id,
             time,
         };
-        self.output.import_frontier.give((datum, ts, diff.into()));
+        self.output
+            .import_frontier
+            .give((datum, ts, (*diff).into()));
     }
 
     /// Update the allocation size for an arrangement.
     fn handle_arrangement_heap_size(
         &mut self,
-        ArrangementHeapSize {
+        ArrangementHeapSizeReference {
             operator_id,
             delta_size,
-        }: ArrangementHeapSize,
+        }: <ArrangementHeapSize as Columnar>::Ref<'_>,
     ) {
         let ts = self.ts();
         let Some(state) = self.state.arrangement_size.get_mut(&operator_id) else {
@@ -1131,10 +1174,10 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
     /// Update the allocation capacity for an arrangement.
     fn handle_arrangement_heap_capacity(
         &mut self,
-        ArrangementHeapCapacity {
+        ArrangementHeapCapacityReference {
             operator_id,
             delta_capacity,
-        }: ArrangementHeapCapacity,
+        }: <ArrangementHeapCapacity as Columnar>::Ref<'_>,
     ) {
         let ts = self.ts();
         let Some(state) = self.state.arrangement_size.get_mut(&operator_id) else {
@@ -1152,10 +1195,10 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
     /// Update the allocation count for an arrangement.
     fn handle_arrangement_heap_allocations(
         &mut self,
-        ArrangementHeapAllocations {
+        ArrangementHeapAllocationsReference {
             operator_id,
             delta_allocations,
-        }: ArrangementHeapAllocations,
+        }: <ArrangementHeapAllocations as Columnar>::Ref<'_>,
     ) {
         let ts = self.ts();
         let Some(state) = self.state.arrangement_size.get_mut(&operator_id) else {
@@ -1174,12 +1217,15 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
     /// Indicate that a new arrangement exists, start maintaining the heap size state.
     fn handle_arrangement_heap_size_operator(
         &mut self,
-        ArrangementHeapSizeOperator {
+        ArrangementHeapSizeOperatorReference {
             operator_id,
             address,
-        }: ArrangementHeapSizeOperator,
+        }: <ArrangementHeapSizeOperator as Columnar>::Ref<'_>,
     ) {
-        let activator = self.state.worker.activator_for(address);
+        let activator = self
+            .state
+            .worker
+            .activator_for(address.into_iter().collect());
         let existing = self
             .state
             .arrangement_size
@@ -1199,7 +1245,7 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
     /// Indicate that an arrangement has been dropped and we can cleanup the heap size state.
     fn handle_arrangement_heap_size_operator_dropped(
         &mut self,
-        ArrangementHeapSizeOperatorDrop { operator_id }: ArrangementHeapSizeOperatorDrop,
+        ArrangementHeapSizeOperatorDropReference { operator_id }: <ArrangementHeapSizeOperatorDrop as Columnar>::Ref<'_>,
     ) {
         if let Some(state) = self.state.arrangement_size.remove(&operator_id) {
             let ts = self.ts();
@@ -1226,33 +1272,29 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
     }
 
     /// Indicate that a new LIR operator exists; record the dataflow address it maps to.
-    fn handle_lir_mapping(&mut self, LirMapping { global_id, mapping }: LirMapping) {
+    fn handle_lir_mapping(
+        &mut self,
+        LirMappingReference { global_id, mapping }: <LirMapping as Columnar>::Ref<'_>,
+    ) {
+        let global_id = Columnar::into_owned(global_id);
         // record the state (for the later drop)
+        let mappings = || mapping.into_iter().map(Columnar::into_owned);
         self.state
             .lir_mapping
             .entry(global_id)
-            .and_modify(|existing_mapping| existing_mapping.extend(mapping.iter().cloned()))
-            .or_insert_with(|| mapping.iter().cloned().collect::<BTreeMap<_, _>>());
+            .and_modify(|existing_mapping| existing_mapping.extend(mappings()))
+            .or_insert_with(|| mappings().collect());
 
         // send the datum out
         let ts = self.ts();
-        for (
-            lir_id,
-            LirMetadata {
-                operator,
-                parent_lir_id,
-                nesting,
-                operator_span,
-            },
-        ) in mapping
-        {
-            let datum = LirMappingDatum {
+        for (lir_id, meta) in mapping.into_iter() {
+            let datum = LirMappingDatumReference {
                 global_id,
                 lir_id,
-                operator,
-                parent_lir_id,
-                nesting,
-                operator_span,
+                operator: meta.operator,
+                parent_lir_id: meta.parent_lir_id,
+                nesting: meta.nesting,
+                operator_span: meta.operator_span,
             };
             self.output.lir_mapping.give((datum, ts, 1));
         }
@@ -1260,21 +1302,22 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
 
     fn handle_dataflow_global(
         &mut self,
-        DataflowGlobal {
+        DataflowGlobalReference {
             dataflow_index,
             global_id,
-        }: DataflowGlobal,
+        }: <DataflowGlobal as Columnar>::Ref<'_>,
     ) {
+        let global_id = Columnar::into_owned(global_id);
         self.state
             .dataflow_global_ids
             .entry(dataflow_index)
             .and_modify(|globals| {
                 // NB BTreeSet::insert() returns `false` when the element was already in the set
-                if !globals.insert(global_id.clone()) {
+                if !globals.insert(global_id) {
                     error!(%dataflow_index, %global_id, "dataflow mapping already knew about this GlobalId");
                 }
             })
-            .or_insert_with(|| BTreeSet::from([global_id.clone()]));
+            .or_insert_with(|| BTreeSet::from([global_id]));
 
         let ts = self.ts();
         let datum = DataflowGlobalDatum {
@@ -1305,7 +1348,7 @@ impl CollectionLogging {
         dataflow_index: usize,
         import_ids: impl Iterator<Item = GlobalId>,
     ) -> Self {
-        logger.log(ComputeEvent::Export(Export {
+        logger.log(&ComputeEvent::Export(Export {
             export_id,
             dataflow_index,
         }));
@@ -1346,7 +1389,7 @@ impl CollectionLogging {
                     diff: 1,
                 })
             });
-            let events = retraction.into_iter().chain(insertion);
+            let events = retraction.as_ref().into_iter().chain(insertion.as_ref());
             self.logger.log_many(events);
         }
     }
@@ -1377,14 +1420,14 @@ impl CollectionLogging {
                     diff: 1,
                 })
             });
-            let events = retraction.into_iter().chain(insertion);
+            let events = retraction.as_ref().into_iter().chain(insertion.as_ref());
             self.logger.log_many(events);
         }
     }
 
     /// Set the collection as hydrated.
     pub fn set_hydrated(&self) {
-        self.logger.log(ComputeEvent::Hydration(Hydration {
+        self.logger.log(&ComputeEvent::Hydration(Hydration {
             export_id: self.export_id,
         }));
     }
@@ -1400,7 +1443,7 @@ impl Drop for CollectionLogging {
             self.set_import_frontier(import_id, None);
         }
 
-        self.logger.log(ComputeEvent::ExportDropped(ExportDropped {
+        self.logger.log(&ComputeEvent::ExportDropped(ExportDropped {
             export_id: self.export_id,
         }));
     }
@@ -1423,7 +1466,7 @@ where
                 move |input, output| {
                     input.for_each(|cap, data| {
                         let diff = data.iter().map(|(_d, _t, r)| r).sum();
-                        logger.log(ComputeEvent::ErrorCount(ErrorCount { export_id, diff }));
+                        logger.log(&ComputeEvent::ErrorCount(ErrorCount { export_id, diff }));
 
                         output.session(&cap).give_container(data);
                     });
@@ -1443,7 +1486,7 @@ where
             move |input, output| {
                 input.for_each(|cap, data| {
                     let diff = data.iter().map(sum_batch_diffs).sum();
-                    logger.log(ComputeEvent::ErrorCount(ErrorCount { export_id, diff }));
+                    logger.log(&ComputeEvent::ErrorCount(ErrorCount { export_id, diff }));
 
                     output.session(&cap).give_container(data);
                 });

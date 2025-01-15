@@ -64,27 +64,27 @@ where
             _marker: PhantomData,
         }
     }
-
-    /// Indicate progress up to a specific `time`.
-    fn report_progress(&mut self, time: &Duration) {
-        let time_ms = ((time.as_millis() / self.interval_ms) + 1) * self.interval_ms;
-        let new_time_ms: Timestamp = time_ms.try_into().expect("must fit");
-        if self.time_ms < new_time_ms {
-            self.event_pusher
-                .push(Event::Progress(vec![(new_time_ms, 1), (self.time_ms, -1)]));
-            self.time_ms = new_time_ms;
-        }
-    }
 }
 
 impl<C, P> BatchLogger<C, P>
 where
     P: EventPusher<Timestamp, C>,
+    C: Container,
 {
     /// Publishes a batch of logged events and advances the capability.
-    fn publish_batch(&mut self, time: &Duration, data: C) {
-        self.event_pusher.push(Event::Messages(self.time_ms, data));
-        self.report_progress(time);
+    fn publish_batch(&mut self, time: &Duration, data: &mut Option<C>) {
+        if let Some(data) = data.take() {
+            self.event_pusher.push(Event::Messages(self.time_ms, data));
+        } else {
+            // Flush: Indicate progress up to `time`.
+            let time_ms = ((time.as_millis() / self.interval_ms) + 1) * self.interval_ms;
+            let new_time_ms: Timestamp = time_ms.try_into().expect("must fit");
+            if self.time_ms < new_time_ms {
+                self.event_pusher
+                    .push(Event::Progress(vec![(new_time_ms, 1), (self.time_ms, -1)]));
+                self.time_ms = new_time_ms;
+            }
+        }
     }
 }
 

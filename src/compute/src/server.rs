@@ -744,7 +744,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
             for (_, peek) in std::mem::take(&mut compute_state.pending_peeks) {
                 // Log dropping the peek request.
                 if let Some(logger) = compute_state.compute_logger.as_mut() {
-                    logger.log(peek.as_log_event(false));
+                    logger.log(&peek.as_log_event(false));
                 }
             }
 

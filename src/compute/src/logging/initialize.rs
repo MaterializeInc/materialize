@@ -18,6 +18,7 @@ use mz_ore::flatcontainer::{MzRegionPreference, OwnedRegionOpinion};
 use mz_repr::{Diff, Timestamp};
 use mz_storage_operators::persist_source::Subtime;
 use mz_storage_types::errors::DataflowError;
+use mz_timely_util::containers::Column;
 use mz_timely_util::operator::CollectionExt;
 use timely::communication::Allocate;
 use timely::container::flatcontainer::FlatStack;
@@ -100,7 +101,7 @@ struct LoggingContext<'a, A: Allocate> {
     t_event_queue: EventQueue<Vec<(Duration, TimelyEvent)>>,
     r_event_queue: EventQueue<FlatStack<ReachabilityEventRegion>>,
     d_event_queue: EventQueue<Vec<(Duration, DifferentialEvent)>>,
-    c_event_queue: EventQueue<Vec<(Duration, ComputeEvent)>>,
+    c_event_queue: EventQueue<Column<(Duration, ComputeEvent)>>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
 }
 
@@ -173,11 +174,17 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
         &self,
         event_queue: EventQueue<CB::Container>,
     ) -> Logger<CB> {
-        let mut logger = BatchLogger::new(event_queue.link, self.interval_ms);
-        Logger::new(self.now, self.start_offset, move |time, data| {
-            logger.publish_batch(time, std::mem::take(data));
-            event_queue.activator.activate();
-        })
+        let mut logger = BatchLogger::<_, _>::new(event_queue.link, self.interval_ms);
+        Logger::new(
+            self.now,
+            self.start_offset,
+            move |time, data: &mut Option<CB::Container>| {
+                if data.is_none() {
+                    event_queue.activator.activate();
+                }
+                logger.publish_batch(time, data);
+            },
+        )
     }
 
     fn reachability_logger(&self) -> Logger<TrackerEventBuilder> {
@@ -189,7 +196,13 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
         Logger::new(
             self.now,
             self.start_offset,
-            move |time, data: &mut Vec<_>| {
+            move |time, data: &mut Option<Vec<_>>| {
+                let Some(data) = data.as_mut() else {
+                    logger.publish_batch(time, &mut None);
+                    event_queue.activator.activate();
+                    return;
+                };
+
                 let mut massaged = Vec::new();
                 let mut container = FlatStack::default();
                 for (time, event) in data.drain(..) {
@@ -220,8 +233,7 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
                         }
                     }
                 }
-                logger.publish_batch(time, container);
-                logger.report_progress(time);
+                logger.publish_batch(time, &mut Some(container));
                 event_queue.activator.activate();
             },
         )

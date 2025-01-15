@@ -566,7 +566,7 @@ impl DemuxHandler<'_, '_> {
     fn handle_dataflow_shutdown(&mut self, dataflow_index: usize) {
         // Notify compute logging about the shutdown.
         if let Some(logger) = &self.shared_state.compute_logger {
-            logger.log(ComputeEvent::DataflowShutdown(DataflowShutdown {
+            logger.log(&ComputeEvent::DataflowShutdown(DataflowShutdown {
                 dataflow_index,
             }));
         }
