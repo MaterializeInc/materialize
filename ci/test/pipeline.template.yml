@@ -628,7 +628,7 @@ steps:
   - id: feature-benchmark-kafka-only
     label: "Feature benchmark (Kafka only)"
     depends_on: build-x86_64
-    timeout_in_minutes: 45
+    timeout_in_minutes: 60
     plugins:
       - ./ci/plugins/mzcompose:
           composition: feature-benchmark
