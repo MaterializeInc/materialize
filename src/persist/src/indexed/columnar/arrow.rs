@@ -11,18 +11,18 @@
 
 use std::ptr::NonNull;
 use std::sync::Arc;
-use std::sync::LazyLock;
 
-use arrow::array::{make_array, Array, ArrayData, ArrayRef, AsArray};
+use arrow::array::{make_array, Array, ArrayData, ArrayRef, AsArray, RecordBatch};
 use arrow::buffer::{BooleanBuffer, Buffer, NullBuffer};
-use arrow::datatypes::{DataType, Field, Schema, ToByteSlice};
+use arrow::datatypes::{ToByteSlice};
 use mz_dyncfg::Config;
 use mz_ore::iter::IteratorExt;
 
 use crate::indexed::columnar::{ColumnarRecords, ColumnarRecordsStructuredExt};
+use crate::indexed::encoding::BlobTraceUpdates;
 use crate::metrics::ColumnarMetrics;
 
-/// The Arrow schema we use to encode ((K, V), T, D) tuples.
+/// Converts a [`ColumnarRecords`] into [`arrow`] columns.
 ///
 /// Both Time and Diff are presented externally to persist users as a type
 /// parameter that implements [mz_persist_types::Codec64]. Our columnar format
@@ -37,55 +37,28 @@ use crate::metrics::ColumnarMetrics;
 /// time after year 2200). Using a i64 might be a pessimization for a
 /// non-realtime mz source with u64 timestamps in the range `(i64::MAX,
 /// u64::MAX]`, but realtime sources are overwhelmingly the common case.
-pub static SCHEMA_ARROW_RS_KVTD: LazyLock<Arc<Schema>> = LazyLock::new(|| {
-    let schema = Schema::new(vec![
-        Field::new("k", DataType::Binary, false),
-        Field::new("v", DataType::Binary, false),
-        Field::new("t", DataType::Int64, false),
-        Field::new("d", DataType::Int64, false),
-    ]);
-    Arc::new(schema)
-});
-
-/// Converts a [`ColumnarRecords`] into `(K, V, T, D)` [`arrow`] columns.
-pub fn encode_arrow_batch_kvtd(x: &ColumnarRecords) -> Vec<arrow::array::ArrayRef> {
-    let key = x.key_data.clone();
-    let val = x.val_data.clone();
-    let ts = x.timestamps.clone();
-    let diff = x.diffs.clone();
-
-    vec![Arc::new(key), Arc::new(val), Arc::new(ts), Arc::new(diff)]
-}
-
-/// Converts a [`ColumnarRecords`] and [`ColumnarRecordsStructuredExt`] pair
-/// (aka [`BlobTraceUpdates::Both`]) into [`arrow::array::Array`]s with columns
-/// [(K, V, T, D, K_S, V_S)].
-///
-/// [`BlobTraceUpdates::Both`]: crate::indexed::encoding::BlobTraceUpdates::Both
-pub fn encode_arrow_batch_kvtd_ks_vs(
-    records: &ColumnarRecords,
-    structured: &ColumnarRecordsStructuredExt,
-) -> (Vec<Arc<Field>>, Vec<Arc<dyn Array>>) {
-    let mut fields: Vec<_> = (*SCHEMA_ARROW_RS_KVTD).fields().iter().cloned().collect();
-    let mut arrays = encode_arrow_batch_kvtd(records);
-
-    {
-        let key_array = &structured.key;
-        let key_field = Field::new("k_s", key_array.data_type().clone(), false);
-
-        fields.push(Arc::new(key_field));
-        arrays.push(Arc::clone(key_array));
+pub fn encode_arrow_batch(updates: &BlobTraceUpdates) -> RecordBatch {
+    fn array_ref<A: Array + Clone + 'static>(a: &A) -> ArrayRef {
+        Arc::new(a.clone())
     }
+    // For historical reasons, the codec-encoded columns are placed before T/D,
+    // and the structured-encoding columns are placed after.
+    let kv = updates
+        .records()
+        .into_iter()
+        .flat_map(|x| [("k", array_ref(&x.key_data)), ("v", array_ref(&x.val_data))]);
+    let td = [
+        ("t", array_ref(updates.timestamps())),
+        ("d", array_ref(updates.diffs())),
+    ];
+    let ks_vs = updates
+        .structured()
+        .into_iter()
+        .flat_map(|x| [("k_s", Arc::clone(&x.key)), ("v_s", Arc::clone(&x.val))]);
 
-    {
-        let val_array = &structured.val;
-        let val_field = Field::new("v_s", val_array.data_type().clone(), false);
-
-        fields.push(Arc::new(val_field));
-        arrays.push(Arc::clone(val_array));
-    }
-
-    (fields, arrays)
+    // We expect all the top-level fields to be fully defined.
+    let fields = kv.chain(td).chain(ks_vs).map(|(f, a)| (f, a, false));
+    RecordBatch::try_from_iter_with_nullable(fields).expect("valid field definitions")
 }
 
 pub(crate) const ENABLE_ARROW_LGALLOC_CC_SIZES: Config<bool> = Config::new(
