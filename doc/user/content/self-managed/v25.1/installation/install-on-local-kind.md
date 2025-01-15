@@ -3,7 +3,7 @@ title: "Install locally on kind"
 description: ""
 aliases:
   - /self-hosted/install-on-local-kind/
-robots: "noindex, nofollow"
+  - /self-managed/installation/install-on-local-kind/
 ---
 
 The following tutorial deploys self-managed Materialize onto a local
@@ -104,7 +104,7 @@ Check out the {{% self-managed/latest_version %}} tag.
       ```
 
       If you run into an error during deployment, refer to the
-      [Troubleshooting](/self-hosted/troubleshooting) guide.
+      [Troubleshooting](/self-managed/v25.1/installation/troubleshooting) guide.
 
 1. Install PostgreSQL and minIO.
 

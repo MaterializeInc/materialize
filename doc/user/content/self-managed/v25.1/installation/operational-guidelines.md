@@ -2,6 +2,8 @@
 title: "Operational guidelines"
 description: ""
 robots: "noindex, nofollow"
+aliases:
+  - /self-managed/operational-guidelines/
 ---
 
 ## Recommended instance types

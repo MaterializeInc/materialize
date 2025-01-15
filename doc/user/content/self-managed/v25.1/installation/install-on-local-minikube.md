@@ -1,7 +1,8 @@
 ---
 title: "Install locally on minikube"
 description: ""
-robots: "noindex, nofollow"
+aliases:
+  - /self-managed/installation/install-on-local-minikube/
 ---
 
 The following tutorial deploys Materialize onto a local

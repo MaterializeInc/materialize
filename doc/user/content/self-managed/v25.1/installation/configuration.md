@@ -3,7 +3,7 @@ title: "Materialize Operator Configuration"
 description: ""
 aliases:
   - /self-hosted/configuration/
-robots: "noindex, nofollow"
+  - /self-managed/configuration/
 ---
 
 You can configure the Materialize operator chart. For example:
@@ -15,13 +15,13 @@ You can configure the Materialize operator chart. For example:
 - **Network Policies**
 
   Network policies can be enabled by setting
-  [`networkPolicies.enabled=true`](/self-managed/configuration/#networkpoliciesenabled).
+  [`networkPolicies.enabled=true`](#networkpoliciesenabled).
   By default, the chart uses native Kubernetes network policies. For additional network policy configuration options, see [`networkPolicies` parameters](#networkpolicies-parameters).
 
 - **Observability**
 
   To enable observability features, set
-  [`observability.enabled=true`](/self-managed/configuration/#observabilityenabled).
+  [`observability.enabled=true`](#observabilityenabled).
   This will create the necessary resources for monitoring the operator. For
   additional observability configuraiton options, see [`observability`
   parameters](#observability-parameters).
