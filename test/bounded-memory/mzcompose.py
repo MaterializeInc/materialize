@@ -948,60 +948,60 @@ SCENARIOS = [
 
             ? EXPLAIN WITH(cardinality) SELECT pk FROM tab0 WHERE col0 <= 88 AND (((col4 <= 97.11 AND col0 IN (11,85,87,63,88) OR (col0 <= 45 AND ((((((((col0 > 79)) OR col1 <= 30.14 OR col3 >= 12))) OR col0 >= 89 OR col1 < 20.99 OR col1 >= 74.51 AND col3 > 77) AND (col0 IN (67,97,94,86,81))) AND ((col1 <= 10.70 AND col1 IS NULL AND col3 > 49 AND col3 > 66 AND (((col4 > 42.2) AND ((((col4 < 86.27) AND col3 >= 77 AND col3 < 48))) AND col3 >= 49)) AND col0 IN (SELECT col3 FROM tab0 WHERE col4 BETWEEN 20.3 AND 97.63))) AND col0 >= 25) OR ((col0 <= 35)) AND col0 < 68 OR ((col0 = 98))) OR (col1 <= 17.96) AND ((((col0 IS NULL))) OR col4 <= 2.63 AND (col0 > 2) AND col3 > 8) OR col3 <= 88 AND (((col0 IS NULL))) OR col0 >= 30)) AND col0 > 5) OR col0 > 3;
             Explained Query:
-              Return // { cardinality: "<UNKNOWN>" }
-                Project (#0) // { cardinality: "<UNKNOWN>" }
-                  Filter ((#1 > 3) OR ((#1 <= 88) AND (#1 > 5) AND ((#1 = 98) OR (#1 >= 30) OR (#6 AND (#2) IS NULL AND (#3 < 48) AND (#4 < 86.27) AND (#1 <= 45) AND (#2 <= 10.7) AND (#3 > 49) AND (#3 > 66) AND (#4 > 42.2) AND (#1 >= 25) AND (#3 >= 49) AND (#3 >= 77) AND ((#1 = 67) OR (#1 = 81) OR (#1 = 86) OR (#1 = 94) OR (#1 = 97)) AND ((#2 < 20.99) OR (#2 <= 30.14) OR (#1 > 79) OR (#1 >= 89) OR (#3 >= 12) OR ((#3 > 77) AND (#2 >= 74.51)))) OR (#7 AND (#3 <= 88)) OR ((#1 < 68) AND (#1 <= 35)) OR ((#2 <= 17.96) AND (#7 OR ((#4 <= 2.63) AND (#1 > 2) AND (#3 > 8)))) OR ((#4 <= 97.11) AND ((#1 = 11) OR (#1 = 63) OR (#1 = 85) OR (#1 = 87) OR (#1 = 88)))))) // { cardinality: "<UNKNOWN>" }
-                    Map ((#1) IS NULL) // { cardinality: "<UNKNOWN>" }
-                      Join on=(#1 = #5) type=differential // { cardinality: "<UNKNOWN>" }
-                        ArrangeBy keys=[[#1]] // { cardinality: "<UNKNOWN>" }
-                          Project (#0..=#2, #4, #5) // { cardinality: "<UNKNOWN>" }
-                            Filter ((#1 > 3) OR ((#1 <= 88) AND (#1 > 5) AND ((#1 = 98) OR (#1 >= 30) OR (#7 AND (#4 <= 88)) OR ((#2) IS NULL AND (#4 < 48) AND (#5 < 86.27) AND (#1 <= 45) AND (#2 <= 10.7) AND (#4 > 49) AND (#4 > 66) AND (#5 > 42.2) AND (#1 >= 25) AND (#4 >= 49) AND (#4 >= 77) AND ((#1 = 67) OR (#1 = 81) OR (#1 = 86) OR (#1 = 94) OR (#1 = 97)) AND ((#2 < 20.99) OR (#2 <= 30.14) OR (#1 > 79) OR (#1 >= 89) OR (#4 >= 12) OR ((#4 > 77) AND (#2 >= 74.51)))) OR ((#1 < 68) AND (#1 <= 35)) OR ((#2 <= 17.96) AND (#7 OR ((#5 <= 2.63) AND (#1 > 2) AND (#4 > 8)))) OR ((#5 <= 97.11) AND ((#1 = 11) OR (#1 = 63) OR (#1 = 85) OR (#1 = 87) OR (#1 = 88)))))) // { cardinality: "<UNKNOWN>" }
-                              Map ((#1) IS NULL) // { cardinality: "<UNKNOWN>" }
-                                ReadStorage materialize.public.tab0 // { cardinality: "<UNKNOWN>" }
-                        ArrangeBy keys=[[#0]] // { cardinality: "<UNKNOWN>" }
-                          Union // { cardinality: "<UNKNOWN>" }
-                            Filter ((#0 > 3) OR ((#0 <= 88) AND (#0 > 5) AND ((#0) IS NULL OR (#0 = 11) OR (#0 = 63) OR (#0 = 85) OR (#0 = 87) OR (#0 = 88) OR (#0 = 98) OR (#0 > 2) OR (#0 >= 30) OR (#1 AND (#0 <= 45) AND (#0 >= 25) AND ((#0 = 67) OR (#0 = 81) OR (#0 = 86) OR (#0 = 94) OR (#0 = 97))) OR ((#0 < 68) AND (#0 <= 35))))) // { cardinality: "<UNKNOWN>" }
-                              Get l2 // { cardinality: "<UNKNOWN>" }
-                            Project (#0, #18) // { cardinality: "<UNKNOWN>" }
-                              Filter (#2 OR (#3 AND #4 AND (#5 OR #6 OR #7 OR #8 OR #9 OR #10 OR #11 OR #12 OR #13 OR #17 OR (#14 AND #15 AND #16)))) AND (#2 OR (#3 AND #4 AND (#5 OR #6 OR #7 OR #8 OR #9 OR #10 OR #11 OR #12 OR #13 OR #17 OR (#14 AND #15 AND #16 AND null)))) // { cardinality: "<UNKNOWN>" }
-                                Map ((#0 > 3), (#0 <= 88), (#0 > 5), (#0) IS NULL, (#0 = 11), (#0 = 63), (#0 = 85), (#0 = 87), (#0 = 88), (#0 = 98), (#0 > 2), (#0 >= 30), (#0 <= 45), (#0 >= 25), ((#0 = 67) OR (#0 = 81) OR (#0 = 86) OR (#0 = 94) OR (#0 = 97)), ((#0 < 68) AND (#0 <= 35)), null) // { cardinality: "<UNKNOWN>" }
-                                  Join on=(#0 = #1) type=differential // { cardinality: "<UNKNOWN>" }
-                                    ArrangeBy keys=[[#0]] // { cardinality: "<UNKNOWN>" }
-                                      Union // { cardinality: "<UNKNOWN>" }
-                                        Negate // { cardinality: "<UNKNOWN>" }
-                                          Project (#0) // { cardinality: "<UNKNOWN>" }
-                                            Filter (#2 OR (#3 AND #4 AND (#5 OR #6 OR #7 OR #8 OR #9 OR #10 OR #11 OR #12 OR #13 OR #17 OR (#14 AND #15 AND #16)))) AND (#2 OR (#3 AND #4 AND (#5 OR #6 OR #7 OR #8 OR #9 OR #10 OR #11 OR #12 OR #13 OR #17 OR (#14 AND #15 AND #16 AND null)))) // { cardinality: "<UNKNOWN>" }
-                                              Map ((#0 > 3), (#0 <= 88), (#0 > 5), (#0) IS NULL, (#0 = 11), (#0 = 63), (#0 = 85), (#0 = 87), (#0 = 88), (#0 = 98), (#0 > 2), (#0 >= 30), (#0 <= 45), (#0 >= 25), ((#0 = 67) OR (#0 = 81) OR (#0 = 86) OR (#0 = 94) OR (#0 = 97)), ((#0 < 68) AND (#0 <= 35))) // { cardinality: "<UNKNOWN>" }
-                                                Get l2 // { cardinality: "<UNKNOWN>" }
-                                        Project (#0) // { cardinality: "<UNKNOWN>" }
-                                          Filter (#1 OR (#2 AND #3 AND (#4 OR #5 OR #6 OR #7 OR #8 OR #9 OR #10 OR #11 OR #12 OR #16 OR (#13 AND #14 AND #15)))) AND (#1 OR (#2 AND #3 AND (#4 OR #5 OR #6 OR #7 OR #8 OR #9 OR #10 OR #11 OR #12 OR #16 OR (#13 AND #14 AND #15 AND null)))) // { cardinality: "<UNKNOWN>" }
-                                            Map ((#0 > 3), (#0 <= 88), (#0 > 5), (#0) IS NULL, (#0 = 11), (#0 = 63), (#0 = 85), (#0 = 87), (#0 = 88), (#0 = 98), (#0 > 2), (#0 >= 30), (#0 <= 45), (#0 >= 25), ((#0 = 67) OR (#0 = 81) OR (#0 = 86) OR (#0 = 94) OR (#0 = 97)), ((#0 < 68) AND (#0 <= 35))) // { cardinality: "<UNKNOWN>" }
-                                              Get l0 // { cardinality: "<UNKNOWN>" }
-                                    ArrangeBy keys=[[#0]] // { cardinality: "<UNKNOWN>" }
-                                      Get l0 // { cardinality: "<UNKNOWN>" }
               With
-                cte l2 =
-                  Union // { cardinality: "<UNKNOWN>" }
-                    Get l1 // { cardinality: "<UNKNOWN>" }
-                    Map (false) // { cardinality: "<UNKNOWN>" }
-                      Union // { cardinality: "<UNKNOWN>" }
-                        Negate // { cardinality: "<UNKNOWN>" }
-                          Project (#0) // { cardinality: "<UNKNOWN>" }
-                            Get l1 // { cardinality: "<UNKNOWN>" }
-                        Get l0 // { cardinality: "<UNKNOWN>" }
-                cte l1 =
-                  Reduce group_by=[#0] aggregates=[any((#0 = #1))] // { cardinality: "<UNKNOWN>" }
-                    CrossJoin type=differential // { cardinality: "<UNKNOWN>" }
-                      ArrangeBy keys=[[]] // { cardinality: "<UNKNOWN>" }
-                        Get l0 // { cardinality: "<UNKNOWN>" }
-                      ArrangeBy keys=[[]] // { cardinality: "<UNKNOWN>" }
-                        Project (#4) // { cardinality: "<UNKNOWN>" }
-                          Filter (#5 <= 97.63) AND (#5 >= 20.3) // { cardinality: "<UNKNOWN>" }
-                            ReadStorage materialize.public.tab0 // { cardinality: "<UNKNOWN>" }
                 cte l0 =
-                  Distinct project=[#0] // { cardinality: "<UNKNOWN>" }
-                    Project (#1) // { cardinality: "<UNKNOWN>" }
-                      ReadStorage materialize.public.tab0 // { cardinality: "<UNKNOWN>" }
+                  Distinct project=[#0] // { cardinality: \"<UNKNOWN>\" }
+                    Project (#1) // { cardinality: \"<UNKNOWN>\" }
+                      ReadStorage materialize.public.tab0 // { cardinality: \"<UNKNOWN>\" }
+                cte l1 =
+                  Reduce group_by=[#0] aggregates=[any((#0 = #1))] // { cardinality: \"<UNKNOWN>\" }
+                    CrossJoin type=differential // { cardinality: \"<UNKNOWN>\" }
+                      ArrangeBy keys=[[]] // { cardinality: \"<UNKNOWN>\" }
+                        Get l0 // { cardinality: \"<UNKNOWN>\" }
+                      ArrangeBy keys=[[]] // { cardinality: \"<UNKNOWN>\" }
+                        Project (#4) // { cardinality: \"<UNKNOWN>\" }
+                          Filter (#5 <= 97.63) AND (#5 >= 20.3) // { cardinality: \"<UNKNOWN>\" }
+                            ReadStorage materialize.public.tab0 // { cardinality: \"<UNKNOWN>\" }
+                cte l2 =
+                  Union // { cardinality: \"<UNKNOWN>\" }
+                    Get l1 // { cardinality: \"<UNKNOWN>\" }
+                    Map (false) // { cardinality: \"<UNKNOWN>\" }
+                      Union // { cardinality: \"<UNKNOWN>\" }
+                        Negate // { cardinality: \"<UNKNOWN>\" }
+                          Project (#0) // { cardinality: \"<UNKNOWN>\" }
+                            Get l1 // { cardinality: \"<UNKNOWN>\" }
+                        Get l0 // { cardinality: \"<UNKNOWN>\" }
+              Return // { cardinality: \"<UNKNOWN>\" }
+                Project (#0) // { cardinality: \"<UNKNOWN>\" }
+                  Filter ((#1 > 3) OR ((#1 <= 88) AND (#1 > 5) AND ((#1 = 98) OR (#1 >= 30) OR (#6 AND (#2) IS NULL AND (#3 < 48) AND (#4 < 86.27) AND (#1 <= 45) AND (#2 <= 10.7) AND (#3 > 49) AND (#3 > 66) AND (#4 > 42.2) AND (#1 >= 25) AND (#3 >= 49) AND (#3 >= 77) AND ((#1 = 67) OR (#1 = 81) OR (#1 = 86) OR (#1 = 94) OR (#1 = 97)) AND ((#2 < 20.99) OR (#2 <= 30.14) OR (#1 > 79) OR (#1 >= 89) OR (#3 >= 12) OR ((#3 > 77) AND (#2 >= 74.51)))) OR (#7 AND (#3 <= 88)) OR ((#1 < 68) AND (#1 <= 35)) OR ((#2 <= 17.96) AND (#7 OR ((#4 <= 2.63) AND (#1 > 2) AND (#3 > 8)))) OR ((#4 <= 97.11) AND ((#1 = 11) OR (#1 = 63) OR (#1 = 85) OR (#1 = 87) OR (#1 = 88)))))) // { cardinality: \"<UNKNOWN>\" }
+                    Map ((#1) IS NULL) // { cardinality: \"<UNKNOWN>\" }
+                      Join on=(#1 = #5) type=differential // { cardinality: \"<UNKNOWN>\" }
+                        ArrangeBy keys=[[#1]] // { cardinality: \"<UNKNOWN>\" }
+                          Project (#0..=#2, #4, #5) // { cardinality: \"<UNKNOWN>\" }
+                            Filter ((#1 > 3) OR ((#1 <= 88) AND (#1 > 5) AND ((#1 = 98) OR (#1 >= 30) OR (#7 AND (#4 <= 88)) OR ((#2) IS NULL AND (#4 < 48) AND (#5 < 86.27) AND (#1 <= 45) AND (#2 <= 10.7) AND (#4 > 49) AND (#4 > 66) AND (#5 > 42.2) AND (#1 >= 25) AND (#4 >= 49) AND (#4 >= 77) AND ((#1 = 67) OR (#1 = 81) OR (#1 = 86) OR (#1 = 94) OR (#1 = 97)) AND ((#2 < 20.99) OR (#2 <= 30.14) OR (#1 > 79) OR (#1 >= 89) OR (#4 >= 12) OR ((#4 > 77) AND (#2 >= 74.51)))) OR ((#1 < 68) AND (#1 <= 35)) OR ((#2 <= 17.96) AND (#7 OR ((#5 <= 2.63) AND (#1 > 2) AND (#4 > 8)))) OR ((#5 <= 97.11) AND ((#1 = 11) OR (#1 = 63) OR (#1 = 85) OR (#1 = 87) OR (#1 = 88)))))) // { cardinality: \"<UNKNOWN>\" }
+                              Map ((#1) IS NULL) // { cardinality: \"<UNKNOWN>\" }
+                                ReadStorage materialize.public.tab0 // { cardinality: \"<UNKNOWN>\" }
+                        ArrangeBy keys=[[#0]] // { cardinality: \"<UNKNOWN>\" }
+                          Union // { cardinality: \"<UNKNOWN>\" }
+                            Filter ((#0 > 3) OR ((#0 <= 88) AND (#0 > 5) AND ((#0) IS NULL OR (#0 = 11) OR (#0 = 63) OR (#0 = 85) OR (#0 = 87) OR (#0 = 88) OR (#0 = 98) OR (#0 > 2) OR (#0 >= 30) OR (#1 AND (#0 <= 45) AND (#0 >= 25) AND ((#0 = 67) OR (#0 = 81) OR (#0 = 86) OR (#0 = 94) OR (#0 = 97))) OR ((#0 < 68) AND (#0 <= 35))))) // { cardinality: \"<UNKNOWN>\" }
+                              Get l2 // { cardinality: \"<UNKNOWN>\" }
+                            Project (#0, #18) // { cardinality: \"<UNKNOWN>\" }
+                              Filter (#2 OR (#3 AND #4 AND (#5 OR #6 OR #7 OR #8 OR #9 OR #10 OR #11 OR #12 OR #13 OR #17 OR (#14 AND #15 AND #16)))) AND (#2 OR (#3 AND #4 AND (#5 OR #6 OR #7 OR #8 OR #9 OR #10 OR #11 OR #12 OR #13 OR #17 OR (#14 AND #15 AND #16 AND null)))) // { cardinality: \"<UNKNOWN>\" }
+                                Map ((#0 > 3), (#0 <= 88), (#0 > 5), (#0) IS NULL, (#0 = 11), (#0 = 63), (#0 = 85), (#0 = 87), (#0 = 88), (#0 = 98), (#0 > 2), (#0 >= 30), (#0 <= 45), (#0 >= 25), ((#0 = 67) OR (#0 = 81) OR (#0 = 86) OR (#0 = 94) OR (#0 = 97)), ((#0 < 68) AND (#0 <= 35)), null) // { cardinality: \"<UNKNOWN>\" }
+                                  Join on=(#0 = #1) type=differential // { cardinality: \"<UNKNOWN>\" }
+                                    ArrangeBy keys=[[#0]] // { cardinality: \"<UNKNOWN>\" }
+                                      Union // { cardinality: \"<UNKNOWN>\" }
+                                        Negate // { cardinality: \"<UNKNOWN>\" }
+                                          Project (#0) // { cardinality: \"<UNKNOWN>\" }
+                                            Filter (#2 OR (#3 AND #4 AND (#5 OR #6 OR #7 OR #8 OR #9 OR #10 OR #11 OR #12 OR #13 OR #17 OR (#14 AND #15 AND #16)))) AND (#2 OR (#3 AND #4 AND (#5 OR #6 OR #7 OR #8 OR #9 OR #10 OR #11 OR #12 OR #13 OR #17 OR (#14 AND #15 AND #16 AND null)))) // { cardinality: \"<UNKNOWN>\" }
+                                              Map ((#0 > 3), (#0 <= 88), (#0 > 5), (#0) IS NULL, (#0 = 11), (#0 = 63), (#0 = 85), (#0 = 87), (#0 = 88), (#0 = 98), (#0 > 2), (#0 >= 30), (#0 <= 45), (#0 >= 25), ((#0 = 67) OR (#0 = 81) OR (#0 = 86) OR (#0 = 94) OR (#0 = 97)), ((#0 < 68) AND (#0 <= 35))) // { cardinality: \"<UNKNOWN>\" }
+                                                Get l2 // { cardinality: \"<UNKNOWN>\" }
+                                        Project (#0) // { cardinality: \"<UNKNOWN>\" }
+                                          Filter (#1 OR (#2 AND #3 AND (#4 OR #5 OR #6 OR #7 OR #8 OR #9 OR #10 OR #11 OR #12 OR #16 OR (#13 AND #14 AND #15)))) AND (#1 OR (#2 AND #3 AND (#4 OR #5 OR #6 OR #7 OR #8 OR #9 OR #10 OR #11 OR #12 OR #16 OR (#13 AND #14 AND #15 AND null)))) // { cardinality: \"<UNKNOWN>\" }
+                                            Map ((#0 > 3), (#0 <= 88), (#0 > 5), (#0) IS NULL, (#0 = 11), (#0 = 63), (#0 = 85), (#0 = 87), (#0 = 88), (#0 = 98), (#0 > 2), (#0 >= 30), (#0 <= 45), (#0 >= 25), ((#0 = 67) OR (#0 = 81) OR (#0 = 86) OR (#0 = 94) OR (#0 = 97)), ((#0 < 68) AND (#0 <= 35))) // { cardinality: \"<UNKNOWN>\" }
+                                              Get l0 // { cardinality: \"<UNKNOWN>\" }
+                                    ArrangeBy keys=[[#0]] // { cardinality: \"<UNKNOWN>\" }
+                                      Get l0 // { cardinality: \"<UNKNOWN>\" }
 
             Source materialize.public.tab0
 
@@ -1024,6 +1024,29 @@ SCENARIOS = [
 
             ? EXPLAIN WITH(cardinality) SELECT pk FROM tab0 WHERE col0 <= 88 AND (((col4 <= 97.11 AND col0 IN (11,85,87,63,88) OR (col0 <= 45 AND ((((((((col0 > 79)) OR col1 <= 30.14 OR col3 >= 12))) OR col0 >= 89 OR col1 < 20.99 OR col1 >= 74.51 AND col3 > 77) AND (col0 IN (67,97,94,86,81))) AND ((col1 <= 10.70 AND col1 IS NULL AND col3 > 49 AND col3 > 66 AND (((col4 > 42.2) AND ((((col4 < 86.27) AND col3 >= 77 AND col3 < 48))) AND col3 >= 49)) AND col0 IN (SELECT col3 FROM tab0 WHERE col4 BETWEEN 20.3 AND 97.63))) AND col0 >= 25) OR ((col0 <= 35)) AND col0 < 68 OR ((col0 = 98))) OR (col1 <= 17.96) AND ((((col0 IS NULL))) OR col4 <= 2.63 AND (col0 > 2) AND col3 > 8) OR col3 <= 88 AND (((col0 IS NULL))) OR col0 >= 30)) AND col0 > 5) OR col0 > 3;
             Explained Query:
+              With
+                cte l0 =
+                  Distinct project=[#0] // { cardinality: "<UNKNOWN>" }
+                    Project (#1) // { cardinality: "<UNKNOWN>" }
+                      ReadStorage materialize.public.tab0 // { cardinality: "<UNKNOWN>" }
+                cte l1 =
+                  Reduce group_by=[#0] aggregates=[any((#0 = #1))] // { cardinality: "<UNKNOWN>" }
+                    CrossJoin type=differential // { cardinality: "<UNKNOWN>" }
+                      ArrangeBy keys=[[]] // { cardinality: "<UNKNOWN>" }
+                        Get l0 // { cardinality: "<UNKNOWN>" }
+                      ArrangeBy keys=[[]] // { cardinality: "<UNKNOWN>" }
+                        Project (#4) // { cardinality: "<UNKNOWN>" }
+                          Filter (#5 <= 97.63) AND (#5 >= 20.3) // { cardinality: "<UNKNOWN>" }
+                            ReadStorage materialize.public.tab0 // { cardinality: "<UNKNOWN>" }
+                cte l2 =
+                  Union // { cardinality: "<UNKNOWN>" }
+                    Get l1 // { cardinality: "<UNKNOWN>" }
+                    Map (false) // { cardinality: "<UNKNOWN>" }
+                      Union // { cardinality: "<UNKNOWN>" }
+                        Negate // { cardinality: "<UNKNOWN>" }
+                          Project (#0) // { cardinality: "<UNKNOWN>" }
+                            Get l1 // { cardinality: "<UNKNOWN>" }
+                        Get l0 // { cardinality: "<UNKNOWN>" }
               Return // { cardinality: "<UNKNOWN>" }
                 Project (#0) // { cardinality: "<UNKNOWN>" }
                   Filter ((#1 > 3) OR ((#1 <= 88) AND (#1 > 5) AND ((#1 = 98) OR (#1 >= 30) OR (#6 AND (#2) IS NULL AND (#3 < 48) AND (#4 < 86.27) AND (#1 <= 45) AND (#2 <= 10.7) AND (#3 > 49) AND (#3 > 66) AND (#4 > 42.2) AND (#1 >= 25) AND (#3 >= 49) AND (#3 >= 77) AND ((#1 = 67) OR (#1 = 81) OR (#1 = 86) OR (#1 = 94) OR (#1 = 97)) AND ((#2 < 20.99) OR (#2 <= 30.14) OR (#1 > 79) OR (#1 >= 89) OR (#3 >= 12) OR ((#3 > 77) AND (#2 >= 74.51)))) OR (#7 AND (#3 <= 88)) OR ((#1 < 68) AND (#1 <= 35)) OR ((#2 <= 17.96) AND (#7 OR ((#4 <= 2.63) AND (#1 > 2) AND (#3 > 8)))) OR ((#4 <= 97.11) AND ((#1 = 11) OR (#1 = 63) OR (#1 = 85) OR (#1 = 87) OR (#1 = 88)))))) // { cardinality: "<UNKNOWN>" }
@@ -1055,29 +1078,6 @@ SCENARIOS = [
                                               Get l0 // { cardinality: "<UNKNOWN>" }
                                     ArrangeBy keys=[[#0]] // { cardinality: "<UNKNOWN>" }
                                       Get l0 // { cardinality: "<UNKNOWN>" }
-              With
-                cte l2 =
-                  Union // { cardinality: "<UNKNOWN>" }
-                    Get l1 // { cardinality: "<UNKNOWN>" }
-                    Map (false) // { cardinality: "<UNKNOWN>" }
-                      Union // { cardinality: "<UNKNOWN>" }
-                        Negate // { cardinality: "<UNKNOWN>" }
-                          Project (#0) // { cardinality: "<UNKNOWN>" }
-                            Get l1 // { cardinality: "<UNKNOWN>" }
-                        Get l0 // { cardinality: "<UNKNOWN>" }
-                cte l1 =
-                  Reduce group_by=[#0] aggregates=[any((#0 = #1))] // { cardinality: "<UNKNOWN>" }
-                    CrossJoin type=differential // { cardinality: "<UNKNOWN>" }
-                      ArrangeBy keys=[[]] // { cardinality: "<UNKNOWN>" }
-                        Get l0 // { cardinality: "<UNKNOWN>" }
-                      ArrangeBy keys=[[]] // { cardinality: "<UNKNOWN>" }
-                        Project (#4) // { cardinality: "<UNKNOWN>" }
-                          Filter (#5 <= 97.63) AND (#5 >= 20.3) // { cardinality: "<UNKNOWN>" }
-                            ReadStorage materialize.public.tab0 // { cardinality: "<UNKNOWN>" }
-                cte l0 =
-                  Distinct project=[#0] // { cardinality: "<UNKNOWN>" }
-                    Project (#1) // { cardinality: "<UNKNOWN>" }
-                      ReadStorage materialize.public.tab0 // { cardinality: "<UNKNOWN>" }
 
             Source materialize.public.tab0
 

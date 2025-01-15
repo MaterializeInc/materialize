@@ -488,6 +488,11 @@ Target cluster: quickstart
 
 ? EXPLAIN WITH(no notices) SELECT COUNT(DISTINCT key1) FROM t1_pkne;
 Explained Query:
+  With
+    cte l0 =
+      Reduce aggregates=[count(distinct #0)] monotonic
+        Project (#0)
+          ReadIndex on=t1_pkne t1_pkne_primary_idx=[*** full scan ***]
   Return
     Union
       Get l0
@@ -498,11 +503,6 @@ Explained Query:
               Get l0
           Constant
             - ()
-  With
-    cte l0 =
-      Reduce aggregates=[count(distinct #0)] monotonic
-        Project (#0)
-          ReadIndex on=t1_pkne t1_pkne_primary_idx=[*** full scan ***]
 
 Used Indexes:
   - t1_pkne_primary_idx (*** full scan ***)
