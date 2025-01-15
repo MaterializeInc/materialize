@@ -112,12 +112,12 @@ test more risky features of Materialize, see `get_default_system_parameters` in
 [https://github.com/MaterializeInc/materialize/blob/main/misc/python/materialize/mzcompose/__init__.py](mzcompose/__init__.py).
 On the command line specific system parameters can be set using the
 `MZSYSTEM_PARAMETER_DEFAULT` environment variable (`;`-separated).
-Alternatively `MZ_ALL_FEATURES=1` enables all available Materialize features.
+Alternatively `MZ_ALL_FEATURES=true` enables all available Materialize features.
 For example to run the `mz-arrangement-sharing.td` locally with a Debug build
 for fast turnaround times:
 
 ```shell
-$ MZ_ALL_FEATURES=1 bin/environmentd
+$ MZ_ALL_FEATURES=true bin/environmentd
 $ cargo run --bin testdrive -- test/testdrive/mz-arrangement-sharing.td
 ```
 
