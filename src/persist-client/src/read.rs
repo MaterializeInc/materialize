@@ -925,7 +925,7 @@ pub struct Cursor<K: Codec, V: Codec, T: Timestamp + Codec64, D: Codec64> {
 #[derive(Debug)]
 enum CursorConsolidator<K: Codec, V: Codec, T: Timestamp + Codec64, D: Codec64> {
     Codec {
-        consolidator: Consolidator<T, D, CodecSort<T, D>>,
+        consolidator: Consolidator<T, D, CodecSort<K, V, T, D>>,
     },
     Structured {
         consolidator: Consolidator<T, D, StructuredSort<K, V, T, D>>,
@@ -1101,7 +1101,7 @@ where
             let mut consolidator = Consolidator::new(
                 context,
                 self.shard_id(),
-                CodecSort::default(),
+                CodecSort::new(self.read_schemas.clone()),
                 Arc::clone(&self.blob),
                 Arc::clone(&self.metrics),
                 Arc::clone(&self.machine.applier.shard_metrics),
