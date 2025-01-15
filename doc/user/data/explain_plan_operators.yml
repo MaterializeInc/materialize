@@ -47,16 +47,14 @@ operators:
 
       There are three types of `Get`.
 
-      1. `Get::PassArrangements`, which means that the results are
-         available in an in-memory arrangement... _and_ that in-memory
-         arrangement will be available to whoever uses this operator
-         as input.
+      1. `Get::PassArrangements`, which means the plan will use an
+         existing arrangement.
 
-      2. `Get::Arrangement`, which means that the results are
-         available in an in-memory arrangement.
+      2. `Get::Arrangement`, which means that the results will be
+         _looked up_ in an existing arrangement.
 
       3. `Get::Collection`, which means that the results are
-      unarranged, and will be processed as they arrive.
+         unarranged, and will be processed as they arrive.
 
     uses_memory: False
     memory_details: ""
@@ -225,13 +223,14 @@ operators:
 
       1. `Reduce::Distinct` corresponds to the SQL `DISTINCT` operator.
 
-      2. `Reduce::Basic` corresponds to a single, easy to implement aggregation.
+      2. `Reduce::Accumulable` corresponds to several easy to implement aggregations that can be done simultaneously.
 
-      3. `Reduce::Accumulable` corresponds to several easy to implement aggregations that can be done simultaneously.
+      3. `Reduce::Hierarchical` corresponds to an aggregation requiring a tower of arrangements. These can be either monotonic (more efficient) or bucketed. These may benefit from a hint; [see `mz_introspection.mz_expected_group_size_advice`](/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice).
 
-      4. `Reduce::Hierarchical` corresponds to an aggregation requiring a tower of arrangements. These can be either monotonic (more efficient) or bucketed. These may benefit from a hint; [see `mz_introspection.mz_expected_group_size_advice`](/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice).
+      4. `Reduce::Collation` corresponds to an arbitrary mix of reductions, which will be performed separately and then joined together.
 
-      5. `Reduce::Collation` corresponds to an arbitrary mix of reductions, which will be performed separately and then joined together.
+      5. `Reduce::Basic` corresponds to a single hard-to-incrementalize aggregation.
+
     uses_memory: True
     memory_details: |
       Can use significant amount as the operator can significantly overestimate
@@ -360,7 +359,7 @@ operators:
   - operator: Union
     plan_types: "lir"
     description: |
-      Sums the counts of each row of all inputs.
+      Combines its inputs into a unified output, emitting one row for each row on any input.
     uses_memory: True
     memory_details: |
       If the union "consolidates output", it will make moderate use of memory, particularly at hydration time. If the union is not marked with "consolidates output", it will not consume memory.
