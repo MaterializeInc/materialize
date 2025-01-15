@@ -1,0 +1,152 @@
+# Copyright 2020 The Actions Ecosystem Authors
+# Modifications Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# ------------------------------------------------------------------------------
+# GitHub Actions Workflow: Publish Helm Charts
+# ------------------------------------------------------------------------------
+# This workflow automates the packaging and publishing of Helm charts to the
+# `gh-pages` branch. It triggers on any push to the `main` branch that modifies
+# files under `misc/helm-charts/`.
+#
+# Workflow:
+# 1. Detects valid Helm charts in the specified directory (`misc/helm-charts/`).
+# 2. Lints and packages new or updated charts.
+# 3. Publishes packaged charts to the `gh-pages` branch.
+# 4. Updates the Helm repository index (`index.yaml`) with new versions.
+#
+# Notes:
+# - Existing chart versions are skipped to prevent redundant releases.
+# - Linting is enforced to maintain chart quality.
+# - GitHub Actions' default permissions are scoped to writing repository contents.
+# ------------------------------------------------------------------------------
+
+name: Publish Helm Charts
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'misc/helm-charts/**'
+permissions:
+  contents: write
+env:
+  CHARTS_DIR: misc/helm-charts
+  GITHUB_PAGES_BRANCH: gh-pages
+  RELEASE_DIR: .cr-release-packages
+jobs:
+  publish:
+    name: Package and Publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v3.5
+        with:
+          version: latest
+
+      - name: Get list of valid charts
+        id: chart-list
+        shell: bash
+        run: |
+          # Find directories containing Chart.yaml
+          CHARTS=""
+          for dir in ${CHARTS_DIR}/*/; do
+            if [ -f "${dir}Chart.yaml" ]; then
+              chart_name=$(basename "$dir")
+              CHARTS="${CHARTS:+${CHARTS} }${chart_name}"
+            fi
+          done
+
+          if [ -z "$CHARTS" ]; then
+            echo "No valid Helm charts found"
+            exit 0
+          fi
+
+          echo "Found valid charts: $CHARTS"
+          echo "charts=$CHARTS" >> $GITHUB_OUTPUT
+
+      - name: Checkout gh-pages branch
+        if: steps.chart-list.outputs.charts != ''
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.GITHUB_PAGES_BRANCH }}
+          path: gh-pages
+          clean: true
+
+      - name: Process charts
+        if: steps.chart-list.outputs.charts != ''
+        shell: bash
+        run: |
+          mkdir -p ${RELEASE_DIR}
+          CHANGES_MADE=0
+
+          for CHART in ${{ steps.chart-list.outputs.charts }}; do
+            CHART_PATH="${CHARTS_DIR}/${CHART}"
+            VERSION=$(yq eval '.version' ${CHART_PATH}/Chart.yaml)
+            echo "Processing chart: ${CHART} version: ${VERSION}"
+
+            # Check if version already exists
+            if [ -f "gh-pages/${CHART}-${VERSION}.tgz" ]; then
+              echo "Chart ${CHART} version ${VERSION} already exists, skipping"
+              continue
+            fi
+
+            # Lint chart
+            helm lint "${CHART_PATH}"
+            if [ $? -ne 0 ]; then
+              echo "Linting failed for ${CHART}"
+              exit 1
+            fi
+
+            # Package chart
+            helm package "${CHART_PATH}" --destination ${RELEASE_DIR}
+            CHANGES_MADE=1
+          done
+
+          # Only proceed if we have new packages
+          if [ $CHANGES_MADE -eq 1 ]; then
+            # Copy new charts to gh-pages
+            cp ${RELEASE_DIR}/*.tgz gh-pages/
+
+            # Update the repository index
+            cd gh-pages
+            REPO_URL="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}"
+            if [ -f index.yaml ]; then
+              helm repo index . --url "${REPO_URL}" --merge index.yaml
+            else
+              helm repo index . --url "${REPO_URL}"
+            fi
+
+            # Configure git
+            git config user.name "${{ github.actor }}"
+            git config user.email "${{ github.actor }}@users.noreply.github.com"
+
+            # Commit and push changes
+            git add .
+            git commit -m "helm-charts: publish updated charts"
+            git push origin ${{ env.GITHUB_PAGES_BRANCH }}
+          else
+            echo "No new chart versions to publish"
+          fi
+
+      - name: Handle failure
+        if: failure()
+        run: |
+          echo "::error::Failed to publish Helm charts"
+          exit 1
