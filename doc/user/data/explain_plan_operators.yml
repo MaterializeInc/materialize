@@ -47,7 +47,7 @@ operators:
 
       There are three types of `Get`.
 
-      1. `GetPass::PassArrangements`, which means that the results are
+      1. `Get::PassArrangements`, which means that the results are
          available in an in-memory arrangement... _and_ that in-memory
          arrangement will be available to whoever uses this operator
          as input.
