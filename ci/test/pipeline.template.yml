@@ -748,7 +748,7 @@ steps:
     depends_on: lint-docs
     trigger: deploy-website
     async: true
-    branches: main
+    branches: "main self-managed-docs/*"
     build:
       commit: "$BUILDKITE_COMMIT"
       branch: "$BUILDKITE_BRANCH"
