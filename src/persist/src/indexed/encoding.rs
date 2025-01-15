@@ -686,9 +686,9 @@ pub fn encode_trace_inline_meta<T: Timestamp + Codec64>(batch: &BlobTraceBatchPa
             let metadata = ProtoFormatMetadata::StructuredMigration(2);
             (ProtoBatchFormat::ParquetStructured, Some(metadata))
         }
-
         BlobTraceUpdates::Structured { .. } => {
-            unimplemented!("codec data should exist before reaching parquet encoding")
+            let metadata = ProtoFormatMetadata::StructuredMigration(3);
+            (ProtoBatchFormat::ParquetStructured, Some(metadata))
         }
     };
 

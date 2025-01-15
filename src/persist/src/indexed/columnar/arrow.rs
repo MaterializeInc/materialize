@@ -12,11 +12,11 @@
 use std::ptr::NonNull;
 use std::sync::Arc;
 
-use arrow::array::{make_array, Array, ArrayData, ArrayRef, AsArray, RecordBatch};
+use anyhow::anyhow;
+use arrow::array::{make_array, Array, ArrayData, ArrayRef, BinaryArray, Int64Array, RecordBatch};
 use arrow::buffer::{BooleanBuffer, Buffer, NullBuffer};
-use arrow::datatypes::{ToByteSlice};
+use arrow::datatypes::ToByteSlice;
 use mz_dyncfg::Config;
-use mz_ore::iter::IteratorExt;
 
 use crate::indexed::columnar::{ColumnarRecords, ColumnarRecordsStructuredExt};
 use crate::indexed::encoding::BlobTraceUpdates;
@@ -167,84 +167,71 @@ fn realloc_buffer(buffer: &Buffer, metrics: &ColumnarMetrics) -> Buffer {
     unsafe { Buffer::from_custom_allocation(ptr, bytes.len(), Arc::new(region)) }
 }
 
-/// Converts an [`arrow`] [(K, V, T, D)] [`RecordBatch`] into a [`ColumnarRecords`].
-///
-/// [`RecordBatch`]: `arrow::array::RecordBatch`
-pub fn decode_arrow_batch_kvtd(
-    columns: &[Arc<dyn Array>],
+/// Converts an [`arrow`] [RecordBatch] into a [BlobTraceUpdates] and reallocate the backing data.
+pub fn decode_arrow_batch(
+    batch: &RecordBatch,
     metrics: &ColumnarMetrics,
-) -> Result<ColumnarRecords, String> {
-    let (key_col, val_col, ts_col, diff_col) = match &columns {
-        x @ &[k, v, t, d] => {
-            // The columns need to all have the same logical length.
-            if !x.iter().map(|col| col.len()).all_equal() {
-                return Err(format!(
-                    "columns don't all have equal length {k_len}, {v_len}, {t_len}, {d_len}",
-                    k_len = k.len(),
-                    v_len = v.len(),
-                    t_len = t.len(),
-                    d_len = d.len()
-                ));
-            }
-
-            (k, v, t, d)
-        }
-        _ => return Err(format!("expected 4 columns got {}", columns.len())),
-    };
-
-    let key = key_col
-        .as_binary_opt::<i32>()
-        .ok_or_else(|| "key column is wrong type".to_string())?;
-
-    let val = val_col
-        .as_binary_opt::<i32>()
-        .ok_or_else(|| "val column is wrong type".to_string())?;
-
-    let time = ts_col
-        .as_primitive_opt::<arrow::datatypes::Int64Type>()
-        .ok_or_else(|| "time column is wrong type".to_string())?;
-
-    let diff = diff_col
-        .as_primitive_opt::<arrow::datatypes::Int64Type>()
-        .ok_or_else(|| "diff column is wrong type".to_string())?;
-
-    let len = key.len();
-    let ret = ColumnarRecords {
-        len,
-        key_data: realloc_array(key, metrics),
-        val_data: realloc_array(val, metrics),
-        timestamps: realloc_array(time, metrics),
-        diffs: realloc_array(diff, metrics),
-    };
-    ret.validate()?;
-
-    Ok(ret)
-}
-
-/// Converts an arrow [(K, V, T, D)] Chunk into a ColumnarRecords.
-pub fn decode_arrow_batch_kvtd_ks_vs(
-    cols: &[Arc<dyn Array>],
-    key_col: Arc<dyn Array>,
-    val_col: Arc<dyn Array>,
-    metrics: &ColumnarMetrics,
-) -> Result<(ColumnarRecords, ColumnarRecordsStructuredExt), String> {
-    let same_length = cols
-        .iter()
-        .map(|col| col.as_ref())
-        .chain([&*key_col])
-        .chain([&*val_col])
-        .map(|col| col.len())
-        .all_equal();
-    if !same_length {
-        return Err("not all columns (included structured) have the same length".to_string());
+) -> anyhow::Result<BlobTraceUpdates> {
+    fn try_downcast<A: Array + From<ArrayData> + 'static>(
+        batch: &RecordBatch,
+        name: &'static str,
+        metrics: &ColumnarMetrics,
+    ) -> anyhow::Result<Option<A>> {
+        let Some(array_ref) = batch.column_by_name(name) else {
+            return Ok(None);
+        };
+        let col_ref = array_ref
+            .as_any()
+            .downcast_ref::<A>()
+            .ok_or_else(|| anyhow!("wrong datatype for column {}", name))?;
+        let col = realloc_array(col_ref, metrics);
+        Ok(Some(col))
     }
 
-    // We always have (K, V, T, D) columns.
-    let primary_records = decode_arrow_batch_kvtd(cols, metrics)?;
-    let structured_ext = ColumnarRecordsStructuredExt {
-        key: key_col,
-        val: val_col,
+    let codec_key = try_downcast::<BinaryArray>(batch, "k", metrics)?;
+    let codec_val = try_downcast::<BinaryArray>(batch, "v", metrics)?;
+    let timestamps = try_downcast::<Int64Array>(batch, "t", metrics)?
+        .ok_or_else(|| anyhow!("missing timestamp column"))?;
+    let diffs = try_downcast::<Int64Array>(batch, "d", metrics)?
+        .ok_or_else(|| anyhow!("missing diff column"))?;
+    let structured_key = batch
+        .column_by_name("k_s")
+        .map(|a| realloc_any(Arc::clone(a), metrics));
+    let structured_val = batch
+        .column_by_name("v_s")
+        .map(|a| realloc_any(Arc::clone(a), metrics));
+
+    let updates = match (codec_key, codec_val, structured_key, structured_val) {
+        (Some(codec_key), Some(codec_val), Some(structured_key), Some(structured_val)) => {
+            BlobTraceUpdates::Both(
+                ColumnarRecords::new(codec_key, codec_val, timestamps, diffs),
+                ColumnarRecordsStructuredExt {
+                    key: structured_key,
+                    val: structured_val,
+                },
+            )
+        }
+        (Some(codec_key), Some(codec_val), None, None) => BlobTraceUpdates::Row(
+            ColumnarRecords::new(codec_key, codec_val, timestamps, diffs),
+        ),
+        (None, None, Some(structured_key), Some(structured_val)) => BlobTraceUpdates::Structured {
+            key_values: ColumnarRecordsStructuredExt {
+                key: structured_key,
+                val: structured_val,
+            },
+            timestamps,
+            diffs,
+        },
+        (k, v, ks, vs) => {
+            anyhow::bail!(
+                "unexpected mix of key/value columns: k={:?}, v={}, k_s={}, v_s={}",
+                k.is_some(),
+                v.is_some(),
+                ks.is_some(),
+                vs.is_some(),
+            );
+        }
     };
 
-    Ok((primary_records, structured_ext))
+    Ok(updates)
 }
