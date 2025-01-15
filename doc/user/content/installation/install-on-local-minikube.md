@@ -3,6 +3,7 @@ title: "Install locally on minikube"
 description: ""
 aliases:
   - /self-hosted/install-on-local-minikube/
+  - /self-managed/installation/install-on-local-minikube/
 menu:
   main:
     parent: "installation"

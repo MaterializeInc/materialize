@@ -3,6 +3,7 @@ title: "Troubleshooting"
 description: ""
 aliases:
   - /self-hosted/troubleshooting/
+  - /self-managed/troubleshooting/
 menu:
   main:
     parent: "installation"

@@ -3,6 +3,7 @@ title: "Upgrading"
 description: "Upgrading Helm chart and Materialize."
 aliases:
   - /self-hosted/upgrading/
+  - /self-managed/upgrading/
 menu:
   main:
     parent: "installation"

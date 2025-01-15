@@ -3,6 +3,7 @@ title: "Operational guidelines"
 description: ""
 aliases:
   - /self-hosted/operational-guidelines/
+  - /self-managed/operational-guidelines/
 menu:
   main:
     parent: "installation"

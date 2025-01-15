@@ -2,7 +2,8 @@
 title: "Installation"
 description: "Installation guides for self-managed Materialize."
 disable_list: true
-
+aliases:
+  - /self-managed/installation/
 menu:
   main:
     identifier: "installation"

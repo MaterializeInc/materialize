@@ -3,7 +3,7 @@ title: "Self-managed Materialize"
 description: ""
 aliases:
   - /self-hosted/
-robots: "noindex, nofollow"
+  - /self-managed/
 ---
 
 With self-managed Materialize, you can deploy and operate Materialize in your

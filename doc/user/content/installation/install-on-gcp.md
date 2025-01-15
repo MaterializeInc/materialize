@@ -3,6 +3,7 @@ title: "Install on GCP"
 description: ""
 aliases:
   - /self-hosted/install-on-gcp/
+  - /self-managed/installation/install-on-gcp/
 menu:
   main:
     parent: "installation"

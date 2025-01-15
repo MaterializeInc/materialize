@@ -3,6 +3,7 @@ title: "Install locally on kind"
 description: ""
 aliases:
   - /self-hosted/install-on-local-kind/
+  - /self-managed/installation/install-on-local-kind/
 menu:
   main:
     parent: "installation"
