@@ -31,8 +31,7 @@ use crate::error::Error;
 use crate::gen::persist::proto_batch_part_inline::FormatMetadata as ProtoFormatMetadata;
 use crate::gen::persist::ProtoBatchFormat;
 use crate::indexed::columnar::arrow::{
-    decode_arrow_batch_kvtd, decode_arrow_batch_kvtd_ks_vs, encode_arrow_batch_kvtd,
-    encode_arrow_batch_kvtd_ks_vs, realloc_any, SCHEMA_ARROW_RS_KVTD,
+    decode_arrow_batch_kvtd, decode_arrow_batch_kvtd_ks_vs, encode_arrow_batch, realloc_any,
 };
 use crate::indexed::columnar::ColumnarRecords;
 use crate::indexed::encoding::{
@@ -128,24 +127,14 @@ pub fn encode_parquet_kvtd<W: Write + Send>(
         .set_key_value_metadata(Some(vec![metadata]))
         .build();
 
-    let (columns, schema, format) = match updates {
-        BlobTraceUpdates::Row(updates) => (
-            encode_arrow_batch_kvtd(updates),
-            Arc::clone(&*SCHEMA_ARROW_RS_KVTD),
-            "k,v,t,d",
-        ),
-        BlobTraceUpdates::Both(codec_updates, structured_updates) => {
-            let (fields, arrays) = encode_arrow_batch_kvtd_ks_vs(codec_updates, structured_updates);
-            let schema = Schema::new(fields);
-            (arrays, Arc::new(schema), "k,v,t,d,k_s,v_s")
-        }
-        BlobTraceUpdates::Structured { .. } => {
-            unimplemented!("codec data should exist before reaching parquet encoding")
-        }
+    let batch = encode_arrow_batch(updates);
+    let format = match updates {
+        BlobTraceUpdates::Row(_) => "k,v,t,d",
+        BlobTraceUpdates::Both(_, _) => "k,v,t,d,k_s,v_s",
+        BlobTraceUpdates::Structured { .. } => "t,d,k_s,v_s",
     };
 
-    let mut writer = ArrowWriter::try_new(w, Arc::clone(&schema), Some(properties))?;
-    let batch = RecordBatch::try_new(Arc::clone(&schema), columns)?;
+    let mut writer = ArrowWriter::try_new(w, batch.schema(), Some(properties))?;
     writer.write(&batch)?;
 
     writer.flush()?;
@@ -179,11 +168,6 @@ pub fn decode_parquet_file_kvtd(
 
     match format_metadata {
         None => {
-            // Make sure we have all of the expected columns.
-            if SCHEMA_ARROW_RS_KVTD.fields() != schema.fields() {
-                return Err(format!("found invalid schema {:?}", schema).into());
-            }
-
             let mut ret = Vec::new();
             for batch in reader {
                 let batch = batch.map_err(|e| Error::String(e.to_string()))?;
