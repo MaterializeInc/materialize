@@ -278,7 +278,7 @@ pub struct StorageState {
     /// Descriptions of each installed export.
     pub exports: BTreeMap<GlobalId, StorageSinkDesc<MetadataFilled, mz_repr::Timestamp>>,
     /// Descriptions of oneshot ingestions that are currently running.
-    pub oneshot_ingestions: BTreeMap<GlobalId, OneshotIngestionDescription<ProtoBatch>>,
+    pub oneshot_ingestions: BTreeMap<uuid::Uuid, OneshotIngestionDescription<ProtoBatch>>,
     /// Undocumented
     pub now: NowFn,
     /// Index of the associated timely dataflow worker.

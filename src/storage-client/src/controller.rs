@@ -494,7 +494,7 @@ pub trait StorageController: Debug {
     /// Create a oneshot ingestion.
     async fn create_oneshot_ingestion(
         &mut self,
-        ingestion_id: GlobalId,
+        ingestion_id: uuid::Uuid,
         collection_id: GlobalId,
         instance_id: StorageInstanceId,
         request: OneshotIngestionRequest,

@@ -17,6 +17,7 @@ use mz_storage_client::client::TableData;
 use mz_storage_types::oneshot_sources::OneshotIngestionRequest;
 use smallvec::SmallVec;
 use url::Url;
+use uuid::Uuid;
 
 use crate::coord::sequencer::inner::return_if_err;
 use crate::coord::{Coordinator, TargetCluster};
@@ -76,8 +77,9 @@ impl Coordinator {
             return ctx.retire(Err(AdapterError::Unstructured(anyhow::anyhow!(msg))));
         };
 
+        // Generate a unique UUID for our ingestion.
+        let ingestion_id = Uuid::new_v4();
         let collection_id = dest_table.global_id_writes();
-        let (_, ingestion_id) = self.transient_id_gen.allocate_id();
         let request = OneshotIngestionRequest {
             source: mz_storage_types::oneshot_sources::ContentSource::Http { url },
             format: mz_storage_types::oneshot_sources::ContentFormat::Csv,

@@ -476,7 +476,7 @@ pub fn build_export_dataflow<A: Allocate>(
 pub(crate) fn build_oneshot_ingestion_dataflow<A: Allocate>(
     timely_worker: &mut TimelyWorker<A>,
     storage_state: &mut StorageState,
-    ingestion_id: GlobalId,
+    ingestion_id: uuid::Uuid,
     collection_id: GlobalId,
     collection_meta: CollectionMetadata,
     description: OneshotIngestionRequest,

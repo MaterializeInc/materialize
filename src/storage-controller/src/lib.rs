@@ -162,7 +162,7 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     pending_table_handle_drops_rx: mpsc::UnboundedReceiver<GlobalId>,
     /// Closures that can be used to send responses from oneshot ingestions.
     #[derivative(Debug = "ignore")]
-    pending_oneshot_ingestions: BTreeMap<GlobalId, OneshotResultCallback<ProtoBatch>>,
+    pending_oneshot_ingestions: BTreeMap<uuid::Uuid, OneshotResultCallback<ProtoBatch>>,
 
     /// Interface for managed collections
     pub(crate) collection_manager: collection_mgmt::CollectionManager<T>,
@@ -1387,7 +1387,7 @@ where
     /// Create a oneshot ingestion.
     async fn create_oneshot_ingestion(
         &mut self,
-        ingestion_id: GlobalId,
+        ingestion_id: uuid::Uuid,
         collection_id: GlobalId,
         instance_id: StorageInstanceId,
         request: OneshotIngestionRequest,
@@ -1400,10 +1400,8 @@ where
             .collection_metadata
             .clone();
         let instance = self.instances.get_mut(&instance_id).ok_or_else(|| {
-            StorageError::ExportInstanceMissing {
-                storage_instance_id: instance_id,
-                export_id: ingestion_id,
-            }
+            // TODO(cf2): Refine this error.
+            StorageError::Generic(anyhow::anyhow!("missing cluster {instance_id}"))
         })?;
         let oneshot_cmd = RunOneshotIngestionCommand {
             ingestion_id,

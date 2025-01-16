@@ -201,7 +201,7 @@ impl RustType<ProtoRunIngestionCommand> for RunIngestionCommand {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct RunOneshotIngestionCommand {
     /// The ID of the ingestion dataflow.
-    pub ingestion_id: GlobalId,
+    pub ingestion_id: uuid::Uuid,
     /// The ID of collection we'll stage batches for.
     pub collection_id: GlobalId,
     /// Metadata for the collection we'll stage batches for.
@@ -604,7 +604,7 @@ pub enum StorageResponse<T = mz_repr::Timestamp> {
     /// Punctuation indicates that no more responses will be transmitted for the specified ids
     DroppedIds(BTreeSet<GlobalId>),
     /// Batches that have been staged in Persist and maybe will be linked into a shard.
-    StagedBatches(BTreeMap<GlobalId, Vec<Result<ProtoBatch, String>>>),
+    StagedBatches(BTreeMap<uuid::Uuid, Vec<Result<ProtoBatch, String>>>),
 
     /// A list of statistics updates, currently only for sources.
     StatisticsUpdates(Vec<SourceStatisticsUpdate>, Vec<SinkStatisticsUpdate>),
@@ -755,7 +755,8 @@ pub struct PartitionedStorageState<T> {
     /// individual partition.
     uppers: BTreeMap<GlobalId, (MutableAntichain<T>, Vec<Option<Antichain<T>>>)>,
     /// Staged batches from oneshot sources that will get appended by `environmentd`.
-    oneshot_source_responses: BTreeMap<GlobalId, BTreeMap<usize, Vec<Result<ProtoBatch, String>>>>,
+    oneshot_source_responses:
+        BTreeMap<uuid::Uuid, BTreeMap<usize, Vec<Result<ProtoBatch, String>>>>,
 }
 
 impl<T> Partitionable<StorageCommand<T>, StorageResponse<T>>

@@ -87,7 +87,7 @@ pub enum InternalStorageCommand {
     /// batches in Persist, that can later be appended to the shard.
     RunOneshotIngestion {
         /// ID of the running dataflow that is doing the ingestion.
-        ingestion_id: GlobalId,
+        ingestion_id: uuid::Uuid,
         /// ID of the collection we'll create batches for.
         collection_id: GlobalId,
         /// Metadata of the collection we'll create batches for.

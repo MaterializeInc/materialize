@@ -7051,6 +7051,7 @@ dependencies = [
  "tonic",
  "tonic-build",
  "tracing",
+ "uuid",
  "workspace-hack",
 ]
 
@@ -7091,6 +7092,7 @@ dependencies = [
  "tokio-postgres",
  "tokio-stream",
  "tracing",
+ "uuid",
  "workspace-hack",
 ]
 

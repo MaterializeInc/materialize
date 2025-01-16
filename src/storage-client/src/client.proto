@@ -49,7 +49,7 @@ message ProtoRunIngestionCommand {
 }
 
 message ProtoRunOneshotIngestionCommand {
-  mz_repr.global_id.ProtoGlobalId ingestion_id = 1;
+  mz_proto.ProtoU128 ingestion_id = 1;
   mz_repr.global_id.ProtoGlobalId collection_id = 2;
   mz_storage_types.controller.ProtoCollectionMetadata storage_metadata = 3;
   mz_storage_types.oneshot_sources.ProtoOneshotIngestionRequest request = 4;
@@ -141,7 +141,7 @@ message ProtoStorageResponse {
     }
 
     message Inner {
-      mz_repr.global_id.ProtoGlobalId id = 1;
+      mz_proto.ProtoU128 id = 1;
       repeated BatchResult batches = 2;
     }
 

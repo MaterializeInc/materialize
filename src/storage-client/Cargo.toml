@@ -57,6 +57,7 @@ tokio = { version = "1.38.0", features = [
 tokio-stream = "0.1.11"
 tonic = "0.12.1"
 tracing = "0.1.37"
+uuid = "1.2.2"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [build-dependencies]
