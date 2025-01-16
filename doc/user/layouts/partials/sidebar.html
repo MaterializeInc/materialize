@@ -81,7 +81,7 @@
         return response.json();
       })
       .catch(() => {
-        return fetch('{{ .Site.BaseURL }}/versions.json')
+        return fetch('{{ .Site.BaseURL }}versions.json')
           .then(response => {
             if (!response.ok) {
               throw new Error('Fallback file not found');
