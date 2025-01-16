@@ -326,21 +326,24 @@ impl<D: Ord> ConsolidatingVec<D> {
 
     /// Pushes `item` into the vector.
     ///
-    /// If the vector does not have sufficient capacity, we try to consolidate and/or double its
-    /// capacity.
+    /// If the vector does not have sufficient capacity, we'll first consolidate and then increase
+    /// its capacity if the consolidated results still occupy a significant fraction of the vector.
     ///
     /// The worst-case cost of this function is O(n log n) in the number of items the vector stores,
-    /// but amortizes to O(1).
+    /// but amortizes to O(log n).
     pub fn push(&mut self, item: (D, Diff)) {
         let capacity = self.data.capacity();
         if self.data.len() == capacity {
             // The vector is full. First, consolidate to try to recover some space.
             self.consolidate();
 
-            // If consolidation didn't free at least half the available capacity, double the
-            // capacity. This ensures we won't consolidate over and over again with small gains.
-            if self.data.len() > capacity / 2 {
-                self.data.reserve(capacity);
+            // If consolidation didn't free enough space, at least a linear amount, increase the capacity
+            // The `slop` term describes the rate of growth, where we scale up by factors of 1/slop.
+            // Setting `slop` to 2 results in doubling whenever the list is at least half full.
+            // Larger numbers result in more conservative approaches that use more CPU, but less memory.
+            let slop = 10;
+            if self.data.len() > capacity * (slop - 1) / slop {
+                self.data.reserve(capacity / (slop - 1));
             }
         }
 
@@ -352,7 +355,7 @@ impl<D: Ord> ConsolidatingVec<D> {
         consolidate(&mut self.data);
 
         // We may have the opportunity to reclaim allocated memory.
-        // Given that `push` will double the capacity when the vector is more than half full, and
+        // Given that `push` will at most double the capacity when the vector is more than half full, and
         // we want to avoid entering into a resizing cycle, we choose to only shrink if the
         // vector's length is less than one fourth of its capacity.
         if self.data.len() < self.data.capacity() / 4 {
