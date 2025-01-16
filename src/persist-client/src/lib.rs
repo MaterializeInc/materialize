@@ -826,8 +826,12 @@ mod tests {
             .await
             .expect("failed to fetch part")
             .expect("missing part");
-        let part =
+        let mut part =
             BlobTraceBatchPart::decode(&value, &metrics.columnar).expect("failed to decode part");
+        // Ensure codec data is present even if it was not generated at write time.
+        let _ = part
+            .updates
+            .get_or_make_codec::<K, V>(&read_schemas.key, &read_schemas.val);
         let mut updates = Vec::new();
         // TODO(bkirwi): switch to structured data in tests
         for ((k, v), t, d) in part.updates.records().expect("codec data").iter() {
