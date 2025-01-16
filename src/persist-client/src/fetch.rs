@@ -742,7 +742,7 @@ pub struct FetchedPart<K: Codec, V: Codec, T, D> {
 impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, T, D> {
     fn new(
         metrics: Arc<Metrics>,
-        part: EncodedPart<T>,
+        mut part: EncodedPart<T>,
         migration: PartMigration<K, V>,
         ts_filter: FetchBatchFilter<T>,
         filter_pushdown_audit: bool,
@@ -831,7 +831,7 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
                     }
                     PartMigration::Codec { .. } => (None, None),
                     PartMigration::Either {
-                        _write,
+                        write: _write,
                         read,
                         key_migration,
                         val_migration,
@@ -861,6 +861,13 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
             }
             _ => (None, None),
         };
+
+        // Fill in the codec data, since decode expects it.
+        // TODO(structured): make reading the codec data optional.
+        let write_schemas = migration.structured_write();
+        part.part
+            .updates
+            .get_or_make_codec::<K, V>(write_schemas.key.as_ref(), write_schemas.val.as_ref());
 
         FetchedPart {
             metrics,
