@@ -142,13 +142,6 @@ impl AzureBlobConfig {
 
         Ok(Some(config))
     }
-
-    /// Returns a clone of Self with a new v4 uuid prefix.
-    pub fn clone_with_new_uuid_prefix(&self) -> Self {
-        let mut ret = self.clone();
-        ret.prefix = Uuid::new_v4().to_string();
-        ret
-    }
 }
 
 /// Implementation of [Blob] backed by Azure Blob Storage.
@@ -194,6 +187,9 @@ impl Blob for AzureBlob {
         let blob = self.client.blob_client(path);
         let mut segments: Vec<MaybeLgBytes> = vec![];
 
+        // TODO: the default chunk size is 1MB. We have not tried tuning it,
+        // but making this configurable / running some benchmarks could be
+        // valuable.
         let mut stream = blob.get().into_stream();
         while let Some(value) = stream.next().await {
             let response = match value {

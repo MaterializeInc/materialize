@@ -152,7 +152,12 @@ impl BlobConfig {
                 query_params.clear();
                 Ok(BlobConfig::Mem(tombstone))
             }
-            "http" | "https" => match url.host().expect("hostname").to_string().split_once('.') {
+            "http" | "https" => match url
+                .host()
+                .ok_or_else(|| anyhow!("missing protocol: {}", &url.as_str()))?
+                .to_string()
+                .split_once('.')
+            {
                 // The Azurite emulator always uses the well-known account name devstoreaccount1
                 Some((account, "blob.core.windows.net")) | Some((account, _))
                     if account == "devstoreaccount1" =>
