@@ -647,6 +647,8 @@ fn test_subscribe_basic() {
 fn test_subscribe_progress() {
     let server = test_util::TestHarness::default().start_blocking();
 
+    panic!("TEST PANIC");
+
     for has_initial_data in [false, true] {
         for has_index in [false, true] {
             for has_snapshot in [false, true] {
