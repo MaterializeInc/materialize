@@ -72,6 +72,54 @@ impl Deref for SensitiveUrl {
     }
 }
 
+#[cfg(feature = "cli")]
+#[derive(Clone, Debug)]
+/// clap parser for SensitiveUrl
+pub struct SensitiveUrlParser;
+
+#[cfg(feature = "cli")]
+impl clap::builder::TypedValueParser for SensitiveUrlParser {
+    type Value = SensitiveUrl;
+
+    fn parse_ref(
+        &self,
+        cmd: &clap::Command,
+        arg: Option<&clap::Arg>,
+        value: &std::ffi::OsStr,
+    ) -> Result<Self::Value, clap::Error> {
+        let s = value
+            .to_str()
+            .ok_or_else(|| clap::Error::new(clap::error::ErrorKind::InvalidUtf8).with_cmd(cmd))?;
+        let url = s.parse().map_err(|_e| {
+            let mut err = clap::Error::new(clap::error::ErrorKind::ValueValidation);
+            if let Some(arg) = arg {
+                err.insert(
+                    clap::error::ContextKind::InvalidArg,
+                    clap::error::ContextValue::String(arg.to_string()),
+                );
+            }
+            err.insert(
+                clap::error::ContextKind::InvalidValue,
+                clap::error::ContextValue::String("<redacted>".to_string()),
+            );
+            // TODO: waiting on https://github.com/clap-rs/clap/issues/5065
+            // to be resolved
+            // err.set_source(e);
+            err
+        })?;
+        Ok(SensitiveUrl(url))
+    }
+}
+
+#[cfg(feature = "cli")]
+impl clap::builder::ValueParserFactory for SensitiveUrl {
+    type Parser = SensitiveUrlParser;
+
+    fn value_parser() -> Self::Parser {
+        SensitiveUrlParser
+    }
+}
+
 #[cfg(feature = "proptest")]
 impl Arbitrary for SensitiveUrl {
     type Parameters = ();
