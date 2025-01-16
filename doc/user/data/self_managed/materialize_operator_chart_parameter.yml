@@ -31,7 +31,7 @@ parameters:
       {"enabled":false}
 
   - parameter: observability.enabled
-    description: ""
+    description: Whether to enable observability features
     default: true
 
   - parameter: observability.podMetrics.enabled
@@ -75,11 +75,11 @@ parameters:
 
   - parameter: operator.cloudProvider.region
     description: Common cloud provider settings
-    default: |
-      kind
+    default: kind
 
   - parameter: operator.cloudProvider.type
-    description: ""
+    description: |
+      Specifies cloud provider. Valid values are 'aws', 'gcp', 'azure', 'generic', or 'local'.
     default: local
 
   - parameter: operator.clusters.defaultSizes.analytics
@@ -109,7 +109,6 @@ parameters:
   - parameter: operator.features.authentication
     description: |
       Whether to enable environmentd rbac checks.
-
       *Not yet supported in the helm chart*
     default: false
 
@@ -142,7 +141,7 @@ parameters:
   - parameter: operator.image.tag
     description: |
       The tag/version of the operator image to be used
-    default: v0.127.0
+    default: v25.1
 
   - parameter: operator.nodeSelector
     description: ""
@@ -161,10 +160,25 @@ parameters:
     default: |
       {"cpu":"100m","memory":"512Mi"}
 
+  - parameter: operator.secretsController
+    description: |
+
+      Which secrets controller to use for storing secrets. Valid values are
+      'kubernetes' and 'aws-secrets-manager'. Setting 'aws-secrets-manager'
+      requires a configured AWS cloud provider and IAM role for the environment
+      with Secrets Manager permissions.
+
+    default: kubernetes
+
   - parameter: rbac.create
     description: |
       Whether to create necessary RBAC roles and bindings
     default: true
+
+  - parameter: schedulerName
+    description: |
+      Optionally use a non-default kubernetes scheduler.
+    default: ""
 
   - parameter: serviceAccount.create
     description: |
@@ -182,12 +196,12 @@ parameters:
 
   - parameter: storage.storageClass.create
     description: |
-      Set to false to use an existing StorageClass instead
+      Set to false to use an existing StorageClass instead.
     default: false
 
   - parameter: storage.storageClass.name
     description: |
-      Name of the StorageClass to create/use: e.g.,"openebs-lvm-instance-store-ext4"
+      Name of the StorageClass to create/use: eg "openebs-lvm-instance-store-ext4"
     default: ""
 
   - parameter: storage.storageClass.parameters
