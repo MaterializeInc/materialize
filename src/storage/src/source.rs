@@ -31,6 +31,7 @@ pub mod generator;
 mod kafka;
 mod mysql;
 mod postgres;
+mod probe;
 pub(crate) mod reclock;
 mod source_reader_pipeline;
 mod statistics;

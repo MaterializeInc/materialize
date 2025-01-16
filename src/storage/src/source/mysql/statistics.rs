@@ -23,7 +23,7 @@ use mz_storage_types::sources::MySqlSourceConnection;
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
 
 use crate::source::types::{Probe, ProgressStatisticsUpdate};
-use crate::source::RawSourceCreationConfig;
+use crate::source::{probe, RawSourceCreationConfig};
 
 use super::{ReplicationError, TransientError};
 
@@ -89,16 +89,13 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
             let prev_offset_committed = Cell::new(None);
             let stats_output = RefCell::new(stats_output);
 
-            let mut interval = tokio::time::interval(
-                mz_storage_types::dyncfgs::MYSQL_OFFSET_KNOWN_INTERVAL
-                    .get(config.config.config_set()),
-            );
+            let probe_interval = mz_storage_types::dyncfgs::MYSQL_OFFSET_KNOWN_INTERVAL
+                .get(config.config.config_set());
+            let mut probe_ticker = probe::Ticker::new(probe_interval, config.now_fn);
             let probe_loop = async {
                 loop {
-                    interval.tick().await;
+                    let probe_ts = probe_ticker.tick().await;
 
-                    let probe_ts =
-                        mz_repr::Timestamp::try_from((config.now_fn)()).expect("must fit");
                     let gtid_executed =
                         query_sys_var(&mut stats_conn, "global.gtid_executed").await?;
                     // We don't translate this into a definite error like in snapshotting, but we
