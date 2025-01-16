@@ -327,8 +327,13 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
     async fn register(
         &mut self,
         register_ts: T,
-        ids_handles: Vec<(GlobalId, WriteHandle<SourceData, (), T, i64>)>,
+        mut ids_handles: Vec<(GlobalId, WriteHandle<SourceData, (), T, i64>)>,
     ) {
+        // As tables evolve (e.g. columns are added) we treat the older versions as
+        // "views" on the later versions. While it's not required, it's easier to reason
+        // about table registration if we do it in GlobalId order.
+        ids_handles.sort_unstable_by_key(|(gid, _handle)| *gid);
+
         for (id, write_handle) in ids_handles.iter() {
             debug!(
                 "tables register {} {:.9}",
