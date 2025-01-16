@@ -289,6 +289,26 @@ fn column_type(
     expr.typ(outers, &inner_type, &NO_PARAMS)
 }
 
+impl HirScalarExpr {
+    /// Similar to `MirScalarExpr::support`, but adapted to `HirScalarExpr` in a special way: it
+    /// considers column references that target the root level.
+    /// (See `visit_columns_referring_to_root_level`.)
+    fn support(&self) -> Vec<usize> {
+        let mut result = Vec::new();
+        self.visit_columns_referring_to_root_level(&mut |c| result.push(c));
+        result
+    }
+
+    /// Changes column references in `self` by the given remapping.
+    /// Panics if a referred column is not present in `idx_map`!
+    fn remap(mut self, idx_map: &BTreeMap<usize, usize>) -> HirScalarExpr {
+        self.visit_columns_referring_to_root_level_mut(&mut |c| {
+            *c = idx_map[c];
+        });
+        self
+    }
+}
+
 /// # Aims and scope
 ///
 /// The aim here is to amortize the overhead of the MIR window function pattern
@@ -355,26 +375,6 @@ pub fn fuse_window_functions(
     root: &mut HirRelationExpr,
     _context: &crate::plan::lowering::Context,
 ) -> Result<(), RecursionLimitError> {
-    impl HirScalarExpr {
-        /// Similar to `MirScalarExpr::support`, but adapted to `HirScalarExpr` in a special way: it
-        /// considers column references that target the root level.
-        /// (See `visit_columns_referring_to_root_level`.)
-        fn support(&self) -> Vec<usize> {
-            let mut result = Vec::new();
-            self.visit_columns_referring_to_root_level(&mut |c| result.push(c));
-            result
-        }
-
-        /// Changes column references in `self` by the given remapping.
-        /// Panics if a referred column is not present in `idx_map`!
-        fn remap(mut self, idx_map: &BTreeMap<usize, usize>) -> HirScalarExpr {
-            self.visit_columns_referring_to_root_level_mut(&mut |c| {
-                *c = idx_map[c];
-            });
-            self
-        }
-    }
-
     /// Those options of a window function call that are relevant for fusion.
     #[derive(PartialEq, Eq)]
     enum WindowFuncCallOptions {
