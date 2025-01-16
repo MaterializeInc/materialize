@@ -48,7 +48,7 @@ class Workload:
     def __init__(
         self,
         azurite: bool,
-        mz_service: str = "materailized",
+        mz_service: str = "materialized",
         deploy_generation: int = 0,
     ) -> None:
         self.azurite = azurite
