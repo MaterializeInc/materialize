@@ -9,8 +9,6 @@
 
 //! Code for iterating through one or more parts, including streaming consolidation.
 
-use anyhow::anyhow;
-use arrow::array::{Array, AsArray, Int64Array};
 use std::cmp::{Ordering, Reverse};
 use std::collections::binary_heap::PeekMut;
 use std::collections::{BinaryHeap, VecDeque};
@@ -19,6 +17,8 @@ use std::marker::PhantomData;
 use std::mem;
 use std::sync::Arc;
 
+use anyhow::anyhow;
+use arrow::array::{Array, AsArray, Int64Array};
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
@@ -34,7 +34,7 @@ use mz_persist_types::arrow::{ArrayBound, ArrayIdx, ArrayOrd};
 use mz_persist_types::{Codec, Codec64};
 use semver::Version;
 use timely::progress::Timestamp;
-use tracing::{debug_span, Instrument};
+use tracing::{debug_span, warn, Instrument};
 
 use crate::fetch::{EncodedPart, FetchBatchFilter};
 use crate::internal::encoding::Schemas;
@@ -101,12 +101,15 @@ fn interleave_updates<T: Codec64, D: Codec64>(
 
     let mut arrays: Vec<&dyn Array> = Vec::with_capacity(updates.len());
     let mut interleave = |get_array: fn(&BlobTraceUpdates) -> Option<&dyn Array>| {
+        arrays.clear();
         for part in updates {
             arrays.push(get_array(part)?);
         }
-        let out = ::arrow::compute::interleave(arrays.as_slice(), &indices).ok();
-        arrays.clear();
-        out
+        let out = ::arrow::compute::interleave(arrays.as_slice(), &indices);
+        if let Err(err) = &out {
+            warn!("interleave error: {}", err);
+        }
+        out.ok()
     };
 
     let codec_keys =
