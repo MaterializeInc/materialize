@@ -2643,6 +2643,7 @@ mod tests {
                     &create_sql,
                     &BTreeMap::new(),
                     &mut LocalExpressionCache::Closed,
+                    None,
                 )
                 .expect("unable to parse view");
             let commit_ts = catalog.current_upper().await;
@@ -3549,7 +3550,9 @@ mod tests {
                 .deserialize_item(
                     mv_gid,
                     &format!("CREATE MATERIALIZED VIEW {database_name}.{schema_name}.{mv_name} AS SELECT name FROM mz_tables"),
-                    &BTreeMap::new(), &mut LocalExpressionCache::Closed
+                    &BTreeMap::new(),
+                    &mut LocalExpressionCache::Closed,
+                    None,
                 )
                 .expect("unable to deserialize item");
             let commit_ts = catalog.current_upper().await;

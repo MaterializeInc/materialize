@@ -168,6 +168,7 @@ impl CatalogItemRebuilder {
                     is_retained_metrics_object,
                     custom_logical_compaction_window,
                     &mut LocalExpressionCache::Closed,
+                    None,
                 )
                 .unwrap_or_else(|error| panic!("invalid persisted create sql ({error:?}): {sql}")),
         }

@@ -684,7 +684,9 @@ impl CatalogState {
                         &versions,
                         None,
                         index.is_retained_metrics_object,
-                        custom_logical_compaction_window,local_expression_cache,
+                        custom_logical_compaction_window,
+                        local_expression_cache,
+                        None,
                     )
                     .unwrap_or_else(|e| {
                         panic!(
@@ -826,6 +828,7 @@ impl CatalogState {
                         false,
                         None,
                         local_expression_cache,
+                        None,
                     )
                     .unwrap_or_else(|e| {
                         panic!(
@@ -862,6 +865,7 @@ impl CatalogState {
                         false,
                         None,
                         local_expression_cache,
+                        None,
                     )
                     .unwrap_or_else(|e| {
                         panic!(
@@ -986,6 +990,7 @@ impl CatalogState {
                                     &create_sql,
                                     &extra_versions,
                                     local_expression_cache,
+                                    Some(retraction.item),
                                 )
                                 .unwrap_or_else(|e| {
                                     panic!("{e:?}: invalid persisted SQL: {create_sql}")
@@ -1007,6 +1012,7 @@ impl CatalogState {
                                 &create_sql,
                                 &extra_versions,
                                 local_expression_cache,
+                                None,
                             )
                             .unwrap_or_else(|e| {
                                 panic!("{e:?}: invalid persisted SQL: {create_sql}")
@@ -1370,6 +1376,7 @@ impl CatalogState {
                                 false,
                                 None,
                                 cached_expr,
+                                None,
                             );
                             (id, global_id, res)
                         }
