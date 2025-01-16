@@ -382,3 +382,36 @@ pub mod batcher {
         }
     }
 }
+
+pub use provided_builder::ProvidedBuilder;
+
+mod provided_builder {
+    use timely::container::ContainerBuilder;
+    use timely::Container;
+
+    /// A container builder that doesn't support pushing elements, and is only suitable for pushing
+    /// whole containers at session.
+    pub struct ProvidedBuilder<C> {
+        _marker: std::marker::PhantomData<C>,
+    }
+
+    impl<C> Default for ProvidedBuilder<C> {
+        fn default() -> Self {
+            Self {
+                _marker: std::marker::PhantomData,
+            }
+        }
+    }
+
+    impl<C: Container + Clone + 'static> ContainerBuilder for ProvidedBuilder<C> {
+        type Container = C;
+
+        fn extract(&mut self) -> Option<&mut Self::Container> {
+            None
+        }
+
+        fn finish(&mut self) -> Option<&mut Self::Container> {
+            None
+        }
+    }
+}

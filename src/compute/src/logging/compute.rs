@@ -22,7 +22,7 @@ use differential_dataflow::Collection;
 use mz_compute_types::plan::LirId;
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, GlobalId, Timestamp};
-use mz_timely_util::containers::{Column, ColumnBuilder};
+use mz_timely_util::containers::{Column, ColumnBuilder, ProvidedBuilder};
 use mz_timely_util::replay::MzReplay;
 use timely::communication::Allocate;
 use timely::container::CapacityContainerBuilder;
@@ -310,7 +310,7 @@ pub(super) fn construct<A: Allocate + 'static>(
 
     worker.dataflow_named("Dataflow: compute logging", move |scope| {
         let enable_logging = config.enable_logging;
-        let (logs, token) = Some(event_queue.link).mz_replay::<_, ColumnBuilder<_>, _>(
+        let (logs, token) = Some(event_queue.link).mz_replay::<_, ProvidedBuilder<_>, _>(
             scope,
             "compute logs",
             config.interval,
@@ -319,7 +319,7 @@ pub(super) fn construct<A: Allocate + 'static>(
                 // If logging is disabled, we still need to install the indexes, but we can leave them
                 // empty. We do so by immediately filtering all logs events.
                 if enable_logging {
-                    session.give_iterator(data.iter())
+                    session.give_container(&mut data.clone())
                 }
             },
         );

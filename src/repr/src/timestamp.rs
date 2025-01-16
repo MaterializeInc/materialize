@@ -37,6 +37,7 @@ include!(concat!(env!("OUT_DIR"), "/mz_repr.timestamp.rs"));
     Arbitrary,
     Columnar,
 )]
+#[columnar(derive(PartialEq, Eq, PartialOrd, Ord))]
 pub struct Timestamp {
     /// note no `pub`.
     internal: u64,

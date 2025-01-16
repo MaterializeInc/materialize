@@ -1754,8 +1754,9 @@ checksum = "5b63caa9aa9397e2d9480a9b13673856c78d8ac123288526c37d7839f2a86990"
 
 [[package]]
 name = "columnar"
-version = "0.2.0"
-source = "git+https://github.com/frankmcsherry/columnar#ea1be6ddb64fe984dfe847f82c5f5c60f5815835"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d58a4c12223e2d2140bbf4be9fb38b3a612804230c91388dfa4e56a8a6464bf3"
 dependencies = [
  "bincode",
  "bytemuck",
@@ -1767,8 +1768,9 @@ dependencies = [
 
 [[package]]
 name = "columnar_derive"
-version = "0.2.0"
-source = "git+https://github.com/frankmcsherry/columnar#ea1be6ddb64fe984dfe847f82c5f5c60f5815835"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "087b1ac5c4ecad28348b6a9957e3dbd44ac7d041d267370acfdbbfa66b514c7d"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -10372,7 +10374,7 @@ dependencies = [
 [[package]]
 name = "timely"
 version = "0.16.0"
-source = "git+https://github.com/antiguru/timely-dataflow?branch=logger_flush#56ec0d7473e7fee0a79f40525843fa6089873347"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#291de98e10f778799557b187888df0e78fb58f39"
 dependencies = [
  "bincode",
  "byteorder",
@@ -10390,12 +10392,12 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.12.2"
-source = "git+https://github.com/antiguru/timely-dataflow?branch=logger_flush#56ec0d7473e7fee0a79f40525843fa6089873347"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#291de98e10f778799557b187888df0e78fb58f39"
 
 [[package]]
 name = "timely_communication"
 version = "0.16.1"
-source = "git+https://github.com/antiguru/timely-dataflow?branch=logger_flush#56ec0d7473e7fee0a79f40525843fa6089873347"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#291de98e10f778799557b187888df0e78fb58f39"
 dependencies = [
  "byteorder",
  "columnar",
@@ -10410,7 +10412,7 @@ dependencies = [
 [[package]]
 name = "timely_container"
 version = "0.13.1"
-source = "git+https://github.com/antiguru/timely-dataflow?branch=logger_flush#56ec0d7473e7fee0a79f40525843fa6089873347"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#291de98e10f778799557b187888df0e78fb58f39"
 dependencies = [
  "columnation",
  "flatcontainer",
@@ -10420,7 +10422,7 @@ dependencies = [
 [[package]]
 name = "timely_logging"
 version = "0.13.1"
-source = "git+https://github.com/antiguru/timely-dataflow?branch=logger_flush#56ec0d7473e7fee0a79f40525843fa6089873347"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#291de98e10f778799557b187888df0e78fb58f39"
 dependencies = [
  "timely_container",
 ]

@@ -12,27 +12,24 @@
 use std::collections::BTreeMap;
 use std::convert::TryInto;
 use std::rc::Rc;
+use std::time::Duration;
 
-use differential_dataflow::AsCollection;
+use columnar::{Columnar, Index};
+use differential_dataflow::Hashable;
 use mz_compute_client::logging::LoggingConfig;
-use mz_expr::{permutation_for_arrangement, MirScalarExpr};
 use mz_ore::cast::CastFrom;
-use mz_ore::flatcontainer::{MzRegionPreference, OwnedRegionOpinion};
-use mz_ore::iter::IteratorExt;
-use mz_repr::{Datum, Diff, RowArena, SharedRow, Timestamp};
-use mz_timely_util::operator::consolidate_pact;
+use mz_repr::{Datum, Diff, Row, RowRef, Timestamp};
+use mz_timely_util::containers::{Col2ValBatcher, Column, ColumnBuilder};
 use mz_timely_util::replay::MzReplay;
 use timely::communication::Allocate;
-use timely::container::flatcontainer::FlatStack;
-use timely::container::CapacityContainerBuilder;
-use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::operators::core::Map;
+use timely::dataflow::channels::pact::ExchangeCore;
+use timely::Container;
 
-use crate::extensions::arrange::MzArrange;
-use crate::logging::initialize::ReachabilityEventRegion;
-use crate::logging::{EventQueue, LogCollection, LogVariant, TimelyLog};
-use crate::row_spine::{RowRowBatcher, RowRowBuilder};
-use crate::typedefs::{FlatKeyValBatcherDefault, RowRowSpine};
+use crate::extensions::arrange::MzArrangeCore;
+use crate::logging::initialize::ReachabilityEvent;
+use crate::logging::{prepare_log_collection, EventQueue, LogCollection, LogVariant, TimelyLog};
+use crate::row_spine::RowRowBuilder;
+use crate::typedefs::RowRowSpine;
 
 /// Constructs the logging dataflow for reachability logs.
 ///
@@ -43,7 +40,7 @@ use crate::typedefs::{FlatKeyValBatcherDefault, RowRowSpine};
 pub(super) fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
     config: &LoggingConfig,
-    event_queue: EventQueue<FlatStack<ReachabilityEventRegion>>,
+    event_queue: EventQueue<Column<(Duration, ReachabilityEvent)>>,
 ) -> BTreeMap<LogVariant, LogCollection> {
     let interval_ms = std::cmp::max(1, config.interval.as_millis());
     let worker_index = worker.index();
@@ -52,16 +49,9 @@ pub(super) fn construct<A: Allocate>(
     // A dataflow for multiple log-derived arrangements.
     let traces = worker.dataflow_named("Dataflow: timely reachability logging", move |scope| {
         let enable_logging = config.enable_logging;
-        type UpdatesKey = (
-            bool,
-            OwnedRegionOpinion<Vec<usize>>,
-            usize,
-            usize,
-            Option<Timestamp>,
-        );
-        type UpdatesRegion = <((UpdatesKey, ()), Timestamp, Diff) as MzRegionPreference>::Region;
+        type UpdatesKey = (bool, Vec<usize>, usize, usize, Option<Timestamp>);
 
-        type CB = CapacityContainerBuilder<FlatStack<UpdatesRegion>>;
+        type CB = ColumnBuilder<((UpdatesKey, ()), Timestamp, Diff)>;
         let (updates, token) = Some(event_queue.link).mz_replay::<_, CB, _>(
             scope,
             "reachability logs",
@@ -76,7 +66,7 @@ pub(super) fn construct<A: Allocate>(
                 for (time, (addr, massaged)) in data.iter() {
                     let time_ms = ((time.as_millis() / interval_ms) + 1) * interval_ms;
                     let time_ms: Timestamp = time_ms.try_into().expect("must fit");
-                    for (source, port, update_type, ts, diff) in massaged {
+                    for (source, port, update_type, ts, diff) in massaged.into_iter() {
                         let datum = (update_type, addr, source, port, ts);
                         session.give(((datum, ()), time_ms, diff));
                     }
@@ -85,62 +75,36 @@ pub(super) fn construct<A: Allocate>(
         );
 
         // Restrict results by those logs that are meant to be active.
-        let logs_active = vec![LogVariant::Timely(TimelyLog::Reachability)];
+        let logs_active = [LogVariant::Timely(TimelyLog::Reachability)];
 
-        let updates = consolidate_pact::<
-            FlatKeyValBatcherDefault<UpdatesKey, (), Timestamp, Diff, _>,
-            _,
-            _,
-            _,
-            _,
-        >(&updates, Pipeline, "Consolidate Timely reachability")
-        .container::<FlatStack<UpdatesRegion>>();
+        let mut addr_row = Row::default();
+        let updates = prepare_log_collection(
+            &updates,
+            TimelyLog::Reachability,
+            move |datum, (), packer| {
+                let (update_type, addr, source, port, ts) = datum;
+                let update_type = if update_type { "source" } else { "target" };
+                addr_row.packer().push_list(
+                    addr.iter()
+                        .chain(std::iter::once(source))
+                        .map(|id| Datum::UInt64(u64::cast_from(id))),
+                );
+                packer.pack_slice(&[
+                    addr_row.iter().next().unwrap(),
+                    Datum::UInt64(u64::cast_from(port)),
+                    Datum::UInt64(u64::cast_from(worker_index)),
+                    Datum::String(update_type),
+                    Datum::from(<Option<Timestamp>>::into_owned(ts)),
+                ]);
+            }
+        );
 
         let mut result = BTreeMap::new();
         for variant in logs_active {
             if config.index_logs.contains_key(&variant) {
-                let key = variant.index_by();
-                let (_, value) = permutation_for_arrangement(
-                    &key.iter()
-                        .cloned()
-                        .map(MirScalarExpr::Column)
-                        .collect::<Vec<_>>(),
-                    variant.desc().arity(),
-                );
-
-                let updates = updates
-                    .map(
-                        move |(((update_type, addr, source, port, ts), _), time, diff)| {
-                            let row_arena = RowArena::default();
-                            let update_type = if update_type { "source" } else { "target" };
-                            let binding = SharedRow::get();
-                            let mut row_builder = binding.borrow_mut();
-                            row_builder.packer().push_list(
-                                addr.iter()
-                                    .copied()
-                                    .chain_one(source)
-                                    .map(|id| Datum::UInt64(u64::cast_from(id))),
-                            );
-                            let datums = &[
-                                row_arena.push_unary_row(row_builder.clone()),
-                                Datum::UInt64(u64::cast_from(port)),
-                                Datum::UInt64(u64::cast_from(worker_index)),
-                                Datum::String(update_type),
-                                Datum::from(ts.clone()),
-                            ];
-                            row_builder.packer().extend(key.iter().map(|k| datums[*k]));
-                            let key_row = row_builder.clone();
-                            row_builder
-                                .packer()
-                                .extend(value.iter().map(|k| datums[*k]));
-                            let value_row = row_builder.clone();
-                            ((key_row, value_row), time, diff)
-                        },
-                    )
-                    .as_collection();
-
                 let trace = updates
-                    .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+                    .mz_arrange_core::<_, Col2ValBatcher<_, _, _, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+                        ExchangeCore::new(|((key, _val), _time, _diff): &((&RowRef, &RowRef), _, _)| key.hashed()),
                         &format!("Arrange {variant:?}"),
                     )
                     .trace;
