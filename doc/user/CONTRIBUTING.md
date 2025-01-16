@@ -40,17 +40,17 @@ to `git pull` the latest version of Materialize.
 
     ```shell
     cd doc/user
-    hugo server -D --baseURL http://localhost:1313/self-managed/v25.1/
+    hugo server -D --baseURL http://localhost:1313/docs/self-managed/v25.1/
     ```
 
     If you're making changes to the site, you might want a more cache-busting
     version:
 
     ```shell
-    hugo server --disableFastRender --ignoreCache  --baseURL http://localhost:1313/self-managed/v25.1/
+    hugo server --disableFastRender --ignoreCache  --baseURL http://localhost:1313/docs/self-managed/v25.1/
     ```
 
-1. Open <http://localhost:1313/self-managed/v25.1/>.
+1. Open <http://localhost:1313/docs/self-managed/v25.1/>.
 
 You can also read the documentation in Markdown in the `content` directory,
 though some features like our SQL syntax diagrams will not be readily

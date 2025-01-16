@@ -35,8 +35,10 @@ Merging to the `self-managed/v25.1` branch will immediately deploy the updated d
 to https://materialize.com/docs/self-managed/v25.1/.
 
 When running `hugo server` locally, specify the `--baseURL
-http://localhost:1313/self-managed/v25.1/` to test the changes locally.
-Otherwise, the `hugo server` uses base URL http://localhost:1313/.
+http://localhost:1313/docs/self-managed/v25.1/` to test the changes locally
+(including the version selector)
+Otherwise, the `hugo server` uses base URL http://localhost:1313/ (and the
+version selector assumes Cloud docs).
 
 ### Adjusting documentation for existing features
 
