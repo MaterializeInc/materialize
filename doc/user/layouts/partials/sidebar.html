@@ -83,7 +83,14 @@
           versionSelect.appendChild(option);
         });
 
-        const matchingVersion = versions.find(version => currentPath.includes(version.base_url));
+        let matchingVersion;
+
+        if (currentPath.includes("self-managed")) {
+          matchingVersion = versions.filter(version => version.base_url.includes("self-managed")).find(version => currentPath.includes(version.base_url));
+        } else {
+          matchingVersion = versions.filter(version => currentPath.includes(version.base_url));
+        }
+
         if (matchingVersion) {
           versionSelect.value = matchingVersion.base_url;
         }
