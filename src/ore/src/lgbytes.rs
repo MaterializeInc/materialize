@@ -179,8 +179,8 @@ impl Buf for LgBytes {
 pub struct LgBytesMetrics {
     /// Metrics for the "persist_s3" usage of [LgBytes].
     pub persist_s3: LgBytesOpMetrics,
-    /// Metrics for the "persist_abs" usage of [LgBytes].
-    pub persist_abs: LgBytesOpMetrics,
+    /// Metrics for the "persist_azure" usage of [LgBytes].
+    pub persist_azure: LgBytesOpMetrics,
     /// Metrics for the "persist_arrow" usage of [LgBytes].
     pub persist_arrow: LgBytesOpMetrics,
 }
@@ -274,7 +274,7 @@ impl LgBytesMetrics {
         };
         LgBytesMetrics {
             persist_s3: op("persist_s3"),
-            persist_abs: op("persist_abs"),
+            persist_azure: op("persist_azure"),
             persist_arrow: op("persist_arrow"),
         }
     }
