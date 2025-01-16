@@ -74,7 +74,21 @@
     const currentPath = window.location.pathname;
 
     fetch('/docs/versions.json')
-      .then(response => response.json())
+      .then( response => {
+        if (!response.ok) {
+          throw new Error('File not found');
+        }
+        return response.json();
+      })
+      .catch(() => {
+        return fetch('{{ .Site.BaseURL }}/versions.json')
+          .then(response => {
+            if (!response.ok) {
+              throw new Error('Fallback file not found');
+            }
+            return response.json();
+          });
+      })
       .then(versions => {
         versions.forEach(version => {
           const option = document.createElement('option');
@@ -83,20 +97,16 @@
           versionSelect.appendChild(option);
         });
 
-        let matchingVersion;
+        const currentVersion = versions.filter(version => currentPath.includes(version.base_url))?.at(-1)?.base_url;
 
-        if (currentPath.includes("self-managed")) {
-          matchingVersion = versions.filter(version => version.base_url.includes("self-managed")).find(version => currentPath.includes(version.base_url));
-        } else {
-          matchingVersion = versions.filter(version => currentPath.includes(version.base_url));
-        }
-
-        if (matchingVersion) {
-          versionSelect.value = matchingVersion.base_url;
+        if (currentVersion) {
+          versionSelect.value = currentVersion;
         }
 
         versionSelect.addEventListener('change', function () {
-          const selectedBaseUrl = versionSelect.value;
+          const baseUrl = '{{ .Site.BaseURL }}';
+          const strippedBaseUrl = baseUrl.endsWith(currentVersion) ? baseUrl.slice(0, -currentVersion.length) : baseUrl;
+          const selectedBaseUrl = strippedBaseUrl + versionSelect.value;
           if (selectedBaseUrl) {
             window.location.href = selectedBaseUrl;
           }
