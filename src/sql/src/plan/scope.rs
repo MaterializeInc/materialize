@@ -60,7 +60,7 @@ pub struct ScopeItem {
     /// The name of the column.
     pub column_name: ColumnName,
     /// The expressions from which this scope item is derived. Used by `GROUP
-    /// BY`.
+    /// BY` and window functions.
     pub exprs: BTreeSet<Expr<Aug>>,
     /// Whether the column is the return value of a function that produces only
     /// a single column. This accounts for a strange PostgreSQL special case

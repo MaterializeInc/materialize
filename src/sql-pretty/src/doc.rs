@@ -531,6 +531,9 @@ fn doc_select<T: AstInfo>(v: &Select<T>) -> RcDoc {
     if let Some(having) = &v.having {
         docs.push(nest_title("HAVING", doc_expr(having)));
     }
+    if let Some(qualify) = &v.qualify {
+        docs.push(nest_title("QUALIFY", doc_expr(qualify)));
+    }
     if !v.options.is_empty() {
         docs.push(bracket(
             "OPTIONS (",
