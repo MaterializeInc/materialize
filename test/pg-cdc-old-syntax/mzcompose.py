@@ -98,7 +98,7 @@ SERVICES = [
         additional_system_parameter_defaults={
             "log_filter": "mz_storage::source::postgres=trace,debug,info,warn,error"
         },
-        external_minio=True,
+        external_blob_store=True,
     ),
     Testdrive(),
     CockroachOrPostgresMetadata(),
@@ -402,7 +402,7 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
             image=get_old_image_for_source_table_migration_test(),
             volumes_extra=["secrets:/share/secrets"],
             external_metadata_store=True,
-            external_minio=True,
+            external_blob_store=True,
             additional_system_parameter_defaults={
                 "log_filter": "mz_storage::source::postgres=trace,debug,info,warn,error"
             },
@@ -413,7 +413,7 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
             image=get_new_image_for_source_table_migration_test(),
             volumes_extra=["secrets:/share/secrets"],
             external_metadata_store=True,
-            external_minio=True,
+            external_blob_store=True,
             additional_system_parameter_defaults={
                 "log_filter": "mz_storage::source::postgres=trace,debug,info,warn,error",
                 "force_source_table_syntax": "true",

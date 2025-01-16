@@ -91,7 +91,7 @@ def get_default_system_parameters(
         "enable_0dt_deployment": "true" if zero_downtime else "false",
         "enable_0dt_deployment_panic_after_timeout": "true",
         "enable_0dt_deployment_sources": (
-            "true" if version >= MzVersion.parse_mz("v0.130.0-dev") else "false"
+            "true" if version >= MzVersion.parse_mz("v0.132.0-dev") else "false"
         ),
         "enable_alter_swap": "true",
         "enable_columnation_lgalloc": "true",

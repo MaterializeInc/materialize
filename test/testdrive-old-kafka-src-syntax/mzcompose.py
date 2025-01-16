@@ -331,7 +331,7 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
         # validate_catalog_store=True,
         default_timeout=args.default_timeout,
         volumes_extra=["mzdata:/mzdata"],
-        external_minio=True,
+        external_blob_store=True,
         fivetran_destination=True,
         fivetran_destination_files_path="/share/tmp",
         entrypoint_extra=[f"--var=uses-redpanda={args.redpanda}"],
@@ -356,14 +356,14 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
         default_size=Materialized.Size.DEFAULT_SIZE,
         image=get_old_image_for_source_table_migration_test(),
         external_metadata_store=True,
-        external_minio=True,
+        external_blob_store=True,
         additional_system_parameter_defaults=additional_system_parameter_defaults,
     )
     mz_new = Materialized(
         default_size=Materialized.Size.DEFAULT_SIZE,
         image=get_new_image_for_source_table_migration_test(),
         external_metadata_store=True,
-        external_minio=True,
+        external_blob_store=True,
         additional_system_parameter_defaults=additional_system_parameter_defaults,
     )
 

@@ -59,12 +59,12 @@ def _verify_source(
 
 def check_source_table_migration_test_sensible() -> None:
     assert MzVersion.parse_cargo() < MzVersion.parse_mz(
-        "v0.137.0"
+        "v0.139.0"
     ), "migration test probably no longer needed"
 
 
 def get_old_image_for_source_table_migration_test() -> str:
-    return "materialize/materialized:v0.129.0"
+    return "materialize/materialized:v0.131.0"
 
 
 def get_new_image_for_source_table_migration_test() -> str | None:

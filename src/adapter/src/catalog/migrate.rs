@@ -14,7 +14,7 @@ use mz_catalog::durable::Transaction;
 use mz_catalog::memory::objects::{BootstrapStateUpdateKind, StateUpdate};
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NowFn;
-use mz_repr::{CatalogItemId, GlobalId, Timestamp};
+use mz_repr::{CatalogItemId, Timestamp};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::names::FullItemName;
 use mz_sql_parser::ast::{Raw, Statement};
@@ -267,7 +267,7 @@ fn ast_rewrite_sources_to_tables(
             acc
         });
 
-    // Any GlobalId that should be changed to a new GlobalId in any statements that
+    // Any CatalogItemId that should be changed to a new CatalogItemId in any statements that
     // reference it. This is necessary for ensuring downstream statements (e.g.
     // mat views, indexes) that reference a single-output source (e.g. kafka)
     // will now reference the corresponding new table, with the same data, instead.
@@ -276,7 +276,7 @@ fn ast_rewrite_sources_to_tables(
     for (mut item, stmt) in items_with_statements {
         match stmt {
             // Migrate each `CREATE SUBSOURCE` statement to an equivalent
-            // `CREATE TABLE .. FROM SOURCE` statement.
+            // `CREATE TABLE ... FROM SOURCE` statement.
             Statement::CreateSubsource(CreateSubsourceStatement {
                 name,
                 columns,
@@ -294,7 +294,7 @@ fn ast_rewrite_sources_to_tables(
                 let source = match raw_source_name {
                     // Some legacy subsources have named-only references to their `of_source`
                     // so we ensure we always use an ID-based reference in the stored
-                    // `CREATE TABLE .. FROM SOURCE` statements.
+                    // `CREATE TABLE ... FROM SOURCE` statements.
                     RawItemName::Name(name) => {
                         // Convert the name reference to an ID reference.
                         let (source_item, _) = items_with_statements_copied
@@ -304,7 +304,7 @@ fn ast_rewrite_sources_to_tables(
                                 _ => false,
                             })
                             .expect("source must exist");
-                        RawItemName::Id(source_item.global_id.to_string(), name, None)
+                        RawItemName::Id(source_item.id.to_string(), name, None)
                     }
                     RawItemName::Id(..) => raw_source_name,
                 };
@@ -531,7 +531,7 @@ fn ast_rewrite_sources_to_tables(
                         .iter()
                         .any(|(_, statement)| match statement {
                             Statement::CreateTableFromSource(stmt) => {
-                                let source: GlobalId = match &stmt.source {
+                                let source: CatalogItemId = match &stmt.source {
                                     RawItemName::Name(_) => {
                                         unreachable!("tables store source as ID")
                                     }
@@ -539,7 +539,7 @@ fn ast_rewrite_sources_to_tables(
                                         source_id.parse().expect("valid id")
                                     }
                                 };
-                                source == item.global_id
+                                source == item.id
                             }
                             _ => false,
                         });
@@ -586,7 +586,7 @@ fn ast_rewrite_sources_to_tables(
 
                 // A reference to the source that will be included in the table statement
                 let source_ref =
-                    RawItemName::Id(item.global_id.to_string(), new_source_name.clone(), None);
+                    RawItemName::Id(item.id.to_string(), new_source_name.clone(), None);
 
                 let columns = if col_names.is_empty() {
                     TableFromSourceColumns::NotSpecified
@@ -676,7 +676,8 @@ fn ast_rewrite_sources_to_tables(
                     progress_subsource,
                 };
 
-                let source_id = item.global_id;
+                let source_id = item.id;
+                let source_global_id = item.global_id;
                 let schema_id = item.schema_id.clone();
                 let schema = tx.get_schema(&item.schema_id).expect("schema must exist");
 
@@ -712,13 +713,13 @@ fn ast_rewrite_sources_to_tables(
                 // external tools such as DBT and Terraform. We will insert a new shard for the source
                 // statement which will be automatically created after the migration is complete.
                 let new_source_shard = ShardId::new();
-                let (source_id, existing_source_shard) = tx
-                    .delete_collection_metadata(btreeset! {source_id})
+                let (source_global_id, existing_source_shard) = tx
+                    .delete_collection_metadata(btreeset! {source_global_id})
                     .pop()
                     .expect("shard should exist");
                 tx.insert_collection_metadata(btreemap! {
                     new_table_global_id => existing_source_shard,
-                    source_id => new_source_shard
+                    source_global_id => new_source_shard
                 })?;
 
                 add_to_audit_log(
@@ -741,7 +742,7 @@ fn ast_rewrite_sources_to_tables(
 
                 // We also need to update any other statements that reference the source to use the new
                 // table id/name instead.
-                changed_ids.insert(source_id, new_table_global_id);
+                changed_ids.insert(source_id, new_table_id);
             }
 
             // When we upgrade to > rust 1.81 we should use #[expect(unreachable_patterns)]

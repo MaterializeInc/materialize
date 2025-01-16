@@ -56,7 +56,7 @@ def create_mysql_replica(mysql_version: str) -> MySql:
 
 SERVICES = [
     Materialized(
-        external_minio=True,
+        external_blob_store=True,
         additional_system_parameter_defaults={
             "log_filter": "mz_storage::source::mysql=trace,info"
         },
@@ -318,7 +318,7 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
             name="materialized",
             image=get_old_image_for_source_table_migration_test(),
             external_metadata_store=True,
-            external_minio=True,
+            external_blob_store=True,
             additional_system_parameter_defaults={
                 "log_filter": "mz_storage::source::mysql=trace,info"
             },
@@ -328,7 +328,7 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
             name="materialized",
             image=get_new_image_for_source_table_migration_test(),
             external_metadata_store=True,
-            external_minio=True,
+            external_blob_store=True,
             additional_system_parameter_defaults={
                 "log_filter": "mz_storage::source::mysql=trace,info",
                 "force_source_table_syntax": "true",

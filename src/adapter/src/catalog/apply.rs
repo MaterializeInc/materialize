@@ -1884,8 +1884,7 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
         }
     }
 
-    /// Sort item updates by parsing statements to identify any id-based dependencies within
-    /// this set of updates and then performing a topological sort.
+    /// Sort item updates by dependency.
     fn sort_item_updates(
         item_updates: Vec<(mz_catalog::durable::Item, Timestamp, StateDiff)>,
     ) -> VecDeque<(mz_catalog::durable::Item, Timestamp, StateDiff)> {
@@ -1949,7 +1948,7 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
     let item_retractions = sort_item_updates(item_retractions);
     let item_additions = sort_item_updates(item_additions);
 
-    /// Sort temporary item updates by GlobalId.
+    /// Sort temporary item updates by dependency.
     fn sort_temp_item_updates(
         temp_item_updates: Vec<(TemporaryItem, Timestamp, StateDiff)>,
     ) -> VecDeque<(TemporaryItem, Timestamp, StateDiff)> {

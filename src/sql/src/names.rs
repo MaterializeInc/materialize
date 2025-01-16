@@ -2390,13 +2390,13 @@ where
 #[derive(Debug)]
 pub struct ItemDependencyModifier<'a> {
     pub modified: bool,
-    pub id_map: &'a BTreeMap<GlobalId, GlobalId>,
+    pub id_map: &'a BTreeMap<CatalogItemId, CatalogItemId>,
 }
 
 impl<'ast, 'a> VisitMut<'ast, Raw> for ItemDependencyModifier<'a> {
     fn visit_item_name_mut(&mut self, item_name: &mut RawItemName) {
         if let RawItemName::Id(id, _, _) = item_name {
-            let parsed_id = id.parse::<GlobalId>().unwrap();
+            let parsed_id = id.parse::<CatalogItemId>().unwrap();
             if let Some(new_id) = self.id_map.get(&parsed_id) {
                 *id = new_id.to_string();
                 self.modified = true;
@@ -2411,7 +2411,7 @@ impl<'ast, 'a> VisitMut<'ast, Raw> for ItemDependencyModifier<'a> {
 /// ids refer to an item of the same name, whose id has changed).
 pub fn modify_dependency_item_ids<'ast, N>(
     node: &'ast mut N,
-    id_map: &BTreeMap<GlobalId, GlobalId>,
+    id_map: &BTreeMap<CatalogItemId, CatalogItemId>,
 ) -> bool
 where
     N: VisitMutNode<'ast, Raw>,
