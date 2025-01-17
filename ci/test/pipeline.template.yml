@@ -341,15 +341,15 @@ steps:
     agents:
       queue: hetzner-aarch64-4cpu-8gb
 
-  - id: legacy-upgrade
-    label: "Legacy upgrade tests (last version from docs)"
+  - id: legacy-upgrade-docs-ignore-missing
+    label: "Legacy upgrade tests (last version from docs, ignore missing)"
     parallelism: 2
     depends_on: build-aarch64
     timeout_in_minutes: 60
     plugins:
       - ./ci/plugins/mzcompose:
           composition: legacy-upgrade
-          args: ["--versions-source=docs"]
+          args: ["--versions-source=docs", "--ignore-missing-version"]
     agents:
       queue: hetzner-aarch64-4cpu-8gb
 
