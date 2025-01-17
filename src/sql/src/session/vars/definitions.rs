@@ -2182,6 +2182,12 @@ feature_flags!(
         default: false,
         enable_for_item_parsing: true,
     },
+    {
+        name: enable_copy_from_remote,
+        desc: "Whether to allow COPY FROM <url>.",
+        default: false,
+        enable_for_item_parsing: false,
+    },
 );
 
 impl From<&super::SystemVars> for OptimizerFeatures {

@@ -30,12 +30,14 @@ use async_trait::async_trait;
 use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_cluster_client::metrics::WallclockLagMetrics;
 use mz_cluster_client::ReplicaId;
+use mz_persist_client::batch::ProtoBatch;
 use mz_persist_types::{Codec64, Opaque, ShardId};
 use mz_repr::{Diff, GlobalId, RelationDesc, RelationVersion, Row};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::inline::InlinedConnection;
 use mz_storage_types::controller::{CollectionMetadata, StorageError};
 use mz_storage_types::instances::StorageInstanceId;
+use mz_storage_types::oneshot_sources::{OneshotIngestionRequest, OneshotResultCallback};
 use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::read_policy::ReadPolicy;
@@ -49,7 +51,7 @@ use timely::progress::Timestamp as TimelyTimestamp;
 use timely::progress::{Antichain, Timestamp};
 use tokio::sync::{mpsc, oneshot};
 
-use crate::client::{AppendOnlyUpdate, StatusUpdate, TimestamplessUpdate};
+use crate::client::{AppendOnlyUpdate, StatusUpdate, TableData};
 use crate::statistics::WebhookStatistics;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, Eq, PartialEq, Hash, PartialOrd, Ord)]
@@ -489,6 +491,16 @@ pub trait StorageController: Debug {
         exports: Vec<(GlobalId, ExportDescription<Self::Timestamp>)>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
+    /// Create a oneshot ingestion.
+    async fn create_oneshot_ingestion(
+        &mut self,
+        ingestion_id: uuid::Uuid,
+        collection_id: GlobalId,
+        instance_id: StorageInstanceId,
+        request: OneshotIngestionRequest,
+        result_tx: OneshotResultCallback<ProtoBatch>,
+    ) -> Result<(), StorageError<Self::Timestamp>>;
+
     /// Alter the sink identified by the given id to match the provided `ExportDescription`.
     async fn alter_export(
         &mut self,
@@ -563,7 +575,7 @@ pub trait StorageController: Debug {
         &mut self,
         write_ts: Self::Timestamp,
         advance_to: Self::Timestamp,
-        commands: Vec<(GlobalId, Vec<TimestamplessUpdate>)>,
+        commands: Vec<(GlobalId, Vec<TableData>)>,
     ) -> Result<
         tokio::sync::oneshot::Receiver<Result<(), StorageError<Self::Timestamp>>>,
         StorageError<Self::Timestamp>,

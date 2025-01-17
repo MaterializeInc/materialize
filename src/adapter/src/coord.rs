@@ -124,6 +124,7 @@ use mz_ore::vec::VecExt;
 use mz_ore::{
     assert_none, instrument, soft_assert_eq_or_log, soft_assert_or_log, soft_panic_or_log, stack,
 };
+use mz_persist_client::batch::ProtoBatch;
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::global_id::TransientIdGen;
@@ -144,7 +145,7 @@ use mz_sql::session::user::User;
 use mz_sql::session::vars::SystemVars;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::ExplainStage;
-use mz_storage_client::client::TimestamplessUpdate;
+use mz_storage_client::client::TableData;
 use mz_storage_client::controller::{CollectionDescription, DataSource};
 use mz_storage_types::connections::inline::{IntoInlineConnection, ReferencedConnection};
 use mz_storage_types::connections::Connection as StorageConnection;
@@ -253,6 +254,11 @@ pub enum Message {
         conn_id: ConnectionId,
     },
     LinearizeReads,
+    StagedBatches {
+        conn_id: ConnectionId,
+        table_id: CatalogItemId,
+        batches: Vec<Result<ProtoBatch, String>>,
+    },
     StorageUsageSchedule,
     StorageUsageFetch,
     StorageUsageUpdate(ShardsUsageReferenced),
@@ -353,6 +359,7 @@ impl Message {
             Message::ClusterEvent(_) => "cluster_event",
             Message::CancelPendingPeeks { .. } => "cancel_pending_peeks",
             Message::LinearizeReads => "linearize_reads",
+            Message::StagedBatches { .. } => "staged_batches",
             Message::StorageUsageSchedule => "storage_usage_schedule",
             Message::StorageUsageFetch => "storage_usage_fetch",
             Message::StorageUsageUpdate(_) => "storage_usage_update",
@@ -1658,6 +1665,10 @@ pub struct Coordinator {
     active_compute_sinks: BTreeMap<GlobalId, ActiveComputeSink>,
     /// A map from active webhooks to their invalidation handle.
     active_webhooks: BTreeMap<CatalogItemId, WebhookAppenderInvalidator>,
+    /// A map of active `COPY FROM` statements. The Coordinator waits for `clusterd`
+    /// to stage Batches in Persist that we will then link into the shard.
+    active_copies: BTreeMap<ConnectionId, ExecuteContext>,
+
     /// A map from connection ids to a watch channel that is set to `true` if the connection
     /// received a cancel request.
     staged_cancellation: BTreeMap<ConnectionId, (watch::Sender<bool>, watch::Receiver<bool>)>,
@@ -2218,13 +2229,7 @@ impl Coordinator {
                 );
                 let appends = appends
                     .into_iter()
-                    .map(|(id, updates)| {
-                        let updates = updates
-                            .into_iter()
-                            .map(|(row, diff)| TimestamplessUpdate { row, diff })
-                            .collect();
-                        (id, updates)
-                    })
+                    .map(|(id, updates)| (id, vec![TableData::Rows(updates)]))
                     .collect();
                 let fut = self
                     .controller
@@ -4189,6 +4194,7 @@ pub fn serve(
                     serialized_ddl: LockedVecDeque::new(),
                     active_compute_sinks: BTreeMap::new(),
                     active_webhooks: BTreeMap::new(),
+                    active_copies: BTreeMap::new(),
                     staged_cancellation: BTreeMap::new(),
                     introspection_subscribes: BTreeMap::new(),
                     write_locks: BTreeMap::new(),

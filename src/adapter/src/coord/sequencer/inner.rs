@@ -52,6 +52,7 @@ use mz_sql::names::{
 use mz_sql::plan::{ConnectionDetails, NetworkPolicyRule, StatementContext};
 use mz_sql::pure::{generate_subsource_statements, PurifiedSourceExport};
 use mz_storage_types::sinks::StorageSinkDesc;
+use smallvec::SmallVec;
 use timely::progress::Timestamp as TimelyTimestamp;
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
 use mz_adapter_types::connection::ConnectionId;
@@ -117,6 +118,7 @@ use crate::util::{viewable_variables, ClientTransmitter, ResultExt};
 use crate::{PeekResponseUnary, ReadHolds};
 
 mod cluster;
+mod copy_from;
 mod create_continual_task;
 mod create_index;
 mod create_materialized_view;
@@ -2245,10 +2247,10 @@ impl Coordinator {
                     },
                 };
 
-                let mut collected_writes: BTreeMap<CatalogItemId, Vec<_>> = BTreeMap::new();
+                let mut collected_writes: BTreeMap<CatalogItemId, SmallVec<_>> = BTreeMap::new();
                 for WriteOp { id, rows } in writes {
                     let total_rows = collected_writes.entry(id).or_default();
-                    total_rows.extend(rows);
+                    total_rows.push(rows);
                 }
 
                 self.submit_write(PendingWriteTxn::User {
