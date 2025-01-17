@@ -453,7 +453,7 @@ fn parse_data_type(
                 column_name: info.column_name.clone(),
                 intended_type: None,
             })
-        },
+        }
     }
 }
 
