@@ -15,7 +15,7 @@
 # deployed to production, but the version needs to be bumped whenever features
 # that the console depends upon are removed (to a version of the console that
 # doesn't depend on those features).
-FROM materialize/console:25.1.0-beta.3 AS console
+FROM materialize/console:25.1.0 AS console
 
 MZFROM ubuntu-base
 
@@ -26,17 +26,17 @@ ARG CI_SANITIZER=none
 
 RUN apt-get update \
     && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get -qy install --no-install-recommends \
-        ca-certificates \
-        curl \
-        gettext-base \
-        nginx \
-        postgresql \
-        postgresql-contrib \
-        tini \
-        ssh \
+    ca-certificates \
+    curl \
+    gettext-base \
+    nginx \
+    postgresql \
+    postgresql-contrib \
+    tini \
+    ssh \
     && if [ "$CI_SANITIZER" != "none" ]; then \
-        TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get -qy install --no-install-recommends llvm; \
-       fi \
+    TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get -qy install --no-install-recommends llvm; \
+    fi \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean \
     && mkdir -p /mzdata /scratch /var/lib/postgresql/data /var/run/postgresql /var/lib/nginx /var/log/nginx \
