@@ -63,7 +63,7 @@ repo](https://github.com/MaterializeInc/materialize).
 
 {{< important >}}
 
-Check out the {{< self-managed/latest_version >}} tag.
+Check out the {{< self-managed/latest_version >}}.
 
 {{< /important >}}
 
