@@ -777,7 +777,7 @@ mod tests {
     use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
     use mz_persist_types::{Codec64, ShardId};
     use mz_repr::Timestamp;
-    use mz_repr::{Diff, RelationType, RelationDesc, RelationVersion, Row};
+    use mz_repr::{Diff, RelationDesc, RelationType, RelationVersion, Row};
     use mz_storage_client::controller::{CollectionDescription, StorageMetadata, StorageTxn};
     use mz_storage_client::storage_collections::{CollectionFrontiers, SnapshotCursor};
     use mz_storage_types::connections::inline::InlinedConnection;
