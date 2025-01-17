@@ -402,16 +402,6 @@ impl<K: Codec, V: Codec> PartMigration<K, V> {
             PartMigration::Either { read, .. } => read,
         }
     }
-
-    pub(crate) fn structured_write(&self) -> &Schemas<K, V> {
-        match self {
-            PartMigration::SameSchema { both } => both,
-            // We should have a write schema set for all parts that are written with the structured-
-            // only parquet format.
-            PartMigration::Codec { read } => read,
-            PartMigration::Either { write, .. } => write,
-        }
-    }
 }
 
 /// Returns if `new` is at least as nullable as `old`.
