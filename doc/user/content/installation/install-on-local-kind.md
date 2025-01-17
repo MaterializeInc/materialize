@@ -11,7 +11,7 @@ menu:
 The following tutorial deploys self-managed Materialize onto a local
 [`kind`](https://kind.sigs.k8s.io/) cluster. Self-managed Materialize requires:
 
-{{% self-managed/requirements-list %}}
+{{% self-managed/materialize-components-list %}}
 
 The tutorial uses a local `kind` cluster and deploys the following components:
 
