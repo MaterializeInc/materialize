@@ -3,7 +3,7 @@ title: "Self-managed Materialize"
 description: ""
 aliases:
   - /self-hosted/
-robots: "noindex, nofollow"
+disable_list: true
 ---
 
 With self-managed Materialize, you can deploy and operate Materialize in your
@@ -45,10 +45,3 @@ For instructions on installing Materialize on your Kubernetes cluster, see:
 
 - [Install on AWS](/installation/install-on-aws/)
 - [Install on GCP](/installation/install-on-gcp/)
-
-## Related pages
-
-<!-- Temporary:
-Hugo will add links to the pages in the same folder.
-Since we're hiding this section from the left-hand nav, adding the links here.
--->

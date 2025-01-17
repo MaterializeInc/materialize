@@ -46,7 +46,7 @@ To configure the Materialize operator chart, you can:
 
   ```shell
   helm install my-materialize-operator \
-    --set operator.image.tag=v1.0.0 \
+    --set operator.image.tag=v0.130.0 \
     /path/to/materialize/helm-charts/operator
   ```
 
