@@ -11,7 +11,7 @@ menu:
 The following tutorial deploys Materialize onto a local
 [`minikube`](https://minikube.sigs.k8s.io/docs/start/) cluster. Self-managed Materialize requires:
 
-{{% self-managed/requirements-list %}}
+{{% self-managed/materialize-components-list %}}
 
 The tutorial deploys the following components onto your local `minikube`
 cluster:

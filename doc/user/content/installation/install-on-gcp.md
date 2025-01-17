@@ -10,7 +10,7 @@ menu:
 
 Self-managed Materialize requires:
 
-{{% self-managed/requirements-list %}}
+{{% self-managed/materialize-components-list %}}
 
 The tutorial deploys Materialize to GCP Google Kubernetes Engine (GKE) cluster
 with a Cloud SQL PostgreSQL database as the metadata database and Cloud Storage
@@ -69,7 +69,7 @@ documentation](https://helm.sh/docs/intro/install/).
 
 ### GCP Kubernetes environment
 
-{{% self-managed/requirements-list %}}
+{{% self-managed/materialize-components-list %}}
 
 See [A. Set up GCP Kubernetes environment](#a-set-up-gcp-kubernetes-environment)
 for a sample setup.
