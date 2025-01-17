@@ -670,7 +670,7 @@ impl<D: Ord> SinkState<D, Timestamp> {
         SinkState {
             append_times: BTreeSet::new(),
             append_times_progress: Antichain::from_elem(Timestamp::minimum()),
-            to_append: ConsolidatingVec::with_min_capacity(128),
+            to_append: ConsolidatingVec::new(128, 2),
             to_append_progress: Antichain::from_elem(Timestamp::minimum()),
             output_progress: Antichain::from_elem(Timestamp::minimum()),
         }

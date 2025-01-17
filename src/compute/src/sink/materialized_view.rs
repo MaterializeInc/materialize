@@ -17,6 +17,7 @@ use std::sync::Arc;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{Collection, Hashable};
 use futures::StreamExt;
+use mz_compute_types::dyncfgs::CONSOLIDATING_VEC_GROWTH_DENOMINATOR;
 use mz_compute_types::dyncfgs::ENABLE_MATERIALIZED_VIEW_SINK_V2;
 use mz_compute_types::sinks::{ComputeSinkDesc, MaterializedViewSinkConnection};
 use mz_ore::cast::CastFrom;
@@ -222,6 +223,8 @@ where
         compute_state,
     );
 
+    let growth_denominator = CONSOLIDATING_VEC_GROWTH_DENOMINATOR.get(&compute_state.worker_config);
+
     let (written_batches, write_token) = write_batches(
         sink_id.clone(),
         operator_name.clone(),
@@ -233,6 +236,7 @@ where
         &persist_errs,
         Arc::clone(&persist_clients),
         compute_state.read_only_rx.clone(),
+        growth_denominator,
     );
 
     let append_token = append_batches(
@@ -608,6 +612,7 @@ fn write_batches<G>(
     persist_errs: &Stream<G, (DataflowError, Timestamp, Diff)>,
     persist_clients: Arc<PersistClientCache>,
     mut read_only: watch::Receiver<bool>,
+    growth_denominator: usize,
 ) -> (Stream<G, ProtoBatch>, Rc<dyn Any>)
 where
     G: Scope<Timestamp = Timestamp>,
@@ -667,8 +672,13 @@ where
         // Contains `desired - persist`, reflecting the updates we would like to commit
         // to `persist` in order to "correct" it to track `desired`. These collections are
         // only modified by updates received from either the `desired` or `persist` inputs.
-        let mut correction_oks = Correction::new(sink_metrics.clone(), sink_worker_metrics.clone());
-        let mut correction_errs = Correction::new(sink_metrics, sink_worker_metrics);
+        let mut correction_oks = Correction::new(
+            sink_metrics.clone(),
+            sink_worker_metrics.clone(),
+            growth_denominator,
+        );
+        let mut correction_errs =
+            Correction::new(sink_metrics, sink_worker_metrics, growth_denominator);
 
         // Contains descriptions of batches for which we know that we can
         // write data. We got these from the "centralized" operator that

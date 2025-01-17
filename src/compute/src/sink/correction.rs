@@ -47,17 +47,24 @@ pub(super) struct Correction<D> {
     metrics: SinkMetrics,
     /// Per-worker persist sink metrics.
     worker_metrics: SinkWorkerMetrics,
+    /// Configuration for `ConsolidatingVec` determining the rate of growth (doubling, or less).
+    growth_denominator: usize,
 }
 
 impl<D> Correction<D> {
     /// Construct a new `Correction` instance.
-    pub fn new(metrics: SinkMetrics, worker_metrics: SinkWorkerMetrics) -> Self {
+    pub fn new(
+        metrics: SinkMetrics,
+        worker_metrics: SinkWorkerMetrics,
+        growth_denominator: usize,
+    ) -> Self {
         Self {
             updates: Default::default(),
             since: Antichain::from_elem(Timestamp::MIN),
             total_size: Default::default(),
             metrics,
             worker_metrics,
+            growth_denominator,
         }
     }
 
@@ -125,7 +132,8 @@ impl<D: Data> Correction<D> {
             use std::collections::btree_map::Entry;
             match self.updates.entry(time) {
                 Entry::Vacant(entry) => {
-                    let vec: ConsolidatingVec<_> = data.collect();
+                    let mut vec: ConsolidatingVec<_> = data.collect();
+                    vec.growth_denominator = self.growth_denominator;
                     new_size += (vec.len(), vec.capacity());
                     entry.insert(vec);
                 }
@@ -304,13 +312,22 @@ pub(crate) struct ConsolidatingVec<D> {
     /// A lower bound for how small we'll shrink the Vec's capacity. NB: The cap
     /// might start smaller than this.
     min_capacity: usize,
+    /// Denominator in the growth rate, where 2 corresponds to doubling, and `n` to `1 + 1/(n-1)`.
+    ///
+    /// If consolidation didn't free enough space, at least a linear amount, increase the capacity
+    /// The `slop` term describes the rate of growth, where we scale up by factors of 1/slop.
+    /// Setting `slop` to 2 results in doubling whenever the list is at least half full.
+    /// Larger numbers result in more conservative approaches that use more CPU, but less memory.
+    growth_denominator: usize,
 }
 
 impl<D: Ord> ConsolidatingVec<D> {
-    pub fn with_min_capacity(min_capacity: usize) -> Self {
+    /// Creates a new instance from the necessary configuration arguments.
+    pub fn new(min_capacity: usize, growth_denominator: usize) -> Self {
         ConsolidatingVec {
             data: Vec::new(),
             min_capacity,
+            growth_denominator,
         }
     }
 
@@ -337,11 +354,7 @@ impl<D: Ord> ConsolidatingVec<D> {
             // The vector is full. First, consolidate to try to recover some space.
             self.consolidate();
 
-            // If consolidation didn't free enough space, at least a linear amount, increase the capacity
-            // The `slop` term describes the rate of growth, where we scale up by factors of 1/slop.
-            // Setting `slop` to 2 results in doubling whenever the list is at least half full.
-            // Larger numbers result in more conservative approaches that use more CPU, but less memory.
-            let slop = 10;
+            let slop = self.growth_denominator;
             if self.data.len() > capacity * (slop - 1) / slop {
                 self.data.reserve(capacity / (slop - 1));
             }
@@ -391,6 +404,7 @@ impl<D> FromIterator<(D, Diff)> for ConsolidatingVec<D> {
         Self {
             data: Vec::from_iter(iter),
             min_capacity: 0,
+            growth_denominator: 2,
         }
     }
 }
