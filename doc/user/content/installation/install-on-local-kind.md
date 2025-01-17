@@ -26,6 +26,10 @@ For testing purposes only.
 
 {{< /important >}}
 
+## Resource requirements
+
+{{% self-managed/local-resource-requirements %}}
+
 ## Prerequisites
 
 ### kind
