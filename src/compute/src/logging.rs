@@ -21,7 +21,7 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 use std::time::Duration;
 
-use ::timely::container::columnation::Columnation;
+use ::timely::container::ContainerBuilder;
 use ::timely::dataflow::channels::pact::Pipeline;
 use ::timely::dataflow::channels::pushers::buffer::Session;
 use ::timely::dataflow::channels::pushers::{Counter, Tee};
@@ -31,12 +31,11 @@ use ::timely::dataflow::StreamCore;
 use ::timely::progress::Timestamp as TimelyTimestamp;
 use ::timely::scheduling::Activator;
 use ::timely::Container;
-use columnar::Columnar;
+use differential_dataflow::trace::Batcher;
 use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, TimelyLog};
 use mz_expr::{permutation_for_arrangement, MirScalarExpr};
-use mz_repr::{Datum, Diff, Row, RowPacker, RowRef, SharedRow, Timestamp};
+use mz_repr::{Datum, Diff, Row, RowPacker, RowRef, Timestamp};
 use mz_timely_util::activator::RcActivator;
-use mz_timely_util::containers::{Col2ValBatcher, Column, ColumnBuilder};
 use mz_timely_util::operator::consolidate_pact;
 
 use crate::logging::compute::Logger as ComputeLogger;
@@ -141,6 +140,8 @@ struct SharedLoggingState {
 pub(crate) struct PermutedRowPacker {
     key: Vec<usize>,
     value: Vec<usize>,
+    key_row: Row,
+    value_row: Row,
 }
 
 impl PermutedRowPacker {
@@ -155,59 +156,7 @@ impl PermutedRowPacker {
                 .collect::<Vec<_>>(),
             variant.desc().arity(),
         );
-        Self { key, value }
-    }
-
-    /// Pack a slice of datums suitable for the key columns in the log variant.
-    pub(crate) fn pack_slice(&self, datums: &[Datum]) -> (Row, Row) {
-        self.pack_by_index(|packer, index| packer.push(datums[index]))
-    }
-
-    /// Pack using a callback suitable for the key columns in the log variant.
-    pub(crate) fn pack_by_index<F: Fn(&mut RowPacker, usize)>(&self, logic: F) -> (Row, Row) {
-        let binding = SharedRow::get();
-        let mut row_builder = binding.borrow_mut();
-
-        let mut packer = row_builder.packer();
-        for index in &self.key {
-            logic(&mut packer, *index);
-        }
-        let key_row = row_builder.clone();
-
-        let mut packer = row_builder.packer();
-        for index in &self.value {
-            logic(&mut packer, *index);
-        }
-        let value_row = row_builder.clone();
-
-        (key_row, value_row)
-    }
-}
-
-/// Helper to pack collections of [`Datum`]s into key and value row.
-pub(crate) struct PermutedRowRefPacker {
-    arity: usize,
-    key: Vec<usize>,
-    value: Vec<usize>,
-    key_row: Row,
-    value_row: Row,
-}
-
-impl PermutedRowRefPacker {
-    /// Construct based on the information within the log variant.
-    pub(crate) fn new<V: Into<LogVariant>>(variant: V) -> Self {
-        let variant = variant.into();
-        let key = variant.index_by();
-        let arity = variant.desc().arity();
-        let (_, value) = permutation_for_arrangement(
-            &key.iter()
-                .cloned()
-                .map(MirScalarExpr::Column)
-                .collect::<Vec<_>>(),
-            arity,
-        );
         Self {
-            arity,
             key,
             value,
             key_row: Row::default(),
@@ -217,8 +166,13 @@ impl PermutedRowRefPacker {
 
     /// Pack a slice of datums suitable for the key columns in the log variant.
     pub(crate) fn pack_slice(&mut self, datums: &[Datum]) -> (&RowRef, &RowRef) {
-        assert_eq!(datums.len(), self.arity);
         self.pack_by_index(|packer, index| packer.push(datums[index]))
+    }
+
+    /// Pack a slice of datums suitable for the key columns in the log variant.
+    pub(crate) fn pack_slice_owned(&mut self, datums: &[Datum]) -> (Row, Row) {
+        let (key, value) = self.pack_by_index(|packer, index| packer.push(datums[index]));
+        (key.to_owned(), value.to_owned())
     }
 
     /// Pack using a callback suitable for the key columns in the log variant.
@@ -238,14 +192,6 @@ impl PermutedRowRefPacker {
 
         (&self.key_row, &self.value_row)
     }
-
-    pub(crate) fn key(&self) -> &RowRef {
-        &self.key_row
-    }
-
-    pub(crate) fn value(&self) -> &RowRef {
-        &self.value_row
-    }
 }
 
 /// Information about a collection exported from a logging dataflow.
@@ -258,10 +204,9 @@ struct LogCollection {
     dataflow_index: usize,
 }
 
-pub(super) type Update<D> = (D, Timestamp, Diff);
-pub(super) type Pusher<D> =
-    Counter<Timestamp, Column<Update<D>>, Tee<Timestamp, Column<Update<D>>>>;
-pub(super) type OutputSession<'a, D> = Session<'a, Timestamp, ColumnBuilder<Update<D>>, Pusher<D>>;
+pub(super) type Pusher<C> = Counter<Timestamp, C, Tee<Timestamp, C>>;
+pub(super) type OutputSession<'a, CB> =
+    Session<'a, Timestamp, CB, Pusher<<CB as ContainerBuilder>::Container>>;
 
 /// A single-purpose function to consolidate and pack updates for log collection.
 ///
@@ -269,38 +214,38 @@ pub(super) type OutputSession<'a, D> = Session<'a, Timestamp, ColumnBuilder<Upda
 /// the updates into `(Row, Row)` pairs using the provided logic function. It is crucial that the
 /// data is not exchanged between workers, as the consolidation would not function as desired
 /// otherwise.
-pub(super) fn prepare_log_collection<G, L, K, V, F>(
-    input: &StreamCore<G, Column<Update<(K, V)>>>,
+pub(super) fn consolidate_and_pack<G, B, CB, L, F>(
+    input: &StreamCore<G, B::Input>,
     log: L,
     mut logic: F,
-) -> StreamCore<G, Column<Update<(Row, Row)>>>
+) -> StreamCore<G, CB::Container>
 where
     G: ::timely::dataflow::Scope<Timestamp = Timestamp>,
+    B: Batcher<Time = G::Timestamp> + 'static,
+    B::Input: Container + Clone + 'static,
+    B::Output: Container + Clone + 'static,
+    CB: ContainerBuilder,
     L: Into<LogVariant>,
-    K: Columnar + Columnation + Ord,
-    for<'a> K::Ref<'a>: Ord + Copy,
-    K::Container: Clone,
-    V: Columnar + Columnation + Ord,
-    for<'a> V::Ref<'a>: Ord + Copy,
-    V::Container: Clone,
-    F: FnMut(K::Ref<'_>, V::Ref<'_>, &mut PermutedRowRefPacker) + 'static,
+    F: for<'a> FnMut(
+            <B::Output as Container>::Item<'a>,
+            &mut PermutedRowPacker,
+            &mut OutputSession<CB>,
+        ) + 'static,
 {
     let log = log.into();
     // TODO: Use something other than the debug representation of the log variant as a name.
-    let name = format!("{log:?}");
-    let consolidate_name = &format!("Consolidate {name}");
-    let mut packer = PermutedRowRefPacker::new(log);
-    consolidate_pact::<Col2ValBatcher<_, _, _, _>, _, _, _, _>(input, Pipeline, consolidate_name)
-        .container::<Column<Update<(K, V)>>>()
-        .unary::<ColumnBuilder<_>, _, _, _>(Pipeline, &format!("ToRow {name}"), |_, _| {
-            move |input, output| {
-                while let Some((time, data)) = input.next() {
-                    let mut session = output.session_with_builder(&time);
-                    for ((key, val), time, diff) in data.iter() {
-                        logic(key, val, &mut packer);
-                        session.give(((packer.key(), packer.value()), time, diff));
-                    }
+    let c_name = &format!("Consolidate {log:?}");
+    let u_name = &format!("ToRow {log:?}");
+    let mut packer = PermutedRowPacker::new(log);
+    let consolidated = consolidate_pact::<B, _, _, _>(input, Pipeline, c_name);
+    consolidated.unary::<CB, _, _, _>(Pipeline, u_name, |_, _| {
+        move |input, output| {
+            while let Some((time, data)) = input.next() {
+                let mut session = output.session_with_builder(&time);
+                for item in data.drain() {
+                    logic(item, &mut packer, &mut session);
                 }
             }
-        })
+        }
+    })
 }

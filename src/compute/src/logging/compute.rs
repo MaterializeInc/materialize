@@ -394,34 +394,34 @@ pub(super) fn construct<A: Allocate + 'static>(
         });
 
         // Encode the contents of each logging stream into its expected `Row` format.
-        let packer = PermutedRowPacker::new(ComputeLog::DataflowCurrent);
+        let mut packer = PermutedRowPacker::new(ComputeLog::DataflowCurrent);
         let dataflow_current = export.as_collection().map({
             let mut scratch = String::new();
             move |datum| {
-                packer.pack_slice(&[
+                packer.pack_slice_owned(&[
                     make_string_datum(datum.export_id, &mut scratch),
                     Datum::UInt64(u64::cast_from(worker_id)),
                     Datum::UInt64(u64::cast_from(datum.dataflow_index)),
                 ])
             }
         });
-        let packer = PermutedRowPacker::new(ComputeLog::FrontierCurrent);
+        let mut packer = PermutedRowPacker::new(ComputeLog::FrontierCurrent);
         let frontier_current = frontier.as_collection().map({
             let mut scratch = String::new();
             move |datum| {
-                packer.pack_slice(&[
+                packer.pack_slice_owned(&[
                     make_string_datum(datum.export_id, &mut scratch),
                     Datum::UInt64(u64::cast_from(worker_id)),
                     Datum::MzTimestamp(datum.time),
                 ])
             }
         });
-        let packer = PermutedRowPacker::new(ComputeLog::ImportFrontierCurrent);
+        let mut packer = PermutedRowPacker::new(ComputeLog::ImportFrontierCurrent);
         let import_frontier_current = import_frontier.as_collection().map({
             let mut scratch1 = String::new();
             let mut scratch2 = String::new();
             move |datum| {
-                packer.pack_slice(&[
+                packer.pack_slice_owned(&[
                     make_string_datum(datum.export_id, &mut scratch1),
                     make_string_datum(datum.import_id, &mut scratch2),
                     Datum::UInt64(u64::cast_from(worker_id)),
@@ -429,11 +429,11 @@ pub(super) fn construct<A: Allocate + 'static>(
                 ])
             }
         });
-        let packer = PermutedRowPacker::new(ComputeLog::PeekCurrent);
+        let mut packer = PermutedRowPacker::new(ComputeLog::PeekCurrent);
         let peek_current = peek.as_collection().map({
             let mut scratch = String::new();
             move |PeekDatum { peek, peek_type }| {
-                packer.pack_slice(&[
+                packer.pack_slice_owned(&[
                     Datum::Uuid(Uuid::from_bytes(peek.uuid)),
                     Datum::UInt64(u64::cast_from(worker_id)),
                     make_string_datum(peek.id, &mut scratch),
@@ -442,20 +442,20 @@ pub(super) fn construct<A: Allocate + 'static>(
                 ])
             }
         });
-        let packer = PermutedRowPacker::new(ComputeLog::PeekDuration);
+        let mut packer = PermutedRowPacker::new(ComputeLog::PeekDuration);
         let peek_duration =
             peek_duration
                 .as_collection()
                 .map(move |PeekDurationDatum { peek_type, bucket }| {
-                    packer.pack_slice(&[
+                    packer.pack_slice_owned(&[
                         Datum::UInt64(u64::cast_from(worker_id)),
                         Datum::String(peek_type.name()),
                         Datum::UInt64(bucket.try_into().expect("bucket too big")),
                     ])
                 });
-        let packer = PermutedRowPacker::new(ComputeLog::ShutdownDuration);
+        let mut packer = PermutedRowPacker::new(ComputeLog::ShutdownDuration);
         let shutdown_duration = shutdown_duration.as_collection().map(move |bucket| {
-            packer.pack_slice(&[
+            packer.pack_slice_owned(&[
                 Datum::UInt64(u64::cast_from(worker_id)),
                 Datum::UInt64(bucket.try_into().expect("bucket too big")),
             ])
@@ -463,7 +463,7 @@ pub(super) fn construct<A: Allocate + 'static>(
 
         let arrangement_heap_datum_to_row =
             move |packer: &mut PermutedRowPacker, ArrangementHeapDatum { operator_id }| {
-                packer.pack_slice(&[
+                packer.pack_slice_owned(&[
                     Datum::UInt64(operator_id.try_into().expect("operator_id too big")),
                     Datum::UInt64(u64::cast_from(worker_id)),
                 ])
@@ -484,11 +484,11 @@ pub(super) fn construct<A: Allocate + 'static>(
             .as_collection()
             .map(move |d| arrangement_heap_datum_to_row(&mut packer, d));
 
-        let packer = PermutedRowPacker::new(ComputeLog::ErrorCount);
+        let mut packer = PermutedRowPacker::new(ComputeLog::ErrorCount);
         let error_count = error_count.as_collection().map({
             let mut scratch = String::new();
             move |datum| {
-                packer.pack_slice(&[
+                packer.pack_slice_owned(&[
                     make_string_datum(datum.export_id, &mut scratch),
                     Datum::UInt64(u64::cast_from(worker_id)),
                     Datum::Int64(datum.count),
@@ -496,11 +496,11 @@ pub(super) fn construct<A: Allocate + 'static>(
             }
         });
 
-        let packer = PermutedRowPacker::new(ComputeLog::HydrationTime);
+        let mut packer = PermutedRowPacker::new(ComputeLog::HydrationTime);
         let hydration_time = hydration_time.as_collection().map({
             let mut scratch = String::new();
             move |datum| {
-                packer.pack_slice(&[
+                packer.pack_slice_owned(&[
                     make_string_datum(datum.export_id, &mut scratch),
                     Datum::UInt64(u64::cast_from(worker_id)),
                     Datum::from(datum.time_ns),
@@ -508,13 +508,13 @@ pub(super) fn construct<A: Allocate + 'static>(
             }
         });
 
-        let packer = PermutedRowPacker::new(ComputeLog::LirMapping);
+        let mut packer = PermutedRowPacker::new(ComputeLog::LirMapping);
         let lir_mapping = lir_mapping
             .map({
                 let mut scratch1 = String::new();
                 let mut scratch2 = String::new();
                 move |(datum, time, diff)| {
-                    let row = packer.pack_slice(&[
+                    let row = packer.pack_slice_owned(&[
                         make_string_datum(GlobalId::into_owned(datum.global_id), &mut scratch1),
                         Datum::UInt64(<LirId as Columnar>::into_owned(datum.lir_id).into()),
                         Datum::UInt64(u64::cast_from(worker_id)),
@@ -532,11 +532,11 @@ pub(super) fn construct<A: Allocate + 'static>(
             })
             .as_collection();
 
-        let packer = PermutedRowPacker::new(ComputeLog::DataflowGlobal);
+        let mut packer = PermutedRowPacker::new(ComputeLog::DataflowGlobal);
         let dataflow_global_ids = dataflow_global_ids.as_collection().map({
             let mut scratch = String::new();
             move |datum| {
-                packer.pack_slice(&[
+                packer.pack_slice_owned(&[
                     Datum::UInt64(u64::cast_from(datum.dataflow_index)),
                     Datum::UInt64(u64::cast_from(worker_id)),
                     make_string_datum(datum.global_id, &mut scratch),
@@ -731,7 +731,7 @@ struct PeekDurationDatum {
     bucket: u128,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 struct ArrangementHeapDatum {
     operator_id: usize,
 }
@@ -1252,14 +1252,12 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
             let datum = ArrangementHeapDatum { operator_id };
 
             let diff = -Diff::cast_from(state.size);
-            self.output
-                .arrangement_heap_size
-                .give((datum.clone(), ts, diff));
+            self.output.arrangement_heap_size.give((datum, ts, diff));
 
             let diff = -Diff::cast_from(state.capacity);
             self.output
                 .arrangement_heap_capacity
-                .give((datum.clone(), ts, diff));
+                .give((datum, ts, diff));
 
             let diff = -Diff::cast_from(state.count);
             self.output

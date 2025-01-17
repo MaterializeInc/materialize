@@ -14,31 +14,33 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::Duration;
 
-use columnar::{Columnar, Index, IndexAs};
+use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::Hashable;
 use mz_compute_client::logging::LoggingConfig;
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, RowRef, Timestamp};
-use mz_timely_util::containers::{Col2ValBatcher, Column, ColumnBuilder};
+use mz_timely_util::containers::{Col2ValBatcher, ColumnBuilder};
 use mz_timely_util::replay::MzReplay;
 use timely::communication::Allocate;
 use timely::container::columnation::{Columnation, CopyRegion};
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
+use timely::dataflow::channels::pushers::buffer::Session;
+use timely::dataflow::channels::pushers::{Counter, Tee};
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::StreamCore;
 use timely::logging::{
-    ChannelsEvent, MessagesEvent, OperatesEvent, ParkEvent, ParkEventReference, ScheduleEvent,
-    ShutdownEvent, TimelyEvent, TimelyEventReference,
+    ChannelsEvent, MessagesEvent, OperatesEvent, ParkEvent, ScheduleEvent, ShutdownEvent,
+    TimelyEvent,
 };
 use timely::Container;
 use tracing::error;
 
 use crate::extensions::arrange::MzArrangeCore;
 use crate::logging::compute::{ComputeEvent, DataflowShutdown};
-use crate::logging::{prepare_log_collection, LogCollection, OutputSession};
+use crate::logging::{consolidate_and_pack, LogCollection};
 use crate::logging::{EventQueue, LogVariant, SharedLoggingState, TimelyLog};
 use crate::row_spine::RowRowBuilder;
-use crate::typedefs::RowRowSpine;
+use crate::typedefs::{KeyBatcher, KeyValBatcher, RowRowSpine};
 
 /// Constructs the logging dataflow for timely logs.
 ///
@@ -60,8 +62,8 @@ pub(super) fn construct<A: Allocate>(
 
     worker.dataflow_named("Dataflow: timely logging", move |scope| {
         let enable_logging = config.enable_logging;
-        let (logs, token): (StreamCore<_, Column<(Duration, TimelyEvent)>>, _) =
-            Some(event_queue.link).mz_replay::<_, ColumnBuilder<_>, _>(
+        let (logs, token) =
+            Some(event_queue.link).mz_replay::<_, CapacityContainerBuilder<_>, _>(
                 scope,
                 "timely logs",
                 config.interval,
@@ -74,6 +76,7 @@ pub(super) fn construct<A: Allocate>(
                     }
                 },
             );
+        let logs = logs.container::<Vec<_>>();
 
         // Build a demux operator that splits the replayed event stream up into the separate
         // logging streams.
@@ -118,9 +121,8 @@ pub(super) fn construct<A: Allocate>(
                         batches_received: batches_received.session_with_builder(&cap),
                     };
 
-                    let shared_state = &mut shared_state.borrow_mut();
-                    for (time, event) in data.drain() {
-                        if let TimelyEventReference::Messages(msg) = &event {
+                    for (time, event) in data.drain(..) {
+                        if let TimelyEvent::Messages(msg) = &event {
                             match msg.is_send {
                                 true => assert_eq!(msg.source, worker_id),
                                 false => assert_eq!(msg.target, worker_id),
@@ -129,7 +131,7 @@ pub(super) fn construct<A: Allocate>(
 
                         DemuxHandler {
                             state: &mut demux_state,
-                            shared_state,
+                            shared_state: &mut shared_state.borrow_mut(),
                             output: &mut output_buffers,
                             logging_interval_ms,
                             peers,
@@ -145,25 +147,26 @@ pub(super) fn construct<A: Allocate>(
         // We pre-arrange the logging streams to force a consolidation and reduce the amount of
         // updates that reach `Row` encoding.
 
-        let operates = prepare_log_collection(
+        let operates = consolidate_and_pack::<_, KeyValBatcher<_, _, _, _>, ColumnBuilder<_>, _, _>(
             &operates,
             TimelyLog::Operates,
-            move |id, name, packer| {
-                packer.pack_slice(&[
-                    Datum::UInt64(u64::cast_from(id)),
+            move |((id, name), time, diff), packer, session| {
+                let data = packer.pack_slice(&[
+                    Datum::UInt64(u64::cast_from(*id)),
                     Datum::UInt64(u64::cast_from(worker_id)),
                     Datum::String(name),
                 ]);
+                session.give((data, time, diff));
             },
         );
 
-        let channels = prepare_log_collection(
+        let channels = consolidate_and_pack::<_, KeyValBatcher<_, _, _, _>, ColumnBuilder<_>, _, _>(
             &channels,
             TimelyLog::Channels,
-            move |datum, (), packer| {
+            move |((datum, ()), time, diff), packer, session| {
                 let (source_node, source_port) = datum.source;
                 let (target_node, target_port) = datum.target;
-                packer.pack_slice(&[
+                let data = packer.pack_slice(&[
                     Datum::UInt64(u64::cast_from(datum.id)),
                     Datum::UInt64(u64::cast_from(worker_id)),
                     Datum::UInt64(u64::cast_from(source_node)),
@@ -171,108 +174,117 @@ pub(super) fn construct<A: Allocate>(
                     Datum::UInt64(u64::cast_from(target_node)),
                     Datum::UInt64(u64::cast_from(target_port)),
                 ]);
+                session.give((data, time, diff));
             },
         );
 
-        let addresses = prepare_log_collection(
+        let addresses = consolidate_and_pack::<_, KeyValBatcher<_, _, _, _>, ColumnBuilder<_>, _, _>(
             &addresses,
             TimelyLog::Addresses,
-            move |id, address, packer| {
-                packer.pack_by_index(|packer, index| match index {
-                    0 => packer.push(Datum::UInt64(u64::cast_from(id))),
+            move |((id, address), time, diff), packer, session| {
+                let data = packer.pack_by_index(|packer, index| match index {
+                    0 => packer.push(Datum::UInt64(u64::cast_from(*id))),
                     1 => packer.push(Datum::UInt64(u64::cast_from(worker_id))),
                     2 => {
-                        packer.push_list(address.iter().map(|i| Datum::UInt64(u64::cast_from(i))))
+                        packer.push_list(address.iter().map(|i| Datum::UInt64(u64::cast_from(*i))))
                     }
                     _ => unreachable!("Addresses relation has three columns"),
                 });
+                session.give((data, time, diff));
             },
         );
 
-        let parks = prepare_log_collection(
+        let parks = consolidate_and_pack::<_, KeyBatcher<_, _, _>, ColumnBuilder<_>, _, _>(
             &parks,
             TimelyLog::Parks,
-            move |datum, (), packer| {
-                packer.pack_slice(&[
+            move |((datum, ()), time, diff), packer, session| {
+                let data = packer.pack_slice(&[
                     Datum::UInt64(u64::cast_from(worker_id)),
-                    Datum::UInt64(*datum.duration_pow),
+                    Datum::UInt64(datum.duration_pow),
                     datum
                         .requested_pow
-                        .map(|v| Datum::UInt64(*v))
+                        .map(|v| Datum::UInt64(v))
                         .unwrap_or(Datum::Null),
                 ]);
+                session.give((data, time, diff));
             },
         );
 
-        let batches_sent = prepare_log_collection(
+        let batches_sent = consolidate_and_pack::<_, KeyValBatcher<_, _, _, _>, ColumnBuilder<_>, _, _>(
             &batches_sent,
             TimelyLog::BatchesSent,
-            move |datum, (), packer| {
-                packer.pack_slice(&[
+            move |((datum, ()), time, diff), packer, session| {
+                let data = packer.pack_slice(&[
                     Datum::UInt64(u64::cast_from(datum.channel)),
                     Datum::UInt64(u64::cast_from(worker_id)),
                     Datum::UInt64(u64::cast_from(datum.worker)),
                 ]);
+                session.give((data, time, diff));
             },
         );
 
-        let batches_received = prepare_log_collection(
+        let batches_received = consolidate_and_pack::<_, KeyValBatcher<_, _, _, _>, ColumnBuilder<_>, _, _>(
             &batches_received,
             TimelyLog::BatchesReceived,
-            move |datum, (), packer| {
-                packer.pack_slice(&[
+            move |((datum, ()), time, diff), packer, session| {
+                let data = packer.pack_slice(&[
                     Datum::UInt64(u64::cast_from(datum.channel)),
                     Datum::UInt64(u64::cast_from(datum.worker)),
                     Datum::UInt64(u64::cast_from(worker_id)),
                 ]);
+                session.give((data, time, diff));
             },
         );
 
 
-        let messages_sent = prepare_log_collection(
+        let messages_sent = consolidate_and_pack::<_, KeyValBatcher<_, _, _, _>, ColumnBuilder<_>, _, _>(
             &messages_sent,
             TimelyLog::MessagesSent,
-            move |datum, (), packer| {
-                packer.pack_slice(&[
+            move |((datum, ()), time, diff), packer, session| {
+                let data = packer.pack_slice(&[
                     Datum::UInt64(u64::cast_from(datum.channel)),
                     Datum::UInt64(u64::cast_from(worker_id)),
                     Datum::UInt64(u64::cast_from(datum.worker)),
                 ]);
+                session.give((data, time, diff));
             },
         );
 
-        let messages_received = prepare_log_collection(
+        let messages_received = consolidate_and_pack::<_, KeyValBatcher<_, _, _, _>, ColumnBuilder<_>, _, _>(
             &messages_received,
             TimelyLog::MessagesReceived,
-            move |datum, (), packer| {
-                packer.pack_slice(&[
+            move |((datum, ()), time, diff), packer, session| {
+                let data = packer.pack_slice(&[
                     Datum::UInt64(u64::cast_from(datum.channel)),
                     Datum::UInt64(u64::cast_from(datum.worker)),
                     Datum::UInt64(u64::cast_from(worker_id)),
                 ]);
+                session.give((data, time, diff));
             },
         );
 
-        let elapsed = prepare_log_collection(
+        let elapsed = consolidate_and_pack::<_, KeyValBatcher<_, _, _, _>, ColumnBuilder<_>, _, _>(
             &schedules_duration,
             TimelyLog::Elapsed,
-            move |operator, (), packer| {
-                packer.pack_slice(&[Datum::UInt64(u64::cast_from(operator)),
+            move |((operator, ()), time, diff), packer, session| {
+                let data = packer.pack_slice(&[Datum::UInt64(u64::cast_from(*operator)),
                     Datum::UInt64(u64::cast_from(worker_id)),
                 ]);
+                session.give((data, time, diff));
             },
         );
 
 
-        let histogram = prepare_log_collection(
+        let histogram = consolidate_and_pack::<_, KeyValBatcher<_, _, _, _>, ColumnBuilder<_>, _, _>(
             &schedules_histogram,
             TimelyLog::Histogram,
-            move |datum, (), packer| {
-                packer.pack_slice(&[
+            move |((datum, ()), time, diff), packer, session| {
+                let data = packer.pack_slice(&[
                     Datum::UInt64(u64::cast_from(datum.operator)),
                     Datum::UInt64(u64::cast_from(worker_id)),
-                    Datum::UInt64(*datum.duration_pow),
+                    Datum::UInt64(datum.duration_pow),
                 ]);
+                session.give((data, time, diff));
             },
         );
 
@@ -336,7 +348,6 @@ struct DemuxState {
     schedules_data: BTreeMap<usize, Vec<(isize, i64)>>,
 }
 
-#[derive(Columnar)]
 struct Park {
     /// Time when the park occurred.
     time: Duration,
@@ -345,13 +356,18 @@ struct Park {
 }
 
 /// Organize message counts into number of batches and records.
-#[derive(Default, Copy, Clone, Debug, Columnar)]
+#[derive(Default, Copy, Clone, Debug)]
 struct MessageCount {
     /// The number of batches sent across a channel.
     batches: i64,
     /// The number of records sent across a channel.
     records: i64,
 }
+
+type Pusher<D> =
+    Counter<Timestamp, Vec<(D, Timestamp, Diff)>, Tee<Timestamp, Vec<(D, Timestamp, Diff)>>>;
+type OutputSession<'a, D> =
+    Session<'a, Timestamp, ConsolidatingContainerBuilder<Vec<(D, Timestamp, Diff)>>, Pusher<D>>;
 
 /// Bundled output buffers used by the demux operator.
 //
@@ -371,8 +387,7 @@ struct DemuxOutput<'a> {
     schedules_histogram: OutputSession<'a, (ScheduleHistogramDatum, ())>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Columnar)]
-#[columnar(derive(PartialEq, Eq, PartialOrd, Ord))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct ChannelDatum {
     id: usize,
     source: (usize, usize),
@@ -383,8 +398,7 @@ impl Columnation for ChannelDatum {
     type InnerRegion = CopyRegion<Self>;
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Columnar)]
-#[columnar(derive(PartialEq, Eq, PartialOrd, Ord))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct ParkDatum {
     duration_pow: u64,
     requested_pow: Option<u64>,
@@ -394,8 +408,7 @@ impl Columnation for ParkDatum {
     type InnerRegion = CopyRegion<Self>;
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Columnar)]
-#[columnar(derive(PartialEq, Eq, PartialOrd, Ord))]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct MessageDatum {
     channel: usize,
     worker: usize,
@@ -405,8 +418,7 @@ impl Columnation for MessageDatum {
     type InnerRegion = CopyRegion<Self>;
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Columnar)]
-#[columnar(derive(PartialEq, Eq, PartialOrd, Ord))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct ScheduleHistogramDatum {
     operator: usize,
     duration_pow: u64,
@@ -443,8 +455,8 @@ impl DemuxHandler<'_, '_> {
     }
 
     /// Handle the given timely event.
-    fn handle(&mut self, event: <TimelyEvent as Columnar>::Ref<'_>) {
-        use TimelyEventReference::*;
+    fn handle(&mut self, event: TimelyEvent) {
+        use TimelyEvent::*;
 
         match event {
             Operates(e) => self.handle_operates(e),
@@ -457,20 +469,18 @@ impl DemuxHandler<'_, '_> {
         }
     }
 
-    fn handle_operates(&mut self, event: <OperatesEvent as Columnar>::Ref<'_>) {
+    fn handle_operates(&mut self, event: OperatesEvent) {
         let ts = self.ts();
-        let datum = (event.id, event.name);
+        let datum = (event.id, event.name.clone());
         self.output.operates.give((datum, ts, 1));
 
-        let datum = (event.id, event.addr);
+        let datum = (event.id, event.addr.clone());
         self.output.addresses.give((datum, ts, 1));
 
-        self.state
-            .operators
-            .insert(event.id, Columnar::into_owned(event));
+        self.state.operators.insert(event.id, event);
     }
 
-    fn handle_channels(&mut self, event: <ChannelsEvent as Columnar>::Ref<'_>) {
+    fn handle_channels(&mut self, event: ChannelsEvent) {
         let ts = self.ts();
         let datum = ChannelDatum {
             id: event.id,
@@ -479,18 +489,18 @@ impl DemuxHandler<'_, '_> {
         };
         self.output.channels.give(((datum, ()), ts, 1));
 
-        let datum = (event.id, event.scope_addr);
+        let datum = (event.id, event.scope_addr.clone());
         self.output.addresses.give((datum, ts, 1));
 
-        let dataflow_index = event.scope_addr.index_as(0);
+        let dataflow_index = event.scope_addr[0];
         self.state
             .dataflow_channels
             .entry(dataflow_index)
             .or_default()
-            .push(Columnar::into_owned(event));
+            .push(event);
     }
 
-    fn handle_shutdown(&mut self, event: <ShutdownEvent as Columnar>::Ref<'_>) {
+    fn handle_shutdown(&mut self, event: ShutdownEvent) {
         // Dropped operators should result in a negative record for
         // the `operates` collection, cancelling out the initial
         // operator announcement.
@@ -503,7 +513,7 @@ impl DemuxHandler<'_, '_> {
 
         // Retract operator information.
         let ts = self.ts();
-        let datum = (operator.id, &operator.name);
+        let datum = (operator.id, operator.name);
         self.output.operates.give((datum, ts, -1));
 
         // Retract schedules information for the operator
@@ -532,7 +542,7 @@ impl DemuxHandler<'_, '_> {
             self.handle_dataflow_shutdown(dataflow_index);
         }
 
-        let datum = (operator.id, &operator.addr);
+        let datum = (operator.id, operator.addr);
         self.output.addresses.give((datum, ts, -1));
     }
 
@@ -559,7 +569,7 @@ impl DemuxHandler<'_, '_> {
             };
             self.output.channels.give(((datum, ()), ts, -1));
 
-            let datum = (channel.id, &channel.scope_addr);
+            let datum = (channel.id, channel.scope_addr);
             self.output.addresses.give((datum, ts, -1));
 
             // Retract messages logged for this channel.
@@ -594,9 +604,9 @@ impl DemuxHandler<'_, '_> {
         }
     }
 
-    fn handle_park(&mut self, event: <ParkEvent as Columnar>::Ref<'_>) {
+    fn handle_park(&mut self, event: ParkEvent) {
         match event {
-            ParkEventReference::Park(requested) => {
+            ParkEvent::Park(requested) => {
                 let park = Park {
                     time: self.time,
                     requested,
@@ -606,7 +616,7 @@ impl DemuxHandler<'_, '_> {
                     error!("park without a succeeding unpark");
                 }
             }
-            ParkEventReference::Unpark(()) => {
+            ParkEvent::Unpark => {
                 let Some(park) = self.state.last_park.take() else {
                     error!("unpark without a preceding park");
                     return;
@@ -629,7 +639,7 @@ impl DemuxHandler<'_, '_> {
         }
     }
 
-    fn handle_messages(&mut self, event: <MessagesEvent as Columnar>::Ref<'_>) {
+    fn handle_messages(&mut self, event: MessagesEvent) {
         let ts = self.ts();
         let count = Diff::try_from(event.length).expect("must fit");
 
@@ -666,7 +676,7 @@ impl DemuxHandler<'_, '_> {
         }
     }
 
-    fn handle_schedule(&mut self, event: <ScheduleEvent as Columnar>::Ref<'_>) {
+    fn handle_schedule(&mut self, event: ScheduleEvent) {
         match event.start_stop {
             timely::logging::StartStop::Start => {
                 let existing = self.state.schedule_starts.insert(event.id, self.time);

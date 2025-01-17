@@ -14,7 +14,7 @@ use std::convert::TryInto;
 use std::rc::Rc;
 use std::time::Duration;
 
-use columnar::{Columnar, Index};
+use columnar::Index;
 use differential_dataflow::Hashable;
 use mz_compute_client::logging::LoggingConfig;
 use mz_ore::cast::CastFrom;
@@ -27,7 +27,7 @@ use timely::Container;
 
 use crate::extensions::arrange::MzArrangeCore;
 use crate::logging::initialize::ReachabilityEvent;
-use crate::logging::{prepare_log_collection, EventQueue, LogCollection, LogVariant, TimelyLog};
+use crate::logging::{consolidate_and_pack, EventQueue, LogCollection, LogVariant, TimelyLog};
 use crate::row_spine::RowRowBuilder;
 use crate::typedefs::RowRowSpine;
 
@@ -78,24 +78,25 @@ pub(super) fn construct<A: Allocate>(
         let logs_active = [LogVariant::Timely(TimelyLog::Reachability)];
 
         let mut addr_row = Row::default();
-        let updates = prepare_log_collection(
+        let updates = consolidate_and_pack::<_, Col2ValBatcher<UpdatesKey, _, _, _>, ColumnBuilder<_>, _, _>(
             &updates,
             TimelyLog::Reachability,
-            move |datum, (), packer| {
+            move |((datum, ()), time, diff), packer, session| {
                 let (update_type, addr, source, port, ts) = datum;
-                let update_type = if update_type { "source" } else { "target" };
+                let update_type = if *update_type { "source" } else { "target" };
                 addr_row.packer().push_list(
-                    addr.iter()
+                    IntoIterator::into_iter(addr)
                         .chain(std::iter::once(source))
-                        .map(|id| Datum::UInt64(u64::cast_from(id))),
+                        .map(|id| Datum::UInt64(u64::cast_from(*id))),
                 );
-                packer.pack_slice(&[
+                let data = packer.pack_slice(&[
                     addr_row.iter().next().unwrap(),
-                    Datum::UInt64(u64::cast_from(port)),
+                    Datum::UInt64(u64::cast_from(*port)),
                     Datum::UInt64(u64::cast_from(worker_index)),
                     Datum::String(update_type),
-                    Datum::from(<Option<Timestamp>>::into_owned(ts)),
+                    Datum::from(*ts),
                 ]);
+                session.give((data, time, diff));
             }
         );
 

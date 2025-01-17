@@ -18,26 +18,27 @@ use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::logging::{
     BatchEvent, BatcherEvent, DifferentialEvent, DropEvent, MergeEvent, TraceShare,
 };
-use differential_dataflow::AsCollection;
+use differential_dataflow::Hashable;
 use mz_ore::cast::CastFrom;
-use mz_repr::{Datum, Diff, Timestamp};
-use mz_timely_util::operator::consolidate_pact;
+use mz_repr::{Datum, Diff, RowRef, Timestamp};
+use mz_timely_util::containers::{Col2ValBatcher, ColumnBuilder};
 use mz_timely_util::replay::MzReplay;
 use timely::communication::Allocate;
 use timely::container::CapacityContainerBuilder;
-use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::channels::pushers::buffer::Session;
 use timely::dataflow::channels::pushers::{Counter, Tee};
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::Filter;
 use timely::dataflow::Stream;
 
-use crate::extensions::arrange::MzArrange;
+use crate::extensions::arrange::MzArrangeCore;
 use crate::logging::compute::{ArrangementHeapSizeOperatorDrop, ComputeEvent};
 use crate::logging::{
-    DifferentialLog, EventQueue, LogCollection, LogVariant, PermutedRowPacker, SharedLoggingState,
+    consolidate_and_pack, DifferentialLog, EventQueue, LogCollection, LogVariant,
+    SharedLoggingState,
 };
-use crate::row_spine::{RowRowBatcher, RowRowBuilder};
+use crate::row_spine::RowRowBuilder;
 use crate::typedefs::{KeyBatcher, RowRowSpine};
 
 /// Constructs the logging dataflow for differential logs.
@@ -121,36 +122,30 @@ pub(super) fn construct<A: Allocate>(
             }
         });
 
-        let stream_to_collection = |input: Stream<_, ((usize, ()), Timestamp, Diff)>, log, name| {
-            let packer = PermutedRowPacker::new(log);
-            consolidate_pact::<KeyBatcher<_, _, _>, _, _, _, _>(
-                &input,
-                Pipeline,
-                &format!("Consolidate Differential {name}"),
+        // We're lucky and the differential logs all have the same stream format, so just implement
+        // the call once.
+        let stream_to_collection = |input: &Stream<_, ((usize, ()), Timestamp, Diff)>, log| {
+            consolidate_and_pack::<_, KeyBatcher<_, _, _>, ColumnBuilder<_>, _, _>(
+                input,
+                log,
+                move |((op, ()), time, diff), packer, session| {
+                    let data = packer.pack_slice(&[
+                        Datum::UInt64(u64::cast_from(*op)),
+                        Datum::UInt64(u64::cast_from(worker_id)),
+                    ]);
+                    session.give((data, *time, *diff))
+                },
             )
-            .as_collection()
-            .map(move |(op, ())| {
-                packer.pack_slice(&[
-                    Datum::UInt64(u64::cast_from(op)),
-                    Datum::UInt64(u64::cast_from(worker_id)),
-                ])
-            })
         };
 
         // Encode the contents of each logging stream into its expected `Row` format.
-        let arrangement_batches = stream_to_collection(batches, ArrangementBatches, "batches");
-        let arrangement_records = stream_to_collection(records, ArrangementRecords, "records");
-        let sharing = stream_to_collection(sharing, Sharing, "sharing");
-        let batcher_records =
-            stream_to_collection(batcher_records, BatcherRecords, "batcher records");
-        let batcher_size = stream_to_collection(batcher_size, BatcherSize, "batcher size");
-        let batcher_capacity =
-            stream_to_collection(batcher_capacity, BatcherCapacity, "batcher capacity");
-        let batcher_allocations = stream_to_collection(
-            batcher_allocations,
-            BatcherAllocations,
-            "batcher allocations",
-        );
+        let arrangement_batches = stream_to_collection(&batches, ArrangementBatches);
+        let arrangement_records = stream_to_collection(&records, ArrangementRecords);
+        let sharing = stream_to_collection(&sharing, Sharing);
+        let batcher_records = stream_to_collection(&batcher_records, BatcherRecords);
+        let batcher_size = stream_to_collection(&batcher_size, BatcherSize);
+        let batcher_capacity = stream_to_collection(&batcher_capacity, BatcherCapacity);
+        let batcher_allocations = stream_to_collection(&batcher_allocations, BatcherAllocations);
 
         use DifferentialLog::*;
         let logs = [
@@ -169,7 +164,8 @@ pub(super) fn construct<A: Allocate>(
             let variant = LogVariant::Differential(variant);
             if config.index_logs.contains_key(&variant) {
                 let trace = collection
-                    .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+                    .mz_arrange_core::<_, Col2ValBatcher<_, _, _, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+                        ExchangeCore::new(|((key, _val), _time, _diff): &((&RowRef, &RowRef), _, _)| key.hashed()),
                         &format!("Arrange {variant:?}"),
                     )
                     .trace;
