@@ -733,7 +733,7 @@ steps:
     key: platform-checks
     steps:
       - id: checks-no-restart-no-upgrade-azurite
-        label: "Checks without restart or upgrade with :azure: blob store %N"
+        label: "Checks without restart or upgrade with :azure: blob store"
         depends_on: build-aarch64
         inputs: [misc/python/materialize/checks]
         timeout_in_minutes: 45
@@ -760,7 +760,7 @@ steps:
               args: [--scenario=RestartEntireMz, "--seed=$BUILDKITE_JOB_ID", --azurite]
 
       - id: checks-restart-environmentd-clusterd-storage-azurite
-        label: "Checks + restart of environmentd & storage clusterd with :azure: blob store %N"
+        label: "Checks + restart of environmentd & storage clusterd with :azure: blob store"
         depends_on: build-aarch64
         inputs: [misc/python/materialize/checks]
         timeout_in_minutes: 45
@@ -841,7 +841,7 @@ steps:
               args: [--scenario=RestartEntireMz, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-parallel-restart-entire-mz-azurite
-        label: "Checks parallel + restart of the entire Mz with :azure: blob store %N"
+        label: "Checks parallel + restart of the entire Mz with :azure: blob store"
         depends_on: build-aarch64
         timeout_in_minutes: 180
         parallelism: 2
