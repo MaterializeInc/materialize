@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use mz_ore::cast::CastFrom;
 use mz_repr::strconv;
 
 use crate::EvalError;
@@ -61,6 +62,14 @@ sqlfunc!(
     #[sqlname = "seahash_string"]
     fn seahash_string<'a>(a: &'a str) -> u64 {
         seahash_bytes(a.as_bytes())
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "bit_count"]
+    fn bit_count_bytes<'a>(a: &'a [u8]) -> Result<i64, EvalError> {
+        let count: u64 = a.iter().map(|b| u64::cast_from(b.count_ones())).sum();
+        i64::try_from(count).or(Err(EvalError::Int64OutOfRange(count.to_string().into())))
     }
 );
 

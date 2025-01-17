@@ -1866,6 +1866,9 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(Float64) => Operation::nullary(|_ecx| catalog_name_only!("avg")) => Float64, 2105;
             params!(Interval) => Operation::nullary(|_ecx| catalog_name_only!("avg")) => Interval, 2106;
         },
+        "bit_count" => Scalar {
+            params!(Bytes) => UnaryFunc::BitCountBytes(func::BitCountBytes) => Int64, 6163;
+        },
         "bit_length" => Scalar {
             params!(Bytes) => UnaryFunc::BitLengthBytes(func::BitLengthBytes) => Int32, 1810;
             params!(String) => UnaryFunc::BitLengthString(func::BitLengthString) => Int32, 1811;
@@ -2084,6 +2087,9 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                         ELSE coalesce((SELECT pg_catalog.concat(coalesce(mz_internal.mz_type_name($1), name), mz_internal.mz_render_typmod($1, $2)) FROM mz_catalog.mz_types WHERE oid = $1), '???')
                     END"
             ) => String, 1081;
+        },
+        "get_bit" => Scalar {
+            params!(Bytes, Int32) => BinaryFunc::GetBit => Int32, 723;
         },
         "get_byte" => Scalar {
             params!(Bytes, Int32) => BinaryFunc::GetByte => Int32, 721;

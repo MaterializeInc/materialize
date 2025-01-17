@@ -1361,6 +1361,26 @@ fn power_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError>
     }
 }
 
+fn get_bit<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let bytes = a.unwrap_bytes();
+    let index = b.unwrap_int32();
+    let err = EvalError::IndexOutOfRange {
+        provided: index,
+        valid_end: i32::try_from(bytes.len().saturating_mul(8)).unwrap() - 1,
+    };
+
+    let index = usize::try_from(index).map_err(|_| err.clone())?;
+
+    let byte_index = index / 8;
+    let bit_index = index % 8;
+
+    let i = bytes
+        .get(byte_index)
+        .map(|b| (*b >> bit_index) & 1)
+        .ok_or(err)?;
+    Ok(Datum::from(i32::from(i)))
+}
+
 fn get_byte<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let bytes = a.unwrap_bytes();
     let index = b.unwrap_int32();
@@ -2344,6 +2364,7 @@ pub enum BinaryFunc {
     LogNumeric,
     Power,
     PowerNumeric,
+    GetBit,
     GetByte,
     ConstantTimeEqBytes,
     ConstantTimeEqString,
@@ -2607,6 +2628,7 @@ impl BinaryFunc {
             BinaryFunc::Power => power(a, b),
             BinaryFunc::PowerNumeric => power_numeric(a, b),
             BinaryFunc::RepeatString => repeat_string(a, b, temp_storage),
+            BinaryFunc::GetBit => get_bit(a, b),
             BinaryFunc::GetByte => get_byte(a, b),
             BinaryFunc::ConstantTimeEqBytes => constant_time_eq_bytes(a, b),
             BinaryFunc::ConstantTimeEqString => constant_time_eq_string(a, b),
@@ -2804,6 +2826,7 @@ impl BinaryFunc {
                 ScalarType::Numeric { max_scale: None }.nullable(in_nullable)
             }
 
+            GetBit => ScalarType::Int32.nullable(in_nullable),
             GetByte => ScalarType::Int32.nullable(in_nullable),
 
             ConstantTimeEqBytes | ConstantTimeEqString => {
@@ -3023,6 +3046,7 @@ impl BinaryFunc {
             | LogNumeric
             | Power
             | PowerNumeric
+            | GetBit
             | GetByte
             | RangeContainsElem { .. }
             | RangeContainsRange { .. }
@@ -3241,6 +3265,7 @@ impl BinaryFunc {
             | ListRemove
             | LikeEscape
             | UuidGenerateV5
+            | GetBit
             | GetByte
             | MzAclItemContainsPrivilege
             | ConstantTimeEqBytes
@@ -3508,7 +3533,8 @@ impl BinaryFunc {
             | BinaryFunc::Decode => (false, false),
             // TODO: it may be safe to treat these as monotone.
             BinaryFunc::LogNumeric | BinaryFunc::Power | BinaryFunc::PowerNumeric => (false, false),
-            BinaryFunc::GetByte
+            BinaryFunc::GetBit
+            | BinaryFunc::GetByte
             | BinaryFunc::RangeContainsElem { .. }
             | BinaryFunc::RangeContainsRange { .. }
             | BinaryFunc::RangeOverlaps
@@ -3716,6 +3742,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::Power => f.write_str("power"),
             BinaryFunc::PowerNumeric => f.write_str("power_numeric"),
             BinaryFunc::RepeatString => f.write_str("repeat"),
+            BinaryFunc::GetBit => f.write_str("get_bit"),
             BinaryFunc::GetByte => f.write_str("get_byte"),
             BinaryFunc::ConstantTimeEqBytes => f.write_str("constant_time_compare_bytes"),
             BinaryFunc::ConstantTimeEqString => f.write_str("constant_time_compare_strings"),
@@ -4140,6 +4167,7 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
             BinaryFunc::LogNumeric => LogNumeric(()),
             BinaryFunc::Power => Power(()),
             BinaryFunc::PowerNumeric => PowerNumeric(()),
+            BinaryFunc::GetBit => GetBit(()),
             BinaryFunc::GetByte => GetByte(()),
             BinaryFunc::RangeContainsElem { elem_type, rev } => {
                 RangeContainsElem(crate::scalar::proto_binary_func::ProtoRangeContainsInner {
@@ -4360,6 +4388,7 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                 LogNumeric(()) => Ok(BinaryFunc::LogNumeric),
                 Power(()) => Ok(BinaryFunc::Power),
                 PowerNumeric(()) => Ok(BinaryFunc::PowerNumeric),
+                GetBit(()) => Ok(BinaryFunc::GetBit),
                 GetByte(()) => Ok(BinaryFunc::GetByte),
                 RangeContainsElem(inner) => Ok(BinaryFunc::RangeContainsElem {
                     elem_type: inner
@@ -4799,6 +4828,7 @@ derive_unary!(
     FloorFloat64,
     FloorNumeric,
     Ascii,
+    BitCountBytes,
     BitLengthBytes,
     BitLengthString,
     ByteLengthBytes,
@@ -5209,6 +5239,7 @@ impl Arbitrary for UnaryFunc {
             FloorFloat64::arbitrary().prop_map_into().boxed(),
             FloorNumeric::arbitrary().prop_map_into().boxed(),
             Ascii::arbitrary().prop_map_into().boxed(),
+            BitCountBytes::arbitrary().prop_map_into().boxed(),
             BitLengthBytes::arbitrary().prop_map_into().boxed(),
             BitLengthString::arbitrary().prop_map_into().boxed(),
             ByteLengthBytes::arbitrary().prop_map_into().boxed(),
@@ -5597,6 +5628,7 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::FloorFloat64(_) => FloorFloat64(()),
             UnaryFunc::FloorNumeric(_) => FloorNumeric(()),
             UnaryFunc::Ascii(_) => Ascii(()),
+            UnaryFunc::BitCountBytes(_) => BitCountBytes(()),
             UnaryFunc::BitLengthBytes(_) => BitLengthBytes(()),
             UnaryFunc::BitLengthString(_) => BitLengthString(()),
             UnaryFunc::ByteLengthBytes(_) => ByteLengthBytes(()),
@@ -6071,6 +6103,7 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 FloorFloat64(_) => Ok(impls::FloorFloat64.into()),
                 FloorNumeric(_) => Ok(impls::FloorNumeric.into()),
                 Ascii(_) => Ok(impls::Ascii.into()),
+                BitCountBytes(_) => Ok(impls::BitCountBytes.into()),
                 BitLengthBytes(_) => Ok(impls::BitLengthBytes.into()),
                 BitLengthString(_) => Ok(impls::BitLengthString.into()),
                 ByteLengthBytes(_) => Ok(impls::ByteLengthBytes.into()),
