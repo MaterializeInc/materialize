@@ -56,10 +56,12 @@ def generate_version(
         is_development = True
     else:
         buildkite_tag = os.environ.get("BUILDKITE_TAG")
-        # buildkite_tag starts with a 'v' and node_version does not.
-        assert (
-            buildkite_tag == f"v{node_version}"
-        ), f"Buildkite tag ({buildkite_tag}) does not match environmentd version ({crate_version})"
+        # For self-managed branch the buildkite tag is not set, but we are still not in a prerelease version
+        if buildkite_tag:
+            # buildkite_tag starts with a 'v' and node_version does not.
+            assert (
+                buildkite_tag == f"v{node_version}"
+            ), f"Buildkite tag ({buildkite_tag}) does not match environmentd version ({crate_version})"
     return NpmPackageVersion(
         rust=crate_version, node=node_version, is_development=is_development
     )
