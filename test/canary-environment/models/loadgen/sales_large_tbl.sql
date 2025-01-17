@@ -7,10 +7,13 @@
 -- the Business Source License, use of this software will be governed
 -- by the Apache License, Version 2.0.
 
-{% macro create_loadgen_source(name) %}
-FROM KAFKA CONNECTION kafka_connection (TOPIC 'datagen_demo_snowflakeschema_{{ name.table }}');
-{% endmacro %}
-
-{% macro create_large_loadgen_source(name) %}
-FROM KAFKA CONNECTION kafka_connection (TOPIC 'datagen_large_snowflakeschema_{{ name }}');
-{% endmacro %}
+-- depends_on: {{ ref('sales_large') }}
+{{ config(
+    materialized='source_table'
+) }}
+FROM SOURCE {{ ref('sales_large') }}
+(REFERENCE "datagen_large_snowflakeschema_sales")
+KEY FORMAT BYTES
+VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
+INCLUDE TIMESTAMP as kafka_timestamp
+ENVELOPE UPSERT;
