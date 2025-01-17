@@ -293,7 +293,7 @@ steps:
               composition: testdrive
               args: [
                 --system-param=persist_part_decode_format=arrow,
-                --system-param=persist_batch_columnar_format=both_v2,
+                --system-param=persist_batch_columnar_format=structured,
                 --system-param=persist_encoding_enable_dictionary=true,
               ]
 
