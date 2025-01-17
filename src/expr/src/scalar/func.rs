@@ -1378,6 +1378,7 @@ fn get_bit<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
         .get(byte_index)
         .map(|b| (*b >> bit_index) & 1)
         .ok_or(err)?;
+    assert!(i == 0 || i == 1);
     Ok(Datum::from(i32::from(i)))
 }
 
