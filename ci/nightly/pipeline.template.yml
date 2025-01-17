@@ -827,7 +827,7 @@ steps:
       - id: checks-0dt-restart-entire-mz-forced-migrations
         label: "Checks 0dt restart of the entire Mz with forced migrations"
         depends_on: build-aarch64
-        timeout_in_minutes: 60
+        timeout_in_minutes: 120
         parallelism: 2
         agents:
           queue: hetzner-aarch64-16cpu-32gb
@@ -839,7 +839,7 @@ steps:
       - id: checks-0dt-upgrade-entire-mz
         label: "Checks 0dt upgrade, whole-Mz restart"
         depends_on: build-aarch64
-        timeout_in_minutes: 60
+        timeout_in_minutes: 120
         parallelism: 2
         agents:
           queue: hetzner-aarch64-16cpu-32gb
@@ -851,7 +851,7 @@ steps:
       - id: checks-0dt-upgrade-entire-mz-two-versions
         label: "Checks 0dt upgrade across two versions"
         depends_on: build-aarch64
-        timeout_in_minutes: 60
+        timeout_in_minutes: 120
         parallelism: 2
         agents:
           queue: hetzner-aarch64-16cpu-32gb
@@ -863,7 +863,7 @@ steps:
       - id: checks-0dt-upgrade-entire-mz-four-versions
         label: "Checks 0dt upgrade across four versions"
         depends_on: build-aarch64
-        timeout_in_minutes: 60
+        timeout_in_minutes: 120
         parallelism: 2
         agents:
           queue: hetzner-aarch64-16cpu-32gb
@@ -1714,7 +1714,8 @@ steps:
     timeout_in_minutes: 240
     parallelism: 10
     agents:
-      queue: hetzner-aarch64-8cpu-16gb
+      # Runs faster/more consistently on larger agent
+      queue: hetzner-aarch64-16cpu-32gb
     plugins:
       - ./ci/plugins/mzcompose:
           composition: sqllogictest
