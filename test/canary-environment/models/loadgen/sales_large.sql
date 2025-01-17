@@ -7,10 +7,5 @@
 -- the Business Source License, use of this software will be governed
 -- by the Apache License, Version 2.0.
 
-{% macro create_loadgen_source(name) %}
-FROM KAFKA CONNECTION kafka_connection (TOPIC 'datagen_demo_snowflakeschema_{{ name.table }}');
-{% endmacro %}
-
-{% macro create_large_loadgen_source(name) %}
-FROM KAFKA CONNECTION kafka_connection (TOPIC 'datagen_large_snowflakeschema_{{ name }}');
-{% endmacro %}
+{{ config(materialized='source', cluster='qa_canary_environment_storage', indexes=[{'default': True, 'cluster': 'qa_canary_environment_compute'}]) }}
+{{ create_large_loadgen_source('sales') }}
