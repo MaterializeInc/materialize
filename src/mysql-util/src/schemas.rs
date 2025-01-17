@@ -443,12 +443,17 @@ fn parse_data_type(
             Ok(ScalarType::Bytes)
         }
         "json" => Ok(ScalarType::Jsonb),
-        _ => Err(UnsupportedDataType {
-            column_type: info.column_type.clone(),
-            qualified_table_name: format!("{:?}.{:?}", schema_name, table_name),
-            column_name: info.column_name.clone(),
-            intended_type: None,
-        }),
+        // TODO(mysql): Support the `bit` type natively in Materialize.
+        "bit" => Ok(ScalarType::Bytes),
+        typ => {
+            tracing::warn!(?typ, "found unsupported data type");
+            Err(UnsupportedDataType {
+                column_type: info.column_type.clone(),
+                qualified_table_name: format!("{:?}.{:?}", schema_name, table_name),
+                column_name: info.column_name.clone(),
+                intended_type: None,
+            })
+        },
     }
 }
 
