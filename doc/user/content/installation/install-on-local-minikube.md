@@ -63,7 +63,7 @@ repo](https://github.com/MaterializeInc/materialize).
 
 {{< important >}}
 
-Check out the {{< self-managed/latest_version >}} tag.
+Check out the {{< self-managed/latest_version >}}.
 
 {{< /important >}}
 
@@ -150,11 +150,11 @@ Check out the {{< self-managed/latest_version >}} tag.
 
    1. Go to the Materialize repo directory.
 
-   1. Use the provided `environmentd.yaml` file to create the
+   1. Use the provided `materialize.yaml` file to create the
       `materialize-environment` namespace and install Materialize:
 
       ```shell
-      kubectl apply -f misc/helm-charts/testing/environmentd.yaml
+      kubectl apply -f misc/helm-charts/testing/materialize.yaml
       ```
 
     1. Verify the installation and check the status:
