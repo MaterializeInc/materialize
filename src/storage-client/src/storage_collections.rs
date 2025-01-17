@@ -2245,11 +2245,13 @@ where
         // frontier is probably in advance of the write_handle's upper. So we fast forward the
         // write frontier to match that of the existing collection.
         let write_frontier =
-            if PartialOrder::less_than(write_handle.upper(), &existing_write_frontier) {
+            if PartialOrder::less_equal(write_handle.upper(), &existing_write_frontier) {
                 existing_write_frontier
             } else {
                 mz_ore::soft_panic_or_log!(
-                    "WriteHandle frontier in advance of logical write frontier"
+                    "WriteHandle frontier in advance of logical write frontier, {:?} vs {:?}",
+                    write_handle.upper(),
+                    existing_write_frontier
                 );
                 write_handle.upper().clone()
             };

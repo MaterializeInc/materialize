@@ -337,6 +337,10 @@ query T multiline
 EXPLAIN SELECT v2.a, v3.a, v4.a, v2.b, v3.b, v4.c FROM v2 JOIN v3 ON v2.a = v3.a JOIN v4 ON v2.a = v4.a;
 ----
 Explained Query:
+  With
+    cte l0 =
+      ArrangeBy keys=[[#0]]
+        ReadIndex on=t1 t1_idx_a=[delta join lookup]
   Return
     Project (#0, #0, #0, #1, #3, #7)
       Join on=(#0 = #2 = #5) type=delta
@@ -344,10 +348,6 @@ Explained Query:
           ReadIndex on=v2 v2_idx=[delta join 1st input (full scan)]
         Get l0
         Get l0
-  With
-    cte l0 =
-      ArrangeBy keys=[[#0]]
-        ReadIndex on=t1 t1_idx_a=[delta join lookup]
 
 Used Indexes:
   - materialize.public.v2_idx (delta join 1st input (full scan))

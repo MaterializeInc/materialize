@@ -97,11 +97,17 @@ class AlterTableAddColumn(Check):
                 hello 400
                 hello <null>
                 hello <null>
+                world 100
+                world 200
+                world 400
+                world <null>
+                world <null>
 
                 > SELECT * FROM alter_table2 ORDER BY f1, f2 ASC;
                 bar 800
                 foo 900
                 hello <null>
+                world 1
            """
             )
         )
