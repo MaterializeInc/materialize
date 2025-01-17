@@ -67,8 +67,9 @@
 
 {% for cluster in clusters %}
     {% set deploy_cluster = adapter.generate_final_cluster_name(cluster, force_deploy_suffix=True) %}
-    {% if not cluster_exists(cluster) %}
-        {{ exceptions.raise_compiler_error("Production cluster " ~ cluster ~ " does not exist") }}
+    {% set origin_cluster = adapter.generate_final_cluster_name(cluster, force_deploy_suffix=False) %}
+    {% if not cluster_exists(origin_cluster) %}
+        {{ exceptions.raise_compiler_error("Production cluster " ~ origin_cluster ~ " does not exist") }}
     {% endif %}
     {% if not cluster_exists(deploy_cluster) %}
         {{ exceptions.raise_compiler_error("Deployment cluster " ~ deploy_cluster ~ " does not exist") }}
@@ -91,8 +92,9 @@
 
     {% for cluster in clusters %}
         {% set deploy_cluster = adapter.generate_final_cluster_name(cluster, force_deploy_suffix=True) %}
-        {{ log("Swapping clusters " ~ adapter.generate_final_cluster_name(cluster) ~ " and " ~ deploy_cluster, info=True) }}
-        ALTER CLUSTER {{ adapter.quote(cluster) }} SWAP WITH {{ adapter.quote(deploy_cluster) }};
+        {% set origin_cluster = adapter.generate_final_cluster_name(cluster, force_deploy_suffix=False) %}
+        {{ log("Swapping clusters " ~ origin_cluster ~ " and " ~ deploy_cluster, info=True) }}
+        ALTER CLUSTER {{ adapter.quote(origin_cluster) }} SWAP WITH {{ adapter.quote(deploy_cluster) }};
     {% endfor %}
 
     COMMIT;
@@ -108,8 +110,9 @@
 
     {% for cluster in clusters %}
         {% set deploy_cluster = adapter.generate_final_cluster_name(cluster, force_deploy_suffix=True) %}
+        {% set origin_cluster = adapter.generate_final_cluster_name(cluster, force_deploy_suffix=False) %}
         {{ log("DRY RUN: Swapping clusters " ~ adapter.generate_final_cluster_name(cluster) ~ " and " ~ deploy_cluster, info=True) }}
-        {{ log("DRY RUN: ALTER CLUSTER " ~ adapter.quote(cluster) ~ " SWAP WITH " ~ adapter.quote(deploy_cluster), info=True) }}
+        {{ log("DRY RUN: ALTER CLUSTER " ~ adapter.quote(origin_cluster) ~ " SWAP WITH " ~ adapter.quote(deploy_cluster), info=True) }}
     {% endfor %}
     {{ log("Dry run completed. The statements above were **not** executed against Materialize.", info=True) }}
 {% endif %}
