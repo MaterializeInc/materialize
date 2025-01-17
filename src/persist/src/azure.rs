@@ -209,22 +209,17 @@ impl Blob for AzureBlob {
             };
 
             let content_length = response.blob.properties.content_length;
+            tracing::debug!(
+                ?key,
+                content_length = %response.blob.properties.content_length,
+                "blob response",
+            );
 
-            // Here we're being quite defensive. If `content_length` comes back
-            // as 0 it's most likely incorrect. In that case we'll copy bytes
-            // of the network into a growable buffer, then copy the entire
-            // buffer into lgalloc.
-            let mut buffer = match content_length {
-                1.. => {
-                    let region = self
-                        .metrics
-                        .lgbytes
-                        .persist_azure
-                        .new_region(usize::cast_from(content_length));
-                    PreSizedBuffer::Sized(region)
-                }
-                0 => PreSizedBuffer::Unknown(Vec::new()),
-            };
+            let mut buffer = self
+                .metrics
+                .lgbytes
+                .persist_azure
+                .new_region(usize::cast_from(content_length));
 
             let mut body = response.data;
             while let Some(value) = body.next().await {
@@ -233,15 +228,7 @@ impl Blob for AzureBlob {
                 })?;
                 buffer.extend_from_slice(&value);
             }
-
-            // Spill our bytes to lgalloc, if they aren't already.
-            let lg_bytes = match buffer {
-                PreSizedBuffer::Sized(region) => LgBytes::from(Arc::new(region)),
-                PreSizedBuffer::Unknown(buffer) => {
-                    self.metrics.lgbytes.persist_azure.try_mmap(buffer)
-                }
-            };
-            segments.push(MaybeLgBytes::LgBytes(lg_bytes));
+            segments.push(MaybeLgBytes::LgBytes(LgBytes::from(Arc::new(buffer))));
         }
 
         Ok(Some(SegmentedBytes::from(segments)))
