@@ -44,13 +44,13 @@
 {% endfor %}
 
 {% for cluster in clusters %}
-    {% set source_cluster = adapter.generate_final_cluster_name(cluster, force_deploy_suffix=False) %}
-    {% if not cluster_exists(source_cluster) %}
-        {{ exceptions.raise_compiler_error("Production cluster " ~ source_cluster ~ " does not exist") }}
+    {% set origin_cluster = adapter.generate_final_cluster_name(cluster, force_deploy_suffix=False) %}
+    {% if not cluster_exists(origin_cluster) %}
+        {{ exceptions.raise_compiler_error("Production cluster " ~ origin_cluster ~ " does not exist") }}
     {% endif %}
-    {% if cluster_contains_sinks(source_cluster) %}
+    {% if cluster_contains_sinks(origin_cluster) %}
         {{ exceptions.raise_compiler_error("""
-        Production cluster " ~ source_cluster ~ " contains sinks.
+        Production cluster " ~ origin_cluster ~ " contains sinks.
         Blue/green deployments require sinks to be in a dedicated cluster.
         """) }}
     {% endif %}
@@ -108,7 +108,7 @@
 {% endfor %}
 
 {% for cluster in clusters %}
-    {% set source_cluster = adapter.generate_final_cluster_name(cluster, force_deploy_suffix=False) %}
+    {% set origin_cluster = adapter.generate_final_cluster_name(cluster, force_deploy_suffix=False) %}
     {% set cluster_configuration %}
         SELECT
             c.managed,
@@ -120,7 +120,7 @@
             cs.refresh_hydration_time_estimate
         FROM mz_clusters c
         LEFT JOIN mz_internal.mz_cluster_schedules cs ON cs.cluster_id = c.id
-        WHERE c.name = {{ dbt.string_literal(source_cluster) }}
+        WHERE c.name = {{ dbt.string_literal(origin_cluster) }}
     {% endset %}
 
     {% set cluster_config_results = run_query(cluster_configuration) %}
@@ -135,7 +135,7 @@
         {% set refresh_hydration_time_estimate = results[6] %}
 
         {% if not managed %}
-            {{ exceptions.raise_compiler_error("Production cluster " ~ source_cluster ~ " is not managed") }}
+            {{ exceptions.raise_compiler_error("Production cluster " ~ origin_cluster ~ " is not managed") }}
         {% endif %}
 
         {% set deploy_cluster = create_cluster(
