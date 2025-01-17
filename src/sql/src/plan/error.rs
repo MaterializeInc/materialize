@@ -132,6 +132,13 @@ pub enum PlanError {
         from: String,
         to: String,
     },
+    InvalidTable {
+        name: String,
+    },
+    InvalidVersion {
+        name: String,
+        version: String,
+    },
     MangedReplicaName(String),
     ParserStatement(ParserStatementError),
     Parser(ParserError),
@@ -593,6 +600,12 @@ impl fmt::Display for PlanError {
                     },
                 )
             }
+            Self::InvalidTable { name } => {
+                write!(f, "invalid table definition for {}", name.quoted())
+            },
+            Self::InvalidVersion { name, version } => {
+                write!(f, "invalid version {} for {}", version.quoted(), name.quoted())
+            },
             Self::DropViewOnMaterializedView(name)
             | Self::AlterViewOnMaterializedView(name)
             | Self::ShowCreateViewOnMaterializedView(name)

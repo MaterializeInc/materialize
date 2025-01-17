@@ -30,11 +30,14 @@ use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::role_id::RoleId;
 use mz_repr::{
-    CatalogItemId, Diff, GlobalId, RelationDesc, RelationVersion, RelationVersionSelector,
-    Timestamp,
+    CatalogItemId, ColumnName, ColumnType, Diff, GlobalId, RelationDesc, RelationVersion,
+    RelationVersionSelector, Timestamp, VersionedRelationDesc,
 };
 use mz_sql::ast::display::AstDisplay;
-use mz_sql::ast::{Expr, Raw, Statement, UnresolvedItemName, Value, WithOptionValue};
+use mz_sql::ast::{
+    ColumnDef, ColumnOption, ColumnOptionDef, ColumnVersioned, Expr, Raw, RawDataType, Statement,
+    UnresolvedItemName, Value, WithOptionValue,
+};
 use mz_sql::catalog::{
     CatalogClusterReplica, CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem,
     CatalogItemType as SqlCatalogItemType, CatalogItemType, CatalogSchema, CatalogTypeDetails,
@@ -627,15 +630,23 @@ pub struct CatalogEntry {
 /// tasks with a single catalog item.
 #[derive(Clone, Debug)]
 pub struct CatalogCollectionEntry {
-    entry: CatalogEntry,
-    #[allow(dead_code)]
-    version: RelationVersionSelector,
+    pub entry: CatalogEntry,
+    pub version: RelationVersionSelector,
+}
+
+impl CatalogCollectionEntry {
+    pub fn desc(&self, name: &FullItemName) -> Result<Cow<RelationDesc>, SqlCatalogError> {
+        self.item().desc(name, self.version)
+    }
+
+    pub fn desc_opt(&self) -> Option<Cow<RelationDesc>> {
+        self.item().desc_opt(self.version)
+    }
 }
 
 impl mz_sql::catalog::CatalogCollectionItem for CatalogCollectionEntry {
     fn desc(&self, name: &FullItemName) -> Result<Cow<RelationDesc>, SqlCatalogError> {
-        // TODO(alter_table): Versioned Relation Desc
-        self.entry.desc(name)
+        CatalogCollectionEntry::desc(self, name)
     }
 
     fn global_id(&self) -> GlobalId {
@@ -666,6 +677,14 @@ impl mz_sql::catalog::CatalogCollectionItem for CatalogCollectionEntry {
                     .clone(),
             },
         }
+    }
+}
+
+impl Deref for CatalogCollectionEntry {
+    type Target = CatalogEntry;
+
+    fn deref(&self) -> &CatalogEntry {
+        &self.entry
     }
 }
 
@@ -778,7 +797,14 @@ impl mz_sql::catalog::CatalogItem for CatalogCollectionEntry {
         &self,
         version: RelationVersionSelector,
     ) -> Box<dyn mz_sql::catalog::CatalogCollectionItem> {
-        self.entry.at_version(version)
+        Box::new(CatalogCollectionEntry {
+            entry: self.entry.clone(),
+            version,
+        })
+    }
+
+    fn latest_version(&self) -> Option<RelationVersion> {
+        self.entry.latest_version()
     }
 }
 
@@ -819,8 +845,8 @@ impl From<CatalogEntry> for durable::Item {
 pub struct Table {
     /// Parse-able SQL that defines this table.
     pub create_sql: Option<String>,
-    /// [`RelationDesc`] of this table, derived from the `create_sql`.
-    pub desc: RelationDesc,
+    /// [`VersionedRelationDesc`] of this table, derived from the `create_sql`.
+    pub desc: VersionedRelationDesc,
     /// Versions of this table, and the [`GlobalId`]s that refer to them.
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub collections: BTreeMap<RelationVersion, GlobalId>,
@@ -865,12 +891,26 @@ impl Table {
     }
 
     /// Returns all of the collections and their [`RelationDesc`]s associated with this [`Table`].
-    pub fn collection_descs(&self) -> impl Iterator<Item = (GlobalId, RelationDesc)> + '_ {
-        // TODO(alter_table): Support multiple versions of the table.
-        assert_eq!(self.collections.len(), 1);
-        self.collections
-            .values()
-            .map(|gid| (*gid, self.desc.clone()))
+    pub fn collection_descs(
+        &self,
+    ) -> impl Iterator<Item = (GlobalId, RelationVersion, RelationDesc)> + '_ {
+        self.collections.iter().map(|(version, gid)| {
+            let desc = self
+                .desc
+                .at_version(RelationVersionSelector::Specific(*version));
+            (*gid, *version, desc)
+        })
+    }
+
+    /// Returns the [`RelationDesc`] for a specific [`GlobalId`].
+    pub fn desc_for(&self, id: &GlobalId) -> RelationDesc {
+        let (version, _gid) = self
+            .collections
+            .iter()
+            .find(|(_version, gid)| *gid == id)
+            .expect("GlobalId to exist");
+        self.desc
+            .at_version(RelationVersionSelector::Specific(*version))
     }
 }
 
@@ -1591,18 +1631,23 @@ impl CatalogItem {
         }
     }
 
-    pub fn desc(&self, name: &FullItemName) -> Result<Cow<RelationDesc>, SqlCatalogError> {
-        self.desc_opt().ok_or(SqlCatalogError::InvalidDependency {
-            name: name.to_string(),
-            typ: self.typ(),
-        })
+    pub fn desc(
+        &self,
+        name: &FullItemName,
+        version: RelationVersionSelector,
+    ) -> Result<Cow<RelationDesc>, SqlCatalogError> {
+        self.desc_opt(version)
+            .ok_or(SqlCatalogError::InvalidDependency {
+                name: name.to_string(),
+                typ: self.typ(),
+            })
     }
 
-    pub fn desc_opt(&self) -> Option<Cow<RelationDesc>> {
+    pub fn desc_opt(&self, version: RelationVersionSelector) -> Option<Cow<RelationDesc>> {
         match &self {
             CatalogItem::Source(src) => Some(Cow::Borrowed(&src.desc)),
             CatalogItem::Log(log) => Some(Cow::Owned(log.variant.desc())),
-            CatalogItem::Table(tbl) => Some(Cow::Borrowed(&tbl.desc)),
+            CatalogItem::Table(tbl) => Some(Cow::Owned(tbl.desc.at_version(version))),
             CatalogItem::View(view) => Some(Cow::Borrowed(&view.desc)),
             CatalogItem::MaterializedView(mview) => Some(Cow::Borrowed(&mview.desc)),
             CatalogItem::Type(typ) => typ.desc.as_ref().map(Cow::Borrowed),
@@ -1953,6 +1998,46 @@ impl CatalogItem {
         Ok(res)
     }
 
+    pub fn add_column(
+        &mut self,
+        name: ColumnName,
+        typ: ColumnType,
+        sql: RawDataType,
+    ) -> Result<RelationVersion, PlanError> {
+        let CatalogItem::Table(table) = self else {
+            return Err(PlanError::Unsupported {
+                feature: "adding columns to a non-Table".to_string(),
+                discussion_no: None,
+            });
+        };
+        let next_version = table.desc.add_column(name.clone(), typ);
+
+        let update = |ast: &mut Statement<Raw>| match ast {
+            Statement::CreateTable(ref mut stmt) => {
+                let version = ColumnOptionDef {
+                    name: None,
+                    option: ColumnOption::Versioned {
+                        action: ColumnVersioned::Added,
+                        version: next_version.into(),
+                    },
+                };
+                let column = ColumnDef {
+                    name: name.into(),
+                    data_type: sql,
+                    collation: None,
+                    options: vec![version],
+                };
+                stmt.columns.push(column);
+                Ok(())
+            }
+            _ => Err(()),
+        };
+
+        self.update_sql(update)
+            .map_err(|()| PlanError::Unstructured("expected CREATE TABLE statement".to_string()))?;
+        Ok(next_version)
+    }
+
     /// Updates the create_sql field of this item. Returns an error if this is a builtin item,
     /// otherwise returns f's result.
     pub fn update_sql<F, T>(&mut self, f: F) -> Result<T, ()>
@@ -2220,21 +2305,23 @@ impl CatalogItem {
 }
 
 impl CatalogEntry {
-    /// Like [`CatalogEntry::desc_opt`], but returns an error if the catalog
-    /// entry is not of a type that has a description.
-    pub fn desc(&self, name: &FullItemName) -> Result<Cow<RelationDesc>, SqlCatalogError> {
-        self.item.desc(name)
+    /// Reports the latest [`RelationDesc`] of the rows produced by this [`CatalogEntry`],
+    /// returning an error if this [`CatalogEntry`] does not produce rows.
+    ///
+    /// If you need to get the [`RelationDesc`] for a specific version, see [`CatalogItem::desc`].
+    pub fn desc_latest(&self, name: &FullItemName) -> Result<Cow<RelationDesc>, SqlCatalogError> {
+        self.item.desc(name, RelationVersionSelector::Latest)
     }
 
-    /// Reports the description of the rows produced by this catalog entry, if
-    /// this catalog entry produces rows.
-    pub fn desc_opt(&self) -> Option<Cow<RelationDesc>> {
-        self.item.desc_opt()
+    /// Reports the latest [`RelationDesc`] of the rows produced by this [`CatalogEntry`], if it
+    /// produces rows.
+    pub fn desc_opt_latest(&self) -> Option<Cow<RelationDesc>> {
+        self.item.desc_opt(RelationVersionSelector::Latest)
     }
 
     /// Reports if the item has columns.
     pub fn has_columns(&self) -> bool {
-        self.item.desc_opt().is_some()
+        self.desc_opt_latest().is_some()
     }
 
     /// Returns the [`mz_sql::func::Func`] associated with this `CatalogEntry`.
@@ -3238,6 +3325,10 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
             entry: self.clone(),
             version,
         })
+    }
+
+    fn latest_version(&self) -> Option<RelationVersion> {
+        self.table().map(|t| t.desc.latest_version())
     }
 }
 

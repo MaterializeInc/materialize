@@ -53,8 +53,10 @@ enum PersistTableWriteCmd<T: Timestamp + Lattice + Codec64> {
         tokio::sync::oneshot::Sender<()>,
     ),
     Update {
-        /// Table to update.
-        table_id: GlobalId,
+        /// Existing collection for the table.
+        existing_collection: GlobalId,
+        /// New collection we'll emit writes to.
+        new_collection: GlobalId,
         /// Timestamp to forget the original handle at.
         forget_ts: T,
         /// Timestamp to register the new handle at.
@@ -203,14 +205,16 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWrite
     #[allow(dead_code)]
     pub(crate) fn update(
         &self,
-        table_id: GlobalId,
+        existing_collection: GlobalId,
+        new_collection: GlobalId,
         forget_ts: T,
         register_ts: T,
         handle: WriteHandle<SourceData, (), T, Diff>,
     ) -> oneshot::Receiver<()> {
         let (tx, rx) = oneshot::channel();
         self.send(PersistTableWriteCmd::Update {
-            table_id,
+            existing_collection,
+            new_collection,
             forget_ts,
             register_ts,
             handle,
@@ -277,15 +281,18 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
                     let _ = tx.send(());
                 }
                 PersistTableWriteCmd::Update {
-                    table_id,
+                    existing_collection,
+                    new_collection,
                     forget_ts,
                     register_ts,
                     handle,
                     tx,
                 } => {
                     async {
-                        self.drop_handles(vec![table_id], forget_ts).await;
-                        self.register(register_ts, vec![(table_id, handle)]).await;
+                        self.drop_handles(vec![existing_collection], forget_ts)
+                            .await;
+                        self.register(register_ts, vec![(new_collection, handle)])
+                            .await;
                     }
                     .instrument(span)
                     .await;
@@ -320,8 +327,13 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
     async fn register(
         &mut self,
         register_ts: T,
-        ids_handles: Vec<(GlobalId, WriteHandle<SourceData, (), T, i64>)>,
+        mut ids_handles: Vec<(GlobalId, WriteHandle<SourceData, (), T, i64>)>,
     ) {
+        // As tables evolve (e.g. columns are added) we treat the older versions as
+        // "views" on the later versions. While it's not required, it's easier to reason
+        // about table registration if we do it in GlobalId order.
+        ids_handles.sort_unstable_by_key(|(gid, _handle)| *gid);
+
         for (id, write_handle) in ids_handles.iter() {
             debug!(
                 "tables register {} {:.9}",
@@ -360,7 +372,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
             // the shard it's connected to because dataflows might still
             // be using it.
             .filter_map(|id| self.write_handles.remove(id))
-            .collect::<Vec<_>>();
+            .collect::<BTreeSet<_>>();
         if !data_ids.is_empty() {
             match self.txns.forget(forget_ts.clone(), data_ids.clone()).await {
                 Ok(tidy) => {

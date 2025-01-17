@@ -1324,7 +1324,7 @@ impl Coordinator {
                     desc,
                     global_id,
                     ..
-                }) => (data_source, desc, *global_id),
+                }) => (data_source, desc.clone(), *global_id),
                 CatalogItem::Table(
                     table @ Table {
                         desc,
@@ -1335,7 +1335,7 @@ impl Coordinator {
                             },
                         ..
                     },
-                ) => (data_source, desc, table.global_id_writes()),
+                ) => (data_source, desc.latest(), table.global_id_writes()),
                 _ => return Err(name),
             };
 

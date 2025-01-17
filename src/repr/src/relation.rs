@@ -14,8 +14,10 @@ use std::{fmt, vec};
 use anyhow::bail;
 use itertools::Itertools;
 use mz_lowertest::MzReflect;
+use mz_ore::cast::CastFrom;
 use mz_ore::str::StrExt;
 use mz_ore::{assert_none, assert_ok};
+use mz_persist_types::schema::SchemaId;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use proptest::prelude::*;
 use proptest::strategy::{Strategy, Union};
@@ -426,6 +428,18 @@ impl RelationVersion {
     /// Should __only__ be used for serialization.
     pub fn from_raw(val: u64) -> RelationVersion {
         RelationVersion(val)
+    }
+}
+
+impl From<RelationVersion> for SchemaId {
+    fn from(value: RelationVersion) -> Self {
+        SchemaId(usize::cast_from(value.0))
+    }
+}
+
+impl From<mz_sql_parser::ast::Version> for RelationVersion {
+    fn from(value: mz_sql_parser::ast::Version) -> Self {
+        RelationVersion(value.into_inner())
     }
 }
 

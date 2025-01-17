@@ -29,9 +29,10 @@ use mz_catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap};
 use mz_catalog::expr_cache::LocalExpressions;
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, Cluster, ClusterReplica, CommentsMap, Connection, DataSourceDesc,
-    Database, DefaultPrivileges, Index, MaterializedView, NetworkPolicy, Role, Schema, Secret,
-    Sink, Source, SourceReferences, Table, TableDataSource, Type, View,
+    CatalogCollectionEntry, CatalogEntry, CatalogItem, Cluster, ClusterReplica, CommentsMap,
+    Connection, DataSourceDesc, Database, DefaultPrivileges, Index, MaterializedView,
+    NetworkPolicy, Role, Schema, Secret, Sink, Source, SourceReferences, Table, TableDataSource,
+    Type, View,
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_controller::clusters::{
@@ -54,7 +55,7 @@ use mz_repr::namespaces::{
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, GlobalId, RelationDesc, RelationVersion};
+use mz_repr::{CatalogItemId, GlobalId, RelationDesc, RelationVersion, RelationVersionSelector};
 use mz_secrets::InMemorySecretsController;
 use mz_sql::ast::Ident;
 use mz_sql::catalog::{BuiltinsConfig, CatalogConfig, EnvironmentId};
@@ -715,12 +716,25 @@ impl CatalogState {
             .unwrap_or_else(|| panic!("catalog out of sync, missing id {id:?}"))
     }
 
-    pub fn get_entry_by_global_id(&self, id: &GlobalId) -> &CatalogEntry {
+    pub fn get_entry_by_global_id(&self, id: &GlobalId) -> CatalogCollectionEntry {
         let item_id = self
             .entry_by_global_id
             .get(id)
             .unwrap_or_else(|| panic!("catalog out of sync, missing id {id:?}"));
-        self.get_entry(item_id)
+
+        let entry = self.get_entry(item_id).clone();
+        let version = match entry.item() {
+            CatalogItem::Table(table) => {
+                let (version, _) = table
+                    .collections
+                    .iter()
+                    .find(|(_verison, gid)| *gid == id)
+                    .expect("version to exist");
+                RelationVersionSelector::Specific(*version)
+            }
+            _ => RelationVersionSelector::Latest,
+        };
+        CatalogCollectionEntry { entry, version }
     }
 
     pub fn get_entries(&self) -> impl Iterator<Item = (&CatalogItemId, &CatalogEntry)> + '_ {
@@ -806,6 +820,18 @@ impl CatalogState {
     pub fn try_get_entry_by_global_id(&self, id: &GlobalId) -> Option<&CatalogEntry> {
         let item_id = self.entry_by_global_id.get(id)?;
         self.try_get_entry(item_id)
+    }
+
+    /// Returns the [`RelationDesc`] for a [`GlobalId`], if the provided [`GlobalId`] refers to an
+    /// object that returns rows.
+    pub fn try_get_desc_by_global_id(&self, id: &GlobalId) -> Option<Cow<RelationDesc>> {
+        let entry = self.try_get_entry_by_global_id(id)?;
+        let desc = match entry.item() {
+            CatalogItem::Table(table) => Cow::Owned(table.desc_for(id)),
+            // TODO(alter_table): Support schema evolution on sources.
+            other => other.desc_opt(RelationVersionSelector::Latest)?,
+        };
+        Some(desc)
     }
 
     pub(crate) fn get_cluster(&self, cluster_id: ClusterId) -> &Cluster {
@@ -1041,9 +1067,11 @@ impl CatalogState {
 
         let item = match plan {
             Plan::CreateTable(CreateTablePlan { table, .. }) => {
-                // TODO(alter_table): Support versioning tables.
-                assert_eq!(extra_versions.len(), 0);
-                let collections = [(RelationVersion::root(), global_id)].into_iter().collect();
+                let collections = extra_versions
+                    .iter()
+                    .map(|(version, gid)| (*version, *gid))
+                    .chain([(RelationVersion::root(), global_id)].into_iter())
+                    .collect();
 
                 CatalogItem::Table(Table {
                     create_sql: Some(table.create_sql),
@@ -2615,7 +2643,7 @@ impl ConnectionResolver for CatalogState {
 }
 
 impl OptimizerCatalog for CatalogState {
-    fn get_entry(&self, id: &GlobalId) -> &CatalogEntry {
+    fn get_entry(&self, id: &GlobalId) -> CatalogCollectionEntry {
         CatalogState::get_entry_by_global_id(self, id)
     }
     fn get_entry_by_item_id(&self, id: &CatalogItemId) -> &CatalogEntry {
@@ -2638,7 +2666,7 @@ impl OptimizerCatalog for CatalogState {
 }
 
 impl OptimizerCatalog for Catalog {
-    fn get_entry(&self, id: &GlobalId) -> &CatalogEntry {
+    fn get_entry(&self, id: &GlobalId) -> CatalogCollectionEntry {
         self.state.get_entry_by_global_id(id)
     }
 
