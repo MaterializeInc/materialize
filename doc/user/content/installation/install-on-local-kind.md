@@ -58,11 +58,9 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 The following instructions assume that you are installing from the [Materialize
 repo](https://github.com/MaterializeInc/materialize).
 
-{{< important >}}
-
-Check out the {{% self-managed/latest_version %}}.
-
-{{< /important >}}
+```sh
+git clone --branch lts-v0.130 https://github.com/MaterializeInc/materialize.git
+```
 
 ## Installation
 
@@ -221,7 +219,7 @@ Check out the {{% self-managed/latest_version %}}.
       connection. It detects failures by monitoring for "portforward.go" error messages.
       {{< /note >}}
 
-   1. Open a browser and navigate to
+   1. Open a browser to
       [http://localhost:8080](http://localhost:8080).
 
       ![Image of  self-managed Materialize console running on local kind](/images/self-managed/self-managed-console-kind.png)

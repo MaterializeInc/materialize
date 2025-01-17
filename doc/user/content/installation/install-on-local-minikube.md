@@ -65,11 +65,9 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 The following instructions assume that you are installing from the [Materialize
 repo](https://github.com/MaterializeInc/materialize).
 
-{{< important >}}
-
-Check out the {{< self-managed/latest_version >}}.
-
-{{< /important >}}
+```sh
+git clone --branch lts-v0.130 https://github.com/MaterializeInc/materialize.git
+```
 
 ## Installation
 
@@ -88,19 +86,13 @@ Check out the {{< self-managed/latest_version >}}.
 
    1. Go to the Materialize repo directory.
 
-   1. Optional. Edit the `misc/helm-charts/operator/values.yaml` to update (in
-      the `operator.args` section) the `region` value to `minikube`:
-
-      ```yaml
-          region: "minikube"
-      ```
-
    1. Install the Materialize operator with the release name
       `my-materialize-operator` into the `materialize` namespace:
 
       ```shell
       helm install my-materialize-operator \
          -f misc/helm-charts/operator/values.yaml misc/helm-charts/operator \
+         --set operator.cloudProvider.region=minikube \
          --namespace materialize --create-namespace
       ```
 
@@ -237,8 +229,8 @@ Check out the {{< self-managed/latest_version >}}.
       detects failures by monitoring for `"portforward.go"` error messages.
       {{< /note >}}
 
-   1. Open a browser and navigate to
-      [https://localhost:8080](https://localhost:8080).
+   1. Open a browser to
+      [http://localhost:8080](http://localhost:8080).
 
       ![Image of self-managed Materialize console running on local minikube](/images/self-managed/self-managed-console-minkiube.png)
 
