@@ -20,6 +20,8 @@ class AlterTableAddColumn(Check):
 
     def initialize(self) -> Testdrive:
         return Testdrive(
+            # Note(parkmycar): We want to make sure to ALTER a table in the initialize to exercise
+            # how ALTER-ed tables are handled on a restart of Materialize.
             dedent(
                 """
                 $postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
@@ -31,6 +33,9 @@ class AlterTableAddColumn(Check):
 
                 > CREATE TABLE alter_table2 (f1 text);
                 > INSERT INTO alter_table2 VALUES ('hello');
+
+                > ALTER TABLE alter_table2 ADD COLUMN f2 int;
+                > INSERT INTO alter_table2 VALUES ('world', 1);
                 """
             )
         )
@@ -52,7 +57,6 @@ class AlterTableAddColumn(Check):
                 $postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
                 ALTER SYSTEM SET enable_alter_table_add_column = true;
 
-                > ALTER TABLE alter_table2 ADD COLUMN f2 INTEGER;
                 > INSERT INTO alter_table2 VALUES ('foo', 900), ('bar', 800);
                 > CREATE VIEW alter_table_view_2 AS SELECT * FROM alter_table2;
                 """,
