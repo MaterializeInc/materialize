@@ -319,6 +319,26 @@ a {
     background-clip: text;
 }
 
+select.version-dropdown {
+    appearance: none;
+	-moz-appearance: none;
+	-webkit-appearance: none;
+	background-image: url('https://res.cloudinary.com/mzimgcdn/image/upload/v1737129759/dropdown.svg');
+	background-position: right 0.5rem top 50%, 0 0;
+	background-repeat: no-repeat, repeat;
+	background-size: 1.3rem auto, 100%;
+	outline: 1px solid transparent;
+    border: 1px solid var(--divider);
+    padding: var(--pico) var(--nano);
+    border-radius: 4px;
+    background-color: var(--bg);
+
+	&:focus,
+	&:active {
+		outline: none;
+	}
+}
+
 
 red { color: var(--code-red); }
 blue { color: #2300ce; }
