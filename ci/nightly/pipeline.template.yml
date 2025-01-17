@@ -1714,7 +1714,8 @@ steps:
     timeout_in_minutes: 240
     parallelism: 10
     agents:
-      queue: hetzner-aarch64-8cpu-16gb
+      # Runs faster/more consistently on larger agent
+      queue: hetzner-aarch64-16cpu-32gb
     plugins:
       - ./ci/plugins/mzcompose:
           composition: sqllogictest
