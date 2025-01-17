@@ -50,6 +50,7 @@ SANITIZER_TARGET = (
     else f"{Arch.host()}-apple-darwin"
 )
 DEFAULT_POSTGRES = "postgres://root@localhost:26257/materialize"
+DEFAULT_BLOB = "file://mzdata/persist/blob"
 
 # sets entitlements on the built binary, e.g. environmentd, so you can inspect it with Instruments
 MACOS_ENTITLEMENTS_DATA = """
@@ -89,6 +90,11 @@ def main() -> int:
         "--postgres",
         help="Postgres/CockroachDB connection string",
         default=os.getenv("MZDEV_POSTGRES", DEFAULT_POSTGRES),
+    )
+    parser.add_argument(
+        "--blob",
+        help="Blob storage connection string",
+        default=os.getenv("MZDEV_BLOB", DEFAULT_BLOB),
     )
     parser.add_argument(
         "--release",
@@ -278,7 +284,7 @@ def main() -> int:
                 f"--orchestrator-process-scratch-directory={scratch}",
                 "--secrets-controller=local-file",
                 f"--persist-consensus-url={args.postgres}?options=--search_path=consensus",
-                f"--persist-blob-url=file://{mzdata}/persist/blob",
+                f"--persist-blob-url={args.blob}",
                 f"--timestamp-oracle-url={args.postgres}?options=--search_path=tsoracle",
                 f"--environment-id={environment_id}",
                 "--bootstrap-role=materialize",

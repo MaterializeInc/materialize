@@ -15,6 +15,7 @@ from materialize.zippy.balancerd_actions import (
     BalancerdStart,
     BalancerdStop,
 )
+from materialize.zippy.blob_store_actions import BlobStoreRestart, BlobStoreStart
 from materialize.zippy.crdb_actions import CockroachRestart, CockroachStart
 from materialize.zippy.debezium_actions import CreateDebeziumSource, DebeziumStart
 from materialize.zippy.framework import ActionOrFactory
@@ -25,7 +26,6 @@ from materialize.zippy.kafka_actions import (
     KafkaStart,
 )
 from materialize.zippy.kafka_capabilities import Envelope
-from materialize.zippy.minio_actions import MinioRestart, MinioStart
 from materialize.zippy.mysql_actions import (
     CreateMySqlTable,
     MySqlDML,
@@ -72,7 +72,7 @@ class Scenario:
         return [
             KafkaStart,
             CockroachStart,
-            MinioStart,
+            BlobStoreStart,
             MzStart,
             StoragedStart,
             BalancerdStart,
@@ -277,8 +277,8 @@ class KafkaParallelInsert(Scenario):
         }
 
 
-class CrdbMinioRestart(Scenario):
-    """A Zippy test that restarts CRDB and Minio."""
+class CrdbBlobStoreRestart(Scenario):
+    """A Zippy test that restarts CRDB and BlobStore."""
 
     def actions_with_weight(self) -> dict[ActionOrFactory, float]:
         return {
@@ -296,7 +296,7 @@ class CrdbMinioRestart(Scenario):
             # Disabled because a separate clusterd is not supported by Mz0dtDeploy yet
             # StoragedRestart: 10,
             CockroachRestart: 15,
-            MinioRestart: 15,
+            BlobStoreRestart: 15,
         }
 
 

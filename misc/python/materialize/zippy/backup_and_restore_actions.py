@@ -21,6 +21,10 @@ class BackupAndRestore(Action):
         return {MzIsRunning, CockroachIsRunning}
 
     def run(self, c: Composition, state: State) -> None:
+        # TODO: Support and test azurite backups
+        if c.blob_store() == "azurite":
+            return
+
         # Required because of database-issues#6880
         c.kill("storaged")
 
@@ -28,7 +32,8 @@ class BackupAndRestore(Action):
         with c.override(
             Materialized(
                 name=state.mz_service,
-                external_minio=True,
+                external_blob_store=True,
+                blob_store_is_azure=c.blob_store() == "azurite",
                 external_metadata_store=True,
                 deploy_generation=state.deploy_generation,
                 system_parameter_defaults=state.system_parameter_defaults,

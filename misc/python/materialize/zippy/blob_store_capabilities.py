@@ -10,5 +10,5 @@
 from materialize.zippy.framework import Capability
 
 
-class MinioIsRunning(Capability):
+class BlobStoreIsRunning(Capability):
     pass

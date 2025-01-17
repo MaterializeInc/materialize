@@ -18,6 +18,7 @@ from pathlib import Path
 from materialize import ci_util
 from materialize.mzcompose import get_default_system_parameters
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services.azure import Azurite
 from materialize.mzcompose.services.fivetran_destination import FivetranDestination
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
@@ -36,10 +37,11 @@ SERVICES = [
     Redpanda(),
     Postgres(),
     MySql(),
+    Azurite(),
     Minio(setup_materialize=True, additional_directories=["copytos3"]),
-    Materialized(external_minio=True),
+    Materialized(external_blob_store=True),
     FivetranDestination(volumes_extra=["tmp:/share/tmp"]),
-    Testdrive(external_minio=True),
+    Testdrive(external_blob_store=True),
 ]
 
 
@@ -89,6 +91,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     parser.add_argument(
+        "--azurite", action="store_true", help="Use Azurite as blob store instead of S3"
+    )
+
+    parser.add_argument(
         "files",
         nargs="*",
         default=["*.td"],
@@ -98,10 +104,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     dependencies = [
         "fivetran-destination",
-        "minio",
         "materialized",
         "postgres",
         "mysql",
+        "minio",
     ]
     if args.redpanda:
         dependencies += ["redpanda"]
@@ -128,7 +134,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     materialized = Materialized(
         default_size=args.default_size,
-        external_minio=True,
+        external_blob_store=True,
+        blob_store_is_azure=args.azurite,
         additional_system_parameter_defaults=additional_system_parameter_defaults,
     )
 
@@ -139,7 +146,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         validate_catalog_store=True,
         default_timeout=args.default_timeout,
         volumes_extra=["mzdata:/mzdata"],
-        external_minio=True,
+        external_blob_store=True,
+        blob_store_is_azure=args.azurite,
         fivetran_destination=True,
         fivetran_destination_files_path="/share/tmp",
         entrypoint_extra=[
