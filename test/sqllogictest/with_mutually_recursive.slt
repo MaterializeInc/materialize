@@ -671,7 +671,6 @@ WITH MUTUALLY RECURSIVE
 SELECT x FROM bar
 
 ## Adapted from https://www.sqlite.org/lang_with.html#outlandish_recursive_query_examples
-## The 'x' at the beginning is to work around an sqllogictest bug.
 query T multiline
 WITH MUTUALLY RECURSIVE
   xaxis(x double) AS (VALUES(-2.0) UNION ALL SELECT x+0.05 FROM xaxis WHERE x<1.2),
@@ -689,9 +688,8 @@ WITH MUTUALLY RECURSIVE
     SELECT string_agg( substr(' .+*#', 1+least(iter/7,4), 1), '' ORDER BY cx), cy
     FROM m2 GROUP BY cy
   )
-SELECT 'x' || chr(10) || string_agg(rtrim(t), chr(10) ORDER BY cy) FROM a;
+SELECT string_agg(rtrim(t), chr(10) ORDER BY cy) FROM a;
 ----
-x
                                     ....#
                                    ..#*..
                                  ..+####+.
