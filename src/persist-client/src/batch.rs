@@ -367,7 +367,7 @@ pub struct BatchBuilderConfig {
 // TODO: Remove this once we're comfortable that there aren't any bugs.
 pub(crate) const BATCH_DELETE_ENABLED: Config<bool> = Config::new(
     "persist_batch_delete_enabled",
-    true,
+    false,
     "Whether to actually delete blobs when batch delete is called (Materialize).",
 );
 
