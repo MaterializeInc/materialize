@@ -1510,7 +1510,7 @@ steps:
     timeout_in_minutes: 90
     parallelism: 2
     agents:
-      queue: hetzner-aarch64-8cpu-16gb
+      queue: hetzner-aarch64-16cpu-32gb
     plugins:
       - ./ci/plugins/mzcompose:
           composition: data-ingest
