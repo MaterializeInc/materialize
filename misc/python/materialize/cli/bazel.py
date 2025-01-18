@@ -116,7 +116,10 @@ def integrity_cmd(config: BuildConfig, args: list[str]):
 def bazel_cmd(config: BuildConfig, args: list[str]):
     """Forwards all arguments to Bazel, possibly with extra configuration."""
     remote_cache = remote_cache_arg(config)
-    subprocess.run(["bazel", *args, *remote_cache], check=True)
+    try:
+        subprocess.run(["bazel", *args, *remote_cache], check=True)
+    except:
+        pass
 
 
 def gen(config: BuildConfig, path: Path | None, check: bool):
