@@ -82,35 +82,17 @@ for evaluation purposes only. The module deploys a sample infrastructure on AWS
 1. Clone or download the [Materialize's sample Terraform
    repo](https://github.com/MaterializeInc/terraform-aws-materialize).
 
-1. Go to the Materialize Terraform repo directory.
+1. Go to the `examples/simple` folder in the Materialize Terraform repo
+   directory.
 
    ```bash
-   cd terraform-aws-materialize
+   cd terraform-aws-materialize/examples/simple
    ```
 
-1. Copy the `terraform.tfvars.example` file to `terraform.tfvars`.
+1. Create a `terraform.tfvars` file and specify a database password.
 
    ```bash
-   cp terraform.tfvars.example terraform.tfvars
-   ```
-
-1. Edit the `terraform.tfvars` file to set the values for your AWS environment.
-   In particular,
-
-   - set your `database_password` to a secure password.
-   - set your `node_group_ami_type` to a `"AL2023_ARM_64_STANDARD"`.
-   - set your `node_group_instance_types` to a supported instance type for
-     ARM64.
-   - set your `service_account_name` to a name for your Materialize.
-
-
-   ```bash
-
-   # resources are prefixed with ${namespace}-${environment}
-   namespace         = "enter-your-namespace"       # Enter a namespace
-   environment       = "enter-your-environment"     # Enter an environment name
    database_password = "enter-your-secure-password" # Enter a secure password
-
    ```
 
 1. Initialize the terraform directory.
@@ -138,13 +120,13 @@ for evaluation purposes only. The module deploys a sample infrastructure on AWS
    Apply complete! Resources: 82 added, 0 changed, 0 destroyed.
 
    Outputs:
-   database_endpoint = "my-test-db.abcdefg8dsto.us-east-1.rds.amazonaws.com:5432"
+   database_endpoint = "materialize-simple.abcdefg8dsto.us-east-1.rds.amazonaws.com:5432"
    eks_cluster_endpoint = "https://0123456789A00BCD000E11BE12345A01.gr7.us-east-1.eks.amazonaws.com"
-   materialize_s3_role_arn = "arn:aws:iam::000111222333:role/my-test-materialize-s3-role"
+   materialize_s3_role_arn = "arn:aws:iam::000111222333:role/dev-materialize-s3-role"
    metadata_backend_url = <sensitive>
-   oidc_provider_arn = "arn:aws:iam::000111222333:oidc-provider/oidc.eks. us-east-1.amazonaws.com/id/0123456789A00BCD000E11BE12345A01"
-   persist_backend_url = "s3://my-test-bucket/my-test:serviceaccount:materialize-environment:my-test-materialize-svc"
-   s3_bucket_name = "my-test-bucket"
+   oidc_provider_arn = "arn:aws:iam::000111222333:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/0123456789A00BCD000E11BE12345A01"
+   persist_backend_url = "s3://materialize-simple-storage-c2663c2f/dev:serviceaccount:materialize-environment:12345678-1234-1234-1234-123456789012"
+   s3_bucket_name = "materialize-simple-storage-c2663c2f"
    vpc_id = "vpc-0abc000bed1d111bd"
    ```
 
@@ -164,16 +146,16 @@ for evaluation purposes only. The module deploys a sample infrastructure on AWS
      terraform output -json metadata_backend_url | jq
      ```
 
-1. Configure `kubectl` to connect to your EKS cluster, replacing:
+1. Configure `kubectl` to connect to your EKS cluster.
 
-   - `<your-cluster-name>` with the name of your EKS cluster (specified in
-     `terraform.tfvars`)
+   - By default, the example Terraform module uses `materialize-eks-simple` as
+     the name of your EKS cluster.
 
-   - `<your-region>` with the region of your EKS cluster. By default, the
-     sample Terraform module uses `us-east-1`.
+   - By default, the example Terraform module uses `us-east-1` as the region of
+     your EKS cluster.
 
    ```bash
-   aws eks update-kubeconfig --name <your-cluster-name> --region <your-region>
+   aws eks update-kubeconfig --name materialize-eks-simple --region us-east-1
    ```
 
    To verify that you have configured correctly, run the following command:
@@ -193,15 +175,18 @@ for evaluation purposes only. The module deploys a sample infrastructure on AWS
 ## B. Install the Materialize Operator
 
 1. Clone/download the [Materialize
-   repo](https://github.com/MaterializeInc/materialize).
+   repo](https://github.com/MaterializeInc/materialize). The tutorial uses the
+   `lts-v0.130` branch.
+
+   ```sh
+   git clone --branch lts-v0.130 https://github.com/MaterializeInc/materialize.git
+   ```
 
 1. Go to the Materialize repo directory.
 
    ```bash
    cd materialize
    ```
-
-1. Check out the {{% self-managed/latest_version %}} tag.
 
 1. Create a `my-materialize-operator-values.yaml` configuration file for the
    Materialize operator. Update with:
@@ -311,17 +296,14 @@ To deploy Materialize:
 1. Create a YAML file `my-materialize.yaml` for your Materialize
    configuration.
 
-   Replace `<your_service_account_name>` with the name you specified in the
-   `terraform.tfvars` file.
-
    ```yaml
    apiVersion: materialize.cloud/v1alpha1
    kind: Materialize
    metadata:
-     name: "<your_service_account_name>"      # e.g. my-test-materialize-svc
+     name: 12345678-1234-1234-1234-123456789012
      namespace: materialize-environment
    spec:
-     environmentdImageRef: materialize/environmentd:v0.127.0
+     environmentdImageRef: materialize/environmentd:v0.130.0
      environmentdResourceRequirements:
        limits:
          memory: 16Gi
