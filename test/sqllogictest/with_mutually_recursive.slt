@@ -669,3 +669,49 @@ query error db error: ERROR: WITH MUTUALLY RECURSIVE query "bar" declared types 
 WITH MUTUALLY RECURSIVE
     bar(x list_numeric_scale_2) as (SELECT LIST['1'::TEXT])
 SELECT x FROM bar
+
+## Adapted from https://www.sqlite.org/lang_with.html#outlandish_recursive_query_examples
+## The 'x' at the beginning is to work around an sqllogictest bug.
+query T multiline
+WITH MUTUALLY RECURSIVE
+  xaxis(x double) AS (VALUES(-2.0) UNION ALL SELECT x+0.05 FROM xaxis WHERE x<1.2),
+  yaxis(y double) AS (VALUES(-1.0) UNION ALL SELECT y+0.1 FROM yaxis WHERE y<1.0),
+  m(iter int, cx double, cy double, x double, y double) AS (
+    SELECT 0, x, y, 0.0, 0.0 FROM xaxis, yaxis
+    UNION ALL
+    SELECT iter+1, cx, cy, x*x-y*y + cx, 2.0*x*y + cy FROM m
+     WHERE (x*x + y*y) < 4.0 AND iter<28
+  ),
+  m2(iter int, cx double, cy double) AS (
+    SELECT max(iter), cx, cy FROM m GROUP BY cx, cy
+  ),
+  a(t text, cy double) AS (
+    SELECT string_agg( substr(' .+*#', 1+least(iter/7,4), 1), '' ORDER BY cx), cy
+    FROM m2 GROUP BY cy
+  )
+SELECT 'x' || chr(10) || string_agg(rtrim(t), chr(10) ORDER BY cy) FROM a;
+----
+x
+                                    ....#
+                                   ..#*..
+                                 ..+####+.
+                            .......+####....   +
+                           ..##+*##########+.++++
+                          .+.##################+.
+              .............+###################+.+
+              ..++..#.....*#####################+.
+             ...+#######++#######################.
+          ....+*################################.
+ #############################################...
+          ....+*################################.
+             ...+#######++#######################.
+              ..++..#.....*#####################+.
+              .............+###################+.+
+                          .+.##################+.
+                           ..##+*##########+.++++
+                            .......+####....   +
+                                 ..+####+.
+                                   ..#*..
+                                    ....#
+                                    +.
+EOF
