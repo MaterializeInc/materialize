@@ -3495,31 +3495,10 @@ impl Coordinator {
     }
 
     /// Publishes a notice message to all sessions.
-    ///
-    /// TODO(parkmycar): This code is dead, but is a nice parallel to [`Coordinator::broadcast_notice_tx`]
-    /// so we keep it around.
-    #[allow(dead_code)]
     pub(crate) fn broadcast_notice(&self, notice: AdapterNotice) {
         for meta in self.active_conns.values() {
             let _ = meta.notice_tx.send(notice.clone());
         }
-    }
-
-    /// Returns a closure that will publish a notice to all sessions that were active at the time
-    /// this method was called.
-    pub(crate) fn broadcast_notice_tx(
-        &self,
-    ) -> Box<dyn FnOnce(AdapterNotice) -> () + Send + 'static> {
-        let senders: Vec<_> = self
-            .active_conns
-            .values()
-            .map(|meta| meta.notice_tx.clone())
-            .collect();
-        Box::new(move |notice| {
-            for tx in senders {
-                let _ = tx.send(notice.clone());
-            }
-        })
     }
 
     pub(crate) fn active_conns(&self) -> &BTreeMap<ConnectionId, ConnMeta> {

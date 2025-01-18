@@ -763,8 +763,13 @@ impl Coordinator {
             );
 
             let builtin_table_updates = vec![builtin_table_retraction, builtin_table_addition];
-            // Returns a Future that completes when the Builtin Table write is completed.
-            let builtin_table_completion = self.builtin_table_update().defer(builtin_table_updates);
+
+            self.builtin_table_update()
+                .execute(builtin_table_updates)
+                .await
+                .0
+                .instrument(info_span!("coord::message_cluster_event::table_updates"))
+                .await;
 
             let cluster = self.catalog().get_cluster(event.cluster_id);
             let replica = cluster.replica(event.replica_id).expect("Replica exists");
@@ -773,24 +778,12 @@ impl Coordinator {
                 .get_cluster_replica_status(event.cluster_id, event.replica_id);
 
             if old_replica_status != new_replica_status {
-                let notifier = self.broadcast_notice_tx();
-                let notice = AdapterNotice::ClusterReplicaStatusChanged {
+                self.broadcast_notice(AdapterNotice::ClusterReplicaStatusChanged {
                     cluster: cluster.name.clone(),
                     replica: replica.name.clone(),
                     status: new_replica_status,
                     time: event.time,
-                };
-                // In a separate task, so we don't block the Coordinator, wait for the builtin
-                // table update to complete, and then notify active sessions.
-                mz_ore::task::spawn(
-                    || format!("cluster_event-{}-{}", event.cluster_id, event.replica_id),
-                    async move {
-                        // Wait for the builtin table updates to complete.
-                        builtin_table_completion.await;
-                        // Notify all sessions that were active at the time the cluster status changed.
-                        (notifier)(notice)
-                    },
-                );
+                });
             }
         }
     }
