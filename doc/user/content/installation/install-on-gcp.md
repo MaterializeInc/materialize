@@ -256,7 +256,12 @@ evaluation purposes only. The module deploys a sample infrastructure on GCP
 ## B. Install the Materialize Operator
 
 1. Clone/download the [Materialize
-   repo](https://github.com/MaterializeInc/materialize).
+   repo](https://github.com/MaterializeInc/materialize). The tutorial uses the
+   `lts-v0.130` branch.
+
+   ```sh
+   git clone --branch lts-v0.130 https://github.com/MaterializeInc/materialize.git
+   ```
 
 1. Go to the Materialize repo directory.
 
@@ -264,7 +269,6 @@ evaluation purposes only. The module deploys a sample infrastructure on GCP
    cd materialize
    ```
 
-1. Check out the {{% self-managed/latest_version %}} tag.
 
 1. Create a `my-materialize-operator-values.yaml` configuration file for
    the Materialize operator.  Update with:
@@ -370,19 +374,7 @@ To deploy Materialize:
      name: "your-service-account-name"      # e.g. my-simple-materialize-sa
      namespace: materialize-environment
    spec:
-     environmentdImageRef: materialize/environmentd:v0.127.0
-     environmentdResourceRequirements:
-       limits:
-         memory: 16Gi
-       requests:
-         cpu: "2"
-         memory: 16Gi
-     balancerdResourceRequirements:
-       limits:
-         memory: 256Mi
-       requests:
-         cpu: "100m"
-         memory: 256Mi
+     environmentdImageRef: materialize/environmentd:v0.130.0
      backendSecretName: materialize-backend
    ```
 
