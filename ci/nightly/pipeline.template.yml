@@ -1505,16 +1505,17 @@ steps:
           composition: retain-history
 
   - id: data-ingest
-    label: "Data Ingest with :azure: blob store"
+    label: "Data Ingest"
     depends_on: build-aarch64
     timeout_in_minutes: 90
     parallelism: 2
     agents:
-      queue: hetzner-aarch64-16cpu-32gb
+      queue: hetzner-aarch64-8cpu-16gb
     plugins:
       - ./ci/plugins/mzcompose:
           composition: data-ingest
-          args: [--azurite]
+          # TODO: Reenable Azurite when https://github.com/MaterializeInc/database-issues/issues/8892 is fixed
+          #args: [--azurite]
 
   - group: "Parallel Workload"
     key: parallel-workload
