@@ -39,7 +39,6 @@ use std::num::NonZeroU64;
 use std::{iter, mem};
 
 use itertools::Itertools;
-use mz_expr::virtual_syntax::AlgExcept;
 use mz_expr::{func as expr_func, Id, LetRecLimit, LocalId, MirScalarExpr, RowSetFinishing};
 use mz_ore::assert_none;
 use mz_ore::collections::CollectionExt;
@@ -79,9 +78,9 @@ use crate::normalize;
 use crate::plan::error::PlanError;
 use crate::plan::expr::{
     AbstractColumnType, AbstractExpr, AggregateExpr, AggregateFunc, AggregateWindowExpr,
-    BinaryFunc, CoercibleScalarExpr, CoercibleScalarType, ColumnOrder, ColumnRef, Hir,
-    HirRelationExpr, HirScalarExpr, JoinKind, ScalarWindowExpr, ScalarWindowFunc, UnaryFunc,
-    ValueWindowExpr, ValueWindowFunc, VariadicFunc, WindowExpr, WindowExprType,
+    BinaryFunc, CoercibleScalarExpr, CoercibleScalarType, ColumnOrder, ColumnRef, HirRelationExpr,
+    HirScalarExpr, JoinKind, ScalarWindowExpr, ScalarWindowFunc, UnaryFunc, ValueWindowExpr,
+    ValueWindowFunc, VariadicFunc, WindowExpr, WindowExprType,
 };
 use crate::plan::plan_utils::{self, GroupSizeHints, JoinSide};
 use crate::plan::scope::{Scope, ScopeItem, ScopeUngroupedColumn};
@@ -1795,7 +1794,7 @@ fn plan_set_expr(
                         lhs.union(rhs).distinct()
                     }
                 }
-                SetOperator::Except => Hir::except(all, lhs, rhs),
+                SetOperator::Except => lhs.except(rhs, all),
                 SetOperator::Intersect => {
                     // TODO: Let's not duplicate the left-hand expression into TWO dataflows!
                     // Though we believe that render() does The Right Thing (TM)
@@ -1804,10 +1803,9 @@ fn plan_set_expr(
                     // i.e., the record counts for differential data flow definitely remain non-negative.
                     let left_clone = lhs.clone();
                     if *all {
-                        lhs.union(left_clone.union(rhs.negate()).threshold().negate())
+                        lhs.minus(left_clone.minus(rhs).threshold())
                     } else {
-                        lhs.union(left_clone.union(rhs.negate()).threshold().negate())
-                            .distinct()
+                        lhs.minus(left_clone.minus(rhs).threshold()).distinct()
                     }
                 }
             };

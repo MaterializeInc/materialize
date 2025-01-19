@@ -3046,7 +3046,7 @@ pub fn plan_create_continual_task(
         };
         match stmt {
             ast::ContinualTaskStmt::Insert(_) => exprs.push(expr),
-            ast::ContinualTaskStmt::Delete(_) => exprs.push(expr.negate()),
+            ast::ContinualTaskStmt::Delete(_) => exprs.push(expr.negate_unguarded()),
         }
     }
     // TODO(ct3): Collect things by output and assert that there is only one (or
