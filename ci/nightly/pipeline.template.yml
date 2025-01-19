@@ -679,7 +679,7 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
 
       - id: testdrive-old-kafka-src-syntax
-        label: "Testdrive (before Kafka source versioning)"
+        label: "Testdrive (before Kafka source versioning) with :azure: blob store"
         depends_on: build-aarch64
         timeout_in_minutes: 180
         plugins:
@@ -1505,12 +1505,12 @@ steps:
           composition: retain-history
 
   - id: data-ingest
-    label: "Data Ingest"
+    label: "Data Ingest with :azure: blob store"
     depends_on: build-aarch64
     timeout_in_minutes: 90
     parallelism: 2
     agents:
-      queue: hetzner-aarch64-8cpu-16gb
+      queue: hetzner-aarch64-16cpu-32gb
     plugins:
       - ./ci/plugins/mzcompose:
           composition: data-ingest
@@ -1722,7 +1722,7 @@ steps:
         sanitizer: skip
 
   - id: txn-wal-fencing
-    label: Txn-wal fencing
+    label: "Txn-wal fencing with :azure: blob store"
     depends_on: build-aarch64
     timeout_in_minutes: 120
     parallelism: 2
