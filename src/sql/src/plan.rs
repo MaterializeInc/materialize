@@ -97,7 +97,7 @@ pub(crate) mod scope;
 pub(crate) mod side_effecting_func;
 pub(crate) mod statement;
 pub(crate) mod transform_ast;
-pub(crate) mod transform_expr;
+pub(crate) mod transform_hir;
 pub(crate) mod typeconv;
 pub(crate) mod with_options;
 
