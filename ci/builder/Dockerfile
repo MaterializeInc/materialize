@@ -382,6 +382,12 @@ RUN curl -fsSL https://releases.hashicorp.com/terraform/1.9.8/terraform_1.9.8_li
     && chmod +x /usr/local/bin/terraform \
     && rm terraform.zip
 
+RUN curl -fsSL https://github.com/mikefarah/yq/releases/download/v4.45.1/yq_linux_$ARCH_GO > yq \
+    && if [ $ARCH_GO = amd64 ]; then echo '654d2943ca1d3be2024089eb4f270f4070f491a0610481d128509b2834870049 yq' | sha256sum --check; fi \
+    && if [ $ARCH_GO = arm64 ]; then echo 'ceea73d4c86f2e5c91926ee0639157121f5360da42beeb8357783d79c2cc6a1d yq' | sha256sum --check; fi \
+    && chmod +x yq \
+    && mv yq /usr/local/bin
+
 # Hardcode some known SSH hosts, or else SSH will ask whether the host is
 # trustworthy on the first connection.
 
