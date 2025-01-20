@@ -508,27 +508,25 @@ pub(super) fn construct<A: Allocate + 'static>(
             }
         });
 
+        let mut scratch1 = String::new();
+        let mut scratch2 = String::new();
         let mut packer = PermutedRowPacker::new(ComputeLog::LirMapping);
         let lir_mapping = lir_mapping
-            .map({
-                let mut scratch1 = String::new();
-                let mut scratch2 = String::new();
-                move |(datum, time, diff)| {
-                    let row = packer.pack_slice_owned(&[
-                        make_string_datum(GlobalId::into_owned(datum.global_id), &mut scratch1),
-                        Datum::UInt64(<LirId as Columnar>::into_owned(datum.lir_id).into()),
-                        Datum::UInt64(u64::cast_from(worker_id)),
-                        make_string_datum(datum.operator, &mut scratch2),
-                        datum
-                            .parent_lir_id
-                            .map(|lir_id| Datum::UInt64(LirId::into_owned(lir_id).into()))
-                            .unwrap_or_else(|| Datum::Null),
-                        Datum::UInt16(u16::cast_from(*datum.nesting)),
-                        Datum::UInt64(u64::cast_from(datum.operator_span.0)),
-                        Datum::UInt64(u64::cast_from(datum.operator_span.1)),
-                    ]);
-                    (row, Timestamp::into_owned(time), *diff)
-                }
+            .map(move |(datum, time, diff)| {
+                let row = packer.pack_slice_owned(&[
+                    make_string_datum(GlobalId::into_owned(datum.global_id), &mut scratch1),
+                    Datum::UInt64(<LirId as Columnar>::into_owned(datum.lir_id).into()),
+                    Datum::UInt64(u64::cast_from(worker_id)),
+                    make_string_datum(datum.operator, &mut scratch2),
+                    datum
+                        .parent_lir_id
+                        .map(|lir_id| Datum::UInt64(LirId::into_owned(lir_id).into()))
+                        .unwrap_or_else(|| Datum::Null),
+                    Datum::UInt16(u16::cast_from(*datum.nesting)),
+                    Datum::UInt64(u64::cast_from(datum.operator_span.0)),
+                    Datum::UInt64(u64::cast_from(datum.operator_span.1)),
+                ]);
+                (row, Timestamp::into_owned(time), *diff)
             })
             .as_collection();
 

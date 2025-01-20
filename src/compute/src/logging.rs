@@ -169,7 +169,11 @@ impl PermutedRowPacker {
         self.pack_by_index(|packer, index| packer.push(datums[index]))
     }
 
-    /// Pack a slice of datums suitable for the key columns in the log variant.
+    /// Pack a slice of datums suitable for the key columns in the log variant, returning owned
+    /// rows.
+    ///
+    /// This is equivalent to calling [`PermutedRowPacker::pack_slice`] and then calling `to_owned`
+    /// on the returned rows.
     pub(crate) fn pack_slice_owned(&mut self, datums: &[Datum]) -> (Row, Row) {
         let (key, value) = self.pack_by_index(|packer, index| packer.push(datums[index]));
         (key.to_owned(), value.to_owned())
@@ -237,7 +241,7 @@ where
     let c_name = &format!("Consolidate {log:?}");
     let u_name = &format!("ToRow {log:?}");
     let mut packer = PermutedRowPacker::new(log);
-    let consolidated = consolidate_pact::<B, _, _, _>(input, Pipeline, c_name);
+    let consolidated = consolidate_pact::<B, _, _>(input, Pipeline, c_name);
     consolidated.unary::<CB, _, _, _>(Pipeline, u_name, |_, _| {
         move |input, output| {
             while let Some((time, data)) = input.next() {

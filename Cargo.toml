@@ -285,16 +285,6 @@ incremental = true
 # merged), after which point it becomes impossible to build that historical
 # version of Materialize.
 [patch.crates-io]
-#columnar = { git = "https://github.com/frankmcsherry/columnar" }
-#columnar = { git = "https://github.com/antiguru/columnar", branch = "inline_as_bytes" }
-#columnar = { path = "../columnar" }
-#differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow" }
-#differential-dataflow = { git = "https://github.com/antiguru/differential-dataflow", branch = "logging_fallout", version = "0.13.2" }
-#differential-dataflow = { path = "../differential-dataflow" }
-timely = { git = "https://github.com/TimelyDataflow/timely-dataflow" }
-#timely = { git = "https://github.com/antiguru/timely-dataflow", branch = "logger_flush" }
-#timely = { path = "../timely-dataflow/timely" }
-
 # Waiting on https://github.com/sfackler/rust-postgres/pull/752.
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }

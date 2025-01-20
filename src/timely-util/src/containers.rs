@@ -18,7 +18,6 @@ pub mod stack;
 pub use container::Column;
 
 mod container {
-
     use columnar::bytes::serialization::decode;
     use columnar::common::IterOwn;
     use columnar::Columnar;
@@ -144,7 +143,7 @@ mod container {
     impl<C: Columnar> ContainerBytes for Column<C> {
         fn from_bytes(bytes: Bytes) -> Self {
             // Our expectation / hope is that `bytes` is `u64` aligned and sized.
-            // If the alignment is borked, we can relocate. IF the size is borked,
+            // If the alignment is borked, we can relocate. If the size is borked,
             // not sure what we do in that case.
             assert_eq!(bytes.len() % 8, 0);
             if let Ok(_) = bytemuck::try_cast_slice::<_, u64>(&bytes) {
@@ -359,12 +358,11 @@ pub mod batcher {
                             T::copy_from(&mut owned_time, prev_time);
                             let tuple = (owned_data, owned_time, prev_diff);
                             self.empty.push_into(&tuple);
-                            owned_data = tuple.0;
-                            owned_time = tuple.1;
+                            (owned_data, owned_time, prev_diff) = tuple;
                         }
                         prev_data = data;
                         prev_time = time;
-                        prev_diff = <R as Columnar>::into_owned(diff);
+                        R::copy_from(&mut prev_diff, diff);
                     }
                 }
 
@@ -390,7 +388,9 @@ mod provided_builder {
     use timely::Container;
 
     /// A container builder that doesn't support pushing elements, and is only suitable for pushing
-    /// whole containers at session.
+    /// whole containers at session. See [`give_container`] for more information.
+    ///
+    ///  [`give_container`]: timely::dataflow::channels::pushers::buffer::Session::give_container
     pub struct ProvidedBuilder<C> {
         _marker: std::marker::PhantomData<C>,
     }

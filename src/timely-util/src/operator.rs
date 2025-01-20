@@ -708,7 +708,7 @@ where
                 h.finish()
             });
             // Access to `arrange_core` is OK because we specify the trace and don't hold on to it.
-            consolidate_pact::<Ba, _, _, _>(&self.map(|k| (k, ())).inner, exchange, name)
+            consolidate_pact::<Ba, _, _>(&self.map(|k| (k, ())).inner, exchange, name)
                 .map(|((k, ()), time, diff)| (k.clone(), time.clone(), diff.clone()))
                 .as_collection()
         } else {
@@ -730,7 +730,7 @@ where
         let exchange =
             Exchange::new(move |update: &((D1, ()), G::Timestamp, R)| (update.0).0.hashed());
 
-        consolidate_pact::<Ba, _, _, _>(&self.map(|k| (k, ())).inner, exchange, name)
+        consolidate_pact::<Ba, _, _>(&self.map(|k| (k, ())).inner, exchange, name)
             .map(|((k, ()), time, diff)| (k.clone(), time.clone(), diff.clone()))
             .as_collection()
     }
@@ -774,19 +774,17 @@ where
 /// The data are accumulated in place, each held back until their timestamp has completed.
 ///
 /// This serves as a low-level building-block for more user-friendly functions.
-pub fn consolidate_pact<B, P, G, CI>(
-    stream: &StreamCore<G, CI>,
+pub fn consolidate_pact<Ba, P, G>(
+    stream: &StreamCore<G, Ba::Input>,
     pact: P,
     name: &str,
-) -> StreamCore<G, B::Output>
+) -> StreamCore<G, Ba::Output>
 where
     G: Scope,
-    B: Batcher<Input = CI, Time = G::Timestamp> + 'static,
-    B::Output: Container + Clone,
-    // for<'a> CO: PushInto<<B::Output as Container>::Item<'a>>,
-    P: ParallelizationContract<G::Timestamp, CI>,
-    CI: Container + Data,
-    // CO: SizableContainer + Data,
+    Ba: Batcher<Time = G::Timestamp> + 'static,
+    Ba::Input: Container + Clone + 'static,
+    Ba::Output: Container + Clone,
+    P: ParallelizationContract<G::Timestamp, Ba::Input>,
 {
     stream.unary_frontier(pact, name, |_cap, info| {
         // Acquire a logger for arrange events.
@@ -798,7 +796,7 @@ where
                 .map(Into::into)
         };
 
-        let mut batcher = B::new(logger, info.global_id);
+        let mut batcher = Ba::new(logger, info.global_id);
         // Capabilities for the lower envelope of updates in `batcher`.
         let mut capabilities = Antichain::<Capability<G::Timestamp>>::new();
         let mut prev_frontier = Antichain::from_elem(G::Timestamp::minimum());
@@ -835,7 +833,7 @@ where
                             let mut session = output.session(&capabilities.elements()[index]);
                             // Extract updates not in advance of `upper`.
                             let output =
-                                batcher.seal::<ConsolidateBuilder<_, B::Output>>(upper.clone());
+                                batcher.seal::<ConsolidateBuilder<_, Ba::Output>>(upper.clone());
                             for mut batch in output {
                                 session.give_container(&mut batch);
                             }

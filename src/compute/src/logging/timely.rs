@@ -203,7 +203,7 @@ pub(super) fn construct<A: Allocate>(
                     Datum::UInt64(datum.duration_pow),
                     datum
                         .requested_pow
-                        .map(|v| Datum::UInt64(v))
+                        .map(Datum::UInt64)
                         .unwrap_or(Datum::Null),
                 ]);
                 session.give((data, time, diff));

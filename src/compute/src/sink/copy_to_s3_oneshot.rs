@@ -67,7 +67,7 @@ where
         // is necessary to ensure the files written from each compute replica are identical.
         // While this is not technically guaranteed, the current implementation uses a FIFO channel.
         // In the storage copy_to operator we assert the ordering of rows to detect any regressions.
-        let input = consolidate_pact::<KeyBatcher<_, _, _>, _, _, _>(
+        let input = consolidate_pact::<KeyBatcher<_, _, _>, _, _>(
             &sinked_collection
                 .map(move |row| {
                     let batch = row.hashed() % batch_count;
@@ -81,7 +81,7 @@ where
         let input = input.map(Clone::clone).as_collection();
 
         // We need to consolidate the error collection to ensure we don't act on retracted errors.
-        let error = consolidate_pact::<KeyBatcher<_, _, _>, _, _, _>(
+        let error = consolidate_pact::<KeyBatcher<_, _, _>, _, _>(
             &err_collection
                 .map(move |row| {
                     let batch = row.hashed() % batch_count;
