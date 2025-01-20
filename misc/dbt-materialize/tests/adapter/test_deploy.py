@@ -389,7 +389,7 @@ class TestTargetDeploy:
                 "deployment": {
                     "default": {
                         "clusters": ["prod"],
-                        "schemas": ["prod"],
+                        "schemas": ["prod", "staging"],
                     }
                 },
             }
@@ -401,12 +401,16 @@ class TestTargetDeploy:
         project.run_sql("DROP CLUSTER IF EXISTS prod_dbt_deploy CASCADE")
         project.run_sql("DROP SCHEMA IF EXISTS prod CASCADE")
         project.run_sql("DROP SCHEMA IF EXISTS prod_dbt_deploy CASCADE")
+        project.run_sql("DROP SCHEMA IF EXISTS staging CASCADE")
+        project.run_sql("DROP SCHEMA IF EXISTS staging_dbt_deploy CASCADE")
 
     def test_dbt_deploy(self, project):
         project.run_sql("CREATE CLUSTER prod SIZE = '1'")
         project.run_sql("CREATE CLUSTER prod_dbt_deploy SIZE = '1'")
         project.run_sql("CREATE SCHEMA prod")
         project.run_sql("CREATE SCHEMA prod_dbt_deploy")
+        project.run_sql("CREATE SCHEMA staging")
+        project.run_sql("CREATE SCHEMA staging_dbt_deploy")
 
         before_clusters = dict(
             project.run_sql(
@@ -417,6 +421,12 @@ class TestTargetDeploy:
         before_schemas = dict(
             project.run_sql(
                 "SELECT name, id FROM mz_schemas WHERE name IN ('prod', 'prod_dbt_deploy')",
+                fetch="all",
+            )
+        )
+        before_staging_schemas = dict(
+            project.run_sql(
+                "SELECT name, id FROM mz_schemas WHERE name IN ('staging', 'staging_dbt_deploy')",
                 fetch="all",
             )
         )
@@ -435,11 +445,19 @@ class TestTargetDeploy:
                 fetch="all",
             )
         )
+        after_staging_schemas = dict(
+            project.run_sql(
+                "SELECT name, id FROM mz_schemas WHERE name IN ('staging', 'staging_dbt_deploy')",
+                fetch="all",
+            )
+        )
 
         assert before_clusters["prod"] != after_clusters["prod_dbt_deploy"]
         assert before_clusters["prod_dbt_deploy"] != after_clusters["prod"]
         assert before_schemas["prod"] != after_schemas["prod_dbt_deploy"]
-        assert before_schemas["prod"] != after_schemas["prod_dbt_deploy"]
+        assert before_schemas["prod_dbt_deploy"] != after_schemas["prod"]
+        assert before_staging_schemas["staging"] != after_staging_schemas["staging_dbt_deploy"]
+        assert before_staging_schemas["staging_dbt_deploy"] != after_staging_schemas["staging"]
 
         run_dbt(["run-operation", "deploy_promote"])
 
@@ -455,32 +473,43 @@ class TestTargetDeploy:
                 fetch="all",
             )
         )
+        after_staging_schemas = dict(
+            project.run_sql(
+                "SELECT name, id FROM mz_schemas WHERE name IN ('staging', 'staging_dbt_deploy')",
+                fetch="all",
+            )
+        )
 
         assert before_clusters["prod"] == after_clusters["prod_dbt_deploy"]
         assert before_clusters["prod_dbt_deploy"] == after_clusters["prod"]
         assert before_schemas["prod"] == after_schemas["prod_dbt_deploy"]
-        assert before_schemas["prod"] == after_schemas["prod_dbt_deploy"]
+        assert before_schemas["prod_dbt_deploy"] == after_schemas["prod"]
+        assert before_staging_schemas["staging"] == after_staging_schemas["staging_dbt_deploy"]
+        assert before_staging_schemas["staging_dbt_deploy"] == after_staging_schemas["staging"]
 
-        # Verify that the 'prod' schema is tagged correctly
-        tagged_schema_comment = project.run_sql(
-            """
-            SELECT c.comment
-            FROM mz_internal.mz_comments c
-            JOIN mz_schemas s USING (id)
-            WHERE s.name = 'prod';
-            """,
-            fetch="one",
-        )
+        # Verify that both schemas are tagged correctly
+        for schema_name in ['prod', 'staging']:
+            tagged_schema_comment = project.run_sql(
+                f"""
+                SELECT c.comment
+                FROM mz_internal.mz_comments c
+                JOIN mz_schemas s USING (id)
+                WHERE s.name = '{schema_name}';
+                """,
+                fetch="one"
+            )
 
-        assert tagged_schema_comment is not None
-        assert "Deployment by" in tagged_schema_comment[0]
-        assert "on" in tagged_schema_comment[0]
+            assert tagged_schema_comment is not None, f"No comment found for schema {schema_name}"
+            assert "Deployment by" in tagged_schema_comment[0], f"Missing deployment info in {schema_name} comment"
+            assert "on" in tagged_schema_comment[0], f"Missing timestamp in {schema_name} comment"
 
     def test_dbt_deploy_with_force(self, project):
         project.run_sql("CREATE CLUSTER prod SIZE = '1'")
         project.run_sql("CREATE CLUSTER prod_dbt_deploy SIZE = '1'")
         project.run_sql("CREATE SCHEMA prod")
         project.run_sql("CREATE SCHEMA prod_dbt_deploy")
+        project.run_sql("CREATE SCHEMA staging")
+        project.run_sql("CREATE SCHEMA staging_dbt_deploy")
 
         before_clusters = dict(
             project.run_sql(
@@ -519,6 +548,8 @@ class TestTargetDeploy:
         project.run_sql("CREATE CLUSTER prod SIZE = '1'")
         project.run_sql("CREATE SCHEMA prod")
         project.run_sql("CREATE SCHEMA prod_dbt_deploy")
+        project.run_sql("CREATE SCHEMA staging")
+        project.run_sql("CREATE SCHEMA staging_dbt_deploy")
 
         run_dbt(["run-operation", "deploy_promote"], expect_pass=False)
 
@@ -532,6 +563,8 @@ class TestTargetDeploy:
     def test_fails_on_unmanaged_cluster(self, project):
         project.run_sql("CREATE CLUSTER prod REPLICAS ()")
         project.run_sql("CREATE SCHEMA prod")
+        project.run_sql("CREATE SCHEMA staging")
+        project.run_sql("CREATE SCHEMA staging_dbt_deploy")
 
         run_dbt(["run-operation", "deploy_init"], expect_pass=False)
 
@@ -540,6 +573,7 @@ class TestTargetDeploy:
             "CREATE CLUSTER prod (SIZE = '1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1 hour'))"
         )
         project.run_sql("CREATE SCHEMA prod")
+        project.run_sql("CREATE SCHEMA staging")
 
         run_dbt(["run-operation", "deploy_init"])
 
@@ -559,6 +593,7 @@ class TestTargetDeploy:
     def test_dbt_deploy_init_and_cleanup(self, project):
         project.run_sql("CREATE CLUSTER prod SIZE = '1'")
         project.run_sql("CREATE SCHEMA prod")
+        project.run_sql("CREATE SCHEMA staging")
 
         run_dbt(["run-operation", "deploy_init"])
 
@@ -595,6 +630,8 @@ class TestTargetDeploy:
         project.run_sql("CREATE SCHEMA prod")
         project.run_sql("CREATE SCHEMA prod_dbt_deploy")
         project.run_sql("CREATE CLUSTER prod_dbt_deploy SIZE = '1'")
+        project.run_sql("CREATE SCHEMA staging")
+        project.run_sql("CREATE SCHEMA staging_dbt_deploy")
 
         project.run_sql(
             "CREATE MATERIALIZED VIEW mv IN CLUSTER prod_dbt_deploy AS SELECT 1"
@@ -615,6 +652,8 @@ class TestTargetDeploy:
         project.run_sql("CREATE SCHEMA prod")
         project.run_sql("CREATE SCHEMA prod_dbt_deploy")
         project.run_sql("CREATE CLUSTER prod_dbt_deploy SIZE = '1'")
+        project.run_sql("CREATE SCHEMA staging")
+        project.run_sql("CREATE SCHEMA staging_dbt_deploy")
 
         project.run_sql("CREATE VIEW prod_dbt_deploy.view AS SELECT 1")
 
