@@ -9,7 +9,11 @@
 
 //! Reusable containers.
 
+use std::hash::Hash;
+
+use columnar::Columnar;
 use differential_dataflow::trace::implementations::merge_batcher::{ColMerger, MergeBatcher};
+use differential_dataflow::Hashable;
 use timely::container::columnation::TimelyStack;
 
 pub mod array;
@@ -25,7 +29,6 @@ mod container {
     use columnar::{AsBytes, Clear, FromBytes, Index, Len};
     use timely::bytes::arc::Bytes;
     use timely::container::PushInto;
-    use timely::container::SizableContainer;
     use timely::dataflow::channels::ContainerBytes;
     use timely::Container;
 
@@ -106,20 +109,6 @@ mod container {
         fn drain(&mut self) -> Self::DrainIter<'_> {
             self.borrow().into_iter()
         }
-    }
-
-    impl<C: Columnar> SizableContainer for Column<C> {
-        fn at_capacity(&self) -> bool {
-            match self {
-                Self::Typed(t) => {
-                    let length_in_bytes = t.borrow().length_in_words() * 8;
-                    length_in_bytes >= (1 << 20)
-                }
-                Self::Bytes(_) => true,
-                Self::Align(_) => true,
-            }
-        }
-        fn ensure_capacity(&mut self, _stash: &mut Option<Self>) {}
     }
 
     impl<C: Columnar, T> PushInto<T> for Column<C>
@@ -282,6 +271,21 @@ pub type Col2ValBatcher<K, V, T, R> = MergeBatcher<
 >;
 pub type Col2KeyBatcher<K, T, R> = Col2ValBatcher<K, (), T, R>;
 
+/// An exchange function for columnar tuples of the form `((K, V), T, D)`. Rust has a hard
+/// time to figure out the lifetimes of the elements when specified as a closure, so we rather
+/// specify it as a function.
+#[inline(always)]
+pub fn columnar_exchange<K, V, T, D>(((k, _), _, _): &<((K, V), T, D) as Columnar>::Ref<'_>) -> u64
+where
+    K: Columnar,
+    for<'a> K::Ref<'a>: Hash,
+    V: Columnar,
+    D: Columnar,
+    T: Columnar,
+{
+    k.hashed()
+}
+
 /// Types for consolidating, merging, and extracting columnar update collections.
 pub mod batcher {
     use std::collections::VecDeque;
@@ -406,10 +410,12 @@ mod provided_builder {
     impl<C: Container + Clone + 'static> ContainerBuilder for ProvidedBuilder<C> {
         type Container = C;
 
+        #[inline(always)]
         fn extract(&mut self) -> Option<&mut Self::Container> {
             None
         }
 
+        #[inline(always)]
         fn finish(&mut self) -> Option<&mut Self::Container> {
             None
         }

@@ -18,10 +18,9 @@ use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::logging::{
     BatchEvent, BatcherEvent, DifferentialEvent, DropEvent, MergeEvent, TraceShare,
 };
-use differential_dataflow::Hashable;
 use mz_ore::cast::CastFrom;
-use mz_repr::{Datum, Diff, RowRef, Timestamp};
-use mz_timely_util::containers::{Col2ValBatcher, ColumnBuilder};
+use mz_repr::{Datum, Diff, Timestamp};
+use mz_timely_util::containers::{columnar_exchange, Col2ValBatcher, ColumnBuilder};
 use mz_timely_util::replay::MzReplay;
 use timely::communication::Allocate;
 use timely::container::CapacityContainerBuilder;
@@ -165,7 +164,7 @@ pub(super) fn construct<A: Allocate>(
             if config.index_logs.contains_key(&variant) {
                 let trace = collection
                     .mz_arrange_core::<_, Col2ValBatcher<_, _, _, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
-                        ExchangeCore::new(|((key, _val), _time, _diff): &((&RowRef, &RowRef), _, _)| key.hashed()),
+                        ExchangeCore::<ColumnBuilder<_>, _>::new_core(columnar_exchange::<mz_repr::Row, mz_repr::Row, Timestamp, mz_repr::Diff>),
                         &format!("Arrange {variant:?}"),
                     )
                     .trace;
