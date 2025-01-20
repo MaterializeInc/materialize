@@ -679,7 +679,7 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
 
       - id: testdrive-old-kafka-src-syntax
-        label: "Testdrive (before Kafka source versioning)"
+        label: "Testdrive (before Kafka source versioning) with :azure: blob store"
         depends_on: build-aarch64
         timeout_in_minutes: 180
         plugins:
@@ -1514,7 +1514,8 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: data-ingest
-          args: [--azurite]
+          # TODO: Reenable Azurite when https://github.com/MaterializeInc/database-issues/issues/8892 is fixed
+          #args: [--azurite]
 
   - group: "Parallel Workload"
     key: parallel-workload
@@ -1737,7 +1738,7 @@ steps:
         sanitizer: skip
 
   - id: txn-wal-fencing
-    label: Txn-wal fencing
+    label: "Txn-wal fencing with :azure: blob store"
     depends_on: build-aarch64
     timeout_in_minutes: 120
     parallelism: 2
