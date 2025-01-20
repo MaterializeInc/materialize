@@ -50,7 +50,7 @@ steps:
         inputs:
           - "*"
         depends_on: [build-x86_64]
-        timeout_in_minutes: 10
+        timeout_in_minutes: 20
         priority: 50
         if: build.tag != null
         agents:
@@ -79,7 +79,7 @@ steps:
           - "*"
         depends_on: [build-aarch64]
         priority: 50
-        timeout_in_minutes: 10
+        timeout_in_minutes: 20
         if: build.tag != null
         agents:
           queue: builder-linux-aarch64-mem
@@ -116,7 +116,7 @@ steps:
         inputs:
           - "*"
         depends_on: []
-        timeout_in_minutes: 10
+        timeout_in_minutes: 20
         agents:
           # Error: no prebuilt wasm-opt binaries are available for this platform: Unrecognized target!
           queue: linux-x86_64-small
@@ -147,7 +147,7 @@ steps:
         depends_on:
           - build-x86_64
           - build-aarch64
-        timeout_in_minutes: 10
+        timeout_in_minutes: 20
         agents:
           queue: linux-aarch64-small
         coverage: skip
