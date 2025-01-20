@@ -60,7 +60,7 @@ if [ $CHANGES_MADE -eq 1 ]; then
   cp $RELEASE_DIR/*.tgz gh-pages/
   # Update the repository index
   cd gh-pages
-  REPO_URL="https://materialize.github.io/materialize"
+  REPO_URL="https://materializeinc.github.io/materialize"
   if [ -f index.yaml ]; then
     helm repo index . --url "$REPO_URL" --merge index.yaml
   else
