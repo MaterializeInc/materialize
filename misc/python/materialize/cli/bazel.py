@@ -119,7 +119,9 @@ def bazel_cmd(config: BuildConfig, args: list[str]):
     try:
         subprocess.run(["bazel", *args, *remote_cache], check=True)
     except:
-        pass
+        # Don't print any python backtrace because it's never useful. Instead
+        # just exit the process.
+        exit(1)
 
 
 def gen(config: BuildConfig, path: Path | None, check: bool):
