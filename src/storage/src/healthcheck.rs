@@ -232,10 +232,9 @@ impl HealthState {
 /// A trait that lets a user configure the `health_operator` with custom
 /// behavior. This is mostly useful for testing, and the [`DefaultWriter`]
 /// should be the correct implementation for everyone.
-#[async_trait::async_trait(?Send)]
 pub trait HealthOperator {
     /// Record a new status.
-    async fn record_new_status(
+    fn record_new_status(
         &self,
         collection_id: GlobalId,
         ts: DateTime<Utc>,
@@ -249,7 +248,7 @@ pub trait HealthOperator {
         // some use of persist. For now we just leave it and ignore it in tests.
         write_namespaced_map: bool,
     );
-    async fn send_halt(&self, id: GlobalId, error: Option<(StatusNamespace, HealthStatusUpdate)>);
+    fn send_halt(&self, id: GlobalId, error: Option<(StatusNamespace, HealthStatusUpdate)>);
 
     /// Optionally override the chosen worker index. Default is semi-random.
     /// Only useful for tests.
@@ -264,9 +263,8 @@ pub struct DefaultWriter {
     pub updates: Rc<RefCell<Vec<StatusUpdate>>>,
 }
 
-#[async_trait::async_trait(?Send)]
 impl HealthOperator for DefaultWriter {
-    async fn record_new_status(
+    fn record_new_status(
         &self,
         collection_id: GlobalId,
         ts: DateTime<Utc>,
@@ -293,7 +291,7 @@ impl HealthOperator for DefaultWriter {
         });
     }
 
-    async fn send_halt(&self, id: GlobalId, error: Option<(StatusNamespace, HealthStatusUpdate)>) {
+    fn send_halt(&self, id: GlobalId, error: Option<(StatusNamespace, HealthStatusUpdate)>) {
         self.command_tx
             .borrow_mut()
             .broadcast(InternalStorageCommand::SuspendAndRestart {
@@ -389,17 +387,15 @@ where
                 if mark_starting.contains(id) {
                     let status = OverallStatus::Starting;
                     let timestamp = mz_ore::now::to_datetime(now());
-                    health_operator_impl
-                        .record_new_status(
-                            *id,
-                            timestamp,
-                            (&status).into(),
-                            status.error(),
-                            &status.hints(),
-                            status.errors().unwrap_or(&BTreeMap::new()),
-                            write_namespaced_map,
-                        )
-                        .await;
+                    health_operator_impl.record_new_status(
+                        *id,
+                        timestamp,
+                        (&status).into(),
+                        status.error(),
+                        &status.hints(),
+                        status.errors().unwrap_or(&BTreeMap::new()),
+                        write_namespaced_map,
+                    );
 
                     state.last_reported_status = Some(status);
                 }
@@ -466,17 +462,15 @@ where
                         );
 
                         let timestamp = mz_ore::now::to_datetime(now());
-                        health_operator_impl
-                            .record_new_status(
-                                id,
-                                timestamp,
-                                (&new_status).into(),
-                                new_status.error(),
-                                &new_status.hints(),
-                                new_status.errors().unwrap_or(&BTreeMap::new()),
-                                write_namespaced_map,
-                            )
-                            .await;
+                        health_operator_impl.record_new_status(
+                            id,
+                            timestamp,
+                            (&new_status).into(),
+                            new_status.error(),
+                            &new_status.hints(),
+                            new_status.errors().unwrap_or(&BTreeMap::new()),
+                            write_namespaced_map,
+                        );
 
                         *last_reported_status = Some(new_status.clone());
                     }
@@ -507,7 +501,7 @@ where
                         halt_with, suspend_and_restart_delay
                     );
                     tokio::time::sleep(suspend_and_restart_delay).await;
-                    health_operator_impl.send_halt(id, halt_with).await;
+                    health_operator_impl.send_halt(id, halt_with);
                 }
             }
         }
@@ -1014,9 +1008,8 @@ mod tests {
         input_mapping: BTreeMap<GlobalId, usize>,
     }
 
-    #[async_trait::async_trait(?Send)]
     impl HealthOperator for TestWriter {
-        async fn record_new_status(
+        fn record_new_status(
             &self,
             collection_id: GlobalId,
             _ts: DateTime<Utc>,
@@ -1048,11 +1041,7 @@ mod tests {
             });
         }
 
-        async fn send_halt(
-            &self,
-            _id: GlobalId,
-            _error: Option<(StatusNamespace, HealthStatusUpdate)>,
-        ) {
+        fn send_halt(&self, _id: GlobalId, _error: Option<(StatusNamespace, HealthStatusUpdate)>) {
             // Not yet unit-tested
             unimplemented!()
         }
