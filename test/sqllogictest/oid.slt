@@ -124,6 +124,7 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 701  float8
 720  octet_length
 721  get_byte
+723  get_bit
 745  current_user
 746  session_user
 750  array_in
@@ -586,6 +587,7 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 5090  anycompatiblearray_recv
 5092  anycompatiblenonarray_in
 5094  anycompatiblerange_in
+6163  bit_count
 6177  date_bin
 6178  date_bin
 6199  extract

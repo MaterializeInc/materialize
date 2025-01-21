@@ -169,6 +169,8 @@ pub enum MySqlColumnMeta {
     Date,
     /// The described column is a timestamp value with a set precision.
     Timestamp(u32),
+    /// The described column is a `bit` column, with the given possibly precision.
+    Bit(u32),
 }
 
 impl IsCompatible for Option<MySqlColumnMeta> {
@@ -195,6 +197,9 @@ impl IsCompatible for Option<MySqlColumnMeta> {
                 Some(MySqlColumnMeta::Timestamp(precision)),
                 Some(MySqlColumnMeta::Timestamp(other_precision)),
             ) => precision <= other_precision,
+            // We always cast bit columns to u64's and the max precision of a bit column
+            // is 64 bits, so any bit column is always compatible with another.
+            (Some(MySqlColumnMeta::Bit(_)), Some(MySqlColumnMeta::Bit(_))) => true,
             _ => false,
         }
     }
@@ -226,6 +231,9 @@ impl RustType<ProtoMySqlColumnDesc> for MySqlColumnDesc {
                         precision: *precision,
                     }))
                 }
+                MySqlColumnMeta::Bit(precision) => Some(Meta::Bit(ProtoMySqlColumnMetaBit {
+                    precision: *precision,
+                })),
             }),
         }
     }
@@ -245,6 +253,7 @@ impl RustType<ProtoMySqlColumnDesc> for MySqlColumnDesc {
                     Meta::Year(_) => Some(Ok(MySqlColumnMeta::Year)),
                     Meta::Date(_) => Some(Ok(MySqlColumnMeta::Date)),
                     Meta::Timestamp(e) => Some(Ok(MySqlColumnMeta::Timestamp(e.precision))),
+                    Meta::Bit(e) => Some(Ok(MySqlColumnMeta::Bit(e.precision))),
                 })
                 .transpose()?,
         })
