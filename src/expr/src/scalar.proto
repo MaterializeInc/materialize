@@ -455,6 +455,7 @@ message ProtoUnaryFunc {
     ProtoToCharTimestamp to_char_timestamp = 331;
     ProtoToCharTimestamp to_char_timestamp_tz = 332;
     google.protobuf.Empty cast_date_to_mz_timestamp = 333;
+    google.protobuf.Empty bit_count_bytes = 334;
   }
 }
 
@@ -668,6 +669,7 @@ message ProtoBinaryFunc {
     bool list_contains_list = 193;
     bool array_contains_array = 194;
     google.protobuf.Empty starts_with = 195;
+    google.protobuf.Empty get_bit = 196;
   }
 }
 

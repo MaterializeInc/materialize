@@ -14,6 +14,7 @@ from typing import Any
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check, externally_idempotent
+from materialize.checks.executors import Executor
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.services.mysql import MySql
 
@@ -359,6 +360,121 @@ class MySqlCdcMzNow(Check):
                 $ mysql-execute name=mysql
                 INSERT INTO mysql_mz_now_table VALUES (NOW(), 'B3');
                 DELETE FROM mysql_mz_now_table WHERE f2 LIKE '%4%';
+                """
+            )
+        )
+
+
+@externally_idempotent(False)
+class MySqlBitType(Check):
+    def _can_run(self, e: Executor) -> bool:
+        return self.base_version > MzVersion.parse_mz("v0.131.0-dev")
+
+    def initialize(self) -> Testdrive:
+        return Testdrive(
+            dedent(
+                f"""
+                $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
+
+                $ mysql-execute name=mysql
+                # create the database if it does not exist yet but do not drop it
+                CREATE DATABASE IF NOT EXISTS public;
+                USE public;
+
+                CREATE USER mysql3 IDENTIFIED BY 'mysql';
+                GRANT REPLICATION SLAVE ON *.* TO mysql3;
+                GRANT ALL ON public.* TO mysql3;
+
+                DROP TABLE IF EXISTS mysql_bit_table;
+
+                CREATE TABLE mysql_bit_table (f1 BIT(11), f2 BIT(1));
+
+                INSERT INTO mysql_bit_table VALUES (8, 0);
+                INSERT INTO mysql_bit_table VALUES (13, 1)
+                INSERT INTO mysql_bit_table VALUES (b'11100000100', b'1');
+                INSERT INTO mysql_bit_table VALUES (b'0000', b'0');
+                INSERT INTO mysql_bit_table VALUES (b'11111111111', b'0');
+
+                > CREATE SECRET mysql_bit_pass AS 'mysql';
+                > CREATE CONNECTION mysql_bit_conn TO MYSQL (
+                    HOST 'mysql',
+                    USER mysql3,
+                    PASSWORD SECRET mysql_bit_pass
+                  )
+
+                > CREATE SOURCE mysql_bit_source
+                  FROM MYSQL CONNECTION mysql_bit_conn;
+                > CREATE TABLE mysql_bit_table FROM SOURCE mysql_bit_source (REFERENCE public.mysql_bit_table);
+
+                # Return all rows
+                > CREATE MATERIALIZED VIEW mysql_bit_view AS
+                  SELECT * FROM mysql_bit_table
+                """
+            )
+        )
+
+    def manipulate(self) -> list[Testdrive]:
+        return [
+            Testdrive(dedent(s))
+            for s in [
+                f"""
+                $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
+
+                $ mysql-execute name=mysql
+                USE public;
+                INSERT INTO mysql_bit_table VALUES (20, 1);
+                """,
+                f"""
+                $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
+
+                $ mysql-execute name=mysql
+                USE public;
+                INSERT INTO mysql_bit_table VALUES (30, 1);
+                """,
+            ]
+        ]
+
+    def validate(self) -> Testdrive:
+        return Testdrive(
+            dedent(
+                f"""
+                > SELECT * FROM mysql_bit_table;
+                0 0
+                8 0
+                13 1
+                20 1
+                30 1
+                1796 1
+                2047 0
+
+                $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
+
+                $ mysql-execute name=mysql
+                USE public;
+                INSERT INTO mysql_bit_table VALUES (40, 1);
+
+                > SELECT * FROM mysql_bit_table;
+                0 0
+                8 0
+                13 1
+                20 1
+                30 1
+                40 1
+                1796 1
+                2047 0
+
+                # Rollback the last INSERTs so that validate() can be called multiple times
+                $ mysql-execute name=mysql
+                DELETE FROM mysql_bit_table WHERE f1 = 40;
+
+                > SELECT * FROM mysql_bit_table;
+                0 0
+                8 0
+                13 1
+                20 1
+                30 1
+                1796 1
+                2047 0
                 """
             )
         )
