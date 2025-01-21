@@ -358,10 +358,11 @@ impl<D: Ord> ConsolidatingVec<D> {
             let length = self.data.len();
             let dampener = self.growth_dampener;
             if capacity < length + length / (dampener + 1) {
-                // Increase as a function of capacity rather than length.
-                // When `capacity` is smaller than `dampener+1` this may have no effect, and we rely
-                // instead of standard `Vec` doubling to get the capacity past `dampener+1`.
-                self.data.reserve_exact(capacity / (dampener + 1));
+                // We would like to increase the capacity by a factor of `1+1/(n+1)`, which involves
+                // determining the target capacity, and then reserving an amount that achieves this
+                // while working around the existing length.
+                let new_cap = capacity + capacity / (dampener + 1);
+                self.data.reserve_exact(new_cap - length);
             }
         }
 
