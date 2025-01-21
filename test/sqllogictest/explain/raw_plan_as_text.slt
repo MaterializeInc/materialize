@@ -165,10 +165,10 @@ EXPLAIN RAW PLAN AS TEXT FOR
 SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELECT * FROM mv WHERE t.b > mv.b)
 ----
 With
-  cte l2 =
+  cte [l2 as subquery-2] =
     Filter (#^1 > #1)
       Get materialize.public.mv
-  cte l1 =
+  cte [l1 as subquery-1] =
     Filter (#^0 < #0)
       Get materialize.public.mv
 Return
@@ -186,12 +186,12 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
 ----
 Project (#2, #3)
   With
-    cte l2 =
+    cte [l2 as subquery-2] =
       Project (#0)
         TopK limit=1
           Filter (#1 = #^1)
             Get materialize.public.mv
-    cte l1 =
+    cte [l1 as subquery-1] =
       Project (#0)
         TopK limit=1
           Filter (#1 = #^1)
@@ -299,7 +299,7 @@ WITH x AS (SELECT t.a * t.b as v from t) SELECT x.v + 5 FROM x
 ----
 Project (#1)
   With
-    cte l0 =
+    cte [l0 as x] =
       Project (#2)
         Map ((#0 * #1))
           Get materialize.public.t
@@ -317,11 +317,11 @@ EXPLAIN RAW PLAN AS TEXT FOR
 WITH A AS (SELECT 1 AS a), B as (SELECT a as b FROM A WHERE a > 0) SELECT * FROM A, B;
 ----
 With
-  cte l0 =
+  cte [l0 as a] =
     Map (1)
       Constant
         - ()
-  cte l1 =
+  cte [l1 as b] =
     Filter (#0 > 0)
       Get l0
 Return
@@ -360,14 +360,14 @@ CrossJoin
   CrossJoin
     Get materialize.public.t
     With
-      cte l0 =
+      cte [l0 as r2] =
         Reduce aggregates=[max((#^0 * #0))]
           Get materialize.public.t
     Return
       Filter (#0 != #^0)
         Get l0
   With
-    cte l0 =
+    cte [l0 as r4] =
       Reduce aggregates=[max((#^0 * #0))]
         Get materialize.public.t
   Return
@@ -408,7 +408,7 @@ FROM
 CrossJoin
   Get materialize.public.t
   With
-    cte l0 =
+    cte [l0 as r4] =
       Reduce aggregates=[max((#^0 * #0))]
         Get materialize.public.t
   Return
@@ -416,7 +416,7 @@ CrossJoin
       CrossJoin
         Get l0
         With
-          cte l1 =
+          cte [l1 as r2] =
             Reduce aggregates=[max((#^^0 * #0))]
               Get materialize.public.t
         Return
@@ -592,7 +592,7 @@ WITH MUTUALLY RECURSIVE
 SELECT * FROM bar;
 ----
 With Mutually Recursive
-  cte l0 =
+  cte [l0 as foo] =
     Distinct
       Union
         Map (1, 2)
@@ -600,7 +600,7 @@ With Mutually Recursive
             - ()
         Map (7)
           Get l1
-  cte l1 =
+  cte [l1 as bar] =
     Project (#0)
       Get l0
 Return
@@ -618,7 +618,7 @@ WITH MUTUALLY RECURSIVE (RECURSION LIMIT = 5)
 SELECT * FROM bar;
 ----
 With Mutually Recursive [recursion_limit=5]
-  cte l0 =
+  cte [l0 as foo] =
     Distinct
       Union
         Map (1, 2)
@@ -626,7 +626,7 @@ With Mutually Recursive [recursion_limit=5]
             - ()
         Map (7)
           Get l1
-  cte l1 =
+  cte [l1 as bar] =
     Project (#0)
       Get l0
 Return
@@ -644,7 +644,7 @@ WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT = 5)
 SELECT * FROM bar;
 ----
 With Mutually Recursive [recursion_limit=5, return_at_limit]
-  cte l0 =
+  cte [l0 as foo] =
     Distinct
       Union
         Map (1, 2)
@@ -652,7 +652,7 @@ With Mutually Recursive [recursion_limit=5, return_at_limit]
             - ()
         Map (7)
           Get l1
-  cte l1 =
+  cte [l1 as bar] =
     Project (#0)
       Get l0
 Return
