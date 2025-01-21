@@ -164,16 +164,16 @@ query T multiline
 EXPLAIN RAW PLAN AS TEXT FOR
 SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELECT * FROM mv WHERE t.b > mv.b)
 ----
-Return
-  Filter (exists(Get l1) AND exists(Get l2))
-    Get materialize.public.t
 With
-  cte l1 =
-    Filter (#^0 < #0)
-      Get materialize.public.mv
   cte l2 =
     Filter (#^1 > #1)
       Get materialize.public.mv
+  cte l1 =
+    Filter (#^0 < #0)
+      Get materialize.public.mv
+Return
+  Filter (exists(Get l1) AND exists(Get l2))
+    Get materialize.public.t
 
 Target cluster: quickstart
 
@@ -185,20 +185,20 @@ EXPLAIN RAW PLAN AS TEXT FOR
 SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE mv.b = t.b LIMIT 1) FROM t
 ----
 Project (#2, #3)
-  Return
-    Map (select(Get l1), select(Get l2))
-      Get materialize.public.t
   With
-    cte l1 =
-      Project (#0)
-        TopK limit=1
-          Filter (#1 = #^1)
-            Get materialize.public.v
     cte l2 =
       Project (#0)
         TopK limit=1
           Filter (#1 = #^1)
             Get materialize.public.mv
+    cte l1 =
+      Project (#0)
+        TopK limit=1
+          Filter (#1 = #^1)
+            Get materialize.public.v
+  Return
+    Map (select(Get l1), select(Get l2))
+      Get materialize.public.t
 
 Target cluster: quickstart
 
@@ -298,14 +298,14 @@ EXPLAIN RAW PLAN AS TEXT FOR
 WITH x AS (SELECT t.a * t.b as v from t) SELECT x.v + 5 FROM x
 ----
 Project (#1)
-  Return
-    Map ((#0 + 5))
-      Get l0
   With
     cte l0 =
       Project (#2)
         Map ((#0 * #1))
           Get materialize.public.t
+  Return
+    Map ((#0 + 5))
+      Get l0
 
 Target cluster: quickstart
 
@@ -316,18 +316,18 @@ query T multiline
 EXPLAIN RAW PLAN AS TEXT FOR
 WITH A AS (SELECT 1 AS a), B as (SELECT a as b FROM A WHERE a > 0) SELECT * FROM A, B;
 ----
-Return
-  CrossJoin
-    Get l0
-    Get l1
 With
-  cte l1 =
-    Filter (#0 > 0)
-      Get l0
   cte l0 =
     Map (1)
       Constant
         - ()
+  cte l1 =
+    Filter (#0 > 0)
+      Get l0
+Return
+  CrossJoin
+    Get l0
+    Get l1
 
 Target cluster: mz_catalog_server
 
@@ -359,20 +359,20 @@ FROM
 CrossJoin
   CrossJoin
     Get materialize.public.t
-    Return
-      Filter (#0 != #^0)
-        Get l0
     With
       cte l0 =
         Reduce aggregates=[max((#^0 * #0))]
           Get materialize.public.t
-  Return
-    Filter ((#0 != #^0) OR ((#0) IS NOT NULL AND (#^0) IS NULL))
-      Get l0
+    Return
+      Filter (#0 != #^0)
+        Get l0
   With
     cte l0 =
       Reduce aggregates=[max((#^0 * #0))]
         Get materialize.public.t
+  Return
+    Filter ((#0 != #^0) OR ((#0) IS NOT NULL AND (#^0) IS NULL))
+      Get l0
 
 Target cluster: quickstart
 
@@ -407,21 +407,21 @@ FROM
 ----
 CrossJoin
   Get materialize.public.t
-  Return
-    Filter (#^0 != #^0)
-      CrossJoin
-        Get l0
-        Return
-          Filter ((#^^0 = #^0) AND (#0 > 5))
-            Get l1
-        With
-          cte l1 =
-            Reduce aggregates=[max((#^^0 * #0))]
-              Get materialize.public.t
   With
     cte l0 =
       Reduce aggregates=[max((#^0 * #0))]
         Get materialize.public.t
+  Return
+    Filter (#^0 != #^0)
+      CrossJoin
+        Get l0
+        With
+          cte l1 =
+            Reduce aggregates=[max((#^^0 * #0))]
+              Get materialize.public.t
+        Return
+          Filter ((#^^0 = #^0) AND (#0 > 5))
+            Get l1
 
 Target cluster: quickstart
 
@@ -591,12 +591,7 @@ WITH MUTUALLY RECURSIVE
     bar (a int) as (SELECT a FROM foo)
 SELECT * FROM bar;
 ----
-Return
-  Get l1
 With Mutually Recursive
-  cte l1 =
-    Project (#0)
-      Get l0
   cte l0 =
     Distinct
       Union
@@ -605,6 +600,11 @@ With Mutually Recursive
             - ()
         Map (7)
           Get l1
+  cte l1 =
+    Project (#0)
+      Get l0
+Return
+  Get l1
 
 Target cluster: mz_catalog_server
 
@@ -617,12 +617,7 @@ WITH MUTUALLY RECURSIVE (RECURSION LIMIT = 5)
     bar (a int) as (SELECT a FROM foo)
 SELECT * FROM bar;
 ----
-Return
-  Get l1
 With Mutually Recursive [recursion_limit=5]
-  cte l1 =
-    Project (#0)
-      Get l0
   cte l0 =
     Distinct
       Union
@@ -631,6 +626,11 @@ With Mutually Recursive [recursion_limit=5]
             - ()
         Map (7)
           Get l1
+  cte l1 =
+    Project (#0)
+      Get l0
+Return
+  Get l1
 
 Target cluster: mz_catalog_server
 
@@ -643,12 +643,7 @@ WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT = 5)
     bar (a int) as (SELECT a FROM foo)
 SELECT * FROM bar;
 ----
-Return
-  Get l1
 With Mutually Recursive [recursion_limit=5, return_at_limit]
-  cte l1 =
-    Project (#0)
-      Get l0
   cte l0 =
     Distinct
       Union
@@ -657,6 +652,11 @@ With Mutually Recursive [recursion_limit=5, return_at_limit]
             - ()
         Map (7)
           Get l1
+  cte l1 =
+    Project (#0)
+      Get l0
+Return
+  Get l1
 
 Target cluster: mz_catalog_server
 
