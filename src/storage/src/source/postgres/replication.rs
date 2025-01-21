@@ -91,6 +91,7 @@ use mz_postgres_util::PostgresError;
 use mz_postgres_util::{simple_query_opt, Client};
 use mz_repr::{Datum, DatumVec, Diff, Row};
 use mz_sql_parser::ast::{display::AstDisplay, Ident};
+use mz_storage_types::dyncfgs::PG_OFFSET_KNOWN_INTERVAL;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceTimestamp;
 use mz_storage_types::sources::{MzOffset, PostgresSourceConnection};
@@ -758,12 +759,12 @@ async fn raw_stream<'a>(
     );
 
     let (probe_tx, mut probe_rx) = watch::channel(None);
-    let probe_interval =
-        mz_storage_types::dyncfgs::PG_OFFSET_KNOWN_INTERVAL.get(config.config.config_set());
+    let config_set = Arc::clone(config.config.config_set());
     let now_fn = config.now_fn.clone();
     let max_lsn_task_handle =
         mz_ore::task::spawn(|| format!("pg_current_wal_lsn:{}", config.id), async move {
-            let mut probe_ticker = probe::Ticker::new(probe_interval, now_fn);
+            let mut probe_ticker =
+                probe::Ticker::new(|| PG_OFFSET_KNOWN_INTERVAL.get(&config_set), now_fn);
 
             while !probe_tx.is_closed() {
                 let probe_ts = probe_ticker.tick().await;
