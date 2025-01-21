@@ -103,6 +103,7 @@ curl -o sample-materialize.yaml https://raw.githubusercontent.com/MaterializeInc
       helm install my-materialize-operator materialize/materialize-operator \
           --namespace=materialize --create-namespace \
           --version v25.1.0 \
+          --set operator.cloudProvider.region=minikube \
           -f values.yaml
       ```
 
