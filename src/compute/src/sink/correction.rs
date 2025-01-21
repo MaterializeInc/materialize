@@ -47,8 +47,8 @@ pub(super) struct Correction<D> {
     metrics: SinkMetrics,
     /// Per-worker persist sink metrics.
     worker_metrics: SinkWorkerMetrics,
-    /// Configuration for `ConsolidatingVec` determining the rate of growth (doubling, or less).
-    growth_denominator: usize,
+    /// Configuration for `ConsolidatingVec` driving the growth rate down from doubling.
+    growth_dampener: usize,
 }
 
 impl<D> Correction<D> {
@@ -56,7 +56,7 @@ impl<D> Correction<D> {
     pub fn new(
         metrics: SinkMetrics,
         worker_metrics: SinkWorkerMetrics,
-        growth_denominator: usize,
+        growth_dampener: usize,
     ) -> Self {
         Self {
             updates: Default::default(),
@@ -64,7 +64,7 @@ impl<D> Correction<D> {
             total_size: Default::default(),
             metrics,
             worker_metrics,
-            growth_denominator,
+            growth_dampener,
         }
     }
 
@@ -133,7 +133,7 @@ impl<D: Data> Correction<D> {
             match self.updates.entry(time) {
                 Entry::Vacant(entry) => {
                     let mut vec: ConsolidatingVec<_> = data.collect();
-                    vec.growth_denominator = self.growth_denominator;
+                    vec.growth_dampener = self.growth_dampener;
                     new_size += (vec.len(), vec.capacity());
                     entry.insert(vec);
                 }
@@ -312,22 +312,21 @@ pub(crate) struct ConsolidatingVec<D> {
     /// A lower bound for how small we'll shrink the Vec's capacity. NB: The cap
     /// might start smaller than this.
     min_capacity: usize,
-    /// Denominator in the growth rate, where 2 corresponds to doubling, and `n` to `1 + 1/(n-1)`.
+    /// Dampener in the growth rate. 0 corresponds to doubling and in general `n` to `1+1/(n+1)`.
     ///
     /// If consolidation didn't free enough space, at least a linear amount, increase the capacity
-    /// The `slop` term describes the rate of growth, where we scale up by factors of 1/slop.
-    /// Setting `slop` to 2 results in doubling whenever the list is at least half full.
+    /// Setting this to 0 results in doubling whenever the list is at least half full.
     /// Larger numbers result in more conservative approaches that use more CPU, but less memory.
-    growth_denominator: usize,
+    growth_dampener: usize,
 }
 
 impl<D: Ord> ConsolidatingVec<D> {
     /// Creates a new instance from the necessary configuration arguments.
-    pub fn new(min_capacity: usize, growth_denominator: usize) -> Self {
+    pub fn new(min_capacity: usize, growth_dampener: usize) -> Self {
         ConsolidatingVec {
             data: Vec::new(),
             min_capacity,
-            growth_denominator,
+            growth_dampener,
         }
     }
 
@@ -354,9 +353,15 @@ impl<D: Ord> ConsolidatingVec<D> {
             // The vector is full. First, consolidate to try to recover some space.
             self.consolidate();
 
-            let slop = self.growth_denominator;
-            if self.data.len() > capacity * (slop - 1) / slop {
-                self.data.reserve(capacity / (slop - 1));
+            // We may need more capacity if our current capacity is within `1+1/(n+1)` of the length.
+            // This corresponds to `cap < len + len/(n+1)`, which is the logic we use.
+            let length = self.data.len();
+            let dampener = self.growth_dampener;
+            if capacity < length + length / (dampener + 1) {
+                // Increase as a function of capacity rather than length.
+                // When `capacity` is smaller than `dampener+1` this may have no effect, and we rely
+                // instead of standard `Vec` doubling to get the capacity past `dampener+1`.
+                self.data.reserve_exact(capacity / (dampener + 1));
             }
         }
 
@@ -404,7 +409,7 @@ impl<D> FromIterator<(D, Diff)> for ConsolidatingVec<D> {
         Self {
             data: Vec::from_iter(iter),
             min_capacity: 0,
-            growth_denominator: 2,
+            growth_dampener: 0,
         }
     }
 }

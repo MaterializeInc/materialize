@@ -17,7 +17,7 @@ use std::sync::Arc;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{Collection, Hashable};
 use futures::StreamExt;
-use mz_compute_types::dyncfgs::CONSOLIDATING_VEC_GROWTH_DENOMINATOR;
+use mz_compute_types::dyncfgs::CONSOLIDATING_VEC_GROWTH_DAMPENER;
 use mz_compute_types::dyncfgs::ENABLE_MATERIALIZED_VIEW_SINK_V2;
 use mz_compute_types::sinks::{ComputeSinkDesc, MaterializedViewSinkConnection};
 use mz_ore::cast::CastFrom;
@@ -223,7 +223,7 @@ where
         compute_state,
     );
 
-    let growth_denominator = CONSOLIDATING_VEC_GROWTH_DENOMINATOR.get(&compute_state.worker_config);
+    let growth_dampener = CONSOLIDATING_VEC_GROWTH_DAMPENER.get(&compute_state.worker_config);
 
     let (written_batches, write_token) = write_batches(
         sink_id.clone(),
@@ -236,7 +236,7 @@ where
         &persist_errs,
         Arc::clone(&persist_clients),
         compute_state.read_only_rx.clone(),
-        growth_denominator,
+        growth_dampener,
     );
 
     let append_token = append_batches(
@@ -612,7 +612,7 @@ fn write_batches<G>(
     persist_errs: &Stream<G, (DataflowError, Timestamp, Diff)>,
     persist_clients: Arc<PersistClientCache>,
     mut read_only: watch::Receiver<bool>,
-    growth_denominator: usize,
+    growth_dampener: usize,
 ) -> (Stream<G, ProtoBatch>, Rc<dyn Any>)
 where
     G: Scope<Timestamp = Timestamp>,
@@ -675,10 +675,10 @@ where
         let mut correction_oks = Correction::new(
             sink_metrics.clone(),
             sink_worker_metrics.clone(),
-            growth_denominator,
+            growth_dampener,
         );
         let mut correction_errs =
-            Correction::new(sink_metrics, sink_worker_metrics, growth_denominator);
+            Correction::new(sink_metrics, sink_worker_metrics, growth_dampener);
 
         // Contains descriptions of batches for which we know that we can
         // write data. We got these from the "centralized" operator that
