@@ -167,7 +167,6 @@ steps:
         depends_on: []
         agents:
           queue: linux-aarch64-small
-        branches: main
         coverage: skip
         sanitizer: skip
 
