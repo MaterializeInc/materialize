@@ -23,7 +23,7 @@ use mz_repr::{ColumnName, ColumnType, Datum, RelationType, ScalarBaseType, Scala
 
 use crate::catalog::TypeCategory;
 use crate::plan::error::PlanError;
-use crate::plan::expr::{
+use crate::plan::hir::{
     AbstractColumnType, CoercibleScalarExpr, CoercibleScalarType, ColumnRef, HirScalarExpr,
     UnaryFunc,
 };

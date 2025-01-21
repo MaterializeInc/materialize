@@ -7,10 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! This file houses a representation of a SQL plan that is parallel to that found in
-//! src/expr/relation/mod.rs, but represents an earlier phase of planning. It's structurally very
-//! similar to that file, with some differences which are noted below. It gets turned into that
-//! representation via a call to lower().
+//! This file houses HIR, a representation of a SQL plan that is parallel to MIR, but represents
+//! an earlier phase of planning. It's structurally very similar to MIR, with some differences
+//! which are noted below. It gets turned into MIR via a call to lower().
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Display, Formatter};

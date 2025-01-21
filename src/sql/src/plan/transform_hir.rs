@@ -20,7 +20,7 @@ use mz_expr::{ColumnOrder, UnaryFunc, VariadicFunc};
 use mz_ore::stack::RecursionLimitError;
 use mz_repr::{ColumnName, ColumnType, RelationType, ScalarType};
 
-use crate::plan::expr::{
+use crate::plan::hir::{
     AbstractExpr, AggregateFunc, AggregateWindowExpr, ColumnRef, HirRelationExpr, HirScalarExpr,
     ValueWindowExpr, ValueWindowFunc, WindowExpr,
 };

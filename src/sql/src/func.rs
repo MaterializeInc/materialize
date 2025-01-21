@@ -27,7 +27,7 @@ use crate::ast::{SelectStatement, Statement};
 use crate::catalog::{CatalogType, TypeCategory, TypeReference};
 use crate::names::{self, ResolvedItemName};
 use crate::plan::error::PlanError;
-use crate::plan::expr::{
+use crate::plan::hir::{
     AggregateFunc, BinaryFunc, CoercibleScalarExpr, CoercibleScalarType, ColumnOrder,
     HirRelationExpr, HirScalarExpr, ScalarWindowFunc, TableFunc, UnaryFunc, UnmaterializableFunc,
     ValueWindowFunc, VariadicFunc,

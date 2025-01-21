@@ -29,7 +29,7 @@ use tokio_postgres::Client;
 
 use crate::names::{Aug, ResolvedItemName};
 use crate::normalize;
-use crate::plan::expr::ColumnRef;
+use crate::plan::hir::ColumnRef;
 use crate::plan::typeconv::{plan_cast, CastContext};
 use crate::plan::{
     ExprContext, HirScalarExpr, PlanError, QueryContext, QueryLifetime, Scope, StatementContext,
