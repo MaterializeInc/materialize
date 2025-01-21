@@ -158,19 +158,6 @@ steps:
             - exit_status: 1
               limit: 2
 
-      - id: helm-charts-publish
-        label: Publish Helm Charts
-        command: bin/ci-builder run stable misc/helm-charts/publish.sh
-        timeout_in_minutes: 10
-        inputs:
-          - misc/helm-charts
-        depends_on: []
-        agents:
-          queue: linux-aarch64-small
-        branches: main
-        coverage: skip
-        sanitizer: skip
-
   - group: Lints
     key: lints
     steps:
