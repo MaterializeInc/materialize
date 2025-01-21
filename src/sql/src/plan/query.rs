@@ -1391,7 +1391,7 @@ fn plan_query_inner(qcx: &mut QueryContext, q: &Query<Aug>) -> Result<PlannedQue
             let select_option_extracted = SelectOptionExtracted::try_from(s.options.clone())?;
             let group_size_hints = GroupSizeHints::try_from(select_option_extracted)?;
 
-            let plan = plan_view_select(qcx, *s.clone(), q.order_by.clone())?;
+            let plan = plan_select_from_where(qcx, *s.clone(), q.order_by.clone())?;
             PlannedQuery {
                 expr: plan.expr,
                 scope: plan.scope,
@@ -1670,8 +1670,8 @@ fn plan_set_expr(
     match q {
         SetExpr::Select(select) => {
             let order_by_exprs = Vec::new();
-            let plan = plan_view_select(qcx, *select.clone(), order_by_exprs)?;
-            // We didn't provide any `order_by_exprs`, so `plan_view_select`
+            let plan = plan_select_from_where(qcx, *select.clone(), order_by_exprs)?;
+            // We didn't provide any `order_by_exprs`, so `plan_select_from_where`
             // should not have planned any ordering.
             assert!(plan.order_by.is_empty());
             Ok((plan.expr.project(plan.project), plan.scope))
@@ -2095,7 +2095,7 @@ generate_extracted_config!(
 ///
 /// where expressions in the ORDER BY clause can refer to *both* input columns
 /// and output columns.
-fn plan_view_select(
+fn plan_select_from_where(
     qcx: &QueryContext,
     mut s: Select<Aug>,
     mut order_by_exprs: Vec<OrderByExpr<Aug>>,
@@ -5175,7 +5175,7 @@ fn plan_function<'a>(
                 // Not a window aggregate. Something is wrong.
                 if ecx.allow_aggregates {
                     // Should already have been caught by `scope.resolve_expr` in `plan_expr_inner`
-                    // (after having been planned earlier in `Step 5` of `plan_view_select`).
+                    // (after having been planned earlier in `Step 5` of `plan_select_from_where`).
                     sql_bail!(
                         "Internal error: encountered unplanned non-windowed aggregate function: {:?}",
                         name,
@@ -6124,7 +6124,7 @@ impl Visit<'_, Aug> for WindowFuncCollector {
     }
 
     fn visit_query(&mut self, _query: &Query<Aug>) {
-        // Don't go into subqueries. Those will be handled by their own `plan_view_select`.
+        // Don't go into subqueries. Those will be handled by their own `plan_select_from_where`.
     }
 }
 
