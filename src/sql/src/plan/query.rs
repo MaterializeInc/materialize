@@ -8,18 +8,23 @@
 // by the Apache License, Version 2.0.
 
 //! SQL `Query`s are the declarative, computational part of SQL.
-//! This module turns `Query`s into `HirRelationExpr`s - a more explicit, algebraic way of describing computation.
+//! This module turns `Query`s into `HirRelationExpr`s - a more explicit, algebraic way of
+//! describing computation.
 
-//! Functions named plan_* are typically responsible for handling a single node of the SQL ast. Eg `plan_query` is responsible for handling `sqlparser::ast::Query`.
+//! Functions named plan_* are typically responsible for handling a single node of the SQL ast.
+//! E.g. `plan_query` is responsible for handling `sqlparser::ast::Query`.
 //! plan_* functions which correspond to operations on relations typically return a `HirRelationExpr`.
-//! plan_* functions which correspond to operations on scalars typically return a `HirScalarExpr` and a `ScalarType`. (The latter is because it's not always possible to infer from a `HirScalarExpr` what the intended type is - notably in the case of decimals where the scale/precision are encoded only in the type).
+//! plan_* functions which correspond to operations on scalars typically return a `HirScalarExpr`
+//! and a `ScalarType`. (The latter is because it's not always possible to infer from a
+//! `HirScalarExpr` what the intended type is - notably in the case of decimals where the
+//! scale/precision are encoded only in the type).
 
 //! Aggregates are particularly twisty.
 //!
 //! In SQL, a GROUP BY turns any columns not in the group key into vectors of
 //! values. Then anywhere later in the scope, an aggregate function can be
 //! applied to that group. Inside the arguments of an aggregate function, other
-//! normal functions are applied element-wise over the vectors. Thus `SELECT
+//! normal functions are applied element-wise over the vectors. Thus, `SELECT
 //! sum(foo.x + foo.y) FROM foo GROUP BY x` means adding the scalar `x` to the
 //! vector `y` and summing the results.
 //!
@@ -1391,7 +1396,7 @@ fn plan_query_inner(qcx: &mut QueryContext, q: &Query<Aug>) -> Result<PlannedQue
             let select_option_extracted = SelectOptionExtracted::try_from(s.options.clone())?;
             let group_size_hints = GroupSizeHints::try_from(select_option_extracted)?;
 
-            let plan = plan_view_select(qcx, *s.clone(), q.order_by.clone())?;
+            let plan = plan_select_from_where(qcx, *s.clone(), q.order_by.clone())?;
             PlannedQuery {
                 expr: plan.expr,
                 scope: plan.scope,
@@ -1670,8 +1675,8 @@ fn plan_set_expr(
     match q {
         SetExpr::Select(select) => {
             let order_by_exprs = Vec::new();
-            let plan = plan_view_select(qcx, *select.clone(), order_by_exprs)?;
-            // We didn't provide any `order_by_exprs`, so `plan_view_select`
+            let plan = plan_select_from_where(qcx, *select.clone(), order_by_exprs)?;
+            // We didn't provide any `order_by_exprs`, so `plan_select_from_where`
             // should not have planned any ordering.
             assert!(plan.order_by.is_empty());
             Ok((plan.expr.project(plan.project), plan.scope))
@@ -2095,7 +2100,7 @@ generate_extracted_config!(
 ///
 /// where expressions in the ORDER BY clause can refer to *both* input columns
 /// and output columns.
-fn plan_view_select(
+fn plan_select_from_where(
     qcx: &QueryContext,
     mut s: Select<Aug>,
     mut order_by_exprs: Vec<OrderByExpr<Aug>>,
@@ -2192,6 +2197,7 @@ fn plan_view_select(
 
     // Step 5. Handle GROUP BY clause.
     // This will also plan the aggregates gathered in Step 3.
+    // See an overview of how aggregates are planned in the doc comment at the top of the file.
     let (mut group_scope, select_all_mapping) = {
         // Compute GROUP BY expressions.
         let ecx = &ExprContext {
@@ -5126,6 +5132,7 @@ fn plan_function<'a>(
 
             // Note: the window frame doesn't affect scalar window funcs, but, strangely, we should
             // accept a window frame here without an error msg. (Postgres also does this.)
+            // TODO: maybe we should give a notice
 
             let func = func::select_impl(ecx, FuncSpec::Func(name), impls, scalar_args, vec![])?;
 
@@ -5175,7 +5182,7 @@ fn plan_function<'a>(
                 // Not a window aggregate. Something is wrong.
                 if ecx.allow_aggregates {
                     // Should already have been caught by `scope.resolve_expr` in `plan_expr_inner`
-                    // (after having been planned earlier in `Step 5` of `plan_view_select`).
+                    // (after having been planned earlier in `Step 5` of `plan_select_from_where`).
                     sql_bail!(
                         "Internal error: encountered unplanned non-windowed aggregate function: {:?}",
                         name,
@@ -6124,7 +6131,7 @@ impl Visit<'_, Aug> for WindowFuncCollector {
     }
 
     fn visit_query(&mut self, _query: &Query<Aug>) {
-        // Don't go into subqueries. Those will be handled by their own `plan_view_select`.
+        // Don't go into subqueries. Those will be handled by their own `plan_query`.
     }
 }
 
