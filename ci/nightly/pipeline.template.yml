@@ -1514,8 +1514,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: data-ingest
-          # TODO: Reenable Azurite when https://github.com/MaterializeInc/database-issues/issues/8892 is fixed
-          #args: [--azurite]
+          args: [--azurite]
 
   - group: "Parallel Workload"
     key: parallel-workload
