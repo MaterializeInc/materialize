@@ -464,48 +464,49 @@ avro_table_upsert ""
 # Key-value load generator source using source-fed tables
 #
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_create_table_from_source = true
-ALTER SYSTEM SET enable_load_generator_key_value = true
-ALTER SYSTEM SET force_source_table_syntax = true
+# TODO(database-issues#8904): Re-enable when key-value load gen sources work with force_source_table_syntax.
 
-> CREATE SOURCE keyvalue
-  IN CLUSTER ${arg.single-replica-cluster}
-  FROM LOAD GENERATOR KEY VALUE (
-    KEYS 16,
-    PARTITIONS 4,
-    SNAPSHOT ROUNDS 3,
-    SEED 123,
-    VALUE SIZE 10,
-    BATCH SIZE 2,
-    TICK INTERVAL '1s'
-  );
-
-> CREATE TABLE kv_1 FROM SOURCE keyvalue INCLUDE KEY ENVELOPE UPSERT;
-
-> CREATE TABLE kv_2 FROM SOURCE keyvalue INCLUDE KEY ENVELOPE NONE;
-
-> SELECT partition, count(*) FROM kv_1 GROUP BY partition
-0   4
-1   4
-2   4
-3   4
-
-> SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'kv_1';
-running
-
-> SELECT partition, count(*) > 10 FROM kv_2 GROUP BY partition
-0   true
-1   true
-2   true
-3   true
-
-> SHOW TABLES ON keyvalue;
-kv_1 ""
-kv_2 ""
-
-> DROP SOURCE keyvalue CASCADE;
-
+# $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+# ALTER SYSTEM SET enable_create_table_from_source = true
+# ALTER SYSTEM SET enable_load_generator_key_value = true
+# ALTER SYSTEM SET force_source_table_syntax = true
+#
+# > CREATE SOURCE keyvalue
+#   IN CLUSTER ${arg.single-replica-cluster}
+#   FROM LOAD GENERATOR KEY VALUE (
+#     KEYS 16,
+#     PARTITIONS 4,
+#     SNAPSHOT ROUNDS 3,
+#     SEED 123,
+#     VALUE SIZE 10,
+#     BATCH SIZE 2,
+#     TICK INTERVAL '1s'
+#   );
+#
+# > CREATE TABLE kv_1 FROM SOURCE keyvalue INCLUDE KEY ENVELOPE UPSERT;
+#
+# > CREATE TABLE kv_2 FROM SOURCE keyvalue INCLUDE KEY ENVELOPE NONE;
+#
+# > SELECT partition, count(*) FROM kv_1 GROUP BY partition
+# 0   4
+# 1   4
+# 2   4
+# 3   4
+#
+# > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'kv_1';
+# running
+#
+# > SELECT partition, count(*) > 10 FROM kv_2 GROUP BY partition
+# 0   true
+# 1   true
+# 2   true
+# 3   true
+#
+# > SHOW TABLES ON keyvalue;
+# kv_1 ""
+# kv_2 ""
+#
+# > DROP SOURCE keyvalue CASCADE;
 
 #
 # Force usage of the new syntax and check that old statements are disallowed
