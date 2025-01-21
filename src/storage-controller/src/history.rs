@@ -71,7 +71,7 @@ impl<T: std::fmt::Debug> CommandHistory<T> {
                 RunIngestions(x) => metrics.run_ingestions_count.add(x.len().cast_into()),
                 RunSinks(x) => metrics.run_sinks_count.add(x.len().cast_into()),
                 AllowCompaction(x) => metrics.allow_compaction_count.add(x.len().cast_into()),
-                RunOneshotIngestion(_) => {
+                RunOneshotIngestion(_) | CancelOneshotIngestion { .. } => {
                     // TODO(cf2): Add metrics for oneshot ingestions.
                 }
             }
@@ -115,15 +115,21 @@ impl<T: std::fmt::Debug> CommandHistory<T> {
                     final_sinks.extend(cmds.into_iter().map(|c| (c.id, c)));
                 }
                 AllowCompaction(updates) => final_compactions.extend(updates),
-                RunOneshotIngestion(oneshot) => {
-                    final_oneshot_ingestions.insert(oneshot.ingestion_id, oneshot);
+                RunOneshotIngestion(oneshots) => {
+                    for oneshot in oneshots {
+                        final_oneshot_ingestions.insert(oneshot.ingestion_id, oneshot);
+                    }
+                }
+                CancelOneshotIngestion { ingestions } => {
+                    for ingestion in ingestions {
+                        final_oneshot_ingestions.remove(&ingestion);
+                    }
                 }
             }
         }
 
         let mut run_ingestions = Vec::new();
         let mut run_sinks = Vec::new();
-        let mut run_oneshot_ingestions = Vec::new();
         let mut allow_compaction = Vec::new();
 
         // Discard ingestions that have been dropped, keep the rest.
@@ -154,10 +160,6 @@ impl<T: std::fmt::Debug> CommandHistory<T> {
 
             run_sinks.push(sink);
         }
-
-        // TODO(cf1): Add a CancelOneshotIngestion command similar to CancelPeek
-        // that will compact/reduce away the RunOneshotIngestion.
-        run_oneshot_ingestions.extend(final_oneshot_ingestions.into_values());
 
         // Reconstitute the commands as a compact history.
         //
@@ -192,14 +194,14 @@ impl<T: std::fmt::Debug> CommandHistory<T> {
             self.commands.push(StorageCommand::RunSinks(run_sinks));
         }
 
-        // TODO(cf1): Add a CancelOneshotIngestion command, make sure we prevent
-        // re-sending commands for ingestions that we've already responded to.
-        if !run_oneshot_ingestions.is_empty() {
-            self.commands.extend(
-                run_oneshot_ingestions
-                    .into_iter()
-                    .map(|oneshot| StorageCommand::RunOneshotIngestion(oneshot)),
-            );
+        // Note: RunOneshotIngestion commands are reduced, as we receive
+        // CancelOneshotIngestion commands.
+        //
+        // TODO(cf2): Record metrics on the number of OneshotIngestion commands.
+        if !final_oneshot_ingestions.is_empty() {
+            let oneshots = final_oneshot_ingestions.into_values().collect();
+            self.commands
+                .push(StorageCommand::RunOneshotIngestion(oneshots));
         }
 
         let count = u64::cast_from(allow_compaction.len());

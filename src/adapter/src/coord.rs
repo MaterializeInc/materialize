@@ -170,7 +170,7 @@ use tracing::{debug, info, info_span, span, warn, Instrument, Level, Span};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 
-use crate::active_compute_sink::ActiveComputeSink;
+use crate::active_compute_sink::{ActiveComputeSink, ActiveCopyFrom};
 use crate::catalog::{BuiltinTableUpdate, Catalog, OpenCatalogResult};
 use crate::client::{Client, Handle};
 use crate::command::{Command, ExecuteResponse};
@@ -1667,7 +1667,7 @@ pub struct Coordinator {
     active_webhooks: BTreeMap<CatalogItemId, WebhookAppenderInvalidator>,
     /// A map of active `COPY FROM` statements. The Coordinator waits for `clusterd`
     /// to stage Batches in Persist that we will then link into the shard.
-    active_copies: BTreeMap<ConnectionId, ExecuteContext>,
+    active_copies: BTreeMap<ConnectionId, ActiveCopyFrom>,
 
     /// A map from connection ids to a watch channel that is set to `true` if the connection
     /// received a cancel request.

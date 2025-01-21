@@ -40,6 +40,7 @@ use smallvec::SmallVec;
 use timely::progress::frontier::{Antichain, MutableAntichain};
 use timely::PartialOrder;
 use tonic::{Request, Status as TonicStatus, Streaming};
+use uuid::Uuid;
 
 use crate::client::proto_storage_server::ProtoStorage;
 use crate::metrics::ReplicaMetrics;
@@ -123,18 +124,29 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
     UpdateConfiguration(StorageParameters),
     /// Run the enumerated sources, each associated with its identifier.
     RunIngestions(Vec<RunIngestionCommand>),
-    /// Run a dataflow which will ingest data from an external source and only __stage__ it in
-    /// Persist.
-    ///
-    /// Unlike regular ingestions/sources, some other component (e.g. `environmentd`) is
-    /// responsible for linking the staged data into a shard.
-    RunOneshotIngestion(RunOneshotIngestionCommand),
     /// Enable compaction in storage-managed collections.
     ///
     /// Each entry in the vector names a collection and provides a frontier after which
     /// accumulations must be correct.
     AllowCompaction(Vec<(GlobalId, Antichain<T>)>),
     RunSinks(Vec<RunSinkCommand<T>>),
+    /// Run a dataflow which will ingest data from an external source and only __stage__ it in
+    /// Persist.
+    ///
+    /// Unlike regular ingestions/sources, some other component (e.g. `environmentd`) is
+    /// responsible for linking the staged data into a shard.
+    RunOneshotIngestion(Vec<RunOneshotIngestion>),
+    /// `CancelOneshotIngestion` instructs the replica to cancel the identified oneshot ingestions.
+    ///
+    /// It is invalid to send a [`CancelOneshotIngestion`] command that references a oneshot
+    /// ingestion that was not created by a corresponding [`RunOneshotIngestion`] command before.
+    /// Doing so may cause the replica to exhibit undefined behavior.
+    ///
+    /// [`CancelOneshotIngestion`]: crate::client::StorageCommand::CancelOneshotIngestion
+    /// [`RunOneshotIngestion`]: crate::client::StorageCommand::RunOneshotIngestion
+    CancelOneshotIngestion {
+        ingestions: Vec<Uuid>,
+    },
 }
 
 impl<T> StorageCommand<T> {
@@ -146,7 +158,8 @@ impl<T> StorageCommand<T> {
             | InitializationComplete
             | AllowWrites
             | UpdateConfiguration(_)
-            | AllowCompaction(_) => false,
+            | AllowCompaction(_)
+            | CancelOneshotIngestion { .. } => false,
             // TODO(cf2): multi-replica oneshot ingestions. At the moment returning
             // true here means we can't run `COPY FROM` on multi-replica clusters, this
             // should be easy enough to support though.
@@ -199,7 +212,7 @@ impl RustType<ProtoRunIngestionCommand> for RunIngestionCommand {
 
 /// A command that starts ingesting the given ingestion description
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct RunOneshotIngestionCommand {
+pub struct RunOneshotIngestion {
     /// The ID of the ingestion dataflow.
     pub ingestion_id: uuid::Uuid,
     /// The ID of collection we'll stage batches for.
@@ -210,9 +223,9 @@ pub struct RunOneshotIngestionCommand {
     pub request: OneshotIngestionRequest,
 }
 
-impl RustType<ProtoRunOneshotIngestionCommand> for RunOneshotIngestionCommand {
-    fn into_proto(&self) -> ProtoRunOneshotIngestionCommand {
-        ProtoRunOneshotIngestionCommand {
+impl RustType<ProtoRunOneshotIngestion> for RunOneshotIngestion {
+    fn into_proto(&self) -> ProtoRunOneshotIngestion {
+        ProtoRunOneshotIngestion {
             ingestion_id: Some(self.ingestion_id.into_proto()),
             collection_id: Some(self.collection_id.into_proto()),
             storage_metadata: Some(self.collection_meta.into_proto()),
@@ -220,20 +233,20 @@ impl RustType<ProtoRunOneshotIngestionCommand> for RunOneshotIngestionCommand {
         }
     }
 
-    fn from_proto(proto: ProtoRunOneshotIngestionCommand) -> Result<Self, TryFromProtoError> {
-        Ok(RunOneshotIngestionCommand {
+    fn from_proto(proto: ProtoRunOneshotIngestion) -> Result<Self, TryFromProtoError> {
+        Ok(RunOneshotIngestion {
             ingestion_id: proto
                 .ingestion_id
-                .into_rust_if_some("ProtoRunOneshotIngestionCommand::ingestion_id")?,
+                .into_rust_if_some("ProtoRunOneshotIngestion::ingestion_id")?,
             collection_id: proto
                 .collection_id
-                .into_rust_if_some("ProtoRunOneshotIngestionCommand::collection_id")?,
+                .into_rust_if_some("ProtoRunOneshotIngestion::collection_id")?,
             collection_meta: proto
                 .storage_metadata
-                .into_rust_if_some("ProtoRunOneshotIngestionCommand::storage_metadata")?,
+                .into_rust_if_some("ProtoRunOneshotIngestion::storage_metadata")?,
             request: proto
                 .request
-                .into_rust_if_some("ProtoRunOneshotIngestionCommand::request")?,
+                .into_rust_if_some("ProtoRunOneshotIngestion::request")?,
         })
     }
 }
@@ -300,12 +313,19 @@ impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
                 StorageCommand::RunIngestions(sources) => CreateSources(ProtoCreateSources {
                     sources: sources.into_proto(),
                 }),
-                StorageCommand::RunOneshotIngestion(oneshot) => {
-                    OneshotIngestion(oneshot.into_proto())
-                }
                 StorageCommand::RunSinks(sinks) => RunSinks(ProtoRunSinks {
                     sinks: sinks.into_proto(),
                 }),
+                StorageCommand::RunOneshotIngestion(ingestions) => {
+                    RunOneshotIngestions(ProtoRunOneshotIngestionsCommand {
+                        ingestions: ingestions.iter().map(|cmd| cmd.into_proto()).collect(),
+                    })
+                }
+                StorageCommand::CancelOneshotIngestion { ingestions } => {
+                    CancelOneshotIngestions(ProtoCancelOneshotIngestionsCommand {
+                        ingestions: ingestions.iter().map(|uuid| uuid.into_proto()).collect(),
+                    })
+                }
             }),
         }
     }
@@ -334,8 +354,21 @@ impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
             Some(RunSinks(ProtoRunSinks { sinks })) => {
                 Ok(StorageCommand::RunSinks(sinks.into_rust()?))
             }
-            Some(OneshotIngestion(oneshot)) => {
-                Ok(StorageCommand::RunOneshotIngestion(oneshot.into_rust()?))
+            Some(RunOneshotIngestions(oneshot)) => {
+                let ingestions = oneshot
+                    .ingestions
+                    .into_iter()
+                    .map(|cmd| cmd.into_rust())
+                    .collect::<Result<_, _>>()?;
+                Ok(StorageCommand::RunOneshotIngestion(ingestions))
+            }
+            Some(CancelOneshotIngestions(oneshot)) => {
+                let ingestions = oneshot
+                    .ingestions
+                    .into_iter()
+                    .map(|uuid| uuid.into_rust())
+                    .collect::<Result<_, _>>()?;
+                Ok(StorageCommand::CancelOneshotIngestion { ingestions })
             }
             None => Err(TryFromProtoError::missing_field(
                 "ProtoStorageCommand::kind",
@@ -802,7 +835,8 @@ where
             | StorageCommand::AllowWrites
             | StorageCommand::UpdateConfiguration(_)
             | StorageCommand::AllowCompaction(_)
-            | StorageCommand::RunOneshotIngestion(_) => {}
+            | StorageCommand::RunOneshotIngestion(_)
+            | StorageCommand::CancelOneshotIngestion { .. } => {}
         };
     }
 

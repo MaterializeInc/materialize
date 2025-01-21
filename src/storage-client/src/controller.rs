@@ -501,6 +501,12 @@ pub trait StorageController: Debug {
         result_tx: OneshotResultCallback<ProtoBatch>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
+    /// Cancel a oneshot ingestion.
+    fn cancel_oneshot_ingestion(
+        &mut self,
+        ingestion_id: uuid::Uuid,
+    ) -> Result<(), StorageError<Self::Timestamp>>;
+
     /// Alter the sink identified by the given id to match the provided `ExportDescription`.
     async fn alter_export(
         &mut self,

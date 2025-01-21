@@ -110,6 +110,7 @@ use timely::worker::Worker as TimelyWorker;
 use tokio::sync::{mpsc, watch};
 use tokio::time::Instant;
 use tracing::{info, warn};
+use uuid::Uuid;
 
 use crate::internal_control::{
     self, DataflowParameters, InternalCommandSender, InternalStorageCommand,
@@ -919,6 +920,9 @@ impl<'w, A: Allocate> Worker<'w, A> {
         let mut running_ingestion_descriptions = self.storage_state.ingestions.clone();
         let mut running_exports_descriptions = self.storage_state.exports.clone();
 
+        let mut create_oneshot_ingestions: BTreeSet<Uuid> = BTreeSet::new();
+        let mut cancel_oneshot_ingestions: BTreeSet<Uuid> = BTreeSet::new();
+
         for command in &mut commands {
             match command {
                 StorageCommand::CreateTimely { .. } => {
@@ -954,12 +958,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         }
                     }
                 }
-                StorageCommand::RunOneshotIngestion(oneshot) => {
-                    info!(%worker_id, ?oneshot, "reconcile: received RunOneshotIngestion command");
-                    // TODO(cf1): Handle CancelOneshotIngestion, clean out stale oneshot
-                    // ingestions from our state. Possibly here we respond to the client
-                    // with a cancelation to make sure the client doesn't wait forever.
-                }
                 StorageCommand::RunSinks(exports) => {
                     info!(%worker_id, ?exports, "reconcile: received RunSinks command");
 
@@ -974,6 +972,15 @@ impl<'w, A: Allocate> Worker<'w, A> {
                                 .expect("only alter compatible ingestions permitted");
                         }
                     }
+                }
+                StorageCommand::RunOneshotIngestion(ingestions) => {
+                    info!(%worker_id, ?ingestions, "reconcile: received RunOneshotIngestion command");
+                    create_oneshot_ingestions
+                        .extend(ingestions.iter().map(|ingestion| ingestion.ingestion_id));
+                }
+                StorageCommand::CancelOneshotIngestion { ingestions } => {
+                    info!(%worker_id, ?ingestions, "reconcile: received CancelOneshotIngestion command");
+                    cancel_oneshot_ingestions.extend(ingestions.iter());
                 }
                 StorageCommand::InitializationComplete
                 | StorageCommand::AllowWrites
@@ -1082,11 +1089,28 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         }
                     })
                 }
+                StorageCommand::RunOneshotIngestion(ingestions) => ingestions.retain(|ingestion| {
+                    let already_running = self
+                        .storage_state
+                        .oneshot_ingestions
+                        .contains_key(&ingestion.ingestion_id);
+                    let was_canceled = cancel_oneshot_ingestions.contains(&ingestion.ingestion_id);
+
+                    !already_running && !was_canceled
+                }),
+                StorageCommand::CancelOneshotIngestion { ingestions } => {
+                    ingestions.retain(|ingestion_id| {
+                        let already_running = self
+                            .storage_state
+                            .oneshot_ingestions
+                            .contains_key(ingestion_id);
+                        already_running
+                    });
+                }
                 StorageCommand::InitializationComplete
                 | StorageCommand::AllowWrites
                 | StorageCommand::UpdateConfiguration(_)
-                | StorageCommand::AllowCompaction(_)
-                | StorageCommand::RunOneshotIngestion(_) => (),
+                | StorageCommand::AllowCompaction(_) => (),
             }
         }
 
@@ -1111,14 +1135,28 @@ impl<'w, A: Allocate> Worker<'w, A> {
             // Objects are considered stale if we did not see them re-created.
             .filter(|id| !expected_objects.contains(id))
             .collect::<Vec<_>>();
+        let stale_oneshot_ingestions = self
+            .storage_state
+            .oneshot_ingestions
+            .keys()
+            .filter(|ingestion_id| {
+                let created = create_oneshot_ingestions.contains(ingestion_id);
+                let dropped = cancel_oneshot_ingestions.contains(ingestion_id);
+                !created && !dropped
+            })
+            .copied()
+            .collect::<Vec<_>>();
 
         info!(
-            %worker_id, ?expected_objects, ?stale_objects,
+            %worker_id, ?expected_objects, ?stale_objects, ?stale_oneshot_ingestions,
             "reconcile: modifing storage state to match expected objects",
         );
 
         for id in stale_objects {
             self.storage_state.drop_collection(id);
+        }
+        for id in stale_oneshot_ingestions {
+            self.storage_state.drop_oneshot_ingestion(id);
         }
 
         // Do not report dropping any objects that do not belong to expected
@@ -1223,16 +1261,23 @@ impl StorageState {
                     }
                 }
             }
-            StorageCommand::RunOneshotIngestion(oneshot) => {
+            StorageCommand::RunOneshotIngestion(oneshots) => {
                 if self.timely_worker_index == 0 {
-                    self.internal_cmd_tx.borrow_mut().broadcast(
-                        InternalStorageCommand::RunOneshotIngestion {
-                            ingestion_id: oneshot.ingestion_id,
-                            collection_id: oneshot.collection_id,
-                            collection_meta: oneshot.collection_meta,
-                            request: oneshot.request,
-                        },
-                    );
+                    for oneshot in oneshots {
+                        self.internal_cmd_tx.borrow_mut().broadcast(
+                            InternalStorageCommand::RunOneshotIngestion {
+                                ingestion_id: oneshot.ingestion_id,
+                                collection_id: oneshot.collection_id,
+                                collection_meta: oneshot.collection_meta,
+                                request: oneshot.request,
+                            },
+                        );
+                    }
+                }
+            }
+            StorageCommand::CancelOneshotIngestion { ingestions } => {
+                for id in ingestions {
+                    self.drop_oneshot_ingestion(id);
                 }
             }
             StorageCommand::RunSinks(exports) => {
@@ -1321,5 +1366,11 @@ impl StorageState {
                 .borrow_mut()
                 .broadcast(InternalStorageCommand::DropDataflow(vec![id]));
         }
+    }
+
+    /// Drop the identified oneshot ingestion from the storage state.
+    fn drop_oneshot_ingestion(&mut self, ingestion_id: uuid::Uuid) {
+        let prev = self.oneshot_ingestions.remove(&ingestion_id);
+        tracing::info!(%ingestion_id, existed = %prev.is_some(), "dropping oneshot ingestion");
     }
 }
