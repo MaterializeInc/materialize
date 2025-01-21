@@ -48,7 +48,7 @@ use mz_repr::adt::interval::Interval;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationVersion, Row, TimestampManipulation};
 use mz_storage_client::client::{
-    ProtoStorageCommand, ProtoStorageResponse, RunIngestionCommand, RunOneshotIngestionCommand,
+    ProtoStorageCommand, ProtoStorageResponse, RunIngestionCommand, RunOneshotIngestion,
     RunSinkCommand, Status, StatusUpdate, StorageCommand, StorageResponse, TableData,
 };
 use mz_storage_client::controller::{
@@ -117,6 +117,16 @@ struct PendingCompactionCommand<T> {
     cluster_id: Option<StorageInstanceId>,
 }
 
+#[derive(Derivative)]
+#[derivative(Debug)]
+struct PendingOneshotIngestion {
+    /// Callback used to provide results of the ingestion.
+    #[derivative(Debug = "ignore")]
+    result_tx: OneshotResultCallback<ProtoBatch>,
+    /// Cluster currently running this ingestion
+    cluster_id: StorageInstanceId,
+}
+
 /// A storage controller for a storage instance.
 #[derive(Derivative)]
 #[derivative(Debug)]
@@ -161,7 +171,7 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     pending_table_handle_drops_rx: mpsc::UnboundedReceiver<GlobalId>,
     /// Closures that can be used to send responses from oneshot ingestions.
     #[derivative(Debug = "ignore")]
-    pending_oneshot_ingestions: BTreeMap<uuid::Uuid, OneshotResultCallback<ProtoBatch>>,
+    pending_oneshot_ingestions: BTreeMap<uuid::Uuid, PendingOneshotIngestion>,
 
     /// Interface for managed collections
     pub(crate) collection_manager: collection_mgmt::CollectionManager<T>,
@@ -1405,7 +1415,7 @@ where
             // TODO(cf2): Refine this error.
             StorageError::Generic(anyhow::anyhow!("missing cluster {instance_id}"))
         })?;
-        let oneshot_cmd = RunOneshotIngestionCommand {
+        let oneshot_cmd = RunOneshotIngestion {
             ingestion_id,
             collection_id,
             collection_meta,
@@ -1413,15 +1423,46 @@ where
         };
 
         if !self.read_only {
-            instance.send(StorageCommand::RunOneshotIngestion(oneshot_cmd));
+            instance.send(StorageCommand::RunOneshotIngestion(vec![oneshot_cmd]));
+            let pending = PendingOneshotIngestion {
+                result_tx,
+                cluster_id: instance_id,
+            };
             let novel = self
                 .pending_oneshot_ingestions
-                .insert(ingestion_id, result_tx);
+                .insert(ingestion_id, pending);
             assert!(novel.is_none());
             Ok(())
         } else {
             Err(StorageError::ReadOnly)
         }
+    }
+
+    fn cancel_oneshot_ingestion(
+        &mut self,
+        ingestion_id: uuid::Uuid,
+    ) -> Result<(), StorageError<Self::Timestamp>> {
+        if self.read_only {
+            return Err(StorageError::ReadOnly);
+        }
+
+        let pending = self
+            .pending_oneshot_ingestions
+            .remove(&ingestion_id)
+            .ok_or_else(|| {
+                // TODO(cf2): Refine this error.
+                StorageError::Generic(anyhow::anyhow!("missing oneshot ingestion {ingestion_id}"))
+            })?;
+
+        let instance = self.instances.get_mut(&pending.cluster_id).ok_or_else(|| {
+            // TODO(cf2): Refine this error.
+            StorageError::Generic(anyhow::anyhow!("missing cluster {}", pending.cluster_id))
+        })?;
+        instance.send(StorageCommand::CancelOneshotIngestion {
+            ingestions: vec![ingestion_id],
+        });
+
+        Ok(())
     }
 
     async fn alter_export(
@@ -1998,12 +2039,21 @@ where
                 self.record_status_updates(updates);
             }
             Some(StorageResponse::StagedBatches(batches)) => {
-                for (collection_id, batches) in batches {
-                    match self.pending_oneshot_ingestions.remove(&collection_id) {
-                        Some(sender) => (sender)(batches),
+                for (ingestion_id, batches) in batches {
+                    match self.pending_oneshot_ingestions.remove(&ingestion_id) {
+                        Some(pending) => {
+                            // Send a cancel command so our command history is correct.
+                            if let Some(instance) = self.instances.get_mut(&pending.cluster_id) {
+                                instance.send(StorageCommand::CancelOneshotIngestion {
+                                    ingestions: vec![ingestion_id],
+                                });
+                            }
+                            // Send the results down our channel.
+                            (pending.result_tx)(batches)
+                        }
                         // TODO(cf2): When we support running COPY FROM on multiple
                         // replicas we can probably just ignore the case of `None`.
-                        None => mz_ore::soft_panic_or_log!("no sender for {collection_id}!"),
+                        None => mz_ore::soft_panic_or_log!("no sender for {ingestion_id}!"),
                     }
                 }
             }

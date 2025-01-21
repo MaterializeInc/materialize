@@ -29,7 +29,7 @@ use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
 use crate::coord::peek::PeekResponseUnary;
-use crate::{AdapterError, ExecuteResponse};
+use crate::{AdapterError, ExecuteContext, ExecuteResponse};
 
 #[derive(Debug)]
 /// A description of an active compute sink from the coordinator's perspective.
@@ -434,4 +434,13 @@ impl ActiveCopyTo {
         };
         let _ = self.tx.send(message);
     }
+}
+
+/// State we keep in the `Coordinator` to track active `COPY FROM` statements.
+#[derive(Debug)]
+pub(crate) struct ActiveCopyFrom {
+    /// ID of the ingestion running in clusterd.
+    pub ingestion_id: uuid::Uuid,
+    /// Context of the SQL session that ran the statement.
+    pub ctx: ExecuteContext,
 }
