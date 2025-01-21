@@ -53,13 +53,20 @@ documentationq](https://kubernetes.io/docs/tasks/tools/).
 For help with `kubectl` commands, see [kubectl Quick
 reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 
-### Materialize repo
+### Sample configuration files
 
-The following instructions assume that you are installing from the [Materialize
-repo](https://github.com/MaterializeInc/materialize).
+Download the following sample configuration files from the Materialize repo:
 
-```sh
-git clone --branch lts-v0.130 https://github.com/MaterializeInc/materialize.git
+- `values.yaml`
+- `postgres.yaml`
+- `minio.yaml`
+- `materialize.yaml`
+
+```shell
+curl -o values.yaml https://raw.githubusercontent.com/MaterializeInc/materialize/refs/heads/lts-v0.130/misc/helm-charts/operator/values.yaml
+curl -o sample-postgres.yaml https://raw.githubusercontent.com/MaterializeInc/materialize/refs/heads/lts-v0.130/misc/helm-charts/testing/postgres.yaml
+curl -o sample-minio.yaml https://raw.githubusercontent.com/MaterializeInc/materialize/refs/heads/lts-v0.130/misc/helm-charts/testing/minio.yaml
+curl -o sample-materialize.yaml https://raw.githubusercontent.com/MaterializeInc/materialize/refs/heads/lts-v0.130/misc/helm-charts/testing/materialize.yaml
 ```
 
 ## Installation
@@ -74,18 +81,22 @@ git clone --branch lts-v0.130 https://github.com/MaterializeInc/materialize.git
    kind create cluster
    ```
 
-1. Install the Materialize Helm chart using the files provided in the
-   Materialize repo.
+1. Install the Materialize Helm chart.
 
-   1. Go to the Materialize repo directory.
-
-   1. Install the Materialize operator with the release name
-      `my-materialize-operator` into the `materialize` namespace:
+   1. Add the Materialize Helm chart repository.
 
       ```shell
-      helm install my-materialize-operator \
-         -f misc/helm-charts/operator/values.yaml misc/helm-charts/operator \
-         --namespace materialize --create-namespace
+      helm repo add materialize https://materializeinc.github.io/materialize
+      helm repo update materialize
+      ```
+
+   1. Install the Materialize Operator.
+
+      ```shell
+      helm install my-materialize-operator materialize/materialize-operator \
+          --namespace=materialize --create-namespace \
+          --version v25.1.0 \
+          -f values.yaml
       ```
 
    1. Verify the installation and check the status:
@@ -112,19 +123,17 @@ git clone --branch lts-v0.130 https://github.com/MaterializeInc/materialize.git
 
 1. Install PostgreSQL and minIO.
 
-    1. Go to the Materialize repo directory.
-
-    1. Use the provided `postgres.yaml` file to install PostgreSQL as the
+    1. Use the `sample-postgres.yaml` file to install PostgreSQL as the
        metadata database:
 
         ```shell
-        kubectl apply -f misc/helm-charts/testing/postgres.yaml
+        kubectl apply -f sample-postgres.yaml
         ```
 
-    1. Use the provided `minio.yaml` file to install minIO as the blob storage:
+    1. Use the `sample-minio.yaml` file to install minIO as the blob storage:
 
         ```shell
-        kubectl apply -f misc/helm-charts/testing/minio.yaml
+        kubectl apply -f sample-minio.yaml
         ```
 
 1. Optional. Install the following metrics service for certain system metrics
@@ -136,13 +145,12 @@ git clone --branch lts-v0.130 https://github.com/MaterializeInc/materialize.git
 
 1. Install Materialize into a new `materialize-environment` namespace:
 
-   1. Go to the Materialize repo directory.
 
-   1. Use the provided `materialize.yaml` file to create the
+   1. Use the `sample-materialize.yaml` file to create the
       `materialize-environment` namespace and install Materialize:
 
       ```shell
-      kubectl apply -f misc/helm-charts/testing/materialize.yaml
+      kubectl apply -f sample-materialize.yaml
       ```
 
     1. Verify the installation and check the status:
