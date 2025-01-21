@@ -54,14 +54,12 @@ When operating in AWS, we recommend:
 - Using the `r7gd` and `r6gd` families of instances (and `r8gd` once available)
   when running with local disk (Recommended for production.  See [Operational guidelines](/installation/operational-guidelines/#locally-attached-nvme-storage-openebs) for more information.)
 
-See [A. Set up AWS Kubernetes environment](#a-set-up-aws-kubernetes-environment)
-for a sample setup.
+This tutorial uses Terraform to set up the AWS Kubernetes environment and
+install Materialize. See [Set up AWS Kubernetes environment and install
+Materialize](#set-up-aws-kubernetes-environment-and-install-materialize) for
+details.
 
-## A. Set up AWS Kubernetes environment
-
-{{< tabs  >}}
-
-{{< tab "Terraform" >}}
+## Set up AWS Kubernetes environment and install Materialize
 
 Materialize provides a [sample Terraform
 module](https://github.com/MaterializeInc/terraform-aws-materialize/blob/main/README.md)
@@ -72,6 +70,8 @@ for evaluation purposes only. The module deploys a sample infrastructure on AWS
 - A dedicated VPC
 - An S3 for blob storage
 - An RDS PostgreSQL cluster and database for metadata storage
+- Materialize Operator
+- Materialize instances (during subsequent runs after the Operator is running)
 
 {{< warning >}}
 
@@ -89,10 +89,17 @@ for evaluation purposes only. The module deploys a sample infrastructure on AWS
    cd terraform-aws-materialize/examples/simple
    ```
 
-1. Create a `terraform.tfvars` file and specify a database password.
+1. Create a `terraform.tfvars` file and and specify:
+
+   - A namespace that will be used as the prefix for your AWS resources (e.g.,
+      `my-materialize`). Namespace has a maximum of 18 characters and must
+      be lowercase alphanumeric and hyphens only.
+
+   - A secure password for the RDS PostgreSQL database (to be created).
 
    ```bash
-   database_password = "enter-your-secure-password" # Enter a secure password
+   namespace = "enter-namespace"   // 18 characters, lowercase alphanumeric and hyphens only (e.g. my-materialize)
+   database_password  = "enter-secure-password"
    ```
 
 1. Initialize the terraform directory.
@@ -117,45 +124,35 @@ for evaluation purposes only. The module deploys a sample infrastructure on AWS
    Upon successful completion, various fields and their values are output:
 
    ```bash
-   Apply complete! Resources: 82 added, 0 changed, 0 destroyed.
+   Apply complete! Resources: 76 added, 0 changed, 0 destroyed.
 
    Outputs:
-   database_endpoint = "materialize-simple.abcdefg8dsto.us-east-1.rds.amazonaws.com:5432"
+
+   database_endpoint = "my-materialize-dev-db.abcdefg8dsto.us-east-1.rds.amazonaws.com:5432"
    eks_cluster_endpoint = "https://0123456789A00BCD000E11BE12345A01.gr7.us-east-1.eks.amazonaws.com"
-   materialize_s3_role_arn = "arn:aws:iam::000111222333:role/dev-materialize-s3-role"
+   eks_cluster_name = "my-materialize-dev-eks"
+   materialize_s3_role_arn = "arn:aws:iam::000111222333:role/my-materialize-dev-mz-role"
    metadata_backend_url = <sensitive>
-   oidc_provider_arn = "arn:aws:iam::000111222333:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/0123456789A00BCD000E11BE12345A01"
-   persist_backend_url = "s3://materialize-simple-storage-c2663c2f/dev:serviceaccount:materialize-environment:12345678-1234-1234-1234-123456789012"
-   s3_bucket_name = "materialize-simple-storage-c2663c2f"
+   oidc_provider_arn = "arn:aws:iam::000111222333:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/7D14BCA3A7AA896A836782D96A24F958"
+   persist_backend_url = "s3://my-materialize-dev-storage-f2def2a9/dev:serviceaccount:materialize-environment:12345678-1234-1234-1234-12345678912"
+   s3_bucket_name = "my-materialize-dev-storage-f2def2a9"
    vpc_id = "vpc-0abc000bed1d111bd"
    ```
 
 1. Note your specific values for the following fields:
 
-   - `materialize_s3_role_arn` (Used during [B. Install the Materialize
-     Operator](#b-install-the-materialize-operator))
+   - `eks_cluster_name` (Used to configure `kubectl`)
 
-   - `persist_backend_url` (Used during [C. Install
-     Materialize](#c-install-materialize))
+1. Configure `kubectl` to connect to your EKS cluster, replacing:
 
-   - `metadata_backend_url` (Used during [C. Install
-     Materialize](#c-install-materialize)). You can get the connection strings by running the
-     following command:
+   - `<your-cluster-name>` with the name of your EKS cluster (specified in
+     [Terraform output](#terraform-output))
 
-     ```bash
-     terraform output -json metadata_backend_url | jq
-     ```
-
-1. Configure `kubectl` to connect to your EKS cluster.
-
-   - By default, the example Terraform module uses `materialize-eks-simple` as
-     the name of your EKS cluster.
-
-   - By default, the example Terraform module uses `us-east-1` as the region of
-     your EKS cluster.
+   - `<your-region>` with the region of your EKS cluster. By default, the
+     sample Terraform module uses `us-east-1`.
 
    ```bash
-   aws eks update-kubeconfig --name materialize-eks-simple --region us-east-1
+   aws eks update-kubeconfig --name <your-cluster-name> --region <your-region>
    ```
 
    To verify that you have configured correctly, run the following command:
@@ -167,80 +164,8 @@ for evaluation purposes only. The module deploys a sample infrastructure on AWS
    For help with `kubectl` commands, see [kubectl Quick
    reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 
-{{< /tab >}}
-
-{{< /tabs >}}
-
-
-## B. Install the Materialize Operator
-
-1. Clone/download the [Materialize
-   repo](https://github.com/MaterializeInc/materialize). The tutorial uses the
-   `lts-v0.130` branch.
-
-   ```sh
-   git clone --branch lts-v0.130 https://github.com/MaterializeInc/materialize.git
-   ```
-
-1. Go to the Materialize repo directory.
-
-   ```bash
-   cd materialize
-   ```
-
-1. Create a `my-materialize-operator-values.yaml` configuration file for the
-   Materialize operator. Update with:
-
-   - your AWS region (the sample Terraform module uses `us-east-1`).
-
-   - your AWS Account ID, and
-
-   - your `materialize_s3_role_arn`. (Refer to your [Terraform
-     output](#terraform-output) for the `materialize_s3_role_arn`.)
-
-      ```yaml
-      # my-materialize-operator-values.yaml
-
-      operator:
-        cloudProvider:
-          type: "aws"
-          region: "your-aws-region" # e.g. us-east-1
-          providers:
-            aws:
-              enabled: true
-              accountID: "your-aws-account-id" # e.g. 123456789012
-              iam:
-                roles:
-                  environment: "your-materialize-s3-role-arn" # e.g. arn:aws:iam::123456789012:role/materialize-s3-role
-      networkPolicies:
-        enabled: true
-        egress:
-          enabled: true
-          cidrs: ["0.0.0.0/0"]
-        ingress:
-          enabled: true
-          cidrs: ["0.0.0.0/0"]
-        internal:
-          enabled: true
-
-      ```
-
-   For production, if you have [opted for locally-attached storage](/installation/operational-guidelines/#locally-attached-nvme-storage-openebs),
-   include the storage configuration in your configuration file.  See the
-   [Locally-attached NVMe storage
-   (OpenEBS)](/installation/operational-guidelines/#locally-attached-nvme-storage-openebs)
-   for details.
-
-1. Install the Materialize operator `materialize-operator`, specifying the path
-   to your `my-materialize-operator-values.yaml` file:
-
-   ```shell
-   helm install materialize-operator misc/helm-charts/operator \
-      -f my-materialize-operator-values.yaml  \
-      --namespace materialize --create-namespace
-   ```
-
-1. Verify the installation and check the status:
+1. By default, the example Terraform installs the Materialize Operator. Verify
+   the installation and check the status:
 
     ```shell
     kubectl get all -n materialize
@@ -262,75 +187,59 @@ for evaluation purposes only. The module deploys a sample infrastructure on AWS
     If you run into an error during deployment, refer to the
     [Troubleshooting](/installation/troubleshooting) guide.
 
-## C. Install Materialize
+1. <a name="deploy-materialize-instances"></a>
 
-To deploy Materialize:
+   To deploy Materialize instances, modify the `main.tf` file to include the
+   Materialize instance configuration, specifically, uncomment the
+   `materialize_instances` block.
 
-<a name="deploy-materialize-secrets"></a>
+   ```bash
+   # Once the operator is installed, you can define your Materialize instances here.
+   # Uncomment the following block (or provide your own instances) to configure them.
+   materialize_instances = [
+     {
+       name           = "analytics"
+       namespace      = "materialize-environment"
+       database_name  = "analytics_db"
+       cpu_request    = "2"
+       memory_request = "4Gi"
+       memory_limit   = "4Gi"
+     },
+     {
+       name           = "demo"
+       namespace      = "materialize-environment"
+       database_name  = "demo_db"
+       cpu_request    = "4"
+       memory_request = "8Gi"
+       memory_limit   = "8Gi"
+     }
+   ]
+   ```
 
-1. For your backend configuration, create a file
-   `materialize-backend-secret.yaml` for your [Kubernetes
-   Secret](https://kubernetes.io/docs/concepts/configuration/secret/).
+1. Create a terraform plan and review the changes.
 
-    ```yaml
-    apiVersion: v1
-    kind: Secret
-    metadata:
-      name: materialize-backend
-      namespace: materialize-environment
-    stringData:
-      persist_backend_url: "your-persist-backend-url"
-      metadata_backend_url: "your-metadata-backend-url"
+    ```bash
+    terraform plan -out my-plan.tfplan
     ```
 
-    - For `your-persist-backend-url`, set to the value from the [Terraform
-      output](#terraform-output).
+    The plan should show the changes to be made, with a summary similar to the
+    following:
 
-    - For `your-metadata-backend-url`, set to the value from the [Terraform
-      output](#terraform-output).
+    ```
+    Plan: 7 to add, 0 to change, 0 to destroy.
 
-      {{< tip >}}
-      You may need to URL encode your database password.
-      {{< /tip >}}
+    Saved the plan to: my-plan.tfplan
 
-1. Create a YAML file `my-materialize.yaml` for your Materialize
-   configuration.
+    To perform exactly these actions, run the following command to apply:
+    terraform apply "my-plan.tfplan"
+    ```
 
-   ```yaml
-   apiVersion: materialize.cloud/v1alpha1
-   kind: Materialize
-   metadata:
-     name: 12345678-1234-1234-1234-123456789012
-     namespace: materialize-environment
-   spec:
-     environmentdImageRef: materialize/environmentd:v0.130.0
-     environmentdResourceRequirements:
-       limits:
-         memory: 16Gi
-       requests:
-         cpu: "2"
-         memory: 16Gi
-     balancerdResourceRequirements:
-       limits:
-         memory: 256Mi
-       requests:
-         cpu: "100m"
-         memory: 256Mi
-     backendSecretName: materialize-backend
-   ```
+1. If you are satisfied with the changes, apply the terraform plan.
 
-1. Create the your namespace.
+    ```bash
+    terraform apply my-plan.tfplan
+    ```
 
-   ```shell
-   kubectl create namespace materialize-environment
-   ```
-
-1. Apply the files to install Materialize:
-
-   ```shell
-   kubectl apply -f materialize-backend-secret.yaml
-   kubectl apply -f my-materialize.yaml
-   ```
 
 1. Verify the installation and check the status:
 
@@ -341,41 +250,51 @@ To deploy Materialize:
    Wait for the components to be in the `Running` state.
 
    ```none
-   NAME                                             READY   STATUS    RESTARTS   AGE
-   pod/mzm3otrsfcv7-balancerd-59454965d4-jjw4c      1/1     Running   0          37s
-   pod/mzm3otrsfcv7-cluster-s1-replica-s1-gen-1-0   1/1     Running   0          43s
-   pod/mzm3otrsfcv7-cluster-s2-replica-s2-gen-1-0   1/1     Running   0          43s
-   pod/mzm3otrsfcv7-cluster-s3-replica-s3-gen-1-0   1/1     Running   0          43s
-   pod/mzm3otrsfcv7-cluster-u1-replica-u1-gen-1-0   1/1     Running   0          42s
-   pod/mzm3otrsfcv7-console-68b5cddfbf-xvs97        1/1     Running   0          30s
-   pod/mzm3otrsfcv7-console-68b5cddfbf-z5zml        1/1     Running   0          30s
-   pod/mzm3otrsfcv7-environmentd-1-0                1/1     Running   0          47s
+   NAME                                             READY   STATUS      RESTARTS      AGE
+   pod/create-db-analytics-db-mh2jf                 0/1     Completed   0             108s
+   pod/create-db-production-db-8vpj9                0/1     Completed   0             108s
+   pod/mznzlk3r3fyl-balancerd-696dc4f949-tdtkv      1/1     Running     0             93s
+   pod/mznzlk3r3fyl-cluster-s1-replica-s1-gen-1-0   1/1     Running     0             99s
+   pod/mznzlk3r3fyl-cluster-s2-replica-s2-gen-1-0   1/1     Running     0             99s
+   pod/mznzlk3r3fyl-cluster-s3-replica-s3-gen-1-0   1/1     Running     0             99s
+   pod/mznzlk3r3fyl-cluster-u1-replica-u1-gen-1-0   1/1     Running     0             99s
+   pod/mznzlk3r3fyl-console-57c84c99df-5vsdt        1/1     Running     0             86s
+   pod/mznzlk3r3fyl-console-57c84c99df-6w5cw        1/1     Running     0             86s
+   pod/mznzlk3r3fyl-environmentd-1-0                1/1     Running     0             107s
+   pod/mzsylm1f691o-environmentd-1-0                0/1     Pending     0             107s
 
-   NAME                                               TYPE        CLUSTER-IP   EXTERNAL-IP   PORT(S)                                        AGE
-   service/mzm3otrsfcv7-balancerd                     ClusterIP   None         <none>        6876/TCP,6875/TCP                              37s
-   service/mzm3otrsfcv7-cluster-s1-replica-s1-gen-1   ClusterIP   None         <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   43s
-   service/mzm3otrsfcv7-cluster-s2-replica-s2-gen-1   ClusterIP   None         <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   43s
-   service/mzm3otrsfcv7-cluster-s3-replica-s3-gen-1   ClusterIP   None         <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   43s
-   service/mzm3otrsfcv7-cluster-u1-replica-u1-gen-1   ClusterIP   None         <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   43s
-   service/mzm3otrsfcv7-console                       ClusterIP   None         <none>        8080/TCP                                       30s
-   service/mzm3otrsfcv7-environmentd                  ClusterIP   None         <none>        6875/TCP,6876/TCP,6877/TCP,6878/TCP            38s
-   service/mzm3otrsfcv7-environmentd-1                ClusterIP   None         <none>        6875/TCP,6876/TCP,6877/TCP,6878/TCP            47s
-   service/mzm3otrsfcv7-persist-pubsub-1              ClusterIP   None         <none>        6879/TCP                                       47s
+   NAME                                               TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)                                        AGE
+   service/mznzlk3r3fyl-balancerd                     ClusterIP   None            <none>        6876/TCP,6875/TCP                              93s
+   service/mznzlk3r3fyl-cluster-s1-replica-s1-gen-1   ClusterIP   None            <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   99s
+   service/mznzlk3r3fyl-cluster-s2-replica-s2-gen-1   ClusterIP   None            <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   99s
+   service/mznzlk3r3fyl-cluster-s3-replica-s3-gen-1   ClusterIP   None            <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   99s
+   service/mznzlk3r3fyl-cluster-u1-replica-u1-gen-1   ClusterIP   None            <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   99s
+   service/mznzlk3r3fyl-console                       ClusterIP   None            <none>        8080/TCP                                       86s
+   service/mznzlk3r3fyl-environmentd                  ClusterIP   None            <none>        6875/TCP,6876/TCP,6877/TCP,6878/TCP            94s
+   service/mznzlk3r3fyl-environmentd-1                ClusterIP   None            <none>        6875/TCP,6876/TCP,6877/TCP,6878/TCP            108s
+   service/mznzlk3r3fyl-persist-pubsub-1              ClusterIP   None            <none>        6879/TCP                                       108s
+   service/mzsylm1f691o-environmentd-1                ClusterIP   None            <none>        6875/TCP,6876/TCP,6877/TCP,6878/TCP            107s
+   service/mzsylm1f691o-persist-pubsub-1              ClusterIP   None            <none>        6879/TCP                                       107s
 
    NAME                                     READY   UP-TO-DATE   AVAILABLE   AGE
-   deployment.apps/mzm3otrsfcv7-balancerd   1/1     1            1           38s
-   deployment.apps/mzm3otrsfcv7-console     2/2     2            2           30s
+   deployment.apps/mznzlk3r3fyl-balancerd   1/1     1            1           93s
+   deployment.apps/mznzlk3r3fyl-console     2/2     2            2           86s
 
-   NAME                                                DESIRED   CURRENT   READY   AGE
-   replicaset.apps/mzm3otrsfcv7-balancerd-59454965d4   1         1         1       37s
-   replicaset.apps/mzm3otrsfcv7-console-68b5cddfbf     2         2         2       30s
+   NAME                                                DESIRED   CURRENT   READY      AGE
+   replicaset.apps/mznzlk3r3fyl-balancerd-696dc4f949   1         1         1          93s
+   replicaset.apps/mznzlk3r3fyl-console-57c84c99df     2         2         2          86s
 
    NAME                                                        READY   AGE
-   statefulset.apps/mzm3otrsfcv7-cluster-s1-replica-s1-gen-1   1/1     43s
-   statefulset.apps/mzm3otrsfcv7-cluster-s2-replica-s2-gen-1   1/1     43s
-   statefulset.apps/mzm3otrsfcv7-cluster-s3-replica-s3-gen-1   1/1     43s
-   statefulset.apps/mzm3otrsfcv7-cluster-u1-replica-u1-gen-1   1/1     43s
-   statefulset.apps/mzm3otrsfcv7-environmentd-1                1/1     47s
+   statefulset.apps/mznzlk3r3fyl-cluster-s1-replica-s1-gen-1   1/1     99s
+   statefulset.apps/mznzlk3r3fyl-cluster-s2-replica-s2-gen-1   1/1     99s
+   statefulset.apps/mznzlk3r3fyl-cluster-s3-replica-s3-gen-1   1/1     99s
+   statefulset.apps/mznzlk3r3fyl-cluster-u1-replica-u1-gen-1   1/1     99s
+   statefulset.apps/mznzlk3r3fyl-environmentd-1                1/1     108s
+   statefulset.apps/mzsylm1f691o-environmentd-1                0/1     107s
+
+   NAME                                STATUS     COMPLETIONS   DURATION   AGE
+   job.batch/create-db-analytics-db    Complete   1/1           11s        108s
+   job.batch/create-db-production-db   Complete   1/1           11s        108s
    ```
 
 1. Open the Materialize console in your browser:
@@ -384,15 +303,15 @@ To deploy Materialize:
 
       ```none
       NAME                           TYPE        CLUSTER-IP   EXTERNAL-IP   PORT(S)    AGE
-      service/mzm3otrsfcv7-console   ClusterIP   None         <none>        8080/TCP   30s
+      service/mznzlk3r3fyl-console   ClusterIP   None         <none>        8080/TCP   86s
       ```
 
    1. Forward the Materialize console service to your local machine (substitute
-      your service name for `mzm3otrsfcv7-console`):
+      your service name for `mznzlk3r3fyl-console`):
 
       ```shell
       while true;
-      do kubectl port-forward svc/mzm3otrsfcv7-console 8080:8080 -n materialize-environment 2>&1 |
+      do kubectl port-forward service/mznzlk3r3fyl-console 8080:8080 -n materialize-environment 2>&1 |
       grep -q "portforward.go" && echo "Restarting port forwarding due to an error." || break;
       done;
       ```
@@ -405,6 +324,8 @@ To deploy Materialize:
 
    1. Open a browser and navigate to
       [http://localhost:8080](http://localhost:8080).
+
+
 
 ## Troubleshooting
 
@@ -430,11 +351,6 @@ kubectl get pvc -A
 See also [Troubleshooting](/self-hosted/troubleshooting).
 
 ## Cleanup
-
-Delete the Materialize environment:
-```bash
-kubectl delete -f materialize-environment.yaml
-```
 
 To uninstall the Materialize operator:
 ```bash
