@@ -1,6 +1,6 @@
 # dbt-materialize Changelog
 
-## Unreleased
+## 1.9.2 - 2025-01-21
 
 * Fix schema tagging to work with current transaction limitations.
 
