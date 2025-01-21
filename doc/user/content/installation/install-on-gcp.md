@@ -374,7 +374,7 @@ To deploy Materialize:
      name: "your-service-account-name"      # e.g. my-simple-materialize-sa
      namespace: materialize-environment
    spec:
-     environmentdImageRef: materialize/environmentd:v0.130.0
+     environmentdImageRef: materialize/environmentd:v0.130.1
      backendSecretName: materialize-backend
    ```
 

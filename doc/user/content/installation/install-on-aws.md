@@ -303,7 +303,7 @@ To deploy Materialize:
      name: 12345678-1234-1234-1234-123456789012
      namespace: materialize-environment
    spec:
-     environmentdImageRef: materialize/environmentd:v0.130.0
+     environmentdImageRef: materialize/environmentd:v0.130.1
      environmentdResourceRequirements:
        limits:
          memory: 16Gi
