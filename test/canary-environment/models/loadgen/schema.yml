@@ -19,14 +19,25 @@ sources:
       - name: sales_progress
         data_tests:
           - makes_progress
+      - name: sales_large
+        data_tests:
+          - makes_progress
+      - name: sales_large_progress
+        data_tests:
+          - makes_progress
       - name: product
       - name: product_category
       - name: product_tbl
       - name: product_category_tbl
       - name: sales_tbl
+      - name: sales_large_tbl
 
 
 models:
     - name: sales_product_product_category
+      data_tests:
+        - makes_progress
+
+    - name: sales_large_product_product_category
       data_tests:
         - makes_progress

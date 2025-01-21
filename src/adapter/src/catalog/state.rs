@@ -29,9 +29,10 @@ use mz_catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap};
 use mz_catalog::expr_cache::LocalExpressions;
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, Cluster, ClusterReplica, CommentsMap, Connection, DataSourceDesc,
-    Database, DefaultPrivileges, Index, MaterializedView, NetworkPolicy, Role, Schema, Secret,
-    Sink, Source, SourceReferences, Table, TableDataSource, Type, View,
+    CatalogCollectionEntry, CatalogEntry, CatalogItem, Cluster, ClusterReplica, CommentsMap,
+    Connection, DataSourceDesc, Database, DefaultPrivileges, Index, MaterializedView,
+    NetworkPolicy, Role, Schema, Secret, Sink, Source, SourceReferences, Table, TableDataSource,
+    Type, View,
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_controller::clusters::{
@@ -54,7 +55,7 @@ use mz_repr::namespaces::{
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, GlobalId, RelationDesc, RelationVersion};
+use mz_repr::{CatalogItemId, GlobalId, RelationDesc, RelationVersion, RelationVersionSelector};
 use mz_secrets::InMemorySecretsController;
 use mz_sql::ast::Ident;
 use mz_sql::catalog::{BuiltinsConfig, CatalogConfig, EnvironmentId};
@@ -715,12 +716,25 @@ impl CatalogState {
             .unwrap_or_else(|| panic!("catalog out of sync, missing id {id:?}"))
     }
 
-    pub fn get_entry_by_global_id(&self, id: &GlobalId) -> &CatalogEntry {
+    pub fn get_entry_by_global_id(&self, id: &GlobalId) -> CatalogCollectionEntry {
         let item_id = self
             .entry_by_global_id
             .get(id)
             .unwrap_or_else(|| panic!("catalog out of sync, missing id {id:?}"));
-        self.get_entry(item_id)
+
+        let entry = self.get_entry(item_id).clone();
+        let version = match entry.item() {
+            CatalogItem::Table(table) => {
+                let (version, _) = table
+                    .collections
+                    .iter()
+                    .find(|(_verison, gid)| *gid == id)
+                    .expect("version to exist");
+                RelationVersionSelector::Specific(*version)
+            }
+            _ => RelationVersionSelector::Latest,
+        };
+        CatalogCollectionEntry { entry, version }
     }
 
     pub fn get_entries(&self) -> impl Iterator<Item = (&CatalogItemId, &CatalogEntry)> + '_ {
@@ -806,6 +820,18 @@ impl CatalogState {
     pub fn try_get_entry_by_global_id(&self, id: &GlobalId) -> Option<&CatalogEntry> {
         let item_id = self.entry_by_global_id.get(id)?;
         self.try_get_entry(item_id)
+    }
+
+    /// Returns the [`RelationDesc`] for a [`GlobalId`], if the provided [`GlobalId`] refers to an
+    /// object that returns rows.
+    pub fn try_get_desc_by_global_id(&self, id: &GlobalId) -> Option<Cow<RelationDesc>> {
+        let entry = self.try_get_entry_by_global_id(id)?;
+        let desc = match entry.item() {
+            CatalogItem::Table(table) => Cow::Owned(table.desc_for(id)),
+            // TODO(alter_table): Support schema evolution on sources.
+            other => other.desc_opt(RelationVersionSelector::Latest)?,
+        };
+        Some(desc)
     }
 
     pub(crate) fn get_cluster(&self, cluster_id: ClusterId) -> &Cluster {
@@ -949,6 +975,7 @@ impl CatalogState {
         create_sql: &str,
         extra_versions: &BTreeMap<RelationVersion, GlobalId>,
         local_expression_cache: &mut LocalExpressionCache,
+        previous_item: Option<CatalogItem>,
     ) -> Result<CatalogItem, AdapterError> {
         self.parse_item(
             global_id,
@@ -958,6 +985,7 @@ impl CatalogState {
             false,
             None,
             local_expression_cache,
+            previous_item,
         )
     }
 
@@ -972,6 +1000,7 @@ impl CatalogState {
         is_retained_metrics_object: bool,
         custom_logical_compaction_window: Option<CompactionWindow>,
         local_expression_cache: &mut LocalExpressionCache,
+        previous_item: Option<CatalogItem>,
     ) -> Result<CatalogItem, AdapterError> {
         let cached_expr = local_expression_cache.remove_cached_expression(&global_id);
         match self.parse_item_inner(
@@ -982,6 +1011,7 @@ impl CatalogState {
             is_retained_metrics_object,
             custom_logical_compaction_window,
             cached_expr,
+            previous_item,
         ) {
             Ok((item, uncached_expr)) => {
                 if let Some((uncached_expr, optimizer_features)) = uncached_expr {
@@ -1018,6 +1048,7 @@ impl CatalogState {
         is_retained_metrics_object: bool,
         custom_logical_compaction_window: Option<CompactionWindow>,
         cached_expr: Option<LocalExpressions>,
+        previous_item: Option<CatalogItem>,
     ) -> Result<
         (
             CatalogItem,
@@ -1036,9 +1067,11 @@ impl CatalogState {
 
         let item = match plan {
             Plan::CreateTable(CreateTablePlan { table, .. }) => {
-                // TODO(alter_table): Support versioning tables.
-                assert_eq!(extra_versions.len(), 0);
-                let collections = [(RelationVersion::root(), global_id)].into_iter().collect();
+                let collections = extra_versions
+                    .iter()
+                    .map(|(version, gid)| (*version, *gid))
+                    .chain([(RelationVersion::root(), global_id)].into_iter())
+                    .collect();
 
                 CatalogItem::Table(Table {
                     create_sql: Some(table.create_sql),
@@ -1166,15 +1199,23 @@ impl CatalogState {
                 // Collect optimizer parameters.
                 let optimizer_config =
                     optimize::OptimizerConfig::from(session_catalog.system_vars());
+                let previous_exprs = previous_item.map(|item| match item {
+                    CatalogItem::View(view) => (view.raw_expr, view.optimized_expr),
+                    item => unreachable!("expected view, found: {item:#?}"),
+                });
 
-                let (raw_expr, optimized_expr) = match cached_expr {
-                    Some(local_expr)
+                let (raw_expr, optimized_expr) = match (cached_expr, previous_exprs) {
+                    (Some(local_expr), _)
                         if local_expr.optimizer_features == optimizer_config.features =>
                     {
                         debug!("local expression cache hit for {global_id:?}");
-                        (view.expr, local_expr.local_mir)
+                        (Arc::new(view.expr), Arc::new(local_expr.local_mir))
                     }
-                    Some(_) | None => {
+                    // If the new expr is equivalent to the old expr, then we don't need to re-optimize.
+                    (_, Some((raw_expr, optimized_expr))) if *raw_expr == view.expr => {
+                        (Arc::clone(&raw_expr), Arc::clone(&optimized_expr))
+                    }
+                    (cached_expr, _) => {
                         let optimizer_features = optimizer_config.features.clone();
                         // Build an optimizer for this VIEW.
                         let mut optimizer = optimize::view::Optimizer::new(optimizer_config, None);
@@ -1188,7 +1229,7 @@ impl CatalogState {
 
                         uncached_expr = Some((optimized_expr.clone(), optimizer_features));
 
-                        (raw_expr, optimized_expr)
+                        (Arc::new(raw_expr), Arc::new(optimized_expr))
                     }
                 };
 
@@ -1202,9 +1243,9 @@ impl CatalogState {
                 CatalogItem::View(View {
                     create_sql: view.create_sql,
                     global_id,
-                    raw_expr: raw_expr.into(),
+                    raw_expr,
                     desc: RelationDesc::new(optimized_expr.typ(), view.column_names),
-                    optimized_expr: optimized_expr.into(),
+                    optimized_expr,
                     conn_id: None,
                     resolved_ids,
                     dependencies: DependencyIds(dependencies),
@@ -1216,15 +1257,30 @@ impl CatalogState {
                 // Collect optimizer parameters.
                 let optimizer_config =
                     optimize::OptimizerConfig::from(session_catalog.system_vars());
+                let previous_exprs = previous_item.map(|item| match item {
+                    CatalogItem::MaterializedView(materialized_view) => {
+                        (materialized_view.raw_expr, materialized_view.optimized_expr)
+                    }
+                    item => unreachable!("expected materialized view, found: {item:#?}"),
+                });
 
-                let (raw_expr, optimized_expr) = match cached_expr {
-                    Some(local_expr)
+                let (raw_expr, optimized_expr) = match (cached_expr, previous_exprs) {
+                    (Some(local_expr), _)
                         if local_expr.optimizer_features == optimizer_config.features =>
                     {
                         debug!("local expression cache hit for {global_id:?}");
-                        (materialized_view.expr, local_expr.local_mir)
+                        (
+                            Arc::new(materialized_view.expr),
+                            Arc::new(local_expr.local_mir),
+                        )
                     }
-                    Some(_) | None => {
+                    // If the new expr is equivalent to the old expr, then we don't need to re-optimize.
+                    (_, Some((raw_expr, optimized_expr)))
+                        if *raw_expr == materialized_view.expr =>
+                    {
+                        (Arc::clone(&raw_expr), Arc::clone(&optimized_expr))
+                    }
+                    (cached_expr, _) => {
                         let optimizer_features = optimizer_config.features.clone();
                         // TODO(aalexandrov): ideally this should be a materialized_view::Optimizer.
                         let mut optimizer = optimize::view::Optimizer::new(optimizer_config, None);
@@ -1237,7 +1293,7 @@ impl CatalogState {
 
                         uncached_expr = Some((optimized_expr.clone(), optimizer_features));
 
-                        (raw_expr, optimized_expr)
+                        (Arc::new(raw_expr), Arc::new(optimized_expr))
                     }
                 };
                 let mut typ = optimized_expr.typ();
@@ -1258,8 +1314,8 @@ impl CatalogState {
                 CatalogItem::MaterializedView(MaterializedView {
                     create_sql: materialized_view.create_sql,
                     global_id,
-                    raw_expr: raw_expr.into(),
-                    optimized_expr: optimized_expr.into(),
+                    raw_expr,
+                    optimized_expr,
                     desc,
                     resolved_ids,
                     dependencies,
@@ -2587,7 +2643,7 @@ impl ConnectionResolver for CatalogState {
 }
 
 impl OptimizerCatalog for CatalogState {
-    fn get_entry(&self, id: &GlobalId) -> &CatalogEntry {
+    fn get_entry(&self, id: &GlobalId) -> CatalogCollectionEntry {
         CatalogState::get_entry_by_global_id(self, id)
     }
     fn get_entry_by_item_id(&self, id: &CatalogItemId) -> &CatalogEntry {
@@ -2610,7 +2666,7 @@ impl OptimizerCatalog for CatalogState {
 }
 
 impl OptimizerCatalog for Catalog {
-    fn get_entry(&self, id: &GlobalId) -> &CatalogEntry {
+    fn get_entry(&self, id: &GlobalId) -> CatalogCollectionEntry {
         self.state.get_entry_by_global_id(id)
     }
 

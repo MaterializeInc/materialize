@@ -4,6 +4,7 @@ description: ""
 aliases:
   - /self-hosted/
 robots: "noindex, nofollow"
+draft: true
 ---
 
 With self-managed Materialize, you can deploy and operate Materialize in your

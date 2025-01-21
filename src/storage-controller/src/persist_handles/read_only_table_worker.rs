@@ -18,7 +18,7 @@ use futures::FutureExt;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_types::Codec64;
 use mz_repr::{Diff, GlobalId, TimestampManipulation};
-use mz_storage_client::client::Update;
+use mz_storage_client::client::{TableData, Update};
 use mz_storage_types::controller::InvalidUpper;
 use mz_storage_types::sources::SourceData;
 use timely::progress::{Antichain, Timestamp};
@@ -142,13 +142,15 @@ where
                 let _ = tx.send(());
             }
             PersistTableWriteCmd::Update {
-                table_id,
+                existing_collection,
+                new_collection,
                 handle,
                 forget_ts: _,
                 register_ts: _,
                 tx,
             } => {
-                write_handles.insert(table_id, handle).expect(
+                write_handles.remove(&existing_collection);
+                write_handles.insert(new_collection, handle).expect(
                     "PersistTableWriteCmd::Update only valid for updating extant write handles",
                 );
                 // We don't care if our waiter has gone away.
@@ -198,10 +200,22 @@ where
                         // than nothing.
                         old_span.follows_from(span.id());
                     }
-                    let updates_with_ts = updates_no_ts.into_iter().map(|x| Update {
-                        row: x.row,
-                        timestamp: write_ts.clone(),
-                        diff: x.diff,
+                    let updates_with_ts = updates_no_ts.into_iter().flat_map(|x| match x {
+                        TableData::Rows(rows) => {
+                            let iter = rows.into_iter().map(|(row, diff)| Update {
+                                row,
+                                timestamp: write_ts.clone(),
+                                diff,
+                            });
+                            itertools::Either::Left(iter)
+                        }
+                        TableData::Batches(_) => {
+                            // TODO(cf1): Handle Batches of updates in ReadOnlyTableWorker.
+                            mz_ore::soft_panic_or_log!(
+                                "handle Batches of updates in the ReadOnlyTableWorker"
+                            );
+                            itertools::Either::Right(std::iter::empty())
+                        }
                     });
                     updates.extend(updates_with_ts);
                     old_new_upper.join_assign(&Antichain::from_elem(advance_to.clone()));

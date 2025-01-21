@@ -44,6 +44,7 @@ rdkafka = { version = "0.29.0", features = [
 ] }
 serde = { version = "1.0.152", features = ["derive"] }
 serde_json = { version = "1.0.125" }
+smallvec = { version = "1.10.0", features = ["serde", "union"] }
 static_assertions = "1.1"
 timely = "0.16.0"
 tokio = { version = "1.38.0", features = [
@@ -56,6 +57,7 @@ tokio = { version = "1.38.0", features = [
 tokio-stream = "0.1.11"
 tonic = "0.12.1"
 tracing = "0.1.37"
+uuid = "1.2.2"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [build-dependencies]

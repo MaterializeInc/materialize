@@ -221,6 +221,9 @@ case "$cmd" in
             --env REDPANDA_CLOUD_CLIENT_ID
             --env REDPANDA_CLOUD_CLIENT_SECRET
             --env QA_BENCHMARKING_APP_PASSWORD
+            # For self managed docs
+            --env BUILDKITE_BRANCH
+            --env BUILDKITE_ORGANIZATION_SLUG
         )
 
         if [[ $detach_container == "true" ]]; then

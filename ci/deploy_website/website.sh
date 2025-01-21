@@ -37,7 +37,12 @@ declare -A shortlinks=(
 )
 
 cd doc/user
-hugo --gc --baseURL /docs --destination public/docs
+if [[ "$BUILDKITE_ORGANIZATION_SLUG" == "materialize" ]] && [[ "$BUILDKITE_BRANCH" == self-managed-docs/* ]]; then
+    VERSION=${BUILDKITE_BRANCH#self-managed-docs/}
+    hugo --gc --baseURL "/docs/self-managed/$VERSION" --destination "public/docs/self-managed/$VERSION"
+else
+    hugo --gc --baseURL /docs --destination public/docs
+fi
 hugo deploy --maxDeletes -1
 
 touch empty

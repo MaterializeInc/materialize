@@ -47,12 +47,13 @@ use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::role_id::RoleId;
 use mz_repr::{
-    CatalogItemId, ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType, Timestamp,
+    CatalogItemId, ColumnName, ColumnType, Diff, GlobalId, RelationDesc, Row, ScalarType,
+    Timestamp, VersionedRelationDesc,
 };
 use mz_sql_parser::ast::{
     AlterSourceAddSubsourceOption, ClusterAlterOptionValue, ConnectionOptionName, QualifiedReplica,
-    SelectStatement, TransactionIsolationLevel, TransactionMode, UnresolvedItemName, Value,
-    WithOptionValue,
+    RawDataType, SelectStatement, TransactionIsolationLevel, TransactionMode, UnresolvedItemName,
+    Value, WithOptionValue,
 };
 use mz_ssh_util::keys::SshKeyPair;
 use mz_storage_types::connections::aws::AwsConnection;
@@ -81,7 +82,7 @@ use crate::catalog::{
 };
 use crate::names::{
     Aug, CommentObjectId, DependencyIds, FullItemName, ObjectId, QualifiedItemName,
-    ResolvedDataType, ResolvedDatabaseSpecifier, ResolvedIds, SchemaSpecifier, SystemObjectId,
+    ResolvedDatabaseSpecifier, ResolvedIds, SchemaSpecifier, SystemObjectId,
 };
 
 pub(crate) mod error;
@@ -96,7 +97,7 @@ pub(crate) mod scope;
 pub(crate) mod side_effecting_func;
 pub(crate) mod statement;
 pub(crate) mod transform_ast;
-pub(crate) mod transform_expr;
+pub(crate) mod transform_hir;
 pub(crate) mod typeconv;
 pub(crate) mod with_options;
 
@@ -932,8 +933,19 @@ pub struct ShowColumnsPlan {
 #[derive(Debug)]
 pub struct CopyFromPlan {
     pub id: CatalogItemId,
+    pub source: CopyFromSource,
     pub columns: Vec<usize>,
     pub params: CopyFormatParams<'static>,
+}
+
+#[derive(Debug)]
+pub enum CopyFromSource {
+    /// Copying from a file local to the user, transmitted via pgwire.
+    Stdin,
+    /// A remote resource, e.g. S3.
+    ///
+    /// The contained [`HirScalarExpr`] evaluates to the Url for the remote resource.
+    Url(HirScalarExpr),
 }
 
 #[derive(Debug, Clone)]
@@ -1269,7 +1281,8 @@ pub struct AlterOwnerPlan {
 pub struct AlterTablePlan {
     pub relation_id: CatalogItemId,
     pub column_name: ColumnName,
-    pub column_type: ResolvedDataType,
+    pub column_type: ColumnType,
+    pub raw_sql_type: RawDataType,
 }
 
 #[derive(Debug)]
@@ -1409,7 +1422,7 @@ pub enum TableDataSource {
 #[derive(Clone, Debug)]
 pub struct Table {
     pub create_sql: String,
-    pub desc: RelationDesc,
+    pub desc: VersionedRelationDesc,
     pub temporary: bool,
     pub compaction_window: Option<CompactionWindow>,
     pub data_source: TableDataSource,

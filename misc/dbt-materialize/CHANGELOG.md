@@ -1,5 +1,13 @@
 # dbt-materialize Changelog
 
+## 1.9.2 - 2025-01-21
+
+* Fix schema tagging to work with current transaction limitations.
+
+## 1.9.1 - 2025-01-17
+
+* Fix a bug in the `deploy_init` macro where source cluster validation wasn't respecting custom cluster naming logic from user-defined `generate_cluster_name` macros.
+
 ## 1.9.0 - 2024-12-17
 
 * Upgrade to `dbt-postgres` v1.9.0.

@@ -9,8 +9,6 @@
 
 //! Code for iterating through one or more parts, including streaming consolidation.
 
-use anyhow::anyhow;
-use arrow::array::{Array, AsArray, Int64Array};
 use std::cmp::{Ordering, Reverse};
 use std::collections::binary_heap::PeekMut;
 use std::collections::{BinaryHeap, VecDeque};
@@ -19,6 +17,8 @@ use std::marker::PhantomData;
 use std::mem;
 use std::sync::Arc;
 
+use anyhow::anyhow;
+use arrow::array::{Array, AsArray, Int64Array};
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
@@ -34,7 +34,7 @@ use mz_persist_types::arrow::{ArrayBound, ArrayIdx, ArrayOrd};
 use mz_persist_types::{Codec, Codec64};
 use semver::Version;
 use timely::progress::Timestamp;
-use tracing::{debug_span, Instrument};
+use tracing::{debug_span, warn, Instrument};
 
 use crate::fetch::{EncodedPart, FetchBatchFilter};
 use crate::internal::encoding::Schemas;
@@ -101,12 +101,15 @@ fn interleave_updates<T: Codec64, D: Codec64>(
 
     let mut arrays: Vec<&dyn Array> = Vec::with_capacity(updates.len());
     let mut interleave = |get_array: fn(&BlobTraceUpdates) -> Option<&dyn Array>| {
+        arrays.clear();
         for part in updates {
             arrays.push(get_array(part)?);
         }
-        let out = ::arrow::compute::interleave(arrays.as_slice(), &indices).ok();
-        arrays.clear();
-        out
+        let out = ::arrow::compute::interleave(arrays.as_slice(), &indices);
+        if let Err(err) = &out {
+            warn!("interleave error: {}", err);
+        }
+        out.ok()
     };
 
     let codec_keys =
@@ -138,17 +141,24 @@ fn interleave_updates<T: Codec64, D: Codec64>(
 }
 
 /// Sort parts ordered by the codec-encoded key and value columns.
-#[derive(Debug)]
-pub struct CodecSort<T, D>(PhantomData<fn(T, D)>);
+#[derive(Debug, Clone)]
+pub struct CodecSort<K: Codec, V: Codec, T, D> {
+    schemas: Schemas<K, V>,
+    _time_diff: PhantomData<fn(T, D)>,
+}
 
-impl<T, D> Default for CodecSort<T, D> {
-    fn default() -> Self {
-        Self(Default::default())
+impl<K: Codec, V: Codec, T, D> CodecSort<K, V, T, D> {
+    /// A sort for codec data with the given schema.
+    pub fn new(schemas: Schemas<K, V>) -> Self {
+        Self {
+            schemas,
+            _time_diff: Default::default(),
+        }
     }
 }
 
-impl<T: Codec64, D: Codec64> RowSort<T, D> for CodecSort<T, D> {
-    type Updates = BlobTraceUpdates;
+impl<K: Codec, V: Codec, T: Codec64, D: Codec64> RowSort<T, D> for CodecSort<K, V, T, D> {
+    type Updates = (ColumnarRecords, BlobTraceUpdates);
     type KV<'a> = (&'a [u8], &'a [u8]);
 
     fn desired_sort(data: &FetchData<T>) -> bool {
@@ -175,11 +185,14 @@ impl<T: Codec64, D: Codec64> RowSort<T, D> for CodecSort<T, D> {
         Some((data.part.key_lower(), &[]))
     }
 
-    fn updates_from_blob(&self, updates: BlobTraceUpdates) -> Self::Updates {
-        updates
+    fn updates_from_blob(&self, mut updates: BlobTraceUpdates) -> Self::Updates {
+        let codec = updates
+            .get_or_make_codec::<K, V>(self.schemas.key.as_ref(), self.schemas.val.as_ref())
+            .clone();
+        (codec, updates)
     }
 
-    fn len(updates: &Self::Updates) -> usize {
+    fn len((updates, _): &Self::Updates) -> usize {
         updates.len()
     }
 
@@ -188,13 +201,8 @@ impl<T: Codec64, D: Codec64> RowSort<T, D> for CodecSort<T, D> {
         8 + key.len() + value.len()
     }
 
-    fn get(updates: &Self::Updates, index: usize) -> Option<(Self::KV<'_>, T, D)> {
-        // TODO(structured): replace before allowing structured-only parts
-        // (pass in schemas and get_or_make_codec?)
-        let ((k, v), t, d) = updates
-            .records()
-            .expect("codec data is present")
-            .get(index)?;
+    fn get((updates, _): &Self::Updates, index: usize) -> Option<(Self::KV<'_>, T, D)> {
+        let ((k, v), t, d) = updates.get(index)?;
         Some(((k, v), T::decode(t), D::decode(d)))
     }
 
@@ -202,13 +210,16 @@ impl<T: Codec64, D: Codec64> RowSort<T, D> for CodecSort<T, D> {
         updates: &[&'a Self::Updates],
         elements: impl IntoIterator<Item = (Indices, Self::KV<'a>, T, D)>,
     ) -> Self::Updates {
-        interleave_updates(
-            updates,
+        let updates: Vec<_> = updates.iter().map(|(_, u)| u).collect();
+        let interleaved = interleave_updates(
+            &updates,
             elements.into_iter().map(|(idx, _kv, t, d)| (idx, t, d)),
-        )
+        );
+        let codec = interleaved.records().expect("always present").clone();
+        (codec, interleaved)
     }
 
-    fn updates_to_blob(&self, updates: Self::Updates) -> BlobTraceUpdates {
+    fn updates_to_blob(&self, (_, updates): Self::Updates) -> BlobTraceUpdates {
         updates
     }
 }
@@ -371,7 +382,7 @@ impl PartIndices {
 }
 
 #[derive(Debug)]
-enum ConsolidationPart<T, D, Sort: RowSort<T, D> = CodecSort<T, D>> {
+enum ConsolidationPart<T, D, Sort: RowSort<T, D>> {
     Queued {
         data: FetchData<T>,
         task: Option<JoinHandle<anyhow::Result<FetchResult<T>>>>,
@@ -448,7 +459,7 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64, Sort: RowSort<T, D>>
 /// client should call `next` until it returns `None`, which signals all data has been returned...
 /// but it's also free to abandon the instance at any time if it eg. only needs a few entries.
 #[derive(Debug)]
-pub(crate) struct Consolidator<T, D, Sort: RowSort<T, D> = CodecSort<T, D>> {
+pub(crate) struct Consolidator<T, D, Sort: RowSort<T, D>> {
     context: String,
     shard_id: ShardId,
     sort: Sort,
@@ -939,7 +950,7 @@ impl<'a, KV: Ord, T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Part
 }
 
 #[derive(Debug)]
-pub(crate) struct ConsolidatingIter<'a, T, D, Sort = CodecSort<T, D>>
+pub(crate) struct ConsolidatingIter<'a, T, D, Sort>
 where
     T: Timestamp + Codec64,
     D: Codec64,
@@ -1104,6 +1115,7 @@ mod tests {
     use mz_persist::indexed::encoding::{BlobTraceBatchPart, BlobTraceUpdates};
     use mz_persist::location::Blob;
     use mz_persist::mem::{MemBlob, MemBlobConfig};
+    use mz_persist_types::codec_impls::VecU8Schema;
     use proptest::collection::vec;
     use proptest::prelude::*;
     use timely::progress::Antichain;
@@ -1137,12 +1149,17 @@ mod tests {
                 Antichain::new(),
                 Antichain::from_elem(0),
             );
+            let sort: CodecSort<Vec<u8>, Vec<u8>, _, _> = CodecSort::new(Schemas {
+                id: None,
+                key: Arc::new(VecU8Schema),
+                val: Arc::new(VecU8Schema),
+            });
             let streaming = {
                 // Toy compaction loop!
                 let mut consolidator = Consolidator {
                     context: "test".to_string(),
                     shard_id: ShardId::new(),
-                    sort: CodecSort::default(),
+                    sort: sort.clone(),
                     blob: Arc::new(MemBlob::open(MemBlobConfig::default())),
                     metrics: Arc::clone(metrics),
                     shard_metrics: metrics.shards.shard(&ShardId::new(), "test"),
@@ -1184,7 +1201,7 @@ mod tests {
                                             part,
                                             true,
                                             &metrics.columnar,
-                                            &CodecSort::default(),
+                                            &sort,
                                         ),
                                         0,
                                     )
@@ -1247,11 +1264,15 @@ mod tests {
                 &MetricsRegistry::new(),
             ));
             let shard_metrics = metrics.shards.shard(&shard_id, "");
-
-            let mut consolidator: Consolidator<u64, i64> = Consolidator::new(
+            let sort: CodecSort<Vec<u8>, Vec<u8>, _, _> = CodecSort::new(Schemas {
+                id: None,
+                key: Arc::new(VecU8Schema),
+                val: Arc::new(VecU8Schema),
+            });
+            let mut consolidator: Consolidator<u64, i64, CodecSort<_, _, _, _>> = Consolidator::new(
                 "test".to_string(),
                 shard_id,
-                CodecSort::default(),
+                sort,
                 blob,
                 Arc::clone(&metrics),
                 shard_metrics,

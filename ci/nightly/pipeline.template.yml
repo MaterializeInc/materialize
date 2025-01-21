@@ -226,18 +226,6 @@ steps:
               composition: testdrive
               args: [--redpanda]
 
-      - id: redpanda-testdrive-aarch64
-        label: ":panda_face: :racing_car: testdrive aarch64"
-        depends_on: build-aarch64
-        timeout_in_minutes: 180
-        agents:
-          queue: hetzner-aarch64-8cpu-16gb
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: testdrive
-              args: [--redpanda]
-        skip: "Disabled due to taking too long for the value provided"
-
       # TODO(def-) Remove this when old upsert implementation is removed
       - id: testdrive-old-upsert
         label: ":racing_car: testdrive with old Upsert"
@@ -309,6 +297,51 @@ steps:
                 --system-param=persist_encoding_enable_dictionary=true,
               ]
 
+      - id: persistence-testdrive
+        label: ":racing_car: testdrive with --persistent-user-tables"
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: testdrive
+              args: [--persistent-user-tables]
+        skip: "Persistence tests disabled"
+
+      - id: azurite-testdrive
+        label: "testdrive with :azure: blob store"
+        depends_on: build-aarch64
+        timeout_in_minutes: 180
+        agents:
+          queue: hetzner-aarch64-8cpu-16gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: testdrive
+              args: [--azurite]
+
+      - id: azurite-testdrive-replicas-4
+        label: ":racing_car: testdrive 4 replicas with :azure: blob store"
+        depends_on: build-aarch64
+        timeout_in_minutes: 180
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: testdrive
+              args: [--replicas=4, --azurite]
+
+      - id: azurite-testdrive-size-8
+        label: ":racing_car: testdrive with SIZE 8 and :azure: blob store"
+        depends_on: build-aarch64
+        timeout_in_minutes: 180
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: testdrive
+              args: [--default-size=8, --azurite]
+
       - id: testdrive-in-cloudtest
         label: "Full Testdrive in Cloudtest (K8s)"
         depends_on: build-aarch64
@@ -326,17 +359,6 @@ steps:
               args: [-m=long, test/cloudtest/test_full_testdrive.py, --no-test-parallelism]
         sanitizer: skip
 
-      - id: persistence-testdrive
-        label: ":racing_car: testdrive with --persistent-user-tables"
-        depends_on: build-aarch64
-        timeout_in_minutes: 30
-        agents:
-          queue: hetzner-aarch64-4cpu-8gb
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: testdrive
-              args: [--persistent-user-tables]
-        skip: "Persistence tests disabled"
 
   - group: Limits
     key: limits-group
@@ -456,6 +478,17 @@ steps:
               composition: zippy
               args: [--scenario=KafkaSources, --actions=10000, --max-execution-time=30m]
 
+      - id: zippy-kafka-sources-azurite
+        label: "Zippy Kafka Sources with :azure: blob store"
+        depends_on: build-aarch64
+        timeout_in_minutes: 120
+        agents:
+          queue: hetzner-aarch64-8cpu-16gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: zippy
+              args: [--scenario=KafkaSources, --actions=10000, --max-execution-time=30m, --azurite]
+
       # TODO(def-) Remove this when old upsert implementation is removed
       - id: zippy-kafka-sources-old-upsert
         label: "Zippy Kafka Sources with old Upsert"
@@ -468,6 +501,18 @@ steps:
               composition: zippy
               args: [--scenario=KafkaSources, --actions=10000, --max-execution-time=30m, --system-param=storage_use_continual_feedback_upsert=false]
 
+      # TODO(def-) Remove this when old upsert implementation is removed
+      - id: zippy-kafka-sources-old-upsert-azurite
+        label: "Zippy Kafka Sources with old Upsert and :azure: blob store"
+        depends_on: build-aarch64
+        timeout_in_minutes: 120
+        agents:
+          queue: hetzner-aarch64-8cpu-16gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: zippy
+              args: [--scenario=KafkaSources, --actions=10000, --max-execution-time=30m, --system-param=storage_use_continual_feedback_upsert=false, --azurite]
+
       - id: zippy-kafka-parallel-insert
         label: "Zippy Kafka Parallel Insert"
         depends_on: build-aarch64
@@ -479,6 +524,17 @@ steps:
               composition: zippy
               args: [--scenario=KafkaParallelInsert, --transaction-isolation=serializable, --actions=10000, --max-execution-time=30m]
 
+      - id: zippy-kafka-parallel-insert-azurite
+        label: "Zippy Kafka Parallel Insert with :azurite: blob store"
+        depends_on: build-aarch64
+        timeout_in_minutes: 120
+        agents:
+          queue: hetzner-aarch64-8cpu-16gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: zippy
+              args: [--scenario=KafkaParallelInsert, --transaction-isolation=serializable, --actions=10000, --max-execution-time=30m, --azurite]
+
       - id: zippy-user-tables
         label: "Zippy User Tables"
         depends_on: build-aarch64
@@ -488,7 +544,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: zippy
-              args: [--scenario=UserTables, --actions=10000, --max-execution-time=30m]
+              args: [--scenario=UserTables, --actions=10000, --max-execution-time=30m, --azurite]
 
       - id: zippy-postgres-cdc
         label: "Zippy Postgres CDC"
@@ -499,7 +555,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: zippy
-              args: [--scenario=PostgresCdc, --actions=10000, --max-execution-time=30m]
+              args: [--scenario=PostgresCdc, --actions=10000, --max-execution-time=30m, --azurite]
 
       - id: zippy-mysql-cdc
         label: "Zippy MySQL CDC"
@@ -510,7 +566,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: zippy
-              args: [--scenario=MySqlCdc, --actions=10000, --max-execution-time=30m]
+              args: [--scenario=MySqlCdc, --actions=10000, --max-execution-time=30m, --azurite]
 
       - id: zippy-debezium-postgres
         label: "Zippy Debezium Postgres"
@@ -623,12 +679,13 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
 
       - id: testdrive-old-kafka-src-syntax
-        label: "Testdrive (before Kafka source versioning)"
+        label: "Testdrive (before Kafka source versioning) with :azure: blob store"
         depends_on: build-aarch64
         timeout_in_minutes: 180
         plugins:
           - ./ci/plugins/mzcompose:
               composition: testdrive-old-kafka-src-syntax
+              args: [--azurite]
         agents:
           queue: hetzner-aarch64-8cpu-16gb
 
@@ -675,6 +732,19 @@ steps:
   - group: "Platform checks"
     key: platform-checks
     steps:
+      - id: checks-no-restart-no-upgrade-azurite
+        label: "Checks without restart or upgrade with :azure: blob store"
+        depends_on: build-aarch64
+        inputs: [misc/python/materialize/checks]
+        timeout_in_minutes: 45
+        parallelism: 2
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=NoRestartNoUpgrade, "--seed=$BUILDKITE_JOB_ID", --azurite]
+
       - id: checks-restart-entire-mz
         label: "Checks + restart of the entire Mz"
         depends_on: build-aarch64
@@ -687,7 +757,25 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=RestartEntireMz, "--seed=$BUILDKITE_JOB_ID"]
+              args: [--scenario=RestartEntireMz, "--seed=$BUILDKITE_JOB_ID", --azurite]
+
+      - id: checks-restart-environmentd-clusterd-storage-azurite
+        label: "Checks + restart of environmentd & storage clusterd with :azure: blob store"
+        depends_on: build-aarch64
+        inputs: [misc/python/materialize/checks]
+        timeout_in_minutes: 45
+        parallelism: 2
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args:
+                [
+                  --scenario=RestartEnvironmentdClusterdStorage,
+                  "--seed=$BUILDKITE_JOB_ID",
+                  --azurite,
+                ]
 
       # TODO(def-) Remove this when old upsert implementation is removed
       - id: checks-restart-entire-mz-old-upsert
@@ -751,6 +839,18 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
               args: [--scenario=RestartEntireMz, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID"]
+
+      - id: checks-parallel-restart-entire-mz-azurite
+        label: "Checks parallel + restart of the entire Mz with :azure: blob store"
+        depends_on: build-aarch64
+        timeout_in_minutes: 180
+        parallelism: 2
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=RestartEntireMz, --execution-mode=parallel, "--seed=$BUILDKITE_JOB_ID", --azurite]
 
       - id: checks-parallel-restart-environmentd-clusterd-storage
         label: "Checks parallel + restart of environmentd & storage clusterd"
@@ -824,22 +924,22 @@ steps:
               composition: platform-checks
               args: [--scenario=UpgradeEntireMzFourVersions, "--seed=$BUILDKITE_JOB_ID"]
 
-      - id: checks-0dt-restart-entire-mz-forced-migrations
-        label: "Checks 0dt restart of the entire Mz with forced migrations"
+      - id: checks-0dt-restart-entire-mz-forced-migrations-azurite
+        label: "Checks 0dt restart of the entire Mz with forced migrations with :azure: blob store"
         depends_on: build-aarch64
-        timeout_in_minutes: 60
+        timeout_in_minutes: 120
         parallelism: 2
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=ZeroDowntimeRestartEntireMzForcedMigrations, "--seed=$BUILDKITE_JOB_ID"]
+              args: [--scenario=ZeroDowntimeRestartEntireMzForcedMigrations, "--seed=$BUILDKITE_JOB_ID", --azurite]
 
       - id: checks-0dt-upgrade-entire-mz
         label: "Checks 0dt upgrade, whole-Mz restart"
         depends_on: build-aarch64
-        timeout_in_minutes: 60
+        timeout_in_minutes: 120
         parallelism: 2
         agents:
           queue: hetzner-aarch64-16cpu-32gb
@@ -851,7 +951,7 @@ steps:
       - id: checks-0dt-upgrade-entire-mz-two-versions
         label: "Checks 0dt upgrade across two versions"
         depends_on: build-aarch64
-        timeout_in_minutes: 60
+        timeout_in_minutes: 120
         parallelism: 2
         agents:
           queue: hetzner-aarch64-16cpu-32gb
@@ -863,7 +963,7 @@ steps:
       - id: checks-0dt-upgrade-entire-mz-four-versions
         label: "Checks 0dt upgrade across four versions"
         depends_on: build-aarch64
-        timeout_in_minutes: 60
+        timeout_in_minutes: 120
         parallelism: 2
         agents:
           queue: hetzner-aarch64-16cpu-32gb
@@ -1414,6 +1514,8 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: data-ingest
+          # TODO: Reenable Azurite when https://github.com/MaterializeInc/database-issues/issues/8892 is fixed
+          #args: [--azurite]
 
   - group: "Parallel Workload"
     key: parallel-workload
@@ -1431,7 +1533,7 @@ steps:
               args: [--runtime=1500, --complexity=dml, --threads=16]
 
       - id: parallel-workload-ddl
-        label: "Parallel Workload (DDL)"
+        label: "Parallel Workload (DDL) with :azure: blob store"
         depends_on: build-aarch64
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 90
@@ -1440,7 +1542,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
-              args: [--runtime=1500, --threads=8]
+              args: [--runtime=1500, --threads=8, --azurite]
 
       - id: parallel-workload-ddl-only
         label: "Parallel Workload (DDL Only)"
@@ -1481,7 +1583,7 @@ steps:
               args: [--runtime=1500, --scenario=rename, --naughty-identifiers, --threads=16]
 
       - id: parallel-workload-rename
-        label: "Parallel Workload (rename)"
+        label: "Parallel Workload (rename) with :azure: blob store"
         depends_on: build-aarch64
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 90
@@ -1490,7 +1592,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
-              args: [--runtime=1500, --scenario=rename, --threads=16]
+              args: [--runtime=1500, --scenario=rename, --threads=16, --azurite]
 
       - id: parallel-workload-cancel
         label: "Parallel Workload (cancel)"
@@ -1564,16 +1666,31 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: balancerd
 
-  - id: legacy-upgrade
-    label: Legacy upgrade tests (last version from git)
-    depends_on: build-aarch64
-    timeout_in_minutes: 60
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: legacy-upgrade
-          args: ["--versions-source=git"]
-    agents:
-      queue: hetzner-aarch64-4cpu-8gb
+  - group: Legacy upgrade tests
+    key: legacy-upgrade
+    steps:
+      - id: legacy-upgrade-git
+        label: Legacy upgrade tests (last version from git)
+        depends_on: build-aarch64
+        timeout_in_minutes: 60
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: legacy-upgrade
+              args: ["--versions-source=git"]
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+
+      - id: legacy-upgrade-docs
+        label: "Legacy upgrade tests (last version from docs)"
+        parallelism: 2
+        depends_on: build-aarch64
+        timeout_in_minutes: 60
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: legacy-upgrade
+              args: ["--versions-source=docs"]
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
 
   - group: Cloud tests
     key: cloudtests
@@ -1621,13 +1738,14 @@ steps:
         sanitizer: skip
 
   - id: txn-wal-fencing
-    label: Txn-wal fencing
+    label: "Txn-wal fencing with :azure: blob store"
     depends_on: build-aarch64
     timeout_in_minutes: 120
     parallelism: 2
     plugins:
       - ./ci/plugins/mzcompose:
           composition: txn-wal-fencing
+          args: [--azurite]
     agents:
       queue: hetzner-aarch64-8cpu-16gb
 
@@ -1691,7 +1809,7 @@ steps:
   - id: 0dt
     label: Zero downtime
     depends_on: build-aarch64
-    timeout_in_minutes: 120
+    timeout_in_minutes: 180
     plugins:
       - ./ci/plugins/mzcompose:
           composition: 0dt
@@ -1714,11 +1832,24 @@ steps:
     timeout_in_minutes: 240
     parallelism: 10
     agents:
-      queue: hetzner-aarch64-8cpu-16gb
+      # Runs faster/more consistently on larger agent
+      queue: hetzner-aarch64-16cpu-32gb
     plugins:
       - ./ci/plugins/mzcompose:
           composition: sqllogictest
           run: slow-tests
+
+  - id: cluster-tests-azurite
+    label: "Cluster tests with :azure: blob store"
+    depends_on: build-aarch64
+    timeout_in_minutes: 120
+    inputs: [test/cluster]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: cluster
+          args: ["--azurite"]
+    agents:
+      queue: hetzner-aarch64-8cpu-16gb
 
   - group: "Language tests"
     key: language-tests

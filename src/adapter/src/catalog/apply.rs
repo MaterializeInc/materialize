@@ -42,7 +42,7 @@ use mz_ore::{instrument, soft_assert_no_log};
 use mz_pgrepr::oid::INVALID_OID;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, GlobalId, RelationVersion, Timestamp};
+use mz_repr::{CatalogItemId, GlobalId, RelationVersion, Timestamp, VersionedRelationDesc};
 use mz_sql::catalog::CatalogError as SqlCatalogError;
 use mz_sql::catalog::{CatalogItem as SqlCatalogItem, CatalogItemType, CatalogSchema, CatalogType};
 use mz_sql::names::{
@@ -645,7 +645,7 @@ impl CatalogState {
                     name.clone(),
                     CatalogItem::Table(Table {
                         create_sql: None,
-                        desc: table.desc.clone(),
+                        desc: VersionedRelationDesc::new(table.desc.clone()),
                         collections: [(RelationVersion::root(), global_id)].into_iter().collect(),
                         conn_id: None,
                         resolved_ids: ResolvedIds::empty(),
@@ -684,7 +684,9 @@ impl CatalogState {
                         &versions,
                         None,
                         index.is_retained_metrics_object,
-                        custom_logical_compaction_window,local_expression_cache,
+                        custom_logical_compaction_window,
+                        local_expression_cache,
+                        None,
                     )
                     .unwrap_or_else(|e| {
                         panic!(
@@ -826,6 +828,7 @@ impl CatalogState {
                         false,
                         None,
                         local_expression_cache,
+                        None,
                     )
                     .unwrap_or_else(|e| {
                         panic!(
@@ -862,6 +865,7 @@ impl CatalogState {
                         false,
                         None,
                         local_expression_cache,
+                        None,
                     )
                     .unwrap_or_else(|e| {
                         panic!(
@@ -986,6 +990,7 @@ impl CatalogState {
                                     &create_sql,
                                     &extra_versions,
                                     local_expression_cache,
+                                    Some(retraction.item),
                                 )
                                 .unwrap_or_else(|e| {
                                     panic!("{e:?}: invalid persisted SQL: {create_sql}")
@@ -1007,6 +1012,7 @@ impl CatalogState {
                                 &create_sql,
                                 &extra_versions,
                                 local_expression_cache,
+                                None,
                             )
                             .unwrap_or_else(|e| {
                                 panic!("{e:?}: invalid persisted SQL: {create_sql}")
@@ -1370,6 +1376,7 @@ impl CatalogState {
                                 false,
                                 None,
                                 cached_expr,
+                                None,
                             );
                             (id, global_id, res)
                         }

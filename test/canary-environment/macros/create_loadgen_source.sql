@@ -10,3 +10,7 @@
 {% macro create_loadgen_source(name) %}
 FROM KAFKA CONNECTION kafka_connection (TOPIC 'datagen_demo_snowflakeschema_{{ name.table }}');
 {% endmacro %}
+
+{% macro create_large_loadgen_source(name) %}
+FROM KAFKA CONNECTION kafka_connection (TOPIC 'datagen_large_snowflakeschema_{{ name }}');
+{% endmacro %}

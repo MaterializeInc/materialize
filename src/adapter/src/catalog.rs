@@ -35,7 +35,8 @@ use mz_catalog::durable::{
 use mz_catalog::expr_cache::{ExpressionCacheHandle, GlobalExpressions, LocalExpressions};
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, Cluster, ClusterReplica, Database, NetworkPolicy, Role, Schema,
+    CatalogCollectionEntry, CatalogEntry, CatalogItem, Cluster, ClusterReplica, Database,
+    NetworkPolicy, Role, Schema,
 };
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_controller::clusters::ReplicaLocation;
@@ -995,7 +996,7 @@ impl Catalog {
         self.state.get_entry(id)
     }
 
-    pub fn get_entry_by_global_id(&self, id: &GlobalId) -> &CatalogEntry {
+    pub fn get_entry_by_global_id(&self, id: &GlobalId) -> CatalogCollectionEntry {
         self.state.get_entry_by_global_id(id)
     }
 
@@ -1447,8 +1448,8 @@ impl Catalog {
                 .iter()
                 .map(|(id, _)| id)
                 .chain(new_global_expressions.iter().map(|(id, _)| id))
-                .filter_map(|id| self.get_entry_by_global_id(id).index())
-                .map(|index| index.on);
+                .map(|id| self.get_entry_by_global_id(id))
+                .filter_map(|entry| entry.index().map(|index| index.on));
             let invalidate_ids = self.invalidate_for_index(ons);
             expr_cache
                 .update(
@@ -1685,12 +1686,7 @@ impl ExprHumanizer for ConnCatalog<'_> {
 
         match entry.index() {
             Some(index) => {
-                // TODO(alter_table): Use the correct RelationDesc here.
-                let on_entry = self.state.try_get_entry_by_global_id(&index.on)?;
-                let on_desc = on_entry
-                    .desc(&self.resolve_full_name(on_entry.name()))
-                    .ok()?;
-
+                let on_desc = self.state.try_get_desc_by_global_id(&index.on)?;
                 let mut on_names = on_desc
                     .iter_names()
                     .map(|col_name| col_name.to_string())
@@ -1714,10 +1710,7 @@ impl ExprHumanizer for ConnCatalog<'_> {
                 Some(ix_names) // Return the updated ix_names vector.
             }
             None => {
-                let Ok(desc) = entry.desc(&self.resolve_full_name(entry.name())) else {
-                    return None;
-                };
-
+                let desc = self.state.try_get_desc_by_global_id(&id)?;
                 let column_names = desc
                     .iter_names()
                     .map(|col_name| col_name.to_string())
@@ -1729,8 +1722,7 @@ impl ExprHumanizer for ConnCatalog<'_> {
     }
 
     fn humanize_column(&self, id: GlobalId, column: usize) -> Option<String> {
-        let entry = self.state.try_get_entry_by_global_id(&id)?;
-        let desc = entry.desc(&self.resolve_full_name(entry.name())).ok()?;
+        let desc = self.state.try_get_desc_by_global_id(&id)?;
         Some(desc.get_name(column).to_string())
     }
 
@@ -2643,6 +2635,7 @@ mod tests {
                     &create_sql,
                     &BTreeMap::new(),
                     &mut LocalExpressionCache::Closed,
+                    None,
                 )
                 .expect("unable to parse view");
             let commit_ts = catalog.current_upper().await;
@@ -3549,7 +3542,9 @@ mod tests {
                 .deserialize_item(
                     mv_gid,
                     &format!("CREATE MATERIALIZED VIEW {database_name}.{schema_name}.{mv_name} AS SELECT name FROM mz_tables"),
-                    &BTreeMap::new(), &mut LocalExpressionCache::Closed
+                    &BTreeMap::new(),
+                    &mut LocalExpressionCache::Closed,
+                    None,
                 )
                 .expect("unable to deserialize item");
             let commit_ts = catalog.current_upper().await;

@@ -21,11 +21,14 @@ use std::iter;
 use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
 use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig, TryIntoTimelyConfig};
+use mz_ore::assert_none;
+use mz_persist_client::batch::ProtoBatch;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Diff, GlobalId, Row};
 use mz_service::client::{GenericClient, Partitionable, PartitionedState};
 use mz_service::grpc::{GrpcClient, GrpcServer, ProtoServiceTypes, ResponseStream};
 use mz_storage_types::controller::CollectionMetadata;
+use mz_storage_types::oneshot_sources::OneshotIngestionRequest;
 use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::sinks::{MetadataFilled, StorageSinkDesc};
 use mz_storage_types::sources::IngestionDescription;
@@ -33,6 +36,7 @@ use mz_timely_util::progress::any_antichain;
 use proptest::prelude::{any, Arbitrary};
 use proptest::strategy::{BoxedStrategy, Strategy, Union};
 use serde::{Deserialize, Serialize};
+use smallvec::SmallVec;
 use timely::progress::frontier::{Antichain, MutableAntichain};
 use timely::PartialOrder;
 use tonic::{Request, Status as TonicStatus, Streaming};
@@ -119,6 +123,12 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
     UpdateConfiguration(StorageParameters),
     /// Run the enumerated sources, each associated with its identifier.
     RunIngestions(Vec<RunIngestionCommand>),
+    /// Run a dataflow which will ingest data from an external source and only __stage__ it in
+    /// Persist.
+    ///
+    /// Unlike regular ingestions/sources, some other component (e.g. `environmentd`) is
+    /// responsible for linking the staged data into a shard.
+    RunOneshotIngestion(RunOneshotIngestionCommand),
     /// Enable compaction in storage-managed collections.
     ///
     /// Each entry in the vector names a collection and provides a frontier after which
@@ -137,7 +147,10 @@ impl<T> StorageCommand<T> {
             | AllowWrites
             | UpdateConfiguration(_)
             | AllowCompaction(_) => false,
-            RunIngestions(_) | RunSinks(_) => true,
+            // TODO(cf2): multi-replica oneshot ingestions. At the moment returning
+            // true here means we can't run `COPY FROM` on multi-replica clusters, this
+            // should be easy enough to support though.
+            RunIngestions(_) | RunSinks(_) | RunOneshotIngestion(_) => true,
         }
     }
 }
@@ -180,6 +193,47 @@ impl RustType<ProtoRunIngestionCommand> for RunIngestionCommand {
             description: proto
                 .description
                 .into_rust_if_some("ProtoRunIngestionCommand::description")?,
+        })
+    }
+}
+
+/// A command that starts ingesting the given ingestion description
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct RunOneshotIngestionCommand {
+    /// The ID of the ingestion dataflow.
+    pub ingestion_id: uuid::Uuid,
+    /// The ID of collection we'll stage batches for.
+    pub collection_id: GlobalId,
+    /// Metadata for the collection we'll stage batches for.
+    pub collection_meta: CollectionMetadata,
+    /// Details for the oneshot ingestion.
+    pub request: OneshotIngestionRequest,
+}
+
+impl RustType<ProtoRunOneshotIngestionCommand> for RunOneshotIngestionCommand {
+    fn into_proto(&self) -> ProtoRunOneshotIngestionCommand {
+        ProtoRunOneshotIngestionCommand {
+            ingestion_id: Some(self.ingestion_id.into_proto()),
+            collection_id: Some(self.collection_id.into_proto()),
+            storage_metadata: Some(self.collection_meta.into_proto()),
+            request: Some(self.request.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: ProtoRunOneshotIngestionCommand) -> Result<Self, TryFromProtoError> {
+        Ok(RunOneshotIngestionCommand {
+            ingestion_id: proto
+                .ingestion_id
+                .into_rust_if_some("ProtoRunOneshotIngestionCommand::ingestion_id")?,
+            collection_id: proto
+                .collection_id
+                .into_rust_if_some("ProtoRunOneshotIngestionCommand::collection_id")?,
+            collection_meta: proto
+                .storage_metadata
+                .into_rust_if_some("ProtoRunOneshotIngestionCommand::storage_metadata")?,
+            request: proto
+                .request
+                .into_rust_if_some("ProtoRunOneshotIngestionCommand::request")?,
         })
     }
 }
@@ -246,6 +300,9 @@ impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
                 StorageCommand::RunIngestions(sources) => CreateSources(ProtoCreateSources {
                     sources: sources.into_proto(),
                 }),
+                StorageCommand::RunOneshotIngestion(oneshot) => {
+                    OneshotIngestion(oneshot.into_proto())
+                }
                 StorageCommand::RunSinks(sinks) => RunSinks(ProtoRunSinks {
                     sinks: sinks.into_proto(),
                 }),
@@ -276,6 +333,9 @@ impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
             }
             Some(RunSinks(ProtoRunSinks { sinks })) => {
                 Ok(StorageCommand::RunSinks(sinks.into_rust()?))
+            }
+            Some(OneshotIngestion(oneshot)) => {
+                Ok(StorageCommand::RunOneshotIngestion(oneshot.into_rust()?))
             }
             None => Err(TryFromProtoError::missing_field(
                 "ProtoStorageCommand::kind",
@@ -543,6 +603,8 @@ pub enum StorageResponse<T = mz_repr::Timestamp> {
     FrontierUppers(Vec<(GlobalId, Antichain<T>)>),
     /// Punctuation indicates that no more responses will be transmitted for the specified ids
     DroppedIds(BTreeSet<GlobalId>),
+    /// Batches that have been staged in Persist and maybe will be linked into a shard.
+    StagedBatches(BTreeMap<uuid::Uuid, Vec<Result<ProtoBatch, String>>>),
 
     /// A list of statistics updates, currently only for sources.
     StatisticsUpdates(Vec<SourceStatisticsUpdate>, Vec<SinkStatisticsUpdate>),
@@ -554,7 +616,9 @@ pub enum StorageResponse<T = mz_repr::Timestamp> {
 impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
     fn into_proto(&self) -> ProtoStorageResponse {
         use proto_storage_response::Kind::*;
-        use proto_storage_response::{ProtoDroppedIds, ProtoStatisticsUpdates, ProtoStatusUpdates};
+        use proto_storage_response::{
+            ProtoDroppedIds, ProtoStagedBatches, ProtoStatisticsUpdates, ProtoStatusUpdates,
+        };
         ProtoStorageResponse {
             kind: Some(match self {
                 StorageResponse::FrontierUppers(traces) => FrontierUppers(traces.into_proto()),
@@ -576,6 +640,29 @@ impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
                 StorageResponse::StatusUpdates(updates) => StatusUpdates(ProtoStatusUpdates {
                     updates: updates.into_proto(),
                 }),
+                StorageResponse::StagedBatches(staged) => {
+                    let batches = staged
+                        .into_iter()
+                        .map(|(collection_id, batches)| {
+                            let batches = batches
+                                .into_iter()
+                                .map(|result| {
+                                    use proto_storage_response::proto_staged_batches::batch_result::Value;
+                                    let value = match result {
+                                        Ok(batch) => Value::Batch(batch.clone()),
+                                        Err(err) => Value::Error(err.clone()),
+                                    };
+                                    proto_storage_response::proto_staged_batches::BatchResult { value: Some(value) }
+                                })
+                                .collect();
+                            proto_storage_response::proto_staged_batches::Inner {
+                                id: Some(collection_id.into_proto()),
+                                batches,
+                            }
+                        })
+                        .collect();
+                    StagedBatches(ProtoStagedBatches { batches })
+                }
             }),
         }
     }
@@ -604,6 +691,35 @@ impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
             )),
             Some(StatusUpdates(ProtoStatusUpdates { updates })) => {
                 Ok(StorageResponse::StatusUpdates(updates.into_rust()?))
+            }
+            Some(StagedBatches(staged)) => {
+                let batches: BTreeMap<_, _> = staged
+                    .batches
+                    .into_iter()
+                    .map(|inner| {
+                        let id = inner
+                            .id
+                            .into_rust_if_some("ProtoStagedBatches::Inner::id")?;
+
+                        let mut batches = Vec::with_capacity(inner.batches.len());
+                        for maybe_batch in inner.batches {
+                            use proto_storage_response::proto_staged_batches::batch_result::Value;
+
+                            let value = maybe_batch.value.ok_or_else(|| {
+                                TryFromProtoError::missing_field("BatchResult::value")
+                            })?;
+                            let batch = match value {
+                                Value::Batch(batch) => Ok(batch),
+                                Value::Error(err) => Err(err),
+                            };
+                            batches.push(batch);
+                        }
+
+                        Ok::<_, TryFromProtoError>((id, batches))
+                    })
+                    .collect::<Result<_, _>>()?;
+
+                Ok(StorageResponse::StagedBatches(batches))
             }
             None => Err(TryFromProtoError::missing_field(
                 "ProtoStorageResponse::kind",
@@ -638,6 +754,9 @@ pub struct PartitionedStorageState<T> {
     /// Upper frontiers for sources and sinks, both unioned across all partitions and from each
     /// individual partition.
     uppers: BTreeMap<GlobalId, (MutableAntichain<T>, Vec<Option<Antichain<T>>>)>,
+    /// Staged batches from oneshot sources that will get appended by `environmentd`.
+    oneshot_source_responses:
+        BTreeMap<uuid::Uuid, BTreeMap<usize, Vec<Result<ProtoBatch, String>>>>,
 }
 
 impl<T> Partitionable<StorageCommand<T>, StorageResponse<T>>
@@ -651,6 +770,7 @@ where
         PartitionedStorageState {
             parts,
             uppers: BTreeMap::new(),
+            oneshot_source_responses: BTreeMap::new(),
         }
     }
 }
@@ -681,7 +801,8 @@ where
             StorageCommand::InitializationComplete
             | StorageCommand::AllowWrites
             | StorageCommand::UpdateConfiguration(_)
-            | StorageCommand::AllowCompaction(_) => {}
+            | StorageCommand::AllowCompaction(_)
+            | StorageCommand::RunOneshotIngestion(_) => {}
         };
     }
 
@@ -805,6 +926,37 @@ where
             StorageResponse::StatusUpdates(updates) => {
                 Some(Ok(StorageResponse::StatusUpdates(updates)))
             }
+            StorageResponse::StagedBatches(batches) => {
+                let mut finished_batches = BTreeMap::new();
+
+                for (collection_id, batches) in batches {
+                    tracing::info!(%shard_id, %collection_id, "got batch");
+
+                    let entry = self
+                        .oneshot_source_responses
+                        .entry(collection_id)
+                        .or_default();
+                    let novel = entry.insert(shard_id, batches);
+                    assert_none!(novel, "Duplicate oneshot source response");
+
+                    // Check if we've received responses from all shards.
+                    if entry.len() == self.parts {
+                        let entry = self
+                            .oneshot_source_responses
+                            .remove(&collection_id)
+                            .expect("checked above");
+                        let all_batches: Vec<_> = entry.into_values().flatten().collect();
+
+                        finished_batches.insert(collection_id, all_batches);
+                    }
+                }
+
+                if !finished_batches.is_empty() {
+                    Some(Ok(StorageResponse::StagedBatches(finished_batches)))
+                } else {
+                    None
+                }
+            }
         }
     }
 }
@@ -820,9 +972,30 @@ pub struct Update<T = mz_repr::Timestamp> {
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 /// A batch of updates to be fed to a local input; however, the input must
 /// determine the most appropriate timestamps to use.
+///
+/// TODO(cf2): Can we remove this and use only on [`TableData`].
 pub struct TimestamplessUpdate {
     pub row: Row,
     pub diff: Diff,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum TableData {
+    /// Rows that still need to be persisted and appended.
+    ///
+    /// The contained [`Row`]s are _not_ consolidated.
+    Rows(Vec<(Row, Diff)>),
+    /// Batches already staged in Persist ready to be appended.
+    Batches(SmallVec<[ProtoBatch; 1]>),
+}
+
+impl TableData {
+    pub fn is_empty(&self) -> bool {
+        match self {
+            TableData::Rows(rows) => rows.is_empty(),
+            TableData::Batches(batches) => batches.is_empty(),
+        }
+    }
 }
 
 impl RustType<ProtoTrace> for (GlobalId, Antichain<mz_repr::Timestamp>) {

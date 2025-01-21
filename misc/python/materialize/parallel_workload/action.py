@@ -36,9 +36,11 @@ from materialize.mzcompose.services.materialized import (
 )
 from materialize.mzcompose.services.minio import minio_blob_uri
 from materialize.parallel_workload.database import (
+    DATA_TYPES,
     DB,
     MAX_CLUSTER_REPLICAS,
     MAX_CLUSTERS,
+    MAX_COLUMNS,
     MAX_DBS,
     MAX_INDEXES,
     MAX_KAFKA_SINKS,
@@ -53,6 +55,7 @@ from materialize.parallel_workload.database import (
     MAX_WEBHOOK_SOURCES,
     Cluster,
     ClusterReplica,
+    Column,
     Database,
     DBObject,
     Index,
@@ -714,6 +717,37 @@ class RenameTableAction(Action):
         return True
 
 
+class AlterTableAddColumnAction(Action):
+    def run(self, exe: Executor) -> bool:
+        with exe.db.lock:
+            if not exe.db.tables:
+                return False
+            if exe.db.flags.get("enable_alter_table_add_column", "FALSE") != "TRUE":
+                return False
+            table = self.rng.choice(exe.db.tables)
+        with table.lock:
+            # Allow adding more a few more columns than the max for additional coverage.
+            if len(table.columns) >= MAX_COLUMNS + 3:
+                return False
+
+            # TODO(alter_table): Support adding non-nullable columns with a default value.
+            new_column = Column(
+                self.rng, len(table.columns), self.rng.choice(DATA_TYPES), table
+            )
+            new_column.raw_name = f"{new_column.raw_name}-altered"
+            new_column.nullable = True
+            new_column.default = None
+
+            try:
+                exe.execute(
+                    f"ALTER TABLE {str(table)} ADD COLUMN {new_column.create()}"
+                )
+            except:
+                raise
+            table.columns.append(new_column)
+        return True
+
+
 class RenameViewAction(Action):
     def run(self, exe: Executor) -> bool:
         if exe.db.scenario != Scenario.Rename:
@@ -1042,6 +1076,7 @@ class FlipFlagsAction(Action):
             BOOLEAN_FLAG_VALUES
         )
         self.flags_with_values["compute_apply_column_demands"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["enable_alter_table_add_column"] = BOOLEAN_FLAG_VALUES
 
     def run(self, exe: Executor) -> bool:
         flag_name = self.rng.choice(list(self.flags_with_values.keys()))
@@ -1059,6 +1094,7 @@ class FlipFlagsAction(Action):
         try:
             conn = self.create_system_connection(exe)
             self.flip_flag(conn, flag_name, flag_value)
+            exe.db.flags[flag_name] = flag_value
             return True
         except OperationalError:
             if conn is not None:
@@ -1594,12 +1630,14 @@ class KillAction(Action):
         self,
         rng: random.Random,
         composition: Composition | None,
+        azurite: bool,
         sanity_restart: bool,
         system_param_fn: Callable[[dict[str, str]], dict[str, str]] = lambda x: x,
     ):
         super().__init__(rng, composition)
         self.system_param_fn = system_param_fn
         self.system_parameters = {}
+        self.azurite = azurite
         self.sanity_restart = sanity_restart
 
     def run(self, exe: Executor) -> bool:
@@ -1609,7 +1647,9 @@ class KillAction(Action):
         with self.composition.override(
             Materialized(
                 restart="on-failure",
-                external_minio="toxiproxy",
+                # TODO: Retry with toxiproxy on azurite
+                external_blob_store=True,
+                blob_store_is_azure=self.azurite,
                 external_metadata_store="toxiproxy",
                 ports=["6975:6875", "6976:6876", "6977:6877"],
                 sanity_restart=self.sanity_restart,
@@ -1627,9 +1667,11 @@ class ZeroDowntimeDeployAction(Action):
         self,
         rng: random.Random,
         composition: Composition | None,
+        azurite: bool,
         sanity_restart: bool,
     ):
         super().__init__(rng, composition)
+        self.azurite = azurite
         self.sanity_restart = sanity_restart
         self.deploy_generation = 0
 
@@ -1650,7 +1692,9 @@ class ZeroDowntimeDeployAction(Action):
         with self.composition.override(
             Materialized(
                 name=mz_service,
-                external_minio="toxiproxy",
+                # TODO: Retry with toxiproxy on azurite
+                external_blob_store=True,
+                blob_store_is_azure=self.azurite,
                 external_metadata_store="toxiproxy",
                 ports=ports,
                 sanity_restart=self.sanity_restart,
@@ -2252,6 +2296,8 @@ ddl_action_list = ActionList(
         (RenameSinkAction, 10),
         (SwapSchemaAction, 10),
         (FlipFlagsAction, 2),
+        # TODO: Reenable when database-issues#8813 is fixed.
+        # (AlterTableAddColumnAction, 10),
         # TODO: Reenable when database-issues#8445 is fixed
         # (AlterKafkaSinkFromAction, 8),
         # (TransactionIsolationAction, 1),

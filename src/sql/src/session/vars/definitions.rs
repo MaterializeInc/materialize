@@ -2126,7 +2126,7 @@ feature_flags!(
         name: enable_alter_table_add_column,
         desc: "Enable ALTER TABLE ... ADD COLUMN ...",
         default: false,
-        enable_for_item_parsing: true,
+        enable_for_item_parsing: false,
     },
     {
         name: enable_graceful_cluster_reconfiguration,
@@ -2181,6 +2181,12 @@ feature_flags!(
         desc: "Whether to allow CREATE TABLE .. FROM SOURCE syntax.",
         default: false,
         enable_for_item_parsing: true,
+    },
+    {
+        name: enable_copy_from_remote,
+        desc: "Whether to allow COPY FROM <url>.",
+        default: false,
+        enable_for_item_parsing: false,
     },
 );
 

@@ -205,6 +205,7 @@ use mz_ore::error::ErrorExt;
 use mz_repr::{GlobalId, Row};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::dyncfgs;
+use mz_storage_types::oneshot_sources::{OneshotIngestionDescription, OneshotIngestionRequest};
 use mz_storage_types::sinks::{MetadataFilled, StorageSinkDesc};
 use mz_storage_types::sources::{GenericSourceConnection, IngestionDescription, SourceConnection};
 use mz_timely_util::antichain::AntichainExt;
@@ -470,4 +471,41 @@ pub fn build_export_dataflow<A: Allocate>(
             storage_state.sink_tokens.insert(id, tokens);
         })
     });
+}
+
+pub(crate) fn build_oneshot_ingestion_dataflow<A: Allocate>(
+    timely_worker: &mut TimelyWorker<A>,
+    storage_state: &mut StorageState,
+    ingestion_id: uuid::Uuid,
+    collection_id: GlobalId,
+    collection_meta: CollectionMetadata,
+    description: OneshotIngestionRequest,
+) {
+    let (results_tx, results_rx) = tokio::sync::mpsc::unbounded_channel();
+    let callback = move |result| {
+        // TODO(cf3): Do we care if the receiver has gone away?
+        //
+        // Persist is working on cleaning up leaked blobs, we could also use `OneshotReceiverExt`
+        // here, but that might run into the infamous async-Drop problem.
+        let _ = results_tx.send(result);
+    };
+
+    let tokens = timely_worker.dataflow(|scope| {
+        mz_storage_operators::oneshot_source::render(
+            scope.clone(),
+            Arc::clone(&storage_state.persist_clients),
+            collection_id,
+            collection_meta,
+            description,
+            callback,
+        )
+    });
+    let ingestion_description = OneshotIngestionDescription {
+        tokens,
+        results: results_rx,
+    };
+
+    storage_state
+        .oneshot_ingestions
+        .insert(ingestion_id, ingestion_description);
 }

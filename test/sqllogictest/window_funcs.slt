@@ -19,7 +19,18 @@ statement ok
 INSERT INTO t VALUES ('a'), ('b'), ('c');
 
 statement error db error: ERROR: window function pg_catalog\.row_number requires an OVER clause
-SELECT row_number() FROM t;
+SELECT row_number()
+FROM t;
+
+statement error db error: ERROR: window function pg_catalog\.row_number requires an OVER clause
+SELECT *
+FROM t
+ORDER BY row_number();
+
+statement error db error: ERROR: window function pg_catalog\.row_number requires an OVER clause
+SELECT *
+FROM t
+QUALIFY row_number();
 
 statement error db error: ERROR: OVER clause not allowed on pg_catalog\.int8range\. The OVER clause can only be used with window functions \(including aggregations\)\.
 SELECT int8range(1, 1, '') OVER (PARTITION BY 1 ORDER BY 1);
@@ -7904,3 +7915,97 @@ FROM (
 );
 ----
 69999
+
+## QUALIFY
+query II
+SELECT *
+FROM t6
+QUALIFY row_number() OVER (PARTITION BY x%3 ORDER BY y) = 1;
+----
+1  2
+5  6
+15  16
+
+query IIII
+SELECT *, x%3, row_number() OVER (PARTITION BY x%3 ORDER BY y)
+FROM t6
+QUALIFY row_number() OVER (PARTITION BY x%3 ORDER BY y) = 1;
+----
+15  16  0  1
+1  2  1  1
+5  6  2  1
+
+query II
+SELECT *
+FROM t6
+QUALIFY sum(x) OVER (ORDER BY y) = 26;
+----
+13  14
+
+query II
+SELECT *
+FROM (SELECT * FROM t6 UNION ALL SELECT * FROM t6)
+QUALIFY sum(x) OVER (ORDER BY y) = 26;
+----
+7  8
+7  8
+
+query I
+SELECT avg(u)
+FROM (
+  SELECT x, unnest(l) AS u
+  FROM (
+    SELECT x, array_agg(y) OVER (PARTITION BY x%5) AS l
+    FROM t7
+  ) AS ff1
+) AS ff2
+GROUP BY x%5
+QUALIFY sum(avg(u)) OVER (ORDER BY x%5) = -15
+ORDER BY x%5;
+----
+2
+
+query II
+SELECT *
+FROM (
+  SELECT x, unnest(l) AS u
+  FROM (
+    SELECT x, array_agg(y) OVER (PARTITION BY x%5) AS l
+    FROM t7
+  ) AS ff1
+)
+QUALIFY x-lag(x) OVER (ORDER BY x) = 0 AND lag(x) OVER (ORDER BY x) - lag(lag(x) OVER (ORDER BY x)) OVER (ORDER BY x) = 0
+ORDER BY x,u;
+----
+5  6
+5  16
+10  -40
+10  -40
+10  6
+10  6
+10  16
+10  16
+15  6
+15  16
+
+query III
+SELECT *, sum(x-9) OVER (ORDER BY x, u)
+FROM
+(
+  SELECT DISTINCT *
+  FROM (
+    SELECT x, unnest(l) AS u
+    FROM (
+      SELECT x, array_agg(y) OVER (PARTITION BY x%5) AS l
+      FROM t7
+    ) AS ff1
+  )
+  QUALIFY x-lag(x) OVER (ORDER BY x) = 0 AND lag(x) OVER (ORDER BY x) - lag(lag(x) OVER (ORDER BY x)) OVER (ORDER BY x) = 0
+)
+QUALIFY sum(x-9) OVER (ORDER BY x, u) > -6
+ORDER BY x,u;
+----
+5  6  -4
+10  16  -5
+15  6  1
+15  16  7

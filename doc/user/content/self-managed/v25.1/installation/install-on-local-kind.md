@@ -3,7 +3,8 @@ title: "Install locally on kind"
 description: ""
 aliases:
   - /self-hosted/install-on-local-kind/
-robots: "noindex, nofollow"
+  - /self-managed/installation/install-on-local-kind/
+suppress_breadcrumb: true
 ---
 
 The following tutorial deploys self-managed Materialize onto a local
@@ -104,7 +105,7 @@ Check out the {{% self-managed/latest_version %}} tag.
       ```
 
       If you run into an error during deployment, refer to the
-      [Troubleshooting](/self-hosted/troubleshooting) guide.
+      [Troubleshooting](/self-managed/v25.1/installation/troubleshooting) guide.
 
 1. Install PostgreSQL and minIO.
 
@@ -134,11 +135,11 @@ Check out the {{% self-managed/latest_version %}} tag.
 
    1. Go to the Materialize repo directory.
 
-   1. Use the provided `environmentd.yaml` file to create the
+   1. Use the provided `materialize.yaml` file to create the
       `materialize-environment` namespace and install Materialize:
 
       ```shell
-      kubectl apply -f misc/helm-charts/testing/environmentd.yaml
+      kubectl apply -f misc/helm-charts/testing/materialize.yaml
       ```
 
     1. Verify the installation and check the status:
@@ -188,7 +189,7 @@ Check out the {{% self-managed/latest_version %}} tag.
        ```
 
        If you run into an error during deployment, refer to the
-       [Troubleshooting](/self-hosted/troubleshooting) guide.
+       [Troubleshooting](/self-managed/troubleshooting) guide.
 
 1. Open the Materialize console in your browser:
 
@@ -222,8 +223,8 @@ Check out the {{% self-managed/latest_version %}} tag.
 
 ## See also
 
-- [Materialize Kubernetes Operator Helm Chart](/self-hosted/)
-- [Materialize Operator Configuration](/self-hosted/configuration/)
+- [Materialize Kubernetes Operator Helm Chart](/self-managed/)
+- [Materialize Operator Configuration](/self-managed/configuration/)
 - [Troubleshooting](/self-managed/troubleshooting/)
 - [Operational guidelines](/self-managed/operational-guidelines/)
 - [Installation](/self-managed/installation/)

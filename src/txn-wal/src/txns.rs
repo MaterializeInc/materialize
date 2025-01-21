@@ -285,9 +285,47 @@ where
                 }
             }
             for data_write in data_writes {
-                self.datas
-                    .data_write_for_commit
-                    .insert(data_write.shard_id(), DataWriteCommit(data_write));
+                let new_schema_id = data_write.schema_id();
+
+                // If we already have a write handle for a newer version of a table, don't replace
+                // it! Currently we only support adding columns to tables with a default value, so
+                // the latest/newest schema will always be the most complete.
+                //
+                // TODO(alter_table): Revist when we support dropping columns.
+                match self.datas.data_write_for_commit.get(&data_write.shard_id()) {
+                    None => {
+                        self.datas
+                            .data_write_for_commit
+                            .insert(data_write.shard_id(), DataWriteCommit(data_write));
+                    }
+                    Some(previous) => {
+                        match (previous.schema_id(), new_schema_id) {
+                            (Some(previous_id), None) => {
+                                mz_ore::soft_panic_or_log!(
+                                    "tried registering a WriteHandle replacing one with a SchemaId prev_schema_id: {:?} shard_id: {:?}",
+                                    previous_id,
+                                    previous.shard_id(),
+                                );
+                            },
+                            (Some(previous_id), Some(new_id)) if previous_id > new_id => {
+                                mz_ore::soft_panic_or_log!(
+                                    "tried registering a WriteHandle with an older SchemaId prev_schema_id: {:?} new_schema_id: {:?} shard_id: {:?}",
+                                    previous_id,
+                                    new_id,
+                                    previous.shard_id(),
+                                );
+                            },
+                            (previous_schema_id, new_schema_id) => {
+                                if previous_schema_id.is_none() && new_schema_id.is_none() {
+                                    tracing::warn!("replacing WriteHandle without any SchemaIds to reason about");
+                                } else {
+                                    tracing::info!(?previous_schema_id, ?new_schema_id, shard_id = ?previous.shard_id(), "replacing WriteHandle");
+                                }
+                                self.datas.data_write_for_commit.insert(data_write.shard_id(), DataWriteCommit(data_write));
+                            }
+                        }
+                    }
+                }
             }
             let tidy = self.apply_le(&register_ts).await;
 

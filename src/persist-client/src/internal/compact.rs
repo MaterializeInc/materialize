@@ -867,7 +867,7 @@ where
                 batch.flush_part(desc.clone(), updates).await;
             }
         } else {
-            let mut consolidator = Consolidator::<T, D>::new(
+            let mut consolidator = Consolidator::<T, D, CodecSort<K, V, T, D>>::new(
                 format!(
                     "{}[lower={:?},upper={:?}]",
                     shard_id,
@@ -875,7 +875,7 @@ where
                     desc.upper().elements()
                 ),
                 *shard_id,
-                CodecSort::default(),
+                CodecSort::new(write_schemas.clone()),
                 blob,
                 Arc::clone(&metrics),
                 shard_metrics,

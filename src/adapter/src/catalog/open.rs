@@ -168,6 +168,7 @@ impl CatalogItemRebuilder {
                     is_retained_metrics_object,
                     custom_logical_compaction_window,
                     &mut LocalExpressionCache::Closed,
+                    None,
                 )
                 .unwrap_or_else(|error| panic!("invalid persisted create sql ({error:?}): {sql}")),
         }
@@ -1585,6 +1586,7 @@ mod builtin_migration_tests {
     use mz_ore::id_gen::Gen;
     use mz_repr::{
         CatalogItemId, GlobalId, RelationDesc, RelationType, RelationVersion, ScalarType,
+        VersionedRelationDesc,
     };
     use mz_sql::catalog::CatalogDatabase;
     use mz_sql::names::{
@@ -1624,13 +1626,14 @@ mod builtin_migration_tests {
             global_id_gen: &mut Gen<u64>,
         ) -> (String, ItemNamespace, CatalogItem, GlobalId) {
             let global_id = GlobalId::User(global_id_gen.allocate_id());
+            let desc = RelationDesc::builder()
+                .with_column("a", ScalarType::Int32.nullable(true))
+                .with_key(vec![0])
+                .finish();
             let item = match self.item {
                 SimplifiedItem::Table => CatalogItem::Table(Table {
                     create_sql: Some("CREATE TABLE materialize.public.t (a INT)".to_string()),
-                    desc: RelationDesc::builder()
-                        .with_column("a", ScalarType::Int32.nullable(true))
-                        .with_key(vec![0])
-                        .finish(),
+                    desc: VersionedRelationDesc::new(desc),
                     collections: [(RelationVersion::root(), global_id)].into_iter().collect(),
                     conn_id: None,
                     resolved_ids: ResolvedIds::empty(),

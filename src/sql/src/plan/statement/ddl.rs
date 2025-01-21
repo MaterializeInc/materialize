@@ -38,7 +38,7 @@ use mz_repr::refresh_schedule::{RefreshEvery, RefreshSchedule};
 use mz_repr::role_id::RoleId;
 use mz_repr::{
     preserves_order, strconv, CatalogItemId, ColumnName, ColumnType, RelationDesc, RelationType,
-    RelationVersionSelector, ScalarType, Timestamp,
+    RelationVersion, RelationVersionSelector, ScalarType, Timestamp, VersionedRelationDesc,
 };
 use mz_sql_parser::ast::{
     self, AlterClusterAction, AlterClusterStatement, AlterConnectionAction, AlterConnectionOption,
@@ -273,6 +273,16 @@ pub fn plan_create_table(
 
     let names: Vec<_> = columns
         .iter()
+        .filter(|c| {
+            // This set of `names` is used to create the initial RelationDesc.
+            // Columns that have been added at later versions of the table will
+            // get added further below.
+            let is_versioned = c
+                .options
+                .iter()
+                .any(|o| matches!(o.option, ColumnOption::Versioned { .. }));
+            !is_versioned
+        })
         .map(|c| normalize::column_name(c.name.clone()))
         .collect();
 
@@ -284,6 +294,7 @@ pub fn plan_create_table(
     // and NOT NULL constraints.
     let mut column_types = Vec::with_capacity(columns.len());
     let mut defaults = Vec::with_capacity(columns.len());
+    let mut changes = BTreeMap::new();
     let mut keys = Vec::new();
 
     for (i, c) in columns.into_iter().enumerate() {
@@ -291,6 +302,7 @@ pub fn plan_create_table(
         let ty = query::scalar_type_from_sql(scx, aug_data_type)?;
         let mut nullable = true;
         let mut default = Expr::null();
+        let mut versioned = false;
         for option in &c.options {
             match &option.option {
                 ColumnOption::NotNull => nullable = false,
@@ -308,12 +320,25 @@ pub fn plan_create_table(
                         nullable = false;
                     }
                 }
+                ColumnOption::Versioned { action, version } => {
+                    let version = RelationVersion::from(*version);
+                    versioned = true;
+
+                    let name = normalize::column_name(c.name.clone());
+                    let typ = ty.clone().nullable(nullable);
+
+                    changes.insert(version, (action.clone(), name, typ));
+                }
                 other => {
                     bail_unsupported!(format!("CREATE TABLE with column constraint: {}", other))
                 }
             }
         }
-        column_types.push(ty.nullable(nullable));
+        // TODO(alter_table): This assumes all versioned columns are at the
+        // end. This will no longer be true when we support dropping columns.
+        if !versioned {
+            column_types.push(ty.nullable(nullable));
+        }
         defaults.push(default);
     }
 
@@ -410,10 +435,26 @@ pub fn plan_create_table(
     }
 
     let desc = RelationDesc::new(typ, names);
+    let mut desc = VersionedRelationDesc::new(desc);
+    for (version, (_action, name, typ)) in changes.into_iter() {
+        let new_version = desc.add_column(name, typ);
+        if version != new_version {
+            return Err(PlanError::InvalidTable {
+                name: full_name.item,
+            });
+        }
+    }
 
     let create_sql = normalize::create_statement(scx, Statement::CreateTable(stmt.clone()))?;
 
-    let options = plan_table_options(scx, &desc, with_options.clone())?;
+    // Table options should only consider the original columns, since those
+    // were the only ones in scope when the table was created.
+    //
+    // TODO(alter_table): Will need to reconsider this when we support ALTERing
+    // the PARTITION BY columns.
+    let original_desc = desc.at_version(RelationVersionSelector::Specific(RelationVersion::root()));
+    let options = plan_table_options(scx, &original_desc, with_options.clone())?;
+
     let compaction_window = options.iter().find_map(|o| {
         #[allow(irrefutable_let_patterns)]
         if let crate::plan::TableOption::RetainHistory(lcw) = o {
@@ -645,7 +686,7 @@ pub fn plan_create_webhook_source(
             if_not_exists,
             table: Table {
                 create_sql,
-                desc,
+                desc: VersionedRelationDesc::new(desc),
                 temporary: false,
                 compaction_window: None,
                 data_source,
@@ -1828,7 +1869,7 @@ pub fn plan_create_table_from_source(
 
     let table = Table {
         create_sql,
-        desc,
+        desc: VersionedRelationDesc::new(desc),
         temporary: false,
         compaction_window: None,
         data_source: TableDataSource::DataSource {
@@ -3126,6 +3167,7 @@ fn continual_task_query<'a>(
                 projection: vec![ast::SelectItem::Wildcard],
                 group_by: Vec::new(),
                 having: None,
+                qualify: None,
                 options: Vec::new(),
             };
             let query = ast::Query {
@@ -7044,10 +7086,17 @@ pub fn plan_alter_table_add_column(
         }
     }
 
+    let scalar_type = scalar_type_from_sql(scx, &data_type)?;
+    // TODO(alter_table): Support non-nullable columns with default values.
+    let column_type = scalar_type.nullable(true);
+    // "unresolve" our data type so we can later update the persisted create_sql.
+    let raw_sql_type = mz_sql_parser::parser::parse_data_type(&data_type.to_ast_string_stable())?;
+
     Ok(Plan::AlterTableAddColumn(AlterTablePlan {
         relation_id,
         column_name,
-        column_type: data_type,
+        column_type,
+        raw_sql_type,
     }))
 }
 

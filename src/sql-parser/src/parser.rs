@@ -3766,6 +3766,7 @@ impl<'a> Parser<'a> {
                     projection: vec![SelectItem::Wildcard],
                     group_by: Vec::new(),
                     having: None,
+                    qualify: None,
                     options: Vec::new(),
                 })),
                 order_by: Vec::new(),
@@ -6349,9 +6350,12 @@ impl<'a> Parser<'a> {
                     )
                     .map_no_statement_parser_err();
                 }
-                self.expect_keyword(STDIN)
-                    .map_parser_err(StatementKind::Copy)?;
-                (CopyDirection::From, CopyTarget::Stdin)
+                if self.parse_keyword(STDIN) {
+                    (CopyDirection::From, CopyTarget::Stdin)
+                } else {
+                    let url_expr = self.parse_expr().map_parser_err(StatementKind::Copy)?;
+                    (CopyDirection::From, CopyTarget::Expr(url_expr))
+                }
             }
             TO => {
                 // We only support the INTO keyword for 'COPY FROM'.
@@ -7479,6 +7483,12 @@ impl<'a> Parser<'a> {
             None
         };
 
+        let qualify = if self.parse_keyword(QUALIFY) {
+            Some(self.parse_expr()?)
+        } else {
+            None
+        };
+
         let options = if self.parse_keyword(OPTIONS) {
             self.expect_token(&Token::LParen)?;
             let options = self.parse_comma_separated(Self::parse_select_option)?;
@@ -7495,6 +7505,7 @@ impl<'a> Parser<'a> {
             selection,
             group_by,
             having,
+            qualify,
             options,
         })
     }

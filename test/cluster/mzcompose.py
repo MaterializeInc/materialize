@@ -3189,7 +3189,7 @@ def workflow_test_incident_70(c: Composition) -> None:
     with c.override(
         Materialized(
             external_metadata_store=True,
-            external_minio=True,
+            external_blob_store=True,
             sanity_restart=False,
         ),
         Minio(setup_materialize=True),

@@ -30,13 +30,14 @@ use async_trait::async_trait;
 use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_cluster_client::metrics::WallclockLagMetrics;
 use mz_cluster_client::ReplicaId;
-use mz_persist_types::schema::SchemaId;
+use mz_persist_client::batch::ProtoBatch;
 use mz_persist_types::{Codec64, Opaque, ShardId};
-use mz_repr::{Diff, GlobalId, RelationDesc, Row};
+use mz_repr::{Diff, GlobalId, RelationDesc, RelationVersion, Row};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::inline::InlinedConnection;
 use mz_storage_types::controller::{CollectionMetadata, StorageError};
 use mz_storage_types::instances::StorageInstanceId;
+use mz_storage_types::oneshot_sources::{OneshotIngestionRequest, OneshotResultCallback};
 use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::read_policy::ReadPolicy;
@@ -50,7 +51,7 @@ use timely::progress::Timestamp as TimelyTimestamp;
 use timely::progress::{Antichain, Timestamp};
 use tokio::sync::{mpsc, oneshot};
 
-use crate::client::{AppendOnlyUpdate, StatusUpdate, TimestamplessUpdate};
+use crate::client::{AppendOnlyUpdate, StatusUpdate, TableData};
 use crate::statistics::WebhookStatistics;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, Eq, PartialEq, Hash, PartialOrd, Ord)]
@@ -115,7 +116,12 @@ pub enum DataSource {
     /// Data comes from external HTTP requests pushed to Materialize.
     Webhook,
     /// The adapter layer appends timestamped data, i.e. it is a `TABLE`.
-    Table,
+    Table {
+        /// This table has had columns added or dropped to it, so we're now a
+        /// "view" over the "primary" Table/collection. Within the
+        /// `storage-controller` we the primary as a dependency.
+        primary: Option<GlobalId>,
+    },
     /// This source's data is does not need to be managed by the storage
     /// controller, e.g. it's a materialized view or the catalog collection.
     Other,
@@ -138,10 +144,10 @@ pub struct CollectionDescription<T> {
 }
 
 impl<T> CollectionDescription<T> {
-    pub fn for_table(desc: RelationDesc) -> Self {
+    pub fn for_table(desc: RelationDesc, primary: Option<GlobalId>) -> Self {
         Self {
             desc,
-            data_source: DataSource::Table,
+            data_source: DataSource::Table { primary },
             since: None,
             status_collection_id: None,
             timeline: Some(Timeline::EpochMilliseconds),
@@ -460,12 +466,12 @@ pub trait StorageController: Debug {
 
     async fn alter_table_desc(
         &mut self,
-        table_id: GlobalId,
+        existing_collection: GlobalId,
+        new_collection: GlobalId,
         new_desc: RelationDesc,
-        expected_schema: SchemaId,
-        forget_ts: Self::Timestamp,
+        expected_version: RelationVersion,
         register_ts: Self::Timestamp,
-    ) -> Result<SchemaId, StorageError<Self::Timestamp>>;
+    ) -> Result<(), StorageError<Self::Timestamp>>;
 
     /// Acquire an immutable reference to the export state, should it exist.
     fn export(
@@ -483,6 +489,16 @@ pub trait StorageController: Debug {
     async fn create_exports(
         &mut self,
         exports: Vec<(GlobalId, ExportDescription<Self::Timestamp>)>,
+    ) -> Result<(), StorageError<Self::Timestamp>>;
+
+    /// Create a oneshot ingestion.
+    async fn create_oneshot_ingestion(
+        &mut self,
+        ingestion_id: uuid::Uuid,
+        collection_id: GlobalId,
+        instance_id: StorageInstanceId,
+        request: OneshotIngestionRequest,
+        result_tx: OneshotResultCallback<ProtoBatch>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
     /// Alter the sink identified by the given id to match the provided `ExportDescription`.
@@ -559,7 +575,7 @@ pub trait StorageController: Debug {
         &mut self,
         write_ts: Self::Timestamp,
         advance_to: Self::Timestamp,
-        commands: Vec<(GlobalId, Vec<TimestamplessUpdate>)>,
+        commands: Vec<(GlobalId, Vec<TableData>)>,
     ) -> Result<
         tokio::sync::oneshot::Receiver<Result<(), StorageError<Self::Timestamp>>>,
         StorageError<Self::Timestamp>,
@@ -648,7 +664,7 @@ impl DataSource {
     /// source using txn-wal.
     pub fn in_txns(&self) -> bool {
         match self {
-            DataSource::Table => true,
+            DataSource::Table { .. } => true,
             DataSource::Other
             | DataSource::Ingestion(_)
             | DataSource::IngestionExport { .. }

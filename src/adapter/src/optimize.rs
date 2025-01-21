@@ -64,7 +64,7 @@ use std::fmt::Debug;
 use std::panic::AssertUnwindSafe;
 
 use mz_adapter_types::connection::ConnectionId;
-use mz_catalog::memory::objects::{CatalogEntry, Index};
+use mz_catalog::memory::objects::{CatalogCollectionEntry, CatalogEntry, Index};
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::Plan;
 use mz_controller_types::ClusterId;
@@ -259,7 +259,7 @@ impl From<&OptimizerConfig> for mz_sql::plan::HirToMirConfig {
 // ===============
 
 pub trait OptimizerCatalog: Debug + Send + Sync {
-    fn get_entry(&self, id: &GlobalId) -> &CatalogEntry;
+    fn get_entry(&self, id: &GlobalId) -> CatalogCollectionEntry;
     fn get_entry_by_item_id(&self, id: &CatalogItemId) -> &CatalogEntry;
     fn resolve_full_name(
         &self,

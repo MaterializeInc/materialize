@@ -89,7 +89,8 @@ WITH clusters_under_deployment AS (
     WHERE name IN (
     {% if clusters|length > 0 %}
         {% for cluster in clusters %}
-            {{ dbt.string_literal(cluster) }}{% if not loop.last %},{% endif %}
+            {% set origin_cluster = adapter.generate_final_cluster_name(cluster, force_deploy_suffix=False) %}
+            {{ dbt.string_literal(origin_cluster) }}{% if not loop.last %},{% endif %}
         {% endfor %}
     {% else %}
         NULL
