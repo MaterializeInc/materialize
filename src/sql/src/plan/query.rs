@@ -8,18 +8,23 @@
 // by the Apache License, Version 2.0.
 
 //! SQL `Query`s are the declarative, computational part of SQL.
-//! This module turns `Query`s into `HirRelationExpr`s - a more explicit, algebraic way of describing computation.
+//! This module turns `Query`s into `HirRelationExpr`s - a more explicit, algebraic way of
+//! describing computation.
 
-//! Functions named plan_* are typically responsible for handling a single node of the SQL ast. Eg `plan_query` is responsible for handling `sqlparser::ast::Query`.
+//! Functions named plan_* are typically responsible for handling a single node of the SQL ast.
+//! E.g. `plan_query` is responsible for handling `sqlparser::ast::Query`.
 //! plan_* functions which correspond to operations on relations typically return a `HirRelationExpr`.
-//! plan_* functions which correspond to operations on scalars typically return a `HirScalarExpr` and a `ScalarType`. (The latter is because it's not always possible to infer from a `HirScalarExpr` what the intended type is - notably in the case of decimals where the scale/precision are encoded only in the type).
+//! plan_* functions which correspond to operations on scalars typically return a `HirScalarExpr`
+//! and a `ScalarType`. (The latter is because it's not always possible to infer from a
+//! `HirScalarExpr` what the intended type is - notably in the case of decimals where the
+//! scale/precision are encoded only in the type).
 
 //! Aggregates are particularly twisty.
 //!
 //! In SQL, a GROUP BY turns any columns not in the group key into vectors of
 //! values. Then anywhere later in the scope, an aggregate function can be
 //! applied to that group. Inside the arguments of an aggregate function, other
-//! normal functions are applied element-wise over the vectors. Thus `SELECT
+//! normal functions are applied element-wise over the vectors. Thus, `SELECT
 //! sum(foo.x + foo.y) FROM foo GROUP BY x` means adding the scalar `x` to the
 //! vector `y` and summing the results.
 //!
@@ -2192,6 +2197,7 @@ fn plan_select_from_where(
 
     // Step 5. Handle GROUP BY clause.
     // This will also plan the aggregates gathered in Step 3.
+    // See an overview of how aggregates are planned in the doc comment at the top of the file.
     let (mut group_scope, select_all_mapping) = {
         // Compute GROUP BY expressions.
         let ecx = &ExprContext {
@@ -5126,6 +5132,7 @@ fn plan_function<'a>(
 
             // Note: the window frame doesn't affect scalar window funcs, but, strangely, we should
             // accept a window frame here without an error msg. (Postgres also does this.)
+            // TODO: maybe we should give a notice
 
             let func = func::select_impl(ecx, FuncSpec::Func(name), impls, scalar_args, vec![])?;
 
@@ -6124,7 +6131,7 @@ impl Visit<'_, Aug> for WindowFuncCollector {
     }
 
     fn visit_query(&mut self, _query: &Query<Aug>) {
-        // Don't go into subqueries. Those will be handled by their own `plan_select_from_where`.
+        // Don't go into subqueries. Those will be handled by their own `plan_query`.
     }
 }
 
