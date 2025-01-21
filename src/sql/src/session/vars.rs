@@ -1178,7 +1178,6 @@ impl SystemVars {
             &KAFKA_SOCKET_CONNECTION_SETUP_TIMEOUT,
             &KAFKA_FETCH_METADATA_TIMEOUT,
             &KAFKA_PROGRESS_RECORD_FETCH_TIMEOUT,
-            &KAFKA_DEFAULT_METADATA_FETCH_INTERVAL,
             &ENABLE_LAUNCHDARKLY,
             &MAX_CONNECTIONS,
             &NETWORK_POLICY,
@@ -1873,11 +1872,6 @@ impl SystemVars {
         *self.expect_value(&KAFKA_PROGRESS_RECORD_FETCH_TIMEOUT)
     }
 
-    /// Returns the `kafka_default_metadata_fetch_interval` configuration parameter.
-    pub fn kafka_default_metadata_fetch_interval(&self) -> Duration {
-        *self.expect_value(&KAFKA_DEFAULT_METADATA_FETCH_INTERVAL)
-    }
-
     /// Returns the `crdb_connect_timeout` configuration parameter.
     pub fn crdb_connect_timeout(&self) -> Duration {
         *self.expect_config_value(UncasedStr::new(
@@ -2249,7 +2243,6 @@ impl SystemVars {
             || name == KAFKA_SOCKET_CONNECTION_SETUP_TIMEOUT.name()
             || name == KAFKA_FETCH_METADATA_TIMEOUT.name()
             || name == KAFKA_PROGRESS_RECORD_FETCH_TIMEOUT.name()
-            || name == KAFKA_DEFAULT_METADATA_FETCH_INTERVAL.name()
             || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES.name()
             || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION.name()
             || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY.name()

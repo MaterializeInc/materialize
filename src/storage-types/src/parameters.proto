@@ -74,7 +74,6 @@ message ProtoKafkaTimeouts {
   mz_proto.ProtoDuration socket_connection_setup_timeout = 3;
   mz_proto.ProtoDuration fetch_metadata_timeout = 4;
   mz_proto.ProtoDuration progress_record_fetch_timeout = 7;
-  mz_proto.ProtoDuration default_metadata_fetch_interval = 8;
 }
 message ProtoSshTimeoutConfig {
   mz_proto.ProtoDuration check_interval = 1;
