@@ -456,8 +456,14 @@ class TestTargetDeploy:
         assert before_clusters["prod_dbt_deploy"] != after_clusters["prod"]
         assert before_schemas["prod"] != after_schemas["prod_dbt_deploy"]
         assert before_schemas["prod_dbt_deploy"] != after_schemas["prod"]
-        assert before_staging_schemas["staging"] != after_staging_schemas["staging_dbt_deploy"]
-        assert before_staging_schemas["staging_dbt_deploy"] != after_staging_schemas["staging"]
+        assert (
+            before_staging_schemas["staging"]
+            != after_staging_schemas["staging_dbt_deploy"]
+        )
+        assert (
+            before_staging_schemas["staging_dbt_deploy"]
+            != after_staging_schemas["staging"]
+        )
 
         run_dbt(["run-operation", "deploy_promote"])
 
@@ -484,11 +490,17 @@ class TestTargetDeploy:
         assert before_clusters["prod_dbt_deploy"] == after_clusters["prod"]
         assert before_schemas["prod"] == after_schemas["prod_dbt_deploy"]
         assert before_schemas["prod_dbt_deploy"] == after_schemas["prod"]
-        assert before_staging_schemas["staging"] == after_staging_schemas["staging_dbt_deploy"]
-        assert before_staging_schemas["staging_dbt_deploy"] == after_staging_schemas["staging"]
+        assert (
+            before_staging_schemas["staging"]
+            == after_staging_schemas["staging_dbt_deploy"]
+        )
+        assert (
+            before_staging_schemas["staging_dbt_deploy"]
+            == after_staging_schemas["staging"]
+        )
 
         # Verify that both schemas are tagged correctly
-        for schema_name in ['prod', 'staging']:
+        for schema_name in ["prod", "staging"]:
             tagged_schema_comment = project.run_sql(
                 f"""
                 SELECT c.comment
@@ -496,12 +508,18 @@ class TestTargetDeploy:
                 JOIN mz_schemas s USING (id)
                 WHERE s.name = '{schema_name}';
                 """,
-                fetch="one"
+                fetch="one",
             )
 
-            assert tagged_schema_comment is not None, f"No comment found for schema {schema_name}"
-            assert "Deployment by" in tagged_schema_comment[0], f"Missing deployment info in {schema_name} comment"
-            assert "on" in tagged_schema_comment[0], f"Missing timestamp in {schema_name} comment"
+            assert (
+                tagged_schema_comment is not None
+            ), f"No comment found for schema {schema_name}"
+            assert (
+                "Deployment by" in tagged_schema_comment[0]
+            ), f"Missing deployment info in {schema_name} comment"
+            assert (
+                "on" in tagged_schema_comment[0]
+            ), f"Missing timestamp in {schema_name} comment"
 
     def test_dbt_deploy_with_force(self, project):
         project.run_sql("CREATE CLUSTER prod SIZE = '1'")
