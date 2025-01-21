@@ -141,16 +141,16 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                     head = body.as_ref();
                 }
 
-                writeln!(f, "{}Return{}", ctx.indent, annotations)?;
-                ctx.indented(|ctx| head.fmt_text(f, ctx))?;
                 writeln!(f, "{}With", ctx.indent)?;
                 ctx.indented(|ctx| {
-                    for (id, value) in bindings.iter().rev() {
+                    for (id, value) in bindings.iter() {
                         writeln!(f, "{}cte {} =", ctx.indent, *id)?;
                         ctx.indented(|ctx| value.fmt_text(f, ctx))?;
                     }
                     Ok(())
                 })?;
+                writeln!(f, "{}Return{}", ctx.indent, annotations)?;
+                ctx.indented(|ctx| head.fmt_text(f, ctx))?;
             }
             LetRec {
                 ids,
@@ -161,11 +161,9 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                 let bindings = izip!(ids.iter(), values, limits).collect_vec();
                 let head = body.as_ref();
 
-                writeln!(f, "{}Return{}", ctx.indent, annotations)?;
-                ctx.indented(|ctx| head.fmt_text(f, ctx))?;
                 writeln!(f, "{}With Mutually Recursive", ctx.indent)?;
                 ctx.indented(|ctx| {
-                    for (id, value, limit) in bindings.iter().rev() {
+                    for (id, value, limit) in bindings.iter() {
                         if let Some(limit) = limit {
                             writeln!(f, "{}cte {} {} =", ctx.indent, limit, *id)?;
                         } else {
@@ -175,6 +173,8 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                     }
                     Ok(())
                 })?;
+                writeln!(f, "{}Return{}", ctx.indent, annotations)?;
+                ctx.indented(|ctx| head.fmt_text(f, ctx))?;
             }
             Mfp {
                 input,
