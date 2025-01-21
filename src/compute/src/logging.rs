@@ -79,19 +79,24 @@ where
     P: EventPusher<Timestamp, C>,
     C: Container,
 {
-    /// Publishes a batch of logged events and advances the capability.
-    fn publish_batch(&mut self, time: &Duration, data: Option<C>) {
-        if let Some(data) = data {
-            self.event_pusher.push(Event::Messages(self.time_ms, data));
+    /// Publishes a batch of logged events.
+    fn publish_batch(&mut self, data: C) {
+        self.event_pusher.push(Event::Messages(self.time_ms, data));
+    }
+
+    /// Indicate progress up to `time`, advances the capability.
+    ///
+    /// Returns `true` if the capability was advanced.
+    fn report_progress(&mut self, time: Duration) -> bool {
+        let time_ms = ((time.as_millis() / self.interval_ms) + 1) * self.interval_ms;
+        let new_time_ms: Timestamp = time_ms.try_into().expect("must fit");
+        if self.time_ms < new_time_ms {
+            self.event_pusher
+                .push(Event::Progress(vec![(new_time_ms, 1), (self.time_ms, -1)]));
+            self.time_ms = new_time_ms;
+            true
         } else {
-            // Flush: Indicate progress up to `time`.
-            let time_ms = ((time.as_millis() / self.interval_ms) + 1) * self.interval_ms;
-            let new_time_ms: Timestamp = time_ms.try_into().expect("must fit");
-            if self.time_ms < new_time_ms {
-                self.event_pusher
-                    .push(Event::Progress(vec![(new_time_ms, 1), (self.time_ms, -1)]));
-                self.time_ms = new_time_ms;
-            }
+            false
         }
     }
 }
@@ -175,7 +180,7 @@ impl PermutedRowPacker {
     /// This is equivalent to calling [`PermutedRowPacker::pack_slice`] and then calling `to_owned`
     /// on the returned rows.
     pub(crate) fn pack_slice_owned(&mut self, datums: &[Datum]) -> (Row, Row) {
-        let (key, value) = self.pack_by_index(|packer, index| packer.push(datums[index]));
+        let (key, value) = self.pack_slice(datums);
         (key.to_owned(), value.to_owned())
     }
 

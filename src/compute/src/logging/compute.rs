@@ -264,8 +264,6 @@ pub struct LirMetadata {
     /// The LIR operator, as a string (see `FlatPlanNode::humanize`).
     operator: String,
     /// The LIR identifier of the parent (if any).
-    /// Since `LirId`s are strictly positive, Rust can steal the low bit.
-    /// (See `test_option_lirid_fits_in_usize`.)
     parent_lir_id: Option<LirId>,
     /// How nested the operator is (for nice indentation).
     nesting: u8,

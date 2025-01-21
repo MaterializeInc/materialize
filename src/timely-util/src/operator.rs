@@ -707,7 +707,6 @@ where
                 data.hash(&mut h);
                 h.finish()
             });
-            // Access to `arrange_core` is OK because we specify the trace and don't hold on to it.
             consolidate_pact::<Ba, _, _>(&self.map(|k| (k, ())).inner, exchange, name)
                 .map(|((k, ()), time, diff)| (k.clone(), time.clone(), diff.clone()))
                 .as_collection()

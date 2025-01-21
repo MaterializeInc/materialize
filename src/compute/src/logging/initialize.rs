@@ -173,10 +173,11 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
             self.now,
             self.start_offset,
             move |time, data: &mut Option<CB::Container>| {
-                if data.is_none() {
+                if let Some(data) = data.take() {
+                    logger.publish_batch(data);
+                } else if logger.report_progress(*time) {
                     event_queue.activator.activate();
                 }
-                logger.publish_batch(time, data.take());
             },
         )
     }
@@ -219,17 +220,18 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
                         }
                     }
                     while let Some(container) = builder.extract() {
-                        logger.publish_batch(&time, Some(std::mem::take(container)));
+                        logger.publish_batch(std::mem::take(container));
                     }
                 }
             } else {
                 // Handle a flush
                 while let Some(container) = builder.finish() {
-                    logger.publish_batch(batch_time, Some(std::mem::take(container)));
+                    logger.publish_batch(std::mem::take(container));
                 }
 
-                logger.publish_batch(batch_time, None);
-                event_queue.activator.activate();
+                if logger.report_progress(*batch_time) {
+                    event_queue.activator.activate();
+                }
             }
         };
 
