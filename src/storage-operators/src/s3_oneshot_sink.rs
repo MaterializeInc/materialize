@@ -16,7 +16,7 @@ use std::rc::Rc;
 
 use anyhow::anyhow;
 use aws_types::sdk_config::SdkConfig;
-use differential_dataflow::{Collection, Hashable};
+use differential_dataflow::Hashable;
 use futures::StreamExt;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
@@ -31,6 +31,7 @@ use mz_storage_types::sinks::{S3SinkFormat, S3UploadInfo};
 use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
+use timely::container::columnation::TimelyStack;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::Broadcast;
 use timely::dataflow::{Scope, Stream};
@@ -54,9 +55,12 @@ mod pgcopy;
 ///   - completion: removes the sentinel file and calls the `worker_callback`
 ///
 /// Returns a token that should be held to keep the sink alive.
+///
+/// The `input_collection` must be a stream of chains, partitioned and exchanged by the row's hash
+/// modulo the number of batches.
 pub fn copy_to<G, F>(
-    input_collection: Collection<G, ((Row, u64), ()), Diff>,
-    err_stream: Stream<G, (((DataflowError, u64), ()), G::Timestamp, Diff)>,
+    input_collection: Stream<G, Vec<TimelyStack<((Row, ()), G::Timestamp, Diff)>>>,
+    err_stream: Stream<G, (DataflowError, G::Timestamp, Diff)>,
     up_to: Antichain<G::Timestamp>,
     connection_details: S3UploadInfo,
     connection_context: ConnectionContext,
@@ -65,6 +69,7 @@ pub fn copy_to<G, F>(
     connection_id: CatalogItemId,
     params: CopyToParameters,
     worker_callback: F,
+    output_batch_count: u64,
 ) -> Rc<dyn Any>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -89,6 +94,7 @@ where
             up_to,
             start_stream,
             params,
+            output_batch_count,
         ),
         S3SinkFormat::Parquet => render_upload_operator::<G, parquet::ParquetUploader>(
             scope.clone(),
@@ -101,6 +107,7 @@ where
             up_to,
             start_stream,
             params,
+            output_batch_count,
         ),
     };
 
@@ -130,7 +137,7 @@ fn render_initialization_operator<G>(
     scope: G,
     sink_id: GlobalId,
     up_to: Antichain<G::Timestamp>,
-    err_stream: Stream<G, (((DataflowError, u64), ()), G::Timestamp, Diff)>,
+    err_stream: Stream<G, (DataflowError, G::Timestamp, Diff)>,
 ) -> (Stream<G, Result<(), String>>, PressOnDropButton)
 where
     G: Scope<Timestamp = Timestamp>,
@@ -160,7 +167,7 @@ where
         while let Some(event) = error_handle.next().await {
             match event {
                 AsyncEvent::Data(cap, data) => {
-                    for (((error, _), _), ts, _) in data {
+                    for (error, ts, _) in data {
                         if !up_to.less_equal(&ts) {
                             start_handle.give(&cap, Err(error.to_string()));
                             return;
@@ -281,6 +288,9 @@ where
 /// Returns a `completion_stream` which contains 1 event per worker of
 /// the result of the upload operation, either an error or the number of rows
 /// uploaded by the worker.
+///
+/// The `input_collection` must be a stream of chains, partitioned and exchanged by the row's hash
+/// modulo the number of batches.
 fn render_upload_operator<G, T>(
     scope: G,
     connection_context: ConnectionContext,
@@ -288,20 +298,20 @@ fn render_upload_operator<G, T>(
     connection_id: CatalogItemId,
     connection_details: S3UploadInfo,
     sink_id: GlobalId,
-    input_collection: Collection<G, ((Row, u64), ()), Diff>,
+    input_collection: Stream<G, Vec<TimelyStack<((Row, ()), G::Timestamp, Diff)>>>,
     up_to: Antichain<G::Timestamp>,
     start_stream: Stream<G, Result<(), String>>,
     params: CopyToParameters,
+    output_batch_count: u64,
 ) -> (Stream<G, Result<u64, String>>, PressOnDropButton)
 where
     G: Scope<Timestamp = Timestamp>,
     T: CopyToS3Uploader,
 {
     let worker_id = scope.index();
-    let num_workers = scope.peers();
     let mut builder = AsyncOperatorBuilder::new("CopyToS3-uploader".to_string(), scope.clone());
 
-    let mut input_handle = builder.new_disconnected_input(&input_collection.inner, Pipeline);
+    let mut input_handle = builder.new_disconnected_input(&input_collection, Pipeline);
     let (completion_handle, completion_stream) = builder.new_output();
     let mut start_handle = builder.new_input_for(&start_stream, Pipeline, &completion_handle);
 
@@ -351,31 +361,24 @@ where
             }
 
             let mut row_count = 0;
-            let mut last_row = None;
             while let Some(event) = input_handle.next().await {
                 match event {
                     AsyncEvent::Data(_ts, data) => {
-                        for (((row, batch), ()), ts, diff) in data {
-                            // Check our assumption above that batches are
-                            // always assigned to the worker with ID `batch %
-                            // num_workers`.
-                            if usize::cast_from(batch) % num_workers != worker_id {
-                                anyhow::bail!(
-                                    "internal error: batch {} assigned to worker {} (expected worker {})",
-                                    batch,
-                                    worker_id,
-                                    usize::cast_from(batch) % num_workers
-                                );
-                            }
-                            if !up_to.less_equal(&ts) {
-                                if diff < 0 {
+                        for ((row, ()), ts, diff) in
+                            data.iter().flatten().flat_map(|chunk| chunk.iter())
+                        {
+                            // We're consuming a batch of data, and the upstream operator has to ensure
+                            // that the data is exchanged according to the batch.
+                            let batch = row.hashed() % output_batch_count;
+                            if !up_to.less_equal(ts) {
+                                if *diff < 0 {
                                     anyhow::bail!(
                                         "Invalid data in source errors, saw retractions ({}) for \
                                         row that does not exist",
-                                        diff * -1,
+                                        *diff * -1,
                                     )
                                 }
-                                row_count += u64::try_from(diff).unwrap();
+                                row_count += u64::try_from(*diff).unwrap();
                                 let uploader = match s3_uploaders.entry(batch) {
                                     Entry::Occupied(entry) => entry.into_mut(),
                                     Entry::Vacant(entry) => {
@@ -389,18 +392,10 @@ where
                                         )?)
                                     }
                                 };
-                                for _ in 0..diff {
-                                    uploader.append_row(&row).await?;
+                                for _ in 0..*diff {
+                                    uploader.append_row(row).await?;
                                 }
                             }
-                            // A very crude way to detect if there is ever a regression in the deterministic
-                            // ordering of rows in our input, since we are depending on an implementation
-                            // detail of timely communication (FIFO ordering over an exchange).
-                            let cur = (row, batch);
-                            if let Some(last) = last_row {
-                                assert!(&last < &cur, "broken fifo ordering!");
-                            }
-                            last_row = Some(cur);
                         }
                     }
                     AsyncEvent::Progress(frontier) => {

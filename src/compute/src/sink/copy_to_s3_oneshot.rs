@@ -11,7 +11,7 @@ use std::any::Any;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use differential_dataflow::{AsCollection, Collection, Hashable};
+use differential_dataflow::{Collection, Hashable};
 use mz_compute_client::protocol::response::CopyToResponse;
 use mz_compute_types::dyncfgs::{
     COPY_TO_S3_ARROW_BUILDER_BUFFER_RATIO, COPY_TO_S3_MULTIPART_PART_SIZE_BYTES,
@@ -23,7 +23,6 @@ use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::consolidate_pact;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::operators::core::Map;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::Scope;
 use timely::progress::Antichain;
@@ -63,32 +62,20 @@ where
         // files based on the user provided `MAX_FILE_SIZE`.
         let batch_count = self.output_batch_count;
 
-        // This relies on an assumption the output order after the Exchange is deterministic, which
-        // is necessary to ensure the files written from each compute replica are identical.
-        // While this is not technically guaranteed, the current implementation uses a FIFO channel.
-        // In the storage copy_to operator we assert the ordering of rows to detect any regressions.
+        // We exchange the data according to batch, but we don't want to send the batch ID to the
+        // sink. The sink can re-compute the batch ID from the data.
         let input = consolidate_pact::<KeyBatcher<_, _, _>, _, _>(
-            &sinked_collection
-                .map(move |row| {
-                    let batch = row.hashed() % batch_count;
-                    ((row, batch), ())
-                })
-                .inner,
-            Exchange::new(move |(((_, batch), _), _, _)| *batch),
+            &sinked_collection.map(move |row| (row, ())).inner,
+            Exchange::new(move |((row, ()), _, _): &((Row, _), _, _)| row.hashed() % batch_count),
             "Consolidated COPY TO S3 input",
         );
-        // TODO: We're converting a stream of region-allocated data to a stream of vectors.
-        let input = input.map(Clone::clone).as_collection();
 
         // We need to consolidate the error collection to ensure we don't act on retracted errors.
         let error = consolidate_pact::<KeyBatcher<_, _, _>, _, _>(
-            &err_collection
-                .map(move |row| {
-                    let batch = row.hashed() % batch_count;
-                    ((row, batch), ())
-                })
-                .inner,
-            Exchange::new(move |(((_, batch), _), _, _)| *batch),
+            &err_collection.map(move |err| (err, ())).inner,
+            Exchange::new(move |((err, _), _, _): &((DataflowError, _), _, _)| {
+                err.hashed() % batch_count
+            }),
             "Consolidated COPY TO S3 errors",
         );
 
@@ -104,9 +91,14 @@ where
                     while let Some((time, data)) = input.next() {
                         if !up_to.less_equal(time.time()) && !received_one {
                             received_one = true;
-                            output
-                                .session(&time)
-                                .give_iterator(data.iter().next().cloned().into_iter());
+                            output.session(&time).give_iterator(
+                                data.iter()
+                                    .flatten()
+                                    .flat_map(|chunk| chunk.iter().cloned())
+                                    .next()
+                                    .map(|((err, ()), time, diff)| (err, time, diff))
+                                    .into_iter(),
+                            );
                         }
                     }
                 }
@@ -132,6 +124,7 @@ where
             self.connection_id,
             params,
             result_callback,
+            self.output_batch_count,
         );
 
         Some(token)
