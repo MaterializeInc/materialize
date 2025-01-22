@@ -3576,6 +3576,7 @@ impl Coordinator {
             version: sink.version,
             partition_strategy: sink.partition_strategy,
             from_storage_metadata: (),
+            to_storage_metadata: (),
         };
 
         self.controller

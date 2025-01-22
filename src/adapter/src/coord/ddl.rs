@@ -1330,6 +1330,7 @@ impl Coordinator {
             with_snapshot: sink.with_snapshot,
             version: sink.version,
             from_storage_metadata: (),
+            to_storage_metadata: (),
         };
 
         let res = self

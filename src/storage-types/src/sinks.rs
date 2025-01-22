@@ -49,6 +49,7 @@ pub struct StorageSinkDesc<S, T = mz_repr::Timestamp> {
     pub envelope: SinkEnvelope,
     pub as_of: Antichain<T>,
     pub from_storage_metadata: S,
+    pub to_storage_metadata: S,
 }
 
 impl<S: Debug + PartialEq, T: Debug + PartialEq + PartialOrder> AlterCompatible
@@ -80,6 +81,7 @@ impl<S: Debug + PartialEq, T: Debug + PartialEq + PartialOrder> AlterCompatible
             from_storage_metadata,
             partition_strategy,
             with_snapshot,
+            to_storage_metadata,
         } = self;
 
         let compatibility_checks = [
@@ -98,6 +100,10 @@ impl<S: Debug + PartialEq, T: Debug + PartialEq + PartialOrder> AlterCompatible
             (
                 from_storage_metadata == &other.from_storage_metadata,
                 "from_storage_metadata",
+            ),
+            (
+                to_storage_metadata == &other.to_storage_metadata,
+                "to_storage_metadata",
             ),
         ];
 
@@ -132,6 +138,7 @@ impl Arbitrary for StorageSinkDesc<CollectionMetadata, mz_repr::Timestamp> {
             any::<SinkPartitionStrategy>(),
             any::<bool>(),
             any::<u64>(),
+            any::<CollectionMetadata>(),
         )
             .prop_map(
                 |(
@@ -144,6 +151,7 @@ impl Arbitrary for StorageSinkDesc<CollectionMetadata, mz_repr::Timestamp> {
                     partition_strategy,
                     with_snapshot,
                     version,
+                    to_storage_metadata,
                 )| {
                     StorageSinkDesc {
                         from,
@@ -155,9 +163,13 @@ impl Arbitrary for StorageSinkDesc<CollectionMetadata, mz_repr::Timestamp> {
                         from_storage_metadata,
                         partition_strategy,
                         with_snapshot,
+                        to_storage_metadata,
                     }
                 },
             )
+            .prop_filter("identical source and sink", |desc| {
+                desc.from_storage_metadata != desc.to_storage_metadata
+            })
             .boxed()
     }
 }
@@ -171,6 +183,7 @@ impl RustType<ProtoStorageSinkDesc> for StorageSinkDesc<CollectionMetadata, mz_r
             envelope: Some(self.envelope.into_proto()),
             as_of: Some(self.as_of.into_proto()),
             from_storage_metadata: Some(self.from_storage_metadata.into_proto()),
+            to_storage_metadata: Some(self.to_storage_metadata.into_proto()),
             partition_strategy: Some(self.partition_strategy.into_proto()),
             with_snapshot: self.with_snapshot,
             version: self.version,
@@ -200,6 +213,9 @@ impl RustType<ProtoStorageSinkDesc> for StorageSinkDesc<CollectionMetadata, mz_r
                 .into_rust_if_some("ProtoStorageSinkDesc::partition_strategy")?,
             with_snapshot: proto.with_snapshot,
             version: proto.version,
+            to_storage_metadata: proto
+                .to_storage_metadata
+                .into_rust_if_some("ProtoStorageSinkDesc::to_storage_metadata")?,
         })
     }
 }

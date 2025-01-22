@@ -1440,6 +1440,7 @@ where
             .expect("missing dependency")
             .into_element();
         let from_storage_metadata = self.storage_collections.collection_metadata(from_id)?;
+        let to_storage_metadata = self.storage_collections.collection_metadata(id)?;
 
         // Check whether the sink's write frontier is beyond the read hold we got
         let cur_export = self
@@ -1480,6 +1481,7 @@ where
                 partition_strategy: new_description.sink.partition_strategy,
                 from_storage_metadata,
                 with_snapshot: new_description.sink.with_snapshot,
+                to_storage_metadata,
             },
         };
 
@@ -1529,6 +1531,7 @@ where
             let from_storage_metadata = self
                 .storage_collections
                 .collection_metadata(new_export_description.sink.from)?;
+            let to_storage_metadata = self.storage_collections.collection_metadata(id)?;
 
             let cmd = RunSinkCommand {
                 id,
@@ -1552,6 +1555,7 @@ where
                     // TODO(petrosagg): change the controller to explicitly track dataflow executions
                     as_of: as_of.to_owned(),
                     from_storage_metadata,
+                    to_storage_metadata,
                 },
             };
 
@@ -3155,6 +3159,7 @@ where
         let from_storage_metadata = self
             .storage_collections
             .collection_metadata(description.sink.from)?;
+        let to_storage_metadata = self.storage_collections.collection_metadata(id)?;
 
         let cmd = RunSinkCommand {
             id,
@@ -3168,6 +3173,7 @@ where
                 partition_strategy: description.sink.partition_strategy.clone(),
                 from_storage_metadata,
                 with_snapshot: description.sink.with_snapshot,
+                to_storage_metadata,
             },
         };
 
