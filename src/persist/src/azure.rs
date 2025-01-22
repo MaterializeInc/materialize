@@ -20,6 +20,7 @@ use azure_storage::{prelude::*, CloudLocation, EMULATOR_ACCOUNT};
 use azure_storage_blobs::blob::operations::GetBlobResponse;
 use azure_storage_blobs::prelude::*;
 use bytes::Bytes;
+use futures_util::stream::FuturesOrdered;
 use futures_util::StreamExt;
 use tracing::{info, warn};
 use url::Url;
@@ -206,10 +207,7 @@ impl Blob for AzureBlob {
                         .new_region(usize::cast_from(content_length));
                     PreSizedBuffer::Sized(region)
                 }
-                0 => {
-                    metrics.get_invalid_resp.inc();
-                    PreSizedBuffer::Unknown(SegmentedBytes::new())
-                }
+                0 => PreSizedBuffer::Unknown(SegmentedBytes::new()),
             };
 
             let mut body = response.data;
@@ -240,7 +238,7 @@ impl Blob for AzureBlob {
             Ok(MaybeLgBytes::LgBytes(lgbytes))
         }
 
-        let mut handles = Vec::new();
+        let mut requests = FuturesOrdered::new();
         // TODO: the default chunk size is 1MB. We have not tried tuning it,
         // but making this configurable / running some benchmarks could be
         // valuable.
@@ -264,29 +262,15 @@ impl Blob for AzureBlob {
                 }
             };
 
-            // Fetch each chunk in a separate task for maximum concurrency.
-            //
-            // Note: Using `abort_on_drop` is important so we cancel any
-            // pending tasks if one hits an error.
+            // Drive all of the fetch requests concurrently.
             let metrics = self.metrics.clone();
-            let handle = mz_ore::task::spawn(|| "azure-fetch-chunk", async move {
-                fetch_chunk(response, metrics).await
-            })
-            .abort_on_drop();
-
-            handles.push(handle);
+            requests.push_back(fetch_chunk(response, metrics));
         }
 
         // Await on all of our chunks.
-        //
-        // No concurrency is needed here because the individual fetches are
-        // driven in tokio::tasks.
-        let mut segments = SegmentedBytes::with_capacity(handles.len());
-        for handle in handles {
-            let segment = handle
-                .await
-                .context("task spawn failure")?
-                .context("azure get body err")?;
+        let mut segments = SegmentedBytes::with_capacity(requests.len());
+        while let Some(body) = requests.next().await {
+            let segment = body.context("azure get body err")?;
             segments.push(segment);
         }
 
