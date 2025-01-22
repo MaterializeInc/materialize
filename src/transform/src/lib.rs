@@ -443,6 +443,9 @@ impl Transform for Fixpoint {
                             );
                             return Ok(());
                         }
+                        if let Some(id) = ctx.global_id {
+                            ctx.last_hash.insert(id, again.hash_to_u64());
+                        }
                         self.apply_transforms(
                             &mut again,
                             ctx,
