@@ -206,7 +206,7 @@ use mz_repr::{GlobalId, Row};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::dyncfgs;
 use mz_storage_types::oneshot_sources::{OneshotIngestionDescription, OneshotIngestionRequest};
-use mz_storage_types::sinks::{MetadataFilled, StorageSinkDesc};
+use mz_storage_types::sinks::StorageSinkDesc;
 use mz_storage_types::sources::{GenericSourceConnection, IngestionDescription, SourceConnection};
 use mz_timely_util::antichain::AntichainExt;
 use timely::communication::Allocate;
@@ -425,7 +425,7 @@ pub fn build_export_dataflow<A: Allocate>(
     timely_worker: &mut TimelyWorker<A>,
     storage_state: &mut StorageState,
     id: GlobalId,
-    description: StorageSinkDesc<MetadataFilled, mz_repr::Timestamp>,
+    description: StorageSinkDesc<CollectionMetadata, mz_repr::Timestamp>,
 ) {
     let worker_logging = timely_worker.log_register().get("timely").map(Into::into);
     let debug_name = id.to_string();

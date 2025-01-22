@@ -238,8 +238,8 @@ mod tests {
     use mz_storage_types::instances::StorageInstanceId;
     use mz_storage_types::sinks::{
         KafkaIdStyle, KafkaSinkCompressionType, KafkaSinkConnection, KafkaSinkFormat,
-        KafkaSinkFormatType, MetadataFilled, SinkEnvelope, SinkPartitionStrategy,
-        StorageSinkConnection, StorageSinkDesc,
+        KafkaSinkFormatType, SinkEnvelope, SinkPartitionStrategy, StorageSinkConnection,
+        StorageSinkDesc,
     };
     use mz_storage_types::sources::load_generator::{
         LoadGenerator, LoadGeneratorOutput, LoadGeneratorSourceExportDetails,
@@ -342,7 +342,7 @@ mod tests {
         }
     }
 
-    fn sink_description() -> StorageSinkDesc<MetadataFilled, u64> {
+    fn sink_description() -> StorageSinkDesc<CollectionMetadata, u64> {
         StorageSinkDesc {
             from: GlobalId::System(1),
             from_desc: RelationDesc::new(

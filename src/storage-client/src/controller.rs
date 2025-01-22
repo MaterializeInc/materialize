@@ -41,7 +41,7 @@ use mz_storage_types::oneshot_sources::{OneshotIngestionRequest, OneshotResultCa
 use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::read_policy::ReadPolicy;
-use mz_storage_types::sinks::{MetadataUnfilled, StorageSinkConnection, StorageSinkDesc};
+use mz_storage_types::sinks::{StorageSinkConnection, StorageSinkDesc};
 use mz_storage_types::sources::{
     GenericSourceConnection, IngestionDescription, SourceDesc, SourceExportDataConfig,
     SourceExportDetails, Timeline,
@@ -157,7 +157,7 @@ impl<T> CollectionDescription<T> {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExportDescription<T = mz_repr::Timestamp> {
-    pub sink: StorageSinkDesc<MetadataUnfilled, T>,
+    pub sink: StorageSinkDesc<(), T>,
     /// The ID of the instance in which to install the export.
     pub instance_id: StorageInstanceId,
 }

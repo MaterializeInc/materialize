@@ -15,7 +15,6 @@ use std::time::Duration;
 
 use mz_dyncfg::ConfigSet;
 use mz_expr::MirScalarExpr;
-use mz_persist_types::ShardId;
 use mz_pgcopy::CopyFormatParams;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::bytes::ByteSize;
@@ -40,7 +39,7 @@ pub mod s3_oneshot_sink;
 
 /// A sink for updates to a relational collection.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct StorageSinkDesc<S: StorageSinkDescFillState, T = mz_repr::Timestamp> {
+pub struct StorageSinkDesc<S, T = mz_repr::Timestamp> {
     pub from: GlobalId,
     pub from_desc: RelationDesc,
     pub connection: StorageSinkConnection,
@@ -49,11 +48,11 @@ pub struct StorageSinkDesc<S: StorageSinkDescFillState, T = mz_repr::Timestamp> 
     pub version: u64,
     pub envelope: SinkEnvelope,
     pub as_of: Antichain<T>,
-    pub from_storage_metadata: <S as StorageSinkDescFillState>::StorageMetadata,
+    pub from_storage_metadata: S,
 }
 
-impl<S: Debug + StorageSinkDescFillState + PartialEq, T: Debug + PartialEq + PartialOrder>
-    AlterCompatible for StorageSinkDesc<S, T>
+impl<S: Debug + PartialEq, T: Debug + PartialEq + PartialOrder> AlterCompatible
+    for StorageSinkDesc<S, T>
 {
     /// Determines if `self` is compatible with another `StorageSinkDesc`, in
     /// such a way that it is possible to turn `self` into `other` through a
@@ -118,26 +117,7 @@ impl<S: Debug + StorageSinkDescFillState + PartialEq, T: Debug + PartialEq + Par
     }
 }
 
-pub trait StorageSinkDescFillState {
-    type StatusId: Debug + Clone + Serialize + for<'a> Deserialize<'a> + Eq + PartialEq;
-    type StorageMetadata: Debug + Clone + Serialize + for<'a> Deserialize<'a> + Eq + PartialEq;
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct MetadataUnfilled;
-impl StorageSinkDescFillState for MetadataUnfilled {
-    type StatusId = GlobalId;
-    type StorageMetadata = ();
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct MetadataFilled;
-impl StorageSinkDescFillState for MetadataFilled {
-    type StatusId = ShardId;
-    type StorageMetadata = CollectionMetadata;
-}
-
-impl Arbitrary for StorageSinkDesc<MetadataFilled, mz_repr::Timestamp> {
+impl Arbitrary for StorageSinkDesc<CollectionMetadata, mz_repr::Timestamp> {
     type Strategy = BoxedStrategy<Self>;
     type Parameters = ();
 
@@ -182,7 +162,7 @@ impl Arbitrary for StorageSinkDesc<MetadataFilled, mz_repr::Timestamp> {
     }
 }
 
-impl RustType<ProtoStorageSinkDesc> for StorageSinkDesc<MetadataFilled, mz_repr::Timestamp> {
+impl RustType<ProtoStorageSinkDesc> for StorageSinkDesc<CollectionMetadata, mz_repr::Timestamp> {
     fn into_proto(&self) -> ProtoStorageSinkDesc {
         ProtoStorageSinkDesc {
             connection: Some(self.connection.into_proto()),

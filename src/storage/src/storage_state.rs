@@ -97,7 +97,7 @@ use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::oneshot_sources::OneshotIngestionDescription;
-use mz_storage_types::sinks::{MetadataFilled, StorageSinkDesc};
+use mz_storage_types::sinks::StorageSinkDesc;
 use mz_storage_types::sources::IngestionDescription;
 use mz_storage_types::AlterCompatible;
 use mz_timely_util::builder_async::PressOnDropButton;
@@ -276,7 +276,7 @@ pub struct StorageState {
     /// Descriptions of each installed ingestion.
     pub ingestions: BTreeMap<GlobalId, IngestionDescription<CollectionMetadata>>,
     /// Descriptions of each installed export.
-    pub exports: BTreeMap<GlobalId, StorageSinkDesc<MetadataFilled, mz_repr::Timestamp>>,
+    pub exports: BTreeMap<GlobalId, StorageSinkDesc<CollectionMetadata, mz_repr::Timestamp>>,
     /// Descriptions of oneshot ingestions that are currently running.
     pub oneshot_ingestions: BTreeMap<uuid::Uuid, OneshotIngestionDescription<ProtoBatch>>,
     /// Undocumented

@@ -30,7 +30,7 @@ use mz_service::grpc::{GrpcClient, GrpcServer, ProtoServiceTypes, ResponseStream
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::oneshot_sources::OneshotIngestionRequest;
 use mz_storage_types::parameters::StorageParameters;
-use mz_storage_types::sinks::{MetadataFilled, StorageSinkDesc};
+use mz_storage_types::sinks::StorageSinkDesc;
 use mz_storage_types::sources::IngestionDescription;
 use mz_timely_util::progress::any_antichain;
 use proptest::prelude::{any, Arbitrary};
@@ -260,7 +260,7 @@ impl RustType<ProtoRunSinkCommand> for RunSinkCommand<mz_repr::Timestamp> {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct RunSinkCommand<T> {
     pub id: GlobalId,
-    pub description: StorageSinkDesc<MetadataFilled, T>,
+    pub description: StorageSinkDesc<CollectionMetadata, T>,
 }
 
 impl Arbitrary for RunSinkCommand<mz_repr::Timestamp> {
@@ -270,7 +270,7 @@ impl Arbitrary for RunSinkCommand<mz_repr::Timestamp> {
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         (
             any::<GlobalId>(),
-            any::<StorageSinkDesc<MetadataFilled, mz_repr::Timestamp>>(),
+            any::<StorageSinkDesc<CollectionMetadata, mz_repr::Timestamp>>(),
         )
             .prop_map(|(id, description)| Self { id, description })
             .boxed()
