@@ -3097,39 +3097,6 @@ impl HirScalarExpr {
         mem::replace(self, HirScalarExpr::literal_null(ScalarType::String))
     }
 
-    #[deprecated = "Use `VisitChildren<HirScalarExpr>::visit_children` instead."]
-    pub fn visit1_mut<F>(&mut self, mut f: F)
-    where
-        F: FnMut(&mut Self),
-    {
-        use HirScalarExpr::*;
-        match self {
-            Column(..) | Parameter(..) | Literal(..) | CallUnmaterializable(..) => (),
-            CallUnary { expr, .. } => f(expr),
-            CallBinary { expr1, expr2, .. } => {
-                f(expr1);
-                f(expr2);
-            }
-            CallVariadic { exprs, .. } => {
-                for expr in exprs {
-                    f(expr);
-                }
-            }
-            If { cond, then, els } => {
-                f(cond);
-                f(then);
-                f(els);
-            }
-            Exists(..) | Select(..) => (),
-            Windowing(expr) => {
-                let _ = expr.visit_expressions_mut(&mut |e| -> Result<(), ()> {
-                    f(e);
-                    Ok(())
-                });
-            }
-        }
-    }
-
     #[deprecated = "Redefine this based on the `Visit` and `VisitChildren` methods."]
     /// Visits the column references in this scalar expression.
     ///
