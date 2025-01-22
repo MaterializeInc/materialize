@@ -1,6 +1,6 @@
 # dbt-materialize Changelog
 
-## Unreleased
+## 1.9.3 - 2025-01-22
 
 * Fix a bug in the `truncate_relation_sql` macro where specifying a cluster for
   seeds wasn't respecting custom cluster naming logic from user-defined
