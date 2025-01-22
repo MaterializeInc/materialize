@@ -321,7 +321,6 @@ pub(super) fn construct<A: Allocate + 'static>(
                 }
             },
         );
-        let logs = logs.container::<Column<(Duration, ComputeEvent)>>();
 
         // Build a demux operator that splits the replayed event stream up into the separate
         // logging streams.
@@ -732,7 +731,7 @@ struct ArrangementHeapDatum {
     operator_id: usize,
 }
 
-#[derive(Clone, Columnar)]
+#[derive(Clone)]
 struct HydrationTimeDatum {
     export_id: GlobalId,
     time_ns: Option<u64>,
@@ -789,47 +788,26 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
 
     /// Handle the given compute event.
     fn handle(&mut self, event: <ComputeEvent as Columnar>::Ref<'_>) {
+        use ComputeEventReference::*;
         match event {
-            ComputeEventReference::Export(export) => self.handle_export(export),
-            ComputeEventReference::ExportDropped(export_dropped) => {
-                self.handle_export_dropped(export_dropped)
-            }
-            ComputeEventReference::Peek(
-                peek @ PeekEventReference {
-                    installed: true, ..
-                },
-            ) => self.handle_peek_install(peek),
-            ComputeEventReference::Peek(
-                peek @ PeekEventReference {
-                    installed: false, ..
-                },
-            ) => self.handle_peek_retire(peek),
-            ComputeEventReference::Frontier(frontier) => self.handle_frontier(frontier),
-            ComputeEventReference::ImportFrontier(import_frontier) => {
-                self.handle_import_frontier(import_frontier)
-            }
-            ComputeEventReference::ArrangementHeapSize(inner) => {
-                self.handle_arrangement_heap_size(inner)
-            }
-            ComputeEventReference::ArrangementHeapCapacity(inner) => {
-                self.handle_arrangement_heap_capacity(inner)
-            }
-            ComputeEventReference::ArrangementHeapAllocations(inner) => {
-                self.handle_arrangement_heap_allocations(inner)
-            }
-            ComputeEventReference::ArrangementHeapSizeOperator(inner) => {
-                self.handle_arrangement_heap_size_operator(inner)
-            }
-            ComputeEventReference::ArrangementHeapSizeOperatorDrop(inner) => {
+            Export(export) => self.handle_export(export),
+            ExportDropped(export_dropped) => self.handle_export_dropped(export_dropped),
+            Peek(peek) if peek.installed => self.handle_peek_install(peek),
+            Peek(peek) => self.handle_peek_retire(peek),
+            Frontier(frontier) => self.handle_frontier(frontier),
+            ImportFrontier(import_frontier) => self.handle_import_frontier(import_frontier),
+            ArrangementHeapSize(inner) => self.handle_arrangement_heap_size(inner),
+            ArrangementHeapCapacity(inner) => self.handle_arrangement_heap_capacity(inner),
+            ArrangementHeapAllocations(inner) => self.handle_arrangement_heap_allocations(inner),
+            ArrangementHeapSizeOperator(inner) => self.handle_arrangement_heap_size_operator(inner),
+            ArrangementHeapSizeOperatorDrop(inner) => {
                 self.handle_arrangement_heap_size_operator_dropped(inner)
             }
-            ComputeEventReference::DataflowShutdown(shutdown) => {
-                self.handle_dataflow_shutdown(shutdown)
-            }
-            ComputeEventReference::ErrorCount(error_count) => self.handle_error_count(error_count),
-            ComputeEventReference::Hydration(hydration) => self.handle_hydration(hydration),
-            ComputeEventReference::LirMapping(mapping) => self.handle_lir_mapping(mapping),
-            ComputeEventReference::DataflowGlobal(global) => self.handle_dataflow_global(global),
+            DataflowShutdown(shutdown) => self.handle_dataflow_shutdown(shutdown),
+            ErrorCount(error_count) => self.handle_error_count(error_count),
+            Hydration(hydration) => self.handle_hydration(hydration),
+            LirMapping(mapping) => self.handle_lir_mapping(mapping),
+            DataflowGlobal(global) => self.handle_dataflow_global(global),
         }
     }
 

@@ -27,12 +27,17 @@ mod container {
     use columnar::Columnar;
     use columnar::Container as _;
     use columnar::{AsBytes, Clear, FromBytes, Index, Len};
+    use mz_ore::cast::CastFrom;
     use timely::bytes::arc::Bytes;
     use timely::container::PushInto;
     use timely::dataflow::channels::ContainerBytes;
     use timely::Container;
 
     /// A container based on a columnar store, encoded in aligned bytes.
+    ///
+    /// The type can represent typed data, bytes from Timely, or an aligned allocation. The name
+    /// is singular to express that the preferred format is [`Column::Align`]. The [`Column::Typed`]
+    /// variant is used to construct the container, and it owns potentially multiple columns of data.
     pub enum Column<C: Columnar> {
         /// The typed variant of the container.
         Typed(C::Container),
@@ -50,8 +55,16 @@ mod container {
         fn borrow(&self) -> <C::Container as columnar::Container<C>>::Borrowed<'_> {
             match self {
                 Column::Typed(t) => t.borrow(),
-                Column::Bytes(b) => <<C::Container as columnar::Container<C>>::Borrowed<'_> as FromBytes>::from_bytes(&mut decode(bytemuck::cast_slice(b))),
-                Column::Align(a) => <<C::Container as columnar::Container<C>>::Borrowed<'_> as FromBytes>::from_bytes(&mut decode(a)),
+                Column::Bytes(b) => {
+                    <<C::Container as columnar::Container<C>>::Borrowed<'_>>::from_bytes(
+                        &mut decode(bytemuck::cast_slice(b)),
+                    )
+                }
+                Column::Align(a) => {
+                    <<C::Container as columnar::Container<C>>::Borrowed<'_>>::from_bytes(
+                        &mut decode(a),
+                    )
+                }
             }
         }
     }
@@ -68,7 +81,8 @@ mod container {
     {
         fn clone(&self) -> Self {
             match self {
-                // TODO: We could go from `Typed` to `Align` if we wanted to.
+                // Typed stays typed, although we would have the option to move to aligned data.
+                // If we did it might be confusing why we couldn't push into a cloned column.
                 Column::Typed(t) => Column::Typed(t.clone()),
                 Column::Bytes(b) => {
                     assert_eq!(b.len() % 8, 0);
@@ -133,12 +147,14 @@ mod container {
         fn from_bytes(bytes: Bytes) -> Self {
             // Our expectation / hope is that `bytes` is `u64` aligned and sized.
             // If the alignment is borked, we can relocate. If the size is borked,
-            // not sure what we do in that case.
+            // not sure what we do in that case. An incorrect size indicates a problem
+            // of `into_bytes`, or a failure of the communication layer, both of which
+            // are unrecoverable.
             assert_eq!(bytes.len() % 8, 0);
             if let Ok(_) = bytemuck::try_cast_slice::<_, u64>(&bytes) {
                 Self::Bytes(bytes)
             } else {
-                println!("Re-locating bytes for alignment reasons");
+                // We failed to cast the slice, so we'll reallocate.
                 let mut alloc: Vec<u64> = vec![0; bytes.len() / 8];
                 bytemuck::cast_slice_mut(&mut alloc[..]).copy_from_slice(&bytes[..]);
                 Self::Align(alloc.into())
@@ -147,7 +163,6 @@ mod container {
 
         fn length_in_bytes(&self) -> usize {
             match self {
-                // We'll need one u64 for the length, then the length rounded up to a multiple of 8.
                 Column::Typed(t) => 8 * t.borrow().length_in_words(),
                 Column::Bytes(b) => b.len(),
                 Column::Align(a) => 8 * a.len(),
@@ -163,12 +178,12 @@ mod container {
                     // Padding should be added, but only for alignment; no specific values are required.
                     for (align, bytes) in t.borrow().as_bytes() {
                         assert!(align <= 8);
-                        let length: u64 = bytes.len().try_into().unwrap();
+                        let length = u64::cast_from(bytes.len());
                         writer
                             .write_all(bytemuck::cast_slice(std::slice::from_ref(&length)))
                             .unwrap();
                         writer.write_all(bytes).unwrap();
-                        let padding: usize = ((8 - (length % 8)) % 8).try_into().unwrap();
+                        let padding = usize::cast_from((8 - (length % 8)) % 8);
                         writer.write_all(&[0; 8][..padding]).unwrap();
                     }
                 }
@@ -193,8 +208,11 @@ mod builder {
     pub struct ColumnBuilder<C: Columnar> {
         /// Container that we're writing to.
         current: C::Container,
-        /// Empty allocation.
-        empty: Option<Column<C>>,
+        /// Finished container that we presented to callers of extract/finish.
+        ///
+        /// We don't recycle the column because for extract, it's not typed, and after calls
+        /// to finish it'll be `None`.
+        finished: Option<Column<C>>,
         /// Completed containers pending to be sent.
         pending: VecDeque<Column<C>>,
     }
@@ -227,7 +245,7 @@ mod builder {
         fn default() -> Self {
             ColumnBuilder {
                 current: Default::default(),
-                empty: None,
+                finished: None,
                 pending: Default::default(),
             }
         }
@@ -242,8 +260,8 @@ mod builder {
         #[inline]
         fn extract(&mut self) -> Option<&mut Self::Container> {
             if let Some(container) = self.pending.pop_front() {
-                self.empty = Some(container);
-                self.empty.as_mut()
+                self.finished = Some(container);
+                self.finished.as_mut()
             } else {
                 None
             }
@@ -255,8 +273,8 @@ mod builder {
                 self.pending
                     .push_back(Column::Typed(std::mem::take(&mut self.current)));
             }
-            self.empty = self.pending.pop_front();
-            self.empty.as_mut()
+            self.finished = self.pending.pop_front();
+            self.finished.as_mut()
         }
     }
 
@@ -392,7 +410,7 @@ mod provided_builder {
     use timely::Container;
 
     /// A container builder that doesn't support pushing elements, and is only suitable for pushing
-    /// whole containers at session. See [`give_container`] for more information.
+    /// whole containers at Timely [`Session`]s. See [`give_container`] for more information.
     ///
     ///  [`give_container`]: timely::dataflow::channels::pushers::buffer::Session::give_container
     pub struct ProvidedBuilder<C> {

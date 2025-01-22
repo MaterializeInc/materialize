@@ -168,7 +168,7 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
         &self,
         event_queue: EventQueue<CB::Container>,
     ) -> Logger<CB> {
-        let mut logger = BatchLogger::<_, _>::new(event_queue.link, self.interval_ms);
+        let mut logger = BatchLogger::new(event_queue.link, self.interval_ms);
         Logger::new(
             self.now,
             self.start_offset,
@@ -185,7 +185,7 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
     fn reachability_logger(&self) -> Logger<TrackerEventBuilder> {
         let event_queue = self.r_event_queue.clone();
 
-        let mut logger = BatchLogger::<_, _>::new(event_queue.link, self.interval_ms);
+        let mut logger = BatchLogger::new(event_queue.link, self.interval_ms);
         let mut massaged = Vec::new();
         let mut builder = ColumnBuilder::default();
 

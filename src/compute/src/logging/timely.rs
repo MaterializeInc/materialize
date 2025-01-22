@@ -53,8 +53,7 @@ pub(super) fn construct<A: Allocate>(
     event_queue: EventQueue<Vec<(Duration, TimelyEvent)>>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
 ) -> BTreeMap<LogVariant, LogCollection> {
-    let logging_interval_ms =
-        u64::try_from(std::cmp::max(1, config.interval.as_millis())).expect("must fit");
+    let logging_interval_ms = std::cmp::max(1, config.interval.as_millis());
     let worker_id = worker.index();
     let peers = worker.peers();
     let dataflow_index = worker.next_dataflow_index();
@@ -436,7 +435,7 @@ struct DemuxHandler<'a, 'b> {
     /// Demux output buffers.
     output: &'a mut DemuxOutput<'b>,
     /// The logging interval specifying the time granularity for the updates.
-    logging_interval_ms: u64,
+    logging_interval_ms: u128,
     /// The number of timely workers.
     peers: usize,
     /// The current event time.
@@ -447,7 +446,7 @@ impl DemuxHandler<'_, '_> {
     /// Return the timestamp associated with the current event, based on the event time and the
     /// logging interval.
     fn ts(&self) -> Timestamp {
-        let time_ms = u64::try_from(self.time.as_millis()).expect("must fit");
+        let time_ms = self.time.as_millis();
         let interval = self.logging_interval_ms;
         let rounded = (time_ms / interval + 1) * interval;
         rounded.try_into().expect("must fit")
