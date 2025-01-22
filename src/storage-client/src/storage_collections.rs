@@ -1545,7 +1545,7 @@ where
                 snapshot
                     .into_iter()
                     .map(|(row, diff)| {
-                        assert!(diff == 1, "snapshot doesn't accumulate to set");
+                        assert_eq!(diff, 1, "snapshot doesn't accumulate to set");
                         row
                     })
                     .collect()

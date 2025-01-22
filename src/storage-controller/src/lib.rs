@@ -1489,7 +1489,7 @@ where
             },
         };
 
-        // Fetch the client for this exports's cluster.
+        // Fetch the client for this export's cluster.
         let instance = self
             .instances
             .get_mut(&new_description.instance_id)
