@@ -217,7 +217,7 @@ fn scalar_type_and_array_to_reader(
             // Don't use the context here, but make sure the precision is valid.
             let mut ctx = dec::Context::<Numeric>::default();
             ctx.set_precision(precision).map_err(|e| {
-                anyhow::anyhow!("invalid precision from Decimal128, {precision}, {e}")
+                anyhow::anyhow!("invalid precision from Decimal256, {precision}, {e}")
             })?;
 
             let array = downcast_array::<Decimal256Array>(array);
