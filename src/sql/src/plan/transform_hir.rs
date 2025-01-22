@@ -56,54 +56,61 @@ use crate::plan::{AggregateExpr, WindowExprType};
 /// = e`, will be further restricted to outer rows that match `A = b AND c =
 /// d AND EXISTS(<subquery>)`. This can vastly reduce the cost of the
 /// subquery, especially when the original conjunction contains join keys.
-pub fn split_subquery_predicates(expr: &mut HirRelationExpr) {
-    fn walk_relation(expr: &mut HirRelationExpr) {
+pub fn split_subquery_predicates(expr: &mut HirRelationExpr) -> Result<(), RecursionLimitError> {
+    fn walk_relation(expr: &mut HirRelationExpr) -> Result<(), RecursionLimitError> {
         #[allow(deprecated)]
-        expr.visit_mut(0, &mut |expr, _| match expr {
-            HirRelationExpr::Map { scalars, .. } => {
-                for scalar in scalars {
-                    walk_scalar(scalar);
+        expr.visit_mut_fallible(0, &mut |expr, _| {
+            match expr {
+                HirRelationExpr::Map { scalars, .. } => {
+                    for scalar in scalars {
+                        walk_scalar(scalar)?;
+                    }
                 }
+                HirRelationExpr::CallTable { exprs, .. } => {
+                    for expr in exprs {
+                        walk_scalar(expr)?;
+                    }
+                }
+                HirRelationExpr::Filter { predicates, .. } => {
+                    let mut subqueries = vec![];
+                    for predicate in &mut *predicates {
+                        walk_scalar(predicate)?;
+                        extract_conjuncted_subqueries(predicate, &mut subqueries)?;
+                    }
+                    // TODO(benesch): we could be smarter about the order in which
+                    // we emit subqueries. At the moment we just emit in the order
+                    // we discovered them, but ideally we'd emit them in an order
+                    // that accounted for their cost/selectivity. E.g., low-cost,
+                    // high-selectivity subqueries should go first.
+                    for subquery in subqueries {
+                        predicates.push(subquery);
+                    }
+                }
+                _ => (),
             }
-            HirRelationExpr::CallTable { exprs, .. } => {
-                for expr in exprs {
-                    walk_scalar(expr);
-                }
-            }
-            HirRelationExpr::Filter { predicates, .. } => {
-                let mut subqueries = vec![];
-                for predicate in &mut *predicates {
-                    walk_scalar(predicate);
-                    extract_conjuncted_subqueries(predicate, &mut subqueries);
-                }
-                // TODO(benesch): we could be smarter about the order in which
-                // we emit subqueries. At the moment we just emit in the order
-                // we discovered them, but ideally we'd emit them in an order
-                // that accounted for their cost/selectivity. E.g., low-cost,
-                // high-selectivity subqueries should go first.
-                for subquery in subqueries {
-                    predicates.push(subquery);
-                }
-            }
-            _ => (),
-        });
-    }
-
-    fn walk_scalar(expr: &mut HirScalarExpr) {
-        #[allow(deprecated)]
-        expr.visit_mut(&mut |expr| match expr {
-            HirScalarExpr::Exists(input) | HirScalarExpr::Select(input) => walk_relation(input),
-            _ => (),
+            Ok(())
         })
     }
 
-    fn contains_subquery(expr: &HirScalarExpr) -> bool {
+    fn walk_scalar(expr: &mut HirScalarExpr) -> Result<(), RecursionLimitError> {
+        expr.try_visit_mut_post(&mut |expr| {
+            match expr {
+                HirScalarExpr::Exists(input) | HirScalarExpr::Select(input) => {
+                    walk_relation(input)?
+                }
+                _ => (),
+            }
+            Ok(())
+        })
+    }
+
+    fn contains_subquery(expr: &HirScalarExpr) -> Result<bool, RecursionLimitError> {
         let mut found = false;
-        expr.visit_pre_nolimit(&mut |expr| match expr {
+        expr.visit_pre(&mut |expr| match expr {
             HirScalarExpr::Exists(_) | HirScalarExpr::Select(_) => found = true,
             _ => (),
-        });
-        found
+        })?;
+        Ok(found)
     }
 
     /// Extracts subqueries from a conjunction into `out`.
@@ -122,7 +129,10 @@ pub fn split_subquery_predicates(expr: &mut HirRelationExpr) {
     ///
     /// and returns the expression fragments `EXISTS (<subquery 1>)` and
     /// `(<subquery 2>) = e` in the `out` vector.
-    fn extract_conjuncted_subqueries(expr: &mut HirScalarExpr, out: &mut Vec<HirScalarExpr>) {
+    fn extract_conjuncted_subqueries(
+        expr: &mut HirScalarExpr,
+        out: &mut Vec<HirScalarExpr>,
+    ) -> Result<(), RecursionLimitError> {
         match expr {
             HirScalarExpr::CallVariadic {
                 func: VariadicFunc::And,
@@ -130,13 +140,14 @@ pub fn split_subquery_predicates(expr: &mut HirRelationExpr) {
             } => {
                 exprs
                     .into_iter()
-                    .for_each(|e| extract_conjuncted_subqueries(e, out));
+                    .try_for_each(|e| extract_conjuncted_subqueries(e, out))?;
             }
-            expr if contains_subquery(expr) => {
+            expr if contains_subquery(expr)? => {
                 out.push(mem::replace(expr, HirScalarExpr::literal_true()))
             }
             _ => (),
         }
+        Ok(())
     }
 
     walk_relation(expr)

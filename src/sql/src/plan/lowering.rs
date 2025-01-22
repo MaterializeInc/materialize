@@ -39,18 +39,19 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::iter::repeat;
 
+use itertools::Itertools;
+use mz_expr::visit::Visit;
+use mz_expr::{AccessStrategy, AggregateFunc, MirRelationExpr, MirScalarExpr};
+use mz_ore::collections::CollectionExt;
+use mz_ore::stack::maybe_grow;
+use mz_repr::*;
+
 use crate::optimizer_metrics::OptimizerMetrics;
 use crate::plan::hir::{
     AggregateExpr, ColumnOrder, ColumnRef, HirRelationExpr, HirScalarExpr, JoinKind, WindowExprType,
 };
 use crate::plan::{transform_hir, PlanError};
 use crate::session::vars::SystemVars;
-use itertools::Itertools;
-use mz_expr::{AccessStrategy, AggregateFunc, MirRelationExpr, MirScalarExpr};
-use mz_expr::visit::Visit;
-use mz_ore::collections::CollectionExt;
-use mz_ore::stack::maybe_grow;
-use mz_repr::*;
 
 mod variadic_left;
 
@@ -185,7 +186,7 @@ impl HirRelationExpr {
             }
             mut other => {
                 let mut id_gen = mz_ore::id_gen::IdGen::default();
-                transform_hir::split_subquery_predicates(&mut other);
+                transform_hir::split_subquery_predicates(&mut other)?;
                 transform_hir::try_simplify_quantified_comparisons(&mut other);
                 transform_hir::fuse_window_functions(&mut other, &context)?;
                 MirRelationExpr::constant(vec![vec![]], RelationType::new(vec![])).let_in(
