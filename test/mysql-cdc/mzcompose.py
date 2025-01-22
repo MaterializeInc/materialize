@@ -79,7 +79,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         f"Workflows in shard with index {buildkite.get_parallelism_index()}: {sharded_workflows}"
     )
     for name in sharded_workflows:
-        if name == "default":
+        if name in ("default", "large-scale"):
             continue
 
         with c.test_case(name):
@@ -270,6 +270,88 @@ def workflow_many_inserts(c: Composition, parser: WorkflowArgumentParser) -> Non
             f"""
             > SELECT count(*) FROM many_inserts
             {initial_records + concurrent_records}
+            """
+        ),
+    )
+
+
+def workflow_large_scale(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """
+    The goal is to test a large scale MySQL instance and to make sure that we can successfully ingest data from it quickly.
+    """
+    mysql_version = get_targeted_mysql_version(parser)
+    with c.override(create_mysql(mysql_version)):
+        c.up("materialized", "mysql")
+        c.up("testdrive", persistent=True)
+
+        # Set up the MySQL server with the initial records, set up the connection to
+        # the MySQL server in Materialize.
+        c.testdrive(
+            dedent(
+                f"""
+                $ postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
+                ALTER SYSTEM SET max_mysql_connections = 100
+
+                $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
+
+                > CREATE SECRET IF NOT EXISTS mysqlpass AS '{MySql.DEFAULT_ROOT_PASSWORD}'
+                > CREATE CONNECTION IF NOT EXISTS mysql_conn TO MYSQL (HOST mysql, USER root, PASSWORD SECRET mysqlpass)
+
+                $ mysql-execute name=mysql
+                DROP DATABASE IF EXISTS public;
+                CREATE DATABASE public;
+                USE public;
+                DROP TABLE IF EXISTS products;
+                CREATE TABLE products (id int NOT NULL, name varchar(255) DEFAULT NULL, merchant_id int NOT NULL, price int DEFAULT NULL, status int DEFAULT NULL, created_at timestamp NULL DEFAULT CURRENT_TIMESTAMP(), recordSizePayload longtext, PRIMARY KEY (id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+                ALTER TABLE products DISABLE KEYS;
+
+                > DROP SOURCE IF EXISTS s1 CASCADE;
+                """
+            )
+        )
+
+    def make_inserts(c: Composition, start: int, batch_num: int):
+        c.testdrive(
+            args=["--no-reset"],
+            input=dedent(
+                f"""
+            $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
+            $ mysql-execute name=mysql
+            SET foreign_key_checks = 0;
+            USE public;
+            SET @i:={start};
+            INSERT INTO products (id, name, merchant_id, price, status, created_at, recordSizePayload) SELECT @i:=@i+1, CONCAT("name", @i), @i % 1000, @i % 1000, @i % 10, '2024-12-12', repeat('x', 1000000) FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT {batch_num};
+            """
+            ),
+        )
+
+    num_rows = 200_000  # out of disk with 300_000 rows
+    batch_size = 100
+    for i in range(0, num_rows, batch_size):
+        batch_num = min(batch_size, num_rows - i)
+        make_inserts(c, i, batch_num)
+
+    c.testdrive(
+        args=["--no-reset"],
+        input=dedent(
+            f"""
+            > CREATE SOURCE s1
+                FROM MYSQL CONNECTION mysql_conn;
+            > CREATE TABLE products FROM SOURCE s1 (REFERENCE public.products);
+            > SELECT COUNT(*) FROM products;
+            {num_rows}
+            """
+        ),
+    )
+
+    make_inserts(c, num_rows, 1)
+
+    c.testdrive(
+        args=["--no-reset"],
+        input=dedent(
+            f"""
+            > SELECT COUNT(*) FROM products;
+            {num_rows + 1}
             """
         ),
     )

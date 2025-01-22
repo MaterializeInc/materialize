@@ -65,7 +65,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         materialized_environment_extra[0] = "MZ_PERSIST_COMPACTION_DISABLED=true"
 
     for name in c.workflows:
-        if name in ["default", "load-test"]:
+        if name in ["default", "load-test", "large-scale"]:
             continue
         with c.test_case(name):
             c.workflow(name)
@@ -535,8 +535,6 @@ def workflow_autospill(c: Composition) -> None:
 # This test is there to compare rehydration metrics with different configs.
 # Can be run locally with the command ./mzcompose run load-test
 def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
-    from textwrap import dedent
-
     # Following variables can be updated to tweak how much data the kafka
     # topic should be populated with and what should be the upsert state size.
     pad_len = 1024
@@ -698,3 +696,80 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
                     )[0]
                 last_latency = rehydration_latency
                 print(f"Scenario {scenario_name} took {rehydration_latency} ms")
+
+
+def workflow_large_scale(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """
+    The goal is to test a large scale Kafka upsert instance and to make sure that we can successfully ingest data from it quickly.
+    """
+    dependencies = ["materialized", "zookeeper", "kafka", "schema-registry"]
+    c.up(*dependencies)
+    with c.override(
+        Testdrive(no_reset=True, consistent_seed=True),
+    ):
+        c.up("testdrive", persistent=True)
+
+        c.testdrive(
+            dedent(
+                """
+            $ kafka-create-topic topic=topic1
+
+            > CREATE CONNECTION IF NOT EXISTS kafka_conn
+              FOR KAFKA BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT;
+            """
+            )
+        )
+
+        def make_inserts(c: Composition, start: int, batch_num: int):
+            c.testdrive(
+                args=["--no-reset"],
+                input=dedent(
+                    f"""
+                    $ kafka-ingest format=bytes topic=topic1 key-format=bytes key-terminator=: repeat={batch_num}
+                    "${{kafka-ingest.iteration}}":"{'x'*1_000_000}"
+                    """
+                ),
+            )
+
+        num_rows = 100_000  # out of disk with 200_000 rows
+        batch_size = 10_000
+        for i in range(0, num_rows, batch_size):
+            batch_num = min(batch_size, num_rows - i)
+            make_inserts(c, i, batch_num)
+
+        c.testdrive(
+            args=["--no-reset"],
+            input=dedent(
+                f"""
+                > CREATE SOURCE s1
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-topic1-${{testdrive.seed}}');
+
+                > CREATE TABLE s1_tbl FROM SOURCE s1 (REFERENCE "testdrive-topic1-${{testdrive.seed}}")
+                  KEY FORMAT TEXT VALUE FORMAT TEXT
+                  ENVELOPE UPSERT;
+
+                > SELECT COUNT(*) FROM s1_tbl;
+                {batch_size}
+                """
+            ),
+        )
+
+        c.testdrive(
+            args=["--no-reset"],
+            input=dedent(
+                f"""
+                $ kafka-ingest format=bytes topic=topic1 key-format=bytes key-terminator=:
+                "{batch_size + 1}":"{'x'*1_000_000}"
+                """
+            ),
+        )
+
+        c.testdrive(
+            args=["--no-reset"],
+            input=dedent(
+                f"""
+                > SELECT COUNT(*) FROM s1_tbl;
+                {batch_size + 1}
+                """
+            ),
+        )
