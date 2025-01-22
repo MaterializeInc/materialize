@@ -2850,6 +2850,20 @@ impl SharedRow {
         row_packer.extend(iter);
         row_builder.clone()
     }
+
+    /// Calls the provided closure with a [`RowPacker`] writing the shared row.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the row is already borrowed elsewhere.
+    pub fn pack_with<F, R>(&mut self, f: F) -> R
+    where
+        for<'a> F: FnOnce(&'a mut RowPacker<'a>) -> R,
+    {
+        let mut borrow = self.borrow_mut();
+        let mut packer = borrow.packer();
+        (f)(&mut packer)
+    }
 }
 
 impl std::ops::Deref for SharedRow {
