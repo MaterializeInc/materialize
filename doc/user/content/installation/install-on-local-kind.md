@@ -26,9 +26,6 @@ For testing purposes only.
 
 {{< /important >}}
 
-## Resource requirements
-
-{{% self-managed/local-resource-requirements %}}
 
 ## Prerequisites
 
@@ -39,6 +36,9 @@ Install [`kind`](https://kind.sigs.k8s.io/docs/user/quick-start/).
 ### Docker
 
 Install [`Docker`](https://docs.docker.com/get-started/get-docker/).
+
+#### Resource requirements
+{{% self-managed/local-resource-requirements %}}
 
 ### Helm 3.2.0+
 
