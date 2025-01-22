@@ -96,7 +96,7 @@ copy_to_s3 ::=
   'COPY' ( query | object_name ) 'TO' s3_uri
   '(' 'WITH' 'AWS CONNECTION' connection_name ',' 'FORMAT' ( csv | parquet ) ( ',' field val )* ')'
 copy_from ::=
-  'COPY' table_name ('(' column ( ',' column )* ')')? 'FROM' 'STDIN'
+  'COPY' 'INTO'? table_name ('(' column ( ',' column )* ')')? 'FROM' 'STDIN'
   ( 'WITH'? '(' field val ( ',' field val )* ')' )?
 create_cluster ::=
   'CREATE' 'CLUSTER' name (
