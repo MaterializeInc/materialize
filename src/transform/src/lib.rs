@@ -442,7 +442,7 @@ impl Transform for Fixpoint {
                             // relevant issues, see
                             // https://github.com/MaterializeInc/database-issues/issues/8197#issuecomment-2200172227
                             mz_repr::explain::trace_plan(relation);
-                            soft_panic_or_log!(
+                            error!(
                                 "Fixpoint `{}` detected a loop of length {} after {} iterations",
                                 self.name,
                                 i - seen_i,
