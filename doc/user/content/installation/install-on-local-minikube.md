@@ -27,10 +27,6 @@ For testing purposes only.
 
 {{< /important >}}
 
-## Resource requirements
-
-{{% self-managed/local-resource-requirements %}}
-
 ## Prerequisites
 
 ### minikube
@@ -40,13 +36,15 @@ Install [`minikube`](https://minikube.sigs.k8s.io/docs/start/).
 ### Container or virtual machine manager
 
 The following tutorial uses `Docker` as the container or virtual machine
-manager.
+manager. To use another container or virtual machine manager as listed on the
+[`minikube` documentation](https://minikube.sigs.k8s.io/docs/start/), refer to
+the specific container/VM manager documentation.
 
 Install [`Docker`](https://docs.docker.com/get-started/get-docker/).
 
-To use another container or virtual machine manager as listed on the
-[`minikube` documentation](https://minikube.sigs.k8s.io/docs/start/), refer to
-the specific container/VM manager documentation.
+#### Resource requirements
+
+{{% self-managed/local-resource-requirements %}}
 
 ### Helm 3.2.0+
 
