@@ -69,7 +69,7 @@ use crate::metrics::source::kafka::KafkaSourceMetrics;
 use crate::source::types::{
     Probe, ProgressStatisticsUpdate, SignaledFuture, SourceRender, StackedCollection,
 };
-use crate::source::{RawSourceCreationConfig, SourceMessage};
+use crate::source::{probe, RawSourceCreationConfig, SourceMessage};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 struct HealthStatus {
@@ -1678,8 +1678,10 @@ fn spawn_metadata_thread<C: ConsumerContext>(
                 poll_interval =? poll_interval,
                 "kafka metadata thread: starting..."
             );
+
+            let mut ticker = probe::Ticker::new(poll_interval, config.now_fn);
             loop {
-                let probe_ts = (config.now_fn)().into();
+                let probe_ts = ticker.tick_blocking();
                 let result = fetch_partition_info(
                     &consumer,
                     &topic,
@@ -1737,8 +1739,6 @@ fn spawn_metadata_thread<C: ConsumerContext>(
                 if tx.send((probe_ts, update)).is_err() {
                     break;
                 }
-
-                thread::park_timeout(poll_interval);
             }
 
             info!(
