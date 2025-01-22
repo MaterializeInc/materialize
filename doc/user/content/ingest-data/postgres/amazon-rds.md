@@ -395,6 +395,16 @@ start by selecting the relevant option.
       subnet, look for **Availability Zone ID** (e.g., `use1-az6`),
       not **Availability Zone** (e.g., `us-east-1d`).
 
+    For **cross-region connections** only, it is recommended to specify no availability zones:
+
+      ```mzsql
+      CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
+        SERVICE NAME 'com.amazonaws.vpce.us-west-1.vpce-svc-0356210a8a432d9e9',
+        AVAILABILITY ZONES ()
+      );
+      ```
+
+
 1. Retrieve the AWS principal for the AWS PrivateLink connection you just
    created:
 

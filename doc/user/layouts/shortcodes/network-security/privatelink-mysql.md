@@ -55,6 +55,21 @@
         );
         ```
 
+    * For **cross-region connections** only, it is recommended to specify no availability zones.
+
+        ```mzsql
+        CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
+        SERVICE NAME 'com.amazonaws.vpce.us-west-1.vpce-svc-<endpoint_service_id>',
+        AVAILABILITY ZONES ()
+        );
+        ```
+
+        The `SERVICE NAME` region refers to where the endpoint service was
+        created. In this example, `AVAILABILITY ZONES` will be optimally
+        auto-assigned if none are provided. This setup allows you to **connect
+        to the endpoint service from a different region** than the one where
+        your Materialize instance is running.
+
     * For **cross-region connections**, you can select any availability zones in your current
       Materialize region. For more details, refer to the [AWS blog on cross-region PrivateLink](https://aws.amazon.com/blogs/networking-and-content-delivery/introducing-cross-region-connectivity-for-aws-privatelink). Due
       to resource constraints, [it is recommended](https://wolfman.dev/posts/exclude-use1-az3/)

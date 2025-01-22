@@ -1,97 +1,109 @@
 1. In the [SQL Shell](https://console.materialize.com/), or your preferred SQL
-   client connected to Materialize, use the [`CREATE CONNECTION`](/sql/create-connection/#aws-privatelink)
-   command to create an AWS PrivateLink connection:
+client connected to Materialize, use the [`CREATE CONNECTION`](/sql/create-connection/#aws-privatelink)
+command to create an AWS PrivateLink connection:
 
-    ```mzsql
-    CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
-      SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0356210a8a432d9e9',
-      AVAILABILITY ZONES ('use1-az1', 'use1-az2', 'use1-az4')
-    );
-    ```
+```mzsql
+CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
+SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0356210a8a432d9e9',
+AVAILABILITY ZONES ('use1-az1', 'use1-az2', 'use1-az4')
+);
+```
 
-    - Replace the `SERVICE NAME` value with the service name you noted [earlier](#b-optional-configure-network-security).
+- Replace the `SERVICE NAME` value with the service name you noted [earlier](#b-optional-configure-network-security).
 
-    - Replace the `AVAILABILITY ZONES` list with the IDs of the availability
-      zones in your AWS account.
+- Replace the `AVAILABILITY ZONES` list with the IDs of the availability
+zones in your AWS account.
 
-      To find your availability zone IDs, select your database in the RDS
-      Console and click the subnets under **Connectivity & security**. For each
-      subnet, look for **Availability Zone ID** (e.g., `use1-az6`),
-      not **Availability Zone** (e.g., `us-east-1d`).
+To find your availability zone IDs, select your database in the RDS
+Console and click the subnets under **Connectivity & security**. For each
+subnet, look for **Availability Zone ID** (e.g., `use1-az6`),
+not **Availability Zone** (e.g., `us-east-1d`).
+
+For **cross-region connections** only, it is recommended to specify no availability zones:
+
+```mzsql
+CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
+SERVICE NAME 'com.amazonaws.vpce.us-west-1.vpce-svc-0356210a8a432d9e9',
+AVAILABILITY ZONES ()
+);
+```
+
 
 1. Retrieve the AWS principal for the AWS PrivateLink connection you just
-   created:
+created:
 
-    ```mzsql
-    SELECT principal
-    FROM mz_aws_privatelink_connections plc
-    JOIN mz_connections c ON plc.id = c.id
-    WHERE c.name = 'privatelink_svc';
-    ```
-    <p></p>
+```mzsql
+SELECT principal
+FROM mz_aws_privatelink_connections plc
+JOIN mz_connections c ON plc.id = c.id
+WHERE c.name = 'privatelink_svc';
+```
+<p></p>
 
-    ```
-                                     principal
-    ---------------------------------------------------------------------------
-     arn:aws:iam::664411391173:role/mz_20273b7c-2bbe-42b8-8c36-8cc179e9bbc3_u1
-    ```
+```
+principal
+---------------------------------------------------------------------------
+arn:aws:iam::664411391173:role/mz_20273b7c-2bbe-42b8-8c36-8cc179e9bbc3_u1
+```
 
-1. Update your VPC endpoint service to [accept connections from the AWS principal](https://docs.aws.amazon.com/vpc/latest/privatelink/add-endpoint-service-permissions.html).
+1. Update your VPC endpoint service to [accept connections from the AWS
+principal](https://docs.aws.amazon.com/vpc/latest/privatelink/add-endpoint-service-permissions.html).
 
 1. If your AWS PrivateLink service is configured to require acceptance of
-   connection requests, [manually approve the connection request from Materialize](https://docs.aws.amazon.com/vpc/latest/privatelink/configure-endpoint-service.html#accept-reject-connection-requests).
+connection requests, [manually approve the connection request from
+Materialize](https://docs.aws.amazon.com/vpc/latest/privatelink/configure-endpoint-service.html#accept-reject-connection-requests).
 
-    **Note:** It can take some time for the connection request to show up. Do
-      not move on to the next step until you've approved the connection.
+**Note:** It can take some time for the connection request to show up. Do
+not move on to the next step until you've approved the connection.
 
 1. Validate the AWS PrivateLink connection you created using the
-   [`VALIDATE CONNECTION`](/sql/validate-connection) command:
+[`VALIDATE CONNECTION`](/sql/validate-connection) command:
 
-    ```mzsql
-    VALIDATE CONNECTION privatelink_svc;
-    ```
+```mzsql
+VALIDATE CONNECTION privatelink_svc;
+```
 
-    If no validation error is returned, move to the next step.
+If no validation error is returned, move to the next step.
 
 1. Use the [`CREATE SECRET`](/sql/create-secret/) command to securely store the
-   password for the `materialize` MySQL user you created [earlier](#2-create-a-user-for-replication):
+password for the `materialize` MySQL user you created [earlier](#2-create-a-user-for-replication):
 
-    ```mzsql
-    CREATE SECRET mysqlpass AS '<PASSWORD>';
-    ```
+```mzsql
+CREATE SECRET mysqlpass AS '<PASSWORD>';
+  ```
 
-1. Use the [`CREATE CONNECTION`](/sql/create-connection/) command to create
-   another connection object, this time with database access and authentication
-   details for Materialize to use:
+  1. Use the [`CREATE CONNECTION`](/sql/create-connection/) command to create
+  another connection object, this time with database access and authentication
+  details for Materialize to use:
 
-    ```mzsql
-    CREATE CONNECTION mysql_connection TO MYSQL (
-      HOST <host>,
-      PORT 3306,
-      USER 'materialize',
-      PASSWORD SECRET mysqlpass,
-      SSL MODE REQUIRED,
-      AWS PRIVATELINK privatelink_svc
-      );
+  ```mzsql
+  CREATE CONNECTION mysql_connection TO MYSQL (
+  HOST <host>,
+    PORT 3306,
+    USER 'materialize',
+    PASSWORD SECRET mysqlpass,
+    SSL MODE REQUIRED,
+    AWS PRIVATELINK privatelink_svc
+    );
     ```
 
     - Replace `<host>` with your RDS endpoint. To find your RDS endpoint, select
       your database in the RDS Console, and look under **Connectivity &
       security**.
 
-    - Replace `<database>` with the name of the database containing the tables
-      you want to replicate to Materialize.
+      - Replace `<database>` with the name of the database containing the tables
+        you want to replicate to Materialize.
 
-1. Use the [`CREATE SOURCE`](/sql/create-source/) command to connect Materialize
-   to your RDS instance via AWS PrivateLink and start ingesting data:
+        1. Use the [`CREATE SOURCE`](/sql/create-source/) command to connect Materialize
+        to your RDS instance via AWS PrivateLink and start ingesting data:
 
-    ```mzsql
-    CREATE SOURCE mz_source
-      FROM mysql CONNECTION mysql_connection
-      FOR ALL TABLES;
-    ```
+        ```mzsql
+        CREATE SOURCE mz_source
+        FROM mysql CONNECTION mysql_connection
+        FOR ALL TABLES;
+        ```
 
-    By default, the source will be created in the active cluster; to use a
-    different cluster, use the `IN CLUSTER` clause. To ingest data from
-    specific schemas or tables, use `FOR SCHEMAS(<schema1>,<schema2>)` or `FOR
-    TABLES (<table1>, <table2>)` instead of `FOR ALL TABLES`.
+        By default, the source will be created in the active cluster; to use a
+        different cluster, use the `IN CLUSTER` clause. To ingest data from
+        specific schemas or tables, use `FOR SCHEMAS(<schema1>,<schema2>)` or `FOR
+            TABLES (<table1>, <table2>)` instead of `FOR ALL TABLES`.
