@@ -3097,16 +3097,6 @@ impl HirScalarExpr {
         mem::replace(self, HirScalarExpr::literal_null(ScalarType::String))
     }
 
-    #[deprecated = "Use `Visit::visit_post` instead."]
-    pub fn visit_mut<F>(&mut self, f: &mut F)
-    where
-        F: FnMut(&mut Self),
-    {
-        #[allow(deprecated)]
-        self.visit1_mut(|e: &mut HirScalarExpr| e.visit_mut(f));
-        f(self);
-    }
-
     #[deprecated = "Use `Visit::visit_mut_pre` instead."]
     pub fn visit_mut_pre<F>(&mut self, f: &mut F)
     where
