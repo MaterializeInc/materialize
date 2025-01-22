@@ -36,7 +36,7 @@ use mz_repr::explain::json::json_string;
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::role_id::RoleId;
 use mz_repr::{
-    CatalogItemId, Datum, Diff, GlobalId, IntoRowIterator, RelationVersion,
+    CatalogItemId, Datum, Diff, GlobalId, IntoRowIterator, RelationDesc, RelationVersion,
     RelationVersionSelector, Row, RowArena, RowIterator, Timestamp,
 };
 use mz_sql::ast::{CreateSubsourceStatement, MySqlConfigOptionName, UnresolvedItemName};
@@ -1344,6 +1344,23 @@ impl Coordinator {
                 return;
             }
         };
+
+        let collection_desc = CollectionDescription {
+            desc: RelationDesc::empty(),
+            data_source: DataSource::Other,
+            since: None,
+            status_collection_id: None,
+            timeline: None,
+        };
+        let collections = vec![(global_id, collection_desc)];
+
+        // Create the collections.
+        let storage_metadata = self.catalog.state().storage_metadata();
+        self.controller
+            .storage
+            .create_collections(storage_metadata, None, collections)
+            .await
+            .unwrap_or_terminate("cannot fail to create collections");
 
         self.create_storage_export(global_id, &catalog_sink)
             .await

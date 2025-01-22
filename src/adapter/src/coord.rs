@@ -2731,6 +2731,16 @@ impl Coordinator {
                         collections.push((ct.global_id(), collection_desc));
                     }
                 }
+                CatalogItem::Sink(sink) => {
+                    let collection_desc = CollectionDescription {
+                        desc: RelationDesc::empty(),
+                        data_source: DataSource::Other,
+                        since: None,
+                        status_collection_id: None,
+                        timeline: None,
+                    };
+                    collections.push((sink.global_id, collection_desc));
+                }
                 _ => (),
             }
         }
