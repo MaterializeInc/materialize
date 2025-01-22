@@ -3097,46 +3097,6 @@ impl HirScalarExpr {
         mem::replace(self, HirScalarExpr::literal_null(ScalarType::String))
     }
 
-    pub fn visit<'a, F>(&'a self, f: &mut F)
-    where
-        F: FnMut(&'a Self),
-    {
-        self.visit1(|e: &HirScalarExpr| e.visit(f));
-        f(self);
-    }
-
-    pub fn visit1<'a, F>(&'a self, mut f: F)
-    where
-        F: FnMut(&'a Self),
-    {
-        use HirScalarExpr::*;
-        match self {
-            Column(..) | Parameter(..) | Literal(..) | CallUnmaterializable(..) => (),
-            CallUnary { expr, .. } => f(expr),
-            CallBinary { expr1, expr2, .. } => {
-                f(expr1);
-                f(expr2);
-            }
-            CallVariadic { exprs, .. } => {
-                for expr in exprs {
-                    f(expr);
-                }
-            }
-            If { cond, then, els } => {
-                f(cond);
-                f(then);
-                f(els);
-            }
-            Exists(..) | Select(..) => (),
-            Windowing(expr) => {
-                let _ = expr.visit_expressions(&mut |e| -> Result<(), ()> {
-                    f(e);
-                    Ok(())
-                });
-            }
-        }
-    }
-
     #[deprecated = "Use `Visit::visit_post` instead."]
     pub fn visit_mut<F>(&mut self, f: &mut F)
     where

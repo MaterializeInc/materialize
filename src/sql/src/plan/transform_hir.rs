@@ -99,7 +99,7 @@ pub fn split_subquery_predicates(expr: &mut HirRelationExpr) {
 
     fn contains_subquery(expr: &HirScalarExpr) -> bool {
         let mut found = false;
-        expr.visit(&mut |expr| match expr {
+        expr.visit_pre_nolimit(&mut |expr| match expr {
             HirScalarExpr::Exists(_) | HirScalarExpr::Select(_) => found = true,
             _ => (),
         });
