@@ -321,7 +321,7 @@ pub mod batcher {
         ///
         /// Also the buffer where we'll stage responses to `extract` and `finish`.
         /// When these calls return, the buffer is available for reuse.
-        empty: C,
+        target: C,
         /// Consolidated buffers ready to go.
         ready: VecDeque<C>,
     }
@@ -331,8 +331,8 @@ pub mod batcher {
 
         fn extract(&mut self) -> Option<&mut Self::Container> {
             if let Some(ready) = self.ready.pop_front() {
-                self.empty = ready;
-                Some(&mut self.empty)
+                self.target = ready;
+                Some(&mut self.target)
             } else {
                 None
             }
@@ -360,7 +360,7 @@ pub mod batcher {
             permutation.extend(container.drain());
             permutation.sort();
 
-            self.empty.clear();
+            self.target.clear();
             // Iterate over the data, accumulating diffs for like keys.
             let mut iter = permutation.drain(..);
             if let Some((data, time, diff)) = iter.next() {
@@ -379,7 +379,7 @@ pub mod batcher {
                             D::copy_from(&mut owned_data, prev_data);
                             T::copy_from(&mut owned_time, prev_time);
                             let tuple = (owned_data, owned_time, prev_diff);
-                            self.empty.push_into(&tuple);
+                            self.target.push_into(&tuple);
                             (owned_data, owned_time, prev_diff) = tuple;
                         }
                         prev_data = data;
@@ -392,12 +392,12 @@ pub mod batcher {
                     D::copy_from(&mut owned_data, prev_data);
                     T::copy_from(&mut owned_time, prev_time);
                     let tuple = (owned_data, owned_time, prev_diff);
-                    self.empty.push_into(&tuple);
+                    self.target.push_into(&tuple);
                 }
             }
 
-            if !self.empty.is_empty() {
-                self.ready.push_back(std::mem::take(&mut self.empty));
+            if !self.target.is_empty() {
+                self.ready.push_back(std::mem::take(&mut self.target));
             }
         }
     }
