@@ -235,6 +235,12 @@ impl Blob for AzureBlob {
                 }
             };
 
+            // Report if the content-length header didn't match the number of
+            // bytes we read from the network.
+            if content_length != u64::cast_from(lgbytes.len()) {
+                metrics.get_invalid_resp.inc();
+            }
+
             Ok(MaybeLgBytes::LgBytes(lgbytes))
         }
 
