@@ -47,6 +47,7 @@ message ProtoSourceDesc {
   ProtoSourceConnection connection = 1;
   mz_proto.ProtoDuration timestamp_interval = 5;
   ProtoSourceExportDataConfig primary_export = 6;
+  ProtoSourceExportDetails primary_export_details = 7;
 }
 
 message ProtoSourceConnection {

@@ -1870,9 +1870,8 @@ where
             // TODO(database-issues#8620): This will be removed once sources no longer export
             // to primary collections and only export to explicit SourceExports (tables).
             if let DataSource::Ingestion(ingestion) = &mut description.data_source {
-                if let Some(export) = ingestion.desc.primary_source_export() {
-                    ingestion.source_exports.insert(id, export);
-                }
+                let export = ingestion.desc.primary_source_export();
+                ingestion.source_exports.insert(id, export);
             }
 
             let write_frontier = write_handle.upper();
