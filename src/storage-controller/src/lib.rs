@@ -21,7 +21,6 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
-use futures::stream::FuturesUnordered;
 use futures::FutureExt;
 use futures::StreamExt;
 use itertools::Itertools;
@@ -238,23 +237,27 @@ fn warm_persist_state_in_background(
     client: PersistClient,
     shard_ids: impl Iterator<Item = ShardId> + Send + 'static,
 ) -> mz_ore::task::JoinHandle<Box<dyn Debug + Send>> {
+    /// Bound the number of shards that we warm at a single time, to limit our overall resource use.
+    const MAX_CONCURRENT_WARMS: usize = 16;
     let logic = async move {
-        let fetchers = FuturesUnordered::new();
-        for shard_id in shard_ids {
-            let client = client.clone();
-            fetchers.push(async move {
-                client
-                    .create_batch_fetcher::<SourceData, (), mz_repr::Timestamp, Diff>(
-                        shard_id,
-                        Arc::new(RelationDesc::empty()),
-                        Arc::new(UnitSchema),
-                        true,
-                        Diagnostics::from_purpose("warm persist load state"),
-                    )
-                    .await
+        let fetchers: Vec<_> = tokio_stream::iter(shard_ids)
+            .map(|shard_id| {
+                let client = client.clone();
+                async move {
+                    client
+                        .create_batch_fetcher::<SourceData, (), mz_repr::Timestamp, Diff>(
+                            shard_id,
+                            Arc::new(RelationDesc::empty()),
+                            Arc::new(UnitSchema),
+                            true,
+                            Diagnostics::from_purpose("warm persist load state"),
+                        )
+                        .await
+                }
             })
-        }
-        let fetchers = fetchers.collect::<Vec<_>>().await;
+            .buffer_unordered(MAX_CONCURRENT_WARMS)
+            .collect()
+            .await;
         let fetchers: Box<dyn Debug + Send> = Box::new(fetchers);
         fetchers
     };
