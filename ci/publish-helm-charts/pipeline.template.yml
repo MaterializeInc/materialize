@@ -24,3 +24,11 @@ steps:
     depends_on: []
     agents:
       queue: linux-aarch64-small
+
+  - id: nightly
+    label: Nightly
+    trigger: nightly
+    async: true
+    build:
+      commit: "$BUILDKITE_COMMIT"
+      branch: "$BUILDKITE_BRANCH"

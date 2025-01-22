@@ -1235,7 +1235,7 @@ steps:
         - ./ci/plugins/scratch-aws-access: ~
         - ./ci/plugins/mzcompose:
             composition: terraform
-      branches: "main v*.*"
+      branches: "main v*.* lts-v*"
 
   - group: "Output consistency"
     key: output-consistency
