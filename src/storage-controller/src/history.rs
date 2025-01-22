@@ -390,7 +390,6 @@ mod tests {
             version: Default::default(),
             envelope: SinkEnvelope::Upsert,
             as_of: Antichain::from_elem(0),
-            status_id: Default::default(),
             from_storage_metadata: CollectionMetadata {
                 persist_location: PersistLocation {
                     blob_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),

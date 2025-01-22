@@ -49,7 +49,6 @@ pub struct StorageSinkDesc<S: StorageSinkDescFillState, T = mz_repr::Timestamp> 
     pub version: u64,
     pub envelope: SinkEnvelope,
     pub as_of: Antichain<T>,
-    pub status_id: Option<<S as StorageSinkDescFillState>::StatusId>,
     pub from_storage_metadata: <S as StorageSinkDescFillState>::StorageMetadata,
 }
 
@@ -79,7 +78,6 @@ impl<S: Debug + StorageSinkDescFillState + PartialEq, T: Debug + PartialEq + Par
             version: _,
             // The as of of the descriptions may differ.
             as_of: _,
-            status_id,
             from_storage_metadata,
             partition_strategy,
             with_snapshot,
@@ -93,7 +91,6 @@ impl<S: Debug + StorageSinkDescFillState + PartialEq, T: Debug + PartialEq + Par
                 "connection",
             ),
             (envelope == &other.envelope, "envelope"),
-            (status_id == &other.status_id, "status_id"),
             (with_snapshot == &other.with_snapshot, "with_snapshot"),
             (
                 partition_strategy == &other.partition_strategy,
@@ -151,7 +148,6 @@ impl Arbitrary for StorageSinkDesc<MetadataFilled, mz_repr::Timestamp> {
             any::<StorageSinkConnection>(),
             any::<SinkEnvelope>(),
             any::<Option<mz_repr::Timestamp>>(),
-            any::<Option<ShardId>>(),
             any::<CollectionMetadata>(),
             any::<SinkPartitionStrategy>(),
             any::<bool>(),
@@ -164,7 +160,6 @@ impl Arbitrary for StorageSinkDesc<MetadataFilled, mz_repr::Timestamp> {
                     connection,
                     envelope,
                     as_of,
-                    status_id,
                     from_storage_metadata,
                     partition_strategy,
                     with_snapshot,
@@ -177,7 +172,6 @@ impl Arbitrary for StorageSinkDesc<MetadataFilled, mz_repr::Timestamp> {
                         envelope,
                         version,
                         as_of: Antichain::from_iter(as_of),
-                        status_id,
                         from_storage_metadata,
                         partition_strategy,
                         with_snapshot,
@@ -196,7 +190,6 @@ impl RustType<ProtoStorageSinkDesc> for StorageSinkDesc<MetadataFilled, mz_repr:
             from_desc: Some(self.from_desc.into_proto()),
             envelope: Some(self.envelope.into_proto()),
             as_of: Some(self.as_of.into_proto()),
-            status_id: self.status_id.into_proto(),
             from_storage_metadata: Some(self.from_storage_metadata.into_proto()),
             partition_strategy: Some(self.partition_strategy.into_proto()),
             with_snapshot: self.with_snapshot,
@@ -219,7 +212,6 @@ impl RustType<ProtoStorageSinkDesc> for StorageSinkDesc<MetadataFilled, mz_repr:
             as_of: proto
                 .as_of
                 .into_rust_if_some("ProtoStorageSinkDesc::as_of")?,
-            status_id: proto.status_id.into_rust()?,
             from_storage_metadata: proto
                 .from_storage_metadata
                 .into_rust_if_some("ProtoStorageSinkDesc::from_storage_metadata")?,

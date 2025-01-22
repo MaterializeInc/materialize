@@ -1468,11 +1468,6 @@ where
         };
         *cur_export = new_export;
 
-        let status_id = match new_description.sink.status_id.clone() {
-            Some(id) => Some(self.storage_collections.collection_metadata(id)?.data_shard),
-            None => None,
-        };
-
         let cmd = RunSinkCommand {
             id,
             description: StorageSinkDesc {
@@ -1483,7 +1478,6 @@ where
                 as_of: new_description.sink.as_of,
                 version: new_description.sink.version,
                 partition_strategy: new_description.sink.partition_strategy,
-                status_id,
                 from_storage_metadata,
                 with_snapshot: new_description.sink.with_snapshot,
             },
@@ -1536,17 +1530,6 @@ where
                 .storage_collections
                 .collection_metadata(new_export_description.sink.from)?;
 
-            let status_id =
-                if let Some(status_collection_id) = new_export_description.sink.status_id {
-                    Some(
-                        self.storage_collections
-                            .collection_metadata(status_collection_id)?
-                            .data_shard,
-                    )
-                } else {
-                    None
-                };
-
             let cmd = RunSinkCommand {
                 id,
                 description: StorageSinkDesc {
@@ -1568,7 +1551,6 @@ where
                     // read holds are held for the correct amount of time.
                     // TODO(petrosagg): change the controller to explicitly track dataflow executions
                     as_of: as_of.to_owned(),
-                    status_id,
                     from_storage_metadata,
                 },
             };
@@ -3176,16 +3158,6 @@ where
             .storage_collections
             .collection_metadata(description.sink.from)?;
 
-        let status_id = if let Some(status_collection_id) = description.sink.status_id {
-            Some(
-                self.storage_collections
-                    .collection_metadata(status_collection_id)?
-                    .data_shard,
-            )
-        } else {
-            None
-        };
-
         let cmd = RunSinkCommand {
             id,
             description: StorageSinkDesc {
@@ -3196,7 +3168,6 @@ where
                 as_of: description.sink.as_of.clone(),
                 version: description.sink.version,
                 partition_strategy: description.sink.partition_strategy.clone(),
-                status_id,
                 from_storage_metadata,
                 with_snapshot: description.sink.with_snapshot,
             },
