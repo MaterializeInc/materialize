@@ -180,7 +180,8 @@
   -- default cluster for the user is invalid(or intentionally set to
   -- mz_catalog_server, which cannot query user data).
   {% if cluster -%}
-      {% do run_query(set_cluster(cluster)) -%}
+      {%- set origin_cluster = adapter.generate_final_cluster_name(cluster) -%}
+      {% do run_query(set_cluster(origin_cluster)) -%}
   {%- endif %}
   {{ truncate_relation(relation) }}
 {% endmacro %}
