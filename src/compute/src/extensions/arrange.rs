@@ -263,10 +263,10 @@ where
         .stream
         .unary(Pipeline, "ArrangementSize", |_cap, info| {
             let address = info.address;
-            logger.log(ComputeEvent::ArrangementHeapSizeOperator(
+            logger.log(&ComputeEvent::ArrangementHeapSizeOperator(
                 ArrangementHeapSizeOperator {
                     operator_id,
-                    address,
+                    address: address.to_vec(),
                 },
             ));
             move |input, output| {
@@ -281,7 +281,7 @@ where
 
                 let size = size.try_into().expect("must fit");
                 if size != old_size {
-                    logger.log(ComputeEvent::ArrangementHeapSize(ArrangementHeapSize {
+                    logger.log(&ComputeEvent::ArrangementHeapSize(ArrangementHeapSize {
                         operator_id,
                         delta_size: size - old_size,
                     }));
@@ -289,7 +289,7 @@ where
 
                 let capacity = capacity.try_into().expect("must fit");
                 if capacity != old_capacity {
-                    logger.log(ComputeEvent::ArrangementHeapCapacity(
+                    logger.log(&ComputeEvent::ArrangementHeapCapacity(
                         ArrangementHeapCapacity {
                             operator_id,
                             delta_capacity: capacity - old_capacity,
@@ -299,7 +299,7 @@ where
 
                 let allocations = allocations.try_into().expect("must fit");
                 if allocations != old_allocations {
-                    logger.log(ComputeEvent::ArrangementHeapAllocations(
+                    logger.log(&ComputeEvent::ArrangementHeapAllocations(
                         ArrangementHeapAllocations {
                             operator_id,
                             delta_allocations: allocations - old_allocations,

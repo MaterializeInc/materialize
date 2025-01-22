@@ -11,6 +11,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use anyhow::{anyhow, Error};
+use columnar::Columnar;
 use columnation::{Columnation, CopyRegion};
 use mz_lowertest::MzReflect;
 use mz_ore::id_gen::AtomicIdGen;
@@ -50,6 +51,7 @@ include!(concat!(env!("OUT_DIR"), "/mz_repr.global_id.rs"));
     Serialize,
     Deserialize,
     MzReflect,
+    Columnar,
 )]
 pub enum GlobalId {
     /// System namespace.

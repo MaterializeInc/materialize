@@ -14,14 +14,13 @@ use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::logging::{DifferentialEvent, DifferentialEventBuilder};
 use differential_dataflow::Collection;
 use mz_compute_client::logging::{LogVariant, LoggingConfig};
-use mz_ore::flatcontainer::{MzRegionPreference, OwnedRegionOpinion};
 use mz_repr::{Diff, Timestamp};
 use mz_storage_operators::persist_source::Subtime;
 use mz_storage_types::errors::DataflowError;
+use mz_timely_util::containers::{Column, ColumnBuilder};
 use mz_timely_util::operator::CollectionExt;
 use timely::communication::Allocate;
-use timely::container::flatcontainer::FlatStack;
-use timely::container::ContainerBuilder;
+use timely::container::{ContainerBuilder, PushInto};
 use timely::logging::{ProgressEventTimestamp, TimelyEvent, TimelyEventBuilder};
 use timely::logging_core::Logger;
 use timely::order::Product;
@@ -82,14 +81,10 @@ pub fn initialize<A: Allocate + 'static>(
     (logger, traces)
 }
 
-/// Type to specify the region for holding reachability events. Only intended to be interpreted
-/// as [`MzRegionPreference`].
-type ReachabilityEventRegionPreference = (
-    OwnedRegionOpinion<Vec<usize>>,
-    OwnedRegionOpinion<Vec<(usize, usize, bool, Option<Timestamp>, Diff)>>,
+pub(super) type ReachabilityEvent = (
+    Vec<usize>,
+    Vec<(usize, usize, bool, Option<Timestamp>, Diff)>,
 );
-pub(super) type ReachabilityEventRegion =
-    <(Duration, ReachabilityEventRegionPreference) as MzRegionPreference>::Region;
 
 struct LoggingContext<'a, A: Allocate> {
     worker: &'a mut timely::worker::Worker<A>,
@@ -98,9 +93,9 @@ struct LoggingContext<'a, A: Allocate> {
     now: Instant,
     start_offset: Duration,
     t_event_queue: EventQueue<Vec<(Duration, TimelyEvent)>>,
-    r_event_queue: EventQueue<FlatStack<ReachabilityEventRegion>>,
+    r_event_queue: EventQueue<Column<(Duration, ReachabilityEvent)>>,
     d_event_queue: EventQueue<Vec<(Duration, DifferentialEvent)>>,
-    c_event_queue: EventQueue<Vec<(Duration, ComputeEvent)>>,
+    c_event_queue: EventQueue<Column<(Duration, ComputeEvent)>>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
 }
 
@@ -174,24 +169,29 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
         event_queue: EventQueue<CB::Container>,
     ) -> Logger<CB> {
         let mut logger = BatchLogger::new(event_queue.link, self.interval_ms);
-        Logger::new(self.now, self.start_offset, move |time, data| {
-            logger.publish_batch(time, std::mem::take(data));
-            event_queue.activator.activate();
-        })
+        Logger::new(
+            self.now,
+            self.start_offset,
+            move |time, data: &mut Option<CB::Container>| {
+                if let Some(data) = data.take() {
+                    logger.publish_batch(data);
+                } else if logger.report_progress(*time) {
+                    event_queue.activator.activate();
+                }
+            },
+        )
     }
 
     fn reachability_logger(&self) -> Logger<TrackerEventBuilder> {
         let event_queue = self.r_event_queue.clone();
-        let mut logger = BatchLogger::<FlatStack<ReachabilityEventRegion>, _>::new(
-            event_queue.link,
-            self.interval_ms,
-        );
-        Logger::new(
-            self.now,
-            self.start_offset,
-            move |time, data: &mut Vec<_>| {
-                let mut massaged = Vec::new();
-                let mut container = FlatStack::default();
+
+        let mut logger = BatchLogger::new(event_queue.link, self.interval_ms);
+        let mut massaged = Vec::new();
+        let mut builder = ColumnBuilder::default();
+
+        let action = move |batch_time: &Duration, data: &mut Option<Vec<_>>| {
+            if let Some(data) = data {
+                // Handle data
                 for (time, event) in data.drain(..) {
                     match event {
                         TrackerEvent::SourceUpdate(update) => {
@@ -203,7 +203,7 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
                                 },
                             ));
 
-                            container.copy((time, (update.tracker_id, &massaged)));
+                            builder.push_into((time, (&update.tracker_id, &massaged)));
                             massaged.clear();
                         }
                         TrackerEvent::TargetUpdate(update) => {
@@ -215,16 +215,27 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
                                 },
                             ));
 
-                            container.copy((time, (update.tracker_id, &massaged)));
+                            builder.push_into((time, (&update.tracker_id, &massaged)));
                             massaged.clear();
                         }
                     }
+                    while let Some(container) = builder.extract() {
+                        logger.publish_batch(std::mem::take(container));
+                    }
                 }
-                logger.publish_batch(time, container);
-                logger.report_progress(time);
-                event_queue.activator.activate();
-            },
-        )
+            } else {
+                // Handle a flush
+                while let Some(container) = builder.finish() {
+                    logger.publish_batch(std::mem::take(container));
+                }
+
+                if logger.report_progress(*batch_time) {
+                    event_queue.activator.activate();
+                }
+            }
+        };
+
+        Logger::new(self.now, self.start_offset, action)
     }
 }
 

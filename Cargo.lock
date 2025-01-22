@@ -1436,9 +1436,9 @@ dependencies = [
 
 [[package]]
 name = "bytemuck"
-version = "1.20.0"
+version = "1.21.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8b37c88a63ffd85d15b406896cc343916d7cf57838a847b3a6f2ca5d39a5695a"
+checksum = "ef657dfab802224e671f5818e9a4935f9b1957ed18e58292690cc39e7a4092a3"
 
 [[package]]
 name = "byteorder"
@@ -1754,9 +1754,9 @@ checksum = "5b63caa9aa9397e2d9480a9b13673856c78d8ac123288526c37d7839f2a86990"
 
 [[package]]
 name = "columnar"
-version = "0.2.0"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d754936b0b004c01c338b3d81c39e0a81d2ead5b6ee9fa64bfa140e6c430b80d"
+checksum = "d58a4c12223e2d2140bbf4be9fb38b3a612804230c91388dfa4e56a8a6464bf3"
 dependencies = [
  "bincode",
  "bytemuck",
@@ -1768,9 +1768,9 @@ dependencies = [
 
 [[package]]
 name = "columnar_derive"
-version = "0.2.0"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "174af3249fb00e9845597cb3a8259f05ff62b4060650b6af6adb4e05df277f7a"
+checksum = "087b1ac5c4ecad28348b6a9957e3dbd44ac7d041d267370acfdbbfa66b514c7d"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5113,6 +5113,7 @@ dependencies = [
  "anyhow",
  "async-stream",
  "bytesize",
+ "columnar",
  "core_affinity",
  "crossbeam-channel",
  "dec",
@@ -5199,6 +5200,7 @@ dependencies = [
 name = "mz-compute-types"
 version = "0.0.0"
 dependencies = [
+ "columnar",
  "columnation",
  "differential-dataflow",
  "itertools 0.12.1",
@@ -7309,6 +7311,8 @@ version = "0.0.0"
 dependencies = [
  "ahash",
  "bincode",
+ "bytemuck",
+ "columnar",
  "columnation",
  "differential-dataflow",
  "either",
@@ -10369,9 +10373,9 @@ dependencies = [
 
 [[package]]
 name = "timely"
-version = "0.16.0"
+version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b134806db44c8452ba2a9b18e6112f3d5e0a0185c6e58524269a08ca2891149c"
+checksum = "0ace21eb2a22c1b80b0b9b5be0627eb0f95a128a5751e866aefc90a85e3007d3"
 dependencies = [
  "bincode",
  "byteorder",
@@ -10394,9 +10398,9 @@ checksum = "99223f9594ab7d4dd36b55b1d7eb9bd2cd205f4304b5cc5381d5cdd417ec06f2"
 
 [[package]]
 name = "timely_communication"
-version = "0.16.1"
+version = "0.16.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f00d5c7f7bbb132a32220890240e5d951fc9582f82fb94452c011a8033c39f7a"
+checksum = "de7b73d69bd229dae4ea989beb7e48e652c0a576774134e6fed59e29f2a6f52c"
 dependencies = [
  "byteorder",
  "columnar",
@@ -10410,9 +10414,9 @@ dependencies = [
 
 [[package]]
 name = "timely_container"
-version = "0.13.1"
+version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "92b763064e76ba4f650dcdb035d82bcaad09986971fab002276e0b4cb10b3aa5"
+checksum = "b8bb051808b458a14146900968293da6166b1e6df5dab7c4d1d163f4734b7431"
 dependencies = [
  "columnation",
  "flatcontainer",
@@ -10421,9 +10425,9 @@ dependencies = [
 
 [[package]]
 name = "timely_logging"
-version = "0.13.1"
+version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d8300263e23bebac4ec9fbbeee65954a25402037609b7716d20191ed35829b14"
+checksum = "e6760517ac4ffa29d00841b0fccf513ece5da896f159045a43970fdb228726d9"
 dependencies = [
  "timely_container",
 ]

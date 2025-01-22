@@ -597,7 +597,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
 
         // Log the receipt of the peek.
         if let Some(logger) = self.compute_state.compute_logger.as_mut() {
-            logger.log(pending.as_log_event(true));
+            logger.log(&pending.as_log_event(true));
         }
 
         self.process_peek(&mut Antichain::new(), pending);
@@ -891,7 +891,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
 
         // Log responding to the peek request.
         if let Some(logger) = self.compute_state.compute_logger.as_mut() {
-            logger.log(log_event);
+            logger.log(&log_event);
         }
     }
 

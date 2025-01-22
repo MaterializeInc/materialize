@@ -12,6 +12,8 @@ workspace = true
 [dependencies]
 ahash = { version = "0.8.11", default-features = false }
 bincode = "1.3.3"
+bytemuck = "1.21.0"
+columnar = "0.2.2"
 columnation = "0.1.0"
 differential-dataflow = "0.13.3"
 either = "1"

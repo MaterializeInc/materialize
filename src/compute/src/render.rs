@@ -956,7 +956,7 @@ where
             // ActiveComputeState can't have a catalog reference, so we'll need to capture the names
             // in some other structure and have that structure impl ExprHumanizer
             let metadata = if should_compute_lir_metadata {
-                let operator: Box<str> = node.expr.humanize(&DummyHumanizer).into();
+                let operator = node.expr.humanize(&DummyHumanizer);
                 let operator_id_start = self.scope.peek_identifier();
                 Some((operator, operator_id_start))
             } else {
@@ -983,8 +983,7 @@ where
         }
 
         if let Some(lir_mapping_metadata) = lir_mapping_metadata {
-            let mapping: Box<[(LirId, LirMetadata)]> = lir_mapping_metadata.into();
-            self.log_lir_mapping(object_id, mapping);
+            self.log_lir_mapping(object_id, lir_mapping_metadata);
         }
 
         collections
@@ -1186,16 +1185,16 @@ where
 
     fn log_dataflow_global_id(&self, dataflow_index: usize, global_id: GlobalId) {
         if let Some(logger) = &self.compute_logger {
-            logger.log(ComputeEvent::DataflowGlobal(DataflowGlobal {
+            logger.log(&ComputeEvent::DataflowGlobal(DataflowGlobal {
                 dataflow_index,
                 global_id,
             }));
         }
     }
 
-    fn log_lir_mapping(&self, global_id: GlobalId, mapping: Box<[(LirId, LirMetadata)]>) {
+    fn log_lir_mapping(&self, global_id: GlobalId, mapping: Vec<(LirId, LirMetadata)>) {
         if let Some(logger) = &self.compute_logger {
-            logger.log(ComputeEvent::LirMapping(LirMapping { global_id, mapping }));
+            logger.log(&ComputeEvent::LirMapping(LirMapping { global_id, mapping }));
         }
     }
 

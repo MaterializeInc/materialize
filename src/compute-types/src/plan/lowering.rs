@@ -43,7 +43,7 @@ impl Context {
     pub fn new(debug_name: String, features: &OptimizerFeatures) -> Self {
         Self {
             arrangements: Default::default(),
-            next_lir_id: LirId(std::num::NonZero::<u64>::MIN),
+            next_lir_id: LirId(1),
             debug_info: LirDebugInfo {
                 debug_name,
                 id: GlobalId::Transient(0),
