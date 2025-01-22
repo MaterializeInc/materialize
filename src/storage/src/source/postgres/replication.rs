@@ -91,6 +91,7 @@ use mz_postgres_util::PostgresError;
 use mz_postgres_util::{simple_query_opt, Client};
 use mz_repr::{Datum, DatumVec, Diff, Row};
 use mz_sql_parser::ast::{display::AstDisplay, Ident};
+use mz_storage_types::dyncfgs::PG_OFFSET_KNOWN_INTERVAL;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceTimestamp;
 use mz_storage_types::sources::{MzOffset, PostgresSourceConnection};
@@ -118,6 +119,7 @@ use tracing::{error, trace};
 use crate::metrics::source::postgres::PgSourceMetrics;
 use crate::source::postgres::verify_schema;
 use crate::source::postgres::{DefiniteError, ReplicationError, SourceOutputInfo, TransientError};
+use crate::source::probe;
 use crate::source::types::{
     Probe, ProgressStatisticsUpdate, SignaledFuture, SourceMessage, StackedCollection,
 };
@@ -757,16 +759,15 @@ async fn raw_stream<'a>(
     );
 
     let (probe_tx, mut probe_rx) = watch::channel(None);
-    let offset_known_interval =
-        mz_storage_types::dyncfgs::PG_OFFSET_KNOWN_INTERVAL.get(config.config.config_set());
+    let config_set = Arc::clone(config.config.config_set());
     let now_fn = config.now_fn.clone();
     let max_lsn_task_handle =
         mz_ore::task::spawn(|| format!("pg_current_wal_lsn:{}", config.id), async move {
-            let mut interval = tokio::time::interval(offset_known_interval);
+            let mut probe_ticker =
+                probe::Ticker::new(|| PG_OFFSET_KNOWN_INTERVAL.get(&config_set), now_fn);
 
             while !probe_tx.is_closed() {
-                interval.tick().await;
-                let probe_ts = mz_repr::Timestamp::try_from((now_fn)()).expect("must fit");
+                let probe_ts = probe_ticker.tick().await;
                 let probe_or_err = super::fetch_max_lsn(&*metadata_client)
                     .await
                     .map(|lsn| Probe {

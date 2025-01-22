@@ -7,10 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! This file houses a representation of a SQL plan that is parallel to that found in
-//! src/expr/relation/mod.rs, but represents an earlier phase of planning. It's structurally very
-//! similar to that file, with some differences which are noted below. It gets turned into that
-//! representation via a call to lower().
+//! This file houses HIR, a representation of a SQL plan that is parallel to MIR, but represents
+//! an earlier phase of planning. It's structurally very similar to MIR, with some differences
+//! which are noted below. It gets turned into MIR via a call to lower().
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Display, Formatter};
@@ -3096,121 +3095,6 @@ impl HirScalarExpr {
 
     pub fn take(&mut self) -> Self {
         mem::replace(self, HirScalarExpr::literal_null(ScalarType::String))
-    }
-
-    pub fn visit<'a, F>(&'a self, f: &mut F)
-    where
-        F: FnMut(&'a Self),
-    {
-        self.visit1(|e: &HirScalarExpr| e.visit(f));
-        f(self);
-    }
-
-    pub fn visit1<'a, F>(&'a self, mut f: F)
-    where
-        F: FnMut(&'a Self),
-    {
-        use HirScalarExpr::*;
-        match self {
-            Column(..) | Parameter(..) | Literal(..) | CallUnmaterializable(..) => (),
-            CallUnary { expr, .. } => f(expr),
-            CallBinary { expr1, expr2, .. } => {
-                f(expr1);
-                f(expr2);
-            }
-            CallVariadic { exprs, .. } => {
-                for expr in exprs {
-                    f(expr);
-                }
-            }
-            If { cond, then, els } => {
-                f(cond);
-                f(then);
-                f(els);
-            }
-            Exists(..) | Select(..) => (),
-            Windowing(expr) => {
-                let _ = expr.visit_expressions(&mut |e| -> Result<(), ()> {
-                    f(e);
-                    Ok(())
-                });
-            }
-        }
-    }
-
-    #[deprecated = "Use `Visit::visit_post` instead."]
-    pub fn visit_mut<F>(&mut self, f: &mut F)
-    where
-        F: FnMut(&mut Self),
-    {
-        #[allow(deprecated)]
-        self.visit1_mut(|e: &mut HirScalarExpr| e.visit_mut(f));
-        f(self);
-    }
-
-    #[deprecated = "Use `Visit::visit_mut_pre` instead."]
-    pub fn visit_mut_pre<F>(&mut self, f: &mut F)
-    where
-        F: FnMut(&mut Self),
-    {
-        f(self);
-        #[allow(deprecated)]
-        self.visit1_mut(|e: &mut HirScalarExpr| e.visit_mut(f));
-    }
-
-    #[deprecated = "Use `VisitChildren<HirScalarExpr>::visit_children` instead."]
-    pub fn visit1_mut<F>(&mut self, mut f: F)
-    where
-        F: FnMut(&mut Self),
-    {
-        use HirScalarExpr::*;
-        match self {
-            Column(..) | Parameter(..) | Literal(..) | CallUnmaterializable(..) => (),
-            CallUnary { expr, .. } => f(expr),
-            CallBinary { expr1, expr2, .. } => {
-                f(expr1);
-                f(expr2);
-            }
-            CallVariadic { exprs, .. } => {
-                for expr in exprs {
-                    f(expr);
-                }
-            }
-            If { cond, then, els } => {
-                f(cond);
-                f(then);
-                f(els);
-            }
-            Exists(..) | Select(..) => (),
-            Windowing(expr) => {
-                let _ = expr.visit_expressions_mut(&mut |e| -> Result<(), ()> {
-                    f(e);
-                    Ok(())
-                });
-            }
-        }
-    }
-
-    #[deprecated = "Use `Visit::visit_pre_post` instead."]
-    /// A generalization of `visit`. The function `pre` runs on a
-    /// `HirScalarExpr` before it runs on any of the child `HirScalarExpr`s.
-    /// The function `post` runs on child `HirScalarExpr`s first before the
-    /// parent. Optionally, `pre` can return which child `HirScalarExpr`s, if
-    /// any, should be visited (default is to visit all children).
-    pub fn visit_pre_post<F1, F2>(&self, pre: &mut F1, post: &mut F2)
-    where
-        F1: FnMut(&Self) -> Option<Vec<&Self>>,
-        F2: FnMut(&Self),
-    {
-        let to_visit = pre(self);
-        if let Some(to_visit) = to_visit {
-            for e in to_visit {
-                e.visit_pre_post(pre, post);
-            }
-        } else {
-            self.visit1(|e| e.visit_pre_post(pre, post));
-        }
-        post(self);
     }
 
     #[deprecated = "Redefine this based on the `Visit` and `VisitChildren` methods."]

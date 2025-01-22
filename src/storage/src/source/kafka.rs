@@ -32,6 +32,7 @@ use mz_ore::iter::IteratorExt;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{adt::jsonb::Jsonb, Datum, Diff, GlobalId, Row};
 use mz_ssh_util::tunnel::SshTunnelStatus;
+use mz_storage_types::dyncfgs::KAFKA_METADATA_FETCH_INTERVAL;
 use mz_storage_types::errors::{
     ContextCreationError, DataflowError, SourceError, SourceErrorDetails,
 };
@@ -69,7 +70,7 @@ use crate::metrics::source::kafka::KafkaSourceMetrics;
 use crate::source::types::{
     Probe, ProgressStatisticsUpdate, SignaledFuture, SourceRender, StackedCollection,
 };
-use crate::source::{RawSourceCreationConfig, SourceMessage};
+use crate::source::{probe, RawSourceCreationConfig, SourceMessage};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 struct HealthStatus {
@@ -1606,18 +1607,8 @@ fn render_metadata_fetcher<G: Scope<Timestamp = KafkaTimestamp>>(
             }
         };
 
-        // We want a fairly low ceiling on our polling frequency, since we rely
-        // on this heartbeat to determine the health of our Kafka connection.
-        let poll_interval = topic_metadata_refresh_interval.min(
-            config
-                .config
-                .parameters
-                .kafka_timeout_config
-                .default_metadata_fetch_interval,
-        );
-
         let (tx, mut rx) = mpsc::unbounded_channel();
-        spawn_metadata_thread(config, consumer, topic, poll_interval, tx);
+        spawn_metadata_thread(config, consumer, topic, tx);
 
         let mut prev_upstream_frontier = resume_upper;
 
@@ -1633,7 +1624,7 @@ fn render_metadata_fetcher<G: Scope<Timestamp = KafkaTimestamp>>(
                 // Unfortunately this is not possible without something like KIP-516.
                 //
                 // The best we can do is check whether the upstream frontier regressed. This tells
-                // us thet the topic was recreated and now contains fewer offsets and/or fewer
+                // us that the topic was recreated and now contains fewer offsets and/or fewer
                 // partitions. Note that we are not able to detect topic recreation if neither of
                 // the two are true.
                 if !PartialOrder::less_equal(&prev_upstream_frontier, &upstream_frontier) {
@@ -1665,7 +1656,6 @@ fn spawn_metadata_thread<C: ConsumerContext>(
     config: RawSourceCreationConfig,
     consumer: BaseConsumer<TunnelingClientContext<C>>,
     topic: String,
-    poll_interval: Duration,
     tx: mpsc::UnboundedSender<(mz_repr::Timestamp, MetadataUpdate)>,
 ) {
     thread::Builder::new()
@@ -1675,11 +1665,16 @@ fn spawn_metadata_thread<C: ConsumerContext>(
                 source_id = config.id.to_string(),
                 worker_id = config.worker_id,
                 num_workers = config.worker_count,
-                poll_interval =? poll_interval,
                 "kafka metadata thread: starting..."
             );
+
+            let mut ticker = probe::Ticker::new(
+                || KAFKA_METADATA_FETCH_INTERVAL.get(config.config.config_set()),
+                config.now_fn,
+            );
+
             loop {
-                let probe_ts = (config.now_fn)().into();
+                let probe_ts = ticker.tick_blocking();
                 let result = fetch_partition_info(
                     &consumer,
                     &topic,
@@ -1737,8 +1732,6 @@ fn spawn_metadata_thread<C: ConsumerContext>(
                 if tx.send((probe_ts, update)).is_err() {
                     break;
                 }
-
-                thread::park_timeout(poll_interval);
             }
 
             info!(

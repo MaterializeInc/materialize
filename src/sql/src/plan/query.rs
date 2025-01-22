@@ -82,7 +82,7 @@ use crate::names::{
 };
 use crate::normalize;
 use crate::plan::error::PlanError;
-use crate::plan::expr::{
+use crate::plan::hir::{
     AbstractColumnType, AbstractExpr, AggregateExpr, AggregateFunc, AggregateWindowExpr,
     BinaryFunc, CoercibleScalarExpr, CoercibleScalarType, ColumnOrder, ColumnRef, Hir,
     HirRelationExpr, HirScalarExpr, JoinKind, ScalarWindowExpr, ScalarWindowFunc, UnaryFunc,
@@ -855,15 +855,16 @@ fn handle_mutation_using_clause(
         // those to the right of `using_rel_expr`) to instead be correlated to
         // the outer relation, i.e. `get`.
         let using_rel_arity = qcx.relation_type(&using_rel_expr).arity();
-        #[allow(deprecated)]
-        expr.visit_mut(&mut |e| {
+        // local import to not get confused with `mz_sql_parser::ast::visit::Visit`
+        use mz_expr::visit::Visit;
+        expr.visit_mut_post(&mut |e| {
             if let HirScalarExpr::Column(c) = e {
                 if c.column >= using_rel_arity {
                     c.level += 1;
                     c.column -= using_rel_arity;
                 };
             }
-        });
+        })?;
 
         // Filter `USING` tables like `<using_rel_expr> WHERE <expr>`. Note that
         // this filters the `USING` tables, _not_ the joined `USING..., FROM`

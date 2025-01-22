@@ -50,7 +50,7 @@ use mz_repr::ColumnName;
 use crate::ast::Expr;
 use crate::names::{Aug, PartialItemName};
 use crate::plan::error::PlanError;
-use crate::plan::expr::ColumnRef;
+use crate::plan::hir::ColumnRef;
 use crate::plan::plan_utils::JoinSide;
 
 #[derive(Debug, Clone)]
