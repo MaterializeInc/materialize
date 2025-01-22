@@ -23,19 +23,24 @@ use tracing::trace;
 /// by sources, thereby reducing churn in downstream dataflows.
 ///
 /// The ticker also supports usage in non-async contexts, using [`Ticker::tick_blocking`].
-pub(super) struct Ticker {
+///
+/// The tick interval is determined by the result of the `get_interval` closure. It is updated
+/// after each tick, allowing it to be changed dynamically during the operation of the ticker.
+pub(super) struct Ticker<G> {
     interval: EpochMillis,
     now: NowFn,
     last_tick: Option<EpochMillis>,
+    get_interval: G,
 }
 
-impl Ticker {
-    pub fn new(interval: Duration, now: NowFn) -> Self {
-        let interval = interval.as_millis().try_into().unwrap();
+impl<G: Fn() -> Duration> Ticker<G> {
+    pub fn new(get_interval: G, now: NowFn) -> Self {
+        let interval = get_interval().as_millis().try_into().unwrap();
         Self {
             interval,
             now,
             last_tick: None,
+            get_interval,
         }
     }
 
@@ -87,6 +92,11 @@ impl Ticker {
     fn apply_tick(&mut self, time: EpochMillis) -> Timestamp {
         let time = self.round_to_interval(time);
         self.last_tick = Some(time);
+
+        // Refresh the interval for the next tick.
+        self.interval = (self.get_interval)().as_millis().try_into().unwrap();
+        trace!("probe ticker interval: {}ms", self.interval);
+
         time.into()
     }
 

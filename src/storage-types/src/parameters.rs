@@ -493,9 +493,6 @@ impl RustType<ProtoKafkaTimeouts> for mz_kafka_util::client::TimeoutConfig {
             ),
             fetch_metadata_timeout: Some(self.fetch_metadata_timeout.into_proto()),
             progress_record_fetch_timeout: Some(self.progress_record_fetch_timeout.into_proto()),
-            default_metadata_fetch_interval: Some(
-                self.default_metadata_fetch_interval.into_proto(),
-            ),
         }
     }
 
@@ -519,11 +516,6 @@ impl RustType<ProtoKafkaTimeouts> for mz_kafka_util::client::TimeoutConfig {
             progress_record_fetch_timeout: proto
                 .progress_record_fetch_timeout
                 .into_rust_if_some("ProtoKafkaSourceTcpTimeouts::progress_record_fetch_timeout")?,
-            default_metadata_fetch_interval: proto
-                .default_metadata_fetch_interval
-                .into_rust_if_some(
-                    "ProtoKafkaSourceTcpTimeouts::default_metadata_fetch_interval",
-                )?,
         })
     }
 }
