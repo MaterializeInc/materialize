@@ -47,6 +47,7 @@ use crate::plan::{transform_hir, PlanError};
 use crate::session::vars::SystemVars;
 use itertools::Itertools;
 use mz_expr::{AccessStrategy, AggregateFunc, MirRelationExpr, MirScalarExpr};
+use mz_expr::visit::Visit;
 use mz_ore::collections::CollectionExt;
 use mz_ore::stack::maybe_grow;
 use mz_repr::*;
@@ -1525,7 +1526,6 @@ impl HirScalarExpr {
             let mut subqueries = Vec::new();
             let distinct_inner = get_inner.clone().distinct();
             for expr in exprs.iter() {
-                #[allow(deprecated)]
                 expr.visit_pre_post(
                     &mut |e| match e {
                         // For simplicity, subqueries within a conditional statement will be
@@ -1565,7 +1565,7 @@ impl HirScalarExpr {
                         }
                         _ => {}
                     },
-                );
+                )?;
             }
 
             if subqueries.is_empty() {
