@@ -187,7 +187,7 @@ impl HirRelationExpr {
             mut other => {
                 let mut id_gen = mz_ore::id_gen::IdGen::default();
                 transform_hir::split_subquery_predicates(&mut other)?;
-                transform_hir::try_simplify_quantified_comparisons(&mut other);
+                transform_hir::try_simplify_quantified_comparisons(&mut other)?;
                 transform_hir::fuse_window_functions(&mut other, &context)?;
                 MirRelationExpr::constant(vec![vec![]], RelationType::new(vec![])).let_in(
                     &mut id_gen,
