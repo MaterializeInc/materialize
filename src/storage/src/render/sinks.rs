@@ -9,7 +9,6 @@
 
 //! Logic related to the creation of dataflow sinks.
 
-use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -54,7 +53,7 @@ pub(crate) fn render_sink<'g, G: Scope<Timestamp = ()>>(
         SnapshotMode::Exclude
     };
 
-    let command_tx = Rc::clone(&storage_state.internal_cmd_tx);
+    let command_tx = storage_state.internal_cmd_tx.clone();
 
     let (ok_collection, err_collection, persist_tokens) = persist_source::persist_source(
         scope,
@@ -74,8 +73,7 @@ pub(crate) fn render_sink<'g, G: Scope<Timestamp = ()>>(
             Box::pin(async move {
                 let error = format!("storage_sink: {error}");
                 tracing::info!("{error}");
-                let mut command_tx = command_tx.borrow_mut();
-                command_tx.broadcast(InternalStorageCommand::SuspendAndRestart {
+                command_tx.send(InternalStorageCommand::SuspendAndRestart {
                     id: sink_id,
                     reason: error,
                 });

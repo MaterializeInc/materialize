@@ -16,7 +16,7 @@
 //! A worker receives _external_ [`StorageCommands`](StorageCommand) from the
 //! storage controller, via a channel. Storage workers also share an _internal_
 //! control/command fabric ([`internal_control`]). Internal commands go through
-//! a `Sequencer` dataflow that ensures that all workers receive all commands in
+//! a sequencer dataflow that ensures that all workers receive all commands in
 //! the same consistent order.
 //!
 //! We need to make sure that commands that cause dataflows to be rendered are
@@ -112,7 +112,8 @@ use tokio::time::Instant;
 use tracing::{info, warn};
 
 use crate::internal_control::{
-    self, DataflowParameters, InternalCommandSender, InternalStorageCommand,
+    self, DataflowParameters, InternalCommandReceiver, InternalCommandSender,
+    InternalStorageCommand,
 };
 use crate::metrics::StorageMetrics;
 use crate::statistics::{AggregatedStatistics, SinkStatistics, SourceStatistics};
@@ -170,8 +171,8 @@ impl<'w, A: Allocate> Worker<'w, A> {
         // because the controller re-started and re-connected), dataflows that
         // were rendered before would still hold a handle to the old sequencer
         // but we would not read their commands anymore.
-        let command_sequencer = internal_control::setup_command_sequencer(timely_worker);
-        let command_sequencer = Rc::new(RefCell::new(command_sequencer));
+        let (internal_cmd_tx, internal_cmd_rx) =
+            internal_control::setup_command_sequencer(timely_worker);
 
         let storage_configuration =
             StorageConfiguration::new(connection_context, mz_dyncfgs::all_dyncfgs());
@@ -230,7 +231,8 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 timely_worker.peers(),
             ),
             object_status_updates: Default::default(),
-            internal_cmd_tx: command_sequencer,
+            internal_cmd_tx,
+            internal_cmd_rx,
             read_only_tx,
             read_only_rx,
             async_worker,
@@ -316,7 +318,9 @@ pub struct StorageState {
     /// within workers/operators and will be distributed to all workers. For
     /// example, for shutting down an entire dataflow from within a
     /// operator/worker.
-    pub internal_cmd_tx: Rc<RefCell<dyn InternalCommandSender>>,
+    pub internal_cmd_tx: InternalCommandSender,
+    /// Receiver for cluster-internal storage commands.
+    pub internal_cmd_rx: InternalCommandReceiver,
 
     /// When this replica/cluster is in read-only mode it must not affect any
     /// changes to external state. This flag can only be changed by a
@@ -486,14 +490,8 @@ impl<'w, A: Allocate> Worker<'w, A> {
             }
 
             // Handle any received commands.
-            loop {
-                let mut borrow = self.storage_state.internal_cmd_tx.borrow_mut();
-                if let Some(internal_cmd) = borrow.next() {
-                    drop(borrow);
-                    self.handle_internal_storage_command(internal_cmd)
-                } else {
-                    break;
-                }
+            while let Some(command) = self.storage_state.internal_cmd_rx.try_recv() {
+                self.handle_internal_storage_command(command);
             }
         }
     }
@@ -519,7 +517,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     0,
                     "only worker #0 is doing async processing"
                 );
-                self.storage_state.internal_cmd_tx.borrow_mut().broadcast(
+                self.storage_state.internal_cmd_tx.send(
                     InternalStorageCommand::CreateIngestionDataflow {
                         id,
                         ingestion_description,
@@ -599,7 +597,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         self.storage_state
                             .aggregated_statistics
                             .advance_global_epoch(id);
-                        self.storage_state.internal_cmd_tx.borrow_mut().broadcast(
+                        self.storage_state.internal_cmd_tx.send(
                             InternalStorageCommand::RunSinkDataflow(id, sink_description),
                         );
                     }
@@ -840,8 +838,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
         if !sources.is_empty() || !sinks.is_empty() {
             self.storage_state
                 .internal_cmd_tx
-                .borrow_mut()
-                .broadcast(InternalStorageCommand::StatisticsUpdate { sources, sinks })
+                .send(InternalStorageCommand::StatisticsUpdate { sources, sinks })
         }
 
         let (sources, sinks) = self.storage_state.aggregated_statistics.snapshot();
@@ -1188,11 +1185,10 @@ impl StorageState {
                 // the internal command fabric, to ensure consistent
                 // ordering of dataflow rendering across all workers.
                 if self.timely_worker_index == 0 {
-                    self.internal_cmd_tx.borrow_mut().broadcast(
-                        InternalStorageCommand::UpdateConfiguration {
+                    self.internal_cmd_tx
+                        .send(InternalStorageCommand::UpdateConfiguration {
                             storage_parameters: params,
-                        },
-                    )
+                        })
                 }
             }
             StorageCommand::RunIngestions(ingestions) => {
@@ -1225,14 +1221,13 @@ impl StorageState {
             }
             StorageCommand::RunOneshotIngestion(oneshot) => {
                 if self.timely_worker_index == 0 {
-                    self.internal_cmd_tx.borrow_mut().broadcast(
-                        InternalStorageCommand::RunOneshotIngestion {
+                    self.internal_cmd_tx
+                        .send(InternalStorageCommand::RunOneshotIngestion {
                             ingestion_id: oneshot.ingestion_id,
                             collection_id: oneshot.collection_id,
                             collection_meta: oneshot.collection_meta,
                             request: oneshot.request,
-                        },
-                    );
+                        });
                 }
             }
             StorageCommand::RunSinks(exports) => {
@@ -1253,9 +1248,11 @@ impl StorageState {
                     // fabric, to ensure consistent ordering of dataflow rendering across all
                     // workers.
                     if self.timely_worker_index == 0 {
-                        self.internal_cmd_tx.borrow_mut().broadcast(
-                            InternalStorageCommand::RunSinkDataflow(export.id, export.description),
-                        );
+                        self.internal_cmd_tx
+                            .send(InternalStorageCommand::RunSinkDataflow(
+                                export.id,
+                                export.description,
+                            ));
                     }
                 }
             }
@@ -1318,8 +1315,7 @@ impl StorageState {
         // Broadcast from one worker to make sure its sequences with the other internal commands.
         if self.timely_worker_index == 0 {
             self.internal_cmd_tx
-                .borrow_mut()
-                .broadcast(InternalStorageCommand::DropDataflow(vec![id]));
+                .send(InternalStorageCommand::DropDataflow(vec![id]));
         }
     }
 }

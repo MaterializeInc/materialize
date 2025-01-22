@@ -6,8 +6,10 @@
 //! Types for cluster-internal control messages that can be broadcast to all
 //! workers from individual operators/workers.
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
-use std::time::Instant;
+use std::rc::Rc;
+use std::sync::mpsc;
 
 use mz_repr::{GlobalId, Row};
 use mz_rocksdb::config::SharedWriteBufferManager;
@@ -18,8 +20,11 @@ use mz_storage_types::sinks::{MetadataFilled, StorageSinkDesc};
 use mz_storage_types::sources::IngestionDescription;
 use serde::{Deserialize, Serialize};
 use timely::communication::Allocate;
+use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::operators::generic::{source, OutputHandle};
+use timely::dataflow::operators::{Broadcast, Exchange, Operator};
 use timely::progress::Antichain;
-use timely::synchronization::Sequencer;
+use timely::scheduling::{Activator, Scheduler};
 use timely::worker::Worker as TimelyWorker;
 
 use crate::statistics::{SinkStatisticsRecord, SourceStatisticsRecord};
@@ -120,31 +125,100 @@ pub enum InternalStorageCommand {
     },
 }
 
-/// Allows broadcasting [`internal commands`](InternalStorageCommand) to all
-/// workers.
-pub trait InternalCommandSender {
-    /// Broadcasts the given command to all workers.
-    fn broadcast(&mut self, internal_cmd: InternalStorageCommand);
-
-    /// Returns the next available command, if any. This returns `None` when
-    /// there are currently no commands but there might be commands again in the
-    /// future.
-    fn next(&mut self) -> Option<InternalStorageCommand>;
+/// A sender broadcasting [`InternalStorageCommand`]s to all workers.
+#[derive(Clone)]
+pub struct InternalCommandSender {
+    tx: mpsc::Sender<InternalStorageCommand>,
+    activator: Rc<RefCell<Option<Activator>>>,
 }
 
-impl InternalCommandSender for Sequencer<InternalStorageCommand> {
-    fn broadcast(&mut self, internal_cmd: InternalStorageCommand) {
-        self.push(internal_cmd);
-    }
+impl InternalCommandSender {
+    /// Broadcasts the given command to all workers.
+    pub fn send(&self, cmd: InternalStorageCommand) {
+        if self.tx.send(cmd).is_err() {
+            panic!("internal command channel disconnected");
+        }
 
-    fn next(&mut self) -> Option<InternalStorageCommand> {
-        Iterator::next(self)
+        self.activator.borrow().as_ref().map(|a| a.activate());
+    }
+}
+
+/// A receiver for [`InternalStorageCommand`]s broadcasted by workers.
+pub struct InternalCommandReceiver {
+    rx: mpsc::Receiver<InternalStorageCommand>,
+}
+
+impl InternalCommandReceiver {
+    /// Returns the next available command, if any.
+    ///
+    /// This returns `None` when there are currently no commands but there might be commands again
+    /// in the future.
+    pub fn try_recv(&self) -> Option<InternalStorageCommand> {
+        match self.rx.try_recv() {
+            Ok(cmd) => Some(cmd),
+            Err(mpsc::TryRecvError::Empty) => None,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                panic!("internal command channel disconnected")
+            }
+        }
     }
 }
 
 pub(crate) fn setup_command_sequencer<'w, A: Allocate>(
     timely_worker: &'w mut TimelyWorker<A>,
-) -> Sequencer<InternalStorageCommand> {
-    // TODO(aljoscha): Use something based on `mz_ore::NowFn`?
-    Sequencer::new(timely_worker, Instant::now())
+) -> (InternalCommandSender, InternalCommandReceiver) {
+    let (input_tx, input_rx) = mpsc::channel();
+    let (output_tx, output_rx) = mpsc::channel();
+    let activator = Rc::new(RefCell::new(None));
+
+    timely_worker.dataflow_named::<(), _, _>("command_sequencer", {
+        let activator = Rc::clone(&activator);
+        move |scope| {
+            // Create a stream of commands received from `input_rx`.
+            let stream = source(scope, "command_sequencer::source", |capability, info| {
+                *activator.borrow_mut() = Some(scope.activator_for(info.address));
+
+                let mut capability = Some(capability);
+
+                move |output: &mut OutputHandle<_, _, _>| {
+                    let Some(cap) = &capability else {
+                        return;
+                    };
+
+                    let mut session = output.session(&cap);
+                    loop {
+                        match input_rx.try_recv() {
+                            Ok(cmd) => session.give(cmd),
+                            Err(mpsc::TryRecvError::Empty) => break,
+                            Err(mpsc::TryRecvError::Disconnected) => {
+                                // Drop our capability to shut down.
+                                capability = None;
+                                return;
+                            }
+                        }
+                    }
+                }
+            });
+
+            // Sequence all commands through a single worker to establish a unique order.
+            let stream = stream.exchange(|_| 0).broadcast();
+
+            // Sink the stream back into `output_tx`.
+            stream.sink(Pipeline, "command_sequencer::sink", move |input| {
+                while let Some((_cap, data)) = input.next() {
+                    for cmd in data.drain(..) {
+                        let _ = output_tx.send(cmd);
+                    }
+                }
+            });
+        }
+    });
+
+    let tx = InternalCommandSender {
+        tx: input_tx,
+        activator,
+    };
+    let rx = InternalCommandReceiver { rx: output_rx };
+
+    (tx, rx)
 }
