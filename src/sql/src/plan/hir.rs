@@ -3114,7 +3114,7 @@ impl HirScalarExpr {
     {
         f(self);
         #[allow(deprecated)]
-        self.visit1_mut(|e: &mut HirScalarExpr| e.visit_mut(f));
+        self.visit1_mut(|e: &mut HirScalarExpr| e.visit_mut_pre(f));
     }
 
     #[deprecated = "Use `VisitChildren<HirScalarExpr>::visit_children` instead."]
