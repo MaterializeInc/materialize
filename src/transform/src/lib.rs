@@ -191,6 +191,16 @@ impl<'a> TransformCtx<'a> {
     fn reset_global_id(&mut self) {
         self.global_id = None;
     }
+
+    /// Updates `last_hash` with the hash of the given MIR plan for the id `self.global_id`.
+    /// Returns the hash.
+    fn update_last_hash(&mut self, plan: &MirRelationExpr) -> u64 {
+        let hash = plan.hash_to_u64();
+        if let Some(id) = self.global_id {
+            self.last_hash.insert(id, hash);
+        }
+        hash
+    }
 }
 
 /// Types capable of transforming relation expressions.
@@ -215,10 +225,7 @@ pub trait Transform: fmt::Debug {
         let res = self.actually_perform_transform(relation, args);
         let duration = start.elapsed();
 
-        let hash_after = relation.hash_to_u64();
-        if let Some(id) = args.global_id {
-            args.last_hash.insert(id, hash_after);
-        }
+        let hash_after = args.update_last_hash(relation);
         if let Some(metrics) = args.metrics {
             let transform_name = self.name();
             metrics.observe_transform_time(transform_name, duration);
@@ -443,9 +450,7 @@ impl Transform for Fixpoint {
                             );
                             return Ok(());
                         }
-                        if let Some(id) = ctx.global_id {
-                            ctx.last_hash.insert(id, again.hash_to_u64());
-                        }
+                        ctx.update_last_hash(&again);
                         self.apply_transforms(
                             &mut again,
                             ctx,
@@ -948,9 +953,7 @@ impl Optimizer {
         relation: &mut MirRelationExpr,
         args: &mut TransformCtx,
     ) -> Result<(), TransformError> {
-        if let Some(id) = args.global_id {
-            args.last_hash.insert(id, relation.hash_to_u64());
-        }
+        args.update_last_hash(relation);
 
         for transform in self.transforms.iter() {
             transform.transform(relation, args)?;
