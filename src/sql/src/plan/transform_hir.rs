@@ -56,54 +56,61 @@ use crate::plan::{AggregateExpr, WindowExprType};
 /// = e`, will be further restricted to outer rows that match `A = b AND c =
 /// d AND EXISTS(<subquery>)`. This can vastly reduce the cost of the
 /// subquery, especially when the original conjunction contains join keys.
-pub fn split_subquery_predicates(expr: &mut HirRelationExpr) {
-    fn walk_relation(expr: &mut HirRelationExpr) {
+pub fn split_subquery_predicates(expr: &mut HirRelationExpr) -> Result<(), RecursionLimitError> {
+    fn walk_relation(expr: &mut HirRelationExpr) -> Result<(), RecursionLimitError> {
         #[allow(deprecated)]
-        expr.visit_mut(0, &mut |expr, _| match expr {
-            HirRelationExpr::Map { scalars, .. } => {
-                for scalar in scalars {
-                    walk_scalar(scalar);
+        expr.visit_mut_fallible(0, &mut |expr, _| {
+            match expr {
+                HirRelationExpr::Map { scalars, .. } => {
+                    for scalar in scalars {
+                        walk_scalar(scalar)?;
+                    }
                 }
+                HirRelationExpr::CallTable { exprs, .. } => {
+                    for expr in exprs {
+                        walk_scalar(expr)?;
+                    }
+                }
+                HirRelationExpr::Filter { predicates, .. } => {
+                    let mut subqueries = vec![];
+                    for predicate in &mut *predicates {
+                        walk_scalar(predicate)?;
+                        extract_conjuncted_subqueries(predicate, &mut subqueries)?;
+                    }
+                    // TODO(benesch): we could be smarter about the order in which
+                    // we emit subqueries. At the moment we just emit in the order
+                    // we discovered them, but ideally we'd emit them in an order
+                    // that accounted for their cost/selectivity. E.g., low-cost,
+                    // high-selectivity subqueries should go first.
+                    for subquery in subqueries {
+                        predicates.push(subquery);
+                    }
+                }
+                _ => (),
             }
-            HirRelationExpr::CallTable { exprs, .. } => {
-                for expr in exprs {
-                    walk_scalar(expr);
-                }
-            }
-            HirRelationExpr::Filter { predicates, .. } => {
-                let mut subqueries = vec![];
-                for predicate in &mut *predicates {
-                    walk_scalar(predicate);
-                    extract_conjuncted_subqueries(predicate, &mut subqueries);
-                }
-                // TODO(benesch): we could be smarter about the order in which
-                // we emit subqueries. At the moment we just emit in the order
-                // we discovered them, but ideally we'd emit them in an order
-                // that accounted for their cost/selectivity. E.g., low-cost,
-                // high-selectivity subqueries should go first.
-                for subquery in subqueries {
-                    predicates.push(subquery);
-                }
-            }
-            _ => (),
-        });
-    }
-
-    fn walk_scalar(expr: &mut HirScalarExpr) {
-        #[allow(deprecated)]
-        expr.visit_mut(&mut |expr| match expr {
-            HirScalarExpr::Exists(input) | HirScalarExpr::Select(input) => walk_relation(input),
-            _ => (),
+            Ok(())
         })
     }
 
-    fn contains_subquery(expr: &HirScalarExpr) -> bool {
+    fn walk_scalar(expr: &mut HirScalarExpr) -> Result<(), RecursionLimitError> {
+        expr.try_visit_mut_post(&mut |expr| {
+            match expr {
+                HirScalarExpr::Exists(input) | HirScalarExpr::Select(input) => {
+                    walk_relation(input)?
+                }
+                _ => (),
+            }
+            Ok(())
+        })
+    }
+
+    fn contains_subquery(expr: &HirScalarExpr) -> Result<bool, RecursionLimitError> {
         let mut found = false;
-        expr.visit(&mut |expr| match expr {
+        expr.visit_pre(&mut |expr| match expr {
             HirScalarExpr::Exists(_) | HirScalarExpr::Select(_) => found = true,
             _ => (),
-        });
-        found
+        })?;
+        Ok(found)
     }
 
     /// Extracts subqueries from a conjunction into `out`.
@@ -122,7 +129,10 @@ pub fn split_subquery_predicates(expr: &mut HirRelationExpr) {
     ///
     /// and returns the expression fragments `EXISTS (<subquery 1>)` and
     /// `(<subquery 2>) = e` in the `out` vector.
-    fn extract_conjuncted_subqueries(expr: &mut HirScalarExpr, out: &mut Vec<HirScalarExpr>) {
+    fn extract_conjuncted_subqueries(
+        expr: &mut HirScalarExpr,
+        out: &mut Vec<HirScalarExpr>,
+    ) -> Result<(), RecursionLimitError> {
         match expr {
             HirScalarExpr::CallVariadic {
                 func: VariadicFunc::And,
@@ -130,13 +140,14 @@ pub fn split_subquery_predicates(expr: &mut HirRelationExpr) {
             } => {
                 exprs
                     .into_iter()
-                    .for_each(|e| extract_conjuncted_subqueries(e, out));
+                    .try_for_each(|e| extract_conjuncted_subqueries(e, out))?;
             }
-            expr if contains_subquery(expr) => {
+            expr if contains_subquery(expr)? => {
                 out.push(mem::replace(expr, HirScalarExpr::literal_true()))
             }
             _ => (),
         }
+        Ok(())
     }
 
     walk_relation(expr)
@@ -162,15 +173,20 @@ pub fn split_subquery_predicates(expr: &mut HirRelationExpr) {
 ///
 /// See Section 3.5 of "Execution Strategies for SQL Subqueries" by
 /// M. Elhemali, et al.
-pub fn try_simplify_quantified_comparisons(expr: &mut HirRelationExpr) {
-    fn walk_relation(expr: &mut HirRelationExpr, outers: &[RelationType]) {
+pub fn try_simplify_quantified_comparisons(
+    expr: &mut HirRelationExpr,
+) -> Result<(), RecursionLimitError> {
+    fn walk_relation(
+        expr: &mut HirRelationExpr,
+        outers: &[RelationType],
+    ) -> Result<(), RecursionLimitError> {
         match expr {
             HirRelationExpr::Map { scalars, input } => {
-                walk_relation(input, outers);
+                walk_relation(input, outers)?;
                 let mut outers = outers.to_vec();
                 outers.insert(0, input.typ(&outers, &NO_PARAMS));
                 for scalar in scalars {
-                    walk_scalar(scalar, &outers, false);
+                    walk_scalar(scalar, &outers, false)?;
                     let (inner, outers) = outers
                         .split_first_mut()
                         .expect("outers known to have at least one element");
@@ -179,95 +195,101 @@ pub fn try_simplify_quantified_comparisons(expr: &mut HirRelationExpr) {
                 }
             }
             HirRelationExpr::Filter { predicates, input } => {
-                walk_relation(input, outers);
+                walk_relation(input, outers)?;
                 let mut outers = outers.to_vec();
                 outers.insert(0, input.typ(&outers, &NO_PARAMS));
                 for pred in predicates {
-                    walk_scalar(pred, &outers, true);
+                    walk_scalar(pred, &outers, true)?;
                 }
             }
             HirRelationExpr::CallTable { exprs, .. } => {
                 let mut outers = outers.to_vec();
                 outers.insert(0, RelationType::empty());
                 for scalar in exprs {
-                    walk_scalar(scalar, &outers, false);
+                    walk_scalar(scalar, &outers, false)?;
                 }
             }
             HirRelationExpr::Join { left, right, .. } => {
-                walk_relation(left, outers);
+                walk_relation(left, outers)?;
                 let mut outers = outers.to_vec();
                 outers.insert(0, left.typ(&outers, &NO_PARAMS));
-                walk_relation(right, &outers);
+                walk_relation(right, &outers)?;
             }
             expr => {
                 #[allow(deprecated)]
-                let _ = expr.visit1_mut(0, &mut |expr, _| -> Result<(), ()> {
-                    walk_relation(expr, outers);
-                    Ok(())
+                let _ = expr.visit1_mut(0, &mut |expr, _| -> Result<(), RecursionLimitError> {
+                    walk_relation(expr, outers)
                 });
             }
         }
+        Ok(())
     }
 
-    fn walk_scalar(expr: &mut HirScalarExpr, outers: &[RelationType], mut in_filter: bool) {
-        #[allow(deprecated)]
-        expr.visit_mut_pre(&mut |e| match e {
-            HirScalarExpr::Exists(input) => walk_relation(input, outers),
-            HirScalarExpr::Select(input) => {
-                walk_relation(input, outers);
+    fn walk_scalar(
+        expr: &mut HirScalarExpr,
+        outers: &[RelationType],
+        mut in_filter: bool,
+    ) -> Result<(), RecursionLimitError> {
+        expr.try_visit_mut_pre(&mut |e| {
+            match e {
+                HirScalarExpr::Exists(input) => walk_relation(input, outers)?,
+                HirScalarExpr::Select(input) => {
+                    walk_relation(input, outers)?;
 
-                // We're inside of a `(SELECT ...)` subquery. Now let's see if
-                // it has the form `(SELECT <any|all>(...) FROM <input>)`.
-                // Ideally we could do this with one pattern, but Rust's pattern
-                // matching engine is not powerful enough, so we have to do this
-                // in stages; the early returns avoid brutal nesting.
+                    // We're inside a `(SELECT ...)` subquery. Now let's see if
+                    // it has the form `(SELECT <any|all>(...) FROM <input>)`.
+                    // Ideally we could do this with one pattern, but Rust's pattern
+                    // matching engine is not powerful enough, so we have to do this
+                    // in stages; the early returns avoid brutal nesting.
 
-                let (func, expr, input) = match &mut **input {
-                    HirRelationExpr::Reduce {
-                        group_key,
-                        aggregates,
-                        input,
-                        expected_group_size: _,
-                    } if group_key.is_empty() && aggregates.len() == 1 => {
-                        let agg = &mut aggregates[0];
-                        (&agg.func, &mut agg.expr, input)
+                    let (func, expr, input) = match &mut **input {
+                        HirRelationExpr::Reduce {
+                            group_key,
+                            aggregates,
+                            input,
+                            expected_group_size: _,
+                        } if group_key.is_empty() && aggregates.len() == 1 => {
+                            let agg = &mut aggregates[0];
+                            (&agg.func, &mut agg.expr, input)
+                        }
+                        _ => return Ok(()),
+                    };
+
+                    if !in_filter && column_type(outers, input, expr).nullable {
+                        // Unless we're directly inside a WHERE, this
+                        // transformation is only valid if the expression involved
+                        // is non-nullable.
+                        return Ok(());
                     }
-                    _ => return,
-                };
 
-                if !in_filter && column_type(outers, input, expr).nullable {
-                    // Unless we're directly inside of a WHERE, this
-                    // transformation is only valid if the expression involved
-                    // is non-nullable.
-                    return;
+                    match func {
+                        AggregateFunc::Any => {
+                            // Found `(SELECT any(<expr>) FROM <input>)`. Rewrite to
+                            // `EXISTS(SELECT 1 FROM <input> WHERE <expr>)`.
+                            *e = input.take().filter(vec![expr.take()]).exists();
+                        }
+                        AggregateFunc::All => {
+                            // Found `(SELECT all(<expr>) FROM <input>)`. Rewrite to
+                            // `NOT EXISTS(SELECT 1 FROM <input> WHERE NOT <expr> OR <expr> IS NULL)`.
+                            //
+                            // Note that negation of <expr> alone is insufficient.
+                            // Consider that `WHERE <pred>` filters out rows if
+                            // `<pred>` is false *or* null. To invert the test, we
+                            // need `NOT <pred> OR <pred> IS NULL`.
+                            let expr = expr.take();
+                            let filter = expr.clone().not().or(expr.call_is_null());
+                            *e = input.take().filter(vec![filter]).exists().not();
+                        }
+                        _ => (),
+                    }
                 }
-
-                match func {
-                    AggregateFunc::Any => {
-                        // Found `(SELECT any(<expr>) FROM <input>)`. Rewrite to
-                        // `EXISTS(SELECT 1 FROM <input> WHERE <expr>)`.
-                        *e = input.take().filter(vec![expr.take()]).exists();
-                    }
-                    AggregateFunc::All => {
-                        // Found `(SELECT all(<expr>) FROM <input>)`. Rewrite to
-                        // `NOT EXISTS(SELECT 1 FROM <input> WHERE NOT <expr> OR <expr> IS NULL)`.
-                        //
-                        // Note that negation of <expr> alone is insufficient.
-                        // Consider that `WHERE <pred>` filters out rows if
-                        // `<pred>` is false *or* null. To invert the test, we
-                        // need `NOT <pred> OR <pred> IS NULL`.
-                        let expr = expr.take();
-                        let filter = expr.clone().not().or(expr.call_is_null());
-                        *e = input.take().filter(vec![filter]).exists().not();
-                    }
-                    _ => (),
+                _ => {
+                    // As soon as we see *any* scalar expression, we are no longer
+                    // directly inside a filter.
+                    in_filter = false;
                 }
             }
-            _ => {
-                // As soon as we see *any* scalar expression, we are no longer
-                // directly inside of a filter.
-                in_filter = false;
-            }
+            Ok(())
         })
     }
 
