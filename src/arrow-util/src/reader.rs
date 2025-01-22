@@ -509,7 +509,7 @@ impl ColReader {
                 let mut num = ctx.from_i128(x);
 
                 // Scale the number.
-                ctx.div(&mut num, &scale_factor);
+                ctx.div(&mut num, scale_factor);
 
                 Datum::Numeric(OrderedDecimal(num))
             }),
@@ -533,7 +533,7 @@ impl ColReader {
                         .map_err(|e| anyhow::anyhow!("decimal out of range: {e}"))?;
 
                     // Scale the number.
-                    ctx.div(&mut num, &scale_factor);
+                    ctx.div(&mut num, scale_factor);
 
                     Ok::<_, anyhow::Error>(Datum::Numeric(OrderedDecimal(num)))
                 })
@@ -868,6 +868,7 @@ mod tests {
         dec128.append_value(100000000009);
 
         let dec128 = dec128.finish();
+        #[allow(clippy::as_conversions)]
         let batch = StructArray::from(vec![(
             Arc::new(Field::new("a", dec128.data_type().clone(), true)),
             Arc::new(dec128) as arrow::array::ArrayRef,
@@ -912,6 +913,7 @@ mod tests {
         dec256.append_value(arrow::datatypes::i256::from(100000000009i64));
 
         let dec256 = dec256.finish();
+        #[allow(clippy::as_conversions)]
         let batch = StructArray::from(vec![(
             Arc::new(Field::new("a", dec256.data_type().clone(), true)),
             Arc::new(dec256) as arrow::array::ArrayRef,
