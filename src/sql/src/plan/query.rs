@@ -82,7 +82,7 @@ use crate::names::{
 };
 use crate::normalize;
 use crate::plan::error::PlanError;
-use crate::plan::expr::{
+use crate::plan::hir::{
     AbstractColumnType, AbstractExpr, AggregateExpr, AggregateFunc, AggregateWindowExpr,
     BinaryFunc, CoercibleScalarExpr, CoercibleScalarType, ColumnOrder, ColumnRef, Hir,
     HirRelationExpr, HirScalarExpr, JoinKind, ScalarWindowExpr, ScalarWindowFunc, UnaryFunc,

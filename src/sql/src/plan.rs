@@ -87,7 +87,7 @@ use crate::names::{
 
 pub(crate) mod error;
 pub(crate) mod explain;
-pub(crate) mod expr;
+pub(crate) mod hir;
 pub(crate) mod literal;
 pub(crate) mod lowering;
 pub(crate) mod notice;
@@ -106,7 +106,7 @@ use crate::plan::statement::ddl::ClusterAlterUntilReadyOptionExtracted;
 use crate::plan::with_options::OptionalDuration;
 pub use error::PlanError;
 pub use explain::normalize_subqueries;
-pub use expr::{
+pub use hir::{
     AggregateExpr, CoercibleScalarExpr, Hir, HirRelationExpr, HirScalarExpr, JoinKind,
     WindowExprType,
 };

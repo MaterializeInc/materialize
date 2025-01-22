@@ -11,7 +11,7 @@ use itertools::Itertools;
 use mz_expr::{MirRelationExpr, MirScalarExpr};
 use mz_ore::soft_assert_eq_or_log;
 
-use crate::plan::expr::{HirRelationExpr, HirScalarExpr};
+use crate::plan::hir::{HirRelationExpr, HirScalarExpr};
 use crate::plan::lowering::{ColumnMap, Context, CteMap};
 use crate::plan::PlanError;
 

@@ -40,7 +40,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::iter::repeat;
 
 use crate::optimizer_metrics::OptimizerMetrics;
-use crate::plan::expr::{
+use crate::plan::hir::{
     AggregateExpr, ColumnOrder, ColumnRef, HirRelationExpr, HirScalarExpr, JoinKind, WindowExprType,
 };
 use crate::plan::{transform_hir, PlanError};
