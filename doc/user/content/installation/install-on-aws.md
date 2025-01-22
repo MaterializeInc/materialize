@@ -14,6 +14,8 @@ Self-managed Materialize requires:
 
 The tutorial deploys Materialize to AWS Elastic Kubernetes Service (EKS) with a
 PostgreSQL RDS database as the metadata database and AWS S3 for blob storage.
+The tutorial uses Terraform both to set up the AWS Kubernetes environment and to
+deploy Materialize to that EKS cluster.
 
 ## Prerequisites
 
@@ -61,6 +63,12 @@ details.
 
 ## Set up AWS Kubernetes environment and install Materialize
 
+{{< warning >}}
+
+{{< self-managed/terraform-disclaimer >}}
+
+{{< /warning >}}
+
 Materialize provides a [sample Terraform
 module](https://github.com/MaterializeInc/terraform-aws-materialize/blob/main/README.md)
 for evaluation purposes only. The module deploys a sample infrastructure on AWS
@@ -73,15 +81,26 @@ for evaluation purposes only. The module deploys a sample infrastructure on AWS
 - Materialize Operator
 - Materialize instances (during subsequent runs after the Operator is running)
 
-{{< warning >}}
+For details on the sample infrastructure (such as the node group AMI type, node
+instance type, etc.), see the
+[README](https://github.com/MaterializeInc/terraform-aws-materialize?tab=readme-ov-file#inputs).
 
-{{< self-managed/terraform-disclaimer >}}
+1. Clone the [Materialize's sample Terraform
+   repo](https://github.com/MaterializeInc/terraform-google-materialize) and
+   checkout the `v0.2.0` tag.
 
-{{< /warning >}}
-
-1. Clone or download the [Materialize's sample Terraform
-   repo](https://github.com/MaterializeInc/terraform-aws-materialize).
-
+   {{< tabs >}}
+   {{< tab "Clone via SSH" >}}
+   ```bash
+   git clone --depth 1 -b v0.2.0 git@github.com:MaterializeInc/terraform-aws-materialize.git
+   ```
+   {{< /tab >}}
+   {{< tab "Clone via HTTPS" >}}
+   ```bash
+   git clone --depth 1 -b v0.2.0 https://github.com/MaterializeInc/terraform-aws-materialize.git
+   ```
+   {{< /tab >}}
+   {{< /tabs >}}
 1. Go to the `examples/simple` folder in the Materialize Terraform repo
    directory.
 
@@ -89,16 +108,24 @@ for evaluation purposes only. The module deploys a sample infrastructure on AWS
    cd terraform-aws-materialize/examples/simple
    ```
 
-1. Create a `terraform.tfvars` file and and specify:
+1. Create a `terraform.tfvars` file (you can copy fromthe
+   `terraform.tfvars.example` file) and specify:
 
-   - A namespace that will be used as the prefix for your AWS resources (e.g.,
-      `my-materialize`). Namespace has a maximum of 18 characters and must
-      be lowercase alphanumeric and hyphens only.
+   - A namespace (e.g., `my-demo`) that will be used to form part of the
+     prefix for your AWS resources. Namespace has a maximum of 18 characters and
+     must be lowercase alphanumeric and hyphens only.
+
+   - An environment name (e.g., `dev`, `test`) that will be used to form part of
+     the prefix for your AWS resources.
 
    - A secure password for the RDS PostgreSQL database (to be created).
 
    ```bash
-   namespace = "enter-namespace"   // 18 characters, lowercase alphanumeric and hyphens only (e.g. my-materialize)
+   # The namespace and environment variables are used to construct the names of the resources
+   # e.g. ${namespace}-${environment}-storage, ${namespace}-${environment}-db etc.
+
+   namespace = "enter-namespace"   // 18 characters, lowercase alphanumeric and hyphens only (e.g. my-demo)
+   environment = "enter-environment" // For example, dev, test
    database_password  = "enter-secure-password"
    ```
 
@@ -128,14 +155,14 @@ for evaluation purposes only. The module deploys a sample infrastructure on AWS
 
    Outputs:
 
-   database_endpoint = "my-materialize-dev-db.abcdefg8dsto.us-east-1.rds.amazonaws.com:5432"
+   database_endpoint = "my-demo-dev-db.abcdefg8dsto.us-east-1.rds.amazonaws.com:5432"
    eks_cluster_endpoint = "https://0123456789A00BCD000E11BE12345A01.gr7.us-east-1.eks.amazonaws.com"
-   eks_cluster_name = "my-materialize-dev-eks"
-   materialize_s3_role_arn = "arn:aws:iam::000111222333:role/my-materialize-dev-mz-role"
+   eks_cluster_name = "my-demo-dev-eks"
+   materialize_s3_role_arn = "arn:aws:iam::000111222333:role/my-demo-dev-mz-role"
    metadata_backend_url = <sensitive>
    oidc_provider_arn = "arn:aws:iam::000111222333:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/7D14BCA3A7AA896A836782D96A24F958"
-   persist_backend_url = "s3://my-materialize-dev-storage-f2def2a9/dev:serviceaccount:materialize-environment:12345678-1234-1234-1234-12345678912"
-   s3_bucket_name = "my-materialize-dev-storage-f2def2a9"
+   persist_backend_url = "s3://my-demo-dev-storage-f2def2a9/dev:serviceaccount:materialize-environment:12345678-1234-1234-1234-12345678912"
+   s3_bucket_name = "my-demo-dev-storage-f2def2a9"
    vpc_id = "vpc-0abc000bed1d111bd"
    ```
 
@@ -174,46 +201,42 @@ for evaluation purposes only. The module deploys a sample infrastructure on AWS
     Wait for the components to be in the `Running` state:
 
     ```none
-    NAME                                        READY   STATUS    RESTARTS   AGE
-    pod/materialize-operator-84ff4b4648-brjhl   1/1     Running   0          12s
+    NAME                                                           READY   STATUS    RESTARTS   AGE
+    pod/my-demo-dev-materialize-operator-84ff4b4648-brjhl   1/1     Running   0          12s
 
-    NAME                                   READY   UP-TO-DATE   AVAILABLE   AGE
-    deployment.apps/materialize-operator   1/1     1            1           12s
+    NAME                                                      READY   UP-TO-DATE   AVAILABLE   AGE
+    deployment.apps/my-demo-dev-materialize-operator   1/1     1            1           12s
 
-    NAME                                              DESIRED   CURRENT   READY   AGE
-    replicaset.apps/materialize-operator-84ff4b4648   1         1         1       12s
+    NAME                                                               DESIRED   CURRENT   READY   AGE
+    replicaset.apps/my-demo-dev-materialize-operator-84ff4b4648   1         1         1       12s
     ```
 
     If you run into an error during deployment, refer to the
     [Troubleshooting](/installation/troubleshooting) guide.
 
-1. <a name="deploy-materialize-instances"></a>
+1. To deploy Materialize instances, add the Materialize instance configuration
+   to your `terraform.tfvars` file. If you copied  from the
+   `terraform.tfvars.example` file, you can just uncomment the
+   `materialize_instances` section.
 
-   To deploy Materialize instances, modify the `main.tf` file to include the
-   Materialize instance configuration, specifically, uncomment the
-   `materialize_instances` block.
+   For example, to deploy the `demo` instance, append the following to your
+   `terraform.tfvars` file:
 
    ```bash
-   # Once the operator is installed, you can define your Materialize instances here.
-   # Uncomment the following block (or provide your own instances) to configure them.
+   cp terraform.tfvars terraform.tfvars.bak
+   cat <<EOF >> terraform.tfvars
+
    materialize_instances = [
-     {
-       name           = "analytics"
-       namespace      = "materialize-environment"
-       database_name  = "analytics_db"
-       cpu_request    = "2"
-       memory_request = "4Gi"
-       memory_limit   = "4Gi"
-     },
-     {
-       name           = "demo"
-       namespace      = "materialize-environment"
-       database_name  = "demo_db"
-       cpu_request    = "4"
-       memory_request = "8Gi"
-       memory_limit   = "8Gi"
-     }
+       {
+         name           = "demo"
+         namespace      = "materialize-environment"
+         database_name  = "demo_db"
+         cpu_request    = "2"
+         memory_request = "8Gi"
+         memory_limit   = "8Gi"
+       }
    ]
+   EOF
    ```
 
 1. Create a terraform plan and review the changes.
@@ -226,7 +249,7 @@ for evaluation purposes only. The module deploys a sample infrastructure on AWS
     following:
 
     ```
-    Plan: 7 to add, 0 to change, 0 to destroy.
+    Plan: 4 to add, 0 to change, 0 to destroy.
 
     Saved the plan to: my-plan.tfplan
 
@@ -240,6 +263,24 @@ for evaluation purposes only. The module deploys a sample infrastructure on AWS
     terraform apply my-plan.tfplan
     ```
 
+   Upon successful completion, you should see output with a summary similar to
+   the following:
+
+   ```bash
+   Apply complete! Resources: 4 added, 0 changed, 0 destroyed.
+
+   Outputs:
+
+   database_endpoint = "my-demo-dev-db.abcdefg8dsto.us-east-1.rds.amazonaws.com:5432"
+   eks_cluster_endpoint = "https://0123456789A00BCD000E11BE12345A01.gr7.us-east-1.eks.amazonaws.com"
+   eks_cluster_name = "my-demo-dev-eks"
+   materialize_s3_role_arn = "arn:aws:iam::000111222333:role/my-demo-dev-mz-role"
+   metadata_backend_url = <sensitive>
+   oidc_provider_arn = "arn:aws:iam::000111222333:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/7D14BCA3A7AA896A836782D96A24F958"
+   persist_backend_url = "s3://my-demo-dev-storage-f2def2a9/dev:serviceaccount:materialize-environment:12345678-1234-1234-1234-12345678912"
+   s3_bucket_name = "my-demo-dev-storage-f2def2a9"
+   vpc_id = "vpc-0abc000bed1d111bd"
+   ```
 
 1. Verify the installation and check the status:
 
@@ -251,67 +292,61 @@ for evaluation purposes only. The module deploys a sample infrastructure on AWS
 
    ```none
    NAME                                             READY   STATUS      RESTARTS      AGE
-   pod/create-db-analytics-db-mh2jf                 0/1     Completed   0             108s
-   pod/create-db-production-db-8vpj9                0/1     Completed   0             108s
-   pod/mznzlk3r3fyl-balancerd-696dc4f949-tdtkv      1/1     Running     0             93s
-   pod/mznzlk3r3fyl-cluster-s1-replica-s1-gen-1-0   1/1     Running     0             99s
-   pod/mznzlk3r3fyl-cluster-s2-replica-s2-gen-1-0   1/1     Running     0             99s
-   pod/mznzlk3r3fyl-cluster-s3-replica-s3-gen-1-0   1/1     Running     0             99s
-   pod/mznzlk3r3fyl-cluster-u1-replica-u1-gen-1-0   1/1     Running     0             99s
-   pod/mznzlk3r3fyl-console-57c84c99df-5vsdt        1/1     Running     0             86s
-   pod/mznzlk3r3fyl-console-57c84c99df-6w5cw        1/1     Running     0             86s
-   pod/mznzlk3r3fyl-environmentd-1-0                1/1     Running     0             107s
-   pod/mzsylm1f691o-environmentd-1-0                0/1     Pending     0             107s
+   pod/create-db-demo-db-6pw88                     0/1     Completed   0             5m31s
+   pod/mzoxtq6663xq-balancerd-d5c64779c-jzqv2       1/1     Running     0             5m16s
+   pod/mzoxtq6663xq-cluster-s1-replica-s1-gen-1-0   1/1     Running     0             5m21s
+   pod/mzoxtq6663xq-cluster-s2-replica-s2-gen-1-0   1/1     Running     0             5m21s
+   pod/mzoxtq6663xq-cluster-s3-replica-s3-gen-1-0   1/1     Running     0             5m21s
+   pod/mzoxtq6663xq-cluster-u1-replica-u1-gen-1-0   1/1     Running     0             5m21s
+   pod/mzoxtq6663xq-console-6f9f77654-d7wtb         1/1     Running     0             5m9s
+   pod/mzoxtq6663xq-console-6f9f77654-l8lnh         1/1     Running     0             5m9s
+   pod/mzoxtq6663xq-environmentd-1-0                1/1     Running     0             5m30s
 
    NAME                                               TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)                                        AGE
-   service/mznzlk3r3fyl-balancerd                     ClusterIP   None            <none>        6876/TCP,6875/TCP                              93s
-   service/mznzlk3r3fyl-cluster-s1-replica-s1-gen-1   ClusterIP   None            <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   99s
-   service/mznzlk3r3fyl-cluster-s2-replica-s2-gen-1   ClusterIP   None            <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   99s
-   service/mznzlk3r3fyl-cluster-s3-replica-s3-gen-1   ClusterIP   None            <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   99s
-   service/mznzlk3r3fyl-cluster-u1-replica-u1-gen-1   ClusterIP   None            <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   99s
-   service/mznzlk3r3fyl-console                       ClusterIP   None            <none>        8080/TCP                                       86s
-   service/mznzlk3r3fyl-environmentd                  ClusterIP   None            <none>        6875/TCP,6876/TCP,6877/TCP,6878/TCP            94s
-   service/mznzlk3r3fyl-environmentd-1                ClusterIP   None            <none>        6875/TCP,6876/TCP,6877/TCP,6878/TCP            108s
-   service/mznzlk3r3fyl-persist-pubsub-1              ClusterIP   None            <none>        6879/TCP                                       108s
-   service/mzsylm1f691o-environmentd-1                ClusterIP   None            <none>        6875/TCP,6876/TCP,6877/TCP,6878/TCP            107s
-   service/mzsylm1f691o-persist-pubsub-1              ClusterIP   None            <none>        6879/TCP                                       107s
+   service/mzoxtq6663xq-balancerd                     ClusterIP   None            <none>        6876/TCP,6875/TCP                              5m16s
+   service/mzoxtq6663xq-cluster-s1-replica-s1-gen-1   ClusterIP   None            <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   5m21s
+   service/mzoxtq6663xq-cluster-s2-replica-s2-gen-1   ClusterIP   None            <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   5m21s
+   service/mzoxtq6663xq-cluster-s3-replica-s3-gen-1   ClusterIP   None            <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   5m21s
+   service/mzoxtq6663xq-cluster-u1-replica-u1-gen-1   ClusterIP   None            <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   5m21s
+   service/mzoxtq6663xq-console                       ClusterIP   None            <none>        8080/TCP                                       5m9s
+   service/mzoxtq6663xq-environmentd                  ClusterIP   None            <none>        6875/TCP,6876/TCP,6877/TCP,6878/TCP            5m16s
+   service/mzoxtq6663xq-environmentd-1                ClusterIP   None            <none>        6875/TCP,6876/TCP,6877/TCP,6878/TCP            5m30s
+   service/mzoxtq6663xq-persist-pubsub-1              ClusterIP   None            <none>        6879/TCP                                       5m30s
 
    NAME                                     READY   UP-TO-DATE   AVAILABLE   AGE
-   deployment.apps/mznzlk3r3fyl-balancerd   1/1     1            1           93s
-   deployment.apps/mznzlk3r3fyl-console     2/2     2            2           86s
+   deployment.apps/mzoxtq6663xq-balancerd   1/1     1            1           5m16s
+   deployment.apps/mzoxtq6663xq-console     2/2     2            2           5m9s
 
-   NAME                                                DESIRED   CURRENT   READY      AGE
-   replicaset.apps/mznzlk3r3fyl-balancerd-696dc4f949   1         1         1          93s
-   replicaset.apps/mznzlk3r3fyl-console-57c84c99df     2         2         2          86s
+   NAME                                               DESIRED   CURRENT   READY      AGE
+   replicaset.apps/mzoxtq6663xq-balancerd-d5c64779c   1         1         1          5m16s
+   replicaset.apps/mzoxtq6663xq-console-6f9f77654     2         2         2          5m9s qq
 
    NAME                                                        READY   AGE
-   statefulset.apps/mznzlk3r3fyl-cluster-s1-replica-s1-gen-1   1/1     99s
-   statefulset.apps/mznzlk3r3fyl-cluster-s2-replica-s2-gen-1   1/1     99s
-   statefulset.apps/mznzlk3r3fyl-cluster-s3-replica-s3-gen-1   1/1     99s
-   statefulset.apps/mznzlk3r3fyl-cluster-u1-replica-u1-gen-1   1/1     99s
-   statefulset.apps/mznzlk3r3fyl-environmentd-1                1/1     108s
-   statefulset.apps/mzsylm1f691o-environmentd-1                0/1     107s
+   statefulset.apps/mzoxtq6663xq-cluster-s1-replica-s1-gen-1   1/1     5m21s
+   statefulset.apps/mzoxtq6663xq-cluster-s2-replica-s2-gen-1   1/1     5m21s
+   statefulset.apps/mzoxtq6663xq-cluster-s3-replica-s3-gen-1   1/1     5m21s
+   statefulset.apps/mzoxtq6663xq-cluster-u1-replica-u1-gen-1   1/1     5m21s
+   statefulset.apps/mzoxtq6663xq-environmentd-1                1/1     5m30s
 
-   NAME                                STATUS     COMPLETIONS   DURATION   AGE
-   job.batch/create-db-analytics-db    Complete   1/1           11s        108s
-   job.batch/create-db-production-db   Complete   1/1           11s        108s
+   NAME                           STATUS     COMPLETIONS   DURATION   AGE
+   job.batch/create-db-demo-db   Complete   1/1           3s         5m32s
    ```
 
-1. Open the Materialize console in your browser:
+1. Open the Materialize Console in your browser:
 
    1. From the previous `kubectl` output, find the Materialize console service.
 
       ```none
       NAME                           TYPE        CLUSTER-IP   EXTERNAL-IP   PORT(S)    AGE
-      service/mznzlk3r3fyl-console   ClusterIP   None         <none>        8080/TCP   86s
+      service/mzoxtq6663xq-console   ClusterIP   None         <none>        8080/TCP   5m9s
       ```
 
-   1. Forward the Materialize console service to your local machine (substitute
-      your service name for `mznzlk3r3fyl-console`):
+   1. Forward the Materialize Console service to your local machine (substitute
+      your service name for `mzoxtq6663xq-console`):
 
       ```shell
       while true;
-      do kubectl port-forward service/mznzlk3r3fyl-console 8080:8080 -n materialize-environment 2>&1 |
+      do kubectl port-forward service/mzoxtq6663xq-console 8080:8080 -n materialize-environment 2>&1 |
       grep -q "portforward.go" && echo "Restarting port forwarding due to an error." || break;
       done;
       ```
