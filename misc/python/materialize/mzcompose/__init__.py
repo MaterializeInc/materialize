@@ -148,6 +148,7 @@ def get_default_system_parameters(
         "pg_offset_known_interval": "1s",
         "statement_logging_default_sample_rate": "0.01",
         "statement_logging_max_sample_rate": "0.01",
+        "storage_reclock_to_latest": "true",
         "storage_source_decode_fuel": "100000",
         "storage_statistics_collection_interval": "1000",
         "storage_statistics_interval": "2000",
