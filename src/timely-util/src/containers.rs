@@ -410,7 +410,7 @@ mod provided_builder {
     use timely::Container;
 
     /// A container builder that doesn't support pushing elements, and is only suitable for pushing
-    /// whole containers at Timely [`Session`]s. See [`give_container`] for more information.
+    /// whole containers at Timely sessions. See [`give_container`] for more information.
     ///
     ///  [`give_container`]: timely::dataflow::channels::pushers::buffer::Session::give_container
     pub struct ProvidedBuilder<C> {
