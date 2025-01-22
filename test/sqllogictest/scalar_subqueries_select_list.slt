@@ -869,15 +869,15 @@ NULL  NULL
 query T multiline
 EXPLAIN RAW PLAN WITH(types) FOR SELECT CASE (SELECT 1) WHEN 1 THEN 0 ELSE 2 END, 'TEXT';
 ----
+With
+  cte [l1 as subquery-1] =
+    Map (1)
+      Constant
+        - ()
 Return
   Map (case when (select(Get l1) = 1) then 0 else 2 end, "TEXT")
     Constant
       - ()
-With
-  cte l1 =
-    Map (1)
-      Constant
-        - ()
 
 Target cluster: quickstart
 

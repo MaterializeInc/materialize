@@ -159,26 +159,6 @@ EXPLAIN PHYSICAL PLAN FOR SELECT count(*) FROM t1
 WHERE a = 2 AND b = 'l2' OR a = 1 + 1 + 1 AND b = 'l3'
 ----
 Explained Query:
-  Return
-    Union
-      ArrangeBy
-        input_key=[]
-        raw=true
-        Get::PassArrangements l0
-          raw=false
-          arrangements[0]={ key=[], permutation=id, thinning=(#0) }
-      Mfp
-        project=(#0)
-        map=(0)
-        Union consolidate_output=true
-          Negate
-            Get::Arrangement l0
-              project=()
-              key=
-              raw=false
-              arrangements[0]={ key=[], permutation=id, thinning=(#0) }
-          Constant
-            - ()
   With
     cte l0 =
       Reduce::Accumulable
@@ -205,6 +185,26 @@ Explained Query:
             Constant
               - (2, "l2")
               - (3, "l3")
+  Return
+    Union
+      ArrangeBy
+        input_key=[]
+        raw=true
+        Get::PassArrangements l0
+          raw=false
+          arrangements[0]={ key=[], permutation=id, thinning=(#0) }
+      Mfp
+        project=(#0)
+        map=(0)
+        Union consolidate_output=true
+          Negate
+            Get::Arrangement l0
+              project=()
+              key=
+              raw=false
+              arrangements[0]={ key=[], permutation=id, thinning=(#0) }
+          Constant
+            - ()
 
 Used Indexes:
   - materialize.public.idx_t1_a_b (lookup)
