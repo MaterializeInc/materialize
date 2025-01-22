@@ -13,19 +13,22 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use arrow::array::{
-    Array, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
-    FixedSizeBinaryArray, Float16Array, Float32Array, Float64Array, Int16Array, Int32Array,
-    Int64Array, Int8Array, LargeBinaryArray, LargeListArray, LargeStringArray, ListArray,
-    StringArray, StringViewArray, StructArray, Time32SecondArray, TimestampMicrosecondArray,
-    TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray, UInt16Array,
-    UInt32Array, UInt64Array, UInt8Array,
+    Array, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array, Decimal128Array,
+    Decimal256Array, FixedSizeBinaryArray, Float16Array, Float32Array, Float64Array, Int16Array,
+    Int32Array, Int64Array, Int8Array, LargeBinaryArray, LargeListArray, LargeStringArray,
+    ListArray, StringArray, StringViewArray, StructArray, Time32MillisecondArray,
+    Time32SecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+    TimestampNanosecondArray, TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array,
+    UInt8Array,
 };
 use arrow::buffer::{NullBuffer, OffsetBuffer};
 use arrow::datatypes::{DataType, TimeUnit};
 use chrono::{DateTime, NaiveTime};
+use dec::OrderedDecimal;
 use mz_ore::cast::CastFrom;
 use mz_repr::adt::date::Date;
 use mz_repr::adt::jsonb::JsonbPacker;
+use mz_repr::adt::numeric::Numeric;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{Datum, RelationDesc, Row, RowPacker, ScalarType, SharedRow};
 use ordered_float::OrderedFloat;
@@ -179,6 +182,52 @@ fn scalar_type_and_array_to_reader(
         (ScalarType::Float64, DataType::Float64) => {
             Ok(ColReader::Float64(downcast_array::<Float64Array>(array)))
         }
+        // TODO(cf3): Consider the max_scale for numeric.
+        (ScalarType::Numeric { .. }, DataType::Decimal128(precision, scale)) => {
+            use num_traits::Pow;
+
+            let base = Numeric::from(10);
+            let scale = Numeric::from(*scale);
+            let scale_factor = base.pow(scale);
+
+            let precision = usize::cast_from(*precision);
+            // Don't use the context here, but make sure the precision is valid.
+            let mut ctx = dec::Context::<Numeric>::default();
+            ctx.set_precision(precision).map_err(|e| {
+                anyhow::anyhow!("invalid precision from Decimal128, {precision}, {e}")
+            })?;
+
+            let array = downcast_array::<Decimal128Array>(array);
+
+            Ok(ColReader::Decimal128 {
+                array,
+                scale_factor,
+                precision,
+            })
+        }
+        // TODO(cf3): Consider the max_scale for numeric.
+        (ScalarType::Numeric { .. }, DataType::Decimal256(precision, scale)) => {
+            use num_traits::Pow;
+
+            let base = Numeric::from(10);
+            let scale = Numeric::from(*scale);
+            let scale_factor = base.pow(scale);
+
+            let precision = usize::cast_from(*precision);
+            // Don't use the context here, but make sure the precision is valid.
+            let mut ctx = dec::Context::<Numeric>::default();
+            ctx.set_precision(precision).map_err(|e| {
+                anyhow::anyhow!("invalid precision from Decimal128, {precision}, {e}")
+            })?;
+
+            let array = downcast_array::<Decimal256Array>(array);
+
+            Ok(ColReader::Decimal256 {
+                array,
+                scale_factor,
+                precision,
+            })
+        }
         (ScalarType::Bytes, DataType::Binary) => {
             Ok(ColReader::Binary(downcast_array::<BinaryArray>(array)))
         }
@@ -248,6 +297,10 @@ fn scalar_type_and_array_to_reader(
         (ScalarType::Time, DataType::Time32(TimeUnit::Second)) => {
             let array = downcast_array::<Time32SecondArray>(array);
             Ok(ColReader::Time32Seconds(array))
+        }
+        (ScalarType::Time, DataType::Time32(TimeUnit::Millisecond)) => {
+            let array = downcast_array::<Time32MillisecondArray>(array);
+            Ok(ColReader::Time32Milliseconds(array))
         }
         (
             ScalarType::List {
@@ -344,6 +397,17 @@ enum ColReader {
     Float32(arrow::array::Float32Array),
     Float64(arrow::array::Float64Array),
 
+    Decimal128 {
+        array: Decimal128Array,
+        scale_factor: Numeric,
+        precision: usize,
+    },
+    Decimal256 {
+        array: Decimal256Array,
+        scale_factor: Numeric,
+        precision: usize,
+    },
+
     Binary(arrow::array::BinaryArray),
     LargeBinary(arrow::array::LargeBinaryArray),
     FixedSizeBinary(arrow::array::FixedSizeBinaryArray),
@@ -364,6 +428,7 @@ enum ColReader {
     Date64(Date64Array),
 
     Time32Seconds(Time32SecondArray),
+    Time32Milliseconds(arrow::array::Time32MillisecondArray),
 
     List {
         offsets: OffsetBuffer<i32>,
@@ -433,6 +498,46 @@ impl ColReader {
                 .is_valid(idx)
                 .then(|| array.value(idx))
                 .map(|x| Datum::Float64(OrderedFloat(x))),
+            ColReader::Decimal128 {
+                array,
+                scale_factor,
+                precision,
+            } => array.is_valid(idx).then(|| array.value(idx)).map(|x| {
+                // Create a Numeric from our i128 with precision.
+                let mut ctx = dec::Context::<Numeric>::default();
+                ctx.set_precision(*precision).expect("checked before");
+                let mut num = ctx.from_i128(x);
+
+                // Scale the number.
+                ctx.div(&mut num, &scale_factor);
+
+                Datum::Numeric(OrderedDecimal(num))
+            }),
+            ColReader::Decimal256 {
+                array,
+                scale_factor,
+                precision,
+            } => array
+                .is_valid(idx)
+                .then(|| array.value(idx))
+                .map(|x| {
+                    let s = x.to_string();
+
+                    // Parse a i256 from it's String representation.
+                    //
+                    // TODO(cf3): See if we can add support for 256-bit numbers to the `dec` crate.
+                    let mut ctx = dec::Context::<Numeric>::default();
+                    ctx.set_precision(*precision).expect("checked before");
+                    let mut num = ctx
+                        .parse(s)
+                        .map_err(|e| anyhow::anyhow!("decimal out of range: {e}"))?;
+
+                    // Scale the number.
+                    ctx.div(&mut num, &scale_factor);
+
+                    Ok::<_, anyhow::Error>(Datum::Numeric(OrderedDecimal(num)))
+                })
+                .transpose()?,
             ColReader::Binary(array) => array
                 .is_valid(idx)
                 .then(|| array.value(idx))
@@ -583,6 +688,18 @@ impl ColReader {
                     Ok::<_, anyhow::Error>(Datum::Time(time))
                 })
                 .transpose()?,
+            ColReader::Time32Milliseconds(array) => array
+                .is_valid(idx)
+                .then(|| array.value(idx))
+                .map(|millis| {
+                    let umillis: u32 = millis.try_into().context("time32 milliseconds")?;
+                    let usecs = umillis / 1000;
+                    let unanos = (umillis % 1000).saturating_mul(1_000_000);
+                    let time = NaiveTime::from_num_seconds_from_midnight_opt(usecs, unanos)
+                        .ok_or_else(|| anyhow::anyhow!("invalid Time32 Milliseconds {umillis}"))?;
+                    Ok::<_, anyhow::Error>(Datum::Time(time))
+                })
+                .transpose()?,
             ColReader::List {
                 offsets,
                 values,
@@ -667,6 +784,9 @@ impl ColReader {
 
 #[cfg(test)]
 mod tests {
+    use arrow::datatypes::Field;
+    use mz_ore::collections::CollectionExt;
+
     use super::*;
 
     #[mz_ore::test]
@@ -730,5 +850,93 @@ mod tests {
 
         reader.read(1, &mut rnd_row).unwrap();
         assert_eq!(&null_row, &rnd_row);
+    }
+
+    #[mz_ore::test]
+    fn smoketest_decimal128() {
+        let desc = RelationDesc::builder()
+            .with_column("a", ScalarType::Numeric { max_scale: None }.nullable(true))
+            .finish();
+
+        let mut dec128 = arrow::array::Decimal128Builder::new();
+        dec128 = dec128.with_precision_and_scale(12, 3).unwrap();
+
+        // 1.234
+        dec128.append_value(1234);
+        dec128.append_null();
+        // 100000000.009
+        dec128.append_value(100000000009);
+
+        let dec128 = dec128.finish();
+        let batch = StructArray::from(vec![(
+            Arc::new(Field::new("a", dec128.data_type().clone(), true)),
+            Arc::new(dec128) as arrow::array::ArrayRef,
+        )]);
+
+        // Decode our data!
+        let reader = ArrowReader::new(&desc, batch).unwrap();
+        let mut rnd_row = Row::default();
+
+        reader.read(0, &mut rnd_row).unwrap();
+        let num = rnd_row.into_element().unwrap_numeric();
+        assert_eq!(num.0, Numeric::from(1.234f64));
+
+        // Create a packer to clear the row alloc.
+        rnd_row.packer();
+
+        reader.read(1, &mut rnd_row).unwrap();
+        let num = rnd_row.into_element();
+        assert_eq!(num, Datum::Null);
+
+        // Create a packer to clear the row alloc.
+        rnd_row.packer();
+
+        reader.read(2, &mut rnd_row).unwrap();
+        let num = rnd_row.into_element().unwrap_numeric();
+        assert_eq!(num.0, Numeric::from(100000000.009f64));
+    }
+
+    #[mz_ore::test]
+    fn smoketest_decimal256() {
+        let desc = RelationDesc::builder()
+            .with_column("a", ScalarType::Numeric { max_scale: None }.nullable(true))
+            .finish();
+
+        let mut dec256 = arrow::array::Decimal256Builder::new();
+        dec256 = dec256.with_precision_and_scale(12, 3).unwrap();
+
+        // 1.234
+        dec256.append_value(arrow::datatypes::i256::from(1234));
+        dec256.append_null();
+        // 100000000.009
+        dec256.append_value(arrow::datatypes::i256::from(100000000009i64));
+
+        let dec256 = dec256.finish();
+        let batch = StructArray::from(vec![(
+            Arc::new(Field::new("a", dec256.data_type().clone(), true)),
+            Arc::new(dec256) as arrow::array::ArrayRef,
+        )]);
+
+        // Decode our data!
+        let reader = ArrowReader::new(&desc, batch).unwrap();
+        let mut rnd_row = Row::default();
+
+        reader.read(0, &mut rnd_row).unwrap();
+        let num = rnd_row.into_element().unwrap_numeric();
+        assert_eq!(num.0, Numeric::from(1.234f64));
+
+        // Create a packer to clear the row alloc.
+        rnd_row.packer();
+
+        reader.read(1, &mut rnd_row).unwrap();
+        let num = rnd_row.into_element();
+        assert_eq!(num, Datum::Null);
+
+        // Create a packer to clear the row alloc.
+        rnd_row.packer();
+
+        reader.read(2, &mut rnd_row).unwrap();
+        let num = rnd_row.into_element().unwrap_numeric();
+        assert_eq!(num.0, Numeric::from(100000000.009f64));
     }
 }

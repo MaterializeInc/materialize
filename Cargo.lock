@@ -2302,12 +2302,14 @@ dependencies = [
 
 [[package]]
 name = "dec"
-version = "0.4.8"
+version = "0.4.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cbdeb628adfc427c3f926528cf76daf4418453e103151739d48f79b8182cb41f"
+checksum = "a8aed775093963adbd1821f88d7934c839330b05f41c9877bdbc7b385e498b9c"
 dependencies = [
  "decnumber-sys",
  "libc",
+ "num-traits",
+ "paste",
  "serde",
  "static_assertions",
 ]
@@ -4686,9 +4688,11 @@ dependencies = [
  "anyhow",
  "arrow",
  "chrono",
+ "dec",
  "half 2.4.1",
  "mz-ore",
  "mz-repr",
+ "num-traits",
  "ordered-float 4.2.0",
  "serde",
  "serde_json",
