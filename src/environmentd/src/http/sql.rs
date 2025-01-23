@@ -1141,16 +1141,20 @@ async fn execute_request<S: ResultSender>(
         // Special-case `COPY TO` statements that are not `COPY ... TO STDOUT`, since
         // StatementKind::Copy links to several `ExecuteResponseKind`s that are not supported,
         // but this specific statement should be allowed.
-        let is_valid_copy_to = matches!(
+        let is_valid_copy = matches!(
             stmt,
             Statement::Copy(CopyStatement {
                 direction: CopyDirection::To,
                 target: CopyTarget::Expr(_),
                 ..
+            }) | Statement::Copy(CopyStatement {
+                direction: CopyDirection::From,
+                target: CopyTarget::Expr(_),
+                ..
             })
         );
 
-        if !is_valid_copy_to
+        if !is_valid_copy
             && execute_responses.iter().any(|execute_response| {
                 // Returns true if a statement or execute response are unsupported.
                 match execute_response {
