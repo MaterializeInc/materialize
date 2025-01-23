@@ -342,29 +342,31 @@ where
 
             // Wrap our work in a block to capture `?`.
             let result = async {
-                let mut record_chunks = Vec::new();
-
                 // Process each stream of work, one at a time.
                 for maybe_request in maybe_requests {
                     let request = maybe_request?;
 
                     let mut work_stream = format.fetch_work(&source, request);
                     while let Some(result) = work_stream.next().await {
+                        // Returns early and stop consuming from the stream if we hit an error.
                         let record_chunk = result.context("fetch worker")?;
-                        record_chunks.push(record_chunk);
+
+                        // Note: We want to give record chunks as we receive them, because a work
+                        // request may be for an entire file.
+                        //
+                        // TODO(cf3): Investigate if some small batching here would help perf.
+                        record_handle.give(&capability, Ok(record_chunk));
                     }
                 }
 
-                Ok::<_, StorageErrorX>(record_chunks)
+                Ok::<_, StorageErrorX>(())
             }
             .await
             .context("fetch work");
 
-            match result {
-                Ok(record_chunks) => record_chunks
-                    .into_iter()
-                    .for_each(|chunk| record_handle.give(&capability, Ok(chunk))),
-                Err(err) => record_handle.give(&capability, Err(err)),
+            if let Err(err) = result {
+                tracing::warn!(?err, "failed to fetch");
+                record_handle.give(&capability, Err(err))
             }
         }
     });
