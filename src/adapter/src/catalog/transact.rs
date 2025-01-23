@@ -1058,8 +1058,10 @@ impl Catalog {
                     CatalogItem::ContinualTask(ct) => {
                         storage_collections_to_create.insert(ct.global_id());
                     }
+                    CatalogItem::Sink(sink) => {
+                        storage_collections_to_create.insert(sink.global_id());
+                    }
                     CatalogItem::Log(_)
-                    | CatalogItem::Sink(_)
                     | CatalogItem::View(_)
                     | CatalogItem::Index(_)
                     | CatalogItem::Type(_)

@@ -1905,10 +1905,7 @@ where
             Some(StorageResponse::DroppedId(id)) => {
                 tracing::debug!("DroppedId for collection {id}");
 
-                if let Some(_collection) = self.collections.remove(&id) {
-                    // Nothing to do, we already dropped read holds in
-                    // `drop_sources_unvalidated`.
-                } else if let Some(export) = self.exports.get_mut(&id) {
+                if let Some(export) = self.exports.get_mut(&id) {
                     // TODO: Current main never drops export state, so we
                     // also don't do that, because it would be yet more
                     // refactoring. Instead, we downgrade to the empty
@@ -1919,6 +1916,9 @@ where
                         .read_hold
                         .try_downgrade(Antichain::new())
                         .expect("must be possible");
+                } else if let Some(_collection) = self.collections.remove(&id) {
+                    // Nothing to do, we already dropped read holds in
+                    // `drop_sources_unvalidated`.
                 } else {
                     soft_panic_or_log!(
                         "DroppedId for ID {id} but we have neither ingestion nor export \
@@ -2491,7 +2491,9 @@ where
         let mut read_capability_changes = BTreeMap::default();
 
         for (id, policy) in policies.into_iter() {
-            if let Some(collection) = self.collections.get_mut(&id) {
+            if let Some(_export) = self.exports.get_mut(&id) {
+                unreachable!("set_hold_policies is only called for ingestions");
+            } else if let Some(collection) = self.collections.get_mut(&id) {
                 let ingestion = match &mut collection.extra_state {
                     CollectionStateExtra::Ingestion(ingestion) => ingestion,
                     CollectionStateExtra::None => {
@@ -2512,8 +2514,6 @@ where
                 }
 
                 ingestion.hold_policy = policy;
-            } else if let Some(_export) = self.exports.get_mut(&id) {
-                unreachable!("set_hold_policies is only called for ingestions");
             }
         }
 
@@ -2527,7 +2527,37 @@ where
         let mut read_capability_changes = BTreeMap::default();
 
         for (id, new_upper) in updates.iter() {
-            if let Some(collection) = self.collections.get_mut(id) {
+            if let Ok(export) = self.export_mut(*id) {
+                if PartialOrder::less_than(&export.write_frontier, new_upper) {
+                    export.write_frontier.clone_from(new_upper);
+                }
+
+                // Ignore read policy for sinks whose write frontiers are closed, which identifies
+                // the sink is being dropped; we need to advance the read frontier to the empty
+                // chain to signal to the dataflow machinery that they should deprovision this
+                // object.
+                let new_read_capability = if export.write_frontier.is_empty() {
+                    export.write_frontier.clone()
+                } else {
+                    export.read_policy.frontier(export.write_frontier.borrow())
+                };
+
+                if PartialOrder::less_equal(export.read_hold.since(), &new_read_capability) {
+                    let mut update = ChangeBatch::new();
+                    update.extend(new_read_capability.iter().map(|time| (time.clone(), 1)));
+                    update.extend(
+                        export
+                            .read_hold
+                            .since()
+                            .iter()
+                            .map(|time| (time.clone(), -1)),
+                    );
+
+                    if !update.is_empty() {
+                        read_capability_changes.insert(*id, update);
+                    }
+                }
+            } else if let Some(collection) = self.collections.get_mut(id) {
                 let ingestion = match &mut collection.extra_state {
                     CollectionStateExtra::Ingestion(ingestion) => ingestion,
                     CollectionStateExtra::None => {
@@ -2559,36 +2589,6 @@ where
                     update.extend(new_derived_since.iter().map(|time| (time.clone(), 1)));
                     std::mem::swap(&mut ingestion.derived_since, &mut new_derived_since);
                     update.extend(new_derived_since.iter().map(|time| (time.clone(), -1)));
-
-                    if !update.is_empty() {
-                        read_capability_changes.insert(*id, update);
-                    }
-                }
-            } else if let Ok(export) = self.export_mut(*id) {
-                if PartialOrder::less_than(&export.write_frontier, new_upper) {
-                    export.write_frontier.clone_from(new_upper);
-                }
-
-                // Ignore read policy for sinks whose write frontiers are closed, which identifies
-                // the sink is being dropped; we need to advance the read frontier to the empty
-                // chain to signal to the dataflow machinery that they should deprovision this
-                // object.
-                let new_read_capability = if export.write_frontier.is_empty() {
-                    export.write_frontier.clone()
-                } else {
-                    export.read_policy.frontier(export.write_frontier.borrow())
-                };
-
-                if PartialOrder::less_equal(export.read_hold.since(), &new_read_capability) {
-                    let mut update = ChangeBatch::new();
-                    update.extend(new_read_capability.iter().map(|time| (time.clone(), 1)));
-                    update.extend(
-                        export
-                            .read_hold
-                            .since()
-                            .iter()
-                            .map(|time| (time.clone(), -1)),
-                    );
 
                     if !update.is_empty() {
                         read_capability_changes.insert(*id, update);
@@ -2634,7 +2634,29 @@ where
                 debug!(id = %key, ?update, "update_hold_capability");
             }
 
-            if let Some(collection) = self.collections.get_mut(&key) {
+            if let Ok(export) = self.export_mut(key) {
+                // Seed with our current read hold, then apply changes, to
+                // derive how we need to change our read hold.
+                let mut staged_read_hold = MutableAntichain::new();
+                staged_read_hold
+                    .update_iter(export.read_hold.since().iter().map(|t| (t.clone(), 1)));
+                let changes = staged_read_hold.update_iter(update.drain());
+                update.extend(changes);
+
+                // Make sure we also send `AllowCompaction` commands for sinks,
+                // which drives updating the sink's `as_of`, among other things.
+                let (changes, frontier, _cluster_id) =
+                    exports_net.entry(key).or_insert_with(|| {
+                        (
+                            <ChangeBatch<_>>::new(),
+                            Antichain::new(),
+                            export.cluster_id(),
+                        )
+                    });
+
+                changes.extend(update.drain());
+                *frontier = staged_read_hold.frontier().to_owned();
+            } else if let Some(collection) = self.collections.get_mut(&key) {
                 let ingestion = match &mut collection.extra_state {
                     CollectionStateExtra::Ingestion(ingestion) => ingestion,
                     CollectionStateExtra::None => {
@@ -2661,28 +2683,6 @@ where
 
                 changes.extend(update.drain());
                 *frontier = ingestion.read_capabilities.frontier().to_owned();
-            } else if let Ok(export) = self.export_mut(key) {
-                // Seed with our current read hold, then apply changes, to
-                // derive how we need to change our read hold.
-                let mut staged_read_hold = MutableAntichain::new();
-                staged_read_hold
-                    .update_iter(export.read_hold.since().iter().map(|t| (t.clone(), 1)));
-                let changes = staged_read_hold.update_iter(update.drain());
-                update.extend(changes);
-
-                // Make sure we also send `AllowCompaction` commands for sinks,
-                // which drives updating the sink's `as_of`, among other things.
-                let (changes, frontier, _cluster_id) =
-                    exports_net.entry(key).or_insert_with(|| {
-                        (
-                            <ChangeBatch<_>>::new(),
-                            Antichain::new(),
-                            export.cluster_id(),
-                        )
-                    });
-
-                changes.extend(update.drain());
-                *frontier = staged_read_hold.frontier().to_owned();
             } else {
                 // This is confusing and we should probably error.
                 tracing::warn!(id = ?key, ?update, "update_hold_capabilities for unknown object");

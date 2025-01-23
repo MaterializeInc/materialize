@@ -21,24 +21,32 @@ use futures::{future, Future};
 use itertools::Itertools;
 use maplit::btreeset;
 use mz_adapter_types::compaction::CompactionWindow;
+use mz_adapter_types::connection::ConnectionId;
+use mz_catalog::memory::objects::{
+    CatalogItem, Cluster, Connection, DataSourceDesc, Sink, Source, Table, TableDataSource, Type,
+};
 use mz_cloud_resources::VpcEndpointConfig;
 use mz_controller_types::ReplicaId;
 use mz_expr::{
     CollectionPlan, MapFilterProject, OptimizedMirRelationExpr, ResultSpec, RowSetFinishing,
 };
+use mz_ore::cast::CastFrom;
 use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::task::{self, spawn, JoinHandle};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::vec::VecExt;
+use mz_ore::{assert_none, instrument};
+use mz_persist_client::stats::SnapshotPartStats;
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::explain::json::json_string;
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::role_id::RoleId;
 use mz_repr::{
-    CatalogItemId, Datum, Diff, GlobalId, IntoRowIterator, RelationDesc, RelationVersion,
+    CatalogItemId, Datum, Diff, GlobalId, IntoRowIterator, RelationVersion,
     RelationVersionSelector, Row, RowArena, RowIterator, Timestamp,
 };
+use mz_sql::ast::AlterSourceAddSubsourceOption;
 use mz_sql::ast::{CreateSubsourceStatement, MySqlConfigOptionName, UnresolvedItemName};
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError,
@@ -52,17 +60,7 @@ use mz_sql::names::{
 use mz_sql::plan::{ConnectionDetails, NetworkPolicyRule, StatementContext};
 use mz_sql::pure::{generate_subsource_statements, PurifiedSourceExport};
 use mz_storage_types::sinks::StorageSinkDesc;
-use smallvec::SmallVec;
-use timely::progress::Timestamp as TimelyTimestamp;
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
-use mz_adapter_types::connection::ConnectionId;
-use mz_catalog::memory::objects::{
-    CatalogItem, Cluster, Connection, DataSourceDesc, Sink, Source, Table, TableDataSource, Type,
-};
-use mz_ore::cast::CastFrom;
-use mz_ore::{assert_none, instrument};
-use mz_persist_client::stats::SnapshotPartStats;
-use mz_sql::ast::AlterSourceAddSubsourceOption;
 use mz_sql::plan::{
     AlterConnectionAction, AlterConnectionPlan, CreateSourcePlanBundle, ExplainSinkSchemaPlan,
     Explainee, ExplaineeStatement, MutationKind, Params, Plan, PlannedAlterRoleOption,
@@ -85,12 +83,15 @@ use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::{CollectionDescription, DataSource, ExportDescription};
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::controller::StorageError;
+use mz_storage_types::sources::kafka::KAFKA_PROGRESS_DESC;
 use mz_storage_types::stats::RelationPartStats;
 use mz_storage_types::AlterCompatible;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::{OptimizerNoticeApi, OptimizerNoticeKind, RawOptimizerNotice};
 use mz_transform::EmptyStatisticsOracle;
+use smallvec::SmallVec;
 use timely::progress::Antichain;
+use timely::progress::Timestamp as TimelyTimestamp;
 use tokio::sync::{oneshot, watch};
 use tracing::{warn, Instrument, Span};
 
@@ -1346,7 +1347,8 @@ impl Coordinator {
         };
 
         let collection_desc = CollectionDescription {
-            desc: RelationDesc::empty(),
+            // TODO(sinks): make generic once we have more than one sink type.
+            desc: KAFKA_PROGRESS_DESC.clone(),
             data_source: DataSource::Other,
             since: None,
             status_collection_id: None,
@@ -3544,7 +3546,12 @@ impl Coordinator {
             .expect("sink known to exist")
             .write_frontier;
         let as_of = ctx.read_hold.least_valid_read();
-        assert!(write_frontier.iter().all(|t| as_of.less_than(t)));
+        assert!(
+            write_frontier.iter().all(|t| as_of.less_than(t)),
+            "{:?} should be strictly less than {:?}",
+            &*as_of,
+            &**write_frontier
+        );
 
         let catalog_sink = Sink {
             create_sql: sink.create_sql,

@@ -152,6 +152,7 @@ use mz_storage_types::connections::Connection as StorageConnection;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::sinks::S3SinkFormat;
+use mz_storage_types::sources::kafka::KAFKA_PROGRESS_DESC;
 use mz_storage_types::sources::Timeline;
 use mz_timestamp_oracle::postgres_oracle::{
     PostgresTimestampOracle, PostgresTimestampOracleConfig,
@@ -2733,7 +2734,8 @@ impl Coordinator {
                 }
                 CatalogItem::Sink(sink) => {
                     let collection_desc = CollectionDescription {
-                        desc: RelationDesc::empty(),
+                        // TODO(sinks): make generic once we have more than one sink type.
+                        desc: KAFKA_PROGRESS_DESC.clone(),
                         data_source: DataSource::Other,
                         since: None,
                         status_collection_id: None,
