@@ -17,6 +17,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
+use crate::oneshot_source::util::IntoRangeHeaderValue;
 use crate::oneshot_source::{
     Encoding, OneshotObject, OneshotSource, StorageErrorX, StorageErrorXContext,
 };
@@ -74,7 +75,8 @@ impl OneshotSource for HttpOneshotSource {
     async fn list<'a>(&'a self) -> Result<Vec<(Self::Object, Self::Checksum)>, StorageErrorX> {
         // TODO(cf3): Support listing files from a directory index.
 
-        // Submit a HEAD request so we can discover metadata about the file.
+        // To get metadata about a file we'll first try issuing a `HEAD` request, which
+        // canonically is the right thing do.
         let response = self
             .client
             .head(self.origin.clone())
@@ -82,8 +84,30 @@ impl OneshotSource for HttpOneshotSource {
             .await
             .context("HEAD request")?;
 
+        // Not all servers accept `HEAD` requests though, so we'll fallback to a `GET`
+        // request and skip fetching the body.
+        let headers = match response.error_for_status() {
+            Ok(response) => response.headers().clone(),
+            Err(err) => {
+                tracing::warn!(status = ?err.status(), "HEAD request failed");
+
+                let response = self
+                    .client
+                    .get(self.origin.clone())
+                    .send()
+                    .await
+                    .context("GET request")?;
+                let headers = response.headers().clone();
+
+                // Immediately drop the response so we don't attempt to fetch the body.
+                drop(response);
+
+                headers
+            }
+        };
+
         let get_header = |name: &reqwest::header::HeaderName| {
-            let header = response.headers().get(name)?;
+            let header = headers.get(name)?;
             match header.to_str() {
                 Err(e) => {
                     tracing::warn!("failed to deserialize header '{name}', err: {e}");
@@ -125,13 +149,23 @@ impl OneshotSource for HttpOneshotSource {
         &'s self,
         object: Self::Object,
         _checksum: Self::Checksum,
-        _range: Option<std::ops::RangeInclusive<usize>>,
+        range: Option<std::ops::RangeInclusive<usize>>,
     ) -> BoxStream<'s, Result<Bytes, StorageErrorX>> {
-        // TODO(cf1): Support the range param.
         // TODO(cf1): Validate our checksum.
 
         let initial_response = async move {
-            let response = self.client.get(object.url).send().await.context("get")?;
+            let mut request = self.client.get(object.url);
+
+            if let Some(range) = &range {
+                let value = range.into_range_header_value();
+                request = request.header(&reqwest::header::RANGE, value);
+            }
+
+            // TODO(parkmycar): We should probably assert that the response contains
+            // an appropriate Content-Range header in the response, and maybe that we
+            // got back an HTTP 206?
+
+            let response = request.send().await.context("get")?;
             let bytes_stream = response.bytes_stream().err_into();
 
             Ok::<_, StorageErrorX>(bytes_stream)
