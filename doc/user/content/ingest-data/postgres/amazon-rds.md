@@ -376,34 +376,51 @@ start by selecting the relevant option.
 
 1. In the [SQL Shell](https://console.materialize.com/), or your preferred SQL
    client connected to Materialize, use the [`CREATE CONNECTION`](/sql/create-connection/#aws-privatelink)
-   command to create an AWS PrivateLink connection:
+   command to create an **in-region** or **cross-region** AWS PrivateLink
+   connection.
 
-    ```mzsql
-    CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
-      SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0356210a8a432d9e9',
-      AVAILABILITY ZONES ('use1-az1', 'use1-az2', 'use1-az4')
-    );
-    ```
+    **In-region connections**
+
+    To connect to an AWS PrivateLink endpoint service in the **same region** as your
+    Materialize environment:
+
+      ```mzsql
+      CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
+        SERVICE NAME 'com.amazonaws.vpce.<region_id>.vpce-svc-<endpoint_service_id>',
+        AVAILABILITY ZONES ('use1-az1', 'use1-az2', 'use1-az4')
+      );
+      ```
 
     - Replace the `SERVICE NAME` value with the service name you noted [earlier](#b-optional-configure-network-security).
 
     - Replace the `AVAILABILITY ZONES` list with the IDs of the availability
-      zones in your AWS account.
+      zones in your AWS account. For in-region connections the availability
+      zones of the NLB and the consumer VPC **must match**.
 
       To find your availability zone IDs, select your database in the RDS
       Console and click the subnets under **Connectivity & security**. For each
       subnet, look for **Availability Zone ID** (e.g., `use1-az6`),
       not **Availability Zone** (e.g., `us-east-1d`).
 
-    For **cross-region connections** only, it is recommended to specify no availability zones:
+    **Cross-region connections**
+
+    To connect to an AWS PrivateLink endpoint service in a **different region** to
+    the one where your Materialize environment is deployed:
 
       ```mzsql
       CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
-        SERVICE NAME 'com.amazonaws.vpce.us-west-1.vpce-svc-0356210a8a432d9e9',
+        SERVICE NAME 'com.amazonaws.vpce.us-west-1.vpce-svc-<endpoint_service_id>',
+        -- For now, the AVAILABILITY ZONES clause **is** required, but will be
+        -- made optional in a future release.
         AVAILABILITY ZONES ()
       );
       ```
 
+    - Replace the `SERVICE NAME` value with the service name you noted [earlier](#b-optional-configure-network-security).
+
+    - The service name region refers to where the endpoint service was created.
+      You **do not need** to specify `AVAILABILITY ZONES` manually — these will
+      be optimally auto-assigned when none are provided.
 
 1. Retrieve the AWS principal for the AWS PrivateLink connection you just
    created:
