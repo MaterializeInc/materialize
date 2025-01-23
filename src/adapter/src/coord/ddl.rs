@@ -46,10 +46,11 @@ use mz_sql::session::vars::{
     MAX_REPLICAS_PER_CLUSTER, MAX_ROLES, MAX_SCHEMAS_PER_DATABASE, MAX_SECRETS, MAX_SINKS,
     MAX_SOURCES, MAX_TABLES,
 };
-use mz_storage_client::controller::ExportDescription;
+use mz_storage_client::controller::{CollectionDescription, DataSource, ExportDescription};
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::connections::PostgresConnection;
 use mz_storage_types::read_policy::ReadPolicy;
+use mz_storage_types::sources::kafka::KAFKA_PROGRESS_DESC;
 use mz_storage_types::sources::GenericSourceConnection;
 use serde_json::json;
 use tracing::{event, info_span, warn, Instrument, Level};
@@ -1056,9 +1057,10 @@ impl Coordinator {
     }
 
     pub(crate) fn drop_storage_sinks(&mut self, sink_gids: Vec<GlobalId>) {
+        let storage_metadata = self.catalog.state().storage_metadata();
         self.controller
             .storage
-            .drop_sinks(sink_gids)
+            .drop_sinks(storage_metadata, sink_gids)
             .unwrap_or_terminate("cannot fail to drop sinks");
     }
 
@@ -1333,16 +1335,27 @@ impl Coordinator {
             to_storage_metadata: (),
         };
 
-        let res = self
-            .controller
-            .storage
-            .create_exports(vec![(
-                id,
-                ExportDescription {
+        let collection_desc = CollectionDescription {
+            // TODO(sinks): make generic once we have more than one sink type.
+            desc: KAFKA_PROGRESS_DESC.clone(),
+            data_source: DataSource::Sink {
+                desc: ExportDescription {
                     sink: storage_sink_desc,
                     instance_id: sink.cluster_id,
                 },
-            )])
+            },
+            since: None,
+            status_collection_id: None,
+            timeline: None,
+        };
+        let collections = vec![(id, collection_desc)];
+
+        // Create the collections.
+        let storage_metadata = self.catalog.state().storage_metadata();
+        let res = self
+            .controller
+            .storage
+            .create_collections(storage_metadata, None, collections)
             .await;
 
         // Drop read holds after the export has been created, at which point

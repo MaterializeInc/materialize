@@ -142,8 +142,6 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// This is to prevent the re-binding of identifiers to other descriptions.
     pub(crate) collections: BTreeMap<GlobalId, CollectionState<T>>,
 
-    pub(crate) exports: BTreeMap<GlobalId, ExportState<T>>,
-
     /// Write handle for table shards.
     pub(crate) persist_table_worker: persist_handles::PersistTableWriteWorker<T>,
     /// A shared TxnsCache running in a task and communicated with over a channel.
@@ -358,6 +356,11 @@ where
 
         match &collection.extra_state {
             CollectionStateExtra::Ingestion(ingestion_state) => Ok(ingestion_state.hydrated),
+            CollectionStateExtra::Export(_) => {
+                // For now, sinks are always considered hydrated.
+                // TODO(sinks): base this off of the sink shard's frontier?
+                Ok(true)
+            }
             CollectionStateExtra::None => {
                 // For now, objects that are not ingestions are always
                 // considered hydrated.
@@ -373,37 +376,30 @@ where
         (Antichain<Self::Timestamp>, Antichain<Self::Timestamp>),
         StorageError<Self::Timestamp>,
     > {
-        Ok(match self.export(id) {
-            Ok(export) => (
-                export.read_hold.since().clone(),
-                export.write_frontier.clone(),
-            ),
-            Err(_) => {
-                let frontiers = self.storage_collections.collection_frontiers(id)?;
-                (frontiers.implied_capability, frontiers.write_frontier)
-            }
-        })
+        let frontiers = self.storage_collections.collection_frontiers(id)?;
+        Ok((frontiers.implied_capability, frontiers.write_frontier))
     }
 
     fn collections_frontiers(
         &self,
         mut ids: Vec<GlobalId>,
     ) -> Result<Vec<(GlobalId, Antichain<T>, Antichain<T>)>, StorageError<Self::Timestamp>> {
-        // The ids might be either normal collections or exports. Both have frontiers that might be
-        // interesting to external observers.
         let mut result = vec![];
+        // In theory, we could pull all our frontiers from storage collections...
+        // but in practice those frontiers may not be identical. For historical reasons, we use the
+        // locally-tracked frontier for sinks but the storage-collections-maintained frontier for
+        // sources.
         ids.retain(|&id| match self.export(id) {
             Ok(export) => {
                 result.push((
                     id,
-                    export.read_hold.since().clone(),
+                    export.input_hold().since().clone(),
                     export.write_frontier.clone(),
                 ));
                 false
             }
             Err(_) => true,
         });
-
         result.extend(
             self.storage_collections
                 .collections_frontiers(ids)?
@@ -601,7 +597,7 @@ where
         collections.dedup();
         for pos in 1..collections.len() {
             if collections[pos - 1].0 == collections[pos].0 {
-                return Err(StorageError::SourceIdReused(collections[pos].0));
+                return Err(StorageError::CollectionIdReused(collections[pos].0));
             }
         }
 
@@ -732,6 +728,7 @@ where
         // statistics.
         let mut new_source_statistic_entries = BTreeSet::new();
         let mut new_webhook_statistic_entries = BTreeSet::new();
+        let mut new_sink_statistic_entries = BTreeSet::new();
 
         for (id, description, write, metadata) in to_register {
             let is_in_txns = |id, metadata: &CollectionMetadata| {
@@ -776,7 +773,10 @@ where
             // upper of the shard's `write_handle` generally isn't the logical upper of
             // the shard. Instead we need to thread through the upper of the `txn` shard
             // here so we can check this invariant.
-            if !dependency_read_holds.is_empty() && !is_in_txns(id, &metadata) {
+            if !dependency_read_holds.is_empty()
+                && !is_in_txns(id, &metadata)
+                && !matches!(&data_source, DataSource::Sink { .. })
+            {
                 // The dependency since cannot be beyond the dependent (our)
                 // upper unless the collection is new. In practice, the
                 // depdenency is the remap shard of a source (export), and if
@@ -941,6 +941,27 @@ where
 
                     new_source_statistic_entries.insert(id);
                 }
+                DataSource::Sink { desc } => {
+                    let mut dependency_since = Antichain::from_elem(T::minimum());
+                    for read_hold in dependency_read_holds.iter() {
+                        dependency_since.join_assign(read_hold.since());
+                    }
+
+                    let [self_hold, read_hold] =
+                        dependency_read_holds.try_into().expect("two holds");
+
+                    let state = ExportState::new(
+                        desc.instance_id,
+                        read_hold,
+                        self_hold,
+                        write_frontier.clone(),
+                        ReadPolicy::step_back(),
+                    );
+                    maybe_instance_id = Some(state.cluster_id);
+                    extra_state = CollectionStateExtra::Export(state);
+
+                    new_sink_statistic_entries.insert(id);
+                }
             }
 
             let wallclock_lag_metrics = self.metrics.wallclock_lag_metrics(id, maybe_instance_id);
@@ -962,6 +983,7 @@ where
             // statistics scrapers, but in the interest of safety, avoid overriding existing
             // statistics values.
             let mut source_statistics = self.source_statistics.lock().expect("poisoned");
+            let mut sink_statistics = self.sink_statistics.lock().expect("poisoned");
 
             for id in new_source_statistic_entries {
                 source_statistics
@@ -971,6 +993,11 @@ where
             }
             for id in new_webhook_statistic_entries {
                 source_statistics.webhook_statistics.entry(id).or_default();
+            }
+            for id in new_sink_statistic_entries {
+                sink_statistics
+                    .entry(id)
+                    .or_insert(StatsState::new(SinkStatisticsUpdate::new(id)));
             }
         }
 
@@ -1021,6 +1048,11 @@ where
                     "ingestion exports do not execute directly, but instead schedule their source to be re-executed"
                 ),
                 DataSource::Introspection(_) | DataSource::Webhook | DataSource::Table { .. } | DataSource::Progress | DataSource::Other => {}
+                DataSource::Sink { .. } => {
+                    if !self.read_only {
+                        self.run_export(id)?;
+                    }
+                }
             };
         }
 
@@ -1300,8 +1332,12 @@ where
         &self,
         id: GlobalId,
     ) -> Result<&ExportState<Self::Timestamp>, StorageError<Self::Timestamp>> {
-        self.exports
+        self.collections
             .get(&id)
+            .and_then(|c| match &c.extra_state {
+                CollectionStateExtra::Export(state) => Some(state),
+                _ => None,
+            })
             .ok_or(StorageError::IdentifierMissing(id))
     }
 
@@ -1309,81 +1345,13 @@ where
         &mut self,
         id: GlobalId,
     ) -> Result<&mut ExportState<Self::Timestamp>, StorageError<Self::Timestamp>> {
-        self.exports
+        self.collections
             .get_mut(&id)
+            .and_then(|c| match &mut c.extra_state {
+                CollectionStateExtra::Export(state) => Some(state),
+                _ => None,
+            })
             .ok_or(StorageError::IdentifierMissing(id))
-    }
-
-    async fn create_exports(
-        &mut self,
-        exports: Vec<(GlobalId, ExportDescription<Self::Timestamp>)>,
-    ) -> Result<(), StorageError<Self::Timestamp>> {
-        // Validate first, to avoid corrupting state.
-        let mut dedup = BTreeMap::new();
-        for (id, desc) in exports.iter() {
-            if dedup.insert(id, desc).is_some() {
-                return Err(StorageError::SinkIdReused(*id));
-            }
-            if let Ok(export) = self.export(*id) {
-                if &export.description != desc {
-                    return Err(StorageError::SinkIdReused(*id));
-                }
-            }
-        }
-
-        for (id, description) in exports {
-            let from_id = description.sink.from;
-
-            // Acquire read holds at StorageCollections to ensure that the
-            // sinked collection is not dropped while we're sinking it.
-            let desired_read_holds = vec![from_id.clone()];
-            let read_hold = self
-                .storage_collections
-                .acquire_read_holds(desired_read_holds)
-                .expect("missing dependency")
-                .into_element();
-
-            info!(
-                sink_id = id.to_string(),
-                from_id = from_id.to_string(),
-                acquired_read_hold = ?read_hold,
-                "sink acquired read holds"
-            );
-            let read_policy = ReadPolicy::step_back();
-
-            info!(
-                sink_id = id.to_string(),
-                from_id = from_id.to_string(),
-                as_of = ?description.sink.as_of,
-                "create_exports: creating sink"
-            );
-
-            let wallclock_lag_metrics = self
-                .metrics
-                .wallclock_lag_metrics(id, Some(description.instance_id));
-
-            let export_state = ExportState::new(
-                description.clone(),
-                read_hold,
-                read_policy,
-                wallclock_lag_metrics,
-            );
-            self.exports.insert(id, export_state);
-
-            // Just like with `new_source_statistic_entries`, we can probably
-            // `insert` here, but in the interest of safety, never override
-            // existing values.
-            self.sink_statistics
-                .lock()
-                .expect("poisoned")
-                .entry(id)
-                .or_insert(StatsState::new(SinkStatisticsUpdate::new(id)));
-
-            if !self.read_only {
-                self.run_export(id)?;
-            }
-        }
-        Ok(())
     }
 
     /// Create a oneshot ingestion.
@@ -1433,39 +1401,33 @@ where
 
         // Acquire read holds at StorageCollections to ensure that the
         // sinked collection is not dropped while we're sinking it.
-        let desired_read_holds = vec![from_id.clone()];
-        let read_hold = self
+        let desired_read_holds = vec![from_id.clone(), id.clone()];
+        let [input_hold, self_hold] = self
             .storage_collections
             .acquire_read_holds(desired_read_holds)
             .expect("missing dependency")
-            .into_element();
+            .try_into()
+            .expect("expected number of holds");
         let from_storage_metadata = self.storage_collections.collection_metadata(from_id)?;
         let to_storage_metadata = self.storage_collections.collection_metadata(id)?;
 
         // Check whether the sink's write frontier is beyond the read hold we got
-        let cur_export = self
-            .exports
-            .get_mut(&id)
-            .ok_or_else(|| StorageError::IdentifierMissing(id))?;
+        let cur_export = self.export_mut(id)?;
         let input_readable = cur_export
             .write_frontier
             .iter()
-            .all(|t| read_hold.since().less_than(t));
+            .all(|t| input_hold.since().less_than(t));
         if !input_readable {
             return Err(StorageError::ReadBeforeSince(from_id));
         }
 
-        let wallclock_lag_metrics = self
-            .metrics
-            .wallclock_lag_metrics(id, Some(new_description.instance_id));
-
         let new_export = ExportState {
-            description: new_description.clone(),
-            read_hold,
+            read_capabilities: cur_export.read_capabilities.clone(),
+            cluster_id: new_description.instance_id,
+            derived_since: cur_export.derived_since.clone(),
+            read_holds: [input_hold, self_hold],
             read_policy: cur_export.read_policy.clone(),
             write_frontier: cur_export.write_frontier.clone(),
-            wallclock_lag_max: Default::default(),
-            wallclock_lag_metrics,
         };
         *cur_export = new_export;
 
@@ -1514,10 +1476,16 @@ where
             // update that because `ExportState` is not clone, because it holds
             // a `ReadHandle` and cloning that would cause additional work for
             // whoever guarantees those read holds.
-            let (mut new_export_description, as_of) = {
-                let export = self.export(id).expect("export exists");
-                let export_description = export.description.clone();
-                let as_of = export.read_hold.since().clone();
+            let (mut new_export_description, as_of): (ExportDescription<Self::Timestamp>, _) = {
+                let export = &self.collections[&id];
+                let DataSource::Sink { desc } = &export.data_source else {
+                    panic!("export exists")
+                };
+                let CollectionStateExtra::Export(state) = &export.extra_state else {
+                    panic!("export exists")
+                };
+                let export_description = desc.clone();
+                let as_of = state.input_hold().since().clone();
 
                 (export_description, as_of)
             };
@@ -1589,8 +1557,13 @@ where
 
             // Update state only after all possible errors have occurred.
             for (id, new_export_description) in export_updates {
-                let export = self.export_mut(id).expect("export known to exist");
-                export.description = new_export_description;
+                let Some(state) = self.collections.get_mut(&id) else {
+                    panic!("export known to exist")
+                };
+                let DataSource::Sink { desc } = &mut state.data_source else {
+                    panic!("export known to exist")
+                };
+                *desc = new_export_description;
             }
         }
 
@@ -1735,6 +1708,7 @@ where
                         ingestions_to_drop.insert(id);
                     }
                     DataSource::Other | DataSource::Introspection(_) | DataSource::Progress => (),
+                    DataSource::Sink { .. } => {}
                 }
             }
         }
@@ -1772,27 +1746,42 @@ where
     /// Drops the read capability for the sinks and allows their resources to be reclaimed.
     fn drop_sinks(
         &mut self,
+        storage_metadata: &StorageMetadata,
         identifiers: Vec<GlobalId>,
     ) -> Result<(), StorageError<Self::Timestamp>> {
         self.validate_export_ids(identifiers.iter().cloned())?;
-        self.drop_sinks_unvalidated(identifiers);
+        self.drop_sinks_unvalidated(storage_metadata, identifiers);
         Ok(())
     }
 
-    fn drop_sinks_unvalidated(&mut self, identifiers: Vec<GlobalId>) {
-        for id in identifiers {
-            // Already removed.
-            if self.export(id).is_err() {
-                continue;
-            }
+    fn drop_sinks_unvalidated(
+        &mut self,
+        storage_metadata: &StorageMetadata,
+        mut identifiers: Vec<GlobalId>,
+    ) {
+        // Ignore exports that have already been removed.
+        identifiers.retain(|id| self.export(*id).is_ok());
 
-            // We don't explicitly remove read capabilities! Downgrading the
-            // frontier of the sink to `[]` (the empty Antichain), will
-            // propagate to the storage dependencies.
+        // TODO: ideally we'd advance the write frontier ourselves here, but this function's
+        // not yet marked async.
 
-            // Remove sink by removing its write frontier and arranging for deprovisioning.
-            self.update_write_frontiers(&[(id, Antichain::new())]);
-        }
+        // We don't explicitly remove read capabilities! Downgrading the
+        // frontier of the source to `[]` (the empty Antichain), will propagate
+        // to the storage dependencies.
+        let drop_policy = identifiers
+            .iter()
+            .map(|id| (*id, ReadPolicy::ValidFrom(Antichain::new())))
+            .collect();
+
+        tracing::debug!(
+            ?drop_policy,
+            "dropping sources by setting read hold policies"
+        );
+        self.set_hold_policies(drop_policy);
+
+        // Also let StorageCollections know!
+        self.storage_collections
+            .drop_collections_unvalidated(storage_metadata, identifiers);
     }
 
     #[instrument(level = "debug")]
@@ -1905,18 +1894,7 @@ where
             Some(StorageResponse::DroppedId(id)) => {
                 tracing::debug!("DroppedId for collection {id}");
 
-                if let Some(export) = self.exports.get_mut(&id) {
-                    // TODO: Current main never drops export state, so we
-                    // also don't do that, because it would be yet more
-                    // refactoring. Instead, we downgrade to the empty
-                    // frontier, which satisfies StorageCollections just as
-                    // much.
-                    tracing::info!("downgrading read hold of export {id} to empty frontier!");
-                    export
-                        .read_hold
-                        .try_downgrade(Antichain::new())
-                        .expect("must be possible");
-                } else if let Some(_collection) = self.collections.remove(&id) {
+                if let Some(_collection) = self.collections.remove(&id) {
                     // Nothing to do, we already dropped read holds in
                     // `drop_sources_unvalidated`.
                 } else {
@@ -1987,6 +1965,9 @@ where
                                                 ingestion_state.hydrated = true;
                                             }
                                         }
+                                        CollectionStateExtra::Export(_) => {
+                                            // TODO(sinks): track sink hydration?
+                                        }
                                         CollectionStateExtra::None => {
                                             // Nothing to do
                                         }
@@ -2051,36 +2032,42 @@ where
             let instance = cluster_id.and_then(|cluster_id| self.instances.get_mut(&cluster_id));
 
             if read_frontier.is_empty() {
-                if instance.is_some() && self.collections.contains_key(&id) {
-                    let collection = self.collections.get(&id).expect("known to exist");
-                    match collection.extra_state {
-                        CollectionStateExtra::Ingestion(_) => {
-                            pending_source_drops.push(id);
+                if let Some(collection) = self.collections.get(&id) {
+                    if instance.is_some() {
+                        match collection.extra_state {
+                            CollectionStateExtra::Ingestion(_) => {
+                                pending_source_drops.push(id);
+                            }
+                            CollectionStateExtra::None => {
+                                // Nothing to do
+                            }
+                            CollectionStateExtra::Export(_) => {
+                                pending_sink_drops.push(id);
+                            }
                         }
-                        CollectionStateExtra::None => {
-                            // Nothing to do
+                    } else {
+                        match collection.data_source {
+                            DataSource::Table { .. } => {
+                                pending_collection_drops.push(id);
+                            }
+                            DataSource::Webhook => {
+                                pending_collection_drops.push(id);
+                                // TODO(parkmycar): The Collection Manager and PersistMonotonicWriter
+                                // could probably use some love and maybe get merged together?
+                                let fut = self.collection_manager.unregister_collection(id);
+                                mz_ore::task::spawn(
+                                    || format!("storage-webhook-cleanup-{id}"),
+                                    fut,
+                                );
+                            }
+                            DataSource::Ingestion(_) => (),
+                            DataSource::IngestionExport { .. } => (),
+                            DataSource::Introspection(_) => (),
+                            DataSource::Progress => (),
+                            DataSource::Other => (),
+                            DataSource::Sink { .. } => (),
                         }
                     }
-                } else if let Some(collection) = self.collections.get(&id) {
-                    match collection.data_source {
-                        DataSource::Table { .. } => {
-                            pending_collection_drops.push(id);
-                        }
-                        DataSource::Webhook => {
-                            pending_collection_drops.push(id);
-                            // TODO(parkmycar): The Collection Manager and PersistMonotonicWriter
-                            // could probably use some love and maybe get merged together?
-                            let fut = self.collection_manager.unregister_collection(id);
-                            mz_ore::task::spawn(|| format!("storage-webhook-cleanup-{id}"), fut);
-                        }
-                        DataSource::Ingestion(_) => (),
-                        DataSource::IngestionExport { .. } => (),
-                        DataSource::Introspection(_) => (),
-                        DataSource::Progress => (),
-                        DataSource::Other => (),
-                    }
-                } else if instance.is_some() && self.exports.contains_key(&id) {
-                    pending_sink_drops.push(id);
                 } else if instance.is_none() {
                     tracing::info!("Compaction command for id {id}, but we don't have a client.");
                 } else {
@@ -2438,7 +2425,6 @@ where
         Self {
             build_info,
             collections: BTreeMap::default(),
-            exports: BTreeMap::default(),
             persist_table_worker,
             txns_read,
             txns_metrics,
@@ -2491,29 +2477,31 @@ where
         let mut read_capability_changes = BTreeMap::default();
 
         for (id, policy) in policies.into_iter() {
-            if let Some(_export) = self.exports.get_mut(&id) {
-                unreachable!("set_hold_policies is only called for ingestions");
-            } else if let Some(collection) = self.collections.get_mut(&id) {
-                let ingestion = match &mut collection.extra_state {
-                    CollectionStateExtra::Ingestion(ingestion) => ingestion,
+            if let Some(collection) = self.collections.get_mut(&id) {
+                let (write_frontier, derived_since, hold_policy) = match &mut collection.extra_state
+                {
+                    CollectionStateExtra::Ingestion(ingestion) => (
+                        ingestion.write_frontier.borrow(),
+                        &mut ingestion.derived_since,
+                        &mut ingestion.hold_policy,
+                    ),
                     CollectionStateExtra::None => {
                         unreachable!("set_hold_policies is only called for ingestions");
                     }
+                    CollectionStateExtra::Export(export) => (
+                        export.write_frontier.borrow(),
+                        &mut export.derived_since,
+                        &mut export.read_policy,
+                    ),
                 };
-                let mut new_derived_since = policy.frontier(ingestion.write_frontier.borrow());
 
-                if PartialOrder::less_equal(&ingestion.derived_since, &new_derived_since) {
-                    let mut update = ChangeBatch::new();
-                    update.extend(new_derived_since.iter().map(|time| (time.clone(), 1)));
-                    std::mem::swap(&mut ingestion.derived_since, &mut new_derived_since);
-                    update.extend(new_derived_since.iter().map(|time| (time.clone(), -1)));
-
-                    if !update.is_empty() {
-                        read_capability_changes.insert(id, update);
-                    }
+                let new_derived_since = policy.frontier(write_frontier);
+                let mut update = swap_updates(derived_since, new_derived_since);
+                if !update.is_empty() {
+                    read_capability_changes.insert(id, update);
                 }
 
-                ingestion.hold_policy = policy;
+                *hold_policy = policy;
             }
         }
 
@@ -2527,39 +2515,14 @@ where
         let mut read_capability_changes = BTreeMap::default();
 
         for (id, new_upper) in updates.iter() {
-            if let Ok(export) = self.export_mut(*id) {
-                if PartialOrder::less_than(&export.write_frontier, new_upper) {
-                    export.write_frontier.clone_from(new_upper);
-                }
-
-                // Ignore read policy for sinks whose write frontiers are closed, which identifies
-                // the sink is being dropped; we need to advance the read frontier to the empty
-                // chain to signal to the dataflow machinery that they should deprovision this
-                // object.
-                let new_read_capability = if export.write_frontier.is_empty() {
-                    export.write_frontier.clone()
-                } else {
-                    export.read_policy.frontier(export.write_frontier.borrow())
-                };
-
-                if PartialOrder::less_equal(export.read_hold.since(), &new_read_capability) {
-                    let mut update = ChangeBatch::new();
-                    update.extend(new_read_capability.iter().map(|time| (time.clone(), 1)));
-                    update.extend(
-                        export
-                            .read_hold
-                            .since()
-                            .iter()
-                            .map(|time| (time.clone(), -1)),
-                    );
-
-                    if !update.is_empty() {
-                        read_capability_changes.insert(*id, update);
-                    }
-                }
-            } else if let Some(collection) = self.collections.get_mut(id) {
-                let ingestion = match &mut collection.extra_state {
-                    CollectionStateExtra::Ingestion(ingestion) => ingestion,
+            if let Some(collection) = self.collections.get_mut(id) {
+                let (write_frontier, derived_since, hold_policy) = match &mut collection.extra_state
+                {
+                    CollectionStateExtra::Ingestion(ingestion) => (
+                        &mut ingestion.write_frontier,
+                        &mut ingestion.derived_since,
+                        &ingestion.hold_policy,
+                    ),
                     CollectionStateExtra::None => {
                         if matches!(collection.data_source, DataSource::Progress) {
                             // We do get these, but can't do anything with it!
@@ -2572,27 +2535,21 @@ where
                         }
                         continue;
                     }
+                    CollectionStateExtra::Export(export) => (
+                        &mut export.write_frontier,
+                        &mut export.derived_since,
+                        &export.read_policy,
+                    ),
                 };
 
-                if PartialOrder::less_than(&ingestion.write_frontier, new_upper) {
-                    ingestion.write_frontier.clone_from(new_upper);
+                if PartialOrder::less_than(write_frontier, new_upper) {
+                    write_frontier.clone_from(new_upper);
                 }
 
-                debug!(%id, ?ingestion, ?new_upper, "upper update for ingestion!");
-
-                let mut new_derived_since = ingestion
-                    .hold_policy
-                    .frontier(ingestion.write_frontier.borrow());
-
-                if PartialOrder::less_equal(&ingestion.derived_since, &new_derived_since) {
-                    let mut update = ChangeBatch::new();
-                    update.extend(new_derived_since.iter().map(|time| (time.clone(), 1)));
-                    std::mem::swap(&mut ingestion.derived_since, &mut new_derived_since);
-                    update.extend(new_derived_since.iter().map(|time| (time.clone(), -1)));
-
-                    if !update.is_empty() {
-                        read_capability_changes.insert(*id, update);
-                    }
+                let new_derived_since = hold_policy.frontier(write_frontier.borrow());
+                let mut update = swap_updates(derived_since, new_derived_since);
+                if !update.is_empty() {
+                    read_capability_changes.insert(*id, update);
                 }
             } else if self.storage_collections.check_exists(*id).is_ok() {
                 // StorageCollections is handling it!
@@ -2621,7 +2578,6 @@ where
     fn update_hold_capabilities(&mut self, updates: &mut BTreeMap<GlobalId, ChangeBatch<T>>) {
         // Location to record consequences that we need to act on.
         let mut collections_net = BTreeMap::new();
-        let mut exports_net = BTreeMap::new();
 
         // We must not rely on any specific relative ordering of `GlobalId`s.
         // That said, it is reasonable to assume that collections generally have
@@ -2634,31 +2590,24 @@ where
                 debug!(id = %key, ?update, "update_hold_capability");
             }
 
-            if let Ok(export) = self.export_mut(key) {
-                // Seed with our current read hold, then apply changes, to
-                // derive how we need to change our read hold.
-                let mut staged_read_hold = MutableAntichain::new();
-                staged_read_hold
-                    .update_iter(export.read_hold.since().iter().map(|t| (t.clone(), 1)));
-                let changes = staged_read_hold.update_iter(update.drain());
-                update.extend(changes);
+            if let Some(collection) = self.collections.get_mut(&key) {
+                match &mut collection.extra_state {
+                    CollectionStateExtra::Ingestion(ingestion) => {
+                        let changes = ingestion.read_capabilities.update_iter(update.drain());
+                        update.extend(changes);
 
-                // Make sure we also send `AllowCompaction` commands for sinks,
-                // which drives updating the sink's `as_of`, among other things.
-                let (changes, frontier, _cluster_id) =
-                    exports_net.entry(key).or_insert_with(|| {
-                        (
-                            <ChangeBatch<_>>::new(),
-                            Antichain::new(),
-                            export.cluster_id(),
-                        )
-                    });
+                        let (changes, frontier, _cluster_id) =
+                            collections_net.entry(key).or_insert_with(|| {
+                                (
+                                    <ChangeBatch<_>>::new(),
+                                    Antichain::new(),
+                                    ingestion.instance_id,
+                                )
+                            });
 
-                changes.extend(update.drain());
-                *frontier = staged_read_hold.frontier().to_owned();
-            } else if let Some(collection) = self.collections.get_mut(&key) {
-                let ingestion = match &mut collection.extra_state {
-                    CollectionStateExtra::Ingestion(ingestion) => ingestion,
+                        changes.extend(update.drain());
+                        *frontier = ingestion.read_capabilities.frontier().to_owned();
+                    }
                     CollectionStateExtra::None => {
                         // WIP: See if this ever panics in ci.
                         soft_panic_or_log!(
@@ -2667,22 +2616,19 @@ where
                         );
                         continue;
                     }
-                };
+                    CollectionStateExtra::Export(export) => {
+                        let changes = export.read_capabilities.update_iter(update.drain());
+                        update.extend(changes);
 
-                let changes = ingestion.read_capabilities.update_iter(update.drain());
-                update.extend(changes);
+                        let (changes, frontier, _cluster_id) =
+                            collections_net.entry(key).or_insert_with(|| {
+                                (<ChangeBatch<_>>::new(), Antichain::new(), export.cluster_id)
+                            });
 
-                let (changes, frontier, _cluster_id) =
-                    collections_net.entry(key).or_insert_with(|| {
-                        (
-                            <ChangeBatch<_>>::new(),
-                            Antichain::new(),
-                            ingestion.instance_id,
-                        )
-                    });
-
-                changes.extend(update.drain());
-                *frontier = ingestion.read_capabilities.frontier().to_owned();
+                        changes.extend(update.drain());
+                        *frontier = export.read_capabilities.frontier().to_owned();
+                    }
+                }
             } else {
                 // This is confusing and we should probably error.
                 tracing::warn!(id = ?key, ?update, "update_hold_capabilities for unknown object");
@@ -2691,11 +2637,7 @@ where
 
         // Translate our net compute actions into `AllowCompaction` commands and
         // downgrade persist sinces. The actual downgrades are performed by a Tokio
-        // task asynchorously.
-        //
-        // N.B. We only downgrade persist sinces for collections because
-        // exports/sinks don't have an associated collection. We still _do_ want
-        // to sent `AllowCompaction` commands to workers for them, though.
+        // task asynchronously.
         let mut worker_compaction_commands = BTreeMap::default();
 
         for (key, (mut changes, frontier, cluster_id)) in collections_net {
@@ -2709,8 +2651,11 @@ where
                     .get_mut(&key)
                     .expect("missing collection state");
 
-                let ingestion = match &mut collection.extra_state {
-                    CollectionStateExtra::Ingestion(ingestion) => ingestion,
+                let read_holds = match &mut collection.extra_state {
+                    CollectionStateExtra::Ingestion(ingestion) => {
+                        ingestion.dependency_read_holds.as_mut_slice()
+                    }
+                    CollectionStateExtra::Export(export) => export.read_holds.as_mut_slice(),
                     CollectionStateExtra::None => {
                         soft_panic_or_log!(
                             "trying to downgrade read holds for collection which is not an \
@@ -2720,25 +2665,13 @@ where
                     }
                 };
 
-                for read_hold in ingestion.dependency_read_holds.iter_mut() {
+                for read_hold in read_holds.iter_mut() {
                     read_hold
                         .try_downgrade(frontier.clone())
                         .expect("we only advance the frontier");
                 }
 
                 worker_compaction_commands.insert(key, (frontier.clone(), cluster_id));
-            }
-        }
-        for (key, (mut changes, frontier, cluster_id)) in exports_net {
-            if !changes.is_empty() {
-                let export_state = self.exports.get_mut(&key).expect("missing export state");
-
-                export_state
-                    .read_hold
-                    .try_downgrade(frontier.clone())
-                    .expect("we only advance the frontier");
-
-                worker_compaction_commands.insert(key, (frontier, cluster_id));
             }
         }
 
@@ -2774,14 +2707,6 @@ where
             self.export(id)?;
         }
         Ok(())
-    }
-
-    /// Iterate over exports that have not been dropped.
-    fn active_exports(&self) -> impl Iterator<Item = (GlobalId, &ExportState<T>)> {
-        self.exports
-            .iter()
-            .filter(|(_id, e)| !e.is_dropped())
-            .map(|(id, e)| (*id, e))
     }
 
     /// Opens a write and critical since handles for the given `shard`.
@@ -2947,7 +2872,7 @@ where
         self.sink_statistics
             .lock()
             .expect("poisoned")
-            .retain(|k, _| self.exports.contains_key(k));
+            .retain(|k, _| self.export(*k).is_ok());
     }
 
     /// Appends a new global ID, shard ID pair to the appropriate collection.
@@ -2995,7 +2920,7 @@ where
     fn determine_collection_dependencies(
         &self,
         self_id: GlobalId,
-        data_source: &DataSource,
+        data_source: &DataSource<T>,
     ) -> Result<Vec<GlobalId>, StorageError<T>> {
         let dependency = match &data_source {
             DataSource::Introspection(_)
@@ -3032,6 +2957,10 @@ where
                 // track themselves and the remap shard as dependencies.
                 vec![self_id, ingestion.remap_collection_id]
             }
+            DataSource::Sink { desc } => {
+                // Sinks hold back their own frontier and the frontier of their input.
+                vec![self_id, desc.sink.from]
+            }
         };
 
         Ok(dependency)
@@ -3057,7 +2986,7 @@ where
 
         for update in updates {
             let id = update.id;
-            if self.exports.contains_key(&id) {
+            if self.export(id).is_ok() {
                 sink_status_updates.push(update);
             } else if self.storage_collections.check_exists(id).is_ok() {
                 source_status_updates.push(update);
@@ -3146,8 +3075,9 @@ where
     /// Runs the identified export using the current definition of the export
     /// that we have in memory.
     fn run_export(&mut self, id: GlobalId) -> Result<(), StorageError<T>> {
-        let export = self.export(id)?;
-        let description = &export.description;
+        let DataSource::Sink { desc: description } = &self.collections[&id].data_source else {
+            return Err(StorageError::IdentifierMissing(id));
+        };
 
         info!(
             sink_id = %id,
@@ -3208,26 +3138,13 @@ where
             let instance = self
                 .collections
                 .get(&id)
-                .and_then(|c| match &c.extra_state {
-                    CollectionStateExtra::Ingestion(ingestion) => Some(ingestion),
+                .and_then(|collection_state| match &collection_state.extra_state {
+                    CollectionStateExtra::Ingestion(ingestion) => Some(ingestion.instance_id),
+                    CollectionStateExtra::Export(export) => Some(export.cluster_id()),
                     CollectionStateExtra::None => None,
                 })
-                .and_then(|i| self.instances.get(&i.instance_id));
-            if let Some(instance) = instance {
-                for replica_id in instance.replica_ids() {
-                    replica_frontiers.insert((id, replica_id), upper.clone());
-                }
-            }
+                .and_then(|i| self.instances.get(&i));
 
-            global_frontiers.insert(id, (since, upper));
-        }
-
-        for (id, export) in self.active_exports() {
-            // Exports cannot be read from, so their `since` is always the empty frontier.
-            let since = Antichain::new();
-            let upper = export.write_frontier.clone();
-
-            let instance = self.instances.get(&export.cluster_id());
             if let Some(instance) = instance {
                 for replica_id in instance.replica_ids() {
                     replica_frontiers.insert((id, replica_id), upper.clone());
@@ -3353,20 +3270,6 @@ where
             collection.wallclock_lag_metrics.observe(lag);
         }
 
-        let active_exports = self.exports.iter_mut().filter(|(_id, e)| !e.is_dropped());
-        for (id, export) in active_exports {
-            let lag = frontier_lag(&export.write_frontier);
-            export.wallclock_lag_max = std::cmp::max(export.wallclock_lag_max, lag);
-
-            if let Some(updates) = &mut introspection_updates {
-                let lag = std::mem::take(&mut export.wallclock_lag_max);
-                let row = pack_row(*id, lag);
-                updates.push((row, 1));
-            }
-
-            export.wallclock_lag_metrics.observe(lag);
-        }
-
         if let Some(updates) = introspection_updates {
             self.append_introspection_updates(IntrospectionType::WallclockLagHistory, updates);
             self.wallclock_lag_last_refresh = Instant::now();
@@ -3481,7 +3384,7 @@ where
 #[derive(Debug)]
 struct CollectionState<T: TimelyTimestamp> {
     /// The source of this collection's data.
-    pub data_source: DataSource,
+    pub data_source: DataSource<T>,
 
     pub collection_metadata: CollectionMetadata,
 
@@ -3497,6 +3400,7 @@ struct CollectionState<T: TimelyTimestamp> {
 #[derive(Debug)]
 enum CollectionStateExtra<T: TimelyTimestamp> {
     Ingestion(IngestionState<T>),
+    Export(ExportState<T>),
     None,
 }
 
@@ -3613,4 +3517,18 @@ fn replica_status_history_desc(params: &StorageParameters) -> StatusHistoryDesc<
         }),
         extract_time: Box::new(move |datums| datums[time_idx].unwrap_timestamptz()),
     }
+}
+
+/// Replace one antichain with another, tracking the overall changes in the returned `ChangeBatch`.
+fn swap_updates<T: Timestamp>(
+    from: &mut Antichain<T>,
+    mut replace_with: Antichain<T>,
+) -> ChangeBatch<T> {
+    let mut update = ChangeBatch::new();
+    if PartialOrder::less_equal(from, &replace_with) {
+        update.extend(replace_with.iter().map(|time| (time.clone(), 1)));
+        std::mem::swap(from, &mut replace_with);
+        update.extend(replace_with.iter().map(|time| (time.clone(), -1)));
+    }
+    update
 }

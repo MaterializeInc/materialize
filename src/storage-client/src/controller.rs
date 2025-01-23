@@ -27,8 +27,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use differential_dataflow::lattice::Lattice;
 use mz_cluster_client::client::ClusterReplicaLocation;
-use mz_cluster_client::metrics::WallclockLagMetrics;
 use mz_cluster_client::ReplicaId;
 use mz_persist_client::batch::ProtoBatch;
 use mz_persist_types::{Codec64, Opaque, ShardId};
@@ -47,6 +47,7 @@ use mz_storage_types::sources::{
     SourceExportDetails, Timeline,
 };
 use serde::{Deserialize, Serialize};
+use timely::progress::frontier::MutableAntichain;
 use timely::progress::Timestamp as TimelyTimestamp;
 use timely::progress::{Antichain, Timestamp};
 use tokio::sync::{mpsc, oneshot};
@@ -96,7 +97,7 @@ pub enum IntrospectionType {
 
 /// Describes how data is written to the collection.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum DataSource {
+pub enum DataSource<T> {
     /// Ingest data from some external source.
     Ingestion(IngestionDescription),
     /// This source receives its data from the identified ingestion,
@@ -122,9 +123,11 @@ pub enum DataSource {
         /// `storage-controller` we the primary as a dependency.
         primary: Option<GlobalId>,
     },
-    /// This source's data is does not need to be managed by the storage
+    /// This source's data does not need to be managed by the storage
     /// controller, e.g. it's a materialized view or the catalog collection.
     Other,
+    /// This collection is the output collection of a sink.
+    Sink { desc: ExportDescription<T> },
 }
 
 /// Describes a request to create a source.
@@ -133,7 +136,7 @@ pub struct CollectionDescription<T> {
     /// The schema of this collection
     pub desc: RelationDesc,
     /// The source of this collection's data.
-    pub data_source: DataSource,
+    pub data_source: DataSource<T>,
     /// An optional frontier to which the collection's `since` should be advanced.
     pub since: Option<Antichain<T>>,
     /// A GlobalId to use for this collection to use for the status collection.
@@ -168,7 +171,7 @@ pub enum Response<T> {
 }
 
 /// Metadata that the storage controller must know to properly handle the life
-/// cycle of creating and dropping collections.j
+/// cycle of creating and dropping collections.
 ///
 /// This data should be kept consistent with the state modified using
 /// [`StorageTxn`].
@@ -485,12 +488,6 @@ pub trait StorageController: Debug {
         id: GlobalId,
     ) -> Result<&mut ExportState<Self::Timestamp>, StorageError<Self::Timestamp>>;
 
-    /// Create the sinks described by the `ExportDescription`.
-    async fn create_exports(
-        &mut self,
-        exports: Vec<(GlobalId, ExportDescription<Self::Timestamp>)>,
-    ) -> Result<(), StorageError<Self::Timestamp>>;
-
     /// Create a oneshot ingestion.
     async fn create_oneshot_ingestion(
         &mut self,
@@ -532,6 +529,7 @@ pub trait StorageController: Debug {
     /// Drops the read capability for the sinks and allows their resources to be reclaimed.
     fn drop_sinks(
         &mut self,
+        storage_metadata: &StorageMetadata,
         identifiers: Vec<GlobalId>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
@@ -545,7 +543,11 @@ pub trait StorageController: Debug {
     ///     created, but have been forgotten by the controller due to a restart.
     ///     Once command history becomes durable we can remove this method and use the normal
     ///     `drop_sinks`.
-    fn drop_sinks_unvalidated(&mut self, identifiers: Vec<GlobalId>);
+    fn drop_sinks_unvalidated(
+        &mut self,
+        storage_metadata: &StorageMetadata,
+        identifiers: Vec<GlobalId>,
+    );
 
     /// Drops the read capability for the sources and allows their resources to be reclaimed.
     ///
@@ -659,7 +661,7 @@ pub trait StorageController: Debug {
     >;
 }
 
-impl DataSource {
+impl<T> DataSource<T> {
     /// Returns true if the storage controller manages the data shard for this
     /// source using txn-wal.
     pub fn in_txns(&self) -> bool {
@@ -671,6 +673,7 @@ impl DataSource {
             | DataSource::Introspection(_)
             | DataSource::Progress
             | DataSource::Webhook => false,
+            DataSource::Sink { .. } => false,
         }
     }
 }
@@ -710,51 +713,66 @@ impl From<NonZeroI64> for PersistEpoch {
 /// State maintained about individual exports.
 #[derive(Debug)]
 pub struct ExportState<T: TimelyTimestamp> {
-    /// Description with which the export was created
-    pub description: ExportDescription<T>,
+    /// Really only for keeping track of changes to the `derived_since`.
+    pub read_capabilities: MutableAntichain<T>,
 
-    /// The read hold that this export has on its dependencies (inputs). When
+    /// The cluster this export is associated with.
+    pub cluster_id: StorageInstanceId,
+
+    /// The current since frontier, derived from `write_frontier` using
+    /// `hold_policy`.
+    pub derived_since: Antichain<T>,
+
+    /// The read holds that this export has on its dependencies (its input and itself). When
     /// the upper of the export changes, we downgrade this, which in turn
     /// downgrades holds we have on our dependencies' sinces.
-    pub read_hold: ReadHold<T>,
+    pub read_holds: [ReadHold<T>; 2],
 
     /// The policy to use to downgrade `self.read_capability`.
     pub read_policy: ReadPolicy<T>,
 
     /// Reported write frontier.
     pub write_frontier: Antichain<T>,
-
-    /// Maximum frontier wallclock lag since the last introspection update.
-    pub wallclock_lag_max: Duration,
-    /// Frontier wallclock lag metrics tracked for this collection.
-    pub wallclock_lag_metrics: WallclockLagMetrics,
 }
 
 impl<T: Timestamp> ExportState<T> {
     pub fn new(
-        description: ExportDescription<T>,
+        cluster_id: StorageInstanceId,
         read_hold: ReadHold<T>,
+        self_hold: ReadHold<T>,
+        write_frontier: Antichain<T>,
         read_policy: ReadPolicy<T>,
-        wallclock_lag_metrics: WallclockLagMetrics,
-    ) -> Self {
+    ) -> Self
+    where
+        T: Lattice,
+    {
+        let mut dependency_since = Antichain::from_elem(T::minimum());
+        for read_hold in [&read_hold, &self_hold] {
+            dependency_since.join_assign(read_hold.since());
+        }
         Self {
-            description,
-            read_hold,
+            read_capabilities: MutableAntichain::from(dependency_since.borrow()),
+            cluster_id,
+            derived_since: dependency_since,
+            read_holds: [read_hold, self_hold],
             read_policy,
-            write_frontier: Antichain::from_elem(Timestamp::minimum()),
-            wallclock_lag_max: Default::default(),
-            wallclock_lag_metrics,
+            write_frontier,
         }
     }
 
     /// Returns the cluster to which the export is bound.
     pub fn cluster_id(&self) -> StorageInstanceId {
-        self.description.instance_id
+        self.cluster_id
+    }
+
+    /// Returns the cluster to which the export is bound.
+    pub fn input_hold(&self) -> &ReadHold<T> {
+        &self.read_holds[0]
     }
 
     /// Returns whether the export was dropped.
     pub fn is_dropped(&self) -> bool {
-        self.read_hold.since().is_empty()
+        self.read_holds.iter().all(|h| h.since().is_empty())
     }
 }
 /// A channel that allows you to append a set of updates to a pre-defined [`GlobalId`].

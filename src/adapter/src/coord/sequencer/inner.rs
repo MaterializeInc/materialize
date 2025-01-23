@@ -83,7 +83,6 @@ use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::{CollectionDescription, DataSource, ExportDescription};
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::controller::StorageError;
-use mz_storage_types::sources::kafka::KAFKA_PROGRESS_DESC;
 use mz_storage_types::stats::RelationPartStats;
 use mz_storage_types::AlterCompatible;
 use mz_transform::dataflow::DataflowMetainfo;
@@ -1346,27 +1345,12 @@ impl Coordinator {
             }
         };
 
-        let collection_desc = CollectionDescription {
-            // TODO(sinks): make generic once we have more than one sink type.
-            desc: KAFKA_PROGRESS_DESC.clone(),
-            data_source: DataSource::Other,
-            since: None,
-            status_collection_id: None,
-            timeline: None,
-        };
-        let collections = vec![(global_id, collection_desc)];
-
-        // Create the collections.
-        let storage_metadata = self.catalog.state().storage_metadata();
-        self.controller
-            .storage
-            .create_collections(storage_metadata, None, collections)
-            .await
-            .unwrap_or_terminate("cannot fail to create collections");
-
         self.create_storage_export(global_id, &catalog_sink)
             .await
             .unwrap_or_terminate("cannot fail to create exports");
+
+        self.initialize_storage_read_policies([item_id].into(), CompactionWindow::Default)
+            .await;
 
         ctx.retire(Ok(ExecuteResponse::CreatedSink))
     }
