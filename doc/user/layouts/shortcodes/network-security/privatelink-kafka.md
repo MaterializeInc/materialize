@@ -66,7 +66,7 @@ and retrieve the AWS principal needed to configure the AWS PrivateLink service.
       );
       ```
 
-    - Replace the `SERVICE NAME` value with the service name you noted [earlier](#b-optional-configure-network-security).
+    - Replace the `SERVICE NAME` value with the service name you noted earlier.
 
     - Replace the `AVAILABILITY ZONES` list with the IDs of the availability
       zones in your AWS account. For in-region connections the availability
@@ -91,7 +91,7 @@ and retrieve the AWS principal needed to configure the AWS PrivateLink service.
       );
       ```
 
-    - Replace the `SERVICE NAME` value with the service name you noted [earlier](#b-optional-configure-network-security).
+    - Replace the `SERVICE NAME` value with the service name you noted earlier.
 
     - The service name region refers to where the endpoint service was created.
       You **do not need** to specify `AVAILABILITY ZONES` manually — these will

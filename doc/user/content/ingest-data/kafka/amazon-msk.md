@@ -48,7 +48,7 @@ connect:
 
 {{< tabs tabID="1" >}}
 
-{{< tab "Privatelink">}}
+{{< tab "PrivateLink">}}
 
 {{< note >}}
 Materialize provides a Terraform module that automates the creation and
