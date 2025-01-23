@@ -366,7 +366,7 @@ def switch_jobs_to_aws(pipeline: Any, priority: int) -> None:
         if branch == "main" or priority < 0:
             return
 
-        # Consider Hetzner to be overloaded when at least 400 jobs exist with priority >= 0
+        # Consider Hetzner to be overloaded when at least 600 jobs exist with priority >= 0
         try:
             builds = generic_api.get_multiple(
                 "builds",
@@ -397,7 +397,7 @@ def switch_jobs_to_aws(pipeline: Any, priority: int) -> None:
                             continue
                         num_jobs += 1
             print(f"Number of high-priority jobs on Hetzner: {num_jobs}")
-            if num_jobs < 400:
+            if num_jobs < 600:
                 return
         except Exception:
             print("switch_jobs_to_aws failed, ignoring:")
@@ -418,13 +418,13 @@ def switch_jobs_to_aws(pipeline: Any, priority: int) -> None:
                 "hetzner-x86-64-2cpu-4gb",
                 "hetzner-x86-64-dedi-2cpu-8gb",
             ):
-                config["agents"]["queue"] = "linux-x86-64-small"
+                config["agents"]["queue"] = "linux-x86_64-small"
             if agent in ("hetzner-x86-64-8cpu-16gb", "hetzner-x86-64-dedi-4cpu-16gb"):
-                config["agents"]["queue"] = "linux-x86-64"
+                config["agents"]["queue"] = "linux-x86_64"
             if agent in ("hetzner-x86-64-16cpu-32gb", "hetzner-x86-64-dedi-8cpu-32gb"):
-                config["agents"]["queue"] = "linux-x86-64-medium"
+                config["agents"]["queue"] = "linux-x86_64-medium"
             if agent == "hetzner-x86-64-dedi-16cpu-64gb":
-                config["agents"]["queue"] = "linux-x86-64-large"
+                config["agents"]["queue"] = "linux-x86_64-large"
             if agent in (
                 "hetzner-x86-64-dedi-32cpu-128gb",
                 "hetzner-x86-64-dedi-48cpu-192gb",
