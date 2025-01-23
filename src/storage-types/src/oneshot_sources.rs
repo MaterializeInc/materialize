@@ -131,6 +131,7 @@ impl RustType<proto_oneshot_ingestion_request::Source> for ContentSource {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub enum ContentFormat {
     Csv(CopyCsvFormatParams<'static>),
+    Parquet,
 }
 
 impl RustType<proto_oneshot_ingestion_request::Format> for ContentFormat {
@@ -141,6 +142,9 @@ impl RustType<proto_oneshot_ingestion_request::Format> for ContentFormat {
                     params: Some(params.into_proto()),
                 })
             }
+            ContentFormat::Parquet => proto_oneshot_ingestion_request::Format::Parquet(
+                ProtoParquetContentFormat::default(),
+            ),
         }
     }
 
@@ -151,6 +155,9 @@ impl RustType<proto_oneshot_ingestion_request::Format> for ContentFormat {
             proto_oneshot_ingestion_request::Format::Csv(ProtoCsvContentFormat { params }) => {
                 let params = params.into_rust_if_some("ProtoCsvContentFormat::params")?;
                 Ok(ContentFormat::Csv(params))
+            }
+            proto_oneshot_ingestion_request::Format::Parquet(ProtoParquetContentFormat {}) => {
+                Ok(ContentFormat::Parquet)
             }
         }
     }
