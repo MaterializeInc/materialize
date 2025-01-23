@@ -3,6 +3,7 @@ title: "Self-managed Materialize"
 description: ""
 aliases:
   - /self-hosted/
+  - /cloud_releases/
 disable_list: true
 ---
 
