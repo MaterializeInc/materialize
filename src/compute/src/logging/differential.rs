@@ -20,15 +20,15 @@ use differential_dataflow::logging::{
 };
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, Timestamp};
-use mz_timely_util::containers::{columnar_exchange, Col2ValBatcher, ColumnBuilder};
+use mz_timely_util::containers::{
+    columnar_exchange, Col2ValBatcher, ColumnBuilder, ProvidedBuilder,
+};
 use mz_timely_util::replay::MzReplay;
 use timely::communication::Allocate;
-use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::channels::pushers::buffer::Session;
 use timely::dataflow::channels::pushers::{Counter, Tee};
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::operators::Filter;
 use timely::dataflow::Stream;
 
 use crate::extensions::arrange::MzArrangeCore;
@@ -57,20 +57,21 @@ pub(super) fn construct<A: Allocate>(
     let dataflow_index = worker.next_dataflow_index();
 
     worker.dataflow_named("Dataflow: differential logging", move |scope| {
-        let (mut logs, token) = Some(event_queue.link)
-            .mz_replay::<_, CapacityContainerBuilder<_>, _>(
+        let enable_logging = config.enable_logging;
+        let (logs, token) = event_queue.links.clone()
+            .mz_replay::<_, ProvidedBuilder<_>, _>(
                 scope,
                 "differential logs",
                 config.interval,
                 event_queue.activator,
-                |mut session, data| session.give_iterator(data.iter()),
+                move |mut session, mut data|{
+                    // If logging is disabled, we still need to install the indexes, but we can leave them
+                    // empty. We do so by immediately filtering all logs events.
+                    if enable_logging {
+                        session.give_container(data.to_mut())
+                    }
+                }
             );
-
-        // If logging is disabled, we still need to install the indexes, but we can leave them
-        // empty. We do so by immediately filtering all logs events.
-        if !config.enable_logging {
-            logs = logs.filter(|_| false);
-        }
 
         // Build a demux operator that splits the replayed event stream up into the separate
         // logging streams.

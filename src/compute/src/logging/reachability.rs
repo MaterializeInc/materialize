@@ -39,7 +39,7 @@ use crate::typedefs::RowRowSpine;
 pub(super) fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
     config: &LoggingConfig,
-    event_queue: EventQueue<Column<(Duration, ReachabilityEvent)>>,
+    event_queue: EventQueue<Column<(Duration, ReachabilityEvent)>, 3>,
 ) -> BTreeMap<LogVariant, LogCollection> {
     let interval_ms = std::cmp::max(1, config.interval.as_millis());
     let worker_index = worker.index();
@@ -48,10 +48,10 @@ pub(super) fn construct<A: Allocate>(
     // A dataflow for multiple log-derived arrangements.
     let traces = worker.dataflow_named("Dataflow: timely reachability logging", move |scope| {
         let enable_logging = config.enable_logging;
-        type UpdatesKey = (bool, Vec<usize>, usize, usize, Option<Timestamp>);
+        type UpdatesKey = (bool, usize, usize, usize, Timestamp);
 
         type CB = ColumnBuilder<((UpdatesKey, ()), Timestamp, Diff)>;
-        let (updates, token) = Some(event_queue.link).mz_replay::<_, CB, _>(
+        let (updates, token) = event_queue.links.mz_replay::<_, CB, _>(
             scope,
             "reachability logs",
             config.interval,
@@ -62,11 +62,11 @@ pub(super) fn construct<A: Allocate>(
                 if !enable_logging {
                     return;
                 }
-                for (time, (addr, massaged)) in data.iter() {
+                for (time, (operator_id, massaged)) in data.iter() {
                     let time_ms = ((time.as_millis() / interval_ms) + 1) * interval_ms;
                     let time_ms: Timestamp = time_ms.try_into().expect("must fit");
                     for (source, port, update_type, ts, diff) in massaged.into_iter() {
-                        let datum = (update_type, addr, source, port, ts);
+                        let datum = (update_type, operator_id, source, port, ts);
                         session.give(((datum, ()), time_ms, diff));
                     }
                 }
@@ -76,22 +76,17 @@ pub(super) fn construct<A: Allocate>(
         // Restrict results by those logs that are meant to be active.
         let logs_active = [LogVariant::Timely(TimelyLog::Reachability)];
 
-        let mut addr_row = Row::default();
         let updates = consolidate_and_pack::<_, Col2ValBatcher<UpdatesKey, _, _, _>, ColumnBuilder<_>, _, _>(
             &updates,
             TimelyLog::Reachability,
             move |((datum, ()), time, diff), packer, session| {
-                let (update_type, addr, source, port, ts) = datum;
+                let (update_type, operator_id, source, port, ts) = datum;
                 let update_type = if *update_type { "source" } else { "target" };
-                addr_row.packer().push_list(
-                    IntoIterator::into_iter(addr)
-                        .chain(std::iter::once(source))
-                        .map(|id| Datum::UInt64(u64::cast_from(*id))),
-                );
                 let data = packer.pack_slice(&[
-                    addr_row.iter().next().unwrap(),
-                    Datum::UInt64(u64::cast_from(*port)),
+                    Datum::UInt64(u64::cast_from(*operator_id)),
                     Datum::UInt64(u64::cast_from(worker_index)),
+                    Datum::UInt64(u64::cast_from(*source)),
+                    Datum::UInt64(u64::cast_from(*port)),
                     Datum::String(update_type),
                     Datum::from(*ts),
                 ]);
