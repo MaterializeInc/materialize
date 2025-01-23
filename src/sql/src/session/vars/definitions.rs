@@ -1144,6 +1144,15 @@ pub static KAFKA_PROGRESS_RECORD_FETCH_TIMEOUT: VarDefinition = VarDefinition::n
     false,
 );
 
+/// The interval we will fetch metadata from, unless overridden by the source.
+pub static KAFKA_DEFAULT_METADATA_FETCH_INTERVAL: VarDefinition = VarDefinition::new(
+    "kafka_default_metadata_fetch_interval",
+    value!(Duration; mz_kafka_util::client::DEFAULT_METADATA_FETCH_INTERVAL),
+    "The interval we will fetch metadata from, unless overridden by the source. \
+        Defaults to 60s.",
+    false,
+);
+
 /// The maximum number of in-flight bytes emitted by persist_sources feeding _storage
 /// dataflows_.
 /// Currently defaults to 256MiB = 268435456 bytes

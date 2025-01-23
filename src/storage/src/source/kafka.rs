@@ -32,7 +32,6 @@ use mz_ore::iter::IteratorExt;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{adt::jsonb::Jsonb, Datum, Diff, GlobalId, Row};
 use mz_ssh_util::tunnel::SshTunnelStatus;
-use mz_storage_types::dyncfgs::KAFKA_METADATA_FETCH_INTERVAL;
 use mz_storage_types::errors::{
     ContextCreationError, DataflowError, SourceError, SourceErrorDetails,
 };
@@ -1609,7 +1608,13 @@ fn render_metadata_fetcher<G: Scope<Timestamp = KafkaTimestamp>>(
 
         // We want a fairly low ceiling on our polling frequency, since we rely
         // on this heartbeat to determine the health of our Kafka connection.
-        let poll_interval = KAFKA_METADATA_FETCH_INTERVAL.get(config.config.config_set());
+        let poll_interval = topic_metadata_refresh_interval.min(
+            config
+                .config
+                .parameters
+                .kafka_timeout_config
+                .default_metadata_fetch_interval,
+        );
 
         let (tx, mut rx) = mpsc::unbounded_channel();
         spawn_metadata_thread(config, consumer, topic, poll_interval, tx);

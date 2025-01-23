@@ -98,13 +98,6 @@ pub const KAFKA_POLL_MAX_WAIT: Config<Duration> = Config::new(
     available.",
 );
 
-/// Interval to fetch topic partition metadata.
-pub static KAFKA_METADATA_FETCH_INTERVAL: Config<Duration> = Config::new(
-    "kafka_default_metadata_fetch_interval",
-    Duration::from_secs(60),
-    "Interval to fetch topic partition metadata.",
-);
-
 pub const KAFKA_DEFAULT_AWS_PRIVATELINK_ENDPOINT_IDENTIFICATION_ALGORITHM: Config<&'static str> =
     Config::new(
         "kafka_default_aws_privatelink_endpoint_identification_algorithm",
@@ -253,7 +246,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL)
         .add(&KAFKA_CLIENT_ID_ENRICHMENT_RULES)
         .add(&KAFKA_POLL_MAX_WAIT)
-        .add(&KAFKA_METADATA_FETCH_INTERVAL)
         .add(&KAFKA_DEFAULT_AWS_PRIVATELINK_ENDPOINT_IDENTIFICATION_ALGORITHM)
         .add(&KAFKA_BUFFERED_EVENT_RESIZE_THRESHOLD_ELEMENTS)
         .add(&MYSQL_REPLICATION_HEARTBEAT_INTERVAL)
