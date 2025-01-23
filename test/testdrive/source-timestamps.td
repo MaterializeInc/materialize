@@ -59,6 +59,9 @@ ALTER SYSTEM SET kafka_default_metadata_fetch_interval = '1s'
 ALTER SYSTEM SET pg_offset_known_interval = '1s'
 ALTER SYSTEM SET mysql_offset_known_interval = '1s'
 
+> ALTER CLUSTER test SET (REPLICATION FACTOR 0)
+> ALTER CLUSTER test SET (REPLICATION FACTOR 1)
+
 > SELECT name, write_frontier::text::uint8 % 1000 = 1
   FROM mz_internal.mz_frontiers
   JOIN mz_sources ON object_id = id
@@ -75,23 +78,10 @@ ALTER SYSTEM SET kafka_default_metadata_fetch_interval = 1234
 ALTER SYSTEM SET pg_offset_known_interval = 1234
 ALTER SYSTEM SET mysql_offset_known_interval = 1234
 
+> ALTER CLUSTER test SET (REPLICATION FACTOR 0)
+> ALTER CLUSTER test SET (REPLICATION FACTOR 1)
+
 > SELECT name, write_frontier::text::uint8 % 1234 = 1
-  FROM mz_internal.mz_frontiers
-  JOIN mz_sources ON object_id = id
-  WHERE id LIKE 'u%'
-kafka_src          true
-kafka_src_progress true
-pg_src             true
-pg_src_progress    true
-mysql_src          true
-mysql_src_progress true
-
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET kafka_default_metadata_fetch_interval = 500
-ALTER SYSTEM SET pg_offset_known_interval = 500
-ALTER SYSTEM SET mysql_offset_known_interval = 500
-
-> SELECT name, write_frontier::text::uint8 % 500 = 1
   FROM mz_internal.mz_frontiers
   JOIN mz_sources ON object_id = id
   WHERE id LIKE 'u%'

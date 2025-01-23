@@ -12,7 +12,6 @@
 use std::cell::{Cell, RefCell};
 
 use futures::StreamExt;
-use mz_storage_types::dyncfgs::MYSQL_OFFSET_KNOWN_INTERVAL;
 use timely::dataflow::operators::Map;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
@@ -90,10 +89,9 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
             let prev_offset_committed = Cell::new(None);
             let stats_output = RefCell::new(stats_output);
 
-            let mut probe_ticker = probe::Ticker::new(
-                || MYSQL_OFFSET_KNOWN_INTERVAL.get(config.config.config_set()),
-                config.now_fn,
-            );
+            let probe_interval = mz_storage_types::dyncfgs::MYSQL_OFFSET_KNOWN_INTERVAL
+                .get(config.config.config_set());
+            let mut probe_ticker = probe::Ticker::new(probe_interval, config.now_fn);
             let probe_loop = async {
                 loop {
                     let probe_ts = probe_ticker.tick().await;
