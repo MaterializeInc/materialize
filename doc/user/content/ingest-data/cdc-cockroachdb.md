@@ -102,7 +102,7 @@ authentication and networking configurations, so refer to the
 [`CREATE CONNECTION`](/sql/create-connection/#kafka) documentation for further
 guidance.
 
-1. In the [SQL Shell](https://console.materialize.com/), or your preferred SQL
+1. In the [SQL Shell](/console/), or your preferred SQL
    client connected to Materialize, use the [`CREATE SECRET`](/sql/create-secret/)
    command to securely store the credentials to connect to your Kafka broker
    and, optionally, schema registry:

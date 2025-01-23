@@ -93,7 +93,7 @@ Accessing usage and billing information in Materialize
 requires **administrator** privileges.
 {{</ note >}}
 
-From the [Materialize console](https://console.materialize.com/) (`Admin` >
+From the [Materialize console](/console/) (`Admin` >
 `Usage & Billing`), administrators can access their invoice. The invoice
 provides Compute and Storage usage and cost information.
 

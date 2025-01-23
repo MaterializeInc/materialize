@@ -19,7 +19,7 @@ connect to your Materialize region using some common SQL clients.
 ## Connection parameters
 
 You can find the credentials for your Materialize region in the
-[Materialize console](https://console.materialize.com/), under **Connect
+[Materialize console](/console/), under **Connect
 externally** in the navigation bar.
 
 Field             | Value

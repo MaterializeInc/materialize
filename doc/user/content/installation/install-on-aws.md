@@ -8,14 +8,29 @@ menu:
     parent: "installation"
 ---
 
+The tutorial deploys Materialize to AWS Elastic Kubernetes Service (EKS) with a
+PostgreSQL RDS database as the metadata database and AWS S3 for blob storage.
+The tutorial uses Terraform both to set up the AWS Kubernetes environment and to
+deploy Materialize Operator and instances to that EKS cluster.
+
 Self-managed Materialize requires:
 
 {{% self-managed/materialize-components-list %}}
 
-The tutorial deploys Materialize to AWS Elastic Kubernetes Service (EKS) with a
-PostgreSQL RDS database as the metadata database and AWS S3 for blob storage.
-The tutorial uses Terraform both to set up the AWS Kubernetes environment and to
-deploy Materialize to that EKS cluster.
+When operating in AWS, we recommend:
+
+- Using the `r8g`, `r7g`, and `r6g` families when running without local disk.
+
+- Using the `r7gd` and `r6gd` families of instances (and `r8gd` once available)
+  when running with local disk (Recommended for production.  See [Operational guidelines](/installation/operational-guidelines/#locally-attached-nvme-storage-openebs) for more information.)
+
+{{< warning >}}
+
+The Terraform modules used in this tutorial are provided for
+demonstration/evaluation purposes only and not intended for production use.
+Materialize does not support nor recommends these modules for production use.
+
+{{< /warning >}}
 
 ## Prerequisites
 
@@ -45,22 +60,6 @@ for details.
 If you do not have Helm 3.2.0+, install. See the [Helm
 documentation](https://helm.sh/docs/intro/install/).
 
-### AWS Kubernetes environment
-
-{{% self-managed/materialize-components-list %}}
-
-When operating in AWS, we recommend:
-
-- Using the `r8g`, `r7g`, and `r6g` families when running without local disk.
-
-- Using the `r7gd` and `r6gd` families of instances (and `r8gd` once available)
-  when running with local disk (Recommended for production.  See [Operational guidelines](/installation/operational-guidelines/#locally-attached-nvme-storage-openebs) for more information.)
-
-This tutorial uses Terraform to set up the AWS Kubernetes environment and
-install Materialize. See [Set up AWS Kubernetes environment and install
-Materialize](#set-up-aws-kubernetes-environment-and-install-materialize) for
-details.
-
 ## Set up AWS Kubernetes environment and install Materialize
 
 {{< warning >}}
@@ -70,8 +69,8 @@ details.
 {{< /warning >}}
 
 Materialize provides a [sample Terraform
-module](https://github.com/MaterializeInc/terraform-aws-materialize/blob/main/README.md)
-for evaluation purposes only. The module deploys a sample infrastructure on AWS
+modules](https://github.com/MaterializeInc/terraform-aws-materialize/blob/main/README.md)
+for evaluation purposes only. The modules deploy a sample infrastructure on AWS
 (region `us-east-1`) with the following components:
 
 - A Kuberneted (EKS) cluster
@@ -81,9 +80,11 @@ for evaluation purposes only. The module deploys a sample infrastructure on AWS
 - Materialize Operator
 - Materialize instances (during subsequent runs after the Operator is running)
 
+{{< tip >}}
 For details on the sample infrastructure (such as the node group AMI type, node
 instance type, etc.), see the
-[README](https://github.com/MaterializeInc/terraform-aws-materialize?tab=readme-ov-file#inputs).
+[examples/simple/main.tf](https://github.com/MaterializeInc/terraform-aws-materialize/blob/main/examples/simple/main.tf).
+{{< /tip >}}
 
 1. Clone the [Materialize's sample Terraform
    repo](https://github.com/MaterializeInc/terraform-google-materialize) and
@@ -108,7 +109,7 @@ instance type, etc.), see the
    cd terraform-aws-materialize/examples/simple
    ```
 
-1. Create a `terraform.tfvars` file (you can copy fromthe
+1. Create a `terraform.tfvars` file (you can copy from the
    `terraform.tfvars.example` file) and specify:
 
    - A namespace (e.g., `my-demo`) that will be used to form part of the
@@ -359,8 +360,6 @@ instance type, etc.), see the
 
    1. Open a browser and navigate to
       [http://localhost:8080](http://localhost:8080).
-
-
 
 ## Troubleshooting
 

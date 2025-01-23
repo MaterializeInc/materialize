@@ -124,9 +124,9 @@ to connect:
 
 {{< tab "Allow Materialize IPs">}}
 
-1. In the [SQL Shell](https://console.materialize.com/), or your preferred SQL
-   client connected to Materialize, find the static egress IP addresses for the
-   Materialize region you are running in:
+1. In the [Materialize console's SQL Shell](/console/),
+   or your preferred SQL client connected to Materialize, find the static egress
+   IP addresses for the Materialize region you are running in:
 
     ```mzsql
     SELECT * FROM mz_egress_ips;
@@ -267,7 +267,7 @@ configuration of resources for an SSH tunnel. For more details, see the
 1. Configure the SSH bastion host to allow traffic only from Materialize.
 
     1. In the [Materialize console's SQL
-       Shell](https://console.materialize.com/), or your preferred SQL client
+       Shell](/console/), or your preferred SQL client
        connected to Materialize, get the static egress IP addresses for the
        Materialize region you are running in:
 
@@ -317,7 +317,7 @@ start by selecting the relevant option.
 
 {{< tab "Allow Materialize IPs">}}
 
-1. In the [SQL Shell](https://console.materialize.com/), or
+1. In [Materialize console's SQL Shell](/console/), or
    your preferred SQL client connected to Materialize, use the [`CREATE
    SECRET`](/sql/create-secret/) command to securely store the password for the
    `materialize` PostgreSQL user you created
@@ -374,15 +374,10 @@ start by selecting the relevant option.
 
 {{< tab "Use AWS PrivateLink">}}
 
-1. In the [SQL Shell](https://console.materialize.com/), or your preferred SQL
-   client connected to Materialize, use the [`CREATE CONNECTION`](/sql/create-connection/#aws-privatelink)
-   command to create an **in-region** or **cross-region** AWS PrivateLink
-   connection.
-
-    ↕️ **In-region connections**
-
-    To connect to an AWS PrivateLink endpoint service in the **same region** as your
-    Materialize environment:
+1. In the [Materialize console's SQL Shell](/console/),
+   or your preferred SQL client connected to Materialize, use the [`CREATE
+   CONNECTION`](/sql/create-connection/#aws-privatelink) command to create an
+   AWS PrivateLink connection:
 
       ```mzsql
       CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
@@ -507,7 +502,7 @@ start by selecting the relevant option.
 
 {{< tab "Use an SSH tunnel">}}
 
-1. In the [Materialize console's SQL Shell](https://console.materialize.com/),
+1. In the [Materialize console's SQL Shell](/console/),
    or your preferred SQL client connected to Materialize, use the [`CREATE
    CONNECTION`](/sql/create-connection/#ssh-tunnel) command to create an SSH
    tunnel connection:

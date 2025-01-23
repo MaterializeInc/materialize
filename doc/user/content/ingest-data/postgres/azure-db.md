@@ -59,7 +59,7 @@ Select the option that works best for you.
 
 {{< tab "Allow Materialize IPs">}}
 
-1. In the [Materialize console's SQL Shell](https://console.materialize.com/),
+1. In the [Materialize console's SQL Shell](/console/),
    or your preferred SQL client connected to Materialize, find the static egress
    IP addresses for the Materialize region you are running in:
 
@@ -92,7 +92,7 @@ to serve as your SSH bastion host.
 1. Configure the SSH bastion host to allow traffic only from Materialize.
 
     1. In the [Materialize console's SQL
-       Shell](https://console.materialize.com/), or your preferred SQL client
+       Shell](/console/), or your preferred SQL client
        connected to Materialize, get the static egress IP addresses for the
        Materialize region you are running in:
 
@@ -134,7 +134,7 @@ start by selecting the relevant option.
 
 {{< tab "Allow Materialize IPs">}}
 
-1. In the [Materialize console's SQL Shell](https://console.materialize.com/),
+1. In the [Materialize console's SQL Shell](/console/),
    or your preferred SQL client connected to Materialize, use the [`CREATE
    SECRET`](/sql/create-secret/) command to securely store the password for the
    `materialize` PostgreSQL user you created
@@ -189,7 +189,7 @@ created [earlier](#2-create-a-publication-and-a-replication-user):
 
 {{< tab "Use an SSH tunnel">}}
 
-1. In the [Materialize console's SQL Shell](https://console.materialize.com/),
+1. In the [Materialize console's SQL Shell](/console/),
    or your preferred SQL client connected to Materialize, use the [`CREATE
    CONNECTION`](/sql/create-connection/#ssh-tunnel) command to create an SSH
    tunnel connection:
