@@ -19,16 +19,18 @@ To keep results up-to-date as new data arrives, Materialize incrementally
 updates results as it ingests data rather than recalculating results from
 scratch.
 
-{{< callout primary_url="https://materialize.com/register/?utm_campaign=General&utm_source=documentation" primary_text="Get Started">}}
+{{< callout >}}
 
-## Try it out! 🚀
+### Also available!
 
-1. Sign up for a [free trial
-   account](https://materialize.com/register/?utm_campaign=General&utm_source=documentation)
-   or [download the Materialize Emulator Docker
-   image](/get-started/install-materialize-emulator/).
-2. Follow the quickstart guide to learn the basics.
-3. Connect your own data sources and start building.
+- Materialize is also available as a managed cloud service. You can sign up for
+  a [free
+  trial](https://materialize.com/register/?utm_campaign=General&utm_source=documentation).
+  For more information, see the [Materialize
+  Cloud](https://materialize.com/docs) documentation.
+
+- You can also run Materialize locally using the [Materialize Emulator Docker
+  image](/get-started/install-materialize-emulator/).
 
 {{</ callout >}}
 
