@@ -401,7 +401,10 @@ impl Listeners {
                 strconv::parse_bool(x).map_err(|x| x.to_string())
             })?;
             let catalog = openable_adapter_storage.get_enable_0dt_deployment().await?;
-            let computed = ld.or(catalog).or(default).unwrap_or(false);
+            let computed = ld
+                .or(catalog)
+                .or(default)
+                .unwrap_or(ENABLE_0DT_DEPLOYMENT.default().clone());
             info!(
                 %computed,
                 ?ld,
@@ -481,7 +484,10 @@ impl Listeners {
             let catalog = openable_adapter_storage
                 .get_enable_0dt_deployment_panic_after_timeout()
                 .await?;
-            let computed = ld.or(catalog).or(default).unwrap_or(false);
+            let computed = ld
+                .or(catalog)
+                .or(default)
+                .unwrap_or(ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT.default().clone());
             info!(
                 %computed,
                 ?ld,
