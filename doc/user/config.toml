@@ -158,20 +158,24 @@ parent = 'commands'
 url = '/sql/create-sink'
 
 #
-# Releases
+# Tools and integrations
 #
 
 [[menu.main]]
-identifier = "releases-previews"
-name = "Releases"
-weight = 65
+identifier = "integrations"
+name = "Tools and integrations"
+weight = 25
 
 [[menu.main]]
-identifier = "changelogs"
-name = "Changelog ↗️"
-parent = "releases-previews"
-weight = 20
-url = "https://materialize.com/changelog/"
+identifier = "cli-reference"
+name = "Command reference"
+parent = "cli"
+
+[[menu.main]]
+identifier = "client-libraries"
+name = "SQL drivers"
+parent = "integrations"
+weight = 15
 
 #
 # About
