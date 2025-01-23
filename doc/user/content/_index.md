@@ -16,6 +16,12 @@ Kubernetes environment. For self-managed Materialize, Materialize provides:
 - Materialize packaged as a containerized application that can be deployed in a
   Kubernetes cluster.
 
+{{< callout >}}
+
+{{< self-managed/also-available >}}
+
+{{</ callout >}}
+
 ## Requirements
 
 The self-managed Materialize requires the following:
