@@ -172,7 +172,7 @@ integration guides:
 
 ### Health Dashboard
 
-[Materialize Console](https://console.materialize.com/) introduces an
+[Materialize Console](/console/) introduces an
 **Environment Overview** page under **Monitoring**. The **Environment Overview**
 page displays a health dashboard that provides the status for each cluster in
 your environment.
