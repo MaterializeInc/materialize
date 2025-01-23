@@ -1194,7 +1194,7 @@ fn plan_copy_from(
             )
         }
         CopyFormat::Binary => bail_unsupported!("FORMAT BINARY"),
-        CopyFormat::Parquet => bail_unsupported!("FORMAT PARQUET"),
+        CopyFormat::Parquet => CopyFormatParams::Parquet,
     };
 
     let filter = match (options.files, options.pattern) {

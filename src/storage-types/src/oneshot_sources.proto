@@ -24,6 +24,7 @@ message ProtoOneshotIngestionRequest {
 
   oneof format {
     ProtoCsvContentFormat csv = 2;
+    ProtoParquetContentFormat parquet = 3;
   }
 
   oneof filter {
@@ -33,9 +34,7 @@ message ProtoOneshotIngestionRequest {
   }
 }
 
-message ProtoHttpContentSource {
-  string url = 1;
-}
+message ProtoHttpContentSource { string url = 1; }
 
 message ProtoAwsS3Source {
   mz_storage_types.connections.aws.ProtoAwsConnection connection = 1;
@@ -46,6 +45,8 @@ message ProtoAwsS3Source {
 message ProtoCsvContentFormat {
   mz_pgcopy.copy.ProtoCopyCsvFormatParams params = 1;
 }
+
+message ProtoParquetContentFormat {}
 
 message ProtoFilterFiles {
   repeated string files = 1;
