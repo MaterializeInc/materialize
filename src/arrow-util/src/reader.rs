@@ -790,6 +790,7 @@ mod tests {
     use super::*;
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
     fn smoketest_reader() {
         let desc = RelationDesc::builder()
             .with_column("bool", ScalarType::Bool.nullable(true))
@@ -853,6 +854,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
     fn smoketest_decimal128() {
         let desc = RelationDesc::builder()
             .with_column("a", ScalarType::Numeric { max_scale: None }.nullable(true))
@@ -898,6 +900,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
     fn smoketest_decimal256() {
         let desc = RelationDesc::builder()
             .with_column("a", ScalarType::Numeric { max_scale: None }.nullable(true))
