@@ -8,14 +8,23 @@ menu:
     parent: "installation"
 ---
 
+The tutorial deploys Materialize to GCP Google Kubernetes Engine (GKE) cluster
+with a Cloud SQL PostgreSQL database as the metadata database and Cloud Storage
+bucket for blob storage. The tutorial uses Terraform both to set up the GCP
+Kubernetes environment and to deploy the Materialize Operator and instance(s) to
+that GKE cluster.
+
 Self-managed Materialize requires:
 
 {{% self-managed/materialize-components-list %}}
 
-The tutorial deploys Materialize to GCP Google Kubernetes Engine (GKE) cluster
-with a Cloud SQL PostgreSQL database as the metadata database and Cloud Storage
-bucket for blob storage. The tutorial uses Terraform both to set up the GCP
-Kubernetes environment and to deploy Materialize to that GKE cluster.
+{{< warning >}}
+
+The Terraform modules used in this tutorial are provided for
+demonstration/evaluation purposes only and not intended for production use.
+Materialize does not support nor recommends these modules for production use.
+
+{{< /warning >}}
 
 ## Prerequisites
 
@@ -68,13 +77,6 @@ Otherwise, you will need to manually install the `gke-gcloud-auth-plugin` for
 If you don't have Helm version 3.2.0+ installed, refer to the [Helm
 documentation](https://helm.sh/docs/intro/install/).
 
-### GCP Kubernetes environment
-
-{{% self-managed/materialize-components-list %}}
-
-This tutorial uses Terraform to set up the GCP Kubernetes environment and
-install Materialize. For details, see [Set up GCP Kubernetes environment and install Materialize](#set-up-gcp-kubernetes-environment-and-install-materialize).
-
 ## Set up GCP Kubernetes environment and install Materialize
 
 {{< warning >}}
@@ -97,7 +99,7 @@ evaluation purposes only. The module deploys a sample infrastructure on GCP
 - Materialize instances (during subsequent runs after the Operator is running)
 
 For details on the sample infrastructure (such as the EKS cluster size, region,
-etc.), see the [README](https://github.com/MaterializeInc/terraform-google-materialize/blob/main/README.md#inputs).
+etc.), see the [examples/simple/main.tf](https://github.com/MaterializeInc/terraform-google-materialize/blob/main/examples/simple/main.tf).
 
 1. Enable the following services for your GCP project:
 
@@ -200,7 +202,8 @@ etc.), see the [README](https://github.com/MaterializeInc/terraform-google-mater
    cd terraform-google-materialize/examples/simple
    ```
 
-1. Create a `terraform.tfvars` file and and specify:
+1. Create a `terraform.tfvars` file (you can copy from the
+   `terraform.tfvars.example` file) and specify:
 
    -  Your GCP project ID and
 
