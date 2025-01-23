@@ -183,7 +183,7 @@ on, taking longer to return. As an example, if you issue a lot of
 resource-intensive queries at once, that might spike the CPU.
 
 The measure of cluster busyness is CPU. You can monitor CPU usage in the
-[Materialize console](https://console.materialize.com/) by clicking
+[Materialize console](/console/) by clicking
 the **"Clusters"** tab in the navigation bar, and clicking into the cluster.
 You can also grab CPU usage from the system catalog using SQL:
 
@@ -595,7 +595,7 @@ starting point, you can build your own attribution queries. When building your o
 Materialize stores a (sampled) log of the SQL statements that are issued against
 your Materialize region in the last **three days**, along with various metadata
 about these statements. You can access this log via the **"Query history"** tab
-in the [Materialize console](https://console.materialize.com/). You can filter
+in the [Materialize console](/console/). You can filter
 and sort statements by type, duration, and other dimensions.
 
 This data is also available via the

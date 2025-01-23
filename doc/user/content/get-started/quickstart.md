@@ -41,22 +41,13 @@ flippers. Specifically, you will:
 
 ![Image of Quickstart in the Materialize Console](/images/quickstart-console.png "Quickstart in the Materialize Console")
 
-## Prerequisite
-
-A Materialize account. If you do not have an account, you can [sign up for a
-free
-trial](https://materialize.com/register/?utm_campaign=General&utm_source=documentation).
-
-Alternatively, you can [download the Materialize
-Emulator](/get-started/install-materialize-emulator/) to test locally. However,
-the Materialize Emulator does not provide the full experience of using
-Materialize.
 
 ## Step 0. Open the SQL Shell
 
-- If you have a Materialize account, navigate to the [Materialize
-  Console](https://console.materialize.com/) and sign in. By default, you should
-  be in the SQL Shell. If you're already signed in, you can access the SQL Shell in the left-hand menu.
+- If you have self-managed Materialize, open the Materialize Console in your
+  browser at [http://localhost:8080](http://localhost:8080). By default, you
+  should be in the SQL Shell. If you're already signed in, you can access the
+  SQL Shell in the left-hand menu.
 
 - If you are using the Materialize Emulator, open the Materialize Console in
   your browser at [http://localhost:6874](http://localhost:6874).
@@ -595,7 +586,7 @@ creating indexes, see [Index Best Practices](/concepts/indexes/#best-practices).
 
 To get started ingesting your own data from an external system like Kafka, MySQL
 or PostgreSQL, check the documentation for [sources](/sql/create-source/), and
-navigate to **Data** > **Sources** > **New source** in the [Materialize Console](https://console.materialize.com/)
+navigate to **Data** > **Sources** > **New source** in the [Materialize Console](/console/)
 to create your first source.
 
 For help getting started with your data or other questions about Materialize,
