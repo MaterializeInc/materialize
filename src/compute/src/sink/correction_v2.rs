@@ -90,7 +90,7 @@
 //! ## Merging Chains
 //!
 //! Merging multiple chains into a single chain is done using a k-way merge. As the input chains
-//! are sorted by (time, data) and consolidated, the some properties hold for the output chain. The
+//! are sorted by (time, data) and consolidated, the same properties hold for the output chain. The
 //! complexity of a merge of K chains containing N updates is O(N log K).
 //!
 //! There is a twist though: Merging also has to respect the `since` frontier, which determines how
@@ -176,13 +176,14 @@ impl<D: Data> CorrectionV2<D> {
     }
 
     /// Insert a batch of updates.
-    pub fn insert(&mut self, mut updates: Vec<(D, Timestamp, Diff)>) {
+    pub fn insert(&mut self, updates: &mut Vec<(D, Timestamp, Diff)>) {
         let Some(since_ts) = self.since.as_option() else {
             // If the since is the empty frontier, discard all updates.
+            updates.clear();
             return;
         };
 
-        for (_, time, _) in &mut updates {
+        for (_, time, _) in &mut *updates {
             *time = std::cmp::max(*time, *since_ts);
         }
 
@@ -190,13 +191,14 @@ impl<D: Data> CorrectionV2<D> {
     }
 
     /// Insert a batch of updates, after negating their diffs.
-    pub fn insert_negated(&mut self, mut updates: Vec<(D, Timestamp, Diff)>) {
+    pub fn insert_negated(&mut self, updates: &mut Vec<(D, Timestamp, Diff)>) {
         let Some(since_ts) = self.since.as_option() else {
             // If the since is the empty frontier, discard all updates.
+            updates.clear();
             return;
         };
 
-        for (_, time, diff) in &mut updates {
+        for (_, time, diff) in &mut *updates {
             *time = std::cmp::max(*time, *since_ts);
             *diff = -*diff;
         }
@@ -207,10 +209,10 @@ impl<D: Data> CorrectionV2<D> {
     /// Insert a batch of updates.
     ///
     /// All times are expected to be >= the `since`.
-    fn insert_inner(&mut self, mut updates: Vec<(D, Timestamp, Diff)>) {
+    fn insert_inner(&mut self, updates: &mut Vec<(D, Timestamp, Diff)>) {
         debug_assert!(updates.iter().all(|(_, t, _)| self.since.less_equal(t)));
 
-        consolidate(&mut updates);
+        consolidate(updates);
 
         let first_update = match updates.first() {
             Some((d, t, r)) => (d, *t, *r),
@@ -227,7 +229,7 @@ impl<D: Data> CorrectionV2<D> {
             }
         };
 
-        chain.extend(updates);
+        chain.extend(updates.drain(..));
 
         // Restore the chain invariant.
         let merge_needed = |chains: &[Chain<_>]| match chains {
@@ -238,7 +240,7 @@ impl<D: Data> CorrectionV2<D> {
         while merge_needed(&self.chains) {
             let a = self.chains.pop().unwrap();
             let b = self.chains.pop().unwrap();
-            let merged = merge_chains(vec![a, b], &self.since);
+            let merged = merge_chains([a, b], &self.since);
             self.chains.push(merged);
         }
 
@@ -307,9 +309,12 @@ impl<D: Data> CorrectionV2<D> {
             if needs_merge {
                 let a = self.chains.remove(i);
                 let b = std::mem::take(&mut self.chains[i - 1]);
-                let merged = merge_chains(vec![a, b], &self.since);
+                let merged = merge_chains([a, b], &self.since);
                 self.chains[i - 1] = merged;
             } else {
+                // Only advance the index if we didn't merge. A merge can reduce the size of the
+                // chain at `i - 1`, causing an violation of the chain invariant with the next
+                // chain, so we might need to merge the two before proceeding to lower indexes.
                 i -= 1;
             }
         }
@@ -720,7 +725,9 @@ impl<D: Data> Cursor<D> {
     /// where possible.
     ///
     /// An unwrap is only successful if the cursor's `limit` and `overwrite_ts` are both `None` and
-    /// the cursor has unique references to its chunks.
+    /// the cursor has unique references to its chunks. If the unwrap fails, this method returns an
+    /// `Err` containing the cursor in an unchanged state, allowing the caller to convert it into a
+    /// chain by copying chunks rather than reusing them.
     fn try_unwrap(self) -> Result<Chain<D>, (&'static str, Self)> {
         if self.limit.is_some() {
             return Err(("cursor with limit", self));
@@ -944,7 +951,10 @@ fn consolidate<D: Data>(updates: &mut Vec<(D, Timestamp, Diff)>) {
 }
 
 /// Merge the given chains, advancing times by the given `since` in the process.
-fn merge_chains<D: Data>(chains: Vec<Chain<D>>, since: &Antichain<Timestamp>) -> Chain<D> {
+fn merge_chains<D: Data>(
+    chains: impl IntoIterator<Item = Chain<D>>,
+    since: &Antichain<Timestamp>,
+) -> Chain<D> {
     let Some(&since_ts) = since.as_option() else {
         return Chain::default();
     };

@@ -722,8 +722,8 @@ mod write {
                 let maybe_batch = tokio::select! {
                     Some(event) = desired_inputs.ok.next() => {
                         match event {
-                            Event::Data(_cap, data) => {
-                                state.corrections.ok.insert(data);
+                            Event::Data(_cap, mut data) => {
+                                state.corrections.ok.insert(&mut data);
                                 None
                             }
                             Event::Progress(frontier) => {
@@ -734,8 +734,8 @@ mod write {
                     }
                     Some(event) = desired_inputs.err.next() => {
                         match event {
-                            Event::Data(_cap, data) => {
-                                state.corrections.err.insert(data);
+                            Event::Data(_cap, mut data) => {
+                                state.corrections.err.insert(&mut data);
                                 None
                             }
                             Event::Progress(frontier) => {
@@ -746,8 +746,8 @@ mod write {
                     }
                     Some(event) = persist_inputs.ok.next() => {
                         match event {
-                            Event::Data(_cap, data) => {
-                                state.corrections.ok.insert_negated(data);
+                            Event::Data(_cap, mut data) => {
+                                state.corrections.ok.insert_negated(&mut data);
                                 None
                             }
                             Event::Progress(frontier) => {
@@ -758,8 +758,8 @@ mod write {
                     }
                     Some(event) = persist_inputs.err.next() => {
                         match event {
-                            Event::Data(_cap, data) => {
-                                state.corrections.err.insert_negated(data);
+                            Event::Data(_cap, mut data) => {
+                                state.corrections.err.insert_negated(&mut data);
                                 None
                             }
                             Event::Progress(frontier) => {

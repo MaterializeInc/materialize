@@ -756,7 +756,7 @@ where
                 }
                 Some(event) = desired_oks_input.next() => {
                     match event {
-                        Event::Data(_cap, data) => {
+                        Event::Data(_cap, mut data) => {
                             // Extract desired rows as positive contributions to `correction_oks`.
                             if sink_id.is_user() && !data.is_empty() {
                                 trace!(
@@ -774,7 +774,7 @@ where
                                 );
                             }
 
-                            correction_oks.insert(data);
+                            correction_oks.insert(&mut data);
 
                             continue;
                         }
@@ -785,7 +785,7 @@ where
                 }
                 Some(event) = desired_errs_input.next() => {
                     match event {
-                        Event::Data(_cap, data) => {
+                        Event::Data(_cap, mut data) => {
                             // Extract desired rows as positive contributions to `correction_errs`.
                             if sink_id.is_user() && !data.is_empty() {
                                 trace!(
@@ -803,7 +803,7 @@ where
                                 );
                             }
 
-                            correction_errs.insert(data);
+                            correction_errs.insert(&mut data);
 
                             continue;
                         }
@@ -814,9 +814,9 @@ where
                 }
                 Some(event) = persist_oks_input.next() => {
                     match event {
-                        Event::Data(_cap, data) => {
+                        Event::Data(_cap, mut data) => {
                             // Extract persist rows as negative contributions to `correction_oks`.
-                            correction_oks.insert_negated(data);
+                            correction_oks.insert_negated(&mut data);
 
                             continue;
                         }
@@ -827,9 +827,9 @@ where
                 }
                 Some(event) = persist_errs_input.next() => {
                     match event {
-                        Event::Data(_cap, data) => {
+                        Event::Data(_cap, mut data) => {
                             // Extract persist rows as negative contributions to `correction_errs`.
-                            correction_errs.insert_negated(data);
+                            correction_errs.insert_negated(&mut data);
 
                             continue;
                         }

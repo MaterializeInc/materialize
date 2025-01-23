@@ -52,7 +52,7 @@ impl<D: Data> Correction<D> {
     }
 
     /// Insert a batch of updates.
-    pub fn insert(&mut self, updates: Vec<(D, Timestamp, Diff)>) {
+    pub fn insert(&mut self, updates: &mut Vec<(D, Timestamp, Diff)>) {
         match self {
             Self::V1(c) => c.insert(updates),
             Self::V2(c) => c.insert(updates),
@@ -60,7 +60,7 @@ impl<D: Data> Correction<D> {
     }
 
     /// Insert a batch of updates, after negating their diffs.
-    pub fn insert_negated(&mut self, updates: Vec<(D, Timestamp, Diff)>) {
+    pub fn insert_negated(&mut self, updates: &mut Vec<(D, Timestamp, Diff)>) {
         match self {
             Self::V1(c) => c.insert_negated(updates),
             Self::V2(c) => c.insert_negated(updates),
@@ -161,26 +161,27 @@ impl<D> CorrectionV1<D> {
 
 impl<D: Data> CorrectionV1<D> {
     /// Insert a batch of updates.
-    pub fn insert(&mut self, mut updates: Vec<(D, Timestamp, Diff)>) {
+    pub fn insert(&mut self, updates: &mut Vec<(D, Timestamp, Diff)>) {
         let Some(since_ts) = self.since.as_option() else {
             // If the since frontier is empty, discard all updates.
             return;
         };
 
-        for (_, time, _) in &mut updates {
+        for (_, time, _) in &mut *updates {
             *time = std::cmp::max(*time, *since_ts);
         }
         self.insert_inner(updates);
     }
 
     /// Insert a batch of updates, after negating their diffs.
-    pub fn insert_negated(&mut self, mut updates: Vec<(D, Timestamp, Diff)>) {
+    pub fn insert_negated(&mut self, updates: &mut Vec<(D, Timestamp, Diff)>) {
         let Some(since_ts) = self.since.as_option() else {
             // If the since frontier is empty, discard all updates.
+            updates.clear();
             return;
         };
 
-        for (_, time, diff) in &mut updates {
+        for (_, time, diff) in &mut *updates {
             *time = std::cmp::max(*time, *since_ts);
             *diff = -*diff;
         }
@@ -190,12 +191,12 @@ impl<D: Data> CorrectionV1<D> {
     /// Insert a batch of updates.
     ///
     /// The given `updates` must all have been advanced by `self.since`.
-    fn insert_inner(&mut self, mut updates: Vec<(D, Timestamp, Diff)>) {
-        consolidate_updates(&mut updates);
+    fn insert_inner(&mut self, updates: &mut Vec<(D, Timestamp, Diff)>) {
+        consolidate_updates(updates);
         updates.sort_unstable_by_key(|(_, time, _)| *time);
 
         let mut new_size = self.total_size;
-        let mut updates = updates.into_iter().peekable();
+        let mut updates = updates.drain(..).peekable();
         while let Some(&(_, time, _)) = updates.peek() {
             debug_assert!(
                 self.since.less_equal(&time),
