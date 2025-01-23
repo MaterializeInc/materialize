@@ -1,4 +1,4 @@
-{{- $releasesPage := (index (where $.Site.Sections "Title" "Releases") 0) -}}
+{{- $releasesPage := site.GetPage "section" "cloud_releases" -}}
 {{- $publishedReleases := (where $releasesPage.Pages "Params.released" true) -}}
 {{- $latestPublishedRelease := (index $publishedReleases.ByDate.Reverse 0) -}}
 {{- $patch := default 0 $latestPublishedRelease.Params.patch -}}

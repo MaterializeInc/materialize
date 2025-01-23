@@ -1,12 +1,8 @@
 ---
-title: "Releases"
+title: "Cloud releases"
 description: "How Materialize is released"
 disable_list: true
-menu:
-  main:
-    parent: releases-previews
-    weight: 5
-    identifier: releases
+headless: true
 ---
 
 We are continually improving Materialize with new features and bug fixes. We
