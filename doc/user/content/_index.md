@@ -18,16 +18,7 @@ Kubernetes environment. For self-managed Materialize, Materialize provides:
 
 {{< callout >}}
 
-### Also available!
-
-- Materialize is also available as a managed cloud service. You can sign up for
-  a [free
-  trial](https://materialize.com/register/?utm_campaign=General&utm_source=documentation).
-  For more information, see the [Materialize
-  Cloud](https://materialize.com/docs) documentation.
-
-- You can also run Materialize locally using the [Materialize Emulator Docker
-  image](/get-started/install-materialize-emulator/).
+{{< self-managed/also-available >}}
 
 {{</ callout >}}
 
