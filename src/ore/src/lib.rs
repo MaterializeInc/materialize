@@ -107,3 +107,7 @@ pub mod __private {
     #[cfg(feature = "tracing_")]
     pub use tracing;
 }
+
+// Epoch: 1
+//
+// Bump this whenever we need to change the hash of a build without changing any code.

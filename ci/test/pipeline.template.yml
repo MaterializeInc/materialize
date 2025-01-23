@@ -141,7 +141,7 @@ steps:
 
       - id: devel-docker-tags
         label: Tag development docker images
-        command: bin/ci-builder run stable bin/pyactivate -m ci.test.dev_tag
+        command: bin/ci-builder run min bin/pyactivate -m ci.test.dev_tag
         inputs:
           - "*"
         depends_on:
