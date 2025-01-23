@@ -91,7 +91,7 @@ use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::read_policy::ReadPolicy;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
-use tracing::{info, warn};
+use tracing::info;
 
 /// Runs as-of selection for the given dataflows.
 ///
@@ -395,7 +395,7 @@ impl<'a, T: TimestampManipulation> Context<'a, T> {
                         );
                     }
                     ConstraintType::Soft => {
-                        warn!(%id, %bounds, ?constraint, "failed to apply soft as-of constraint");
+                        info!(%id, %bounds, ?constraint, "failed to apply soft as-of constraint");
                     }
                 }
                 changed
