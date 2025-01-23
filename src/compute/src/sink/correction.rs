@@ -47,17 +47,24 @@ pub(super) struct Correction<D> {
     metrics: SinkMetrics,
     /// Per-worker persist sink metrics.
     worker_metrics: SinkWorkerMetrics,
+    /// Configuration for `ConsolidatingVec` driving the growth rate down from doubling.
+    growth_dampener: usize,
 }
 
 impl<D> Correction<D> {
     /// Construct a new `Correction` instance.
-    pub fn new(metrics: SinkMetrics, worker_metrics: SinkWorkerMetrics) -> Self {
+    pub fn new(
+        metrics: SinkMetrics,
+        worker_metrics: SinkWorkerMetrics,
+        growth_dampener: usize,
+    ) -> Self {
         Self {
             updates: Default::default(),
             since: Antichain::from_elem(Timestamp::MIN),
             total_size: Default::default(),
             metrics,
             worker_metrics,
+            growth_dampener,
         }
     }
 
@@ -125,7 +132,8 @@ impl<D: Data> Correction<D> {
             use std::collections::btree_map::Entry;
             match self.updates.entry(time) {
                 Entry::Vacant(entry) => {
-                    let vec: ConsolidatingVec<_> = data.collect();
+                    let mut vec: ConsolidatingVec<_> = data.collect();
+                    vec.growth_dampener = self.growth_dampener;
                     new_size += (vec.len(), vec.capacity());
                     entry.insert(vec);
                 }
@@ -304,13 +312,21 @@ pub(crate) struct ConsolidatingVec<D> {
     /// A lower bound for how small we'll shrink the Vec's capacity. NB: The cap
     /// might start smaller than this.
     min_capacity: usize,
+    /// Dampener in the growth rate. 0 corresponds to doubling and in general `n` to `1+1/(n+1)`.
+    ///
+    /// If consolidation didn't free enough space, at least a linear amount, increase the capacity
+    /// Setting this to 0 results in doubling whenever the list is at least half full.
+    /// Larger numbers result in more conservative approaches that use more CPU, but less memory.
+    growth_dampener: usize,
 }
 
 impl<D: Ord> ConsolidatingVec<D> {
-    pub fn with_min_capacity(min_capacity: usize) -> Self {
+    /// Creates a new instance from the necessary configuration arguments.
+    pub fn new(min_capacity: usize, growth_dampener: usize) -> Self {
         ConsolidatingVec {
             data: Vec::new(),
             min_capacity,
+            growth_dampener,
         }
     }
 
@@ -326,21 +342,27 @@ impl<D: Ord> ConsolidatingVec<D> {
 
     /// Pushes `item` into the vector.
     ///
-    /// If the vector does not have sufficient capacity, we try to consolidate and/or double its
-    /// capacity.
+    /// If the vector does not have sufficient capacity, we'll first consolidate and then increase
+    /// its capacity if the consolidated results still occupy a significant fraction of the vector.
     ///
     /// The worst-case cost of this function is O(n log n) in the number of items the vector stores,
-    /// but amortizes to O(1).
+    /// but amortizes to O(log n).
     pub fn push(&mut self, item: (D, Diff)) {
         let capacity = self.data.capacity();
         if self.data.len() == capacity {
             // The vector is full. First, consolidate to try to recover some space.
             self.consolidate();
 
-            // If consolidation didn't free at least half the available capacity, double the
-            // capacity. This ensures we won't consolidate over and over again with small gains.
-            if self.data.len() > capacity / 2 {
-                self.data.reserve(capacity);
+            // We may need more capacity if our current capacity is within `1+1/(n+1)` of the length.
+            // This corresponds to `cap < len + len/(n+1)`, which is the logic we use.
+            let length = self.data.len();
+            let dampener = self.growth_dampener;
+            if capacity < length + length / (dampener + 1) {
+                // We would like to increase the capacity by a factor of `1+1/(n+1)`, which involves
+                // determining the target capacity, and then reserving an amount that achieves this
+                // while working around the existing length.
+                let new_cap = capacity + capacity / (dampener + 1);
+                self.data.reserve_exact(new_cap - length);
             }
         }
 
@@ -352,7 +374,7 @@ impl<D: Ord> ConsolidatingVec<D> {
         consolidate(&mut self.data);
 
         // We may have the opportunity to reclaim allocated memory.
-        // Given that `push` will double the capacity when the vector is more than half full, and
+        // Given that `push` will at most double the capacity when the vector is more than half full, and
         // we want to avoid entering into a resizing cycle, we choose to only shrink if the
         // vector's length is less than one fourth of its capacity.
         if self.data.len() < self.data.capacity() / 4 {
@@ -388,6 +410,7 @@ impl<D> FromIterator<(D, Diff)> for ConsolidatingVec<D> {
         Self {
             data: Vec::from_iter(iter),
             min_capacity: 0,
+            growth_dampener: 0,
         }
     }
 }

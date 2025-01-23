@@ -99,6 +99,14 @@ pub const LGALLOC_SLOW_CLEAR_BYTES: Config<usize> = Config::new(
     "Clear byte size per size class for every invocation",
 );
 
+/// The term `n` in the growth rate `1 + 1/(n + 1)` for `ConsolidatingVec`.
+/// The smallest value `0` corresponds to the greatest allowed growth, of doubling.
+pub const CONSOLIDATING_VEC_GROWTH_DAMPENER: Config<usize> = Config::new(
+    "consolidating_vec_growth_dampener",
+    0,
+    "Dampener in growth rate for consolidating vector size",
+);
+
 /// The number of dataflows that may hydrate concurrently.
 pub const HYDRATION_CONCURRENCY: Config<usize> = Config::new(
     "compute_hydration_concurrency",
@@ -179,4 +187,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_COMPUTE_REPLICA_EXPIRATION)
         .add(&COMPUTE_REPLICA_EXPIRATION_OFFSET)
         .add(&COMPUTE_APPLY_COLUMN_DEMANDS)
+        .add(&CONSOLIDATING_VEC_GROWTH_DAMPENER)
 }
