@@ -12,7 +12,7 @@
 use std::fmt;
 use std::sync::Arc;
 
-use arrow::array::{make_array, Array, RecordBatch, StructArray};
+use arrow::array::{Array, RecordBatch, StructArray};
 use bytes::{Bytes, BytesMut};
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
@@ -25,8 +25,8 @@ use parquet::arrow::ParquetRecordBatchStreamBuilder;
 use parquet::errors::ParquetError;
 use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 use prost::Message;
-use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
+use serde::de::Visitor;
+use serde::{Deserialize, Deserializer, Serialize};
 use smallvec::{smallvec, SmallVec};
 
 use crate::oneshot_source::{
@@ -55,24 +55,6 @@ pub struct ParquetWorkRequest<O, C> {
 #[derive(Clone, Debug)]
 pub struct ParquetRowGroup {
     record_batch: RecordBatch,
-}
-
-impl Serialize for ParquetRowGroup {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        todo!()
-    }
-}
-
-impl<'de> Deserialize<'de> for ParquetRowGroup {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        todo!()
-    }
 }
 
 impl OneshotFormat for ParquetFormat {
@@ -232,5 +214,70 @@ impl<S: OneshotSource> AsyncFileReader for ParquetReaderAdapter<S> {
             reader.try_load(self, object_size).await?;
             reader.finish().map(|metadata| Arc::new(metadata))
         })
+    }
+}
+
+// Note(parkmycar): Instead of a manual implementation of Serialize and Deserialize we could
+// change `ParquetRowGroup` to have a type which we can derive the impl for. But no types from the
+// `arrow` crate do, and we'd prefer not to use a Vec<u8> since serialization is only required when
+// Timely workers span multiple processes.
+impl Serialize for ParquetRowGroup {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        // Note: This implementation isn't very efficient, but it should only be rarely used so
+        // it's not too much of a concern.
+        let struct_array = StructArray::from(self.record_batch.clone());
+        let proto_array: ProtoArrayData = struct_array.into_data().into_proto();
+        let encoded_proto = proto_array.encode_to_vec();
+        encoded_proto.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for ParquetRowGroup {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        fn struct_array<'de: 'a, 'a, D: Deserializer<'de>>(
+            deserializer: D,
+        ) -> Result<StructArray, D::Error> {
+            struct StructArrayVisitor;
+
+            impl<'a> Visitor<'a> for StructArrayVisitor {
+                type Value = StructArray;
+
+                fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                    formatter.write_str("binary data")
+                }
+
+                fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E>
+                where
+                    E: serde::de::Error,
+                {
+                    let serde_err =
+                        || serde::de::Error::invalid_value(serde::de::Unexpected::Bytes(v), &self);
+
+                    let array_data = ProtoArrayData::decode(v)
+                        .map_err(|_| serde_err())
+                        .and_then(|proto_array| proto_array.into_rust().map_err(|_| serde_err()))?;
+                    let array_ref = arrow::array::make_array(array_data);
+                    let struct_array = array_ref
+                        .as_any()
+                        .downcast_ref::<StructArray>()
+                        .ok_or_else(|| serde_err())?;
+
+                    Ok(struct_array.clone())
+                }
+            }
+
+            deserializer.deserialize_bytes(StructArrayVisitor)
+        }
+
+        let struct_array = struct_array(deserializer)?;
+        let record_batch = RecordBatch::from(struct_array);
+
+        Ok(ParquetRowGroup { record_batch })
     }
 }
