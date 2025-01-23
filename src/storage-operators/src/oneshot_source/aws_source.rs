@@ -22,6 +22,7 @@ use mz_storage_types::connections::aws::AwsConnection;
 use mz_storage_types::connections::ConnectionContext;
 use serde::{Deserialize, Serialize};
 
+use crate::oneshot_source::util::IntoRangeHeaderValue;
 use crate::oneshot_source::{
     OneshotObject, OneshotSource, StorageErrorX, StorageErrorXContext, StorageErrorXKind,
 };
@@ -208,11 +209,8 @@ impl OneshotSource for AwsS3Source {
 
             let mut request = client.get_object().bucket(&self.bucket).key(&object.name);
             if let Some(range) = range {
-                // See the below link for the specifics of this format.
-                //
-                // <https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Range>
-                let range = format!("byte={}-{}", range.start(), range.end());
-                request = request.range(range);
+                let value = range.into_range_header_value();
+                request = request.range(value);
             }
 
             let object = request

@@ -107,6 +107,8 @@ pub mod parquet;
 pub mod aws_source;
 pub mod http_source;
 
+mod util;
+
 /// Render a dataflow to do a "oneshot" ingestion.
 ///
 /// Roughly the operators we render do the following:
