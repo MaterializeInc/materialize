@@ -48,7 +48,7 @@
         justify-content: space-between;
         flex: 0 0 100%;
         align-items: center;
-        height: calc(var(--nav-height) - 25px);
+        height: var(--nav-height);
     }
 
     a:not([class*="btn"]) {
