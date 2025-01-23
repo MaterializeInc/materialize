@@ -84,7 +84,7 @@ of the following steps:
 
     c. Copy the URL under **Bootstrap server**. This will be your `<broker-url>` going forward.
 
-    d. Connect to Materialize using the [SQL Shell](https://console.materialize.com/),
+    d. Connect to Materialize using the [SQL Shell](/console/),
        or your preferred SQL client.
 
     e. Run the following command. Replace `<confluent_cloud>` with whatever you

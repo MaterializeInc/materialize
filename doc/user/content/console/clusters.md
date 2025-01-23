@@ -9,8 +9,8 @@ menu:
     identifier: console-clusters
 ---
 
-The [Materialize Console](https://console.materialize.com/) provides a
-**Clusters** section where you can manage your clusters.
+The Materialize Console provides a **Clusters** section where you can manage
+your clusters.
 
 ![Image of Clusters page](/images/console/console-clusters.png "Clusters page
 listing your clusters")

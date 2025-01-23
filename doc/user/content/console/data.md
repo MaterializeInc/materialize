@@ -9,8 +9,7 @@ menu:
     identifier: console-data
 ---
 
-Under **Data**, the [Materialize Console](https://console.materialize.com/)
-provides a database object explorer.
+Under **Data**, the Materialize Console provides a database object explorer.
 
 ![Image of the Materialize Console Database Object
 Explorer](/images/console/console-data-explorer.png "Materialize Console Database Object Explorer")
