@@ -7,7 +7,7 @@
 //! workers from individual operators/workers.
 
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use std::sync::mpsc;
 
@@ -20,9 +20,9 @@ use mz_storage_types::sinks::{MetadataFilled, StorageSinkDesc};
 use mz_storage_types::sources::IngestionDescription;
 use serde::{Deserialize, Serialize};
 use timely::communication::Allocate;
-use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::generic::{source, OutputHandle};
-use timely::dataflow::operators::{Broadcast, Exchange, Operator};
+use timely::dataflow::operators::{Broadcast, Operator};
 use timely::progress::Antichain;
 use timely::scheduling::{Activator, Scheduler};
 use timely::worker::Worker as TimelyWorker;
@@ -175,25 +175,37 @@ pub(crate) fn setup_command_sequencer<'w, A: Allocate>(
         let activator = Rc::clone(&activator);
         move |scope| {
             // Create a stream of commands received from `input_rx`.
-            let stream = source(scope, "command_sequencer::source", |capability, info| {
+            //
+            // The output commands are tagged by worker ID and command index, allowing downstream
+            // operators to ensure their correct relative order.
+            let stream = source(scope, "command_sequencer::source", |cap, info| {
                 *activator.borrow_mut() = Some(scope.activator_for(info.address));
 
-                let mut capability = Some(capability);
+                let worker_id = scope.index();
+                let mut cmd_index = 0;
+                let mut capability = Some(cap);
 
                 move |output: &mut OutputHandle<_, _, _>| {
                     let Some(cap) = &capability else {
                         return;
                     };
 
-                    let mut session = output.session(&cap);
+                    let mut session = output.session(cap);
                     loop {
                         match input_rx.try_recv() {
-                            Ok(cmd) => session.give(cmd),
+                            Ok(command) => {
+                                let cmd = IndexedCommand {
+                                    index: cmd_index,
+                                    command,
+                                };
+                                session.give((worker_id, cmd));
+                                cmd_index += 1;
+                            }
                             Err(mpsc::TryRecvError::Empty) => break,
                             Err(mpsc::TryRecvError::Disconnected) => {
                                 // Drop our capability to shut down.
                                 capability = None;
-                                return;
+                                break;
                             }
                         }
                     }
@@ -201,13 +213,73 @@ pub(crate) fn setup_command_sequencer<'w, A: Allocate>(
             });
 
             // Sequence all commands through a single worker to establish a unique order.
-            let stream = stream.exchange(|_| 0).broadcast();
+            //
+            // The output commands are tagged by a command index, allowing downstream operators to
+            // ensure their correct relative order.
+            let stream = stream.unary_frontier(
+                Exchange::new(|_| 0),
+                "command_sequencer::sequencer",
+                |cap, _info| {
+                    let mut cmd_index = 0;
+                    let mut capability = Some(cap);
+
+                    // For each worker, keep an ordered list of pending commands, as well as the
+                    // current index of the next command.
+                    let mut pending_commands = vec![(BTreeSet::new(), 0); scope.peers()];
+
+                    move |input, output: &mut OutputHandle<_, _, _>| {
+                        let Some(cap) = &capability else {
+                            return;
+                        };
+
+                        while let Some((_cap, data)) = input.next() {
+                            for (worker_id, cmd) in data.drain(..) {
+                                pending_commands[worker_id].0.insert(cmd);
+                            }
+                        }
+
+                        let mut session = output.session(cap);
+                        for (commands, next_idx) in &mut pending_commands {
+                            while commands.first().is_some_and(|c| c.index == *next_idx) {
+                                let mut cmd = commands.pop_first().unwrap();
+                                cmd.index = cmd_index;
+                                session.give(cmd);
+
+                                *next_idx += 1;
+                                cmd_index += 1;
+                            }
+                        }
+
+                        if input.frontier().is_empty() {
+                            // Drop our capability to shut down.
+                            capability = None;
+                        }
+                    }
+                },
+            );
+
+            // Broadcast the ordered commands to all workers.
+            let stream = stream.broadcast();
 
             // Sink the stream back into `output_tx`.
-            stream.sink(Pipeline, "command_sequencer::sink", move |input| {
-                while let Some((_cap, data)) = input.next() {
-                    for cmd in data.drain(..) {
-                        let _ = output_tx.send(cmd);
+            stream.sink(Pipeline, "command_sequencer::sink", {
+                // Keep an ordered list of pending commands, as well as the current index of the
+                // next command.
+                let mut pending_commands = BTreeSet::new();
+                let mut next_idx = 0;
+
+                move |input| {
+                    while let Some((_cap, data)) = input.next() {
+                        pending_commands.extend(data.drain(..));
+                    }
+
+                    while pending_commands
+                        .first()
+                        .is_some_and(|c| c.index == next_idx)
+                    {
+                        let cmd = pending_commands.pop_first().unwrap();
+                        let _ = output_tx.send(cmd.command);
+                        next_idx += 1;
                     }
                 }
             });
@@ -221,4 +293,34 @@ pub(crate) fn setup_command_sequencer<'w, A: Allocate>(
     let rx = InternalCommandReceiver { rx: output_rx };
 
     (tx, rx)
+}
+
+// An [`InternalStorageCommand`] tagged with an index.
+//
+// This is a `(u64, InternalStorageCommand)` in spirit, but implements `Ord` (which
+// `InternalStorageCommand` doesn't) by looking only at the index.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct IndexedCommand {
+    index: u64,
+    command: InternalStorageCommand,
+}
+
+impl PartialEq for IndexedCommand {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other).is_eq()
+    }
+}
+
+impl Eq for IndexedCommand {}
+
+impl PartialOrd for IndexedCommand {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for IndexedCommand {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.index.cmp(&other.index)
+    }
 }
