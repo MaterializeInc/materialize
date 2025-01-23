@@ -54,8 +54,8 @@ use crate::plan::query::{plan_expr, plan_up_to, ExprContext, QueryLifetime};
 use crate::plan::scope::Scope;
 use crate::plan::statement::{ddl, StatementContext, StatementDesc};
 use crate::plan::{
-    self, side_effecting_func, transform_ast, CopyToPlan, CreateSinkPlan, ExplainPushdownPlan,
-    ExplainSinkSchemaPlan, ExplainTimestampPlan,
+    self, side_effecting_func, transform_ast, CopyFromFilter, CopyToPlan, CreateSinkPlan,
+    ExplainPushdownPlan, ExplainSinkSchemaPlan, ExplainTimestampPlan,
 };
 use crate::plan::{
     query, CopyFormat, CopyFromPlan, ExplainPlanPlan, InsertPlan, MutationKind, Params, Plan,
@@ -1143,7 +1143,24 @@ fn plan_copy_from(
             };
             let from = plan_expr(ecx, &from_expr)?.type_as(ecx, &ScalarType::String)?;
 
-            CopyFromSource::Url(from)
+            match options.aws_connection {
+                Some(conn_id) => {
+                    let conn_id = CatalogItemId::from(conn_id);
+
+                    // Validate the connection type is one we expect.
+                    let connection = match scx.get_item(&conn_id).connection()? {
+                        mz_storage_types::connections::Connection::Aws(conn) => conn,
+                        _ => sql_bail!("only AWS CONNECTION is supported in COPY ... FROM"),
+                    };
+
+                    CopyFromSource::AwsS3 {
+                        uri: from,
+                        connection,
+                        connection_id: conn_id,
+                    }
+                }
+                None => CopyFromSource::Url(from),
+            }
         }
         CopyTarget::Stdout => bail_never_supported!("COPY FROM {} not supported", target),
     };
@@ -1180,12 +1197,24 @@ fn plan_copy_from(
         CopyFormat::Parquet => bail_unsupported!("FORMAT PARQUET"),
     };
 
+    let filter = match (options.files, options.pattern) {
+        (Some(_), Some(_)) => bail_unsupported!("must specify one of FILES or PATTERN"),
+        (Some(files), None) => Some(CopyFromFilter::Files(files)),
+        (None, Some(pattern)) => Some(CopyFromFilter::Pattern(pattern)),
+        (None, None) => None,
+    };
+
+    if filter.is_some() && matches!(source, CopyFromSource::Stdin) {
+        bail_unsupported!("COPY FROM ... WITH (FILES ...) only supported from a URL")
+    }
+
     let (id, _, columns) = query::plan_copy_from(scx, table_name, columns)?;
     Ok(Plan::CopyFrom(CopyFromPlan {
         id,
         source,
         columns,
         params,
+        filter,
     }))
 }
 
@@ -1206,7 +1235,9 @@ generate_extracted_config!(
     (Quote, String),
     (Header, bool),
     (AwsConnection, with_options::Object),
-    (MaxFileSize, ByteSize, Default(ByteSize::mb(256)))
+    (MaxFileSize, ByteSize, Default(ByteSize::mb(256))),
+    (Files, Vec<String>),
+    (Pattern, String)
 );
 
 pub fn plan_copy(
