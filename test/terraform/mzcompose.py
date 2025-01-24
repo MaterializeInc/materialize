@@ -165,7 +165,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     "eks",
                     "update-kubeconfig",
                     "--name",
-                    "terraform-aws-test-cluster",
+                    "terraform-aws-test-dev-eks",
                     "--region",
                     "us-east-1",
                 ]
@@ -396,7 +396,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     "eks",
                     "update-kubeconfig",
                     "--name",
-                    "terraform-aws-test-cluster",
+                    "terraform-aws-test-dev-eks",
                     "--region",
                     "us-east-1",
                 ]

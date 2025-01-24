@@ -12,14 +12,13 @@ provider "aws" {
 }
 
 module "materialize_infrastructure" {
-  source = "git::https://github.com/MaterializeInc/terraform-aws-materialize.git?ref=v0.1.4"
+  source = "git::https://github.com/MaterializeInc/terraform-aws-materialize.git?ref=v0.2.0"
 
   # Basic settings
+  # The namespace and environment variables are used to construct the names of the resources
+  # e.g. ${namespace}-${environment}-eks and etc.
+  namespace    = "terraform-aws-test"
   environment  = "dev"
-  vpc_name     = "terraform-aws-test-vpc"
-  cluster_name = "terraform-aws-test-cluster"
-  mz_iam_service_account_name = "terraform-aws-test-user"
-  mz_iam_role_name = "terraform-aws-test-s3-role"
 
   # VPC Configuration
   vpc_cidr             = "10.0.0.0/16"
@@ -37,14 +36,12 @@ module "materialize_infrastructure" {
   node_group_capacity_type  = "ON_DEMAND"
 
   # Storage Configuration
-  bucket_name              = "terraform-aws-test-storage-${random_id.suffix.hex}"
   enable_bucket_versioning = true
   enable_bucket_encryption = true
   bucket_force_destroy     = true
 
   # Database Configuration
   database_password    = "someRANDOMpasswordNOTsecure"
-  db_identifier        = "terraform-aws-test-metadata-db"
   postgres_version     = "15"
   db_instance_class    = "db.t3.micro"
   db_allocated_storage = 20
