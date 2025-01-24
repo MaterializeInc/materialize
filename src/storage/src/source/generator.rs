@@ -148,6 +148,10 @@ impl GeneratorKind {
     ) {
         // figure out which output types from the generator belong to which output indexes
         let mut output_map = BTreeMap::new();
+        // Make sure that there's an entry for the default output, even if there are no exports
+        // that need data output. Certain implementations rely on it (at the time of this comment
+        // that includes the key-value load gen source).
+        output_map.insert(LoadGeneratorOutput::Default, Vec::new());
         for (idx, (_, export)) in config.source_exports.iter().enumerate() {
             let output_type = match &export.details {
                 SourceExportDetails::LoadGenerator(details) => details.output,
