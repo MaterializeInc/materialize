@@ -11,7 +11,7 @@ menu:
 The tutorial deploys Materialize to AWS Elastic Kubernetes Service (EKS) with a
 PostgreSQL RDS database as the metadata database and AWS S3 for blob storage.
 The tutorial uses Terraform both to set up the AWS Kubernetes environment and to
-deploy Materialize Operator and instances to that EKS cluster.
+deploy Materialize Operator and Materialize instances to that EKS cluster.
 
 Self-managed Materialize requires:
 
