@@ -151,7 +151,8 @@ pub fn plan_inspect_shard(
     // Always inspect the shard at the latest GlobalId.
     let gid = scx
         .catalog
-        .get_item(&id)
+        .try_get_item(&id)
+        .ok_or_else(|| sql_err!("item doesn't exist"))?
         .at_version(RelationVersionSelector::Latest)
         .global_id();
     Ok(Plan::InspectShard(InspectShardPlan { id: gid }))
