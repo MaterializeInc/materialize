@@ -198,7 +198,7 @@ impl ExpressionCache {
                             Ok(expressions) => expressions,
                             Err(err) => {
                                 soft_panic_or_log!(
-                                    "unable to deserialize local expressions: {expressions:?}: {err:?}"
+                                    "unable to deserialize local expressions: ({key:?}, {expressions:?}): {err:?}"
                                 );
                                 continue;
                             }
@@ -216,7 +216,7 @@ impl ExpressionCache {
                             Ok(expressions) => expressions,
                             Err(err) => {
                                 soft_panic_or_log!(
-                                    "unable to deserialize global expressions: {expressions:?}: {err:?}"
+                                    "unable to deserialize global expressions: ({key:?}, {expressions:?}): {err:?}"
                                 );
                                 continue;
                             }
