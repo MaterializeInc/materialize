@@ -988,6 +988,14 @@ impl KafkaResumeUpperProcessor {
 impl KafkaSourceReader {
     /// Ensures that a partition queue for `pid` exists.
     fn ensure_partition(&mut self, pid: PartitionId) {
+        if self.last_offsets.is_empty() {
+            tracing::info!(
+                source_id = %self.id,
+                worker_id = %self.worker_id,
+                "kafka source does not have any outputs, not creating partition queue");
+
+            return;
+        }
         for last_offsets in self.last_offsets.values() {
             // early exit if we've already inserted this partition
             if last_offsets.contains_key(&pid) {
