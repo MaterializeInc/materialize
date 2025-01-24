@@ -19,6 +19,15 @@ To keep results up-to-date as new data arrives, Materialize incrementally
 updates results as it ingests data rather than recalculating results from
 scratch.
 
+## Self-managed Materialize
+
+With self-managed Materialize, you can deploy and operate Materialize in your
+Kubernetes environment.
+
+For self-managed Materialize, Materialize provides:
+
+{{% self-managed/self-managed-details %}}
+
 {{< callout >}}
 
 {{< self-managed/also-available >}}

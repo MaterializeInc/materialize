@@ -10,11 +10,7 @@ disable_list: true
 With self-managed Materialize, you can deploy and operate Materialize in your
 Kubernetes environment. For self-managed Materialize, Materialize provides:
 
-- A Materialize Operator that manages your Materialize running in your
-  Kubernetes environment.
-
-- Materialize packaged as a containerized application that can be deployed in a
-  Kubernetes cluster.
+{{% self-managed/self-managed-details %}}
 
 {{< callout >}}
 
