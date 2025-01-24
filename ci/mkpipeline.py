@@ -355,55 +355,6 @@ def switch_jobs_to_aws(pipeline: Any, priority: int) -> None:
     """Switch jobs to AWS if Hetzner is currently overloaded"""
 
     branch = os.getenv("BUILDKITE_BRANCH")
-
-    # If Hetzner is entirely broken, you have to take these actions to switch everything back to AWS:
-    # - CI_FORCE_SWITCH_TO_AWS env variable to 1
-    # - Reconfigure the agent from hetzner-aarch64-4cpu-8gb to linux-aarch64-small in https://buildkite.com/materialize/test/settings/steps and other pipelines
-    # - Reconfigure the agent from hetzner-aarch64-4cpu-8gb to linux-aarch64-small in ci/mkpipeline.sh
-    if not ui.env_is_truthy("CI_FORCE_SWITCH_TO_AWS", "0"):
-        # If priority has manually been set to be low, or on main branch, we can
-        # wait for agents to become available
-        if branch == "main" or priority < 0:
-            return
-
-        # Consider Hetzner to be overloaded when at least 600 jobs exist with priority >= 0
-        try:
-            builds = generic_api.get_multiple(
-                "builds",
-                params={
-                    "state[]": [
-                        "creating",
-                        "scheduled",
-                        "running",
-                        "failing",
-                        "canceling",
-                    ],
-                },
-                max_fetches=None,
-            )
-
-            num_jobs = 0
-            for build in builds:
-                for job in build["jobs"]:
-                    if "state" not in job:
-                        continue
-                    if "agent_query_rules" not in job:
-                        continue
-                    if job["state"] in ("scheduled", "running", "assigned", "accepted"):
-                        queue = job["agent_query_rules"][0].removeprefix("queue=")
-                        if not queue.startswith("hetzner-"):
-                            continue
-                        if job.get("priority", {}).get("number", 0) < 0:
-                            continue
-                        num_jobs += 1
-            print(f"Number of high-priority jobs on Hetzner: {num_jobs}")
-            if num_jobs < 600:
-                return
-        except Exception:
-            print("switch_jobs_to_aws failed, ignoring:")
-            traceback.print_exc()
-            return
-
     def visit(config: Any) -> None:
         if "agents" in config:
             agent = config["agents"].get("queue", None)
