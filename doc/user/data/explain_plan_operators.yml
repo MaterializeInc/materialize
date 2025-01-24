@@ -15,7 +15,7 @@ operators:
       ```
 
   - operator: Constant
-    plan_types: "lir"
+    plan_types: "LIR"
     description: |
       Always produces the same collection of rows.
     uses_memory: False
@@ -39,7 +39,7 @@ operators:
     example: "`Get materialize.public.ordered`"
 
   - operator: Get::~
-    plan_types: "lir"
+    plan_types: "LIR"
     description: |
       Produces rows from either an existing source/view or
       from a previous operator in the same plan. There may be a
@@ -85,7 +85,7 @@ operators:
     example: "`Map (((#1 * 10000000dec) / #2) * 1000dec)`"
 
   - operator: MapFilterProject
-    plan_types: "lir"
+    plan_types: "LIR"
     description: |
       The number after the operator is the input operator's `lir_id`.
 
@@ -112,7 +112,7 @@ operators:
     example: "`FlatMap jsonb_foreach(#3)`"
 
   - operator: FlatMap
-    plan_types: "lir"
+    plan_types: "LIR"
     description: |
       The number after the operator is the input operator's `lir_id`.
 
@@ -172,7 +172,7 @@ operators:
     example: "`Join on=(#1 = #2) type=delta`"
 
   - operator: Join::~
-    plan_types: "lir"
+    plan_types: "LIR"
     description: |
       The input operators are listed in the order performed by the join.
 
@@ -213,7 +213,7 @@ operators:
     example: "`Reduce group_by=[#0] aggregates=[max((#0 * #1))]`"
 
   - operator: Reduce::~
-    plan_types: "lir"
+    plan_types: "LIR"
     description: |
       The number after the operator is the input operator's `lir_id`.
 
@@ -288,7 +288,7 @@ operators:
     example: "`TopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5`"
 
   - operator: TopK::~
-    plan_types: "lir"
+    plan_types: "LIR"
     description: |
       The number after the operator is the input operator's `lir_id`.
 
@@ -318,7 +318,7 @@ operators:
     example: "`Negate`"
 
   - operator: Negate
-    plan_types: "lir"
+    plan_types: "LIR"
     description: |
       Negates the row counts of the input. This is usually used in combination with union to remove rows from the other union input.
     uses_memory: False
@@ -337,7 +337,7 @@ operators:
     example: "`Threshold`"
 
   - operator: Threshold
-    plan_types: "lir"
+    plan_types: "LIR"
     description: |
       Removes any rows with negative counts.
     uses_memory: True
@@ -357,7 +357,7 @@ operators:
     example: "`Union`"
 
   - operator: Union
-    plan_types: "lir"
+    plan_types: "LIR"
     description: |
       Combines its inputs into a unified output, emitting one row for each row on any input.
     uses_memory: True
@@ -377,7 +377,7 @@ operators:
     example: "`ArrangeBy keys=[[#0]]`"
 
   - operator: Arrange
-    plan_types: "lir"
+    plan_types: "LIR"
     description: |
       Indicates a point that will become an arrangement in the dataflow engine, i.e., it will consume memory to cache results.
     uses_memory: True
