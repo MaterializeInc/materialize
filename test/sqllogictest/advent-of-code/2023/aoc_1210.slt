@@ -223,7 +223,7 @@ SELECT * FROM part1, part2;
 1439  2073
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH MUTUALLY RECURSIVE
+EXPLAIN OPTIMIZED PLAN FOR WITH MUTUALLY RECURSIVE
 
     lines(line TEXT, row_no INT) AS (
         SELECT regexp_split_to_array(input, '\n')[i], i

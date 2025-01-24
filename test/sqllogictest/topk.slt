@@ -81,7 +81,7 @@ TX  San_Antonio
 mode standard
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) SELECT state, name FROM
+EXPLAIN OPTIMIZED PLAN FOR WITH(arity, join implementations) SELECT state, name FROM
     (SELECT DISTINCT state FROM cities) grp,
     LATERAL (SELECT name, pop FROM cities WHERE state = grp.state ORDER BY pop DESC LIMIT 3)
 ----
@@ -97,7 +97,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) SELECT state, name FROM
+EXPLAIN OPTIMIZED PLAN FOR WITH(arity, join implementations) SELECT state, name FROM
     (SELECT DISTINCT state FROM cities) grp
     LEFT JOIN LATERAL (SELECT name, pop FROM cities  where cities.state = grp.state ORDER BY pop DESC LIMIT 3) ON true
 ----
@@ -129,7 +129,7 @@ EOF
 
 # Test that LIMIT 0 is optimized out
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) SELECT state, COUNT(*) FROM (
+EXPLAIN OPTIMIZED PLAN FOR WITH(arity, join implementations) SELECT state, COUNT(*) FROM (
     SELECT state, name FROM
         (SELECT DISTINCT state FROM cities) grp,
         LATERAL (SELECT name, pop FROM cities WHERE state = grp.state ORDER BY pop DESC LIMIT 0)
@@ -146,7 +146,7 @@ EOF
 
 # Test that LIMIT 1 results in a unique key
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) SELECT state, COUNT(*) FROM (
+EXPLAIN OPTIMIZED PLAN FOR WITH(arity, join implementations) SELECT state, COUNT(*) FROM (
     SELECT state, name FROM
         (SELECT DISTINCT state FROM cities) grp,
         LATERAL (SELECT name, pop FROM cities WHERE state = grp.state ORDER BY pop DESC LIMIT 1)
@@ -167,7 +167,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) SELECT state, name FROM
+EXPLAIN OPTIMIZED PLAN FOR WITH(arity, join implementations) SELECT state, name FROM
     (SELECT DISTINCT state FROM cities) grp,
     LATERAL (SELECT name FROM cities WHERE state = grp.state
              OPTIONS (LIMIT INPUT GROUP SIZE = 1)

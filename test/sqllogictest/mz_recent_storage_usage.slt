@@ -11,7 +11,7 @@ mode cockroach
 
 # Ensure that querying `mz_recent_storage_usage` by ID is a point lookup.
 query T multiline
-EXPLAIN OPTIMIZED PLAN SELECT * FROM mz_recent_storage_usage WHERE object_id = 'just checking explain plan; this value does not matter'
+EXPLAIN OPTIMIZED PLAN FOR SELECT * FROM mz_recent_storage_usage WHERE object_id = 'just checking explain plan; this value does not matter'
 ----
 Explained Query (fast path):
   Project (#0, #1)

@@ -142,7 +142,7 @@ username
 species
 
 query TTT
-EXPLAIN OPTIMIZED PLAN ALTER TABLE users RENAME COLUMN species TO woo
+EXPLAIN OPTIMIZED PLAN FOR ALTER TABLE users RENAME COLUMN species TO woo
 ----
 alter table  ·  ·
 

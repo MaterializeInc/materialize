@@ -38,7 +38,7 @@ FROM (
 278
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN SELECT SUM(LEFT(r, 1)::int * 10 + RIGHT(r, 1)::int) AS part1
+EXPLAIN OPTIMIZED PLAN FOR SELECT SUM(LEFT(r, 1)::int * 10 + RIGHT(r, 1)::int) AS part1
 FROM (
 	SELECT regexp_replace(input, '[^\d]', '', 'g') AS r
 	FROM aoc_1201
@@ -97,7 +97,7 @@ WHERE first.line = last.line
 391
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH
+EXPLAIN OPTIMIZED PLAN FOR WITH
     lines AS (
         SELECT regexp_split_to_table(input, '\n') AS line
         FROM aoc_1201

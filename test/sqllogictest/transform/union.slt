@@ -34,7 +34,7 @@ INSERT INTO t3 VALUES (2, 3), (5, 5), (5, 5), (6, 1)
 
 # Test that nested unions are fused into a single Union operator
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) (SELECT * FROM t1 UNION ALL SELECT * FROM t1) UNION ALL (SELECT * FROM t2 UNION ALL SELECT * FROM t2);
+EXPLAIN OPTIMIZED PLAN FOR WITH(arity, join implementations) (SELECT * FROM t1 UNION ALL SELECT * FROM t1) UNION ALL (SELECT * FROM t2 UNION ALL SELECT * FROM t2);
 ----
 Explained Query:
   Union // { arity: 2 }
@@ -66,7 +66,7 @@ query II
 
 # Test that nested negated unions are merged into the parent Union operator by pushing the Negate into their branches
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) (SELECT * FROM t1 UNION ALL SELECT * FROM t1) EXCEPT ALL (SELECT * FROM t2 UNION ALL SELECT * FROM t2);
+EXPLAIN OPTIMIZED PLAN FOR WITH(arity, join implementations) (SELECT * FROM t1 UNION ALL SELECT * FROM t1) EXCEPT ALL (SELECT * FROM t2 UNION ALL SELECT * FROM t2);
 ----
 Explained Query:
   With
@@ -97,7 +97,7 @@ query II
 4  5
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) SELECT * FROM t2  EXCEPT ALL SELECT * FROM t1 INTERSECT ALL SELECT * FROM t3;
+EXPLAIN OPTIMIZED PLAN FOR WITH(arity, join implementations) SELECT * FROM t2  EXCEPT ALL SELECT * FROM t1 INTERSECT ALL SELECT * FROM t3;
 ----
 Explained Query:
   Threshold // { arity: 2 }
@@ -125,7 +125,7 @@ SELECT * FROM t2  EXCEPT ALL SELECT * FROM t1 INTERSECT ALL SELECT * FROM t3;
 5  5
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) SELECT * FROM t2 EXCEPT ALL (SELECT * FROM t1 INTERSECT ALL SELECT f1, null::int FROM t3);
+EXPLAIN OPTIMIZED PLAN FOR WITH(arity, join implementations) SELECT * FROM t2 EXCEPT ALL (SELECT * FROM t1 INTERSECT ALL SELECT f1, null::int FROM t3);
 ----
 Explained Query:
   Threshold // { arity: 2 }
@@ -156,7 +156,7 @@ SELECT * FROM t2 EXCEPT ALL (SELECT * FROM t1 INTERSECT ALL SELECT f1, null::int
 5 5
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) SELECT a1.* FROM t3 AS a1 LEFT JOIN t2 AS a2 ON (a1.f1 = a2.nokey);
+EXPLAIN OPTIMIZED PLAN FOR WITH(arity, join implementations) SELECT a1.* FROM t3 AS a1 LEFT JOIN t2 AS a2 ON (a1.f1 = a2.nokey);
 ----
 Explained Query:
   With

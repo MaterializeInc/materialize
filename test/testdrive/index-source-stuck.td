@@ -53,7 +53,7 @@
 > CREATE INDEX IN CLUSTER cluster2 ON mv (counter);
 
 # Check that index is actually used
-> EXPLAIN OPTIMIZED PLAN SELECT min(counter) FROM mv;
+> EXPLAIN OPTIMIZED PLAN FOR SELECT min(counter) FROM mv;
 Explained Query:
   With
     cte l0 =

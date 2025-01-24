@@ -27,7 +27,7 @@ CREATE TABLE foo (a int)
 # This query may need to be improved as `with mutually recursive` analysis improves,
 # as it is not semantically complicated just syntactically complicated.
 query T multiline
-EXPLAIN OPTIMIZED PLAN with mutually recursive
+EXPLAIN OPTIMIZED PLAN FOR with mutually recursive
     a(x int) as (select * from b),
     b(x int) as (select * from foo),
     -- meant to contain `b` minus its previous iterate.

@@ -31,7 +31,7 @@ aBcDeF
 abcdef
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN SELECT * FROM t_data
+EXPLAIN OPTIMIZED PLAN FOR SELECT * FROM t_data
 WHERE f1 ILIKE '%bCd%';
 ----
 Explained Query:

@@ -915,7 +915,7 @@ statement ok
 SHOW VIEWS
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN SELECT *, generate_series(1, 100) FROM mz_views
+EXPLAIN OPTIMIZED PLAN FOR SELECT *, generate_series(1, 100) FROM mz_views
 ----
 Explained Query:
   CrossJoin type=differential
@@ -973,7 +973,7 @@ statement ok
 SELECT * FROM t, mz_views
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN SHOW VIEWS
+EXPLAIN OPTIMIZED PLAN FOR SHOW VIEWS
 ----
 Explained Query:
   With

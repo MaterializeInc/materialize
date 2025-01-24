@@ -22,7 +22,7 @@ CREATE TABLE test1(a int, b int, c int, d int)
 # check that the extra project caused by the CSE is lifted
 # through the TopK
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations)
+EXPLAIN OPTIMIZED PLAN FOR WITH(arity, join implementations)
 SELECT avg(d), sumc, sumd FROM (
 SELECT a + b + c as sumc, a + b + d as sumd, d
 FROM test1
@@ -57,7 +57,7 @@ GROUP BY sumc, sumd
 ORDER BY sumc
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) SELECT * FROM plan_test1
+EXPLAIN OPTIMIZED PLAN FOR WITH(arity, join implementations) SELECT * FROM plan_test1
 ----
 Explained Query:
   Project (#4, #0, #1) // { arity: 3 }
@@ -73,7 +73,7 @@ EOF
 
 # Test that chained unions get planned with a single union operator.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) SELECT * FROM test1 UNION ALL SELECT * FROM test1 UNION ALL SELECT * FROM test1
+EXPLAIN OPTIMIZED PLAN FOR WITH(arity, join implementations) SELECT * FROM test1 UNION ALL SELECT * FROM test1 UNION ALL SELECT * FROM test1
 ----
 Explained Query:
   Union // { arity: 4 }
