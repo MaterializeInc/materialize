@@ -23,7 +23,7 @@ from materialize.checks.mzcompose_actions import (
 from materialize.checks.scenarios import Scenario
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.services.materialized import LEADER_STATUS_HEALTHCHECK
-from materialize.version_list import get_published_minor_mz_versions
+from materialize.version_list import LTS_VERSIONS, get_published_minor_mz_versions
 
 # late initialization
 _minor_versions: list[MzVersion] | None = None
@@ -81,6 +81,40 @@ def start_mz_read_only(
         force_migrations=force_migrations,
         publish=publish,
     )
+
+
+class UpgradeEntireMzFromLatestLTS(Scenario):
+    """Upgrade the entire Mz instance from the last LTS version without any intermediate steps. This makes sure our LTS releases for self-managed Materialize stay upgradable."""
+
+    def base_version(self) -> MzVersion:
+        return LTS_VERSIONS[-1]
+
+    def actions(self) -> list[Action]:
+        print(f"Upgrading from tag {self.base_version()}")
+        return [
+            StartMz(
+                self,
+                tag=self.base_version(),
+            ),
+            Initialize(self),
+            Manipulate(self, phase=1),
+            KillMz(
+                capture_logs=True
+            ),  #  We always use True here otherwise docker-compose will lose the pre-upgrade logs
+            StartMz(
+                self,
+                tag=None,
+            ),
+            Manipulate(self, phase=2),
+            Validate(self),
+            # A second restart while already on the new version
+            KillMz(capture_logs=True),
+            StartMz(
+                self,
+                tag=None,
+            ),
+            Validate(self),
+        ]
 
 
 class UpgradeEntireMz(Scenario):
