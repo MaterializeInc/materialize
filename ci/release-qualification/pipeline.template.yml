@@ -477,3 +477,39 @@ steps:
           args: [--find-limit]
     timeout_in_minutes: 3600
     parallelism: 20
+
+  - group: Large Scale Ingestions
+    key: large-scale-ingestions
+    steps:
+      - id: mysql-cdc-large-scale
+        label: MySQL CDC large scale ingestion
+        depends_on: build-aarch64
+        timeout_in_minutes: 3600
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: mysql-cdc
+              run: large-scale
+        agents:
+          queue: hetzner-x86-64-dedi-48cpu-192gb # 1 TB disk
+
+      - id: pg-cdc-large-scale
+        label: Postgres CDC large scale ingestion
+        depends_on: build-aarch64
+        timeout_in_minutes: 3600
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: pg-cdc
+              run: large-scale
+        agents:
+          queue: hetzner-x86-64-dedi-48cpu-192gb # 1 TB disk
+
+      - id: upsert-large-scale
+        label: Upsert large scale ingestion
+        depends_on: build-aarch64
+        timeout_in_minutes: 3600
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: upsert
+              run: large-scale
+        agents:
+          queue: hetzner-x86-64-dedi-48cpu-192gb # 1 TB disk

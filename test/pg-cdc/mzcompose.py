@@ -13,6 +13,7 @@ Native Postgres source tests, functional.
 
 import glob
 import time
+from textwrap import dedent
 
 import psycopg
 from psycopg import Connection
@@ -320,6 +321,87 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
         )
 
 
+def workflow_large_scale(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """
+    The goal is to test a large scale Postgres instance and to make sure that we can successfully ingest data from it quickly.
+    """
+    pg_version = get_targeted_pg_version(parser)
+    with c.override(
+        create_postgres(
+            pg_version=pg_version, extra_command=["-c", "max_replication_slots=3"]
+        )
+    ):
+        c.up("materialized", "postgres")
+        c.up("testdrive", persistent=True)
+
+        # Set up the Postgres server with the initial records, set up the connection to
+        # the Postgres server in Materialize.
+        c.testdrive(
+            dedent(
+                """
+                $ postgres-execute connection=postgres://postgres:postgres@postgres
+                ALTER USER postgres WITH replication;
+                DROP SCHEMA IF EXISTS public CASCADE;
+                DROP PUBLICATION IF EXISTS mz_source;
+                CREATE SCHEMA public;
+
+                > CREATE SECRET IF NOT EXISTS pgpass AS 'postgres'
+                > CREATE CONNECTION IF NOT EXISTS pg TO POSTGRES (HOST postgres, DATABASE postgres, USER postgres, PASSWORD SECRET pgpass)
+
+                $ postgres-execute connection=postgres://postgres:postgres@postgres
+                DROP TABLE IF EXISTS products;
+                CREATE TABLE products (id int NOT NULL, name varchar(255) DEFAULT NULL, merchant_id int NOT NULL, price int DEFAULT NULL, status int DEFAULT NULL, created_at timestamp NULL, recordSizePayload text, PRIMARY KEY (id));
+                ALTER TABLE products REPLICA IDENTITY FULL;
+                CREATE PUBLICATION mz_source FOR ALL TABLES;
+
+                > DROP SOURCE IF EXISTS s1 CASCADE;
+                """
+            )
+        )
+
+    def make_inserts(c: Composition, start: int, batch_num: int):
+        c.testdrive(
+            args=["--no-reset"],
+            input=dedent(
+                f"""
+                $ postgres-execute connection=postgres://postgres:postgres@postgres
+                INSERT INTO products (id, name, merchant_id, price, status, created_at, recordSizePayload) SELECT {start} + row_number() OVER (), 'name' || ({start} + row_number() OVER ()), ({start} + row_number() OVER ()) % 1000, ({start} + row_number() OVER ()) % 1000, ({start} + row_number() OVER ()) % 10, '2024-12-12'::DATE, repeat('x', 1000000) FROM generate_series(1, {batch_num});
+            """
+            ),
+        )
+
+    num_rows = 300_000  # out of disk with 400_000 rows
+    batch_size = 10_000
+    for i in range(0, num_rows, batch_size):
+        batch_num = min(batch_size, num_rows - i)
+        make_inserts(c, i, batch_num)
+
+    c.testdrive(
+        args=["--no-reset"],
+        input=dedent(
+            f"""
+            > CREATE SOURCE s1
+              FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+            > CREATE TABLE products FROM SOURCE s1 (REFERENCE products);
+            > SELECT COUNT(*) FROM products;
+            {num_rows}
+            """
+        ),
+    )
+
+    make_inserts(c, num_rows, 1)
+
+    c.testdrive(
+        args=["--no-reset"],
+        input=dedent(
+            f"""
+            > SELECT COUNT(*) FROM products;
+            {num_rows + 1}
+            """
+        ),
+    )
+
+
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     workflows_with_internal_sharding = ["cdc"]
     sharded_workflows = workflows_with_internal_sharding + buildkite.shard_list(
@@ -330,7 +412,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         f"Workflows in shard with index {buildkite.get_parallelism_index()}: {sharded_workflows}"
     )
     for name in sharded_workflows:
-        if name == "default":
+        if name in ("default", "large-scale"):
             continue
 
         # TODO: Flaky, reenable when database-issues#7611 is fixed
